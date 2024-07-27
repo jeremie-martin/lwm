@@ -7,6 +7,7 @@
 #include <map>
 #include <memory>
 #include <queue>
+#include <ranges>
 #include <stdexcept>
 #include <string>
 #include <unistd.h>
@@ -77,10 +78,7 @@ private:
         uint16_t modifier;
         xcb_keysym_t keysym;
 
-        bool operator<(KeyBinding const& other) const
-        {
-            return std::tie(modifier, keysym) < std::tie(other.modifier, other.keysym);
-        }
+        auto operator<=>(KeyBinding const&) const = default;
     };
 
     std::unique_ptr<xcb_connection_t, decltype(&xcb_disconnect)> conn_;
@@ -98,6 +96,7 @@ private:
     static constexpr uint32_t FOCUS_BORDER_COLOR = 0xFF0000; // Red color
     static constexpr uint32_t STATUS_BAR_HEIGHT = 30;
     static constexpr uint32_t STATUS_BAR_COLOR = 0x808080; // Gray color
+
     void setupRoot()
     {
         uint32_t values[] = { XCB_EVENT_MASK_SUBSTRUCTURE_REDIRECT | XCB_EVENT_MASK_SUBSTRUCTURE_NOTIFY
@@ -144,11 +143,32 @@ private:
     void addKeyBinding(uint16_t modifier, xcb_keysym_t keysym, std::string const& path, std::string const& name)
     {
         keyBindings_[{ modifier, keysym }] = { path, name };
-        xcb_keycode_t* keycode = xcb_key_symbols_get_keycode(keysyms_.get(), keysym);
-        if (keycode)
+    }
+
+    void grabKeys(xcb_window_t window)
+    {
+        xcb_ungrab_key(conn_.get(), XCB_GRAB_ANY, window, XCB_MOD_MASK_ANY);
+
+        for (auto const& [binding, program] : keyBindings_)
         {
-            xcb_grab_key(conn_.get(), 1, screen_->root, modifier, *keycode, XCB_GRAB_MODE_ASYNC, XCB_GRAB_MODE_ASYNC);
+            xcb_keycode_t* keycode = xcb_key_symbols_get_keycode(keysyms_.get(), binding.keysym);
+            if (keycode)
+            {
+                // Grab the key with and without Num Lock
+                uint16_t const modifiers[] = { binding.modifier,
+                                               binding.modifier | XCB_MOD_MASK_2,
+                                               binding.modifier | XCB_MOD_MASK_LOCK,
+                                               binding.modifier | XCB_MOD_MASK_2 | XCB_MOD_MASK_LOCK };
+
+                for (auto mod : modifiers)
+                {
+                    xcb_grab_key(conn_.get(), 1, window, mod, *keycode, XCB_GRAB_MODE_ASYNC, XCB_GRAB_MODE_ASYNC);
+                }
+                free(keycode);
+            }
         }
+
+        xcb_flush(conn_.get());
     }
 
     void initializeTags() { tags_.resize(NUM_TAGS); }
@@ -187,27 +207,31 @@ private:
         xcb_keysym_t keysym = xcb_key_press_lookup_keysym(keysyms_.get(), const_cast<xcb_key_press_event_t*>(&e), 0);
         std::cout << "Received key press: modifier=" << e.state << ", keysym=" << keysym << std::endl;
 
-        auto it = keyBindings_.find({ static_cast<uint16_t>(e.state), keysym });
+        // Remove Num Lock and Caps Lock from the modifier
+        uint16_t cleanMod = e.state & ~(XCB_MOD_MASK_LOCK | XCB_MOD_MASK_2);
+
+        auto it = keyBindings_.find({ cleanMod, keysym });
         if (it != keyBindings_.end())
         {
-            if (it->second.name == "kill" && tags_[currentTagIndex_].focusedWindow != XCB_NONE)
+            auto const& [binding, program] = *it;
+            std::cout << "Executing program: " << program.name << std::endl;
+
+            if (program.name == "kill" && tags_[currentTagIndex_].focusedWindow != XCB_NONE)
             {
-                std::cout << "Killing window: " << tags_[currentTagIndex_].focusedWindow << std::endl;
                 killWindow(tags_[currentTagIndex_].focusedWindow);
             }
-            else if (it->second.name.substr(0, 10) == "switch_tag")
+            else if (program.name.starts_with("switch_tag"))
             {
-                int tag = std::stoi(it->second.name.substr(11));
+                int tag = std::stoi(program.name.substr(11));
                 switchToTag(tag);
             }
-            else if (it->second.name == "move_to_tag")
+            else if (program.name == "move_to_tag")
             {
                 moveWindowToNextTag();
             }
             else
             {
-                std::cout << "Launching program: " << it->second.name << std::endl;
-                launchProgram(it->second);
+                launchProgram(program);
             }
         }
         else
@@ -218,7 +242,6 @@ private:
 
     void killWindow(xcb_window_t window)
     {
-        // First, try to kill the window nicely
         xcb_intern_atom_cookie_t cookie = xcb_intern_atom(conn_.get(), 0, 16, "WM_DELETE_WINDOW");
         xcb_intern_atom_reply_t* reply = xcb_intern_atom_reply(conn_.get(), cookie, nullptr);
 
@@ -236,17 +259,14 @@ private:
             free(reply);
         }
 
-        // Wait a short time for the window to close
         usleep(100000); // 100ms
 
-        // Check if the window still exists
         xcb_get_window_attributes_cookie_t attr_cookie = xcb_get_window_attributes(conn_.get(), window);
         xcb_get_window_attributes_reply_t* attr_reply =
             xcb_get_window_attributes_reply(conn_.get(), attr_cookie, nullptr);
 
         if (attr_reply)
         {
-            // Window still exists, force kill it
             free(attr_reply);
             xcb_kill_client(conn_.get(), window);
         }
@@ -279,47 +299,10 @@ private:
         updateStatusBar();
     }
 
-    void grabKeys(xcb_window_t window)
-    {
-        // Ungrab all keys first
-        xcb_ungrab_key(conn_.get(), XCB_GRAB_ANY, window, XCB_MOD_MASK_ANY);
-
-        for (auto const& binding : keyBindings_)
-        {
-            xcb_keycode_t* keycode = xcb_key_symbols_get_keycode(keysyms_.get(), binding.first.keysym);
-            if (keycode)
-            {
-                xcb_grab_key(
-                    conn_.get(),
-                    1,
-                    window,
-                    binding.first.modifier,
-                    *keycode,
-                    XCB_GRAB_MODE_ASYNC,
-                    XCB_GRAB_MODE_ASYNC
-                );
-                xcb_grab_key(
-                    conn_.get(),
-                    1,
-                    window,
-                    binding.first.modifier | XCB_MOD_MASK_2,
-                    *keycode,
-                    XCB_GRAB_MODE_ASYNC,
-                    XCB_GRAB_MODE_ASYNC
-                );
-                free(keycode);
-            }
-        }
-    }
-
     void unmanageWindow(xcb_window_t window)
     {
         auto& currentTag = tags_[currentTagIndex_];
-        auto it = std::find_if(
-            currentTag.windows.begin(),
-            currentTag.windows.end(),
-            [window](Window const& w) { return w.id == window; }
-        );
+        auto it = std::ranges::find_if(currentTag.windows, [window](Window const& w) { return w.id == window; });
         if (it != currentTag.windows.end())
         {
             currentTag.windows.erase(it);
@@ -426,8 +409,6 @@ private:
             XCB_CONFIG_WINDOW_X | XCB_CONFIG_WINDOW_Y | XCB_CONFIG_WINDOW_WIDTH | XCB_CONFIG_WINDOW_HEIGHT,
             values
         );
-        std::cout << "Configured window " << window << ": x=" << x << ", y=" << y << ", width=" << width
-                  << ", height=" << height << std::endl;
     }
 
     void focusWindow(xcb_window_t window)
@@ -454,9 +435,6 @@ private:
         );
         xcb_set_input_focus(conn_.get(), XCB_INPUT_FOCUS_POINTER_ROOT, currentTag.focusedWindow, XCB_CURRENT_TIME);
 
-        // Re-grab keys for the newly focused window
-        grabKeys(currentTag.focusedWindow);
-
         updateStatusBar();
         xcb_flush(conn_.get());
     }
@@ -476,7 +454,6 @@ private:
         if (tag < 0 || tag >= NUM_TAGS || tag == static_cast<int>(currentTagIndex_))
             return;
 
-        // Unmap all windows on the current tag
         for (auto const& window : tags_[currentTagIndex_].windows)
         {
             xcb_unmap_window(conn_.get(), window.id);
@@ -485,7 +462,6 @@ private:
         currentTagIndex_ = tag;
         rearrangeWindows();
 
-        // Restore focus on the new tag
         if (tags_[currentTagIndex_].focusedWindow != XCB_NONE)
         {
             focusWindow(tags_[currentTagIndex_].focusedWindow);
@@ -506,30 +482,23 @@ private:
         size_t nextTagIndex = (currentTagIndex_ + 1) % NUM_TAGS;
         xcb_window_t windowToMove = tags_[currentTagIndex_].focusedWindow;
 
-        // Find and remove the window from the current tag
         auto& currentTag = tags_[currentTagIndex_];
-        auto it = std::find_if(
-            currentTag.windows.begin(),
-            currentTag.windows.end(),
-            [windowToMove](Window const& w) { return w.id == windowToMove; }
-        );
+        auto it =
+            std::ranges::find_if(currentTag.windows, [windowToMove](Window const& w) { return w.id == windowToMove; });
         if (it != currentTag.windows.end())
         {
             Window movedWindow = *it;
             currentTag.windows.erase(it);
             currentTag.focusedWindow = XCB_NONE;
 
-            // Add the window to the next tag
             tags_[nextTagIndex].windows.push_back(movedWindow);
             tags_[nextTagIndex].focusedWindow = windowToMove;
 
-            // Unmap the window as it's no longer on the current tag
             xcb_unmap_window(conn_.get(), windowToMove);
 
             rearrangeWindows();
             updateStatusBar();
 
-            // Focus the next window on the current tag, if any
             if (!currentTag.windows.empty())
             {
                 focusWindow(currentTag.windows.back().id);
@@ -573,9 +542,8 @@ private:
         statusText += " | Focused: ";
         if (tags_[currentTagIndex_].focusedWindow != XCB_NONE)
         {
-            auto it = std::find_if(
-                tags_[currentTagIndex_].windows.begin(),
-                tags_[currentTagIndex_].windows.end(),
+            auto it = std::ranges::find_if(
+                tags_[currentTagIndex_].windows,
                 [this](Window const& w) { return w.id == tags_[currentTagIndex_].focusedWindow; }
             );
             if (it != tags_[currentTagIndex_].windows.end())
