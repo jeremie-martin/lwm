@@ -22,6 +22,7 @@ public:
         : conn_(xcb_connect(nullptr, nullptr), xcb_disconnect)
         , screen_(nullptr)
         , keysyms_(nullptr, xcb_key_symbols_free)
+        , currentTagIndex_(0)
     {
         if (xcb_connection_has_error(conn_.get()))
         {
@@ -37,6 +38,8 @@ public:
         setupRoot();
         setupKeySymbols();
         setupKeyBindings();
+        createStatusBar();
+        initializeTags();
 
         xcb_flush(conn_.get());
     }
@@ -47,11 +50,22 @@ public:
         {
             std::unique_ptr<xcb_generic_event_t, decltype(&free)> eventPtr(event, free);
             handleEvent(*eventPtr);
-            processFocusQueue();
         }
     }
 
 private:
+    struct Window
+    {
+        xcb_window_t id;
+        std::string name;
+    };
+
+    struct Tag
+    {
+        std::vector<Window> windows;
+        xcb_window_t focusedWindow = XCB_NONE;
+    };
+
     struct Program
     {
         std::string path;
@@ -74,20 +88,21 @@ private:
     std::unique_ptr<xcb_key_symbols_t, decltype(&xcb_key_symbols_free)> keysyms_;
 
     std::map<KeyBinding, Program> keyBindings_;
-    std::vector<xcb_window_t> managedWindows_;
-    xcb_window_t focusedWindow_ = XCB_NONE;
-    std::queue<xcb_window_t> focusQueue_;
+    std::vector<Tag> tags_;
+    size_t currentTagIndex_;
+    xcb_window_t statusBarWindow_;
 
+    static constexpr int NUM_TAGS = 10;
     static constexpr uint32_t PADDING = 10;
     static constexpr uint32_t FOCUS_BORDER_WIDTH = 2;
     static constexpr uint32_t FOCUS_BORDER_COLOR = 0xFF0000; // Red color
-
+    static constexpr uint32_t STATUS_BAR_HEIGHT = 30;
+    static constexpr uint32_t STATUS_BAR_COLOR = 0x808080; // Gray color
     void setupRoot()
     {
         uint32_t values[] = { XCB_EVENT_MASK_SUBSTRUCTURE_REDIRECT | XCB_EVENT_MASK_SUBSTRUCTURE_NOTIFY
                               | XCB_EVENT_MASK_ENTER_WINDOW | XCB_EVENT_MASK_LEAVE_WINDOW
-                              | XCB_EVENT_MASK_STRUCTURE_NOTIFY | XCB_EVENT_MASK_PROPERTY_CHANGE
-                              | XCB_EVENT_MASK_KEY_PRESS };
+                              | XCB_EVENT_MASK_STRUCTURE_NOTIFY | XCB_EVENT_MASK_PROPERTY_CHANGE };
         xcb_change_window_attributes(conn_.get(), screen_->root, XCB_CW_EVENT_MASK, values);
     }
 
@@ -108,6 +123,21 @@ private:
         addKeyBinding(XCB_MOD_MASK_4, XK_q, "kill", "kill");
         addKeyBinding(XCB_MOD_MASK_4, XK_d, "dmenu_run", "dmenu_run");
 
+        // Add key bindings for switching tags (AZERTY layout)
+        addKeyBinding(XCB_MOD_MASK_4, XK_ampersand, "switch_tag", "switch_tag_0");
+        addKeyBinding(XCB_MOD_MASK_4, XK_eacute, "switch_tag", "switch_tag_1");
+        addKeyBinding(XCB_MOD_MASK_4, XK_quotedbl, "switch_tag", "switch_tag_2");
+        addKeyBinding(XCB_MOD_MASK_4, XK_apostrophe, "switch_tag", "switch_tag_3");
+        addKeyBinding(XCB_MOD_MASK_4, XK_parenleft, "switch_tag", "switch_tag_4");
+        addKeyBinding(XCB_MOD_MASK_4, XK_minus, "switch_tag", "switch_tag_5");
+        addKeyBinding(XCB_MOD_MASK_4, XK_egrave, "switch_tag", "switch_tag_6");
+        addKeyBinding(XCB_MOD_MASK_4, XK_underscore, "switch_tag", "switch_tag_7");
+        addKeyBinding(XCB_MOD_MASK_4, XK_ccedilla, "switch_tag", "switch_tag_8");
+        addKeyBinding(XCB_MOD_MASK_4, XK_agrave, "switch_tag", "switch_tag_9");
+
+        // Add key binding for moving window to a different tag
+        addKeyBinding(XCB_MOD_MASK_4 | XCB_MOD_MASK_SHIFT, XK_m, "move_to_tag", "move_to_tag");
+
         grabKeys(screen_->root);
     }
 
@@ -120,6 +150,8 @@ private:
             xcb_grab_key(conn_.get(), 1, screen_->root, modifier, *keycode, XCB_GRAB_MODE_ASYNC, XCB_GRAB_MODE_ASYNC);
         }
     }
+
+    void initializeTags() { tags_.resize(NUM_TAGS); }
 
     void handleEvent(xcb_generic_event_t const& event)
     {
@@ -147,7 +179,7 @@ private:
     {
         manageWindow(e.window);
         xcb_map_window(conn_.get(), e.window);
-        focusQueue_.push(e.window);
+        focusWindow(e.window);
     }
 
     void handleKeyPress(xcb_key_press_event_t const& e)
@@ -156,21 +188,21 @@ private:
         std::cout << "Received key press: modifier=" << e.state << ", keysym=" << keysym << std::endl;
 
         auto it = keyBindings_.find({ static_cast<uint16_t>(e.state), keysym });
-        if (it == keyBindings_.end())
-        {
-            it = std::find_if(
-                keyBindings_.begin(),
-                keyBindings_.end(),
-                [keysym](auto const& pair) { return pair.first.keysym == keysym; }
-            );
-        }
-
         if (it != keyBindings_.end())
         {
-            if (it->second.name == "kill" && focusedWindow_ != XCB_NONE)
+            if (it->second.name == "kill" && tags_[currentTagIndex_].focusedWindow != XCB_NONE)
             {
-                std::cout << "Killing window: " << focusedWindow_ << std::endl;
-                killWindow(focusedWindow_);
+                std::cout << "Killing window: " << tags_[currentTagIndex_].focusedWindow << std::endl;
+                killWindow(tags_[currentTagIndex_].focusedWindow);
+            }
+            else if (it->second.name.substr(0, 10) == "switch_tag")
+            {
+                int tag = std::stoi(it->second.name.substr(11));
+                switchToTag(tag);
+            }
+            else if (it->second.name == "move_to_tag")
+            {
+                moveWindowToNextTag();
             }
             else
             {
@@ -219,6 +251,7 @@ private:
             xcb_kill_client(conn_.get(), window);
         }
 
+        unmanageWindow(window);
         xcb_flush(conn_.get());
     }
 
@@ -230,22 +263,27 @@ private:
     {
         if (e.event != screen_->root && e.mode == XCB_NOTIFY_MODE_NORMAL)
         {
-            focusQueue_.push(e.event);
+            focusWindow(e.event);
         }
     }
 
     void manageWindow(xcb_window_t window)
     {
-        managedWindows_.push_back(window);
+        Window newWindow = { window, getWindowName(window) };
+        tags_[currentTagIndex_].windows.push_back(newWindow);
         uint32_t values[] = { XCB_EVENT_MASK_ENTER_WINDOW | XCB_EVENT_MASK_FOCUS_CHANGE | XCB_EVENT_MASK_PROPERTY_CHANGE
                               | XCB_EVENT_MASK_STRUCTURE_NOTIFY };
         xcb_change_window_attributes(conn_.get(), window, XCB_CW_EVENT_MASK, values);
         grabKeys(window);
         rearrangeWindows();
+        updateStatusBar();
     }
 
     void grabKeys(xcb_window_t window)
     {
+        // Ungrab all keys first
+        xcb_ungrab_key(conn_.get(), XCB_GRAB_ANY, window, XCB_MOD_MASK_ANY);
+
         for (auto const& binding : keyBindings_)
         {
             xcb_keycode_t* keycode = xcb_key_symbols_get_keycode(keysyms_.get(), binding.first.keysym);
@@ -269,60 +307,83 @@ private:
                     XCB_GRAB_MODE_ASYNC,
                     XCB_GRAB_MODE_ASYNC
                 );
+                free(keycode);
             }
         }
     }
 
     void unmanageWindow(xcb_window_t window)
     {
-        auto it = std::find(managedWindows_.begin(), managedWindows_.end(), window);
-        if (it != managedWindows_.end())
+        auto& currentTag = tags_[currentTagIndex_];
+        auto it = std::find_if(
+            currentTag.windows.begin(),
+            currentTag.windows.end(),
+            [window](Window const& w) { return w.id == window; }
+        );
+        if (it != currentTag.windows.end())
         {
-            managedWindows_.erase(it);
-            if (focusedWindow_ == window)
+            currentTag.windows.erase(it);
+            if (currentTag.focusedWindow == window)
             {
-                focusedWindow_ = XCB_NONE;
-                if (!managedWindows_.empty())
+                currentTag.focusedWindow = XCB_NONE;
+                if (!currentTag.windows.empty())
                 {
-                    focusQueue_.push(managedWindows_.back());
+                    focusWindow(currentTag.windows.back().id);
                 }
             }
             rearrangeWindows();
+            updateStatusBar();
         }
     }
 
     void rearrangeWindows()
     {
-        std::cout << "Rearranging windows. Total windows: " << managedWindows_.size() << std::endl;
-        if (managedWindows_.empty())
+        std::cout << "Rearranging windows. Current tag: " << currentTagIndex_ << std::endl;
+
+        for (auto tag : tags_)
+        {
+            for (auto window : tag.windows)
+            {
+                std::cout << "Window: " << window.id << " " << window.name << std::endl;
+            }
+        }
+
+        auto& currentTag = tags_[currentTagIndex_];
+
+        for (auto const& window : currentTag.windows)
+        {
+            xcb_map_window(conn_.get(), window.id);
+        }
+
+        if (currentTag.windows.empty())
             return;
 
         uint32_t screenWidth = screen_->width_in_pixels;
-        uint32_t screenHeight = screen_->height_in_pixels;
+        uint32_t screenHeight = screen_->height_in_pixels - STATUS_BAR_HEIGHT;
 
-        if (managedWindows_.size() == 1)
+        if (currentTag.windows.size() == 1)
         {
             configureWindow(
-                managedWindows_[0],
+                currentTag.windows[0].id,
                 PADDING,
-                PADDING,
+                PADDING + STATUS_BAR_HEIGHT,
                 screenWidth - 2 * PADDING,
                 screenHeight - 2 * PADDING
             );
         }
-        else if (managedWindows_.size() == 2)
+        else if (currentTag.windows.size() == 2)
         {
             configureWindow(
-                managedWindows_[0],
+                currentTag.windows[0].id,
                 PADDING,
-                PADDING,
+                PADDING + STATUS_BAR_HEIGHT,
                 (screenWidth - 3 * PADDING) / 2,
                 screenHeight - 2 * PADDING
             );
             configureWindow(
-                managedWindows_[1],
+                currentTag.windows[1].id,
                 (screenWidth + PADDING) / 2,
-                PADDING,
+                PADDING + STATUS_BAR_HEIGHT,
                 (screenWidth - 3 * PADDING) / 2,
                 screenHeight - 2 * PADDING
             );
@@ -330,22 +391,23 @@ private:
         else
         {
             configureWindow(
-                managedWindows_[0],
+                currentTag.windows[0].id,
                 PADDING,
-                PADDING,
+                PADDING + STATUS_BAR_HEIGHT,
                 (screenWidth - 3 * PADDING) / 2,
                 screenHeight - 2 * PADDING
             );
 
             uint32_t rightWidth = (screenWidth - 3 * PADDING) / 2;
-            uint32_t rightHeight = (screenHeight - (managedWindows_.size() * PADDING)) / (managedWindows_.size() - 1);
+            uint32_t rightHeight =
+                (screenHeight - (currentTag.windows.size() * PADDING)) / (currentTag.windows.size() - 1);
 
-            for (size_t i = 1; i < managedWindows_.size(); ++i)
+            for (size_t i = 1; i < currentTag.windows.size(); ++i)
             {
                 configureWindow(
-                    managedWindows_[i],
+                    currentTag.windows[i].id,
                     (screenWidth + PADDING) / 2,
-                    PADDING + (i - 1) * (rightHeight + PADDING),
+                    PADDING + STATUS_BAR_HEIGHT + (i - 1) * (rightHeight + PADDING),
                     rightWidth,
                     rightHeight
                 );
@@ -370,37 +432,33 @@ private:
 
     void focusWindow(xcb_window_t window)
     {
-        if (focusedWindow_ != XCB_NONE)
+        auto& currentTag = tags_[currentTagIndex_];
+
+        if (currentTag.focusedWindow != XCB_NONE)
         {
-            xcb_change_window_attributes(conn_.get(), focusedWindow_, XCB_CW_BORDER_PIXEL, &screen_->black_pixel);
+            xcb_change_window_attributes(
+                conn_.get(),
+                currentTag.focusedWindow,
+                XCB_CW_BORDER_PIXEL,
+                &screen_->black_pixel
+            );
         }
 
-        focusedWindow_ = window;
-        xcb_change_window_attributes(conn_.get(), focusedWindow_, XCB_CW_BORDER_PIXEL, &FOCUS_BORDER_COLOR);
-        xcb_configure_window(conn_.get(), focusedWindow_, XCB_CONFIG_WINDOW_BORDER_WIDTH, &FOCUS_BORDER_WIDTH);
-        xcb_set_input_focus(conn_.get(), XCB_INPUT_FOCUS_POINTER_ROOT, focusedWindow_, XCB_CURRENT_TIME);
+        currentTag.focusedWindow = window;
+        xcb_change_window_attributes(conn_.get(), currentTag.focusedWindow, XCB_CW_BORDER_PIXEL, &FOCUS_BORDER_COLOR);
+        xcb_configure_window(
+            conn_.get(),
+            currentTag.focusedWindow,
+            XCB_CONFIG_WINDOW_BORDER_WIDTH,
+            &FOCUS_BORDER_WIDTH
+        );
+        xcb_set_input_focus(conn_.get(), XCB_INPUT_FOCUS_POINTER_ROOT, currentTag.focusedWindow, XCB_CURRENT_TIME);
 
         // Re-grab keys for the newly focused window
-        grabKeys(focusedWindow_);
+        grabKeys(currentTag.focusedWindow);
 
+        updateStatusBar();
         xcb_flush(conn_.get());
-    }
-
-    void processFocusQueue()
-    {
-        while (!focusQueue_.empty())
-        {
-            xcb_window_t window = focusQueue_.front();
-            focusQueue_.pop();
-
-            // Check if the window is still valid and managed
-            auto it = std::find(managedWindows_.begin(), managedWindows_.end(), window);
-            if (it != managedWindows_.end())
-            {
-                focusWindow(window);
-                break; // Process only one focus change per event loop iteration
-            }
-        }
     }
 
     void launchProgram(Program const& program)
@@ -411,6 +469,170 @@ private:
             execl(program.path.c_str(), program.name.c_str(), nullptr);
             exit(1);
         }
+    }
+
+    void switchToTag(int tag)
+    {
+        if (tag < 0 || tag >= NUM_TAGS || tag == static_cast<int>(currentTagIndex_))
+            return;
+
+        // Unmap all windows on the current tag
+        for (auto const& window : tags_[currentTagIndex_].windows)
+        {
+            xcb_unmap_window(conn_.get(), window.id);
+        }
+
+        currentTagIndex_ = tag;
+        rearrangeWindows();
+
+        // Restore focus on the new tag
+        if (tags_[currentTagIndex_].focusedWindow != XCB_NONE)
+        {
+            focusWindow(tags_[currentTagIndex_].focusedWindow);
+        }
+        else if (!tags_[currentTagIndex_].windows.empty())
+        {
+            focusWindow(tags_[currentTagIndex_].windows.back().id);
+        }
+
+        updateStatusBar();
+    }
+
+    void moveWindowToNextTag()
+    {
+        if (tags_[currentTagIndex_].focusedWindow == XCB_NONE)
+            return;
+
+        size_t nextTagIndex = (currentTagIndex_ + 1) % NUM_TAGS;
+        xcb_window_t windowToMove = tags_[currentTagIndex_].focusedWindow;
+
+        // Find and remove the window from the current tag
+        auto& currentTag = tags_[currentTagIndex_];
+        auto it = std::find_if(
+            currentTag.windows.begin(),
+            currentTag.windows.end(),
+            [windowToMove](Window const& w) { return w.id == windowToMove; }
+        );
+        if (it != currentTag.windows.end())
+        {
+            Window movedWindow = *it;
+            currentTag.windows.erase(it);
+            currentTag.focusedWindow = XCB_NONE;
+
+            // Add the window to the next tag
+            tags_[nextTagIndex].windows.push_back(movedWindow);
+            tags_[nextTagIndex].focusedWindow = windowToMove;
+
+            // Unmap the window as it's no longer on the current tag
+            xcb_unmap_window(conn_.get(), windowToMove);
+
+            rearrangeWindows();
+            updateStatusBar();
+
+            // Focus the next window on the current tag, if any
+            if (!currentTag.windows.empty())
+            {
+                focusWindow(currentTag.windows.back().id);
+            }
+        }
+    }
+
+    void createStatusBar()
+    {
+        uint32_t mask = XCB_CW_BACK_PIXEL | XCB_CW_EVENT_MASK;
+        uint32_t values[2] = { STATUS_BAR_COLOR, XCB_EVENT_MASK_EXPOSURE | XCB_EVENT_MASK_BUTTON_PRESS };
+
+        statusBarWindow_ = xcb_generate_id(conn_.get());
+        xcb_create_window(
+            conn_.get(),
+            XCB_COPY_FROM_PARENT,
+            statusBarWindow_,
+            screen_->root,
+            0,
+            0,
+            screen_->width_in_pixels,
+            STATUS_BAR_HEIGHT,
+            0,
+            XCB_WINDOW_CLASS_INPUT_OUTPUT,
+            screen_->root_visual,
+            mask,
+            values
+        );
+
+        xcb_map_window(conn_.get(), statusBarWindow_);
+    }
+
+    void updateStatusBar()
+    {
+        std::string statusText = "Tags: ";
+        for (size_t i = 0; i < NUM_TAGS; ++i)
+        {
+            statusText += (i == currentTagIndex_ ? "[" : " ") + std::to_string(i) + (i == currentTagIndex_ ? "]" : " ");
+        }
+
+        statusText += " | Focused: ";
+        if (tags_[currentTagIndex_].focusedWindow != XCB_NONE)
+        {
+            auto it = std::find_if(
+                tags_[currentTagIndex_].windows.begin(),
+                tags_[currentTagIndex_].windows.end(),
+                [this](Window const& w) { return w.id == tags_[currentTagIndex_].focusedWindow; }
+            );
+            if (it != tags_[currentTagIndex_].windows.end())
+            {
+                statusText += it->name;
+            }
+            else
+            {
+                statusText += "Unknown";
+            }
+        }
+        else
+        {
+            statusText += "None";
+        }
+
+        xcb_clear_area(conn_.get(), 0, statusBarWindow_, 0, 0, 0, 0);
+
+        xcb_font_t font = xcb_generate_id(conn_.get());
+        xcb_open_font(conn_.get(), font, strlen("fixed"), "fixed");
+
+        xcb_gcontext_t gc = xcb_generate_id(conn_.get());
+        uint32_t mask = XCB_GC_FOREGROUND | XCB_GC_BACKGROUND | XCB_GC_FONT;
+        uint32_t values[3] = { screen_->black_pixel, STATUS_BAR_COLOR, font };
+        xcb_create_gc(conn_.get(), gc, statusBarWindow_, mask, values);
+
+        xcb_image_text_8(
+            conn_.get(),
+            statusText.length(),
+            statusBarWindow_,
+            gc,
+            10,
+            STATUS_BAR_HEIGHT - 5,
+            statusText.c_str()
+        );
+
+        xcb_close_font(conn_.get(), font);
+        xcb_free_gc(conn_.get(), gc);
+
+        xcb_flush(conn_.get());
+    }
+
+    std::string getWindowName(xcb_window_t window)
+    {
+        xcb_get_property_cookie_t cookie =
+            xcb_get_property(conn_.get(), 0, window, XCB_ATOM_WM_NAME, XCB_ATOM_STRING, 0, 1024);
+        xcb_get_property_reply_t* reply = xcb_get_property_reply(conn_.get(), cookie, NULL);
+
+        if (reply)
+        {
+            int len = xcb_get_property_value_length(reply);
+            char* name = static_cast<char*>(xcb_get_property_value(reply));
+            std::string windowName(name, len);
+            free(reply);
+            return windowName;
+        }
+        return "Unnamed";
     }
 };
 
