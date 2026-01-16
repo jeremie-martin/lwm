@@ -390,19 +390,36 @@ void WindowManager::unmanage_window(xcb_window_t window)
 {
     for (auto& monitor : monitors_)
     {
-        for (auto& workspace : monitor.workspaces)
+        for (size_t ws_idx = 0; ws_idx < monitor.workspaces.size(); ++ws_idx)
         {
+            auto& workspace = monitor.workspaces[ws_idx];
             auto it = workspace.find_window(window);
             if (it != workspace.windows.end())
             {
                 workspace.windows.erase(it);
-                if (workspace.focused_window == window)
+                bool was_focused = (workspace.focused_window == window);
+                if (was_focused)
                 {
                     workspace.focused_window = workspace.windows.empty() ? XCB_NONE : workspace.windows.back().id;
                 }
                 update_ewmh_client_list();
                 rearrange_monitor(monitor);
+
+                // If this was the focused window on the current workspace, update focus and EWMH
+                if (was_focused && ws_idx == monitor.current_workspace)
+                {
+                    if (workspace.focused_window != XCB_NONE)
+                    {
+                        focus_window(workspace.focused_window);
+                    }
+                    else
+                    {
+                        ewmh_.set_active_window(XCB_NONE);
+                    }
+                }
+
                 update_all_bars();
+                conn_.flush();
                 return;
             }
         }
@@ -411,17 +428,44 @@ void WindowManager::unmanage_window(xcb_window_t window)
 
 void WindowManager::focus_window(xcb_window_t window)
 {
-    Monitor* target_monitor = monitor_containing_window(window);
+    // Find which monitor and workspace contains the window
+    Monitor* target_monitor = nullptr;
+    size_t target_monitor_idx = 0;
+    size_t target_workspace_idx = 0;
+
+    for (size_t m = 0; m < monitors_.size(); ++m)
+    {
+        for (size_t w = 0; w < monitors_[m].workspaces.size(); ++w)
+        {
+            if (monitors_[m].workspaces[w].find_window(window) != monitors_[m].workspaces[w].windows.end())
+            {
+                target_monitor = &monitors_[m];
+                target_monitor_idx = m;
+                target_workspace_idx = w;
+                break;
+            }
+        }
+        if (target_monitor)
+            break;
+    }
+
     if (!target_monitor)
         return;
 
-    for (size_t i = 0; i < monitors_.size(); ++i)
+    // Switch to target monitor
+    focused_monitor_ = target_monitor_idx;
+
+    // If window is on a different workspace, switch to it
+    if (target_monitor->current_workspace != target_workspace_idx)
     {
-        if (&monitors_[i] == target_monitor)
+        // Unmap current workspace windows
+        for (auto const& w : target_monitor->current().windows)
         {
-            focused_monitor_ = i;
-            break;
+            xcb_unmap_window(conn_.get(), w.id);
         }
+        target_monitor->current_workspace = target_workspace_idx;
+        update_ewmh_current_desktop();
+        rearrange_monitor(*target_monitor);
     }
 
     // Clear borders on all windows across all monitors
@@ -508,6 +552,7 @@ void WindowManager::switch_workspace(int ws)
     rearrange_monitor(monitor);
     focus_or_fallback(monitor);
     update_all_bars();
+    conn_.flush();
 }
 
 void WindowManager::move_window_to_workspace(int ws)
@@ -658,11 +703,15 @@ void WindowManager::launch_program(std::string const& command)
 
 Monitor* WindowManager::monitor_containing_window(xcb_window_t window)
 {
+    // Search ALL workspaces on ALL monitors, not just current workspace
     for (auto& monitor : monitors_)
     {
-        if (monitor.current().find_window(window) != monitor.current().windows.end())
+        for (auto& workspace : monitor.workspaces)
         {
-            return &monitor;
+            if (workspace.find_window(window) != workspace.windows.end())
+            {
+                return &monitor;
+            }
         }
     }
     return nullptr;
@@ -815,17 +864,20 @@ void WindowManager::switch_to_ewmh_desktop(uint32_t desktop)
     if (monitor_idx >= monitors_.size())
         return;
 
-    // Switch to the target monitor
-    focused_monitor_ = monitor_idx;
     auto& monitor = monitors_[monitor_idx];
 
-    // Unmap windows from current workspace
+    // Early return if already on target monitor and workspace (matches switch_workspace behavior)
+    if (monitor_idx == focused_monitor_ && workspace_idx == monitor.current_workspace)
+        return;
+
+    // Unmap windows from OLD workspace before switching
     for (auto const& window : monitor.current().windows)
     {
         xcb_unmap_window(conn_.get(), window.id);
     }
 
-    // Switch to target workspace
+    // Switch to target monitor and workspace
+    focused_monitor_ = monitor_idx;
     monitor.current_workspace = workspace_idx;
     update_ewmh_current_desktop();
     rearrange_monitor(monitor);
