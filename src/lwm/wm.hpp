@@ -42,6 +42,7 @@ private:
     void handle_window_removal(xcb_window_t window);
     void handle_enter_notify(xcb_enter_notify_event_t const& e);
     void handle_key_press(xcb_key_press_event_t const& e);
+    void handle_client_message(xcb_client_message_event_t const& e);
     void handle_randr_screen_change();
 
     void manage_window(xcb_window_t window);
@@ -82,6 +83,8 @@ private:
     void update_ewmh_client_list();
     void update_ewmh_current_desktop();
     uint32_t get_ewmh_desktop_index(size_t monitor_idx, size_t workspace_idx) const;
+    void switch_to_ewmh_desktop(uint32_t desktop);
+    void clear_all_borders();
 };
 
 } // namespace lwm

@@ -5,6 +5,14 @@ set(CMAKE_CXX_STANDARD 23)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
 
+# Release by default
+if(NOT CMAKE_BUILD_TYPE)
+    set(CMAKE_BUILD_TYPE Release)
+endif()
+
+# Optimize for release
+set(CMAKE_CXX_FLAGS_RELEASE "-O2 -DNDEBUG")
+
 # Dependencies
 find_package(PkgConfig REQUIRED)
 pkg_check_modules(XCB REQUIRED IMPORTED_TARGET xcb xcb-keysyms xcb-randr xcb-ewmh x11)
@@ -19,3 +27,6 @@ FetchContent_Declare(
 FetchContent_MakeAvailable(tomlplusplus)
 
 add_subdirectory(src)
+
+# Install binary to /usr/local/bin
+install(TARGETS lwm DESTINATION bin)

@@ -193,6 +193,9 @@ void WindowManager::handle_event(xcb_generic_event_t const& event)
         case XCB_KEY_PRESS:
             handle_key_press(reinterpret_cast<xcb_key_press_event_t const&>(event));
             break;
+        case XCB_CLIENT_MESSAGE:
+            handle_client_message(reinterpret_cast<xcb_client_message_event_t const&>(event));
+            break;
     }
 }
 
@@ -288,6 +291,27 @@ void WindowManager::handle_key_press(xcb_key_press_event_t const& e)
     else if (action->type == "spawn")
     {
         launch_program(keybinds_.resolve_command(action->command, config_));
+    }
+}
+
+void WindowManager::handle_client_message(xcb_client_message_event_t const& e)
+{
+    xcb_ewmh_connection_t* ewmh = ewmh_.get();
+
+    // Handle _NET_CURRENT_DESKTOP requests (e.g., from Polybar clicks)
+    if (e.type == ewmh->_NET_CURRENT_DESKTOP)
+    {
+        uint32_t desktop = e.data.data32[0];
+        switch_to_ewmh_desktop(desktop);
+    }
+    // Handle _NET_ACTIVE_WINDOW requests
+    else if (e.type == ewmh->_NET_ACTIVE_WINDOW)
+    {
+        xcb_window_t window = e.window;
+        if (monitor_containing_window(window))
+        {
+            focus_window(window);
+        }
     }
 }
 
@@ -390,18 +414,10 @@ void WindowManager::focus_window(xcb_window_t window)
         }
     }
 
+    // Clear borders on all windows across all monitors
+    clear_all_borders();
+
     auto& workspace = target_monitor->current();
-
-    if (workspace.focused_window != XCB_NONE && workspace.focused_window != window)
-    {
-        xcb_change_window_attributes(
-            conn_.get(),
-            workspace.focused_window,
-            XCB_CW_BORDER_PIXEL,
-            &conn_.screen()->black_pixel
-        );
-    }
-
     workspace.focused_window = window;
     xcb_change_window_attributes(conn_.get(), window, XCB_CW_BORDER_PIXEL, &config_.appearance.border_color);
     xcb_configure_window(conn_.get(), window, XCB_CONFIG_WINDOW_BORDER_WIDTH, &config_.appearance.border_width);
@@ -778,6 +794,53 @@ uint32_t WindowManager::get_ewmh_desktop_index(size_t monitor_idx, size_t worksp
 {
     // Desktop index = monitor_idx * workspaces_per_monitor + workspace_idx
     return static_cast<uint32_t>(monitor_idx * Config::NUM_WORKSPACES + workspace_idx);
+}
+
+void WindowManager::switch_to_ewmh_desktop(uint32_t desktop)
+{
+    // Convert EWMH desktop index to monitor + workspace
+    size_t monitor_idx = desktop / Config::NUM_WORKSPACES;
+    size_t workspace_idx = desktop % Config::NUM_WORKSPACES;
+
+    if (monitor_idx >= monitors_.size())
+        return;
+
+    // Switch to the target monitor
+    focused_monitor_ = monitor_idx;
+    auto& monitor = monitors_[monitor_idx];
+
+    // Unmap windows from current workspace
+    for (auto const& window : monitor.current().windows)
+    {
+        xcb_unmap_window(conn_.get(), window.id);
+    }
+
+    // Switch to target workspace
+    monitor.current_workspace = workspace_idx;
+    update_ewmh_current_desktop();
+    rearrange_monitor(monitor);
+    focus_or_fallback(monitor);
+    update_all_bars();
+    conn_.flush();
+}
+
+void WindowManager::clear_all_borders()
+{
+    for (auto& monitor : monitors_)
+    {
+        for (auto& workspace : monitor.workspaces)
+        {
+            for (auto const& window : workspace.windows)
+            {
+                xcb_change_window_attributes(
+                    conn_.get(),
+                    window.id,
+                    XCB_CW_BORDER_PIXEL,
+                    &conn_.screen()->black_pixel
+                );
+            }
+        }
+    }
 }
 
 } // namespace lwm
