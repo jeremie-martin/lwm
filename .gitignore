@@ -1,1 +1,20 @@
+# Compiled binaries
 wm
+lwm
+
+# Build artifacts
+build/
+CMakeFiles/
+CMakeCache.txt
+cmake_install.cmake
+Makefile
+compile_commands.json
+
+# Debug/logs
+*.log
+
+# Editor
+.vscode/
+.idea/
+*.swp
+*~

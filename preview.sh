@@ -2,12 +2,12 @@
 set -e
 
 # Compile the window manager
-g++ -std=c++20 -o wm main.cpp -lxcb -lxcb-keysyms
+g++ -std=c++23 -o wm drw.c main.cpp -I/usr/include/freetype2 -lxcb -lxcb-keysyms -lXft -lfontconfig -lX11
+
 
 # Start Xephyr
 Xephyr :100 -ac -screen 1920x1080 -host-cursor &
 XEPHYR_PID=$!
-
 # Wait for Xephyr to start
 sleep 1
 

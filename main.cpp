@@ -1,3 +1,4 @@
+#include "drw.h"
 #include <X11/keysym.h>
 #include <algorithm>
 #include <cstdio>
@@ -41,6 +42,7 @@ public:
         setupKeyBindings();
         createStatusBar();
         initializeTags();
+        updateStatusBar(); // Add this line to update the status bar at startup
 
         xcb_flush(conn_.get());
     }
