@@ -4,6 +4,7 @@ set -e
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PROJECT_DIR="$(dirname "$SCRIPT_DIR")"
 BUILD_DIR="$PROJECT_DIR/build"
+CONFIG_DIR="$PROJECT_DIR/config"
 
 # Build the project
 echo "Building LWM..."
@@ -34,6 +35,16 @@ echo "Starting LWM in Xephyr..."
 DISPLAY=:100 "$BUILD_DIR/src/app/lwm" "$TEST_CONFIG_DIR/config.toml" &
 WM_PID=$!
 
+# Wait for WM to initialize
+sleep 0.5
+
+# Launch Polybar (if available)
+if command -v polybar &> /dev/null; then
+    echo "Launching Polybar..."
+    DISPLAY=:100 polybar --config="$CONFIG_DIR/polybar.ini" main &
+    POLYBAR_PID=$!
+fi
+
 echo ""
 echo "LWM is running in Xephyr on display :100"
 echo "You can start applications with: DISPLAY=:100 <app>"
@@ -44,6 +55,7 @@ read -p "Press Enter to exit..."
 
 # Clean up
 echo "Cleaning up..."
+kill $POLYBAR_PID 2>/dev/null || true
 kill $WM_PID 2>/dev/null || true
 kill $XEPHYR_PID 2>/dev/null || true
 
