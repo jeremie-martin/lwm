@@ -1,11 +1,31 @@
 #include "wm.hpp"
 #include <algorithm>
+#include <csignal>
 #include <cstdlib>
 #include <cstring>
 #include <memory>
+#include <sys/wait.h>
 #include <unistd.h>
 
 namespace lwm {
+
+namespace {
+
+void sigchld_handler(int /*sig*/)
+{
+    // Reap all zombie children
+    while (waitpid(-1, nullptr, WNOHANG) > 0);
+}
+
+void setup_signal_handlers()
+{
+    struct sigaction sa = {};
+    sa.sa_handler = sigchld_handler;
+    sa.sa_flags = SA_RESTART | SA_NOCLDSTOP;
+    sigaction(SIGCHLD, &sa, nullptr);
+}
+
+} // namespace
 
 WindowManager::WindowManager(Config config)
     : config_(std::move(config))
@@ -18,6 +38,7 @@ WindowManager::WindowManager(Config config)
                                                  : std::nullopt
       )
 {
+    setup_signal_handlers();
     setup_root();
     detect_monitors();
     setup_ewmh();
@@ -189,6 +210,15 @@ void WindowManager::handle_map_request(xcb_map_request_event_t const& e)
         return;
     }
 
+    // Check if window should not be tiled (dialogs, menus, etc.)
+    if (!ewmh_.should_tile_window(e.window))
+    {
+        // Map but don't tile - let it float
+        xcb_map_window(conn_.get(), e.window);
+        conn_.flush();
+        return;
+    }
+
     manage_window(e.window);
     xcb_map_window(conn_.get(), e.window);
     focus_window(e.window);
@@ -276,13 +306,19 @@ void WindowManager::handle_randr_screen_change()
     }
 
     detect_monitors();
-    setup_monitor_bars();
+    if (bar_)
+    {
+        setup_monitor_bars();
+    }
 
     if (!monitors_.empty())
     {
+        // Move all windows to first monitor, current workspace
+        uint32_t desktop = get_ewmh_desktop_index(0, monitors_[0].current_workspace);
         for (auto& window : all_windows)
         {
             monitors_[0].current().windows.push_back(window);
+            ewmh_.set_window_desktop(window.id, desktop);
         }
     }
 
@@ -517,6 +553,11 @@ void WindowManager::focus_or_fallback(Monitor& monitor)
     else if (!monitor.current().windows.empty())
     {
         focus_window(monitor.current().windows.back().id);
+    }
+    else
+    {
+        // No windows - set active window to none per EWMH spec
+        ewmh_.set_active_window(XCB_NONE);
     }
 }
 

@@ -52,6 +52,9 @@ xcb_window_t StatusBar::create_for_monitor(Monitor const& monitor)
 
 void StatusBar::update(Monitor const& monitor)
 {
+    if (monitor.bar_window == XCB_NONE)
+        return;
+
     std::string statusText = "WS: ";
     for (size_t i = 0; i < monitor.workspaces.size(); ++i)
     {

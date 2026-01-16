@@ -201,6 +201,23 @@ bool Ewmh::is_dock_window(xcb_window_t window) const
     return get_window_type(window) == ewmh_._NET_WM_WINDOW_TYPE_DOCK;
 }
 
+bool Ewmh::is_dialog_window(xcb_window_t window) const
+{
+    return get_window_type(window) == ewmh_._NET_WM_WINDOW_TYPE_DIALOG;
+}
+
+bool Ewmh::should_tile_window(xcb_window_t window) const
+{
+    xcb_atom_t type = get_window_type(window);
+    // Don't tile docks, dialogs, or utility windows
+    return type != ewmh_._NET_WM_WINDOW_TYPE_DOCK && type != ewmh_._NET_WM_WINDOW_TYPE_DIALOG
+        && type != ewmh_._NET_WM_WINDOW_TYPE_UTILITY && type != ewmh_._NET_WM_WINDOW_TYPE_SPLASH
+        && type != ewmh_._NET_WM_WINDOW_TYPE_MENU && type != ewmh_._NET_WM_WINDOW_TYPE_DROPDOWN_MENU
+        && type != ewmh_._NET_WM_WINDOW_TYPE_POPUP_MENU && type != ewmh_._NET_WM_WINDOW_TYPE_TOOLTIP
+        && type != ewmh_._NET_WM_WINDOW_TYPE_NOTIFICATION && type != ewmh_._NET_WM_WINDOW_TYPE_COMBO
+        && type != ewmh_._NET_WM_WINDOW_TYPE_DND;
+}
+
 Strut Ewmh::get_window_strut(xcb_window_t window) const
 {
     Strut strut;

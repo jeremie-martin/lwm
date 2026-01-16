@@ -42,6 +42,8 @@ public:
     // Window type detection
     xcb_atom_t get_window_type(xcb_window_t window) const;
     bool is_dock_window(xcb_window_t window) const;
+    bool is_dialog_window(xcb_window_t window) const;
+    bool should_tile_window(xcb_window_t window) const;
 
     // Strut support
     Strut get_window_strut(xcb_window_t window) const;

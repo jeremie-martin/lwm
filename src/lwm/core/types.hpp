@@ -68,10 +68,13 @@ struct Monitor
 
     Geometry working_area() const
     {
+        // Clamp struts to prevent underflow
+        uint32_t h_strut = std::min(static_cast<uint32_t>(width), strut.left + strut.right);
+        uint32_t v_strut = std::min(static_cast<uint32_t>(height), strut.top + strut.bottom);
         return { static_cast<int16_t>(x + strut.left),
                  static_cast<int16_t>(y + strut.top),
-                 static_cast<uint16_t>(width - strut.left - strut.right),
-                 static_cast<uint16_t>(height - strut.top - strut.bottom) };
+                 static_cast<uint16_t>(width - h_strut),
+                 static_cast<uint16_t>(height - v_strut) };
     }
 };
 
