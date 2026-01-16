@@ -1,5 +1,6 @@
 add_library(liblwm STATIC
     core/connection.cpp
+    core/ewmh.cpp
     config/config.cpp
     layout/layout.cpp
     keybind/keybind.cpp

@@ -3,6 +3,7 @@
 #include "lwm/bar/bar.hpp"
 #include "lwm/config/config.hpp"
 #include "lwm/core/connection.hpp"
+#include "lwm/core/ewmh.hpp"
 #include "lwm/core/types.hpp"
 #include "lwm/keybind/keybind.hpp"
 #include "lwm/layout/layout.hpp"
@@ -21,6 +22,7 @@ public:
 private:
     Config config_;
     Connection conn_;
+    Ewmh ewmh_;
     KeybindManager keybinds_;
     Layout layout_;
     StatusBar bar_;
@@ -69,6 +71,12 @@ private:
     Monitor* monitor_at_point(int16_t x, int16_t y);
     std::string get_window_name(xcb_window_t window);
     void update_all_bars();
+
+    // EWMH helpers
+    void setup_ewmh();
+    void update_ewmh_client_list();
+    void update_ewmh_current_desktop();
+    uint32_t get_ewmh_desktop_index(size_t monitor_idx, size_t workspace_idx) const;
 };
 
 } // namespace lwm

@@ -10,12 +10,14 @@ namespace lwm {
 WindowManager::WindowManager(Config config)
     : config_(std::move(config))
     , conn_()
+    , ewmh_(conn_)
     , keybinds_(conn_, config_)
     , layout_(conn_, config_.appearance)
     , bar_(conn_, config_.appearance)
 {
     setup_root();
     detect_monitors();
+    setup_ewmh();
     setup_monitor_bars();
     keybinds_.grab_keys(conn_.screen()->root);
     update_all_bars();
@@ -258,7 +260,12 @@ void WindowManager::handle_randr_screen_change()
         }
     }
 
+    // Update EWMH for new monitor configuration
+    ewmh_.set_desktop_viewport(monitors_);
+    update_ewmh_client_list();
+
     focused_monitor_ = 0;
+    update_ewmh_current_desktop();
     rearrange_all_monitors();
     update_all_bars();
     conn_.flush();
@@ -272,6 +279,11 @@ void WindowManager::manage_window(xcb_window_t window)
     uint32_t values[] = { XCB_EVENT_MASK_ENTER_WINDOW | XCB_EVENT_MASK_FOCUS_CHANGE | XCB_EVENT_MASK_PROPERTY_CHANGE
                           | XCB_EVENT_MASK_STRUCTURE_NOTIFY };
     xcb_change_window_attributes(conn_.get(), window, XCB_CW_EVENT_MASK, values);
+
+    // Set EWMH desktop for this window
+    uint32_t desktop = get_ewmh_desktop_index(focused_monitor_, focused_monitor().current_workspace);
+    ewmh_.set_window_desktop(window, desktop);
+    update_ewmh_client_list();
 
     keybinds_.grab_keys(window);
     rearrange_monitor(focused_monitor());
@@ -292,6 +304,7 @@ void WindowManager::unmanage_window(xcb_window_t window)
                 {
                     workspace.focused_window = workspace.windows.empty() ? XCB_NONE : workspace.windows.back().id;
                 }
+                update_ewmh_client_list();
                 rearrange_monitor(monitor);
                 update_all_bars();
                 return;
@@ -326,6 +339,10 @@ void WindowManager::focus_window(xcb_window_t window)
     xcb_change_window_attributes(conn_.get(), window, XCB_CW_BORDER_PIXEL, &config_.appearance.border_color);
     xcb_configure_window(conn_.get(), window, XCB_CONFIG_WINDOW_BORDER_WIDTH, &config_.appearance.border_width);
     xcb_set_input_focus(conn_.get(), XCB_INPUT_FOCUS_POINTER_ROOT, window, XCB_CURRENT_TIME);
+
+    // Clear urgent hint when window receives focus
+    ewmh_.set_demands_attention(window, false);
+    ewmh_.set_active_window(window);
 
     update_all_bars();
     conn_.flush();
@@ -393,6 +410,7 @@ void WindowManager::switch_workspace(int ws)
     }
 
     monitor.current_workspace = static_cast<size_t>(ws);
+    update_ewmh_current_desktop();
     rearrange_monitor(monitor);
     focus_or_fallback(monitor);
     update_all_bars();
@@ -421,6 +439,10 @@ void WindowManager::move_window_to_workspace(int ws)
 
     monitor.workspaces[ws].windows.push_back(moved_window);
     monitor.workspaces[ws].focused_window = window_to_move;
+
+    // Update EWMH desktop for moved window
+    uint32_t desktop = get_ewmh_desktop_index(focused_monitor_, static_cast<size_t>(ws));
+    ewmh_.set_window_desktop(window_to_move, desktop);
 
     xcb_unmap_window(conn_.get(), window_to_move);
     rearrange_monitor(monitor);
@@ -464,6 +486,7 @@ void WindowManager::focus_monitor(int direction)
         return;
 
     focused_monitor_ = wrap_monitor_index(static_cast<int>(focused_monitor_) + direction);
+    update_ewmh_current_desktop();
 
     auto& monitor = focused_monitor();
     focus_or_fallback(monitor);
@@ -500,10 +523,15 @@ void WindowManager::move_window_to_monitor(int direction)
     target_monitor.current().windows.push_back(moved_window);
     target_monitor.current().focused_window = window_to_move;
 
+    // Update EWMH desktop for moved window
+    uint32_t desktop = get_ewmh_desktop_index(target_idx, target_monitor.current_workspace);
+    ewmh_.set_window_desktop(window_to_move, desktop);
+
     rearrange_monitor(focused_monitor());
     rearrange_monitor(target_monitor);
 
     focused_monitor_ = target_idx;
+    update_ewmh_current_desktop();
     focus_window(window_to_move);
     warp_to_monitor(target_monitor);
 
@@ -567,6 +595,58 @@ void WindowManager::update_all_bars()
     {
         bar_.update(monitor);
     }
+}
+
+void WindowManager::setup_ewmh()
+{
+    ewmh_.init_atoms();
+    ewmh_.set_wm_name("lwm");
+
+    // Total desktops = monitors * workspaces per monitor
+    uint32_t total_desktops = static_cast<uint32_t>(monitors_.size() * Config::NUM_WORKSPACES);
+    ewmh_.set_number_of_desktops(total_desktops);
+
+    // Generate desktop names: "Mon0:1", "Mon0:2", ... "Mon1:1", etc.
+    std::vector<std::string> names;
+    for (size_t m = 0; m < monitors_.size(); ++m)
+    {
+        for (int w = 0; w < Config::NUM_WORKSPACES; ++w)
+        {
+            names.push_back(monitors_[m].name + ":" + std::to_string(w + 1));
+        }
+    }
+    ewmh_.set_desktop_names(names);
+
+    ewmh_.set_desktop_viewport(monitors_);
+    update_ewmh_current_desktop();
+}
+
+void WindowManager::update_ewmh_client_list()
+{
+    std::vector<xcb_window_t> windows;
+    for (auto const& monitor : monitors_)
+    {
+        for (auto const& workspace : monitor.workspaces)
+        {
+            for (auto const& window : workspace.windows)
+            {
+                windows.push_back(window.id);
+            }
+        }
+    }
+    ewmh_.update_client_list(windows);
+}
+
+void WindowManager::update_ewmh_current_desktop()
+{
+    uint32_t desktop = get_ewmh_desktop_index(focused_monitor_, focused_monitor().current_workspace);
+    ewmh_.set_current_desktop(desktop);
+}
+
+uint32_t WindowManager::get_ewmh_desktop_index(size_t monitor_idx, size_t workspace_idx) const
+{
+    // Desktop index = monitor_idx * workspaces_per_monitor + workspace_idx
+    return static_cast<uint32_t>(monitor_idx * Config::NUM_WORKSPACES + workspace_idx);
 }
 
 } // namespace lwm
