@@ -5,8 +5,7 @@
 #include <string>
 #include <vector>
 
-namespace lwm
-{
+namespace lwm {
 
 struct KeybindConfig
 {
@@ -14,7 +13,7 @@ struct KeybindConfig
     std::string key;
     std::string action;
     std::string command;
-    int tag = -1;
+    int workspace = -1;
 };
 
 struct AppearanceConfig
@@ -39,7 +38,7 @@ struct Config
     ProgramsConfig programs;
     std::vector<KeybindConfig> keybinds;
 
-    static constexpr int NUM_TAGS = 10;
+    static constexpr int NUM_WORKSPACES = 10;
 };
 
 std::optional<Config> load_config(std::string const& path);

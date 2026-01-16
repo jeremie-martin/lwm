@@ -15,11 +15,14 @@ launcher = "rofi -show drun"
 
 # Keybindings
 # mod: "super", "super+shift", "super+ctrl", etc.
-# key: X11 keysym name (e.g., "Return", "q", "ampersand")
-# action: "spawn", "kill", "switch_tag", "move_to_tag"
+# key: X11 keysym name (e.g., "Return", "q", "ampersand", "Left", "Right")
+# action: "spawn", "kill", "switch_workspace", "move_to_workspace",
+#         "focus_monitor_left", "focus_monitor_right",
+#         "move_to_monitor_left", "move_to_monitor_right"
 # command: for "spawn" action, use "terminal", "browser", "launcher", or a path
-# tag: for "switch_tag" action, the tag number (0-9)
+# workspace: for "switch_workspace"/"move_to_workspace" actions, the workspace number (0-9)
 
+# Program launching
 [[keybinds]]
 mod = "super"
 key = "Return"
@@ -43,69 +46,146 @@ mod = "super"
 key = "q"
 action = "kill"
 
-# Tag switching (AZERTY layout)
+# Workspace switching (AZERTY layout)
 [[keybinds]]
 mod = "super"
 key = "ampersand"
-action = "switch_tag"
-tag = 0
+action = "switch_workspace"
+workspace = 0
 
 [[keybinds]]
 mod = "super"
 key = "eacute"
-action = "switch_tag"
-tag = 1
+action = "switch_workspace"
+workspace = 1
 
 [[keybinds]]
 mod = "super"
 key = "quotedbl"
-action = "switch_tag"
-tag = 2
+action = "switch_workspace"
+workspace = 2
 
 [[keybinds]]
 mod = "super"
 key = "apostrophe"
-action = "switch_tag"
-tag = 3
+action = "switch_workspace"
+workspace = 3
 
 [[keybinds]]
 mod = "super"
 key = "parenleft"
-action = "switch_tag"
-tag = 4
+action = "switch_workspace"
+workspace = 4
 
 [[keybinds]]
 mod = "super"
 key = "minus"
-action = "switch_tag"
-tag = 5
+action = "switch_workspace"
+workspace = 5
 
 [[keybinds]]
 mod = "super"
 key = "egrave"
-action = "switch_tag"
-tag = 6
+action = "switch_workspace"
+workspace = 6
 
 [[keybinds]]
 mod = "super"
 key = "underscore"
-action = "switch_tag"
-tag = 7
+action = "switch_workspace"
+workspace = 7
 
 [[keybinds]]
 mod = "super"
 key = "ccedilla"
-action = "switch_tag"
-tag = 8
+action = "switch_workspace"
+workspace = 8
 
 [[keybinds]]
 mod = "super"
 key = "agrave"
-action = "switch_tag"
-tag = 9
+action = "switch_workspace"
+workspace = 9
 
-# Move window to next tag
+# Move window to workspace (on current monitor)
 [[keybinds]]
 mod = "super+shift"
-key = "m"
-action = "move_to_tag"
+key = "ampersand"
+action = "move_to_workspace"
+workspace = 0
+
+[[keybinds]]
+mod = "super+shift"
+key = "eacute"
+action = "move_to_workspace"
+workspace = 1
+
+[[keybinds]]
+mod = "super+shift"
+key = "quotedbl"
+action = "move_to_workspace"
+workspace = 2
+
+[[keybinds]]
+mod = "super+shift"
+key = "apostrophe"
+action = "move_to_workspace"
+workspace = 3
+
+[[keybinds]]
+mod = "super+shift"
+key = "parenleft"
+action = "move_to_workspace"
+workspace = 4
+
+[[keybinds]]
+mod = "super+shift"
+key = "minus"
+action = "move_to_workspace"
+workspace = 5
+
+[[keybinds]]
+mod = "super+shift"
+key = "egrave"
+action = "move_to_workspace"
+workspace = 6
+
+[[keybinds]]
+mod = "super+shift"
+key = "underscore"
+action = "move_to_workspace"
+workspace = 7
+
+[[keybinds]]
+mod = "super+shift"
+key = "ccedilla"
+action = "move_to_workspace"
+workspace = 8
+
+[[keybinds]]
+mod = "super+shift"
+key = "agrave"
+action = "move_to_workspace"
+workspace = 9
+
+# Monitor focus switching
+[[keybinds]]
+mod = "super"
+key = "Left"
+action = "focus_monitor_left"
+
+[[keybinds]]
+mod = "super"
+key = "Right"
+action = "focus_monitor_right"
+
+# Move window to adjacent monitor
+[[keybinds]]
+mod = "super+shift"
+key = "Left"
+action = "move_to_monitor_left"
+
+[[keybinds]]
+mod = "super+shift"
+key = "Right"
+action = "move_to_monitor_right"

@@ -3,28 +3,30 @@
 #include "lwm/config/config.hpp"
 #include "lwm/core/connection.hpp"
 #include "lwm/core/types.hpp"
-#include <cstddef>
 #include <string>
-#include <vector>
 
-namespace lwm
-{
+namespace lwm {
 
 class StatusBar
 {
 public:
-    StatusBar(Connection& conn, AppearanceConfig const& appearance, int num_tags);
+    StatusBar(Connection& conn, AppearanceConfig const& appearance);
+    ~StatusBar();
 
-    void update(size_t current_tag, std::vector<Tag> const& tags);
+    StatusBar(StatusBar const&) = delete;
+    StatusBar& operator=(StatusBar const&) = delete;
+
+    xcb_window_t create_for_monitor(Monitor const& monitor);
+    void update(Monitor const& monitor);
+    void destroy(xcb_window_t bar_window);
 
 private:
     Connection& conn_;
     AppearanceConfig const& appearance_;
-    int num_tags_;
-    xcb_window_t window_;
+    xcb_font_t font_;
+    xcb_gcontext_t gc_;
 
-    void create();
-    void draw_text(std::string const& text);
+    void draw_text(xcb_window_t window, std::string const& text);
 };
 
 } // namespace lwm

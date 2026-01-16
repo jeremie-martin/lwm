@@ -6,8 +6,7 @@
 #include <map>
 #include <optional>
 
-namespace lwm
-{
+namespace lwm {
 
 class KeybindManager
 {

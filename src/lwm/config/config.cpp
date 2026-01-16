@@ -2,42 +2,46 @@
 #include <iostream>
 #include <toml++/toml.hpp>
 
-namespace lwm
-{
+namespace lwm {
 
 Config default_config()
 {
     Config cfg;
+    // appearance and programs use struct defaults from config.hpp
 
-    cfg.appearance.padding = 10;
-    cfg.appearance.border_width = 2;
-    cfg.appearance.border_color = 0xFF0000;
-    cfg.appearance.status_bar_height = 30;
-    cfg.appearance.status_bar_color = 0x808080;
-
-    cfg.programs.terminal = "/usr/local/bin/st";
-    cfg.programs.browser = "/usr/bin/firefox";
-    cfg.programs.launcher = "dmenu_run";
-
-    // Default AZERTY keybinds
     cfg.keybinds = {
-        { "super", "Return", "spawn", "terminal", -1 },
-        { "super", "f", "spawn", "browser", -1 },
-        { "super", "d", "spawn", "launcher", -1 },
-        { "super", "q", "kill", "", -1 },
-        // AZERTY number keys for tag switching
-        { "super", "ampersand", "switch_tag", "", 0 },
-        { "super", "eacute", "switch_tag", "", 1 },
-        { "super", "quotedbl", "switch_tag", "", 2 },
-        { "super", "apostrophe", "switch_tag", "", 3 },
-        { "super", "parenleft", "switch_tag", "", 4 },
-        { "super", "minus", "switch_tag", "", 5 },
-        { "super", "egrave", "switch_tag", "", 6 },
-        { "super", "underscore", "switch_tag", "", 7 },
-        { "super", "ccedilla", "switch_tag", "", 8 },
-        { "super", "agrave", "switch_tag", "", 9 },
-        // Move window to next tag
-        { "super+shift", "m", "move_to_tag", "", -1 },
+        {       "super",     "Return",                 "spawn", "terminal", -1 },
+        {       "super",          "f",                 "spawn",  "browser", -1 },
+        {       "super",          "d",                 "spawn", "launcher", -1 },
+        {       "super",          "q",                  "kill",         "", -1 },
+        // AZERTY number keys for workspace switching
+        {       "super",  "ampersand",      "switch_workspace",         "",  0 },
+        {       "super",     "eacute",      "switch_workspace",         "",  1 },
+        {       "super",   "quotedbl",      "switch_workspace",         "",  2 },
+        {       "super", "apostrophe",      "switch_workspace",         "",  3 },
+        {       "super",  "parenleft",      "switch_workspace",         "",  4 },
+        {       "super",      "minus",      "switch_workspace",         "",  5 },
+        {       "super",     "egrave",      "switch_workspace",         "",  6 },
+        {       "super", "underscore",      "switch_workspace",         "",  7 },
+        {       "super",   "ccedilla",      "switch_workspace",         "",  8 },
+        {       "super",     "agrave",      "switch_workspace",         "",  9 },
+        // Move window to workspace on same monitor
+        { "super+shift",  "ampersand",     "move_to_workspace",         "",  0 },
+        { "super+shift",     "eacute",     "move_to_workspace",         "",  1 },
+        { "super+shift",   "quotedbl",     "move_to_workspace",         "",  2 },
+        { "super+shift", "apostrophe",     "move_to_workspace",         "",  3 },
+        { "super+shift",  "parenleft",     "move_to_workspace",         "",  4 },
+        { "super+shift",      "minus",     "move_to_workspace",         "",  5 },
+        { "super+shift",     "egrave",     "move_to_workspace",         "",  6 },
+        { "super+shift", "underscore",     "move_to_workspace",         "",  7 },
+        { "super+shift",   "ccedilla",     "move_to_workspace",         "",  8 },
+        { "super+shift",     "agrave",     "move_to_workspace",         "",  9 },
+        // Monitor focus switching
+        {       "super",       "Left",    "focus_monitor_left",         "", -1 },
+        {       "super",      "Right",   "focus_monitor_right",         "", -1 },
+        // Move window to adjacent monitor
+        { "super+shift",       "Left",  "move_to_monitor_left",         "", -1 },
+        { "super+shift",      "Right", "move_to_monitor_right",         "", -1 },
     };
 
     return cfg;
@@ -93,8 +97,8 @@ std::optional<Config> load_config(std::string const& path)
                         keybind.action = *v;
                     if (auto v = (*kb)["command"].value<std::string>())
                         keybind.command = *v;
-                    if (auto v = (*kb)["tag"].value<int64_t>())
-                        keybind.tag = static_cast<int>(*v);
+                    if (auto v = (*kb)["workspace"].value<int64_t>())
+                        keybind.workspace = static_cast<int>(*v);
                     cfg.keybinds.push_back(keybind);
                 }
             }

@@ -1,15 +1,13 @@
 #include "layout.hpp"
 
-namespace lwm
-{
+namespace lwm {
 
 Layout::Layout(Connection& conn, AppearanceConfig const& appearance)
     : conn_(conn)
     , appearance_(appearance)
-{
-}
+{ }
 
-void Layout::arrange(std::vector<Window> const& windows)
+void Layout::arrange(std::vector<Window> const& windows, Geometry const& geometry)
 {
     // Map all windows
     for (auto const& window : windows)
@@ -20,28 +18,36 @@ void Layout::arrange(std::vector<Window> const& windows)
     if (windows.empty())
         return;
 
-    uint32_t screenWidth = conn_.screen()->width_in_pixels;
-    uint32_t screenHeight = conn_.screen()->height_in_pixels - appearance_.status_bar_height;
+    int32_t baseX = geometry.x;
+    int32_t baseY = geometry.y;
+    uint32_t screenWidth = geometry.width;
+    uint32_t screenHeight = geometry.height - appearance_.status_bar_height;
     uint32_t padding = appearance_.padding;
     uint32_t barHeight = appearance_.status_bar_height;
 
     if (windows.size() == 1)
     {
-        configure_window(windows[0].id, padding, padding + barHeight, screenWidth - 2 * padding, screenHeight - 2 * padding);
+        configure_window(
+            windows[0].id,
+            baseX + padding,
+            baseY + padding + barHeight,
+            screenWidth - 2 * padding,
+            screenHeight - 2 * padding
+        );
     }
     else if (windows.size() == 2)
     {
         configure_window(
             windows[0].id,
-            padding,
-            padding + barHeight,
+            baseX + padding,
+            baseY + padding + barHeight,
             (screenWidth - 3 * padding) / 2,
             screenHeight - 2 * padding
         );
         configure_window(
             windows[1].id,
-            (screenWidth + padding) / 2,
-            padding + barHeight,
+            baseX + (screenWidth + padding) / 2,
+            baseY + padding + barHeight,
             (screenWidth - 3 * padding) / 2,
             screenHeight - 2 * padding
         );
@@ -51,8 +57,8 @@ void Layout::arrange(std::vector<Window> const& windows)
         // Master-stack layout: first window on left half, rest stacked on right
         configure_window(
             windows[0].id,
-            padding,
-            padding + barHeight,
+            baseX + padding,
+            baseY + padding + barHeight,
             (screenWidth - 3 * padding) / 2,
             screenHeight - 2 * padding
         );
@@ -64,8 +70,8 @@ void Layout::arrange(std::vector<Window> const& windows)
         {
             configure_window(
                 windows[i].id,
-                (screenWidth + padding) / 2,
-                padding + barHeight + (i - 1) * (rightHeight + padding),
+                baseX + (screenWidth + padding) / 2,
+                baseY + padding + barHeight + (i - 1) * (rightHeight + padding),
                 rightWidth,
                 rightHeight
             );
@@ -75,9 +81,9 @@ void Layout::arrange(std::vector<Window> const& windows)
     conn_.flush();
 }
 
-void Layout::configure_window(xcb_window_t window, uint32_t x, uint32_t y, uint32_t width, uint32_t height)
+void Layout::configure_window(xcb_window_t window, int32_t x, int32_t y, uint32_t width, uint32_t height)
 {
-    uint32_t values[] = { x, y, width, height };
+    uint32_t values[] = { static_cast<uint32_t>(x), static_cast<uint32_t>(y), width, height };
     xcb_configure_window(
         conn_.get(),
         window,

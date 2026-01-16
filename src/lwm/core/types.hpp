@@ -1,12 +1,13 @@
 #pragma once
 
+#include <array>
 #include <cstdint>
 #include <string>
 #include <vector>
+#include <xcb/randr.h>
 #include <xcb/xcb.h>
 
-namespace lwm
-{
+namespace lwm {
 
 struct Window
 {
@@ -14,10 +15,36 @@ struct Window
     std::string name;
 };
 
-struct Tag
+struct Workspace
 {
     std::vector<Window> windows;
-    xcb_window_t focusedWindow = XCB_NONE;
+    xcb_window_t focused_window = XCB_NONE;
+};
+
+struct Geometry
+{
+    int16_t x = 0;
+    int16_t y = 0;
+    uint16_t width = 0;
+    uint16_t height = 0;
+};
+
+struct Monitor
+{
+    xcb_randr_output_t output = XCB_NONE;
+    std::string name;
+    int16_t x = 0;
+    int16_t y = 0;
+    uint16_t width = 0;
+    uint16_t height = 0;
+    std::array<Workspace, 10> workspaces;
+    size_t current_workspace = 0;
+    xcb_window_t bar_window = XCB_NONE;
+
+    Workspace& current() { return workspaces[current_workspace]; }
+    Workspace const& current() const { return workspaces[current_workspace]; }
+
+    Geometry geometry() const { return { x, y, width, height }; }
 };
 
 struct KeyBinding
@@ -32,7 +59,7 @@ struct Action
 {
     std::string type;
     std::string command;
-    int tag = -1;
+    int workspace = -1;
 };
 
 } // namespace lwm
