@@ -12,7 +12,7 @@ class Layout
 public:
     Layout(Connection& conn, AppearanceConfig const& appearance);
 
-    void arrange(std::vector<Window> const& windows, Geometry const& geometry);
+    void arrange(std::vector<Window> const& windows, Geometry const& geometry, bool has_internal_bar);
 
 private:
     Connection& conn_;

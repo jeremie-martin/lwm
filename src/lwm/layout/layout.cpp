@@ -7,7 +7,7 @@ Layout::Layout(Connection& conn, AppearanceConfig const& appearance)
     , appearance_(appearance)
 { }
 
-void Layout::arrange(std::vector<Window> const& windows, Geometry const& geometry)
+void Layout::arrange(std::vector<Window> const& windows, Geometry const& geometry, bool has_internal_bar)
 {
     // Map all windows
     for (auto const& window : windows)
@@ -21,9 +21,12 @@ void Layout::arrange(std::vector<Window> const& windows, Geometry const& geometr
     int32_t baseX = geometry.x;
     int32_t baseY = geometry.y;
     uint32_t screenWidth = geometry.width;
-    uint32_t screenHeight = geometry.height - appearance_.status_bar_height;
     uint32_t padding = appearance_.padding;
-    uint32_t barHeight = appearance_.status_bar_height;
+
+    // Only account for internal bar if it's enabled
+    // External docks (Polybar) are handled via struts in working_area()
+    uint32_t barHeight = has_internal_bar ? appearance_.status_bar_height : 0;
+    uint32_t screenHeight = geometry.height - barHeight;
 
     if (windows.size() == 1)
     {

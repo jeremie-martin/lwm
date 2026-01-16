@@ -13,12 +13,18 @@ WindowManager::WindowManager(Config config)
     , ewmh_(conn_)
     , keybinds_(conn_, config_)
     , layout_(conn_, config_.appearance)
-    , bar_(conn_, config_.appearance)
+    , bar_(
+          config_.appearance.enable_internal_bar ? std::optional<StatusBar>(std::in_place, conn_, config_.appearance)
+                                                 : std::nullopt
+      )
 {
     setup_root();
     detect_monitors();
     setup_ewmh();
-    setup_monitor_bars();
+    if (bar_)
+    {
+        setup_monitor_bars();
+    }
     keybinds_.grab_keys(conn_.screen()->root);
     update_all_bars();
     conn_.flush();
@@ -128,13 +134,16 @@ void WindowManager::create_fallback_monitor()
 
 void WindowManager::setup_monitor_bars()
 {
+    if (!bar_)
+        return;
+
     for (auto& monitor : monitors_)
     {
         if (monitor.bar_window != XCB_NONE)
         {
-            bar_.destroy(monitor.bar_window);
+            bar_->destroy(monitor.bar_window);
         }
-        monitor.bar_window = bar_.create_for_monitor(monitor);
+        monitor.bar_window = bar_->create_for_monitor(monitor);
     }
 }
 
@@ -154,10 +163,8 @@ void WindowManager::handle_event(xcb_generic_event_t const& event)
             handle_map_request(reinterpret_cast<xcb_map_request_event_t const&>(event));
             break;
         case XCB_UNMAP_NOTIFY:
-            handle_unmap_notify(reinterpret_cast<xcb_unmap_notify_event_t const&>(event));
-            break;
         case XCB_DESTROY_NOTIFY:
-            handle_destroy_notify(reinterpret_cast<xcb_destroy_notify_event_t const&>(event));
+            handle_window_removal(reinterpret_cast<xcb_unmap_notify_event_t const&>(event).window);
             break;
         case XCB_ENTER_NOTIFY:
             handle_enter_notify(reinterpret_cast<xcb_enter_notify_event_t const&>(event));
@@ -170,22 +177,41 @@ void WindowManager::handle_event(xcb_generic_event_t const& event)
 
 void WindowManager::handle_map_request(xcb_map_request_event_t const& e)
 {
+    // Check if this is a dock window (e.g., Polybar)
+    if (ewmh_.is_dock_window(e.window))
+    {
+        // Map but don't manage - let it float above
+        xcb_map_window(conn_.get(), e.window);
+        dock_windows_.push_back(e.window);
+        update_struts();
+        rearrange_all_monitors();
+        conn_.flush();
+        return;
+    }
+
     manage_window(e.window);
     xcb_map_window(conn_.get(), e.window);
     focus_window(e.window);
 }
 
-void WindowManager::handle_unmap_notify(xcb_unmap_notify_event_t const& e) { unmanage_window(e.window); }
-
-void WindowManager::handle_destroy_notify(xcb_destroy_notify_event_t const& e) { unmanage_window(e.window); }
+void WindowManager::handle_window_removal(xcb_window_t window)
+{
+    unmanage_dock_window(window);
+    unmanage_window(window);
+}
 
 void WindowManager::handle_enter_notify(xcb_enter_notify_event_t const& e)
 {
+    // Ignore internal bar windows
     for (auto const& monitor : monitors_)
     {
         if (e.event == monitor.bar_window)
             return;
     }
+
+    // Ignore dock windows (e.g., Polybar)
+    if (std::ranges::find(dock_windows_, e.event) != dock_windows_.end())
+        return;
 
     if (e.event != conn_.screen()->root && e.mode == XCB_NOTIFY_MODE_NORMAL)
     {
@@ -332,7 +358,12 @@ void WindowManager::focus_window(xcb_window_t window)
 
     if (workspace.focused_window != XCB_NONE && workspace.focused_window != window)
     {
-        xcb_change_window_attributes(conn_.get(), workspace.focused_window, XCB_CW_BORDER_PIXEL, &conn_.screen()->black_pixel);
+        xcb_change_window_attributes(
+            conn_.get(),
+            workspace.focused_window,
+            XCB_CW_BORDER_PIXEL,
+            &conn_.screen()->black_pixel
+        );
     }
 
     workspace.focused_window = window;
@@ -386,7 +417,8 @@ void WindowManager::rearrange_monitor(Monitor& monitor)
         }
     }
 
-    layout_.arrange(monitor.current().windows, monitor.geometry());
+    // Use working_area() which accounts for struts from dock windows
+    layout_.arrange(monitor.current().windows, monitor.working_area(), bar_.has_value());
 }
 
 void WindowManager::rearrange_all_monitors()
@@ -464,7 +496,15 @@ size_t WindowManager::wrap_monitor_index(int idx) const
 void WindowManager::warp_to_monitor(Monitor const& monitor)
 {
     xcb_warp_pointer(
-        conn_.get(), XCB_NONE, conn_.screen()->root, 0, 0, 0, 0, monitor.x + monitor.width / 2, monitor.y + monitor.height / 2
+        conn_.get(),
+        XCB_NONE,
+        conn_.screen()->root,
+        0,
+        0,
+        0,
+        0,
+        monitor.x + monitor.width / 2,
+        monitor.y + monitor.height / 2
     );
 }
 
@@ -591,9 +631,59 @@ std::string WindowManager::get_window_name(xcb_window_t window)
 
 void WindowManager::update_all_bars()
 {
+    if (!bar_)
+        return;
+
     for (auto const& monitor : monitors_)
     {
-        bar_.update(monitor);
+        bar_->update(monitor);
+    }
+}
+
+void WindowManager::update_struts()
+{
+    // Reset all monitor struts
+    for (auto& monitor : monitors_)
+    {
+        monitor.strut = {};
+    }
+
+    // Query struts from all dock windows and apply to appropriate monitor
+    for (xcb_window_t dock : dock_windows_)
+    {
+        Strut strut = ewmh_.get_window_strut(dock);
+        if (strut.left == 0 && strut.right == 0 && strut.top == 0 && strut.bottom == 0)
+            continue;
+
+        // Get dock window geometry to determine which monitor it's on
+        auto geom_cookie = xcb_get_geometry(conn_.get(), dock);
+        auto* geom = xcb_get_geometry_reply(conn_.get(), geom_cookie, nullptr);
+        if (!geom)
+            continue;
+
+        // Find the monitor containing this dock
+        Monitor* target = monitor_at_point(geom->x, geom->y);
+        free(geom);
+
+        if (target)
+        {
+            // Aggregate struts (take maximum for each side)
+            target->strut.left = std::max(target->strut.left, strut.left);
+            target->strut.right = std::max(target->strut.right, strut.right);
+            target->strut.top = std::max(target->strut.top, strut.top);
+            target->strut.bottom = std::max(target->strut.bottom, strut.bottom);
+        }
+    }
+}
+
+void WindowManager::unmanage_dock_window(xcb_window_t window)
+{
+    auto it = std::ranges::find(dock_windows_, window);
+    if (it != dock_windows_.end())
+    {
+        dock_windows_.erase(it);
+        update_struts();
+        rearrange_all_monitors();
     }
 }
 

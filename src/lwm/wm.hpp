@@ -8,6 +8,7 @@
 #include "lwm/keybind/keybind.hpp"
 #include "lwm/layout/layout.hpp"
 #include <memory>
+#include <optional>
 #include <vector>
 
 namespace lwm {
@@ -25,9 +26,10 @@ private:
     Ewmh ewmh_;
     KeybindManager keybinds_;
     Layout layout_;
-    StatusBar bar_;
+    std::optional<StatusBar> bar_;
 
     std::vector<Monitor> monitors_;
+    std::vector<xcb_window_t> dock_windows_;
     size_t focused_monitor_ = 0;
 
     void setup_root();
@@ -37,8 +39,7 @@ private:
 
     void handle_event(xcb_generic_event_t const& event);
     void handle_map_request(xcb_map_request_event_t const& e);
-    void handle_unmap_notify(xcb_unmap_notify_event_t const& e);
-    void handle_destroy_notify(xcb_destroy_notify_event_t const& e);
+    void handle_window_removal(xcb_window_t window);
     void handle_enter_notify(xcb_enter_notify_event_t const& e);
     void handle_key_press(xcb_key_press_event_t const& e);
     void handle_randr_screen_change();
@@ -71,6 +72,10 @@ private:
     Monitor* monitor_at_point(int16_t x, int16_t y);
     std::string get_window_name(xcb_window_t window);
     void update_all_bars();
+
+    // Dock/strut helpers
+    void update_struts();
+    void unmanage_dock_window(xcb_window_t window);
 
     // EWMH helpers
     void setup_ewmh();

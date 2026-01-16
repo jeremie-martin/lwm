@@ -36,10 +36,15 @@ void Ewmh::create_supporting_window()
         XCB_COPY_FROM_PARENT,
         supporting_window_,
         conn_.screen()->root,
-        -1, -1, 1, 1, 0,
+        -1,
+        -1,
+        1,
+        1,
+        0,
         XCB_WINDOW_CLASS_INPUT_ONLY,
         XCB_COPY_FROM_PARENT,
-        0, nullptr
+        0,
+        nullptr
     );
 
     // Set _NET_SUPPORTING_WM_CHECK on both root and supporting window
@@ -62,6 +67,12 @@ void Ewmh::set_supported_atoms()
         ewmh_._NET_DESKTOP_VIEWPORT,
         ewmh_._NET_WM_STATE,
         ewmh_._NET_WM_STATE_DEMANDS_ATTENTION,
+        ewmh_._NET_WM_WINDOW_TYPE,
+        ewmh_._NET_WM_WINDOW_TYPE_DOCK,
+        ewmh_._NET_WM_WINDOW_TYPE_NORMAL,
+        ewmh_._NET_WM_WINDOW_TYPE_DIALOG,
+        ewmh_._NET_WM_STRUT,
+        ewmh_._NET_WM_STRUT_PARTIAL,
     };
 
     xcb_ewmh_set_supported(&ewmh_, 0, sizeof(supported) / sizeof(supported[0]), supported);
@@ -72,10 +83,7 @@ void Ewmh::set_wm_name(std::string const& name)
     xcb_ewmh_set_wm_name(&ewmh_, supporting_window_, name.length(), name.c_str());
 }
 
-void Ewmh::set_number_of_desktops(uint32_t count)
-{
-    xcb_ewmh_set_number_of_desktops(&ewmh_, 0, count);
-}
+void Ewmh::set_number_of_desktops(uint32_t count) { xcb_ewmh_set_number_of_desktops(&ewmh_, 0, count); }
 
 void Ewmh::set_desktop_names(std::vector<std::string> const& names)
 {
@@ -88,15 +96,9 @@ void Ewmh::set_desktop_names(std::vector<std::string> const& names)
     xcb_ewmh_set_desktop_names(&ewmh_, 0, combined.length(), combined.c_str());
 }
 
-void Ewmh::set_current_desktop(uint32_t desktop)
-{
-    xcb_ewmh_set_current_desktop(&ewmh_, 0, desktop);
-}
+void Ewmh::set_current_desktop(uint32_t desktop) { xcb_ewmh_set_current_desktop(&ewmh_, 0, desktop); }
 
-void Ewmh::set_active_window(xcb_window_t window)
-{
-    xcb_ewmh_set_active_window(&ewmh_, 0, window);
-}
+void Ewmh::set_active_window(xcb_window_t window) { xcb_ewmh_set_active_window(&ewmh_, 0, window); }
 
 void Ewmh::set_desktop_viewport(std::vector<Monitor> const& monitors)
 {
@@ -125,25 +127,14 @@ void Ewmh::set_window_desktop(xcb_window_t window, uint32_t desktop)
 
 void Ewmh::update_client_list(std::vector<xcb_window_t> const& windows)
 {
-    if (windows.empty())
-    {
-        xcb_ewmh_set_client_list(&ewmh_, 0, 0, nullptr);
-    }
-    else
-    {
-        xcb_ewmh_set_client_list(&ewmh_, 0, windows.size(), const_cast<xcb_window_t*>(windows.data()));
-    }
+    xcb_ewmh_set_client_list(&ewmh_, 0, windows.size(), const_cast<xcb_window_t*>(windows.data()));
 }
 
 void Ewmh::set_demands_attention(xcb_window_t window, bool urgent)
 {
     xcb_ewmh_get_atoms_reply_t current_state;
-    bool has_current = xcb_ewmh_get_wm_state_reply(
-        &ewmh_,
-        xcb_ewmh_get_wm_state(&ewmh_, window),
-        &current_state,
-        nullptr
-    );
+    bool has_current =
+        xcb_ewmh_get_wm_state_reply(&ewmh_, xcb_ewmh_get_wm_state(&ewmh_, window), &current_state, nullptr);
 
     std::vector<xcb_atom_t> new_state;
 
@@ -177,14 +168,8 @@ void Ewmh::set_demands_attention(xcb_window_t window, bool urgent)
 bool Ewmh::has_urgent_hint(xcb_window_t window) const
 {
     xcb_ewmh_get_atoms_reply_t state;
-    if (!xcb_ewmh_get_wm_state_reply(
-            const_cast<xcb_ewmh_connection_t*>(&ewmh_),
-            xcb_ewmh_get_wm_state(const_cast<xcb_ewmh_connection_t*>(&ewmh_), window),
-            &state,
-            nullptr))
-    {
+    if (!xcb_ewmh_get_wm_state_reply(&ewmh_, xcb_ewmh_get_wm_state(&ewmh_, window), &state, nullptr))
         return false;
-    }
 
     bool urgent = false;
     for (uint32_t i = 0; i < state.atoms_len; ++i)
@@ -198,6 +183,50 @@ bool Ewmh::has_urgent_hint(xcb_window_t window) const
 
     xcb_ewmh_get_atoms_reply_wipe(&state);
     return urgent;
+}
+
+xcb_atom_t Ewmh::get_window_type(xcb_window_t window) const
+{
+    xcb_ewmh_get_atoms_reply_t types;
+    if (!xcb_ewmh_get_wm_window_type_reply(&ewmh_, xcb_ewmh_get_wm_window_type(&ewmh_, window), &types, nullptr))
+        return XCB_ATOM_NONE;
+
+    xcb_atom_t type = (types.atoms_len > 0) ? types.atoms[0] : XCB_ATOM_NONE;
+    xcb_ewmh_get_atoms_reply_wipe(&types);
+    return type;
+}
+
+bool Ewmh::is_dock_window(xcb_window_t window) const
+{
+    return get_window_type(window) == ewmh_._NET_WM_WINDOW_TYPE_DOCK;
+}
+
+Strut Ewmh::get_window_strut(xcb_window_t window) const
+{
+    Strut strut;
+
+    // Try _NET_WM_STRUT_PARTIAL first (more detailed)
+    xcb_ewmh_wm_strut_partial_t partial;
+    if (xcb_ewmh_get_wm_strut_partial_reply(&ewmh_, xcb_ewmh_get_wm_strut_partial(&ewmh_, window), &partial, nullptr))
+    {
+        strut.left = partial.left;
+        strut.right = partial.right;
+        strut.top = partial.top;
+        strut.bottom = partial.bottom;
+        return strut;
+    }
+
+    // Fall back to _NET_WM_STRUT
+    xcb_ewmh_get_extents_reply_t extents;
+    if (xcb_ewmh_get_wm_strut_reply(&ewmh_, xcb_ewmh_get_wm_strut(&ewmh_, window), &extents, nullptr))
+    {
+        strut.left = extents.left;
+        strut.right = extents.right;
+        strut.top = extents.top;
+        strut.bottom = extents.bottom;
+    }
+
+    return strut;
 }
 
 } // namespace lwm

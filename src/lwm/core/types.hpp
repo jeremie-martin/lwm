@@ -40,6 +40,14 @@ struct Geometry
     uint16_t height = 0;
 };
 
+struct Strut
+{
+    uint32_t left = 0;
+    uint32_t right = 0;
+    uint32_t top = 0;
+    uint32_t bottom = 0;
+};
+
 struct Monitor
 {
     xcb_randr_output_t output = XCB_NONE;
@@ -51,11 +59,20 @@ struct Monitor
     std::array<Workspace, 10> workspaces;
     size_t current_workspace = 0;
     xcb_window_t bar_window = XCB_NONE;
+    Strut strut = {};
 
     Workspace& current() { return workspaces[current_workspace]; }
     Workspace const& current() const { return workspaces[current_workspace]; }
 
     Geometry geometry() const { return { x, y, width, height }; }
+
+    Geometry working_area() const
+    {
+        return { static_cast<int16_t>(x + strut.left),
+                 static_cast<int16_t>(y + strut.top),
+                 static_cast<uint16_t>(width - strut.left - strut.right),
+                 static_cast<uint16_t>(height - strut.top - strut.bottom) };
+    }
 };
 
 struct KeyBinding

@@ -10,9 +10,9 @@ Config default_config()
     // appearance and programs use struct defaults from config.hpp
 
     cfg.keybinds = {
-        {       "super", "Return",                 "spawn", "terminal", -1 },
-        {       "super",      "d",                 "spawn", "launcher", -1 },
-        {       "super",      "q",                  "kill",         "", -1 },
+        {       "super",     "Return",                 "spawn", "terminal", -1 },
+        {       "super",          "d",                 "spawn", "launcher", -1 },
+        {       "super",          "q",                  "kill",         "", -1 },
         // Workspace switching - AZERTY
         {       "super",  "ampersand",      "switch_workspace",         "",  0 },
         {       "super",     "eacute",      "switch_workspace",         "",  1 },
@@ -88,6 +88,8 @@ std::optional<Config> load_config(std::string const& path)
                 cfg.appearance.status_bar_height = static_cast<uint32_t>(*v);
             if (auto v = (*appearance)["status_bar_color"].value<int64_t>())
                 cfg.appearance.status_bar_color = static_cast<uint32_t>(*v);
+            if (auto v = (*appearance)["enable_internal_bar"].value<bool>())
+                cfg.appearance.enable_internal_bar = *v;
         }
 
         // Programs

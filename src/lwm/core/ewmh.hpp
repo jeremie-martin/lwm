@@ -39,11 +39,18 @@ public:
     void set_demands_attention(xcb_window_t window, bool urgent);
     bool has_urgent_hint(xcb_window_t window) const;
 
+    // Window type detection
+    xcb_atom_t get_window_type(xcb_window_t window) const;
+    bool is_dock_window(xcb_window_t window) const;
+
+    // Strut support
+    Strut get_window_strut(xcb_window_t window) const;
+
     xcb_ewmh_connection_t* get() { return &ewmh_; }
 
 private:
     Connection& conn_;
-    xcb_ewmh_connection_t ewmh_;
+    mutable xcb_ewmh_connection_t ewmh_; // mutable: XCB EWMH API isn't const-correct
     xcb_window_t supporting_window_ = XCB_NONE;
 
     void create_supporting_window();
