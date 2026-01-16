@@ -10,38 +10,37 @@ Config default_config()
     // appearance and programs use struct defaults from config.hpp
 
     cfg.keybinds = {
-        {       "super",     "Return",                 "spawn", "terminal", -1 },
-        {       "super",          "f",                 "spawn",  "browser", -1 },
-        {       "super",          "d",                 "spawn", "launcher", -1 },
-        {       "super",          "q",                  "kill",         "", -1 },
-        // AZERTY number keys for workspace switching
-        {       "super",  "ampersand",      "switch_workspace",         "",  0 },
-        {       "super",     "eacute",      "switch_workspace",         "",  1 },
-        {       "super",   "quotedbl",      "switch_workspace",         "",  2 },
-        {       "super", "apostrophe",      "switch_workspace",         "",  3 },
-        {       "super",  "parenleft",      "switch_workspace",         "",  4 },
-        {       "super",      "minus",      "switch_workspace",         "",  5 },
-        {       "super",     "egrave",      "switch_workspace",         "",  6 },
-        {       "super", "underscore",      "switch_workspace",         "",  7 },
-        {       "super",   "ccedilla",      "switch_workspace",         "",  8 },
-        {       "super",     "agrave",      "switch_workspace",         "",  9 },
-        // Move window to workspace on same monitor
-        { "super+shift",  "ampersand",     "move_to_workspace",         "",  0 },
-        { "super+shift",     "eacute",     "move_to_workspace",         "",  1 },
-        { "super+shift",   "quotedbl",     "move_to_workspace",         "",  2 },
-        { "super+shift", "apostrophe",     "move_to_workspace",         "",  3 },
-        { "super+shift",  "parenleft",     "move_to_workspace",         "",  4 },
-        { "super+shift",      "minus",     "move_to_workspace",         "",  5 },
-        { "super+shift",     "egrave",     "move_to_workspace",         "",  6 },
-        { "super+shift", "underscore",     "move_to_workspace",         "",  7 },
-        { "super+shift",   "ccedilla",     "move_to_workspace",         "",  8 },
-        { "super+shift",     "agrave",     "move_to_workspace",         "",  9 },
+        {       "super", "Return",                 "spawn", "terminal", -1 },
+        {       "super",      "d",                 "spawn", "launcher", -1 },
+        {       "super",      "q",                  "kill",         "", -1 },
+        // Workspace switching (1-9, 0)
+        {       "super",      "1",      "switch_workspace",         "",  0 },
+        {       "super",      "2",      "switch_workspace",         "",  1 },
+        {       "super",      "3",      "switch_workspace",         "",  2 },
+        {       "super",      "4",      "switch_workspace",         "",  3 },
+        {       "super",      "5",      "switch_workspace",         "",  4 },
+        {       "super",      "6",      "switch_workspace",         "",  5 },
+        {       "super",      "7",      "switch_workspace",         "",  6 },
+        {       "super",      "8",      "switch_workspace",         "",  7 },
+        {       "super",      "9",      "switch_workspace",         "",  8 },
+        {       "super",      "0",      "switch_workspace",         "",  9 },
+        // Move window to workspace
+        { "super+shift",      "1",     "move_to_workspace",         "",  0 },
+        { "super+shift",      "2",     "move_to_workspace",         "",  1 },
+        { "super+shift",      "3",     "move_to_workspace",         "",  2 },
+        { "super+shift",      "4",     "move_to_workspace",         "",  3 },
+        { "super+shift",      "5",     "move_to_workspace",         "",  4 },
+        { "super+shift",      "6",     "move_to_workspace",         "",  5 },
+        { "super+shift",      "7",     "move_to_workspace",         "",  6 },
+        { "super+shift",      "8",     "move_to_workspace",         "",  7 },
+        { "super+shift",      "9",     "move_to_workspace",         "",  8 },
+        { "super+shift",      "0",     "move_to_workspace",         "",  9 },
         // Monitor focus switching
-        {       "super",       "Left",    "focus_monitor_left",         "", -1 },
-        {       "super",      "Right",   "focus_monitor_right",         "", -1 },
+        {       "super",   "Left",    "focus_monitor_left",         "", -1 },
+        {       "super",  "Right",   "focus_monitor_right",         "", -1 },
         // Move window to adjacent monitor
-        { "super+shift",       "Left",  "move_to_monitor_left",         "", -1 },
-        { "super+shift",      "Right", "move_to_monitor_right",         "", -1 },
+        { "super+shift",   "Left",  "move_to_monitor_left",         "", -1 },
+        { "super+shift",  "Right", "move_to_monitor_right",         "", -1 },
     };
 
     return cfg;

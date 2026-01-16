@@ -1,5 +1,4 @@
 #include "bar.hpp"
-#include <algorithm>
 #include <cstring>
 
 namespace lwm {
@@ -80,7 +79,7 @@ void StatusBar::update(Monitor const& monitor)
     auto const& ws = monitor.current();
     if (ws.focused_window != XCB_NONE)
     {
-        auto it = std::ranges::find_if(ws.windows, [&ws](Window const& w) { return w.id == ws.focused_window; });
+        auto it = ws.find_window(ws.focused_window);
         if (it != ws.windows.end())
         {
             statusText += it->name;
@@ -100,11 +99,8 @@ void StatusBar::update(Monitor const& monitor)
 
 void StatusBar::destroy(xcb_window_t bar_window)
 {
-    if (bar_window != XCB_NONE)
-    {
-        xcb_destroy_window(conn_.get(), bar_window);
-        conn_.flush();
-    }
+    xcb_destroy_window(conn_.get(), bar_window);
+    conn_.flush();
 }
 
 void StatusBar::draw_text(xcb_window_t window, std::string const& text)

@@ -1,5 +1,6 @@
 #pragma once
 
+#include <algorithm>
 #include <array>
 #include <cstdint>
 #include <string>
@@ -19,6 +20,16 @@ struct Workspace
 {
     std::vector<Window> windows;
     xcb_window_t focused_window = XCB_NONE;
+
+    auto find_window(xcb_window_t id)
+    {
+        return std::ranges::find_if(windows, [id](Window const& w) { return w.id == id; });
+    }
+
+    auto find_window(xcb_window_t id) const
+    {
+        return std::ranges::find_if(windows, [id](Window const& w) { return w.id == id; });
+    }
 };
 
 struct Geometry

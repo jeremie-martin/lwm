@@ -1,5 +1,6 @@
 #include "keybind.hpp"
-#include <X11/keysym.h>
+#include <X11/Xlib.h>
+#include <sstream>
 
 namespace lwm {
 
@@ -50,7 +51,6 @@ void KeybindManager::grab_keys(xcb_window_t window)
 
 std::optional<Action> KeybindManager::resolve(uint16_t state, xcb_keysym_t keysym) const
 {
-    // Remove Num Lock and Caps Lock from the modifier
     uint16_t cleanMod = state & ~(XCB_MOD_MASK_LOCK | XCB_MOD_MASK_2);
 
     auto it = bindings_.find({ cleanMod, keysym });
@@ -75,106 +75,31 @@ std::string KeybindManager::resolve_command(std::string const& command, Config c
 uint16_t KeybindManager::parse_modifier(std::string const& mod)
 {
     uint16_t result = 0;
+    std::istringstream stream(mod);
+    std::string token;
 
-    if (mod.find("super") != std::string::npos)
-        result |= XCB_MOD_MASK_4;
-    if (mod.find("shift") != std::string::npos)
-        result |= XCB_MOD_MASK_SHIFT;
-    if (mod.find("ctrl") != std::string::npos || mod.find("control") != std::string::npos)
-        result |= XCB_MOD_MASK_CONTROL;
-    if (mod.find("alt") != std::string::npos)
-        result |= XCB_MOD_MASK_1;
+    while (std::getline(stream, token, '+'))
+    {
+        if (token == "super")
+            result |= XCB_MOD_MASK_4;
+        else if (token == "shift")
+            result |= XCB_MOD_MASK_SHIFT;
+        else if (token == "ctrl" || token == "control")
+            result |= XCB_MOD_MASK_CONTROL;
+        else if (token == "alt")
+            result |= XCB_MOD_MASK_1;
+    }
 
     return result;
 }
 
 xcb_keysym_t KeybindManager::parse_keysym(std::string const& key)
 {
-    // Common key names
-    static std::map<std::string, xcb_keysym_t> const keymap = {
-        {     "Return",     XK_Return },
-        {      "Enter",     XK_Return },
-        {     "Escape",     XK_Escape },
-        {        "Tab",        XK_Tab },
-        {  "BackSpace",  XK_BackSpace },
-        {     "Delete",     XK_Delete },
-        {      "space",      XK_space },
-        {      "Space",      XK_space },
-        // Letters
-        {          "a",          XK_a },
-        {          "b",          XK_b },
-        {          "c",          XK_c },
-        {          "d",          XK_d },
-        {          "e",          XK_e },
-        {          "f",          XK_f },
-        {          "g",          XK_g },
-        {          "h",          XK_h },
-        {          "i",          XK_i },
-        {          "j",          XK_j },
-        {          "k",          XK_k },
-        {          "l",          XK_l },
-        {          "m",          XK_m },
-        {          "n",          XK_n },
-        {          "o",          XK_o },
-        {          "p",          XK_p },
-        {          "q",          XK_q },
-        {          "r",          XK_r },
-        {          "s",          XK_s },
-        {          "t",          XK_t },
-        {          "u",          XK_u },
-        {          "v",          XK_v },
-        {          "w",          XK_w },
-        {          "x",          XK_x },
-        {          "y",          XK_y },
-        {          "z",          XK_z },
-        // Numbers
-        {          "0",          XK_0 },
-        {          "1",          XK_1 },
-        {          "2",          XK_2 },
-        {          "3",          XK_3 },
-        {          "4",          XK_4 },
-        {          "5",          XK_5 },
-        {          "6",          XK_6 },
-        {          "7",          XK_7 },
-        {          "8",          XK_8 },
-        {          "9",          XK_9 },
-        // AZERTY keys
-        {  "ampersand",  XK_ampersand },
-        {     "eacute",     XK_eacute },
-        {   "quotedbl",   XK_quotedbl },
-        { "apostrophe", XK_apostrophe },
-        {  "parenleft",  XK_parenleft },
-        {      "minus",      XK_minus },
-        {     "egrave",     XK_egrave },
-        { "underscore", XK_underscore },
-        {   "ccedilla",   XK_ccedilla },
-        {     "agrave",     XK_agrave },
-        // Function keys
-        {         "F1",         XK_F1 },
-        {         "F2",         XK_F2 },
-        {         "F3",         XK_F3 },
-        {         "F4",         XK_F4 },
-        {         "F5",         XK_F5 },
-        {         "F6",         XK_F6 },
-        {         "F7",         XK_F7 },
-        {         "F8",         XK_F8 },
-        {         "F9",         XK_F9 },
-        {        "F10",        XK_F10 },
-        {        "F11",        XK_F11 },
-        {        "F12",        XK_F12 },
-        // Arrow keys
-        {       "Left",       XK_Left },
-        {      "Right",      XK_Right },
-        {         "Up",         XK_Up },
-        {       "Down",       XK_Down },
-    };
-
-    auto it = keymap.find(key);
-    if (it != keymap.end())
+    KeySym sym = XStringToKeysym(key.c_str());
+    if (sym != NoSymbol)
     {
-        return it->second;
+        return static_cast<xcb_keysym_t>(sym);
     }
-
     return XCB_NO_SYMBOL;
 }
 

@@ -63,6 +63,8 @@ private:
     Monitor& focused_monitor() { return monitors_[focused_monitor_]; }
     Monitor const& focused_monitor() const { return monitors_[focused_monitor_]; }
     size_t wrap_monitor_index(int idx) const;
+    void warp_to_monitor(Monitor const& monitor);
+    void focus_or_fallback(Monitor& monitor);
     Monitor* monitor_containing_window(xcb_window_t window);
     Monitor* monitor_at_point(int16_t x, int16_t y);
     std::string get_window_name(xcb_window_t window);
