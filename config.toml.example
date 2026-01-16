@@ -1,0 +1,111 @@
+# LWM Configuration File
+# Copy to ~/.config/lwm/config.toml
+
+[appearance]
+padding = 10
+border_width = 2
+border_color = 0xFF0000       # Red (hex)
+status_bar_height = 30
+status_bar_color = 0x808080   # Gray (hex)
+
+[programs]
+terminal = "/usr/local/bin/st"
+browser = "/usr/bin/firefox"
+launcher = "rofi -show drun"
+
+# Keybindings
+# mod: "super", "super+shift", "super+ctrl", etc.
+# key: X11 keysym name (e.g., "Return", "q", "ampersand")
+# action: "spawn", "kill", "switch_tag", "move_to_tag"
+# command: for "spawn" action, use "terminal", "browser", "launcher", or a path
+# tag: for "switch_tag" action, the tag number (0-9)
+
+[[keybinds]]
+mod = "super"
+key = "Return"
+action = "spawn"
+command = "terminal"
+
+[[keybinds]]
+mod = "super"
+key = "f"
+action = "spawn"
+command = "browser"
+
+[[keybinds]]
+mod = "super"
+key = "d"
+action = "spawn"
+command = "launcher"
+
+[[keybinds]]
+mod = "super"
+key = "q"
+action = "kill"
+
+# Tag switching (AZERTY layout)
+[[keybinds]]
+mod = "super"
+key = "ampersand"
+action = "switch_tag"
+tag = 0
+
+[[keybinds]]
+mod = "super"
+key = "eacute"
+action = "switch_tag"
+tag = 1
+
+[[keybinds]]
+mod = "super"
+key = "quotedbl"
+action = "switch_tag"
+tag = 2
+
+[[keybinds]]
+mod = "super"
+key = "apostrophe"
+action = "switch_tag"
+tag = 3
+
+[[keybinds]]
+mod = "super"
+key = "parenleft"
+action = "switch_tag"
+tag = 4
+
+[[keybinds]]
+mod = "super"
+key = "minus"
+action = "switch_tag"
+tag = 5
+
+[[keybinds]]
+mod = "super"
+key = "egrave"
+action = "switch_tag"
+tag = 6
+
+[[keybinds]]
+mod = "super"
+key = "underscore"
+action = "switch_tag"
+tag = 7
+
+[[keybinds]]
+mod = "super"
+key = "ccedilla"
+action = "switch_tag"
+tag = 8
+
+[[keybinds]]
+mod = "super"
+key = "agrave"
+action = "switch_tag"
+tag = 9
+
+# Move window to next tag
+[[keybinds]]
+mod = "super+shift"
+key = "m"
+action = "move_to_tag"
