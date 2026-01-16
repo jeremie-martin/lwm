@@ -1,4 +1,5 @@
 #include "wm.hpp"
+#include "lwm/core/log.hpp"
 #include <algorithm>
 #include <csignal>
 #include <cstdlib>
@@ -256,9 +257,16 @@ void WindowManager::handle_key_press(xcb_key_press_event_t const& e)
 {
     xcb_keysym_t keysym = xcb_key_press_lookup_keysym(conn_.keysyms(), const_cast<xcb_key_press_event_t*>(&e), 0);
 
+    LWM_DEBUG_KEY(e.state, keysym);
+
     auto action = keybinds_.resolve(e.state, keysym);
     if (!action)
+    {
+        LWM_DEBUG("No action for keysym");
         return;
+    }
+
+    LWM_DEBUG("Action: " << action->type);
 
     if (action->type == "kill" && focused_monitor().current().focused_window != XCB_NONE)
     {
@@ -302,12 +310,14 @@ void WindowManager::handle_client_message(xcb_client_message_event_t const& e)
     if (e.type == ewmh->_NET_CURRENT_DESKTOP)
     {
         uint32_t desktop = e.data.data32[0];
+        LWM_DEBUG("_NET_CURRENT_DESKTOP request: desktop=" << desktop);
         switch_to_ewmh_desktop(desktop);
     }
     // Handle _NET_ACTIVE_WINDOW requests
     else if (e.type == ewmh->_NET_ACTIVE_WINDOW)
     {
         xcb_window_t window = e.window;
+        LWM_DEBUG("_NET_ACTIVE_WINDOW request: window=0x" << std::hex << window << std::dec);
         if (monitor_containing_window(window))
         {
             focus_window(window);
