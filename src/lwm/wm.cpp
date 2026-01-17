@@ -1311,11 +1311,18 @@ void WindowManager::handle_configure_request(xcb_configure_request_event_t const
         if (mask & XCB_CONFIG_WINDOW_HEIGHT)
             floating_window->geometry.height = std::max<uint16_t>(1, e.height);
 
-        uint32_t hinted_width = floating_window->geometry.width;
-        uint32_t hinted_height = floating_window->geometry.height;
+        uint16_t requested_width = floating_window->geometry.width;
+        uint16_t requested_height = floating_window->geometry.height;
+        uint32_t hinted_width = requested_width;
+        uint32_t hinted_height = requested_height;
         layout_.apply_size_hints(floating_window->id, hinted_width, hinted_height);
         floating_window->geometry.width = static_cast<uint16_t>(std::max<uint32_t>(1, hinted_width));
         floating_window->geometry.height = static_cast<uint16_t>(std::max<uint32_t>(1, hinted_height));
+
+        if (requested_width != floating_window->geometry.width || requested_height != floating_window->geometry.height)
+        {
+            apply_floating_geometry(*floating_window);
+        }
 
         update_floating_monitor_for_geometry(*floating_window);
         if (active_window_ == floating_window->id)

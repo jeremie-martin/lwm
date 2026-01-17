@@ -6,7 +6,7 @@
 - [x] 4) EWMH sync: wait for _NET_WM_SYNC_REQUEST_COUNTER updates or timeout.
 - [x] 5) IconicState on map: manage but do not map (avoid map/unmap flicker).
 - [x] 6) Override-redirect MapRequest: ignore entirely (no map/manage).
-- [ ] 7) Floating ConfigureRequest: apply size hints to server geometry.
+- [x] 7) Floating ConfigureRequest: apply size hints to server geometry.
 - [ ] 8) WM_NORMAL_HINTS for floating: honor P/US position+size; keep no increment enforcement.
 - [ ] 9) Strut updates: react to _NET_WM_STRUT(_PARTIAL) property changes.
 - [ ] 10) Window types: recognize first-known type from list; support required types; fix _NET_SUPPORTED.
