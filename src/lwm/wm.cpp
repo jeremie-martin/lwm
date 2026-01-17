@@ -185,9 +185,22 @@ void WindowManager::handle_event(xcb_generic_event_t const& event)
             handle_map_request(reinterpret_cast<xcb_map_request_event_t const&>(event));
             break;
         case XCB_UNMAP_NOTIFY:
-        case XCB_DESTROY_NOTIFY:
-            handle_window_removal(reinterpret_cast<xcb_unmap_notify_event_t const&>(event).window);
+        {
+            auto const& e = reinterpret_cast<xcb_unmap_notify_event_t const&>(event);
+            // Ignore if WM initiated this unmap (workspace switch)
+            if (wm_unmapped_windows_.contains(e.window))
+                break;
+            // Client-initiated unmap - remove the window
+            handle_window_removal(e.window);
             break;
+        }
+        case XCB_DESTROY_NOTIFY:
+        {
+            auto const& e = reinterpret_cast<xcb_destroy_notify_event_t const&>(event);
+            handle_window_removal(e.window);
+            wm_unmapped_windows_.erase(e.window); // Clean up tracking
+            break;
+        }
         case XCB_ENTER_NOTIFY:
             handle_enter_notify(reinterpret_cast<xcb_enter_notify_event_t const&>(event));
             break;
@@ -461,7 +474,7 @@ void WindowManager::focus_window(xcb_window_t window)
         // Unmap current workspace windows
         for (auto const& w : target_monitor->current().windows)
         {
-            xcb_unmap_window(conn_.get(), w.id);
+            wm_unmap_window(w.id);
         }
         target_monitor->current_workspace = target_workspace_idx;
         update_ewmh_current_desktop();
@@ -512,19 +525,14 @@ void WindowManager::kill_window(xcb_window_t window)
 
 void WindowManager::rearrange_monitor(Monitor& monitor)
 {
-    for (size_t i = 0; i < monitor.workspaces.size(); ++i)
-    {
-        if (i != monitor.current_workspace)
-        {
-            for (auto const& window : monitor.workspaces[i].windows)
-            {
-                xcb_unmap_window(conn_.get(), window.id);
-            }
-        }
-    }
-
-    // Use working_area() which accounts for struts from dock windows
+    // Only arrange current workspace - callers handle hiding old workspace
     layout_.arrange(monitor.current().windows, monitor.working_area(), bar_.has_value());
+
+    // Clear unmap tracking for windows that are now visible
+    for (auto const& window : monitor.current().windows)
+    {
+        wm_unmapped_windows_.erase(window.id);
+    }
 }
 
 void WindowManager::rearrange_all_monitors()
@@ -544,7 +552,7 @@ void WindowManager::switch_workspace(int ws)
 
     for (auto const& window : monitor.current().windows)
     {
-        xcb_unmap_window(conn_.get(), window.id);
+        wm_unmap_window(window.id);
     }
 
     monitor.current_workspace = static_cast<size_t>(ws);
@@ -583,7 +591,7 @@ void WindowManager::move_window_to_workspace(int ws)
     uint32_t desktop = get_ewmh_desktop_index(focused_monitor_, static_cast<size_t>(ws));
     ewmh_.set_window_desktop(window_to_move, desktop);
 
-    xcb_unmap_window(conn_.get(), window_to_move);
+    wm_unmap_window(window_to_move);
     rearrange_monitor(monitor);
 
     if (!current_ws.windows.empty())
@@ -803,6 +811,12 @@ void WindowManager::unmanage_dock_window(xcb_window_t window)
     }
 }
 
+void WindowManager::wm_unmap_window(xcb_window_t window)
+{
+    wm_unmapped_windows_.insert(window);
+    xcb_unmap_window(conn_.get(), window);
+}
+
 void WindowManager::setup_ewmh()
 {
     ewmh_.init_atoms();
@@ -873,7 +887,7 @@ void WindowManager::switch_to_ewmh_desktop(uint32_t desktop)
     // Unmap windows from OLD workspace before switching
     for (auto const& window : monitor.current().windows)
     {
-        xcb_unmap_window(conn_.get(), window.id);
+        wm_unmap_window(window.id);
     }
 
     // Switch to target monitor and workspace

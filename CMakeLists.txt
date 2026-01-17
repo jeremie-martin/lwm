@@ -30,3 +30,11 @@ add_subdirectory(src)
 
 # Install binary to /usr/local/bin
 install(TARGETS lwm DESTINATION bin)
+
+# Optional tests
+option(BUILD_TESTS "Build unit tests" OFF)
+
+if(BUILD_TESTS)
+    enable_testing()
+    add_subdirectory(tests)
+endif()

@@ -9,6 +9,7 @@
 #include "lwm/layout/layout.hpp"
 #include <memory>
 #include <optional>
+#include <unordered_set>
 #include <vector>
 
 namespace lwm {
@@ -30,6 +31,7 @@ private:
 
     std::vector<Monitor> monitors_;
     std::vector<xcb_window_t> dock_windows_;
+    std::unordered_set<xcb_window_t> wm_unmapped_windows_;
     size_t focused_monitor_ = 0;
 
     void setup_root();
@@ -77,6 +79,9 @@ private:
     // Dock/strut helpers
     void update_struts();
     void unmanage_dock_window(xcb_window_t window);
+
+    // WM-initiated unmap tracking
+    void wm_unmap_window(xcb_window_t window);
 
     // EWMH helpers
     void setup_ewmh();

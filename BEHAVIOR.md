@@ -111,9 +111,9 @@ Map and arrange
 Focus the new window
 ```
 
-### Window Destroyed (UnmapNotify/DestroyNotify)
+### Window Destroyed (DestroyNotify) or Client-Initiated Unmap
 ```
-Window destroyed
+DestroyNotify or client-initiated UnmapNotify received
     ↓
 Find window in any workspace (searches ALL)
     ↓
@@ -125,6 +125,41 @@ Rearrange monitor
     ↓
 Update _NET_CLIENT_LIST
 ```
+
+---
+
+## Event Handling Model
+
+### UnmapNotify vs DestroyNotify
+
+The WM must distinguish between unmaps it initiated (workspace switching) and client-initiated unmaps (app hiding itself).
+
+| Event | Source | WM Response |
+|-------|--------|-------------|
+| `UnmapNotify` (WM-initiated) | WM switched workspace | **Ignore** - window is just hidden |
+| `UnmapNotify` (client-initiated) | App hiding itself | Remove from workspace |
+| `DestroyNotify` | App closing | **Always** remove from workspace |
+
+### Implementation
+
+The WM tracks windows it has unmapped in `wm_unmapped_windows_`. When an `UnmapNotify` arrives:
+- If window is in the tracking set → WM-initiated, ignore
+- If window is NOT in tracking set → client-initiated, remove window
+
+When windows become visible again (via `rearrange_monitor`), they are removed from the tracking set.
+
+### Window Lifecycle
+```
+                    ┌─────────────────────────────┐
+                    │                             │
+                    ▼                             │
+Mapped (visible) ───→ Unmapped by WM (hidden) ───┘
+        │              (still tracked in workspace)
+        │
+        │ DestroyNotify or
+        │ Client UnmapNotify
+        ▼
+    REMOVED from workspace
 
 ---
 
