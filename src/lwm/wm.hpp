@@ -57,6 +57,7 @@ private:
     DragState drag_state_;
 
     void setup_root();
+    void grab_buttons();
     void detect_monitors();
     void create_fallback_monitor();
     void setup_monitor_bars();

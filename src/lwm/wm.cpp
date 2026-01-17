@@ -44,6 +44,7 @@ WindowManager::WindowManager(Config config)
 {
     setup_signal_handlers();
     setup_root();
+    grab_buttons();
     wm_transient_for_ = intern_atom("WM_TRANSIENT_FOR");
     detect_monitors();
     setup_ewmh();
@@ -77,6 +78,39 @@ void WindowManager::setup_root()
     {
         xcb_randr_select_input(conn_.get(), conn_.screen()->root, XCB_RANDR_NOTIFY_MASK_SCREEN_CHANGE);
     }
+}
+
+void WindowManager::grab_buttons()
+{
+    xcb_window_t root = conn_.screen()->root;
+    xcb_ungrab_button(conn_.get(), XCB_BUTTON_INDEX_ANY, root, XCB_MOD_MASK_ANY);
+
+    uint16_t buttons[] = { XCB_BUTTON_INDEX_1, XCB_BUTTON_INDEX_3 };
+    uint16_t modifiers[] = { XCB_MOD_MASK_4,
+                             static_cast<uint16_t>(XCB_MOD_MASK_4 | XCB_MOD_MASK_2),
+                             static_cast<uint16_t>(XCB_MOD_MASK_4 | XCB_MOD_MASK_LOCK),
+                             static_cast<uint16_t>(XCB_MOD_MASK_4 | XCB_MOD_MASK_2 | XCB_MOD_MASK_LOCK) };
+
+    for (auto button : buttons)
+    {
+        for (auto mod : modifiers)
+        {
+            xcb_grab_button(
+                conn_.get(),
+                0,
+                root,
+                XCB_EVENT_MASK_BUTTON_PRESS,
+                XCB_GRAB_MODE_ASYNC,
+                XCB_GRAB_MODE_ASYNC,
+                XCB_NONE,
+                XCB_NONE,
+                button,
+                mod
+            );
+        }
+    }
+
+    conn_.flush();
 }
 
 void WindowManager::detect_monitors()
@@ -369,19 +403,25 @@ void WindowManager::handle_motion_notify(xcb_motion_notify_event_t const& e)
 void WindowManager::handle_button_press(xcb_button_press_event_t const& e)
 {
     uint16_t clean_mod = e.state & ~(XCB_MOD_MASK_LOCK | XCB_MOD_MASK_2);
+    xcb_window_t target = e.event;
+    if (target == conn_.screen()->root && e.child != XCB_NONE)
+        target = e.child;
+
     if (clean_mod & XCB_MOD_MASK_4)
     {
-        if (find_floating_window(e.event))
+        if (find_floating_window(target))
         {
             bool is_resize = e.detail == XCB_BUTTON_INDEX_3;
             bool is_move = e.detail == XCB_BUTTON_INDEX_1;
             if (is_move || is_resize)
             {
-                focus_floating_window(e.event);
-                begin_drag(e.event, is_resize, e.root_x, e.root_y);
+                focus_floating_window(target);
+                begin_drag(target, is_resize, e.root_x, e.root_y);
                 return;
             }
         }
+        if (monitor_containing_window(target))
+            return;
     }
 
     // Only handle clicks on root window (empty areas or gaps)
