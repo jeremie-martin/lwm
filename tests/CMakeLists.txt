@@ -7,10 +7,11 @@ FetchContent_Declare(
 FetchContent_MakeAvailable(Catch2)
 
 add_executable(lwm_tests
+    test_focus_policy.cpp
     test_workspace.cpp
 )
 
-target_link_libraries(lwm_tests PRIVATE Catch2::Catch2WithMain)
+target_link_libraries(lwm_tests PRIVATE liblwm Catch2::Catch2WithMain)
 target_include_directories(lwm_tests PRIVATE ${CMAKE_SOURCE_DIR}/src)
 
 include(Catch)

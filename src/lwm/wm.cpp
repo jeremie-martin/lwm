@@ -1,4 +1,5 @@
 #include "wm.hpp"
+#include "lwm/core/focus.hpp"
 #include "lwm/core/log.hpp"
 #include <algorithm>
 #include <csignal>
@@ -524,43 +525,18 @@ void WindowManager::unmanage_window(xcb_window_t window)
 
 void WindowManager::focus_window(xcb_window_t window)
 {
-    // Find which monitor and workspace contains the window
-    Monitor* target_monitor = nullptr;
-    size_t target_monitor_idx = 0;
-    size_t target_workspace_idx = 0;
-
-    for (size_t m = 0; m < monitors_.size(); ++m)
-    {
-        for (size_t w = 0; w < monitors_[m].workspaces.size(); ++w)
-        {
-            if (monitors_[m].workspaces[w].find_window(window) != monitors_[m].workspaces[w].windows.end())
-            {
-                target_monitor = &monitors_[m];
-                target_monitor_idx = m;
-                target_workspace_idx = w;
-                break;
-            }
-        }
-        if (target_monitor)
-            break;
-    }
-
-    if (!target_monitor)
+    auto change = focus::focus_window_state(monitors_, focused_monitor_, active_window_, window);
+    if (!change)
         return;
 
-    // Switch to target monitor
-    focused_monitor_ = target_monitor_idx;
-
-    // If window is on a different workspace, switch to it
-    if (target_monitor->current_workspace != target_workspace_idx)
+    auto& target_monitor = monitors_[change->target_monitor];
+    if (change->workspace_changed)
     {
-        // Unmap current workspace windows
-        for (auto const& w : target_monitor->current().windows)
+        for (auto const& w : target_monitor.workspaces[change->old_workspace].windows)
         {
             wm_unmap_window(w.id);
         }
-        target_monitor->current_workspace = target_workspace_idx;
-        rearrange_monitor(*target_monitor);
+        rearrange_monitor(target_monitor);
     }
 
     update_ewmh_current_desktop();
@@ -568,9 +544,6 @@ void WindowManager::focus_window(xcb_window_t window)
     // Clear borders on all windows across all monitors
     clear_all_borders();
 
-    auto& workspace = target_monitor->current();
-    workspace.focused_window = window;
-    active_window_ = window;
     xcb_change_window_attributes(conn_.get(), window, XCB_CW_BORDER_PIXEL, &config_.appearance.border_color);
     xcb_configure_window(conn_.get(), window, XCB_CONFIG_WINDOW_BORDER_WIDTH, &config_.appearance.border_width);
     xcb_set_input_focus(conn_.get(), XCB_INPUT_FOCUS_POINTER_ROOT, window, XCB_CURRENT_TIME);
@@ -862,33 +835,17 @@ Monitor* WindowManager::monitor_at_point(int16_t x, int16_t y)
     return monitors_.empty() ? nullptr : &monitors_[0];
 }
 
-std::optional<size_t> WindowManager::monitor_index_at_point(int16_t x, int16_t y)
-{
-    for (size_t i = 0; i < monitors_.size(); ++i)
-    {
-        auto const& monitor = monitors_[i];
-        if (x >= monitor.x && x < monitor.x + monitor.width && y >= monitor.y && y < monitor.y + monitor.height)
-        {
-            return i;
-        }
-    }
-    return std::nullopt;
-}
-
 void WindowManager::update_focused_monitor_at_point(int16_t x, int16_t y)
 {
-    auto new_monitor_idx = monitor_index_at_point(x, y);
-    if (!new_monitor_idx)
-        return;
-
-    // Only act if we crossed to a different monitor
-    if (*new_monitor_idx == focused_monitor_)
+    auto result = focus::pointer_move(monitors_, focused_monitor_, x, y);
+    if (!result.active_monitor_changed)
         return;
 
     // We crossed monitors - update active monitor and clear focus
-    focused_monitor_ = *new_monitor_idx;
+    focused_monitor_ = result.new_monitor;
     update_ewmh_current_desktop();
-    clear_focus();
+    if (result.clear_focus)
+        clear_focus();
 
     update_all_bars();
     conn_.flush();

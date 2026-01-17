@@ -3,12 +3,23 @@
 
 using namespace lwm;
 
+namespace {
+
+void init_workspaces(Monitor& monitor, size_t count = 10)
+{
+    monitor.workspaces.assign(count, Workspace{});
+    monitor.current_workspace = 0;
+}
+
+} // namespace
+
 TEST_CASE("Windows persist across workspace switches", "[workspace][critical]")
 {
     Monitor mon;
     mon.name = "test";
     mon.width = 1920;
     mon.height = 1080;
+    init_workspaces(mon);
 
     // Add window to workspace 0
     mon.workspaces[0].windows.push_back({0x1000, "terminal"});
@@ -48,6 +59,7 @@ TEST_CASE("Window can be found across workspaces", "[workspace]")
 {
     Monitor mon;
     mon.name = "test";
+    init_workspaces(mon);
 
     // Add windows to different workspaces
     mon.workspaces[0].windows.push_back({0x1000, "ws0_win"});
@@ -71,6 +83,7 @@ TEST_CASE("Monitor working_area accounts for struts", "[monitor]")
     mon.y = 0;
     mon.width = 1920;
     mon.height = 1080;
+    init_workspaces(mon);
 
     // No strut
     auto area = mon.working_area();
@@ -107,6 +120,7 @@ TEST_CASE("Moving window between workspaces preserves data", "[workspace]")
 {
     Monitor mon;
     mon.name = "test";
+    init_workspaces(mon);
 
     // Add window to workspace 0
     Window win{0x1000, "mywindow"};

@@ -78,7 +78,6 @@ private:
     void focus_or_fallback(Monitor& monitor);
     Monitor* monitor_containing_window(xcb_window_t window);
     Monitor* monitor_at_point(int16_t x, int16_t y);
-    std::optional<size_t> monitor_index_at_point(int16_t x, int16_t y);
     void update_focused_monitor_at_point(int16_t x, int16_t y);
     std::string get_window_name(xcb_window_t window);
     void update_all_bars();
