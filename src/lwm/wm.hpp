@@ -78,6 +78,7 @@ private:
 
     std::vector<Monitor> monitors_;
     std::vector<xcb_window_t> dock_windows_;
+    std::vector<xcb_window_t> desktop_windows_;
     std::vector<FloatingWindow> floating_windows_;
     std::unordered_set<xcb_window_t> wm_unmapped_windows_;
     std::unordered_set<xcb_window_t> fullscreen_windows_;
@@ -225,6 +226,7 @@ private:
     // Dock/strut helpers
     void update_struts();
     void unmanage_dock_window(xcb_window_t window);
+    void unmanage_desktop_window(xcb_window_t window);
 
     // WM-initiated unmap tracking
     void wm_unmap_window(xcb_window_t window);

@@ -456,14 +456,33 @@ void WindowManager::scan_existing_windows()
         }
 
         xcb_atom_t type = ewmh_.get_window_type(window);
+        bool is_desktop = type == ewmh_.get()->_NET_WM_WINDOW_TYPE_DESKTOP;
         bool is_menu = type == ewmh_.get()->_NET_WM_WINDOW_TYPE_MENU
             || type == ewmh_.get()->_NET_WM_WINDOW_TYPE_DROPDOWN_MENU
             || type == ewmh_.get()->_NET_WM_WINDOW_TYPE_POPUP_MENU || type == ewmh_.get()->_NET_WM_WINDOW_TYPE_TOOLTIP
             || type == ewmh_.get()->_NET_WM_WINDOW_TYPE_NOTIFICATION || type == ewmh_.get()->_NET_WM_WINDOW_TYPE_COMBO
             || type == ewmh_.get()->_NET_WM_WINDOW_TYPE_DND;
         bool is_floating_type = type == ewmh_.get()->_NET_WM_WINDOW_TYPE_DIALOG
-            || type == ewmh_.get()->_NET_WM_WINDOW_TYPE_UTILITY || type == ewmh_.get()->_NET_WM_WINDOW_TYPE_SPLASH;
+            || type == ewmh_.get()->_NET_WM_WINDOW_TYPE_UTILITY || type == ewmh_.get()->_NET_WM_WINDOW_TYPE_SPLASH
+            || type == ewmh_.get()->_NET_WM_WINDOW_TYPE_TOOLBAR;
         bool has_transient = transient_for_window(window).has_value();
+
+        if (is_desktop)
+        {
+            uint32_t values[] = { XCB_EVENT_MASK_PROPERTY_CHANGE };
+            xcb_change_window_attributes(conn_.get(), window, XCB_CW_EVENT_MASK, values);
+            uint32_t stack_mode = XCB_STACK_MODE_BELOW;
+            xcb_configure_window(conn_.get(), window, XCB_CONFIG_WINDOW_STACK_MODE, &stack_mode);
+            if (std::ranges::find(desktop_windows_, window) == desktop_windows_.end())
+            {
+                desktop_windows_.push_back(window);
+            }
+            skip_taskbar_windows_.insert(window);
+            skip_pager_windows_.insert(window);
+            ewmh_.set_window_state(window, ewmh_.get()->_NET_WM_STATE_SKIP_TASKBAR, true);
+            ewmh_.set_window_state(window, ewmh_.get()->_NET_WM_STATE_SKIP_PAGER, true);
+            continue;
+        }
 
         if (is_menu)
             continue;
@@ -471,6 +490,18 @@ void WindowManager::scan_existing_windows()
         if (is_floating_type || has_transient)
         {
             manage_floating_window(window);
+            if (type == ewmh_.get()->_NET_WM_WINDOW_TYPE_TOOLBAR || type == ewmh_.get()->_NET_WM_WINDOW_TYPE_UTILITY
+                || type == ewmh_.get()->_NET_WM_WINDOW_TYPE_SPLASH)
+            {
+                skip_taskbar_windows_.insert(window);
+                skip_pager_windows_.insert(window);
+                ewmh_.set_window_state(window, ewmh_.get()->_NET_WM_STATE_SKIP_TASKBAR, true);
+                ewmh_.set_window_state(window, ewmh_.get()->_NET_WM_STATE_SKIP_PAGER, true);
+            }
+            if (type == ewmh_.get()->_NET_WM_WINDOW_TYPE_UTILITY)
+            {
+                set_window_above(window, true);
+            }
             continue;
         }
 
@@ -613,13 +644,35 @@ void WindowManager::handle_map_request(xcb_map_request_event_t const& e)
     }
 
     xcb_atom_t type = ewmh_.get_window_type(e.window);
+    bool is_desktop = type == ewmh_.get()->_NET_WM_WINDOW_TYPE_DESKTOP;
     bool is_menu = type == ewmh_.get()->_NET_WM_WINDOW_TYPE_MENU
         || type == ewmh_.get()->_NET_WM_WINDOW_TYPE_DROPDOWN_MENU || type == ewmh_.get()->_NET_WM_WINDOW_TYPE_POPUP_MENU
         || type == ewmh_.get()->_NET_WM_WINDOW_TYPE_TOOLTIP || type == ewmh_.get()->_NET_WM_WINDOW_TYPE_NOTIFICATION
         || type == ewmh_.get()->_NET_WM_WINDOW_TYPE_COMBO || type == ewmh_.get()->_NET_WM_WINDOW_TYPE_DND;
     bool is_floating_type = type == ewmh_.get()->_NET_WM_WINDOW_TYPE_DIALOG
-        || type == ewmh_.get()->_NET_WM_WINDOW_TYPE_UTILITY || type == ewmh_.get()->_NET_WM_WINDOW_TYPE_SPLASH;
+        || type == ewmh_.get()->_NET_WM_WINDOW_TYPE_UTILITY || type == ewmh_.get()->_NET_WM_WINDOW_TYPE_SPLASH
+        || type == ewmh_.get()->_NET_WM_WINDOW_TYPE_TOOLBAR;
     bool has_transient = transient_for_window(e.window).has_value();
+
+    if (is_desktop)
+    {
+        uint32_t values[] = { XCB_EVENT_MASK_PROPERTY_CHANGE };
+        xcb_change_window_attributes(conn_.get(), e.window, XCB_CW_EVENT_MASK, values);
+        xcb_map_window(conn_.get(), e.window);
+        uint32_t stack_mode = XCB_STACK_MODE_BELOW;
+        xcb_configure_window(conn_.get(), e.window, XCB_CONFIG_WINDOW_STACK_MODE, &stack_mode);
+        if (std::ranges::find(desktop_windows_, e.window) == desktop_windows_.end())
+        {
+            desktop_windows_.push_back(e.window);
+        }
+        skip_taskbar_windows_.insert(e.window);
+        skip_pager_windows_.insert(e.window);
+        ewmh_.set_window_state(e.window, ewmh_.get()->_NET_WM_STATE_SKIP_TASKBAR, true);
+        ewmh_.set_window_state(e.window, ewmh_.get()->_NET_WM_STATE_SKIP_PAGER, true);
+        update_ewmh_client_list();
+        conn_.flush();
+        return;
+    }
 
     // Ignore short-lived popup windows and tooltips.
     if (is_menu)
@@ -642,6 +695,18 @@ void WindowManager::handle_map_request(xcb_map_request_event_t const& e)
             }
         }
         manage_floating_window(e.window, start_iconic);
+        if (type == ewmh_.get()->_NET_WM_WINDOW_TYPE_TOOLBAR || type == ewmh_.get()->_NET_WM_WINDOW_TYPE_UTILITY
+            || type == ewmh_.get()->_NET_WM_WINDOW_TYPE_SPLASH)
+        {
+            skip_taskbar_windows_.insert(e.window);
+            skip_pager_windows_.insert(e.window);
+            ewmh_.set_window_state(e.window, ewmh_.get()->_NET_WM_STATE_SKIP_TASKBAR, true);
+            ewmh_.set_window_state(e.window, ewmh_.get()->_NET_WM_STATE_SKIP_PAGER, true);
+        }
+        if (type == ewmh_.get()->_NET_WM_WINDOW_TYPE_UTILITY)
+        {
+            set_window_above(e.window, true);
+        }
         return;
     }
 
@@ -682,6 +747,7 @@ void WindowManager::handle_map_request(xcb_map_request_event_t const& e)
 void WindowManager::handle_window_removal(xcb_window_t window)
 {
     unmanage_dock_window(window);
+    unmanage_desktop_window(window);
     unmanage_floating_window(window);
     unmanage_window(window);
 }
@@ -3817,6 +3883,18 @@ void WindowManager::unmanage_dock_window(xcb_window_t window)
         dock_windows_.erase(it);
         update_struts();
         rearrange_all_monitors();
+    }
+}
+
+void WindowManager::unmanage_desktop_window(xcb_window_t window)
+{
+    auto it = std::ranges::find(desktop_windows_, window);
+    if (it != desktop_windows_.end())
+    {
+        desktop_windows_.erase(it);
+        skip_taskbar_windows_.erase(window);
+        skip_pager_windows_.erase(window);
+        update_ewmh_client_list();
     }
 }
 

@@ -3,6 +3,21 @@
 
 namespace lwm {
 
+namespace {
+
+bool is_known_window_type(xcb_ewmh_connection_t const* ewmh, xcb_atom_t type)
+{
+    return type == ewmh->_NET_WM_WINDOW_TYPE_DESKTOP || type == ewmh->_NET_WM_WINDOW_TYPE_DOCK
+        || type == ewmh->_NET_WM_WINDOW_TYPE_TOOLBAR || type == ewmh->_NET_WM_WINDOW_TYPE_MENU
+        || type == ewmh->_NET_WM_WINDOW_TYPE_UTILITY || type == ewmh->_NET_WM_WINDOW_TYPE_SPLASH
+        || type == ewmh->_NET_WM_WINDOW_TYPE_DIALOG || type == ewmh->_NET_WM_WINDOW_TYPE_DROPDOWN_MENU
+        || type == ewmh->_NET_WM_WINDOW_TYPE_POPUP_MENU || type == ewmh->_NET_WM_WINDOW_TYPE_TOOLTIP
+        || type == ewmh->_NET_WM_WINDOW_TYPE_NOTIFICATION || type == ewmh->_NET_WM_WINDOW_TYPE_COMBO
+        || type == ewmh->_NET_WM_WINDOW_TYPE_DND || type == ewmh->_NET_WM_WINDOW_TYPE_NORMAL;
+}
+
+} // namespace
+
 Ewmh::Ewmh(Connection& conn)
     : conn_(conn)
 {
@@ -82,9 +97,20 @@ void Ewmh::set_supported_atoms()
         ewmh_._NET_CLOSE_WINDOW,
         ewmh_._NET_WM_FULLSCREEN_MONITORS,
         ewmh_._NET_WM_WINDOW_TYPE,
+        ewmh_._NET_WM_WINDOW_TYPE_DESKTOP,
         ewmh_._NET_WM_WINDOW_TYPE_DOCK,
-        ewmh_._NET_WM_WINDOW_TYPE_NORMAL,
+        ewmh_._NET_WM_WINDOW_TYPE_TOOLBAR,
+        ewmh_._NET_WM_WINDOW_TYPE_MENU,
+        ewmh_._NET_WM_WINDOW_TYPE_UTILITY,
+        ewmh_._NET_WM_WINDOW_TYPE_SPLASH,
         ewmh_._NET_WM_WINDOW_TYPE_DIALOG,
+        ewmh_._NET_WM_WINDOW_TYPE_DROPDOWN_MENU,
+        ewmh_._NET_WM_WINDOW_TYPE_POPUP_MENU,
+        ewmh_._NET_WM_WINDOW_TYPE_TOOLTIP,
+        ewmh_._NET_WM_WINDOW_TYPE_NOTIFICATION,
+        ewmh_._NET_WM_WINDOW_TYPE_COMBO,
+        ewmh_._NET_WM_WINDOW_TYPE_DND,
+        ewmh_._NET_WM_WINDOW_TYPE_NORMAL,
         ewmh_._NET_WM_STRUT,
         ewmh_._NET_WM_STRUT_PARTIAL,
         ewmh_._NET_FRAME_EXTENTS,
@@ -280,9 +306,17 @@ xcb_atom_t Ewmh::get_window_type(xcb_window_t window) const
 {
     xcb_ewmh_get_atoms_reply_t types;
     if (!xcb_ewmh_get_wm_window_type_reply(&ewmh_, xcb_ewmh_get_wm_window_type(&ewmh_, window), &types, nullptr))
-        return XCB_ATOM_NONE;
+        return ewmh_._NET_WM_WINDOW_TYPE_NORMAL;
 
-    xcb_atom_t type = (types.atoms_len > 0) ? types.atoms[0] : XCB_ATOM_NONE;
+    xcb_atom_t type = ewmh_._NET_WM_WINDOW_TYPE_NORMAL;
+    for (uint32_t i = 0; i < types.atoms_len; ++i)
+    {
+        if (is_known_window_type(&ewmh_, types.atoms[i]))
+        {
+            type = types.atoms[i];
+            break;
+        }
+    }
     xcb_ewmh_get_atoms_reply_wipe(&types);
     return type;
 }
@@ -300,13 +334,7 @@ bool Ewmh::is_dialog_window(xcb_window_t window) const
 bool Ewmh::should_tile_window(xcb_window_t window) const
 {
     xcb_atom_t type = get_window_type(window);
-    // Don't tile docks, dialogs, or utility windows
-    return type != ewmh_._NET_WM_WINDOW_TYPE_DOCK && type != ewmh_._NET_WM_WINDOW_TYPE_DIALOG
-        && type != ewmh_._NET_WM_WINDOW_TYPE_UTILITY && type != ewmh_._NET_WM_WINDOW_TYPE_SPLASH
-        && type != ewmh_._NET_WM_WINDOW_TYPE_MENU && type != ewmh_._NET_WM_WINDOW_TYPE_DROPDOWN_MENU
-        && type != ewmh_._NET_WM_WINDOW_TYPE_POPUP_MENU && type != ewmh_._NET_WM_WINDOW_TYPE_TOOLTIP
-        && type != ewmh_._NET_WM_WINDOW_TYPE_NOTIFICATION && type != ewmh_._NET_WM_WINDOW_TYPE_COMBO
-        && type != ewmh_._NET_WM_WINDOW_TYPE_DND;
+    return type == ewmh_._NET_WM_WINDOW_TYPE_NORMAL;
 }
 
 Strut Ewmh::get_window_strut(xcb_window_t window) const
