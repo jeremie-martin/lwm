@@ -607,8 +607,6 @@ void WindowManager::handle_map_request(xcb_map_request_event_t const& e)
 
     if (is_override_redirect_window(e.window))
     {
-        xcb_map_window(conn_.get(), e.window);
-        conn_.flush();
         return;
     }
 
