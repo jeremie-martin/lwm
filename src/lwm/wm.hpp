@@ -85,10 +85,16 @@ private:
     std::unordered_set<xcb_window_t> above_windows_;
     std::unordered_set<xcb_window_t> below_windows_;
     std::unordered_set<xcb_window_t> iconic_windows_;
+    std::unordered_set<xcb_window_t> sticky_windows_;
+    std::unordered_set<xcb_window_t> maximized_horz_windows_;
+    std::unordered_set<xcb_window_t> maximized_vert_windows_;
+    std::unordered_set<xcb_window_t> shaded_windows_;
+    std::unordered_set<xcb_window_t> modal_windows_;
     std::unordered_set<xcb_window_t> skip_taskbar_windows_;
     std::unordered_set<xcb_window_t> skip_pager_windows_;
     bool showing_desktop_ = false;
     std::unordered_map<xcb_window_t, Geometry> fullscreen_restore_;
+    std::unordered_map<xcb_window_t, Geometry> maximize_restore_;
     std::unordered_map<xcb_window_t, FullscreenMonitors> fullscreen_monitors_;
     std::unordered_map<xcb_window_t, xcb_sync_counter_t> sync_counters_;
     std::unordered_map<xcb_window_t, uint64_t> sync_values_;
@@ -155,6 +161,11 @@ private:
     void set_fullscreen(xcb_window_t window, bool enabled);
     void set_window_above(xcb_window_t window, bool enabled);
     void set_window_below(xcb_window_t window, bool enabled);
+    void set_window_sticky(xcb_window_t window, bool enabled);
+    void set_window_maximized(xcb_window_t window, bool horiz, bool vert);
+    void apply_maximized_geometry(xcb_window_t window);
+    void set_window_shaded(xcb_window_t window, bool enabled);
+    void set_window_modal(xcb_window_t window, bool enabled);
     void apply_fullscreen_if_needed(xcb_window_t window);
     void set_fullscreen_monitors(xcb_window_t window, FullscreenMonitors const& monitors);
     Geometry fullscreen_geometry_for_window(xcb_window_t window) const;

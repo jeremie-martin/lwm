@@ -694,6 +694,10 @@ void WindowManager::handle_map_request(xcb_map_request_event_t const& e)
                 start_iconic = true;
             }
         }
+        if (ewmh_.has_window_state(e.window, ewmh_.get()->_NET_WM_STATE_HIDDEN))
+        {
+            start_iconic = true;
+        }
         manage_floating_window(e.window, start_iconic);
         if (type == ewmh_.get()->_NET_WM_WINDOW_TYPE_TOOLBAR || type == ewmh_.get()->_NET_WM_WINDOW_TYPE_UTILITY
             || type == ewmh_.get()->_NET_WM_WINDOW_TYPE_SPLASH)
@@ -728,6 +732,10 @@ void WindowManager::handle_map_request(xcb_map_request_event_t const& e)
         {
             start_iconic = true;
         }
+    }
+    if (ewmh_.has_window_state(e.window, ewmh_.get()->_NET_WM_STATE_HIDDEN))
+    {
+        start_iconic = true;
     }
 
     manage_window(e.window, start_iconic);
@@ -1020,6 +1028,45 @@ void WindowManager::handle_client_message(xcb_client_message_event_t const& e)
                     skip_pager_windows_.erase(e.window);
                 ewmh_.set_window_state(e.window, ewmh->_NET_WM_STATE_SKIP_PAGER, enable);
             }
+            else if (state == ewmh->_NET_WM_STATE_HIDDEN)
+            {
+                bool enable = compute_enable(iconic_windows_.contains(e.window));
+                if (enable)
+                    iconify_window(e.window);
+                else
+                    deiconify_window(e.window, false);
+            }
+            else if (state == ewmh->_NET_WM_STATE_STICKY)
+            {
+                bool enable = compute_enable(sticky_windows_.contains(e.window));
+                set_window_sticky(e.window, enable);
+            }
+            else if (state == ewmh->_NET_WM_STATE_MAXIMIZED_HORZ)
+            {
+                bool enable = compute_enable(maximized_horz_windows_.contains(e.window));
+                bool vert = maximized_vert_windows_.contains(e.window);
+                set_window_maximized(e.window, enable, vert);
+            }
+            else if (state == ewmh->_NET_WM_STATE_MAXIMIZED_VERT)
+            {
+                bool enable = compute_enable(maximized_vert_windows_.contains(e.window));
+                bool horiz = maximized_horz_windows_.contains(e.window);
+                set_window_maximized(e.window, horiz, enable);
+            }
+            else if (state == ewmh->_NET_WM_STATE_SHADED)
+            {
+                bool enable = compute_enable(shaded_windows_.contains(e.window));
+                set_window_shaded(e.window, enable);
+            }
+            else if (state == ewmh->_NET_WM_STATE_MODAL)
+            {
+                bool enable = compute_enable(modal_windows_.contains(e.window));
+                set_window_modal(e.window, enable);
+            }
+            else if (state == ewmh->_NET_WM_STATE_FOCUSED)
+            {
+                return;
+            }
             else if (state == ewmh->_NET_WM_STATE_DEMANDS_ATTENTION)
             {
                 bool enable = compute_enable(ewmh_.has_urgent_hint(e.window));
@@ -1086,9 +1133,16 @@ void WindowManager::handle_client_message(xcb_client_message_event_t const& e)
         uint32_t desktop = e.data.data32[0];
         LWM_DEBUG("_NET_WM_DESKTOP request: window=0x" << std::hex << e.window << std::dec << " desktop=" << desktop);
 
-        // 0xFFFFFFFF means sticky (visible on all desktops) - not implemented, ignore
+        // 0xFFFFFFFF means sticky (visible on all desktops)
         if (desktop == 0xFFFFFFFF)
+        {
+            set_window_sticky(e.window, true);
             return;
+        }
+        if (sticky_windows_.contains(e.window))
+        {
+            set_window_sticky(e.window, false);
+        }
 
         // Calculate target monitor and workspace from desktop index
         size_t workspaces_per_monitor = config_.workspaces.count;
@@ -1639,6 +1693,8 @@ void WindowManager::manage_window(xcb_window_t window, bool start_iconic)
     std::vector<xcb_atom_t> actions = {
         ewmh->_NET_WM_ACTION_CLOSE, ewmh->_NET_WM_ACTION_FULLSCREEN, ewmh->_NET_WM_ACTION_CHANGE_DESKTOP,
         ewmh->_NET_WM_ACTION_ABOVE, ewmh->_NET_WM_ACTION_BELOW, ewmh->_NET_WM_ACTION_MINIMIZE,
+        ewmh->_NET_WM_ACTION_SHADE, ewmh->_NET_WM_ACTION_STICK, ewmh->_NET_WM_ACTION_MAXIMIZE_VERT,
+        ewmh->_NET_WM_ACTION_MAXIMIZE_HORZ,
     };
     ewmh_.set_allowed_actions(window, actions);
 
@@ -1674,6 +1730,28 @@ void WindowManager::manage_window(xcb_window_t window, bool start_iconic)
         skip_taskbar_windows_.insert(window);
     if (ewmh_.has_window_state(window, ewmh_.get()->_NET_WM_STATE_SKIP_PAGER))
         skip_pager_windows_.insert(window);
+
+    if (ewmh_.has_window_state(window, ewmh_.get()->_NET_WM_STATE_STICKY))
+    {
+        set_window_sticky(window, true);
+    }
+
+    bool wants_max_horz = ewmh_.has_window_state(window, ewmh_.get()->_NET_WM_STATE_MAXIMIZED_HORZ);
+    bool wants_max_vert = ewmh_.has_window_state(window, ewmh_.get()->_NET_WM_STATE_MAXIMIZED_VERT);
+    if (wants_max_horz || wants_max_vert)
+    {
+        set_window_maximized(window, wants_max_horz, wants_max_vert);
+    }
+
+    if (ewmh_.has_window_state(window, ewmh_.get()->_NET_WM_STATE_SHADED))
+    {
+        set_window_shaded(window, true);
+    }
+
+    if (ewmh_.has_window_state(window, ewmh_.get()->_NET_WM_STATE_MODAL))
+    {
+        set_window_modal(window, true);
+    }
 
     bool wants_above = ewmh_.has_window_state(window, ewmh_.get()->_NET_WM_STATE_ABOVE);
     bool wants_below = ewmh_.has_window_state(window, ewmh_.get()->_NET_WM_STATE_BELOW);
@@ -1836,6 +1914,8 @@ void WindowManager::manage_floating_window(xcb_window_t window, bool start_iconi
     std::vector<xcb_atom_t> actions = {
         ewmh->_NET_WM_ACTION_CLOSE,  ewmh->_NET_WM_ACTION_FULLSCREEN, ewmh->_NET_WM_ACTION_CHANGE_DESKTOP,
         ewmh->_NET_WM_ACTION_ABOVE,  ewmh->_NET_WM_ACTION_BELOW,      ewmh->_NET_WM_ACTION_MINIMIZE,
+        ewmh->_NET_WM_ACTION_SHADE,  ewmh->_NET_WM_ACTION_STICK,       ewmh->_NET_WM_ACTION_MAXIMIZE_VERT,
+        ewmh->_NET_WM_ACTION_MAXIMIZE_HORZ,
         ewmh->_NET_WM_ACTION_MOVE,
         ewmh->_NET_WM_ACTION_RESIZE,
     };
@@ -1855,6 +1935,28 @@ void WindowManager::manage_floating_window(xcb_window_t window, bool start_iconi
         skip_taskbar_windows_.insert(window);
     if (ewmh_.has_window_state(window, ewmh_.get()->_NET_WM_STATE_SKIP_PAGER))
         skip_pager_windows_.insert(window);
+
+    if (ewmh_.has_window_state(window, ewmh_.get()->_NET_WM_STATE_STICKY))
+    {
+        set_window_sticky(window, true);
+    }
+
+    bool wants_max_horz = ewmh_.has_window_state(window, ewmh_.get()->_NET_WM_STATE_MAXIMIZED_HORZ);
+    bool wants_max_vert = ewmh_.has_window_state(window, ewmh_.get()->_NET_WM_STATE_MAXIMIZED_VERT);
+    if (wants_max_horz || wants_max_vert)
+    {
+        set_window_maximized(window, wants_max_horz, wants_max_vert);
+    }
+
+    if (ewmh_.has_window_state(window, ewmh_.get()->_NET_WM_STATE_SHADED))
+    {
+        set_window_shaded(window, true);
+    }
+
+    if (ewmh_.has_window_state(window, ewmh_.get()->_NET_WM_STATE_MODAL))
+    {
+        set_window_modal(window, true);
+    }
 
     bool wants_above = ewmh_.has_window_state(window, ewmh_.get()->_NET_WM_STATE_ABOVE);
     bool wants_below = ewmh_.has_window_state(window, ewmh_.get()->_NET_WM_STATE_BELOW);
@@ -1887,11 +1989,17 @@ void WindowManager::unmanage_window(xcb_window_t window)
     above_windows_.erase(window);
     below_windows_.erase(window);
     iconic_windows_.erase(window);
+    sticky_windows_.erase(window);
+    maximized_horz_windows_.erase(window);
+    maximized_vert_windows_.erase(window);
+    shaded_windows_.erase(window);
+    modal_windows_.erase(window);
     skip_taskbar_windows_.erase(window);
     skip_pager_windows_.erase(window);
     fullscreen_monitors_.erase(window);
     sync_counters_.erase(window);
     sync_values_.erase(window);
+    maximize_restore_.erase(window);
     pending_kills_.erase(window);
     pending_pings_.erase(window);
     user_times_.erase(window);
@@ -1949,11 +2057,17 @@ void WindowManager::unmanage_floating_window(xcb_window_t window)
     above_windows_.erase(window);
     below_windows_.erase(window);
     iconic_windows_.erase(window);
+    sticky_windows_.erase(window);
+    maximized_horz_windows_.erase(window);
+    maximized_vert_windows_.erase(window);
+    shaded_windows_.erase(window);
+    modal_windows_.erase(window);
     skip_taskbar_windows_.erase(window);
     skip_pager_windows_.erase(window);
     fullscreen_monitors_.erase(window);
     sync_counters_.erase(window);
     sync_values_.erase(window);
+    maximize_restore_.erase(window);
     pending_kills_.erase(window);
     pending_pings_.erase(window);
     user_times_.erase(window);
@@ -2021,6 +2135,8 @@ void WindowManager::focus_window(xcb_window_t window)
         deiconify_window(window, false);
     }
 
+    xcb_window_t previous_active = active_window_;
+
     auto change = focus::focus_window_state(monitors_, focused_monitor_, active_window_, window);
     if (!change)
         return;
@@ -2030,6 +2146,8 @@ void WindowManager::focus_window(xcb_window_t window)
     {
         for (auto const& w : target_monitor.workspaces[change->old_workspace].windows)
         {
+            if (sticky_windows_.contains(w.id))
+                continue;
             wm_unmap_window(w.id);
         }
         rearrange_monitor(target_monitor);
@@ -2056,6 +2174,11 @@ void WindowManager::focus_window(xcb_window_t window)
     // Clear urgent hint when window receives focus
     ewmh_.set_demands_attention(window, false);
     ewmh_.set_active_window(window);
+    if (previous_active != XCB_NONE && previous_active != window)
+    {
+        ewmh_.set_window_state(previous_active, ewmh_.get()->_NET_WM_STATE_FOCUSED, false);
+    }
+    ewmh_.set_window_state(window, ewmh_.get()->_NET_WM_STATE_FOCUSED, true);
     user_times_[window] = last_event_time_;
 
     apply_fullscreen_if_needed(window);
@@ -2084,12 +2207,16 @@ void WindowManager::focus_floating_window(xcb_window_t window)
     if (floating_window->monitor >= monitors_.size())
         return;
 
+    xcb_window_t previous_active = active_window_;
+
     focused_monitor_ = floating_window->monitor;
     auto& monitor = monitors_[floating_window->monitor];
     if (monitor.current_workspace != floating_window->workspace)
     {
         for (auto const& w : monitor.current().windows)
         {
+            if (sticky_windows_.contains(w.id))
+                continue;
             wm_unmap_window(w.id);
         }
         monitor.previous_workspace = monitor.current_workspace;
@@ -2133,6 +2260,11 @@ void WindowManager::focus_floating_window(xcb_window_t window)
 
     ewmh_.set_demands_attention(window, false);
     ewmh_.set_active_window(window);
+    if (previous_active != XCB_NONE && previous_active != window)
+    {
+        ewmh_.set_window_state(previous_active, ewmh_.get()->_NET_WM_STATE_FOCUSED, false);
+    }
+    ewmh_.set_window_state(window, ewmh_.get()->_NET_WM_STATE_FOCUSED, true);
     user_times_[window] = last_event_time_;
 
     apply_fullscreen_if_needed(window);
@@ -2275,6 +2407,164 @@ void WindowManager::set_window_below(xcb_window_t window, bool enabled)
     ewmh_.set_window_state(window, ewmh_.get()->_NET_WM_STATE_BELOW, enabled);
     update_ewmh_client_list();
     conn_.flush();
+}
+
+void WindowManager::set_window_sticky(xcb_window_t window, bool enabled)
+{
+    if (enabled)
+    {
+        sticky_windows_.insert(window);
+        ewmh_.set_window_state(window, ewmh_.get()->_NET_WM_STATE_STICKY, true);
+        ewmh_.set_window_desktop(window, 0xFFFFFFFF);
+    }
+    else
+    {
+        sticky_windows_.erase(window);
+        ewmh_.set_window_state(window, ewmh_.get()->_NET_WM_STATE_STICKY, false);
+        if (auto monitor_idx = monitor_index_for_window(window))
+        {
+            size_t workspace_idx = workspace_index_for_window(window).value_or(monitors_[*monitor_idx].current_workspace);
+            uint32_t desktop = get_ewmh_desktop_index(*monitor_idx, workspace_idx);
+            ewmh_.set_window_desktop(window, desktop);
+        }
+    }
+
+    if (auto* floating_window = find_floating_window(window))
+    {
+        update_floating_visibility(floating_window->monitor);
+    }
+    else if (auto* monitor = monitor_containing_window(window))
+    {
+        rearrange_monitor(*monitor);
+    }
+
+    update_ewmh_client_list();
+    update_all_bars();
+    conn_.flush();
+}
+
+void WindowManager::set_window_maximized(xcb_window_t window, bool horiz, bool vert)
+{
+    if (horiz)
+        maximized_horz_windows_.insert(window);
+    else
+        maximized_horz_windows_.erase(window);
+
+    if (vert)
+        maximized_vert_windows_.insert(window);
+    else
+        maximized_vert_windows_.erase(window);
+
+    ewmh_.set_window_state(window, ewmh_.get()->_NET_WM_STATE_MAXIMIZED_HORZ, horiz);
+    ewmh_.set_window_state(window, ewmh_.get()->_NET_WM_STATE_MAXIMIZED_VERT, vert);
+
+    bool fullscreen = fullscreen_windows_.contains(window);
+    if (!fullscreen)
+    {
+        if (!horiz && !vert)
+        {
+            auto restore = maximize_restore_.find(window);
+            if (restore != maximize_restore_.end())
+            {
+                if (auto* floating_window = find_floating_window(window))
+                {
+                    floating_window->geometry = restore->second;
+                    if (floating_window->workspace == monitors_[floating_window->monitor].current_workspace
+                        && !iconic_windows_.contains(window))
+                    {
+                        apply_floating_geometry(*floating_window);
+                    }
+                }
+                maximize_restore_.erase(window);
+            }
+        }
+        else if (auto* floating_window = find_floating_window(window))
+        {
+            if (!maximize_restore_.contains(window))
+            {
+                maximize_restore_[window] = floating_window->geometry;
+            }
+            apply_maximized_geometry(window);
+        }
+    }
+
+    update_ewmh_client_list();
+    update_all_bars();
+    conn_.flush();
+}
+
+void WindowManager::apply_maximized_geometry(xcb_window_t window)
+{
+    auto* floating_window = find_floating_window(window);
+    if (!floating_window)
+        return;
+    if (floating_window->monitor >= monitors_.size())
+        return;
+
+    Geometry base = floating_window->geometry;
+    if (auto restore = maximize_restore_.find(window); restore != maximize_restore_.end())
+    {
+        base = restore->second;
+    }
+
+    Geometry area = monitors_[floating_window->monitor].working_area();
+    if (maximized_horz_windows_.contains(window))
+    {
+        base.x = area.x;
+        base.width = area.width;
+    }
+    if (maximized_vert_windows_.contains(window))
+    {
+        base.y = area.y;
+        base.height = area.height;
+    }
+
+    floating_window->geometry = base;
+    if (floating_window->workspace == monitors_[floating_window->monitor].current_workspace
+        && !iconic_windows_.contains(window))
+    {
+        apply_floating_geometry(*floating_window);
+    }
+}
+
+void WindowManager::set_window_shaded(xcb_window_t window, bool enabled)
+{
+    if (enabled)
+    {
+        if (shaded_windows_.insert(window).second)
+        {
+            ewmh_.set_window_state(window, ewmh_.get()->_NET_WM_STATE_SHADED, true);
+            if (!iconic_windows_.contains(window))
+            {
+                iconify_window(window);
+            }
+        }
+    }
+    else
+    {
+        if (shaded_windows_.erase(window) > 0)
+        {
+            ewmh_.set_window_state(window, ewmh_.get()->_NET_WM_STATE_SHADED, false);
+            if (iconic_windows_.contains(window))
+            {
+                deiconify_window(window, false);
+            }
+        }
+    }
+}
+
+void WindowManager::set_window_modal(xcb_window_t window, bool enabled)
+{
+    if (enabled)
+        modal_windows_.insert(window);
+    else
+        modal_windows_.erase(window);
+
+    ewmh_.set_window_state(window, ewmh_.get()->_NET_WM_STATE_MODAL, enabled);
+    if (enabled)
+    {
+        set_window_above(window, true);
+    }
 }
 
 void WindowManager::apply_fullscreen_if_needed(xcb_window_t window)
@@ -2483,6 +2773,10 @@ void WindowManager::deiconify_window(xcb_window_t window, bool focus)
 void WindowManager::clear_focus()
 {
     clear_all_borders();
+    if (active_window_ != XCB_NONE)
+    {
+        ewmh_.set_window_state(active_window_, ewmh_.get()->_NET_WM_STATE_FOCUSED, false);
+    }
     active_window_ = XCB_NONE;
     xcb_set_input_focus(conn_.get(), XCB_INPUT_FOCUS_POINTER_ROOT, conn_.screen()->root, XCB_CURRENT_TIME);
     ewmh_.set_active_window(XCB_NONE);
@@ -2526,6 +2820,7 @@ void WindowManager::rearrange_monitor(Monitor& monitor)
     // Only arrange current workspace - callers handle hiding old workspace
     std::vector<Window> visible_windows;
     visible_windows.reserve(monitor.current().windows.size());
+    std::unordered_set<xcb_window_t> seen;
     for (auto const& window : monitor.current().windows)
     {
         if (iconic_windows_.contains(window.id))
@@ -2534,6 +2829,26 @@ void WindowManager::rearrange_monitor(Monitor& monitor)
             continue;
         }
         visible_windows.push_back(window);
+        seen.insert(window.id);
+    }
+
+    for (auto const& workspace : monitor.workspaces)
+    {
+        for (auto const& window : workspace.windows)
+        {
+            if (!sticky_windows_.contains(window.id))
+                continue;
+            if (iconic_windows_.contains(window.id))
+            {
+                wm_unmap_window(window.id);
+                continue;
+            }
+            if (!seen.contains(window.id))
+            {
+                visible_windows.push_back(window);
+                seen.insert(window.id);
+            }
+        }
     }
 
     layout_.arrange(visible_windows, monitor.working_area(), bar_.has_value());
@@ -2572,6 +2887,8 @@ void WindowManager::switch_workspace(int ws)
     monitor.previous_workspace = monitor.current_workspace;
     for (auto const& window : monitor.current().windows)
     {
+        if (sticky_windows_.contains(window.id))
+            continue;
         wm_unmap_window(window.id);
     }
 
@@ -2622,7 +2939,10 @@ void WindowManager::move_window_to_workspace(int ws)
 
         floating_window->workspace = target_ws;
         uint32_t desktop = get_ewmh_desktop_index(monitor_idx, target_ws);
-        ewmh_.set_window_desktop(window_to_move, desktop);
+        if (sticky_windows_.contains(window_to_move))
+            ewmh_.set_window_desktop(window_to_move, 0xFFFFFFFF);
+        else
+            ewmh_.set_window_desktop(window_to_move, desktop);
 
         update_floating_visibility(monitor_idx);
         focus_or_fallback(monitors_[monitor_idx]);
@@ -2645,9 +2965,15 @@ void WindowManager::move_window_to_workspace(int ws)
 
     // Update EWMH desktop for moved window
     uint32_t desktop = get_ewmh_desktop_index(focused_monitor_, target_ws);
-    ewmh_.set_window_desktop(window_to_move, desktop);
+    if (sticky_windows_.contains(window_to_move))
+        ewmh_.set_window_desktop(window_to_move, 0xFFFFFFFF);
+    else
+        ewmh_.set_window_desktop(window_to_move, desktop);
 
-    wm_unmap_window(window_to_move);
+    if (!sticky_windows_.contains(window_to_move))
+    {
+        wm_unmap_window(window_to_move);
+    }
     rearrange_monitor(monitor);
 
     if (!current_ws.windows.empty())
@@ -2792,7 +3118,10 @@ void WindowManager::move_window_to_monitor(int direction)
         );
 
         uint32_t desktop = get_ewmh_desktop_index(target_idx, floating_window->workspace);
-        ewmh_.set_window_desktop(window_to_move, desktop);
+        if (sticky_windows_.contains(window_to_move))
+            ewmh_.set_window_desktop(window_to_move, 0xFFFFFFFF);
+        else
+            ewmh_.set_window_desktop(window_to_move, desktop);
 
         update_floating_visibility(source_idx);
         update_floating_visibility(target_idx);
@@ -2835,7 +3164,10 @@ void WindowManager::move_window_to_monitor(int direction)
 
     // Update EWMH desktop for moved window
     uint32_t desktop = get_ewmh_desktop_index(target_idx, target_monitor.current_workspace);
-    ewmh_.set_window_desktop(window_to_move, desktop);
+    if (sticky_windows_.contains(window_to_move))
+        ewmh_.set_window_desktop(window_to_move, 0xFFFFFFFF);
+    else
+        ewmh_.set_window_desktop(window_to_move, desktop);
 
     rearrange_monitor(focused_monitor());
     rearrange_monitor(target_monitor);
@@ -3122,12 +3454,19 @@ void WindowManager::update_floating_visibility(size_t monitor_idx)
         if (floating_window.monitor != monitor_idx)
             continue;
 
-        if (floating_window.workspace == monitor.current_workspace && !iconic_windows_.contains(floating_window.id))
+        bool sticky = sticky_windows_.contains(floating_window.id);
+        if ((sticky || floating_window.workspace == monitor.current_workspace)
+            && !iconic_windows_.contains(floating_window.id))
         {
             // Configure BEFORE mapping so window appears at correct position
             if (fullscreen_windows_.contains(floating_window.id))
             {
                 apply_fullscreen_if_needed(floating_window.id);
+            }
+            else if (maximized_horz_windows_.contains(floating_window.id)
+                || maximized_vert_windows_.contains(floating_window.id))
+            {
+                apply_maximized_geometry(floating_window.id);
             }
             else
             {
@@ -4099,6 +4438,8 @@ void WindowManager::switch_to_ewmh_desktop(uint32_t desktop)
     // Unmap windows from OLD workspace before switching
     for (auto const& window : monitor.current().windows)
     {
+        if (sticky_windows_.contains(window.id))
+            continue;
         wm_unmap_window(window.id);
     }
 

@@ -233,7 +233,7 @@ Types to support (in priority order, first match wins):
   - `_NET_WM_STATE_STICKY`: visible on all desktops.
   - `_NET_WM_STATE_MAXIMIZED_VERT`: maximize vertically.
   - `_NET_WM_STATE_MAXIMIZED_HORZ`: maximize horizontally.
-  - `_NET_WM_STATE_SHADED`: show only title bar.
+  - `_NET_WM_STATE_SHADED`: show only title bar (implemented as iconify due to no decorations).
   - `_NET_WM_STATE_SKIP_TASKBAR`: exclude from taskbar.
   - `_NET_WM_STATE_SKIP_PAGER`: exclude from pager.
   - `_NET_WM_STATE_HIDDEN`: iconified/minimized.
