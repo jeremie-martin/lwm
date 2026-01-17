@@ -1651,6 +1651,35 @@ void WindowManager::manage_floating_window(xcb_window_t window, bool start_iconi
     if (!workspace_idx)
         workspace_idx = monitors_[*monitor_idx].current_workspace;
 
+    xcb_size_hints_t size_hints;
+    bool has_hints = xcb_icccm_get_wm_normal_hints_reply(
+        conn_.get(),
+        xcb_icccm_get_wm_normal_hints(conn_.get(), window),
+        &size_hints,
+        nullptr
+    );
+    bool has_position_hint = false;
+    bool has_size_hint = false;
+    int16_t hinted_x = 0;
+    int16_t hinted_y = 0;
+    uint32_t hinted_width = 0;
+    uint32_t hinted_height = 0;
+    if (has_hints)
+    {
+        if (size_hints.flags & (XCB_ICCCM_SIZE_HINT_US_POSITION | XCB_ICCCM_SIZE_HINT_P_POSITION))
+        {
+            has_position_hint = true;
+            hinted_x = static_cast<int16_t>(size_hints.x);
+            hinted_y = static_cast<int16_t>(size_hints.y);
+        }
+        if (size_hints.flags & (XCB_ICCCM_SIZE_HINT_US_SIZE | XCB_ICCCM_SIZE_HINT_P_SIZE))
+        {
+            has_size_hint = true;
+            hinted_width = static_cast<uint32_t>(size_hints.width);
+            hinted_height = static_cast<uint32_t>(size_hints.height);
+        }
+    }
+
     uint32_t width = 300;
     uint32_t height = 200;
     auto geom_cookie = xcb_get_geometry(conn_.get(), window);
@@ -1661,18 +1690,36 @@ void WindowManager::manage_floating_window(xcb_window_t window, bool start_iconi
         height = geom_reply->height;
         free(geom_reply);
     }
+    if (has_size_hint)
+    {
+        if (hinted_width > 0)
+            width = hinted_width;
+        if (hinted_height > 0)
+            height = hinted_height;
+    }
     if (width == 0)
         width = 300;
     if (height == 0)
         height = 200;
     layout_.apply_size_hints(window, width, height);
 
-    Geometry placement = floating::place_floating(
-        monitors_[*monitor_idx].working_area(),
-        static_cast<uint16_t>(width),
-        static_cast<uint16_t>(height),
-        parent_geom
-    );
+    Geometry placement;
+    if (has_position_hint)
+    {
+        placement.x = hinted_x;
+        placement.y = hinted_y;
+        placement.width = static_cast<uint16_t>(width);
+        placement.height = static_cast<uint16_t>(height);
+    }
+    else
+    {
+        placement = floating::place_floating(
+            monitors_[*monitor_idx].working_area(),
+            static_cast<uint16_t>(width),
+            static_cast<uint16_t>(height),
+            parent_geom
+        );
+    }
 
     FloatingWindow floating_window;
     floating_window.id = window;

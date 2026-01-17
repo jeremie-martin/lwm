@@ -7,7 +7,7 @@
 - [x] 5) IconicState on map: manage but do not map (avoid map/unmap flicker).
 - [x] 6) Override-redirect MapRequest: ignore entirely (no map/manage).
 - [x] 7) Floating ConfigureRequest: apply size hints to server geometry.
-- [ ] 8) WM_NORMAL_HINTS for floating: honor P/US position+size; keep no increment enforcement.
+- [x] 8) WM_NORMAL_HINTS for floating: honor P/US position+size; keep no increment enforcement.
 - [ ] 9) Strut updates: react to _NET_WM_STRUT(_PARTIAL) property changes.
 - [ ] 10) Window types: recognize first-known type from list; support required types; fix _NET_SUPPORTED.
 - [ ] 11) Window states: implement required _NET_WM_STATE handling incl. HIDDEN and others.
