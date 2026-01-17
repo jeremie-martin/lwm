@@ -81,7 +81,7 @@ private:
     std::vector<xcb_window_t> dock_windows_;
     std::vector<xcb_window_t> desktop_windows_;
     std::vector<FloatingWindow> floating_windows_;
-    std::unordered_set<xcb_window_t> wm_unmapped_windows_;
+    std::unordered_map<xcb_window_t, uint32_t> wm_unmapped_windows_;
     std::unordered_set<xcb_window_t> fullscreen_windows_;
     std::unordered_set<xcb_window_t> above_windows_;
     std::unordered_set<xcb_window_t> below_windows_;

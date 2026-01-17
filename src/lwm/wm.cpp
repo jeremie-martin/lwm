@@ -553,8 +553,15 @@ void WindowManager::handle_event(xcb_generic_event_t const& event)
         {
             auto const& e = reinterpret_cast<xcb_unmap_notify_event_t const&>(event);
             // Ignore if WM initiated this unmap (workspace switch)
-            if (wm_unmapped_windows_.contains(e.window))
-                break;
+            if (auto it = wm_unmapped_windows_.find(e.window); it != wm_unmapped_windows_.end())
+            {
+                if (it->second > 0)
+                {
+                    if (--it->second == 0)
+                        wm_unmapped_windows_.erase(it);
+                    break;
+                }
+            }
             // Client-initiated unmap - remove the window
             handle_window_removal(e.window);
             break;
@@ -2881,11 +2888,6 @@ void WindowManager::rearrange_monitor(Monitor& monitor)
         apply_fullscreen_if_needed(window.id);
     }
 
-    // Clear unmap tracking for windows that are now visible
-    for (auto const& window : visible_windows)
-    {
-        wm_unmapped_windows_.erase(window.id);
-    }
 }
 
 void WindowManager::rearrange_all_monitors()
@@ -3559,7 +3561,6 @@ void WindowManager::update_floating_visibility(size_t monitor_idx)
                 apply_floating_geometry(floating_window);
             }
             xcb_map_window(conn_.get(), floating_window.id);
-            wm_unmapped_windows_.erase(floating_window.id);
             if (floating_window.transient_for != XCB_NONE)
             {
                 restack_transients(floating_window.transient_for);
@@ -4337,7 +4338,7 @@ void WindowManager::unmanage_desktop_window(xcb_window_t window)
 
 void WindowManager::wm_unmap_window(xcb_window_t window)
 {
-    wm_unmapped_windows_.insert(window);
+    wm_unmapped_windows_[window] += 1;
     xcb_unmap_window(conn_.get(), window);
 }
 
