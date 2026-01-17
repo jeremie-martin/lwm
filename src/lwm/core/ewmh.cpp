@@ -67,6 +67,9 @@ void Ewmh::set_supported_atoms()
         ewmh_._NET_DESKTOP_VIEWPORT,
         ewmh_._NET_WM_STATE,
         ewmh_._NET_WM_STATE_DEMANDS_ATTENTION,
+        ewmh_._NET_WM_STATE_FULLSCREEN,
+        ewmh_._NET_WM_STATE_ABOVE,
+        ewmh_._NET_WM_STATE_HIDDEN,
         ewmh_._NET_WM_WINDOW_TYPE,
         ewmh_._NET_WM_WINDOW_TYPE_DOCK,
         ewmh_._NET_WM_WINDOW_TYPE_NORMAL,
@@ -130,7 +133,7 @@ void Ewmh::update_client_list(std::vector<xcb_window_t> const& windows)
     xcb_ewmh_set_client_list(&ewmh_, 0, windows.size(), const_cast<xcb_window_t*>(windows.data()));
 }
 
-void Ewmh::set_demands_attention(xcb_window_t window, bool urgent)
+void Ewmh::set_window_state(xcb_window_t window, xcb_atom_t state, bool enabled)
 {
     xcb_ewmh_get_atoms_reply_t current_state;
     bool has_current =
@@ -142,7 +145,7 @@ void Ewmh::set_demands_attention(xcb_window_t window, bool urgent)
     {
         for (uint32_t i = 0; i < current_state.atoms_len; ++i)
         {
-            if (current_state.atoms[i] != ewmh_._NET_WM_STATE_DEMANDS_ATTENTION)
+            if (current_state.atoms[i] != state)
             {
                 new_state.push_back(current_state.atoms[i]);
             }
@@ -150,9 +153,9 @@ void Ewmh::set_demands_attention(xcb_window_t window, bool urgent)
         xcb_ewmh_get_atoms_reply_wipe(&current_state);
     }
 
-    if (urgent)
+    if (enabled)
     {
-        new_state.push_back(ewmh_._NET_WM_STATE_DEMANDS_ATTENTION);
+        new_state.push_back(state);
     }
 
     if (new_state.empty())
@@ -163,6 +166,31 @@ void Ewmh::set_demands_attention(xcb_window_t window, bool urgent)
     {
         xcb_ewmh_set_wm_state(&ewmh_, window, new_state.size(), new_state.data());
     }
+}
+
+bool Ewmh::has_window_state(xcb_window_t window, xcb_atom_t state) const
+{
+    xcb_ewmh_get_atoms_reply_t current_state;
+    if (!xcb_ewmh_get_wm_state_reply(&ewmh_, xcb_ewmh_get_wm_state(&ewmh_, window), &current_state, nullptr))
+        return false;
+
+    bool found = false;
+    for (uint32_t i = 0; i < current_state.atoms_len; ++i)
+    {
+        if (current_state.atoms[i] == state)
+        {
+            found = true;
+            break;
+        }
+    }
+
+    xcb_ewmh_get_atoms_reply_wipe(&current_state);
+    return found;
+}
+
+void Ewmh::set_demands_attention(xcb_window_t window, bool urgent)
+{
+    set_window_state(window, ewmh_._NET_WM_STATE_DEMANDS_ATTENTION, urgent);
 }
 
 bool Ewmh::has_urgent_hint(xcb_window_t window) const

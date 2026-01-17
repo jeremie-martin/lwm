@@ -31,6 +31,8 @@ public:
 
     // Per-window properties
     void set_window_desktop(xcb_window_t window, uint32_t desktop);
+    void set_window_state(xcb_window_t window, xcb_atom_t state, bool enabled);
+    bool has_window_state(xcb_window_t window, xcb_atom_t state) const;
 
     // Client list management
     void update_client_list(std::vector<xcb_window_t> const& windows);

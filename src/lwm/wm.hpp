@@ -9,6 +9,7 @@
 #include "lwm/layout/layout.hpp"
 #include <memory>
 #include <optional>
+#include <unordered_map>
 #include <unordered_set>
 #include <vector>
 
@@ -51,17 +52,29 @@ private:
     std::vector<xcb_window_t> dock_windows_;
     std::vector<FloatingWindow> floating_windows_;
     std::unordered_set<xcb_window_t> wm_unmapped_windows_;
+    std::unordered_set<xcb_window_t> fullscreen_windows_;
+    std::unordered_set<xcb_window_t> above_windows_;
+    std::unordered_set<xcb_window_t> iconic_windows_;
+    std::unordered_map<xcb_window_t, Geometry> fullscreen_restore_;
     xcb_window_t active_window_ = XCB_NONE;
     size_t focused_monitor_ = 0; // Active monitor index (window focus tracked separately).
+    xcb_window_t wm_window_ = XCB_NONE;
     xcb_atom_t wm_transient_for_ = XCB_NONE;
+    xcb_atom_t wm_state_ = XCB_NONE;
+    xcb_atom_t wm_change_state_ = XCB_NONE;
+    xcb_atom_t utf8_string_ = XCB_NONE;
+    bool suppress_focus_ = false;
     DragState drag_state_;
 
+    void create_wm_window();
     void setup_root();
     void grab_buttons();
+    void claim_wm_ownership();
     void detect_monitors();
     void create_fallback_monitor();
     void setup_monitor_bars();
     void init_monitor_workspaces(Monitor& monitor);
+    void scan_existing_windows();
 
     void handle_event(xcb_generic_event_t const& event);
     void handle_map_request(xcb_map_request_event_t const& e);
@@ -73,6 +86,7 @@ private:
     void handle_key_press(xcb_key_press_event_t const& e);
     void handle_client_message(xcb_client_message_event_t const& e);
     void handle_configure_request(xcb_configure_request_event_t const& e);
+    void handle_property_notify(xcb_property_notify_event_t const& e);
     void handle_randr_screen_change();
 
     void manage_window(xcb_window_t window);
@@ -81,6 +95,11 @@ private:
     void unmanage_floating_window(xcb_window_t window);
     void focus_window(xcb_window_t window);
     void focus_floating_window(xcb_window_t window);
+    void set_fullscreen(xcb_window_t window, bool enabled);
+    void set_window_above(xcb_window_t window, bool enabled);
+    void apply_fullscreen_if_needed(xcb_window_t window);
+    void iconify_window(xcb_window_t window);
+    void deiconify_window(xcb_window_t window, bool focus);
     void kill_window(xcb_window_t window);
     void clear_focus();
 
@@ -115,11 +134,13 @@ private:
     void update_floating_visibility_all();
     void update_floating_monitor_for_geometry(FloatingWindow& window);
     void apply_floating_geometry(FloatingWindow const& window);
+    void send_configure_notify(xcb_window_t window);
     void begin_drag(xcb_window_t window, bool resize, int16_t root_x, int16_t root_y);
     void update_drag(int16_t root_x, int16_t root_y);
     void end_drag();
     void update_focused_monitor_at_point(int16_t x, int16_t y);
     std::string get_window_name(xcb_window_t window);
+    void update_window_title(xcb_window_t window);
     void update_all_bars();
 
     // Dock/strut helpers
