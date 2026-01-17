@@ -168,6 +168,14 @@ Map and arrange
 Focus the new window
 ```
 
+### Startup Window Adoption
+On startup, LWM scans existing mapped windows and manages them using the same rules as MapRequest:
+1. Docks are tracked for struts
+2. Floating/transient windows are managed as floating
+3. Normal windows are added to the active monitor’s current workspace
+
+Focus is resolved after adoption based on the pointer’s current monitor.
+
 ### Window Destroyed (DestroyNotify) or Client-Initiated Unmap
 ```
 DestroyNotify or client-initiated UnmapNotify received
@@ -204,6 +212,12 @@ The WM tracks windows it has unmapped in `wm_unmapped_windows_`. When an `UnmapN
 - If window is NOT in tracking set → client-initiated, remove window
 
 When windows become visible again (via `rearrange_monitor`), they are removed from the tracking set.
+
+### Iconify / Deiconify (ICCCM)
+- `WM_CHANGE_STATE` with `IconicState` requests that a window be iconified
+- Iconified windows are unmapped but remain tracked in their workspace
+- Deiconify (MapRequest) restores the window and its layout position
+- `WM_STATE` is maintained as `NormalState` or `IconicState`
 
 ### Window Lifecycle
 ```
@@ -245,12 +259,14 @@ Mapped (visible) ───→ Unmapped by WM (hidden) ───┘
 | `_NET_CLIENT_LIST` | Window add/remove |
 | `_NET_WM_DESKTOP` | Window created or moved |
 | `_NET_NUMBER_OF_DESKTOPS` | Startup, monitor change |
+| `_NET_WM_STATE` | Fullscreen/above/hidden updates |
 
 ### Client Messages Handled
 | Message | Action |
 |---------|--------|
 | `_NET_CURRENT_DESKTOP` | Switch to requested desktop (Polybar clicks) |
 | `_NET_ACTIVE_WINDOW` | Focus requested window, switch workspace if needed |
+| `_NET_WM_STATE` | Toggle fullscreen/above state |
 
 ---
 
