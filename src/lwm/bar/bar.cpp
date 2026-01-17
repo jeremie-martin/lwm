@@ -54,7 +54,7 @@ xcb_window_t StatusBar::create_for_monitor(Monitor const& monitor)
     return window;
 }
 
-void StatusBar::update(Monitor const& monitor)
+void StatusBar::update(Monitor const& monitor, BarState const& state)
 {
     if (monitor.bar_window == XCB_NONE)
         return;
@@ -67,7 +67,8 @@ void StatusBar::update(Monitor const& monitor)
         {
             statusText += "[" + label + "]";
         }
-        else if (!monitor.workspaces[i].windows.empty())
+        else if (i < state.workspace_has_windows.size() ? state.workspace_has_windows[i]
+                                                        : !monitor.workspaces[i].windows.empty())
         {
             statusText += " " + label + " ";
         }
@@ -84,23 +85,7 @@ void StatusBar::update(Monitor const& monitor)
     }
 
     statusText += "Focused: ";
-    auto const& ws = monitor.current();
-    if (ws.focused_window != XCB_NONE)
-    {
-        auto it = ws.find_window(ws.focused_window);
-        if (it != ws.windows.end())
-        {
-            statusText += it->name;
-        }
-        else
-        {
-            statusText += "Unknown";
-        }
-    }
-    else
-    {
-        statusText += "None";
-    }
+    statusText += state.focused_title.empty() ? "None" : state.focused_title;
 
     draw_text(monitor.bar_window, statusText);
 }

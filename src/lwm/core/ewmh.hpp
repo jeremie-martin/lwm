@@ -57,6 +57,7 @@ public:
     Strut get_window_strut(xcb_window_t window) const;
 
     xcb_ewmh_connection_t* get() { return &ewmh_; }
+    xcb_ewmh_connection_t* get() const { return &ewmh_; }
 
 private:
     Connection& conn_;

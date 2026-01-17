@@ -31,6 +31,7 @@ private:
         size_t monitor = 0;
         size_t workspace = 0;
         Geometry geometry;
+        std::string name;
     };
 
     struct DragState
@@ -59,6 +60,13 @@ private:
         uint32_t bottom = 0;
         uint32_t left = 0;
         uint32_t right = 0;
+    };
+
+    struct ActiveWindowInfo
+    {
+        size_t monitor = 0;
+        size_t workspace = 0;
+        std::string title;
     };
 
     Config config_;
@@ -145,6 +153,7 @@ private:
     void focus_floating_window(xcb_window_t window);
     void set_fullscreen(xcb_window_t window, bool enabled);
     void set_window_above(xcb_window_t window, bool enabled);
+    void set_window_below(xcb_window_t window, bool enabled);
     void apply_fullscreen_if_needed(xcb_window_t window);
     void set_fullscreen_monitors(xcb_window_t window, FullscreenMonitors const& monitors);
     Geometry fullscreen_geometry_for_window(xcb_window_t window) const;
@@ -179,8 +188,13 @@ private:
     FloatingWindow const* find_floating_window(xcb_window_t window) const;
     std::optional<size_t> monitor_index_for_window(xcb_window_t window) const;
     std::optional<size_t> workspace_index_for_window(xcb_window_t window) const;
+    std::optional<uint32_t> get_window_desktop(xcb_window_t window) const;
+    std::optional<std::pair<size_t, size_t>> resolve_window_desktop(xcb_window_t window) const;
     std::optional<xcb_window_t> transient_for_window(xcb_window_t window) const;
     bool is_override_redirect_window(xcb_window_t window) const;
+    bool is_workspace_visible(size_t monitor_idx, size_t workspace_idx) const;
+    std::optional<ActiveWindowInfo> get_active_window_info() const;
+    BarState build_bar_state(size_t monitor_idx, std::optional<ActiveWindowInfo> const& active_info) const;
     void update_floating_visibility(size_t monitor_idx);
     void update_floating_visibility_all();
     void update_floating_monitor_for_geometry(FloatingWindow& window);

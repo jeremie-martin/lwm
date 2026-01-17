@@ -3,10 +3,17 @@
 #include "lwm/config/config.hpp"
 #include "lwm/core/connection.hpp"
 #include "lwm/core/types.hpp"
+#include <cstdint>
 #include <string>
 #include <vector>
 
 namespace lwm {
+
+struct BarState
+{
+    std::vector<uint8_t> workspace_has_windows;
+    std::string focused_title;
+};
 
 class StatusBar
 {
@@ -18,7 +25,7 @@ public:
     StatusBar& operator=(StatusBar const&) = delete;
 
     xcb_window_t create_for_monitor(Monitor const& monitor);
-    void update(Monitor const& monitor);
+    void update(Monitor const& monitor, BarState const& state);
     void destroy(xcb_window_t bar_window);
 
 private:

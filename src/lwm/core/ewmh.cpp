@@ -94,6 +94,7 @@ void Ewmh::set_supported_atoms()
         ewmh_._NET_WM_ACTION_FULLSCREEN,
         ewmh_._NET_WM_ACTION_CHANGE_DESKTOP,
         ewmh_._NET_WM_ACTION_ABOVE,
+        ewmh_._NET_WM_ACTION_BELOW,
         ewmh_._NET_WM_ACTION_MINIMIZE,
         ewmh_._NET_WM_ACTION_MOVE,
         ewmh_._NET_WM_ACTION_RESIZE,

@@ -594,7 +594,10 @@ void WindowManager::handle_map_request(xcb_map_request_event_t const& e)
         uint32_t values[] = { XCB_EVENT_MASK_ENTER_WINDOW | XCB_EVENT_MASK_POINTER_MOTION };
         xcb_change_window_attributes(conn_.get(), e.window, XCB_CW_EVENT_MASK, values);
         xcb_map_window(conn_.get(), e.window);
-        dock_windows_.push_back(e.window);
+        if (std::ranges::find(dock_windows_, e.window) == dock_windows_.end())
+        {
+            dock_windows_.push_back(e.window);
+        }
         update_struts();
         rearrange_all_monitors();
         conn_.flush();
@@ -672,8 +675,14 @@ void WindowManager::handle_map_request(xcb_map_request_event_t const& e)
     }
     else
     {
-        // Window already mapped by layout_.arrange() in manage_window()
-        focus_window(e.window);
+        auto monitor_idx = monitor_index_for_window(e.window);
+        auto workspace_idx = workspace_index_for_window(e.window);
+        if (monitor_idx && workspace_idx && *monitor_idx == focused_monitor_
+            && *workspace_idx == monitors_[*monitor_idx].current_workspace)
+        {
+            // Window already mapped by layout_.arrange() in manage_window()
+            focus_window(e.window);
+        }
     }
 }
 
@@ -928,21 +937,7 @@ void WindowManager::handle_client_message(xcb_client_message_event_t const& e)
             else if (state == ewmh->_NET_WM_STATE_BELOW)
             {
                 bool enable = compute_enable(below_windows_.contains(e.window));
-                if (enable)
-                {
-                    below_windows_.insert(e.window);
-                    above_windows_.erase(e.window); // Can't be both above and below
-                    ewmh_.set_window_state(e.window, ewmh->_NET_WM_STATE_ABOVE, false);
-                    uint32_t stack_mode = XCB_STACK_MODE_BELOW;
-                    xcb_configure_window(conn_.get(), e.window, XCB_CONFIG_WINDOW_STACK_MODE, &stack_mode);
-                }
-                else
-                {
-                    below_windows_.erase(e.window);
-                }
-                ewmh_.set_window_state(e.window, ewmh->_NET_WM_STATE_BELOW, enable);
-                update_ewmh_client_list();
-                conn_.flush();
+                set_window_below(e.window, enable);
             }
             else if (state == ewmh->_NET_WM_STATE_SKIP_TASKBAR)
             {
@@ -1045,7 +1040,7 @@ void WindowManager::handle_client_message(xcb_client_message_event_t const& e)
         {
             if (showing_desktop_)
                 return false;
-            return monitor_idx == focused_monitor_ && workspace_idx == monitors_[monitor_idx].current_workspace;
+            return monitor_idx < monitors_.size() && workspace_idx == monitors_[monitor_idx].current_workspace;
         };
 
         // Handle tiled windows
@@ -1392,11 +1387,13 @@ void WindowManager::handle_expose(xcb_expose_event_t const& e)
     if (!bar_ || e.count != 0)
         return;
 
-    for (auto const& monitor : monitors_)
+    auto active_info = get_active_window_info();
+    for (size_t i = 0; i < monitors_.size(); ++i)
     {
+        auto const& monitor = monitors_[i];
         if (monitor.bar_window == e.window)
         {
-            bar_->update(monitor);
+            bar_->update(monitor, build_bar_state(i, active_info));
             break;
         }
     }
@@ -1524,7 +1521,12 @@ void WindowManager::manage_window(xcb_window_t window)
 {
     auto [instance_name, class_name] = get_wm_class(window);
     Window newWindow = { window, get_window_name(window), class_name, instance_name };
-    focused_monitor().current().windows.push_back(newWindow);
+    auto target = resolve_window_desktop(window);
+    size_t target_monitor_idx = target ? target->first : focused_monitor_;
+    size_t target_workspace_idx =
+        target ? target->second : monitors_[target_monitor_idx].current_workspace;
+
+    monitors_[target_monitor_idx].workspaces[target_workspace_idx].windows.push_back(newWindow);
     user_times_[window] = get_user_time(window);
 
     uint32_t values[] = { XCB_EVENT_MASK_ENTER_WINDOW | XCB_EVENT_MASK_FOCUS_CHANGE | XCB_EVENT_MASK_PROPERTY_CHANGE
@@ -1545,30 +1547,61 @@ void WindowManager::manage_window(xcb_window_t window)
 
     // Set EWMH properties
     ewmh_.set_frame_extents(window, 0, 0, 0, 0); // LWM doesn't add frames
-    uint32_t desktop = get_ewmh_desktop_index(focused_monitor_, focused_monitor().current_workspace);
+    uint32_t desktop = get_ewmh_desktop_index(target_monitor_idx, target_workspace_idx);
     ewmh_.set_window_desktop(window, desktop);
 
     // Set allowed actions for tiled windows (no move/resize via EWMH)
     xcb_ewmh_connection_t* ewmh = ewmh_.get();
     std::vector<xcb_atom_t> actions = {
         ewmh->_NET_WM_ACTION_CLOSE, ewmh->_NET_WM_ACTION_FULLSCREEN, ewmh->_NET_WM_ACTION_CHANGE_DESKTOP,
-        ewmh->_NET_WM_ACTION_ABOVE, ewmh->_NET_WM_ACTION_MINIMIZE,
+        ewmh->_NET_WM_ACTION_ABOVE, ewmh->_NET_WM_ACTION_BELOW, ewmh->_NET_WM_ACTION_MINIMIZE,
     };
     ewmh_.set_allowed_actions(window, actions);
 
     update_ewmh_client_list();
 
     keybinds_.grab_keys(window);
-    rearrange_monitor(focused_monitor());
+    if (is_workspace_visible(target_monitor_idx, target_workspace_idx))
+    {
+        rearrange_monitor(monitors_[target_monitor_idx]);
+    }
+    else
+    {
+        auto attr_cookie = xcb_get_window_attributes(conn_.get(), window);
+        auto* attr_reply = xcb_get_window_attributes_reply(conn_.get(), attr_cookie, nullptr);
+        if (attr_reply)
+        {
+            bool viewable = attr_reply->map_state == XCB_MAP_STATE_VIEWABLE;
+            free(attr_reply);
+            if (viewable)
+                wm_unmap_window(window);
+        }
+        else
+        {
+            wm_unmap_window(window);
+        }
+    }
     update_all_bars();
+
+    if (ewmh_.has_window_state(window, ewmh_.get()->_NET_WM_STATE_SKIP_TASKBAR))
+        skip_taskbar_windows_.insert(window);
+    if (ewmh_.has_window_state(window, ewmh_.get()->_NET_WM_STATE_SKIP_PAGER))
+        skip_pager_windows_.insert(window);
+
+    bool wants_above = ewmh_.has_window_state(window, ewmh_.get()->_NET_WM_STATE_ABOVE);
+    bool wants_below = ewmh_.has_window_state(window, ewmh_.get()->_NET_WM_STATE_BELOW);
+    if (wants_above)
+    {
+        set_window_above(window, true);
+    }
+    else if (wants_below)
+    {
+        set_window_below(window, true);
+    }
 
     if (ewmh_.has_window_state(window, ewmh_.get()->_NET_WM_STATE_FULLSCREEN))
     {
         set_fullscreen(window, true);
-    }
-    if (ewmh_.has_window_state(window, ewmh_.get()->_NET_WM_STATE_ABOVE))
-    {
-        set_window_above(window, true);
     }
 }
 
@@ -1590,6 +1623,15 @@ void WindowManager::manage_floating_window(xcb_window_t window)
         {
             parent_geom = Geometry{ geom_reply->x, geom_reply->y, geom_reply->width, geom_reply->height };
             free(geom_reply);
+        }
+    }
+
+    if (!monitor_idx || !workspace_idx)
+    {
+        if (auto target = resolve_window_desktop(window))
+        {
+            monitor_idx = target->first;
+            workspace_idx = target->second;
         }
     }
 
@@ -1626,6 +1668,7 @@ void WindowManager::manage_floating_window(xcb_window_t window)
     floating_window.monitor = *monitor_idx;
     floating_window.workspace = *workspace_idx;
     floating_window.geometry = placement;
+    floating_window.name = get_window_name(window);
     floating_windows_.push_back(floating_window);
     user_times_[window] = get_user_time(window);
 
@@ -1652,7 +1695,8 @@ void WindowManager::manage_floating_window(xcb_window_t window)
     xcb_ewmh_connection_t* ewmh = ewmh_.get();
     std::vector<xcb_atom_t> actions = {
         ewmh->_NET_WM_ACTION_CLOSE,  ewmh->_NET_WM_ACTION_FULLSCREEN, ewmh->_NET_WM_ACTION_CHANGE_DESKTOP,
-        ewmh->_NET_WM_ACTION_ABOVE,  ewmh->_NET_WM_ACTION_MINIMIZE,   ewmh->_NET_WM_ACTION_MOVE,
+        ewmh->_NET_WM_ACTION_ABOVE,  ewmh->_NET_WM_ACTION_BELOW,      ewmh->_NET_WM_ACTION_MINIMIZE,
+        ewmh->_NET_WM_ACTION_MOVE,
         ewmh->_NET_WM_ACTION_RESIZE,
     };
     ewmh_.set_allowed_actions(window, actions);
@@ -1661,16 +1705,28 @@ void WindowManager::manage_floating_window(xcb_window_t window)
 
     keybinds_.grab_keys(window);
     update_floating_visibility(*monitor_idx);
-    if (!suppress_focus_)
+    if (!suppress_focus_ && *monitor_idx == focused_monitor_ && is_workspace_visible(*monitor_idx, *workspace_idx))
         focus_floating_window(window);
+
+    if (ewmh_.has_window_state(window, ewmh_.get()->_NET_WM_STATE_SKIP_TASKBAR))
+        skip_taskbar_windows_.insert(window);
+    if (ewmh_.has_window_state(window, ewmh_.get()->_NET_WM_STATE_SKIP_PAGER))
+        skip_pager_windows_.insert(window);
+
+    bool wants_above = ewmh_.has_window_state(window, ewmh_.get()->_NET_WM_STATE_ABOVE);
+    bool wants_below = ewmh_.has_window_state(window, ewmh_.get()->_NET_WM_STATE_BELOW);
+    if (wants_above)
+    {
+        set_window_above(window, true);
+    }
+    else if (wants_below)
+    {
+        set_window_below(window, true);
+    }
 
     if (ewmh_.has_window_state(window, ewmh_.get()->_NET_WM_STATE_FULLSCREEN))
     {
         set_fullscreen(window, true);
-    }
-    if (ewmh_.has_window_state(window, ewmh_.get()->_NET_WM_STATE_ABOVE))
-    {
-        set_window_above(window, true);
     }
 }
 
@@ -2042,6 +2098,32 @@ void WindowManager::set_window_above(xcb_window_t window, bool enabled)
     }
 
     ewmh_.set_window_state(window, ewmh_.get()->_NET_WM_STATE_ABOVE, enabled);
+    update_ewmh_client_list();
+    conn_.flush();
+}
+
+void WindowManager::set_window_below(xcb_window_t window, bool enabled)
+{
+    if (!monitor_index_for_window(window))
+        return;
+
+    if (enabled)
+    {
+        below_windows_.insert(window);
+        if (above_windows_.contains(window))
+        {
+            above_windows_.erase(window);
+            ewmh_.set_window_state(window, ewmh_.get()->_NET_WM_STATE_ABOVE, false);
+        }
+        uint32_t stack_mode = XCB_STACK_MODE_BELOW;
+        xcb_configure_window(conn_.get(), window, XCB_CONFIG_WINDOW_STACK_MODE, &stack_mode);
+    }
+    else
+    {
+        below_windows_.erase(window);
+    }
+
+    ewmh_.set_window_state(window, ewmh_.get()->_NET_WM_STATE_BELOW, enabled);
     update_ewmh_client_list();
     conn_.flush();
 }
@@ -2702,6 +2784,46 @@ std::optional<size_t> WindowManager::workspace_index_for_window(xcb_window_t win
     return std::nullopt;
 }
 
+std::optional<uint32_t> WindowManager::get_window_desktop(xcb_window_t window) const
+{
+    uint32_t desktop = 0;
+    if (!xcb_ewmh_get_wm_desktop_reply(
+            ewmh_.get(),
+            xcb_ewmh_get_wm_desktop(ewmh_.get(), window),
+            &desktop,
+            nullptr
+        ))
+    {
+        return std::nullopt;
+    }
+
+    if (desktop == 0xFFFFFFFF)
+        return std::nullopt;
+
+    return desktop;
+}
+
+std::optional<std::pair<size_t, size_t>> WindowManager::resolve_window_desktop(xcb_window_t window) const
+{
+    if (config_.workspaces.count == 0)
+        return std::nullopt;
+
+    auto desktop = get_window_desktop(window);
+    if (!desktop)
+        return std::nullopt;
+
+    size_t monitor_idx = static_cast<size_t>(*desktop / config_.workspaces.count);
+    size_t workspace_idx = static_cast<size_t>(*desktop % config_.workspaces.count);
+
+    if (monitor_idx >= monitors_.size())
+        return std::nullopt;
+
+    if (workspace_idx >= monitors_[monitor_idx].workspaces.size())
+        return std::nullopt;
+
+    return std::pair<size_t, size_t>{ monitor_idx, workspace_idx };
+}
+
 std::optional<xcb_window_t> WindowManager::transient_for_window(xcb_window_t window) const
 {
     if (wm_transient_for_ == XCB_NONE)
@@ -2734,6 +2856,96 @@ bool WindowManager::is_override_redirect_window(xcb_window_t window) const
     bool override_redirect = reply->override_redirect;
     free(reply);
     return override_redirect;
+}
+
+bool WindowManager::is_workspace_visible(size_t monitor_idx, size_t workspace_idx) const
+{
+    if (showing_desktop_)
+        return false;
+    if (monitor_idx >= monitors_.size())
+        return false;
+    return workspace_idx == monitors_[monitor_idx].current_workspace;
+}
+
+std::optional<WindowManager::ActiveWindowInfo> WindowManager::get_active_window_info() const
+{
+    if (active_window_ == XCB_NONE)
+        return std::nullopt;
+
+    if (auto const* floating_window = find_floating_window(active_window_))
+    {
+        ActiveWindowInfo info;
+        info.monitor = floating_window->monitor;
+        info.workspace = floating_window->workspace;
+        info.title = floating_window->name.empty() ? "Unknown" : floating_window->name;
+        return info;
+    }
+
+    for (size_t m = 0; m < monitors_.size(); ++m)
+    {
+        auto const& monitor = monitors_[m];
+        for (size_t w = 0; w < monitor.workspaces.size(); ++w)
+        {
+            auto const& workspace = monitor.workspaces[w];
+            auto it = workspace.find_window(active_window_);
+            if (it != workspace.windows.end())
+            {
+                ActiveWindowInfo info;
+                info.monitor = m;
+                info.workspace = w;
+                info.title = it->name.empty() ? "Unknown" : it->name;
+                return info;
+            }
+        }
+    }
+
+    return std::nullopt;
+}
+
+BarState WindowManager::build_bar_state(size_t monitor_idx, std::optional<ActiveWindowInfo> const& active_info) const
+{
+    BarState state;
+    if (monitor_idx >= monitors_.size())
+        return state;
+
+    auto const& monitor = monitors_[monitor_idx];
+    state.workspace_has_windows.assign(monitor.workspaces.size(), 0);
+
+    for (size_t i = 0; i < monitor.workspaces.size(); ++i)
+    {
+        if (!monitor.workspaces[i].windows.empty())
+            state.workspace_has_windows[i] = 1;
+    }
+
+    for (auto const& floating_window : floating_windows_)
+    {
+        if (floating_window.monitor == monitor_idx && floating_window.workspace < state.workspace_has_windows.size())
+        {
+            state.workspace_has_windows[floating_window.workspace] = 1;
+        }
+    }
+
+    if (active_info && active_info->monitor == monitor_idx && active_info->workspace == monitor.current_workspace)
+    {
+        state.focused_title = active_info->title;
+        return state;
+    }
+
+    auto const& ws = monitor.current();
+    if (ws.focused_window != XCB_NONE)
+    {
+        auto it = ws.find_window(ws.focused_window);
+        if (it != ws.windows.end())
+        {
+            state.focused_title = it->name.empty() ? "Unknown" : it->name;
+        }
+        else
+        {
+            state.focused_title = "Unknown";
+        }
+    }
+
+    return state;
 }
 
 void WindowManager::update_floating_visibility(size_t monitor_idx)
@@ -3304,9 +3516,12 @@ std::string WindowManager::get_window_name(xcb_window_t window)
             if (len > 0)
             {
                 char* name = static_cast<char*>(xcb_get_property_value(reply));
-                std::string windowName(name, len);
-                free(reply);
-                return windowName;
+                if (name)
+                {
+                    std::string windowName(name, len);
+                    free(reply);
+                    return windowName;
+                }
             }
             free(reply);
         }
@@ -3318,10 +3533,17 @@ std::string WindowManager::get_window_name(xcb_window_t window)
     if (reply)
     {
         int len = xcb_get_property_value_length(reply);
-        char* name = static_cast<char*>(xcb_get_property_value(reply));
-        std::string windowName(name, len);
+        if (len > 0)
+        {
+            char* name = static_cast<char*>(xcb_get_property_value(reply));
+            if (name)
+            {
+                std::string windowName(name, len);
+                free(reply);
+                return windowName;
+            }
+        }
         free(reply);
-        return windowName;
     }
     return "Unnamed";
 }
@@ -3382,6 +3604,19 @@ void WindowManager::update_window_title(xcb_window_t window)
         }
     }
 
+    if (auto* floating_window = find_floating_window(window))
+    {
+        if (floating_window->name != name)
+        {
+            floating_window->name = name;
+            if (is_workspace_visible(floating_window->monitor, floating_window->workspace))
+                update_bars = true;
+        }
+    }
+
+    if (active_window_ == window)
+        update_bars = true;
+
     if (update_bars)
     {
         update_all_bars();
@@ -3394,9 +3629,10 @@ void WindowManager::update_all_bars()
     if (!bar_)
         return;
 
-    for (auto const& monitor : monitors_)
+    auto active_info = get_active_window_info();
+    for (size_t i = 0; i < monitors_.size(); ++i)
     {
-        bar_->update(monitor);
+        bar_->update(monitors_[i], build_bar_state(i, active_info));
     }
 }
 
@@ -3526,85 +3762,61 @@ void WindowManager::update_ewmh_client_list()
     std::vector<xcb_window_t> stacking;
     stacking.reserve(windows.size());
 
+    auto is_below = [this](xcb_window_t id)
+    {
+        return below_windows_.contains(id) && !fullscreen_windows_.contains(id);
+    };
+
+    auto is_above = [this](xcb_window_t id)
+    {
+        return above_windows_.contains(id) && !fullscreen_windows_.contains(id);
+    };
+
     // Helper to check if window is in "normal" tier (not below, not above, not fullscreen)
     auto is_normal = [this](xcb_window_t id)
     {
         return !below_windows_.contains(id) && !above_windows_.contains(id) && !fullscreen_windows_.contains(id);
     };
 
+    auto append_tiled = [&](auto predicate)
+    {
+        for (auto const& monitor : monitors_)
+        {
+            for (auto const& workspace : monitor.workspaces)
+            {
+                for (auto const& window : workspace.windows)
+                {
+                    if (predicate(window.id))
+                        stacking.push_back(window.id);
+                }
+            }
+        }
+    };
+
+    auto append_floating = [&](auto predicate)
+    {
+        for (auto const& floating_window : floating_windows_)
+        {
+            if (predicate(floating_window.id))
+                stacking.push_back(floating_window.id);
+        }
+    };
+
     // BELOW windows (bottom of stack)
-    for (auto const& monitor : monitors_)
-    {
-        for (auto const& workspace : monitor.workspaces)
-        {
-            for (auto const& window : workspace.windows)
-            {
-                if (below_windows_.contains(window.id))
-                {
-                    stacking.push_back(window.id);
-                }
-            }
-        }
-    }
-    for (auto const& floating_window : floating_windows_)
-    {
-        if (below_windows_.contains(floating_window.id))
-        {
-            stacking.push_back(floating_window.id);
-        }
-    }
+    append_tiled(is_below);
+    append_floating(is_below);
 
-    // Normal tiled windows
-    for (auto const& monitor : monitors_)
-    {
-        for (auto const& workspace : monitor.workspaces)
-        {
-            for (auto const& window : workspace.windows)
-            {
-                if (is_normal(window.id))
-                {
-                    stacking.push_back(window.id);
-                }
-            }
-        }
-    }
+    // Normal windows
+    append_tiled(is_normal);
+    append_floating(is_normal);
 
-    // Normal floating windows
-    for (auto const& floating_window : floating_windows_)
-    {
-        if (is_normal(floating_window.id))
-        {
-            stacking.push_back(floating_window.id);
-        }
-    }
+    // ABOVE windows
+    append_tiled(is_above);
+    append_floating(is_above);
 
-    // ABOVE windows (tiled and floating)
-    for (auto const& monitor : monitors_)
-    {
-        for (auto const& workspace : monitor.workspaces)
-        {
-            for (auto const& window : workspace.windows)
-            {
-                if (above_windows_.contains(window.id) && !fullscreen_windows_.contains(window.id))
-                {
-                    stacking.push_back(window.id);
-                }
-            }
-        }
-    }
-    for (auto const& floating_window : floating_windows_)
-    {
-        if (above_windows_.contains(floating_window.id) && !fullscreen_windows_.contains(floating_window.id))
-        {
-            stacking.push_back(floating_window.id);
-        }
-    }
-
-    // Fullscreen windows (top of stack)
-    for (auto window : fullscreen_windows_)
-    {
-        stacking.push_back(window);
-    }
+    // Fullscreen windows (top of stack, deterministic order)
+    append_tiled([this](xcb_window_t id) { return fullscreen_windows_.contains(id); });
+    append_floating([this](xcb_window_t id) { return fullscreen_windows_.contains(id); });
 
     ewmh_.update_client_list_stacking(stacking);
 }
