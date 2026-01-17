@@ -64,16 +64,24 @@ private:
     std::unordered_set<xcb_window_t> wm_unmapped_windows_;
     std::unordered_set<xcb_window_t> fullscreen_windows_;
     std::unordered_set<xcb_window_t> above_windows_;
+    std::unordered_set<xcb_window_t> below_windows_;
     std::unordered_set<xcb_window_t> iconic_windows_;
+    std::unordered_set<xcb_window_t> sticky_windows_;
+    std::unordered_set<xcb_window_t> skip_taskbar_windows_;
+    std::unordered_set<xcb_window_t> skip_pager_windows_;
+    bool showing_desktop_ = false;
     std::unordered_map<xcb_window_t, Geometry> fullscreen_restore_;
     std::unordered_map<xcb_window_t, FullscreenMonitors> fullscreen_monitors_;
     std::unordered_map<xcb_window_t, xcb_sync_counter_t> sync_counters_;
     std::unordered_map<xcb_window_t, uint64_t> sync_values_;
     std::unordered_map<xcb_window_t, std::chrono::steady_clock::time_point> pending_kills_;
     std::unordered_map<xcb_window_t, std::chrono::steady_clock::time_point> pending_pings_;
+    std::unordered_map<xcb_window_t, uint32_t> user_times_;
     xcb_window_t active_window_ = XCB_NONE;
     size_t focused_monitor_ = 0; // Active monitor index (window focus tracked separately).
     xcb_window_t wm_window_ = XCB_NONE;
+    xcb_atom_t wm_s0_ = XCB_NONE;
+    bool running_ = true;
     xcb_atom_t wm_transient_for_ = XCB_NONE;
     xcb_atom_t wm_state_ = XCB_NONE;
     xcb_atom_t wm_change_state_ = XCB_NONE;
@@ -82,11 +90,13 @@ private:
     xcb_atom_t wm_delete_window_ = XCB_NONE;
     xcb_atom_t wm_take_focus_ = XCB_NONE;
     xcb_atom_t wm_normal_hints_ = XCB_NONE;
+    xcb_atom_t wm_hints_ = XCB_NONE;
     xcb_atom_t net_wm_ping_ = XCB_NONE;
     xcb_atom_t net_wm_sync_request_ = XCB_NONE;
     xcb_atom_t net_wm_sync_request_counter_ = XCB_NONE;
     xcb_atom_t net_close_window_ = XCB_NONE;
     xcb_atom_t net_wm_fullscreen_monitors_ = XCB_NONE;
+    xcb_atom_t net_wm_user_time_ = XCB_NONE;
     bool suppress_focus_ = false;
     uint32_t last_event_time_ = XCB_CURRENT_TIME;
     DragState drag_state_;
@@ -175,6 +185,8 @@ private:
     void update_fullscreen_monitor_state(xcb_window_t window);
     void update_focused_monitor_at_point(int16_t x, int16_t y);
     std::string get_window_name(xcb_window_t window);
+    std::pair<std::string, std::string> get_wm_class(xcb_window_t window);
+    uint32_t get_user_time(xcb_window_t window);
     void update_window_title(xcb_window_t window);
     void update_all_bars();
     void update_ewmh_workarea();

@@ -14,9 +14,9 @@ struct PointerFocusResult
     bool clear_focus = false;
 };
 
-std::optional<size_t> monitor_index_at_point(std::span<const Monitor> monitors, int16_t x, int16_t y);
+std::optional<size_t> monitor_index_at_point(std::span<Monitor const> monitors, int16_t x, int16_t y);
 
-PointerFocusResult pointer_move(std::span<const Monitor> monitors, size_t active_monitor, int16_t x, int16_t y);
+PointerFocusResult pointer_move(std::span<Monitor const> monitors, size_t active_monitor, int16_t x, int16_t y);
 
 struct FocusWindowChange
 {

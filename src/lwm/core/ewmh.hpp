@@ -24,6 +24,8 @@ public:
     void set_number_of_desktops(uint32_t count);
     void set_desktop_names(std::vector<std::string> const& names);
     void set_workarea(std::vector<Geometry> const& workareas);
+    void set_desktop_geometry(uint32_t width, uint32_t height);
+    void set_showing_desktop(bool showing);
 
     // Dynamic updates
     void set_current_desktop(uint32_t desktop);
@@ -34,9 +36,12 @@ public:
     void set_window_desktop(xcb_window_t window, uint32_t desktop);
     void set_window_state(xcb_window_t window, xcb_atom_t state, bool enabled);
     bool has_window_state(xcb_window_t window, xcb_atom_t state) const;
+    void set_frame_extents(xcb_window_t window, uint32_t left, uint32_t right, uint32_t top, uint32_t bottom);
+    void set_allowed_actions(xcb_window_t window, std::vector<xcb_atom_t> const& actions);
 
     // Client list management
     void update_client_list(std::vector<xcb_window_t> const& windows);
+    void update_client_list_stacking(std::vector<xcb_window_t> const& windows);
 
     // Urgent hints
     void set_demands_attention(xcb_window_t window, bool urgent);

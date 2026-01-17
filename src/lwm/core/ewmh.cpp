@@ -63,14 +63,22 @@ void Ewmh::set_supported_atoms()
         ewmh_._NET_CURRENT_DESKTOP,
         ewmh_._NET_ACTIVE_WINDOW,
         ewmh_._NET_CLIENT_LIST,
+        ewmh_._NET_CLIENT_LIST_STACKING,
         ewmh_._NET_WM_DESKTOP,
         ewmh_._NET_DESKTOP_VIEWPORT,
+        ewmh_._NET_DESKTOP_GEOMETRY,
         ewmh_._NET_WORKAREA,
         ewmh_._NET_WM_STATE,
         ewmh_._NET_WM_STATE_DEMANDS_ATTENTION,
         ewmh_._NET_WM_STATE_FULLSCREEN,
         ewmh_._NET_WM_STATE_ABOVE,
+        ewmh_._NET_WM_STATE_BELOW,
         ewmh_._NET_WM_STATE_HIDDEN,
+        ewmh_._NET_WM_STATE_STICKY,
+        ewmh_._NET_WM_STATE_MAXIMIZED_VERT,
+        ewmh_._NET_WM_STATE_MAXIMIZED_HORZ,
+        ewmh_._NET_WM_STATE_SKIP_TASKBAR,
+        ewmh_._NET_WM_STATE_SKIP_PAGER,
         ewmh_._NET_WM_PING,
         ewmh_._NET_WM_SYNC_REQUEST,
         ewmh_._NET_WM_SYNC_REQUEST_COUNTER,
@@ -82,6 +90,20 @@ void Ewmh::set_supported_atoms()
         ewmh_._NET_WM_WINDOW_TYPE_DIALOG,
         ewmh_._NET_WM_STRUT,
         ewmh_._NET_WM_STRUT_PARTIAL,
+        ewmh_._NET_FRAME_EXTENTS,
+        ewmh_._NET_REQUEST_FRAME_EXTENTS,
+        ewmh_._NET_WM_ALLOWED_ACTIONS,
+        ewmh_._NET_WM_ACTION_CLOSE,
+        ewmh_._NET_WM_ACTION_FULLSCREEN,
+        ewmh_._NET_WM_ACTION_CHANGE_DESKTOP,
+        ewmh_._NET_WM_ACTION_ABOVE,
+        ewmh_._NET_WM_ACTION_MINIMIZE,
+        ewmh_._NET_WM_ACTION_MOVE,
+        ewmh_._NET_WM_ACTION_RESIZE,
+        ewmh_._NET_MOVERESIZE_WINDOW,
+        ewmh_._NET_WM_MOVERESIZE,
+        ewmh_._NET_SHOWING_DESKTOP,
+        ewmh_._NET_RESTACK_WINDOW,
     };
 
     xcb_ewmh_set_supported(&ewmh_, 0, sizeof(supported) / sizeof(supported[0]), supported);
@@ -111,10 +133,7 @@ void Ewmh::set_workarea(std::vector<Geometry> const& workareas)
     areas.reserve(workareas.size());
     for (auto const& area : workareas)
     {
-        areas.push_back({ static_cast<uint32_t>(area.x),
-                          static_cast<uint32_t>(area.y),
-                          area.width,
-                          area.height });
+        areas.push_back({ static_cast<uint32_t>(area.x), static_cast<uint32_t>(area.y), area.width, area.height });
     }
 
     if (!areas.empty())
@@ -122,6 +141,13 @@ void Ewmh::set_workarea(std::vector<Geometry> const& workareas)
         xcb_ewmh_set_workarea(&ewmh_, 0, areas.size(), areas.data());
     }
 }
+
+void Ewmh::set_desktop_geometry(uint32_t width, uint32_t height)
+{
+    xcb_ewmh_set_desktop_geometry(&ewmh_, 0, width, height);
+}
+
+void Ewmh::set_showing_desktop(bool showing) { xcb_ewmh_set_showing_desktop(&ewmh_, 0, showing ? 1 : 0); }
 
 void Ewmh::set_current_desktop(uint32_t desktop) { xcb_ewmh_set_current_desktop(&ewmh_, 0, desktop); }
 
@@ -152,9 +178,24 @@ void Ewmh::set_window_desktop(xcb_window_t window, uint32_t desktop)
     xcb_ewmh_set_wm_desktop(&ewmh_, window, desktop);
 }
 
+void Ewmh::set_frame_extents(xcb_window_t window, uint32_t left, uint32_t right, uint32_t top, uint32_t bottom)
+{
+    xcb_ewmh_set_frame_extents(&ewmh_, window, left, right, top, bottom);
+}
+
+void Ewmh::set_allowed_actions(xcb_window_t window, std::vector<xcb_atom_t> const& actions)
+{
+    xcb_ewmh_set_wm_allowed_actions(&ewmh_, window, actions.size(), const_cast<xcb_atom_t*>(actions.data()));
+}
+
 void Ewmh::update_client_list(std::vector<xcb_window_t> const& windows)
 {
     xcb_ewmh_set_client_list(&ewmh_, 0, windows.size(), const_cast<xcb_window_t*>(windows.data()));
+}
+
+void Ewmh::update_client_list_stacking(std::vector<xcb_window_t> const& windows)
+{
+    xcb_ewmh_set_client_list_stacking(&ewmh_, 0, windows.size(), const_cast<xcb_window_t*>(windows.data()));
 }
 
 void Ewmh::set_window_state(xcb_window_t window, xcb_atom_t state, bool enabled)

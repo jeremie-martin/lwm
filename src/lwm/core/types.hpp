@@ -13,6 +13,8 @@ struct Window
 {
     xcb_window_t id;
     std::string name;
+    std::string wm_class;
+    std::string wm_class_name;
 };
 
 struct Workspace

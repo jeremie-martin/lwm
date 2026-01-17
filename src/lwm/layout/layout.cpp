@@ -125,7 +125,8 @@ void Layout::apply_size_hints(xcb_window_t window, uint32_t& width, uint32_t& he
             conn_.get(),
             xcb_icccm_get_wm_normal_hints(conn_.get(), window),
             &hints,
-            &error))
+            &error
+        ))
     {
         if (error)
             free(error);
@@ -172,10 +173,8 @@ void Layout::apply_size_hints(xcb_window_t window, uint32_t& width, uint32_t& he
 
     if (hints.flags & XCB_ICCCM_SIZE_HINT_P_ASPECT)
     {
-        double min_ratio =
-            static_cast<double>(hints.min_aspect_num) / std::max<int>(1, hints.min_aspect_den);
-        double max_ratio =
-            static_cast<double>(hints.max_aspect_num) / std::max<int>(1, hints.max_aspect_den);
+        double min_ratio = static_cast<double>(hints.min_aspect_num) / std::max<int>(1, hints.min_aspect_den);
+        double max_ratio = static_cast<double>(hints.max_aspect_num) / std::max<int>(1, hints.max_aspect_den);
         double ratio = static_cast<double>(width) / std::max<uint32_t>(1, height);
 
         if (ratio < min_ratio)

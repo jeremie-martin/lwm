@@ -2,7 +2,7 @@
 
 namespace lwm::focus {
 
-std::optional<size_t> monitor_index_at_point(std::span<const Monitor> monitors, int16_t x, int16_t y)
+std::optional<size_t> monitor_index_at_point(std::span<Monitor const> monitors, int16_t x, int16_t y)
 {
     for (size_t i = 0; i < monitors.size(); ++i)
     {
@@ -15,7 +15,7 @@ std::optional<size_t> monitor_index_at_point(std::span<const Monitor> monitors, 
     return std::nullopt;
 }
 
-PointerFocusResult pointer_move(std::span<const Monitor> monitors, size_t active_monitor, int16_t x, int16_t y)
+PointerFocusResult pointer_move(std::span<Monitor const> monitors, size_t active_monitor, int16_t x, int16_t y)
 {
     PointerFocusResult result;
     result.new_monitor = active_monitor;
@@ -37,7 +37,8 @@ std::optional<FocusWindowChange> focus_window_state(
     std::vector<Monitor>& monitors,
     size_t& active_monitor,
     xcb_window_t& active_window,
-    xcb_window_t window)
+    xcb_window_t window
+)
 {
     for (size_t m = 0; m < monitors.size(); ++m)
     {

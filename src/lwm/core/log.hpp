@@ -11,18 +11,17 @@
 
 #ifndef NDEBUG
 
-#include <iostream>
+#    include <iostream>
 
-#define LWM_DEBUG(msg) \
-    std::cerr << "[LWM] " << __FILE__ << ":" << __LINE__ << " " << msg << std::endl
+#    define LWM_DEBUG(msg) std::cerr << "[LWM] " << __FILE__ << ":" << __LINE__ << " " << msg << std::endl
 
-#define LWM_DEBUG_KEY(state, keysym) \
-    std::cerr << "[LWM] Key: state=0x" << std::hex << state << " keysym=0x" << keysym << std::dec << std::endl
+#    define LWM_DEBUG_KEY(state, keysym) \
+        std::cerr << "[LWM] Key: state=0x" << std::hex << state << " keysym=0x" << keysym << std::dec << std::endl
 
 #else
 
 // Release mode: these expand to nothing (zero cost)
-#define LWM_DEBUG(msg) ((void)0)
-#define LWM_DEBUG_KEY(state, keysym) ((void)0)
+#    define LWM_DEBUG(msg) ((void)0)
+#    define LWM_DEBUG_KEY(state, keysym) ((void)0)
 
 #endif

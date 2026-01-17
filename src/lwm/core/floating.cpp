@@ -10,17 +10,16 @@ Geometry place_floating(Geometry area, uint16_t width, uint16_t height, std::opt
 
     if (parent)
     {
-        target_x = static_cast<int32_t>(parent->x)
-            + (static_cast<int32_t>(parent->width) - static_cast<int32_t>(width)) / 2;
-        target_y = static_cast<int32_t>(parent->y)
-            + (static_cast<int32_t>(parent->height) - static_cast<int32_t>(height)) / 2;
+        target_x =
+            static_cast<int32_t>(parent->x) + (static_cast<int32_t>(parent->width) - static_cast<int32_t>(width)) / 2;
+        target_y =
+            static_cast<int32_t>(parent->y) + (static_cast<int32_t>(parent->height) - static_cast<int32_t>(height)) / 2;
     }
     else
     {
-        target_x = static_cast<int32_t>(area.x)
-            + (static_cast<int32_t>(area.width) - static_cast<int32_t>(width)) / 2;
-        target_y = static_cast<int32_t>(area.y)
-            + (static_cast<int32_t>(area.height) - static_cast<int32_t>(height)) / 2;
+        target_x = static_cast<int32_t>(area.x) + (static_cast<int32_t>(area.width) - static_cast<int32_t>(width)) / 2;
+        target_y =
+            static_cast<int32_t>(area.y) + (static_cast<int32_t>(area.height) - static_cast<int32_t>(height)) / 2;
     }
 
     int32_t min_x = area.x;
