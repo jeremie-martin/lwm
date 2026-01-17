@@ -1734,6 +1734,20 @@ void WindowManager::manage_window(xcb_window_t window, bool start_iconic)
     if (ewmh_.has_window_state(window, ewmh_.get()->_NET_WM_STATE_SKIP_PAGER))
         skip_pager_windows_.insert(window);
 
+    if (transient)
+    {
+        if (!skip_taskbar_windows_.contains(window))
+        {
+            skip_taskbar_windows_.insert(window);
+            ewmh_.set_window_state(window, ewmh_.get()->_NET_WM_STATE_SKIP_TASKBAR, true);
+        }
+        if (!skip_pager_windows_.contains(window))
+        {
+            skip_pager_windows_.insert(window);
+            ewmh_.set_window_state(window, ewmh_.get()->_NET_WM_STATE_SKIP_PAGER, true);
+        }
+    }
+
     if (ewmh_.has_window_state(window, ewmh_.get()->_NET_WM_STATE_STICKY))
     {
         set_window_sticky(window, true);
@@ -1884,6 +1898,7 @@ void WindowManager::manage_floating_window(xcb_window_t window, bool start_iconi
     floating_window.workspace = *workspace_idx;
     floating_window.geometry = placement;
     floating_window.name = get_window_name(window);
+    floating_window.transient_for = transient.value_or(XCB_NONE);
     floating_windows_.push_back(floating_window);
     register_client_window(window);
     user_times_[window] = get_user_time(window);
@@ -2188,6 +2203,7 @@ void WindowManager::focus_window(xcb_window_t window)
     user_times_[window] = last_event_time_;
 
     apply_fullscreen_if_needed(window);
+    restack_transients(window);
 
     update_all_bars();
     conn_.flush();
@@ -2274,6 +2290,7 @@ void WindowManager::focus_floating_window(xcb_window_t window)
     user_times_[window] = last_event_time_;
 
     apply_fullscreen_if_needed(window);
+    restack_transients(window);
 
     update_ewmh_client_list();
     update_all_bars();
@@ -3335,6 +3352,57 @@ std::optional<xcb_window_t> WindowManager::transient_for_window(xcb_window_t win
     return result;
 }
 
+bool WindowManager::is_window_visible(xcb_window_t window) const
+{
+    if (showing_desktop_)
+        return false;
+    if (iconic_windows_.contains(window))
+        return false;
+
+    if (auto const* floating_window = find_floating_window(window))
+    {
+        if (floating_window->monitor >= monitors_.size())
+            return false;
+        if (sticky_windows_.contains(window))
+            return true;
+        return floating_window->workspace == monitors_[floating_window->monitor].current_workspace;
+    }
+
+    if (auto monitor_idx = monitor_index_for_window(window))
+    {
+        if (sticky_windows_.contains(window))
+            return true;
+        auto workspace_idx = workspace_index_for_window(window);
+        if (!workspace_idx)
+            return false;
+        return *workspace_idx == monitors_[*monitor_idx].current_workspace;
+    }
+
+    return false;
+}
+
+void WindowManager::restack_transients(xcb_window_t parent)
+{
+    if (parent == XCB_NONE)
+        return;
+    if (!is_window_visible(parent))
+        return;
+
+    for (auto const& floating_window : floating_windows_)
+    {
+        if (floating_window.transient_for != parent)
+            continue;
+        if (!is_window_visible(floating_window.id))
+            continue;
+
+        uint32_t values[2];
+        values[0] = parent;
+        values[1] = XCB_STACK_MODE_ABOVE;
+        uint16_t mask = XCB_CONFIG_WINDOW_SIBLING | XCB_CONFIG_WINDOW_STACK_MODE;
+        xcb_configure_window(conn_.get(), floating_window.id, mask, values);
+    }
+}
+
 bool WindowManager::is_override_redirect_window(xcb_window_t window) const
 {
     auto cookie = xcb_get_window_attributes(conn_.get(), window);
@@ -3480,6 +3548,10 @@ void WindowManager::update_floating_visibility(size_t monitor_idx)
             }
             xcb_map_window(conn_.get(), floating_window.id);
             wm_unmapped_windows_.erase(floating_window.id);
+            if (floating_window.transient_for != XCB_NONE)
+            {
+                restack_transients(floating_window.transient_for);
+            }
         }
         else
         {

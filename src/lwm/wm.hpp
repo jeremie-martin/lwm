@@ -32,6 +32,7 @@ private:
         size_t workspace = 0;
         Geometry geometry;
         std::string name;
+        xcb_window_t transient_for = XCB_NONE;
     };
 
     struct DragState
@@ -205,6 +206,8 @@ private:
     std::optional<uint32_t> get_window_desktop(xcb_window_t window) const;
     std::optional<std::pair<size_t, size_t>> resolve_window_desktop(xcb_window_t window) const;
     std::optional<xcb_window_t> transient_for_window(xcb_window_t window) const;
+    bool is_window_visible(xcb_window_t window) const;
+    void restack_transients(xcb_window_t parent);
     bool is_override_redirect_window(xcb_window_t window) const;
     bool is_workspace_visible(size_t monitor_idx, size_t workspace_idx) const;
     std::optional<ActiveWindowInfo> get_active_window_info() const;
