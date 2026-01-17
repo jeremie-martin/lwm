@@ -1325,6 +1325,14 @@ void WindowManager::handle_timeouts()
 
 void WindowManager::handle_randr_screen_change()
 {
+    // Exit fullscreen for all windows before reconfiguring monitors
+    // This prevents stale geometry in fullscreen_restore_ after monitor layout changes
+    std::vector<xcb_window_t> fullscreen_copy(fullscreen_windows_.begin(), fullscreen_windows_.end());
+    for (auto window : fullscreen_copy)
+    {
+        set_fullscreen(window, false);
+    }
+
     std::vector<Window> all_windows;
     std::vector<FloatingWindow> all_floating = floating_windows_;
     fullscreen_monitors_.clear();
@@ -1838,6 +1846,19 @@ void WindowManager::set_fullscreen(xcb_window_t window, bool enabled)
         }
 
         fullscreen_windows_.insert(window);
+
+        // Fullscreen is incompatible with ABOVE/BELOW states - clear them
+        if (above_windows_.contains(window))
+        {
+            above_windows_.erase(window);
+            ewmh_.set_window_state(window, ewmh_.get()->_NET_WM_STATE_ABOVE, false);
+        }
+        if (below_windows_.contains(window))
+        {
+            below_windows_.erase(window);
+            ewmh_.set_window_state(window, ewmh_.get()->_NET_WM_STATE_BELOW, false);
+        }
+
         ewmh_.set_window_state(window, ewmh_.get()->_NET_WM_STATE_FULLSCREEN, true);
         apply_fullscreen_if_needed(window);
     }
@@ -3155,18 +3176,46 @@ void WindowManager::update_ewmh_client_list()
     }
     ewmh_.update_client_list(windows);
 
-    // Build stacking order: tiled < floating < above < fullscreen
+    // Build stacking order: below < tiled < floating < above < fullscreen
     std::vector<xcb_window_t> stacking;
     stacking.reserve(windows.size());
 
-    // Tiled windows (bottom of stack)
+    // Helper to check if window is in "normal" tier (not below, not above, not fullscreen)
+    auto is_normal = [this](xcb_window_t id)
+    {
+        return !below_windows_.contains(id) && !above_windows_.contains(id) && !fullscreen_windows_.contains(id);
+    };
+
+    // BELOW windows (bottom of stack)
     for (auto const& monitor : monitors_)
     {
         for (auto const& workspace : monitor.workspaces)
         {
             for (auto const& window : workspace.windows)
             {
-                if (!fullscreen_windows_.contains(window.id) && !above_windows_.contains(window.id))
+                if (below_windows_.contains(window.id))
+                {
+                    stacking.push_back(window.id);
+                }
+            }
+        }
+    }
+    for (auto const& floating_window : floating_windows_)
+    {
+        if (below_windows_.contains(floating_window.id))
+        {
+            stacking.push_back(floating_window.id);
+        }
+    }
+
+    // Normal tiled windows
+    for (auto const& monitor : monitors_)
+    {
+        for (auto const& workspace : monitor.workspaces)
+        {
+            for (auto const& window : workspace.windows)
+            {
+                if (is_normal(window.id))
                 {
                     stacking.push_back(window.id);
                 }
@@ -3174,16 +3223,16 @@ void WindowManager::update_ewmh_client_list()
         }
     }
 
-    // Floating windows (not above, not fullscreen)
+    // Normal floating windows
     for (auto const& floating_window : floating_windows_)
     {
-        if (!fullscreen_windows_.contains(floating_window.id) && !above_windows_.contains(floating_window.id))
+        if (is_normal(floating_window.id))
         {
             stacking.push_back(floating_window.id);
         }
     }
 
-    // Above windows (tiled and floating)
+    // ABOVE windows (tiled and floating)
     for (auto const& monitor : monitors_)
     {
         for (auto const& workspace : monitor.workspaces)
