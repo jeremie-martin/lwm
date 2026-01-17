@@ -66,7 +66,6 @@ private:
     std::unordered_set<xcb_window_t> above_windows_;
     std::unordered_set<xcb_window_t> below_windows_;
     std::unordered_set<xcb_window_t> iconic_windows_;
-    std::unordered_set<xcb_window_t> sticky_windows_;
     std::unordered_set<xcb_window_t> skip_taskbar_windows_;
     std::unordered_set<xcb_window_t> skip_pager_windows_;
     bool showing_desktop_ = false;
@@ -122,6 +121,7 @@ private:
     void handle_client_message(xcb_client_message_event_t const& e);
     void handle_configure_request(xcb_configure_request_event_t const& e);
     void handle_property_notify(xcb_property_notify_event_t const& e);
+    void handle_expose(xcb_expose_event_t const& e);
     void handle_randr_screen_change();
     void handle_timeouts();
 
