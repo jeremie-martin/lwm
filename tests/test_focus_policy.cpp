@@ -60,6 +60,7 @@ TEST_CASE("Focusing a window updates active monitor and workspace", "[focus][win
     REQUIRE(change->workspace_changed);
     REQUIRE(change->old_workspace == 1);
     REQUIRE(change->new_workspace == 2);
+    REQUIRE(monitors[1].previous_workspace == 1);
     REQUIRE(active_monitor == 1);
     REQUIRE(active_window == 0x2000);
     REQUIRE(monitors[1].current_workspace == 2);

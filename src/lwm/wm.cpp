@@ -374,6 +374,7 @@ void WindowManager::init_monitor_workspaces(Monitor& monitor)
 {
     monitor.workspaces.assign(config_.workspaces.count, Workspace{});
     monitor.current_workspace = 0;
+    monitor.previous_workspace = 0;
 }
 
 void WindowManager::setup_monitor_bars()
@@ -779,6 +780,10 @@ void WindowManager::handle_key_press(xcb_key_press_event_t const& e)
     else if (action->type == "switch_workspace" && action->workspace >= 0)
     {
         switch_workspace(action->workspace);
+    }
+    else if (action->type == "toggle_workspace")
+    {
+        toggle_workspace();
     }
     else if (action->type == "move_to_workspace" && action->workspace >= 0)
     {
@@ -1836,6 +1841,7 @@ void WindowManager::focus_floating_window(xcb_window_t window)
         {
             wm_unmap_window(w.id);
         }
+        monitor.previous_workspace = monitor.current_workspace;
         monitor.current_workspace = floating_window->workspace;
         rearrange_monitor(monitor);
         update_floating_visibility(floating_window->monitor);
@@ -2286,6 +2292,7 @@ void WindowManager::switch_workspace(int ws)
     if (ws < 0 || static_cast<size_t>(ws) >= workspace_count || static_cast<size_t>(ws) == monitor.current_workspace)
         return;
 
+    monitor.previous_workspace = monitor.current_workspace;
     for (auto const& window : monitor.current().windows)
     {
         wm_unmap_window(window.id);
@@ -2298,6 +2305,20 @@ void WindowManager::switch_workspace(int ws)
     focus_or_fallback(monitor);
     update_all_bars();
     conn_.flush();
+}
+
+void WindowManager::toggle_workspace()
+{
+    auto& monitor = focused_monitor();
+    size_t workspace_count = monitor.workspaces.size();
+    if (workspace_count <= 1)
+        return;
+
+    size_t target = monitor.previous_workspace;
+    if (target >= workspace_count || target == monitor.current_workspace)
+        return;
+
+    switch_workspace(static_cast<int>(target));
 }
 
 void WindowManager::move_window_to_workspace(int ws)
@@ -3468,6 +3489,7 @@ void WindowManager::switch_to_ewmh_desktop(uint32_t desktop)
     if (monitor_idx == focused_monitor_ && workspace_idx == monitor.current_workspace)
         return;
 
+    size_t old_workspace = monitor.current_workspace;
     // Unmap windows from OLD workspace before switching
     for (auto const& window : monitor.current().windows)
     {
@@ -3476,6 +3498,10 @@ void WindowManager::switch_to_ewmh_desktop(uint32_t desktop)
 
     // Switch to target monitor and workspace
     focused_monitor_ = monitor_idx;
+    if (workspace_idx != old_workspace)
+    {
+        monitor.previous_workspace = old_workspace;
+    }
     monitor.current_workspace = workspace_idx;
     update_ewmh_current_desktop();
     rearrange_monitor(monitor);

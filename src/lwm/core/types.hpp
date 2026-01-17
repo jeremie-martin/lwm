@@ -59,6 +59,7 @@ struct Monitor
     uint16_t height = 0;
     std::vector<Workspace> workspaces;
     size_t current_workspace = 0;
+    size_t previous_workspace = 0;
     xcb_window_t bar_window = XCB_NONE;
     Strut strut = {};
 

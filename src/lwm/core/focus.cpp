@@ -50,6 +50,10 @@ std::optional<FocusWindowChange> focus_window_state(
                 size_t old_workspace = target_monitor.current_workspace;
                 size_t new_workspace = w;
 
+                if (old_workspace != new_workspace)
+                {
+                    target_monitor.previous_workspace = old_workspace;
+                }
                 target_monitor.current_workspace = new_workspace;
                 target_monitor.current().focused_window = window;
                 active_monitor = m;

@@ -146,6 +146,7 @@ private:
 
     // Workspace operations (on focused monitor)
     void switch_workspace(int ws);
+    void toggle_workspace();
     void move_window_to_workspace(int ws);
 
     // Monitor operations
