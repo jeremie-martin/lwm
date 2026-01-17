@@ -2980,7 +2980,18 @@ void WindowManager::move_window_to_workspace(int ws)
 
     Window moved_window = *it;
     current_ws.windows.erase(it);
-    current_ws.focused_window = XCB_NONE;
+    if (current_ws.focused_window == window_to_move)
+    {
+        current_ws.focused_window = XCB_NONE;
+        for (auto rit = current_ws.windows.rbegin(); rit != current_ws.windows.rend(); ++rit)
+        {
+            if (!iconic_windows_.contains(rit->id))
+            {
+                current_ws.focused_window = rit->id;
+                break;
+            }
+        }
+    }
 
     size_t target_ws = static_cast<size_t>(ws);
     monitor.workspaces[target_ws].windows.push_back(moved_window);
@@ -2998,15 +3009,7 @@ void WindowManager::move_window_to_workspace(int ws)
         wm_unmap_window(window_to_move);
     }
     rearrange_monitor(monitor);
-
-    if (!current_ws.windows.empty())
-    {
-        focus_window(current_ws.windows.back().id);
-    }
-    else
-    {
-        clear_focus();
-    }
+    focus_or_fallback(monitor);
 
     update_all_bars();
     conn_.flush();
