@@ -1,0 +1,24 @@
+# Review TODOs
+
+- [x] 1) ICCCM focus: WM_HINTS.input=False + WM_TAKE_FOCUS should not call SetInputFocus.
+- [ ] 2) ICCCM focus: do not activate/focus windows that are not focus-eligible.
+- [ ] 3) EWMH ping: send/receive _NET_WM_PING via WM_PROTOCOLS format.
+- [ ] 4) EWMH sync: wait for _NET_WM_SYNC_REQUEST_COUNTER updates or timeout.
+- [ ] 5) IconicState on map: manage but do not map (avoid map/unmap flicker).
+- [ ] 6) Override-redirect MapRequest: ignore entirely (no map/manage).
+- [ ] 7) Floating ConfigureRequest: apply size hints to server geometry.
+- [ ] 8) WM_NORMAL_HINTS for floating: honor P/US position+size; keep no increment enforcement.
+- [ ] 9) Strut updates: react to _NET_WM_STRUT(_PARTIAL) property changes.
+- [ ] 10) Window types: recognize first-known type from list; support required types; fix _NET_SUPPORTED.
+- [ ] 11) Window states: implement required _NET_WM_STATE handling incl. HIDDEN and others.
+- [ ] 12) Client list ordering/stacking: match COMPLIANCE requirements or track order.
+- [ ] 13) Per-monitor workspaces vs EWMH desktops: document mapping and limitations.
+- [ ] 14) Cursor warping: make configurable per BEHAVIOR.md.
+- [ ] 15) Move-to-workspace focus: restore focus with floating candidates per policy.
+- [ ] 16) Move-to-monitor focus behavior: document current focus-follows-window behavior.
+- [ ] 17) Unmap tracking race: replace boolean set with per-window counter.
+- [ ] 18) Signed geometry: avoid unsigned wrap for monitor/ewmh geometry and workarea.
+- [ ] 19) Transients: enforce stacking above parent and skip taskbar/pager by default.
+- [ ] A) Spec: implement _NET_WM_PING and _NET_WM_SYNC_REQUEST correctly and test.
+- [ ] B) Spec: document that size increments are not enforced for any windows.
+- [ ] C) Spec: keep per-monitor workspaces and document EWMH desktop mapping.

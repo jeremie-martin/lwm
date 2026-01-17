@@ -3088,7 +3088,7 @@ bool WindowManager::should_set_input_focus(xcb_window_t window) const
     if (hints.input)
         return true;
 
-    return supports_protocol(window, wm_take_focus_);
+    return false;
 }
 
 void WindowManager::send_wm_take_focus(xcb_window_t window, uint32_t timestamp)
