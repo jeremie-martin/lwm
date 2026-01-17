@@ -1,11 +1,13 @@
 #include "bar.hpp"
 #include <cstring>
+#include <utility>
 
 namespace lwm {
 
-StatusBar::StatusBar(Connection& conn, AppearanceConfig const& appearance)
+StatusBar::StatusBar(Connection& conn, AppearanceConfig const& appearance, std::vector<std::string> workspace_names)
     : conn_(conn)
     , appearance_(appearance)
+    , workspace_names_(std::move(workspace_names))
     , font_(xcb_generate_id(conn_.get()))
     , gc_(xcb_generate_id(conn_.get()))
 {
@@ -25,7 +27,9 @@ StatusBar::~StatusBar()
 xcb_window_t StatusBar::create_for_monitor(Monitor const& monitor)
 {
     uint32_t mask = XCB_CW_BACK_PIXEL | XCB_CW_EVENT_MASK;
-    uint32_t values[2] = { appearance_.status_bar_color, XCB_EVENT_MASK_EXPOSURE | XCB_EVENT_MASK_BUTTON_PRESS };
+    uint32_t values[2] = { appearance_.status_bar_color,
+                           XCB_EVENT_MASK_EXPOSURE | XCB_EVENT_MASK_BUTTON_PRESS
+                               | XCB_EVENT_MASK_ENTER_WINDOW | XCB_EVENT_MASK_POINTER_MOTION };
 
     xcb_window_t window = xcb_generate_id(conn_.get());
     xcb_create_window(
@@ -58,13 +62,14 @@ void StatusBar::update(Monitor const& monitor)
     std::string statusText = "WS: ";
     for (size_t i = 0; i < monitor.workspaces.size(); ++i)
     {
+        std::string label = (i < workspace_names_.size()) ? workspace_names_[i] : std::to_string(i + 1);
         if (i == monitor.current_workspace)
         {
-            statusText += "[" + std::to_string(i) + "]";
+            statusText += "[" + label + "]";
         }
         else if (!monitor.workspaces[i].windows.empty())
         {
-            statusText += " " + std::to_string(i) + " ";
+            statusText += " " + label + " ";
         }
         else
         {

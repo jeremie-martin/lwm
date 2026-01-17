@@ -35,7 +35,8 @@ WindowManager::WindowManager(Config config)
     , keybinds_(conn_, config_)
     , layout_(conn_, config_.appearance)
     , bar_(
-          config_.appearance.enable_internal_bar ? std::optional<StatusBar>(std::in_place, conn_, config_.appearance)
+          config_.appearance.enable_internal_bar
+              ? std::optional<StatusBar>(std::in_place, conn_, config_.appearance, config_.workspaces.names)
                                                  : std::nullopt
       )
 {
@@ -64,8 +65,9 @@ void WindowManager::run()
 void WindowManager::setup_root()
 {
     uint32_t values[] = { XCB_EVENT_MASK_SUBSTRUCTURE_REDIRECT | XCB_EVENT_MASK_SUBSTRUCTURE_NOTIFY
-                          | XCB_EVENT_MASK_ENTER_WINDOW | XCB_EVENT_MASK_LEAVE_WINDOW | XCB_EVENT_MASK_STRUCTURE_NOTIFY
-                          | XCB_EVENT_MASK_PROPERTY_CHANGE | XCB_EVENT_MASK_BUTTON_PRESS };
+                          | XCB_EVENT_MASK_ENTER_WINDOW | XCB_EVENT_MASK_LEAVE_WINDOW | XCB_EVENT_MASK_POINTER_MOTION
+                          | XCB_EVENT_MASK_STRUCTURE_NOTIFY | XCB_EVENT_MASK_PROPERTY_CHANGE
+                          | XCB_EVENT_MASK_BUTTON_PRESS };
     xcb_change_window_attributes(conn_.get(), conn_.screen()->root, XCB_CW_EVENT_MASK, values);
 
     if (conn_.has_randr())
@@ -125,6 +127,7 @@ void WindowManager::detect_monitors()
             monitor.y = crtc_reply->y;
             monitor.width = crtc_reply->width;
             monitor.height = crtc_reply->height;
+            init_monitor_workspaces(monitor);
             monitors_.push_back(monitor);
         }
 
@@ -151,7 +154,14 @@ void WindowManager::create_fallback_monitor()
     monitor.y = 0;
     monitor.width = conn_.screen()->width_in_pixels;
     monitor.height = conn_.screen()->height_in_pixels;
+    init_monitor_workspaces(monitor);
     monitors_.push_back(monitor);
+}
+
+void WindowManager::init_monitor_workspaces(Monitor& monitor)
+{
+    monitor.workspaces.assign(config_.workspaces.count, Workspace{});
+    monitor.current_workspace = 0;
 }
 
 void WindowManager::setup_monitor_bars()
@@ -204,6 +214,9 @@ void WindowManager::handle_event(xcb_generic_event_t const& event)
         case XCB_ENTER_NOTIFY:
             handle_enter_notify(reinterpret_cast<xcb_enter_notify_event_t const&>(event));
             break;
+        case XCB_MOTION_NOTIFY:
+            handle_motion_notify(reinterpret_cast<xcb_motion_notify_event_t const&>(event));
+            break;
         case XCB_BUTTON_PRESS:
             handle_button_press(reinterpret_cast<xcb_button_press_event_t const&>(event));
             break;
@@ -222,6 +235,8 @@ void WindowManager::handle_map_request(xcb_map_request_event_t const& e)
     if (ewmh_.is_dock_window(e.window))
     {
         // Map but don't manage - let it float above
+        uint32_t values[] = { XCB_EVENT_MASK_ENTER_WINDOW | XCB_EVENT_MASK_POINTER_MOTION };
+        xcb_change_window_attributes(conn_.get(), e.window, XCB_CW_EVENT_MASK, values);
         xcb_map_window(conn_.get(), e.window);
         dock_windows_.push_back(e.window);
         update_struts();
@@ -268,27 +283,28 @@ void WindowManager::handle_enter_notify(xcb_enter_notify_event_t const& e)
             return;
     }
 
-    // Ignore internal bar windows
-    for (auto const& monitor : monitors_)
-    {
-        if (e.event == monitor.bar_window)
-            return;
-    }
-
-    // Ignore dock windows (e.g., Polybar)
-    if (std::ranges::find(dock_windows_, e.event) != dock_windows_.end())
-        return;
-
     // Case 1: Entering a managed window - focus-follows-mouse
     if (e.event != conn_.screen()->root)
     {
-        focus_window(e.event);
-        return;
+        if (monitor_containing_window(e.event))
+        {
+            focus_window(e.event);
+            return;
+        }
     }
 
-    // Case 2: Entering root window (gaps or empty monitor area)
-    // This happens when cursor leaves a managed window and enters root
-    // Update focused monitor based on pointer position
+    // Case 2: Entering root or unmanaged window area (gaps/empty space)
+    update_focused_monitor_at_point(e.root_x, e.root_y);
+}
+
+void WindowManager::handle_motion_notify(xcb_motion_notify_event_t const& e)
+{
+    if (e.event != conn_.screen()->root)
+    {
+        if (monitor_containing_window(e.event))
+            return;
+    }
+
     update_focused_monitor_at_point(e.root_x, e.root_y);
 }
 
@@ -317,9 +333,9 @@ void WindowManager::handle_key_press(xcb_key_press_event_t const& e)
 
     LWM_DEBUG("Action: " << action->type);
 
-    if (action->type == "kill" && focused_monitor().current().focused_window != XCB_NONE)
+    if (action->type == "kill" && active_window_ != XCB_NONE)
     {
-        kill_window(focused_monitor().current().focused_window);
+        kill_window(active_window_);
     }
     else if (action->type == "switch_workspace" && action->workspace >= 0)
     {
@@ -418,7 +434,7 @@ void WindowManager::handle_randr_screen_change()
     }
 
     // Update EWMH for new monitor configuration
-    ewmh_.set_desktop_viewport(monitors_);
+    update_ewmh_desktops();
     update_ewmh_client_list();
 
     focused_monitor_ = 0;
@@ -465,24 +481,36 @@ void WindowManager::unmanage_window(xcb_window_t window)
             if (it != workspace.windows.end())
             {
                 workspace.windows.erase(it);
-                bool was_focused = (workspace.focused_window == window);
-                if (was_focused)
+                bool was_active = (active_window_ == window);
+                bool was_workspace_focus = (workspace.focused_window == window);
+                if (was_workspace_focus)
                 {
                     workspace.focused_window = workspace.windows.empty() ? XCB_NONE : workspace.windows.back().id;
                 }
                 update_ewmh_client_list();
                 rearrange_monitor(monitor);
 
-                // If this was the focused window on the current workspace, update focus and EWMH
-                if (was_focused && ws_idx == monitor.current_workspace)
+                // If this was the active window, select a new focus or clear focus
+                if (was_active)
                 {
-                    if (workspace.focused_window != XCB_NONE)
+                    if (ws_idx == monitor.current_workspace && &monitor == &focused_monitor())
                     {
-                        focus_window(workspace.focused_window);
+                        if (workspace.focused_window != XCB_NONE)
+                        {
+                            focus_window(workspace.focused_window);
+                        }
+                        else if (!workspace.windows.empty())
+                        {
+                            focus_window(workspace.windows.back().id);
+                        }
+                        else
+                        {
+                            clear_focus();
+                        }
                     }
                     else
                     {
-                        ewmh_.set_active_window(XCB_NONE);
+                        clear_focus();
                     }
                 }
 
@@ -532,15 +560,17 @@ void WindowManager::focus_window(xcb_window_t window)
             wm_unmap_window(w.id);
         }
         target_monitor->current_workspace = target_workspace_idx;
-        update_ewmh_current_desktop();
         rearrange_monitor(*target_monitor);
     }
+
+    update_ewmh_current_desktop();
 
     // Clear borders on all windows across all monitors
     clear_all_borders();
 
     auto& workspace = target_monitor->current();
     workspace.focused_window = window;
+    active_window_ = window;
     xcb_change_window_attributes(conn_.get(), window, XCB_CW_BORDER_PIXEL, &config_.appearance.border_color);
     xcb_configure_window(conn_.get(), window, XCB_CONFIG_WINDOW_BORDER_WIDTH, &config_.appearance.border_width);
     xcb_set_input_focus(conn_.get(), XCB_INPUT_FOCUS_POINTER_ROOT, window, XCB_CURRENT_TIME);
@@ -551,6 +581,14 @@ void WindowManager::focus_window(xcb_window_t window)
 
     update_all_bars();
     conn_.flush();
+}
+
+void WindowManager::clear_focus()
+{
+    clear_all_borders();
+    active_window_ = XCB_NONE;
+    xcb_set_input_focus(conn_.get(), XCB_INPUT_FOCUS_POINTER_ROOT, conn_.screen()->root, XCB_CURRENT_TIME);
+    ewmh_.set_active_window(XCB_NONE);
 }
 
 void WindowManager::kill_window(xcb_window_t window)
@@ -606,10 +644,13 @@ void WindowManager::rearrange_all_monitors()
 
 void WindowManager::switch_workspace(int ws)
 {
-    if (ws < 0 || ws >= Config::NUM_WORKSPACES || static_cast<size_t>(ws) == focused_monitor().current_workspace)
+    auto& monitor = focused_monitor();
+    size_t workspace_count = monitor.workspaces.size();
+    if (workspace_count == 0)
         return;
 
-    auto& monitor = focused_monitor();
+    if (ws < 0 || static_cast<size_t>(ws) >= workspace_count || static_cast<size_t>(ws) == monitor.current_workspace)
+        return;
 
     for (auto const& window : monitor.current().windows)
     {
@@ -627,15 +668,19 @@ void WindowManager::switch_workspace(int ws)
 void WindowManager::move_window_to_workspace(int ws)
 {
     auto& monitor = focused_monitor();
+    size_t workspace_count = monitor.workspaces.size();
+    if (workspace_count == 0)
+        return;
+
+    if (ws < 0 || static_cast<size_t>(ws) >= workspace_count || static_cast<size_t>(ws) == monitor.current_workspace)
+        return;
+
+    if (active_window_ == XCB_NONE)
+        return;
+
     auto& current_ws = monitor.current();
 
-    if (ws < 0 || ws >= Config::NUM_WORKSPACES || static_cast<size_t>(ws) == monitor.current_workspace)
-        return;
-
-    if (current_ws.focused_window == XCB_NONE)
-        return;
-
-    xcb_window_t window_to_move = current_ws.focused_window;
+    xcb_window_t window_to_move = active_window_;
 
     auto it = current_ws.find_window(window_to_move);
     if (it == current_ws.windows.end())
@@ -645,11 +690,12 @@ void WindowManager::move_window_to_workspace(int ws)
     current_ws.windows.erase(it);
     current_ws.focused_window = XCB_NONE;
 
-    monitor.workspaces[ws].windows.push_back(moved_window);
-    monitor.workspaces[ws].focused_window = window_to_move;
+    size_t target_ws = static_cast<size_t>(ws);
+    monitor.workspaces[target_ws].windows.push_back(moved_window);
+    monitor.workspaces[target_ws].focused_window = window_to_move;
 
     // Update EWMH desktop for moved window
-    uint32_t desktop = get_ewmh_desktop_index(focused_monitor_, static_cast<size_t>(ws));
+    uint32_t desktop = get_ewmh_desktop_index(focused_monitor_, target_ws);
     ewmh_.set_window_desktop(window_to_move, desktop);
 
     wm_unmap_window(window_to_move);
@@ -661,8 +707,7 @@ void WindowManager::move_window_to_workspace(int ws)
     }
     else
     {
-        // Workspace is now empty - update EWMH to reflect no active window
-        ewmh_.set_active_window(XCB_NONE);
+        clear_focus();
     }
 
     update_all_bars();
@@ -706,8 +751,8 @@ void WindowManager::focus_or_fallback(Monitor& monitor)
     }
     else
     {
-        // No windows - set active window to none per EWMH spec
-        ewmh_.set_active_window(XCB_NONE);
+        // No windows - clear focus per EWMH spec
+        clear_focus();
     }
 }
 
@@ -733,14 +778,14 @@ void WindowManager::move_window_to_monitor(int direction)
         return;
 
     auto& source_ws = focused_monitor().current();
-    if (source_ws.focused_window == XCB_NONE)
+    if (active_window_ == XCB_NONE)
         return;
 
     size_t target_idx = wrap_monitor_index(static_cast<int>(focused_monitor_) + direction);
     if (target_idx == focused_monitor_)
         return;
 
-    xcb_window_t window_to_move = source_ws.focused_window;
+    xcb_window_t window_to_move = active_window_;
 
     auto it = source_ws.find_window(window_to_move);
     if (it == source_ws.windows.end())
@@ -840,22 +885,10 @@ void WindowManager::update_focused_monitor_at_point(int16_t x, int16_t y)
     if (*new_monitor_idx == focused_monitor_)
         return;
 
-    // We crossed monitors - unfocus current window and update focus
-    clear_all_borders();
+    // We crossed monitors - update active monitor and clear focus
     focused_monitor_ = *new_monitor_idx;
     update_ewmh_current_desktop();
-
-    // Focus a window on the new monitor if any, otherwise set no active window
-    auto& ws = focused_monitor().current();
-    if (!ws.windows.empty())
-    {
-        xcb_window_t to_focus = (ws.focused_window != XCB_NONE) ? ws.focused_window : ws.windows.back().id;
-        focus_window(to_focus);
-    }
-    else
-    {
-        ewmh_.set_active_window(XCB_NONE);
-    }
+    clear_focus();
 
     update_all_bars();
     conn_.flush();
@@ -945,24 +978,34 @@ void WindowManager::setup_ewmh()
 {
     ewmh_.init_atoms();
     ewmh_.set_wm_name("lwm");
+    update_ewmh_desktops();
+    update_ewmh_current_desktop();
+}
 
-    // Total desktops = monitors * workspaces per monitor
-    uint32_t total_desktops = static_cast<uint32_t>(monitors_.size() * Config::NUM_WORKSPACES);
+void WindowManager::update_ewmh_desktops()
+{
+    size_t workspaces_per_monitor = config_.workspaces.count;
+    uint32_t total_desktops = static_cast<uint32_t>(monitors_.size() * workspaces_per_monitor);
     ewmh_.set_number_of_desktops(total_desktops);
 
-    // Generate desktop names: "Mon0:1", "Mon0:2", ... "Mon1:1", etc.
     std::vector<std::string> names;
+    names.reserve(total_desktops);
     for (size_t m = 0; m < monitors_.size(); ++m)
     {
-        for (int w = 0; w < Config::NUM_WORKSPACES; ++w)
+        for (size_t w = 0; w < workspaces_per_monitor; ++w)
         {
-            names.push_back(monitors_[m].name + ":" + std::to_string(w + 1));
+            if (w < config_.workspaces.names.size())
+            {
+                names.push_back(config_.workspaces.names[w]);
+            }
+            else
+            {
+                names.push_back(std::to_string(w + 1));
+            }
         }
     }
     ewmh_.set_desktop_names(names);
-
     ewmh_.set_desktop_viewport(monitors_);
-    update_ewmh_current_desktop();
 }
 
 void WindowManager::update_ewmh_client_list()
@@ -990,19 +1033,25 @@ void WindowManager::update_ewmh_current_desktop()
 uint32_t WindowManager::get_ewmh_desktop_index(size_t monitor_idx, size_t workspace_idx) const
 {
     // Desktop index = monitor_idx * workspaces_per_monitor + workspace_idx
-    return static_cast<uint32_t>(monitor_idx * Config::NUM_WORKSPACES + workspace_idx);
+    return static_cast<uint32_t>(monitor_idx * config_.workspaces.count + workspace_idx);
 }
 
 void WindowManager::switch_to_ewmh_desktop(uint32_t desktop)
 {
     // Convert EWMH desktop index to monitor + workspace
-    size_t monitor_idx = desktop / Config::NUM_WORKSPACES;
-    size_t workspace_idx = desktop % Config::NUM_WORKSPACES;
+    size_t workspaces_per_monitor = config_.workspaces.count;
+    if (workspaces_per_monitor == 0)
+        return;
+
+    size_t monitor_idx = desktop / workspaces_per_monitor;
+    size_t workspace_idx = desktop % workspaces_per_monitor;
 
     if (monitor_idx >= monitors_.size())
         return;
 
     auto& monitor = monitors_[monitor_idx];
+    if (workspace_idx >= monitor.workspaces.size())
+        return;
 
     // Early return if already on target monitor and workspace (matches switch_workspace behavior)
     if (monitor_idx == focused_monitor_ && workspace_idx == monitor.current_workspace)

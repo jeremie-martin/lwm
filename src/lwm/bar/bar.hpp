@@ -4,13 +4,14 @@
 #include "lwm/core/connection.hpp"
 #include "lwm/core/types.hpp"
 #include <string>
+#include <vector>
 
 namespace lwm {
 
 class StatusBar
 {
 public:
-    StatusBar(Connection& conn, AppearanceConfig const& appearance);
+    StatusBar(Connection& conn, AppearanceConfig const& appearance, std::vector<std::string> workspace_names);
     ~StatusBar();
 
     StatusBar(StatusBar const&) = delete;
@@ -23,6 +24,7 @@ public:
 private:
     Connection& conn_;
     AppearanceConfig const& appearance_;
+    std::vector<std::string> workspace_names_;
     xcb_font_t font_;
     xcb_gcontext_t gc_;
 

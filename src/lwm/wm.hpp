@@ -32,17 +32,20 @@ private:
     std::vector<Monitor> monitors_;
     std::vector<xcb_window_t> dock_windows_;
     std::unordered_set<xcb_window_t> wm_unmapped_windows_;
-    size_t focused_monitor_ = 0;
+    xcb_window_t active_window_ = XCB_NONE;
+    size_t focused_monitor_ = 0; // Active monitor index (window focus tracked separately).
 
     void setup_root();
     void detect_monitors();
     void create_fallback_monitor();
     void setup_monitor_bars();
+    void init_monitor_workspaces(Monitor& monitor);
 
     void handle_event(xcb_generic_event_t const& event);
     void handle_map_request(xcb_map_request_event_t const& e);
     void handle_window_removal(xcb_window_t window);
     void handle_enter_notify(xcb_enter_notify_event_t const& e);
+    void handle_motion_notify(xcb_motion_notify_event_t const& e);
     void handle_button_press(xcb_button_press_event_t const& e);
     void handle_key_press(xcb_key_press_event_t const& e);
     void handle_client_message(xcb_client_message_event_t const& e);
@@ -52,6 +55,7 @@ private:
     void unmanage_window(xcb_window_t window);
     void focus_window(xcb_window_t window);
     void kill_window(xcb_window_t window);
+    void clear_focus();
 
     void rearrange_monitor(Monitor& monitor);
     void rearrange_all_monitors();
@@ -88,6 +92,7 @@ private:
 
     // EWMH helpers
     void setup_ewmh();
+    void update_ewmh_desktops();
     void update_ewmh_client_list();
     void update_ewmh_current_desktop();
     uint32_t get_ewmh_desktop_index(size_t monitor_idx, size_t workspace_idx) const;

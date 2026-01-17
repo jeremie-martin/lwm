@@ -15,6 +15,13 @@ terminal = "/usr/local/bin/st"
 browser = "/usr/bin/firefox"
 launcher = "rofi -show drun"
 
+[workspaces]
+# Number of workspaces per monitor (must be >= 1).
+count = 10
+# Optional names for workspaces (shown in EWMH and the internal bar).
+# If omitted, defaults to "1".."count".
+names = ["1", "2", "3", "4", "5", "6", "7", "8", "9", "10"]
+
 # Keybindings
 # mod: "super", "super+shift", "super+ctrl", etc.
 # key: X11 keysym name (e.g., "Return", "q", "ampersand", "Left", "Right")
@@ -22,7 +29,7 @@ launcher = "rofi -show drun"
 #         "focus_monitor_left", "focus_monitor_right",
 #         "move_to_monitor_left", "move_to_monitor_right"
 # command: for "spawn" action, use "terminal", "browser", "launcher", or a path
-# workspace: for "switch_workspace"/"move_to_workspace" actions, the workspace number (0-9)
+# workspace: for "switch_workspace"/"move_to_workspace" actions, the workspace index (0..count-1)
 
 # Program launching
 [[keybinds]]

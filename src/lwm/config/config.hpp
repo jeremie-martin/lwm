@@ -1,5 +1,6 @@
 #pragma once
 
+#include <cstddef>
 #include <cstdint>
 #include <optional>
 #include <string>
@@ -33,13 +34,18 @@ struct ProgramsConfig
     std::string launcher = "dmenu_run";
 };
 
+struct WorkspacesConfig
+{
+    size_t count = 10;
+    std::vector<std::string> names;
+};
+
 struct Config
 {
     AppearanceConfig appearance;
     ProgramsConfig programs;
+    WorkspacesConfig workspaces;
     std::vector<KeybindConfig> keybinds;
-
-    static constexpr int NUM_WORKSPACES = 10;
 };
 
 std::optional<Config> load_config(std::string const& path);

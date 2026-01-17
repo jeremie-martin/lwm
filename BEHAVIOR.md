@@ -14,7 +14,7 @@ LWM
 │   │   └── Window B
 │   ├── Workspace 1
 │   │   └── Window C
-│   └── ... (10 workspaces total)
+│   └── ... (configurable workspaces total)
 ├── Monitor 1 (e.g., HDMI-0)
 │   ├── Workspace 0
 │   ├── Workspace 1 (current)
@@ -23,10 +23,10 @@ LWM
 └── Dock Windows (Polybar, etc.) - not managed, just tracked for struts
 ```
 
-- Each monitor has **10 independent workspaces** (0-9)
-- Each workspace has its own **window list** and **focused window**
-- One monitor is the **focused monitor** at any time
-- EWMH desktop index = `monitor_idx * 10 + workspace_idx`
+- Each monitor has **configurable independent workspaces** (default 0-9)
+- Each workspace has its own **window list** and **remembered focused window** (last focused)
+- One monitor is the **active monitor** at any time (drives placement and workspace actions)
+- EWMH desktop index = `monitor_idx * workspaces_per_monitor + workspace_idx`
 
 ---
 
@@ -35,24 +35,27 @@ LWM
 ### What Gets Focus
 | Event | Result |
 |-------|--------|
-| Mouse enters window | Window gets focus (focus-follows-mouse) |
-| Mouse enters different monitor (even empty) | Focus moves to that monitor |
-| Click on empty monitor area | Focus moves to that monitor |
-| New window opens | New window gets focus (on focused monitor) |
+| Mouse enters managed window | Window gets focus (focus-follows-mouse) and its monitor becomes active |
+| Mouse moves onto empty area on same monitor | Focus unchanged |
+| Mouse moves onto empty area on different monitor | Active monitor changes; focused window is cleared |
+| Click on empty area on a different monitor | Active monitor updates; no window is focused |
+| New window opens | New window gets focus on the active monitor |
 | Focused window closes | Last window in workspace gets focus, or none |
 | Switch workspace | Previously focused window on that workspace gets focus |
-| Switch monitor | Focused window on target monitor's current workspace gets focus |
+| Switch monitor | Remembered focused window on target monitor's current workspace gets focus |
 
 ### Focus Tracking
-- **Per-workspace**: Each workspace remembers its `focused_window`
-- **Per-monitor**: `focused_monitor_` tracks which monitor is active
-- **Global**: `_NET_ACTIVE_WINDOW` reflects the currently focused window
+- **Per-workspace**: Each workspace remembers its last focused window
+- **Per-monitor**: The active monitor is always defined
+- **Global**: `_NET_ACTIVE_WINDOW` reflects the focused window (or none)
+- **Placement**: New windows are placed on the active monitor; pointer only updates monitor activity
 - **Visual**: Focused window has colored border; all others have black border
 
 ### Focus Rules
-1. Only ONE window has focus globally at any time
+1. Only ONE window has focus globally at any time (or none)
 2. Focus can only be on a VISIBLE window (current workspace of any monitor)
 3. If focus target is on different workspace, switch to that workspace first
+4. Active monitor is independent of focus and never ambiguous
 
 ### Monitor Focus Semantics
 This is the key behavior for multi-monitor setups:
@@ -61,14 +64,16 @@ This is the key behavior for multi-monitor setups:
    - Moving to wallpaper/gaps within the same monitor doesn't change focus
    - The previously focused window retains focus and visual indication
 
-2. **Mouse crosses to DIFFERENT monitor**: Focus moves immediately
-   - Even if the target monitor is empty (no windows)
-   - Previous window loses focus (border becomes black)
-   - New windows will spawn on the newly focused monitor
+2. **Mouse crosses to DIFFERENT monitor**: Active monitor updates immediately
+   - This happens on pointer movement alone (no click required)
+   - New windows will spawn on the newly active monitor
 
-3. **Click on empty area**: Focus moves to that monitor
-   - Clicking anywhere on the root window updates monitor focus
-   - Useful when entering an empty monitor without crossing from a window
+3. **Mouse on empty area of DIFFERENT monitor**: No window is focused
+   - The previously focused window loses focus (border becomes black)
+   - This is true even if the target monitor has windows
+
+4. **Mouse enters a window on another monitor**: That window is focused immediately
+   - The monitor is already active from (2), but focus must still be set
 
 ---
 
@@ -96,14 +101,14 @@ This is the key behavior for multi-monitor setups:
 ## Monitor Behavior
 
 ### Multi-Monitor Model
-- Monitors are independent, each with their own 10 workspaces
+- Monitors are independent, each with their own configurable workspaces
 - Monitors are sorted left-to-right by X coordinate
-- Focus can be on any monitor
+- The active monitor can be any monitor
 
-### Switching Monitor Focus (Super+Left/Right)
-1. Change `focused_monitor` to adjacent monitor (wraps around)
+### Switching Active Monitor (Super+Left/Right)
+1. Change the active monitor to the adjacent monitor (wraps around)
 2. Warp cursor to center of new monitor
-3. Focus the new monitor's current workspace's focused window
+3. Focus the new monitor's current workspace's remembered focused window
 
 ### Moving Window to Monitor (Super+Shift+Left/Right)
 1. Remove window from source monitor's current workspace
@@ -123,7 +128,7 @@ Is dock window? → Track in dock_windows_, map, update struts, DONE
     ↓
 Is dialog/menu/etc? → Map without managing, DONE
     ↓
-Add to focused monitor's current workspace
+Add to active monitor's current workspace
     ↓
 Map and arrange
     ↓
@@ -224,8 +229,8 @@ Mapped (visible) ───→ Unmapped by WM (hidden) ───┘
 | Super+Return | Launch terminal |
 | Super+d | Launch launcher (rofi) |
 | Super+q | Kill focused window |
-| Super+1-9 | Switch to workspace N on focused monitor |
-| Super+Shift+1-9 | Move focused window to workspace N |
+| Super+1-9 | Switch to workspace N on active monitor (default) |
+| Super+Shift+1-9 | Move focused window to workspace N (default) |
 | Super+Left/Right | Focus adjacent monitor |
 | Super+Shift+Left/Right | Move window to adjacent monitor |
 

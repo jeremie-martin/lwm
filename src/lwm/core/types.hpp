@@ -1,7 +1,6 @@
 #pragma once
 
 #include <algorithm>
-#include <array>
 #include <cstdint>
 #include <string>
 #include <vector>
@@ -56,7 +55,7 @@ struct Monitor
     int16_t y = 0;
     uint16_t width = 0;
     uint16_t height = 0;
-    std::array<Workspace, 10> workspaces;
+    std::vector<Workspace> workspaces;
     size_t current_workspace = 0;
     xcb_window_t bar_window = XCB_NONE;
     Strut strut = {};

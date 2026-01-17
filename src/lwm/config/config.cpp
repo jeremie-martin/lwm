@@ -4,10 +4,57 @@
 
 namespace lwm {
 
+namespace {
+
+std::vector<std::string> default_workspace_names(size_t count)
+{
+    std::vector<std::string> names;
+    names.reserve(count);
+    for (size_t i = 0; i < count; ++i)
+    {
+        names.push_back(std::to_string(i + 1));
+    }
+    return names;
+}
+
+void normalize_workspaces_config(WorkspacesConfig& workspaces, bool count_set, bool names_set)
+{
+    if (!count_set && names_set && !workspaces.names.empty())
+    {
+        workspaces.count = workspaces.names.size();
+    }
+
+    if (workspaces.count < 1)
+    {
+        workspaces.count = 1;
+    }
+
+    if (!names_set || workspaces.names.empty())
+    {
+        workspaces.names = default_workspace_names(workspaces.count);
+        return;
+    }
+
+    if (workspaces.names.size() < workspaces.count)
+    {
+        for (size_t i = workspaces.names.size(); i < workspaces.count; ++i)
+        {
+            workspaces.names.push_back(std::to_string(i + 1));
+        }
+    }
+    else if (workspaces.names.size() > workspaces.count)
+    {
+        workspaces.names.resize(workspaces.count);
+    }
+}
+
+} // namespace
+
 Config default_config()
 {
     Config cfg;
     // appearance and programs use struct defaults from config.hpp
+    cfg.workspaces.names = default_workspace_names(cfg.workspaces.count);
 
     cfg.keybinds = {
         {       "super",     "Return",                 "spawn", "terminal", -1 },
@@ -102,6 +149,28 @@ std::optional<Config> load_config(std::string const& path)
             if (auto v = (*programs)["launcher"].value<std::string>())
                 cfg.programs.launcher = *v;
         }
+
+        bool workspaces_count_set = false;
+        bool workspaces_names_set = false;
+        if (auto workspaces = tbl["workspaces"].as_table())
+        {
+            if (auto v = (*workspaces)["count"].value<int64_t>())
+            {
+                cfg.workspaces.count = (*v > 0) ? static_cast<size_t>(*v) : 1;
+                workspaces_count_set = true;
+            }
+            if (auto names = (*workspaces)["names"].as_array())
+            {
+                cfg.workspaces.names.clear();
+                for (auto const& name : *names)
+                {
+                    if (auto v = name.value<std::string>())
+                        cfg.workspaces.names.push_back(*v);
+                }
+                workspaces_names_set = true;
+            }
+        }
+        normalize_workspaces_config(cfg.workspaces, workspaces_count_set, workspaces_names_set);
 
         // Keybinds
         if (auto keybinds = tbl["keybinds"].as_array())

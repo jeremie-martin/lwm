@@ -5,7 +5,7 @@ A minimal tiling window manager for X11 written in modern C++23.
 ## Features
 
 - Master-stack tiling layout
-- Tag-based workspace system (10 tags)
+- Tag-based workspace system (configurable count)
 - TOML configuration file
 - Status bar with tag and window indicators
 - Keybinding support with modifier handling (NumLock/CapsLock aware)
@@ -62,7 +62,7 @@ Or specify a config path as argument:
 | Super + f | Launch browser |
 | Super + d | Launch dmenu |
 | Super + q | Close focused window |
-| Super + [1-0] | Switch to tag 1-10 |
+| Super + [1-0] | Switch to workspace (default 1-10; configurable) |
 | Super + Shift + m | Move window to next tag |
 
 ## Development
