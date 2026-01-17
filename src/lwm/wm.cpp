@@ -2670,7 +2670,7 @@ void WindowManager::send_wm_ping(xcb_window_t window, uint32_t timestamp)
 
 void WindowManager::send_sync_request(xcb_window_t window, uint32_t timestamp)
 {
-    if (net_wm_sync_request_ == XCB_NONE)
+    if (wm_protocols_ == XCB_NONE || net_wm_sync_request_ == XCB_NONE)
         return;
 
     auto it = sync_counters_.find(window);
@@ -2679,14 +2679,16 @@ void WindowManager::send_sync_request(xcb_window_t window, uint32_t timestamp)
 
     uint64_t value = ++sync_values_[window];
 
+    // _NET_WM_SYNC_REQUEST is sent via WM_PROTOCOLS (EWMH spec)
     xcb_client_message_event_t ev = {};
     ev.response_type = XCB_CLIENT_MESSAGE;
     ev.window = window;
-    ev.type = net_wm_sync_request_;
+    ev.type = wm_protocols_;
     ev.format = 32;
-    ev.data.data32[0] = timestamp ? timestamp : XCB_CURRENT_TIME;
-    ev.data.data32[1] = static_cast<uint32_t>(value & 0xffffffff);
-    ev.data.data32[2] = static_cast<uint32_t>((value >> 32) & 0xffffffff);
+    ev.data.data32[0] = net_wm_sync_request_;
+    ev.data.data32[1] = timestamp ? timestamp : XCB_CURRENT_TIME;
+    ev.data.data32[2] = static_cast<uint32_t>(value & 0xffffffff);
+    ev.data.data32[3] = static_cast<uint32_t>((value >> 32) & 0xffffffff);
 
     xcb_send_event(conn_.get(), 0, window, XCB_EVENT_MASK_NO_EVENT, reinterpret_cast<char*>(&ev));
 }

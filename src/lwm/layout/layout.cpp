@@ -52,16 +52,12 @@ void Layout::arrange(std::vector<Window> const& windows, Geometry const& geometr
         apply_size_hints(windows[0].id, leftWidth, leftHeight);
         configure_window(windows[0].id, baseX + padding, baseY + padding + barHeight, leftWidth, leftHeight);
 
-        uint32_t rightWidth = halfWidth;
+        // Calculate right window width from remaining space for consistent padding
+        uint32_t rightX = baseX + padding + leftWidth + padding;
+        uint32_t rightWidth = safe_sub(screenWidth, leftWidth + 3 * padding);
         uint32_t rightHeight = winHeight;
         apply_size_hints(windows[1].id, rightWidth, rightHeight);
-        configure_window(
-            windows[1].id,
-            baseX + padding + halfWidth + padding,
-            baseY + padding + barHeight,
-            rightWidth,
-            rightHeight
-        );
+        configure_window(windows[1].id, rightX, baseY + padding + barHeight, rightWidth, rightHeight);
     }
     else
     {
@@ -74,22 +70,23 @@ void Layout::arrange(std::vector<Window> const& windows, Geometry const& geometr
         apply_size_hints(windows[0].id, masterWidth, masterH);
         configure_window(windows[0].id, baseX + padding, baseY + padding + barHeight, masterWidth, masterH);
 
+        // Stack windows on right, positioned relative to actual master width
+        int32_t stackX = baseX + padding + masterWidth + padding;
+        uint32_t stackAvailWidth = safe_sub(screenWidth, masterWidth + 3 * padding);
+
         size_t stackCount = windows.size() - 1;
         uint32_t totalStackPadding = static_cast<uint32_t>((stackCount + 1) * padding);
-        uint32_t stackHeight = safe_sub(screenHeight, totalStackPadding) / stackCount;
+        uint32_t stackSlotHeight = safe_sub(screenHeight, totalStackPadding) / stackCount;
 
+        // Track Y position for sequential placement with consistent padding
+        int32_t currentY = baseY + padding + barHeight;
         for (size_t i = 1; i < windows.size(); ++i)
         {
-            uint32_t stackWidth = halfWidth;
-            uint32_t stackH = stackHeight;
+            uint32_t stackWidth = stackAvailWidth;
+            uint32_t stackH = stackSlotHeight;
             apply_size_hints(windows[i].id, stackWidth, stackH);
-            configure_window(
-                windows[i].id,
-                baseX + padding + halfWidth + padding,
-                baseY + padding + barHeight + static_cast<int32_t>((i - 1) * (stackHeight + padding)),
-                stackWidth,
-                stackH
-            );
+            configure_window(windows[i].id, stackX, currentY, stackWidth, stackH);
+            currentY += stackH + padding;
         }
     }
 
