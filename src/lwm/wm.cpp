@@ -388,6 +388,13 @@ void WindowManager::handle_randr_screen_change()
     focused_monitor_ = 0;
     update_ewmh_current_desktop();
     rearrange_all_monitors();
+
+    // Focus a window after reconfiguration (Bug fix: was leaving focus unset)
+    if (!monitors_.empty())
+    {
+        focus_or_fallback(monitors_[0]);
+    }
+
     update_all_bars();
     conn_.flush();
 }
@@ -705,7 +712,16 @@ void WindowManager::move_window_to_monitor(int direction)
 
     Window moved_window = *it;
     source_ws.windows.erase(it);
-    source_ws.focused_window = XCB_NONE;
+
+    // Update source workspace's focused_window to another window if any remain
+    if (!source_ws.windows.empty())
+    {
+        source_ws.focused_window = source_ws.windows.back().id;
+    }
+    else
+    {
+        source_ws.focused_window = XCB_NONE;
+    }
 
     auto& target_monitor = monitors_[target_idx];
     target_monitor.current().windows.push_back(moved_window);
@@ -945,6 +961,7 @@ void WindowManager::clear_all_borders()
             }
         }
     }
+    conn_.flush();
 }
 
 } // namespace lwm
