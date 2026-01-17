@@ -26,10 +26,10 @@ StatusBar::~StatusBar()
 
 xcb_window_t StatusBar::create_for_monitor(Monitor const& monitor)
 {
-    uint32_t mask = XCB_CW_BACK_PIXEL | XCB_CW_EVENT_MASK;
-    uint32_t values[2] = { appearance_.status_bar_color,
-                           XCB_EVENT_MASK_EXPOSURE | XCB_EVENT_MASK_BUTTON_PRESS | XCB_EVENT_MASK_ENTER_WINDOW
-                               | XCB_EVENT_MASK_POINTER_MOTION };
+    uint32_t event_mask = XCB_EVENT_MASK_EXPOSURE | XCB_EVENT_MASK_BUTTON_PRESS | XCB_EVENT_MASK_ENTER_WINDOW
+        | XCB_EVENT_MASK_POINTER_MOTION;
+    uint32_t mask = XCB_CW_BACK_PIXEL | XCB_CW_OVERRIDE_REDIRECT | XCB_CW_EVENT_MASK;
+    uint32_t values[3] = { appearance_.status_bar_color, 1, event_mask };
 
     xcb_window_t window = xcb_generate_id(conn_.get());
     xcb_create_window(
