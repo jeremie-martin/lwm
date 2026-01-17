@@ -37,10 +37,20 @@ private:
     {
         bool active = false;
         bool resizing = false;
+        bool tiled = false;
         xcb_window_t window = XCB_NONE;
         int16_t start_root_x = 0;
         int16_t start_root_y = 0;
+        int16_t last_root_x = 0;
+        int16_t last_root_y = 0;
         Geometry start_geometry;
+    };
+
+    struct MouseBinding
+    {
+        uint16_t modifier = 0;
+        uint8_t button = 0;
+        std::string action;
     };
 
     struct FullscreenMonitors
@@ -99,11 +109,13 @@ private:
     bool suppress_focus_ = false;
     uint32_t last_event_time_ = XCB_CURRENT_TIME;
     DragState drag_state_;
+    std::vector<MouseBinding> mousebinds_;
 
     void create_wm_window();
     void setup_root();
     void grab_buttons();
     void claim_wm_ownership();
+    void init_mousebinds();
     void detect_monitors();
     void create_fallback_monitor();
     void setup_monitor_bars();
@@ -175,8 +187,10 @@ private:
     void apply_floating_geometry(FloatingWindow const& window);
     void send_configure_notify(xcb_window_t window);
     void begin_drag(xcb_window_t window, bool resize, int16_t root_x, int16_t root_y);
+    void begin_tiled_drag(xcb_window_t window, int16_t root_x, int16_t root_y);
     void update_drag(int16_t root_x, int16_t root_y);
     void end_drag();
+    MouseBinding const* resolve_mouse_binding(uint16_t state, uint8_t button) const;
     bool supports_protocol(xcb_window_t window, xcb_atom_t protocol) const;
     bool should_set_input_focus(xcb_window_t window) const;
     void send_wm_take_focus(xcb_window_t window, uint32_t timestamp);

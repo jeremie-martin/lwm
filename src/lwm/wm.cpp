@@ -7,6 +7,7 @@
 #include <csignal>
 #include <cstdlib>
 #include <cstring>
+#include <limits>
 #include <memory>
 #include <poll.h>
 #include <sys/wait.h>
@@ -74,6 +75,7 @@ WindowManager::WindowManager(Config config)
       )
 {
     setup_signal_handlers();
+    init_mousebinds();
     create_wm_window();
     setup_root();
     grab_buttons();
@@ -200,19 +202,40 @@ void WindowManager::create_wm_window()
     );
 }
 
+void WindowManager::init_mousebinds()
+{
+    mousebinds_.clear();
+    mousebinds_.reserve(config_.mousebinds.size());
+
+    for (auto const& mb : config_.mousebinds)
+    {
+        if (mb.button <= 0 || mb.button > std::numeric_limits<uint8_t>::max())
+            continue;
+        if (mb.action.empty())
+            continue;
+
+        MouseBinding binding;
+        binding.modifier = KeybindManager::parse_modifier(mb.mod);
+        binding.button = static_cast<uint8_t>(mb.button);
+        binding.action = mb.action;
+        mousebinds_.push_back(std::move(binding));
+    }
+}
+
 void WindowManager::grab_buttons()
 {
     xcb_window_t root = conn_.screen()->root;
     xcb_ungrab_button(conn_.get(), XCB_BUTTON_INDEX_ANY, root, XCB_MOD_MASK_ANY);
 
-    uint16_t buttons[] = { XCB_BUTTON_INDEX_1, XCB_BUTTON_INDEX_3 };
-    uint16_t modifiers[] = { XCB_MOD_MASK_4,
-                             static_cast<uint16_t>(XCB_MOD_MASK_4 | XCB_MOD_MASK_2),
-                             static_cast<uint16_t>(XCB_MOD_MASK_4 | XCB_MOD_MASK_LOCK),
-                             static_cast<uint16_t>(XCB_MOD_MASK_4 | XCB_MOD_MASK_2 | XCB_MOD_MASK_LOCK) };
-
-    for (auto button : buttons)
+    for (auto const& binding : mousebinds_)
     {
+        uint16_t modifiers[] = {
+            binding.modifier,
+            static_cast<uint16_t>(binding.modifier | XCB_MOD_MASK_2),
+            static_cast<uint16_t>(binding.modifier | XCB_MOD_MASK_LOCK),
+            static_cast<uint16_t>(binding.modifier | XCB_MOD_MASK_2 | XCB_MOD_MASK_LOCK)
+        };
+
         for (auto mod : modifiers)
         {
             xcb_grab_button(
@@ -224,7 +247,7 @@ void WindowManager::grab_buttons()
                 XCB_GRAB_MODE_ASYNC,
                 XCB_NONE,
                 XCB_NONE,
-                button,
+                binding.button,
                 mod
             );
         }
@@ -718,28 +741,49 @@ void WindowManager::handle_motion_notify(xcb_motion_notify_event_t const& e)
     update_focused_monitor_at_point(e.root_x, e.root_y);
 }
 
+WindowManager::MouseBinding const* WindowManager::resolve_mouse_binding(uint16_t state, uint8_t button) const
+{
+    uint16_t clean_mod = state & ~(XCB_MOD_MASK_LOCK | XCB_MOD_MASK_2);
+    for (auto const& binding : mousebinds_)
+    {
+        if (binding.button == button && binding.modifier == clean_mod)
+            return &binding;
+    }
+    return nullptr;
+}
+
 void WindowManager::handle_button_press(xcb_button_press_event_t const& e)
 {
-    uint16_t clean_mod = e.state & ~(XCB_MOD_MASK_LOCK | XCB_MOD_MASK_2);
     xcb_window_t target = e.event;
     if (target == conn_.screen()->root && e.child != XCB_NONE)
         target = e.child;
 
-    if (clean_mod & XCB_MOD_MASK_4)
+    if (auto const* binding = resolve_mouse_binding(e.state, e.detail))
     {
-        if (find_floating_window(target))
+        if (binding->action == "drag_window")
         {
-            bool is_resize = e.detail == XCB_BUTTON_INDEX_3;
-            bool is_move = e.detail == XCB_BUTTON_INDEX_1;
-            if (is_move || is_resize)
+            if (find_floating_window(target))
             {
                 focus_floating_window(target);
-                begin_drag(target, is_resize, e.root_x, e.root_y);
+                begin_drag(target, false, e.root_x, e.root_y);
+                return;
+            }
+            if (monitor_containing_window(target))
+            {
+                focus_window(target);
+                begin_tiled_drag(target, e.root_x, e.root_y);
                 return;
             }
         }
-        if (monitor_containing_window(target))
-            return;
+        else if (binding->action == "resize_floating")
+        {
+            if (find_floating_window(target))
+            {
+                focus_floating_window(target);
+                begin_drag(target, true, e.root_x, e.root_y);
+                return;
+            }
+        }
     }
 
     // Only handle clicks on root window (empty areas or gaps)
@@ -750,11 +794,13 @@ void WindowManager::handle_button_press(xcb_button_press_event_t const& e)
     update_focused_monitor_at_point(e.root_x, e.root_y);
 }
 
-void WindowManager::handle_button_release(xcb_button_release_event_t const& /*e*/)
+void WindowManager::handle_button_release(xcb_button_release_event_t const& e)
 {
     if (!drag_state_.active)
         return;
 
+    drag_state_.last_root_x = e.root_x;
+    drag_state_.last_root_y = e.root_y;
     end_drag();
 }
 
@@ -3006,11 +3052,55 @@ void WindowManager::begin_drag(xcb_window_t window, bool resize, int16_t root_x,
         return;
 
     drag_state_.active = true;
+    drag_state_.tiled = false;
     drag_state_.resizing = resize;
     drag_state_.window = window;
     drag_state_.start_root_x = root_x;
     drag_state_.start_root_y = root_y;
+    drag_state_.last_root_x = root_x;
+    drag_state_.last_root_y = root_y;
     drag_state_.start_geometry = floating_window->geometry;
+
+    xcb_grab_pointer(
+        conn_.get(),
+        0,
+        conn_.screen()->root,
+        XCB_EVENT_MASK_POINTER_MOTION | XCB_EVENT_MASK_BUTTON_RELEASE,
+        XCB_GRAB_MODE_ASYNC,
+        XCB_GRAB_MODE_ASYNC,
+        XCB_NONE,
+        XCB_NONE,
+        XCB_CURRENT_TIME
+    );
+    conn_.flush();
+}
+
+void WindowManager::begin_tiled_drag(xcb_window_t window, int16_t root_x, int16_t root_y)
+{
+    if (showing_desktop_)
+        return;
+    if (fullscreen_windows_.contains(window))
+        return;
+    if (find_floating_window(window))
+        return;
+    if (!monitor_containing_window(window))
+        return;
+
+    auto geom_cookie = xcb_get_geometry(conn_.get(), window);
+    auto* geom_reply = xcb_get_geometry_reply(conn_.get(), geom_cookie, nullptr);
+    if (!geom_reply)
+        return;
+
+    drag_state_.active = true;
+    drag_state_.tiled = true;
+    drag_state_.resizing = false;
+    drag_state_.window = window;
+    drag_state_.start_root_x = root_x;
+    drag_state_.start_root_y = root_y;
+    drag_state_.last_root_x = root_x;
+    drag_state_.last_root_y = root_y;
+    drag_state_.start_geometry = { geom_reply->x, geom_reply->y, geom_reply->width, geom_reply->height };
+    free(geom_reply);
 
     xcb_grab_pointer(
         conn_.get(),
@@ -3030,6 +3120,21 @@ void WindowManager::update_drag(int16_t root_x, int16_t root_y)
 {
     if (!drag_state_.active)
         return;
+
+    drag_state_.last_root_x = root_x;
+    drag_state_.last_root_y = root_y;
+
+    if (drag_state_.tiled)
+    {
+        int32_t dx = static_cast<int32_t>(root_x) - static_cast<int32_t>(drag_state_.start_root_x);
+        int32_t dy = static_cast<int32_t>(root_y) - static_cast<int32_t>(drag_state_.start_root_y);
+        int32_t new_x = static_cast<int32_t>(drag_state_.start_geometry.x) + dx;
+        int32_t new_y = static_cast<int32_t>(drag_state_.start_geometry.y) + dy;
+        uint32_t values[] = { static_cast<uint32_t>(new_x), static_cast<uint32_t>(new_y) };
+        xcb_configure_window(conn_.get(), drag_state_.window, XCB_CONFIG_WINDOW_X | XCB_CONFIG_WINDOW_Y, values);
+        conn_.flush();
+        return;
+    }
 
     auto* floating_window = find_floating_window(drag_state_.window);
     if (!floating_window)
@@ -3077,7 +3182,83 @@ void WindowManager::end_drag()
     if (!drag_state_.active)
         return;
 
+    if (drag_state_.tiled)
+    {
+        xcb_window_t window = drag_state_.window;
+        auto source_monitor_idx = monitor_index_for_window(window);
+        auto source_workspace_idx = workspace_index_for_window(window);
+        if (source_monitor_idx && source_workspace_idx && !monitors_.empty())
+        {
+            auto target_monitor =
+                focus::monitor_index_at_point(monitors_, drag_state_.last_root_x, drag_state_.last_root_y);
+            size_t target_monitor_idx = target_monitor.value_or(*source_monitor_idx);
+            if (target_monitor_idx < monitors_.size())
+            {
+                size_t target_workspace_idx = monitors_[target_monitor_idx].current_workspace;
+                bool same_workspace = *source_monitor_idx == target_monitor_idx
+                    && *source_workspace_idx == target_workspace_idx;
+
+                auto& source_ws = monitors_[*source_monitor_idx].workspaces[*source_workspace_idx];
+                auto source_it = source_ws.find_window(window);
+                if (source_it != source_ws.windows.end())
+                {
+                    Window moved_window = *source_it;
+
+                    auto& target_ws = monitors_[target_monitor_idx].workspaces[target_workspace_idx];
+                    size_t layout_count = target_ws.windows.size();
+                    if (!same_workspace)
+                        layout_count += 1;
+
+                    source_ws.windows.erase(source_it);
+
+                    size_t target_index = 0;
+                    if (layout_count > 0)
+                    {
+                        target_index = layout_.drop_target_index(
+                            layout_count,
+                            monitors_[target_monitor_idx].working_area(),
+                            bar_.has_value(),
+                            drag_state_.last_root_x,
+                            drag_state_.last_root_y
+                        );
+                    }
+
+                    size_t insert_index = std::min(target_index, target_ws.windows.size());
+                    target_ws.windows.insert(target_ws.windows.begin() + insert_index, moved_window);
+                    target_ws.focused_window = window;
+
+                    if (!same_workspace && source_ws.focused_window == window)
+                    {
+                        source_ws.focused_window =
+                            source_ws.windows.empty() ? XCB_NONE : source_ws.windows.back().id;
+                    }
+
+                    if (!same_workspace)
+                    {
+                        uint32_t desktop = get_ewmh_desktop_index(target_monitor_idx, target_workspace_idx);
+                        ewmh_.set_window_desktop(window, desktop);
+                    }
+
+                    if (*source_monitor_idx == target_monitor_idx)
+                    {
+                        rearrange_monitor(monitors_[target_monitor_idx]);
+                    }
+                    else
+                    {
+                        rearrange_monitor(monitors_[*source_monitor_idx]);
+                        rearrange_monitor(monitors_[target_monitor_idx]);
+                    }
+
+                    update_ewmh_client_list();
+                    update_all_bars();
+                    focus_window(window);
+                }
+            }
+        }
+    }
+
     drag_state_.active = false;
+    drag_state_.tiled = false;
     drag_state_.window = XCB_NONE;
     xcb_ungrab_pointer(conn_.get(), XCB_CURRENT_TIME);
     conn_.flush();

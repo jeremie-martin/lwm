@@ -17,6 +17,13 @@ struct KeybindConfig
     int workspace = -1;
 };
 
+struct MousebindConfig
+{
+    std::string mod;
+    int button = 0;
+    std::string action;
+};
+
 struct AppearanceConfig
 {
     uint32_t padding = 10;
@@ -46,6 +53,7 @@ struct Config
     ProgramsConfig programs;
     WorkspacesConfig workspaces;
     std::vector<KeybindConfig> keybinds;
+    std::vector<MousebindConfig> mousebinds;
 };
 
 std::optional<Config> load_config(std::string const& path);

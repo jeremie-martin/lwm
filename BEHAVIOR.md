@@ -108,6 +108,39 @@ Menus, tooltips, notifications, and other short-lived popups are mapped but not 
 
 ---
 
+## Tiled Window Drag-Reorder (Planned)
+
+This feature allows repositioning a tiled window with the mouse **without** converting it to floating.
+
+### Activation
+- Hold a configurable modifier + primary mouse button on a **tiled** window to start a drag
+- Floating windows keep their existing move/resize behavior
+
+### During Drag
+- The dragged window follows the pointer (temporary geometry)
+- The tiling layout is **not** recomputed until drop
+- Other windows remain in place
+- Focus stays on the dragged window; active monitor does not change until drop
+
+### Drop Behavior
+1. Determine the target monitor under the pointer (fallback: source monitor)
+2. Target workspace is the **current** workspace of that monitor (never a hidden workspace)
+3. Insert the window at the slot determined by the active layout
+4. Recompute layout and focus the dragged window
+
+### Layout Slot Mapping
+- Each layout defines how a drop position maps to an insertion index
+- Current master-stack layout:
+  - Drop in master region → index 0 (becomes master)
+  - Drop in stack region → index based on vertical position within the stack
+  - With 2 windows, left/right regions map to indices 0/1
+
+### Multi-Monitor
+- Dropping on another monitor moves the window to that monitor’s current workspace
+- `_NET_WM_DESKTOP` is updated to match the new monitor/workspace
+
+---
+
 ## Workspace Behavior
 
 ### Visibility

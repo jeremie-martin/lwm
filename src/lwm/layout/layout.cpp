@@ -1,4 +1,5 @@
 #include "layout.hpp"
+#include <limits>
 #include <xcb/xcb_icccm.h>
 
 namespace lwm {
@@ -10,8 +11,34 @@ Layout::Layout(Connection& conn, AppearanceConfig const& appearance)
 
 void Layout::arrange(std::vector<Window> const& windows, Geometry const& geometry, bool has_internal_bar)
 {
-    if (windows.empty())
+    auto slots = calculate_slots(windows.size(), geometry, has_internal_bar);
+    if (slots.empty())
         return;
+
+    for (size_t i = 0; i < windows.size(); ++i)
+    {
+        uint32_t width = slots[i].width;
+        uint32_t height = slots[i].height;
+        apply_size_hints(windows[i].id, width, height);
+        configure_window(windows[i].id, slots[i].x, slots[i].y, width, height);
+    }
+
+    // Map all windows AFTER configuring (ensures correct geometry on map)
+    for (auto const& window : windows)
+    {
+        xcb_map_window(conn_.get(), window.id);
+    }
+
+    conn_.flush();
+}
+
+std::vector<Geometry> Layout::calculate_slots(size_t count, Geometry const& geometry, bool has_internal_bar) const
+{
+    std::vector<Geometry> slots;
+    if (count == 0)
+        return slots;
+
+    slots.reserve(count);
 
     // Minimum window dimensions to prevent underflow
     constexpr uint32_t MIN_DIM = 50;
@@ -35,14 +62,18 @@ void Layout::arrange(std::vector<Window> const& windows, Geometry const& geometr
     // Visual gap = padding, so client position = base + padding + border
     // Client width = available - 2*padding - 2*border (for both sides)
 
-    if (windows.size() == 1)
+    if (count == 1)
     {
         uint32_t width = safe_sub(screenWidth, 2 * padding + 2 * border);
         uint32_t height = safe_sub(screenHeight, 2 * padding + 2 * border);
-        apply_size_hints(windows[0].id, width, height);
-        configure_window(windows[0].id, baseX + padding + border, baseY + padding + border + barHeight, width, height);
+        slots.push_back(
+            { static_cast<int16_t>(baseX + padding + border),
+              static_cast<int16_t>(baseY + padding + border + barHeight),
+              static_cast<uint16_t>(width),
+              static_cast<uint16_t>(height) }
+        );
     }
-    else if (windows.size() == 2)
+    else if (count == 2)
     {
         // Two windows side by side: padding | border | win1 | border | padding | border | win2 | border | padding
         // Total borders: 4 * border (2 per window)
@@ -54,18 +85,20 @@ void Layout::arrange(std::vector<Window> const& windows, Geometry const& geometr
         uint32_t winHeight = safe_sub(screenHeight, 2 * padding + 2 * border);
 
         uint32_t leftWidth = halfWidth;
-        uint32_t leftHeight = winHeight;
-        apply_size_hints(windows[0].id, leftWidth, leftHeight);
         int32_t leftX = baseX + padding + border;
         int32_t leftY = baseY + padding + border + barHeight;
-        configure_window(windows[0].id, leftX, leftY, leftWidth, leftHeight);
+        slots.push_back(
+            { static_cast<int16_t>(leftX), static_cast<int16_t>(leftY), static_cast<uint16_t>(leftWidth),
+              static_cast<uint16_t>(winHeight) }
+        );
 
         // Right window position accounts for left window's actual size + borders
         uint32_t rightWidth = safe_sub(availWidth, leftWidth);
-        uint32_t rightHeight = winHeight;
-        apply_size_hints(windows[1].id, rightWidth, rightHeight);
         int32_t rightX = leftX + leftWidth + border + padding + border;
-        configure_window(windows[1].id, rightX, leftY, rightWidth, rightHeight);
+        slots.push_back(
+            { static_cast<int16_t>(rightX), static_cast<int16_t>(leftY), static_cast<uint16_t>(rightWidth),
+              static_cast<uint16_t>(winHeight) }
+        );
     }
     else
     {
@@ -78,16 +111,18 @@ void Layout::arrange(std::vector<Window> const& windows, Geometry const& geometr
 
         uint32_t masterWidth = halfWidth;
         uint32_t masterHeight = safe_sub(screenHeight, 2 * padding + 2 * border);
-        apply_size_hints(windows[0].id, masterWidth, masterHeight);
         int32_t masterX = baseX + padding + border;
         int32_t masterY = baseY + padding + border + barHeight;
-        configure_window(windows[0].id, masterX, masterY, masterWidth, masterHeight);
+        slots.push_back(
+            { static_cast<int16_t>(masterX), static_cast<int16_t>(masterY), static_cast<uint16_t>(masterWidth),
+              static_cast<uint16_t>(masterHeight) }
+        );
 
         // Stack windows on right
         int32_t stackX = masterX + masterWidth + border + padding + border;
         uint32_t stackAvailWidth = safe_sub(availWidth, masterWidth);
 
-        size_t stackCount = windows.size() - 1;
+        size_t stackCount = count - 1;
         // Vertical: (stackCount + 1) paddings, stackCount * 2 borders
         uint32_t totalVPadding = static_cast<uint32_t>((stackCount + 1) * padding);
         uint32_t totalVBorders = static_cast<uint32_t>(stackCount * 2 * border);
@@ -95,23 +130,59 @@ void Layout::arrange(std::vector<Window> const& windows, Geometry const& geometr
         uint32_t stackSlotHeight = stackAvailHeight / stackCount;
 
         int32_t currentY = baseY + padding + border + barHeight;
-        for (size_t i = 1; i < windows.size(); ++i)
+        for (size_t i = 1; i < count; ++i)
         {
-            uint32_t stackWidth = stackAvailWidth;
-            uint32_t stackH = stackSlotHeight;
-            apply_size_hints(windows[i].id, stackWidth, stackH);
-            configure_window(windows[i].id, stackX, currentY, stackWidth, stackH);
-            currentY += stackH + border + padding + border;
+            slots.push_back(
+                { static_cast<int16_t>(stackX), static_cast<int16_t>(currentY), static_cast<uint16_t>(stackAvailWidth),
+                  static_cast<uint16_t>(stackSlotHeight) }
+            );
+            currentY += stackSlotHeight + border + padding + border;
         }
     }
 
-    // Map all windows AFTER configuring (ensures correct geometry on map)
-    for (auto const& window : windows)
+    return slots;
+}
+
+size_t Layout::drop_target_index(size_t count, Geometry const& geometry, bool has_internal_bar, int16_t x, int16_t y) const
+{
+    auto slots = calculate_slots(count, geometry, has_internal_bar);
+    if (slots.empty())
+        return 0;
+
+    size_t best_idx = 0;
+    int64_t best_dist = std::numeric_limits<int64_t>::max();
+    int32_t px = x;
+    int32_t py = y;
+
+    for (size_t i = 0; i < slots.size(); ++i)
     {
-        xcb_map_window(conn_.get(), window.id);
+        auto const& slot = slots[i];
+        int32_t left = slot.x;
+        int32_t top = slot.y;
+        int32_t right = slot.x + static_cast<int32_t>(slot.width);
+        int32_t bottom = slot.y + static_cast<int32_t>(slot.height);
+
+        int32_t dx = 0;
+        if (px < left)
+            dx = left - px;
+        else if (px > right)
+            dx = px - right;
+
+        int32_t dy = 0;
+        if (py < top)
+            dy = top - py;
+        else if (py > bottom)
+            dy = py - bottom;
+
+        int64_t dist = static_cast<int64_t>(dx) * dx + static_cast<int64_t>(dy) * dy;
+        if (dist < best_dist)
+        {
+            best_dist = dist;
+            best_idx = i;
+        }
     }
 
-    conn_.flush();
+    return best_idx;
 }
 
 void Layout::configure_window(xcb_window_t window, int32_t x, int32_t y, uint32_t width, uint32_t height)

@@ -112,6 +112,11 @@ Config default_config()
         { "super+shift",      "Right", "move_to_monitor_right",         "", -1 },
     };
 
+    cfg.mousebinds = {
+        { "super", 1, "drag_window" },
+        { "super", 3, "resize_floating" },
+    };
+
     return cfg;
 }
 
@@ -192,6 +197,26 @@ std::optional<Config> load_config(std::string const& path)
                     if (auto v = (*kb)["workspace"].value<int64_t>())
                         keybind.workspace = static_cast<int>(*v);
                     cfg.keybinds.push_back(keybind);
+                }
+            }
+        }
+
+        // Mousebinds
+        if (auto mousebinds = tbl["mousebinds"].as_array())
+        {
+            cfg.mousebinds.clear();
+            for (auto const& item : *mousebinds)
+            {
+                if (auto mb = item.as_table())
+                {
+                    MousebindConfig mousebind;
+                    if (auto v = (*mb)["mod"].value<std::string>())
+                        mousebind.mod = *v;
+                    if (auto v = (*mb)["button"].value<int64_t>())
+                        mousebind.button = static_cast<int>(*v);
+                    if (auto v = (*mb)["action"].value<std::string>())
+                        mousebind.action = *v;
+                    cfg.mousebinds.push_back(mousebind);
                 }
             }
         }

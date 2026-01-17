@@ -18,11 +18,12 @@ public:
 
     std::string resolve_command(std::string const& command, Config const& config) const;
 
+    static uint16_t parse_modifier(std::string const& mod);
+
 private:
     Connection& conn_;
     std::map<KeyBinding, Action> bindings_;
 
-    static uint16_t parse_modifier(std::string const& mod);
     static xcb_keysym_t parse_keysym(std::string const& key);
 };
 

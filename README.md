@@ -54,6 +54,8 @@ Or specify a config path as argument:
 ./lwm /path/to/config.toml
 ```
 
+Mouse bindings can be configured via `[[mousebinds]]` in the config (e.g., `drag_window`, `resize_floating`).
+
 ## Default Keybindings (AZERTY)
 
 | Key | Action |
