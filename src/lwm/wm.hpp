@@ -43,6 +43,7 @@ private:
     void handle_map_request(xcb_map_request_event_t const& e);
     void handle_window_removal(xcb_window_t window);
     void handle_enter_notify(xcb_enter_notify_event_t const& e);
+    void handle_button_press(xcb_button_press_event_t const& e);
     void handle_key_press(xcb_key_press_event_t const& e);
     void handle_client_message(xcb_client_message_event_t const& e);
     void handle_randr_screen_change();
@@ -73,6 +74,8 @@ private:
     void focus_or_fallback(Monitor& monitor);
     Monitor* monitor_containing_window(xcb_window_t window);
     Monitor* monitor_at_point(int16_t x, int16_t y);
+    std::optional<size_t> monitor_index_at_point(int16_t x, int16_t y);
+    void update_focused_monitor_at_point(int16_t x, int16_t y);
     std::string get_window_name(xcb_window_t window);
     void update_all_bars();
 

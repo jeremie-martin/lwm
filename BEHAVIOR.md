@@ -36,13 +36,16 @@ LWM
 | Event | Result |
 |-------|--------|
 | Mouse enters window | Window gets focus (focus-follows-mouse) |
-| New window opens | New window gets focus |
+| Mouse enters different monitor (even empty) | Focus moves to that monitor |
+| Click on empty monitor area | Focus moves to that monitor |
+| New window opens | New window gets focus (on focused monitor) |
 | Focused window closes | Last window in workspace gets focus, or none |
 | Switch workspace | Previously focused window on that workspace gets focus |
 | Switch monitor | Focused window on target monitor's current workspace gets focus |
 
 ### Focus Tracking
 - **Per-workspace**: Each workspace remembers its `focused_window`
+- **Per-monitor**: `focused_monitor_` tracks which monitor is active
 - **Global**: `_NET_ACTIVE_WINDOW` reflects the currently focused window
 - **Visual**: Focused window has colored border; all others have black border
 
@@ -50,6 +53,22 @@ LWM
 1. Only ONE window has focus globally at any time
 2. Focus can only be on a VISIBLE window (current workspace of any monitor)
 3. If focus target is on different workspace, switch to that workspace first
+
+### Monitor Focus Semantics
+This is the key behavior for multi-monitor setups:
+
+1. **Mouse in gaps on SAME monitor**: Focus stays on current window
+   - Moving to wallpaper/gaps within the same monitor doesn't change focus
+   - The previously focused window retains focus and visual indication
+
+2. **Mouse crosses to DIFFERENT monitor**: Focus moves immediately
+   - Even if the target monitor is empty (no windows)
+   - Previous window loses focus (border becomes black)
+   - New windows will spawn on the newly focused monitor
+
+3. **Click on empty area**: Focus moves to that monitor
+   - Clicking anywhere on the root window updates monitor focus
+   - Useful when entering an empty monitor without crossing from a window
 
 ---
 

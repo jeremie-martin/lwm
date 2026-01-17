@@ -65,7 +65,7 @@ void WindowManager::setup_root()
 {
     uint32_t values[] = { XCB_EVENT_MASK_SUBSTRUCTURE_REDIRECT | XCB_EVENT_MASK_SUBSTRUCTURE_NOTIFY
                           | XCB_EVENT_MASK_ENTER_WINDOW | XCB_EVENT_MASK_LEAVE_WINDOW | XCB_EVENT_MASK_STRUCTURE_NOTIFY
-                          | XCB_EVENT_MASK_PROPERTY_CHANGE };
+                          | XCB_EVENT_MASK_PROPERTY_CHANGE | XCB_EVENT_MASK_BUTTON_PRESS };
     xcb_change_window_attributes(conn_.get(), conn_.screen()->root, XCB_CW_EVENT_MASK, values);
 
     if (conn_.has_randr())
@@ -204,6 +204,9 @@ void WindowManager::handle_event(xcb_generic_event_t const& event)
         case XCB_ENTER_NOTIFY:
             handle_enter_notify(reinterpret_cast<xcb_enter_notify_event_t const&>(event));
             break;
+        case XCB_BUTTON_PRESS:
+            handle_button_press(reinterpret_cast<xcb_button_press_event_t const&>(event));
+            break;
         case XCB_KEY_PRESS:
             handle_key_press(reinterpret_cast<xcb_key_press_event_t const&>(event));
             break;
@@ -249,6 +252,10 @@ void WindowManager::handle_window_removal(xcb_window_t window)
 
 void WindowManager::handle_enter_notify(xcb_enter_notify_event_t const& e)
 {
+    // Only handle normal mode (not grab/ungrab)
+    if (e.mode != XCB_NOTIFY_MODE_NORMAL)
+        return;
+
     // Ignore internal bar windows
     for (auto const& monitor : monitors_)
     {
@@ -260,10 +267,27 @@ void WindowManager::handle_enter_notify(xcb_enter_notify_event_t const& e)
     if (std::ranges::find(dock_windows_, e.event) != dock_windows_.end())
         return;
 
-    if (e.event != conn_.screen()->root && e.mode == XCB_NOTIFY_MODE_NORMAL)
+    // Case 1: Entering a managed window - focus-follows-mouse
+    if (e.event != conn_.screen()->root)
     {
         focus_window(e.event);
+        return;
     }
+
+    // Case 2: Entering root window (gaps or empty monitor area)
+    // This happens when cursor leaves a managed window and enters root
+    // Update focused monitor based on pointer position
+    update_focused_monitor_at_point(e.root_x, e.root_y);
+}
+
+void WindowManager::handle_button_press(xcb_button_press_event_t const& e)
+{
+    // Only handle clicks on root window (empty areas or gaps)
+    if (e.event != conn_.screen()->root)
+        return;
+
+    // Update focused monitor based on click position
+    update_focused_monitor_at_point(e.root_x, e.root_y);
 }
 
 void WindowManager::handle_key_press(xcb_key_press_event_t const& e)
@@ -779,6 +803,50 @@ Monitor* WindowManager::monitor_at_point(int16_t x, int16_t y)
         }
     }
     return monitors_.empty() ? nullptr : &monitors_[0];
+}
+
+std::optional<size_t> WindowManager::monitor_index_at_point(int16_t x, int16_t y)
+{
+    for (size_t i = 0; i < monitors_.size(); ++i)
+    {
+        auto const& monitor = monitors_[i];
+        if (x >= monitor.x && x < monitor.x + monitor.width && y >= monitor.y && y < monitor.y + monitor.height)
+        {
+            return i;
+        }
+    }
+    return std::nullopt;
+}
+
+void WindowManager::update_focused_monitor_at_point(int16_t x, int16_t y)
+{
+    auto new_monitor_idx = monitor_index_at_point(x, y);
+    if (!new_monitor_idx)
+        return;
+
+    // Only act if we crossed to a different monitor
+    if (*new_monitor_idx == focused_monitor_)
+        return;
+
+    // We crossed monitors - unfocus current window and update focus
+    clear_all_borders();
+    focused_monitor_ = *new_monitor_idx;
+    update_ewmh_current_desktop();
+
+    // Focus a window on the new monitor if any, otherwise set no active window
+    auto& ws = focused_monitor().current();
+    if (!ws.windows.empty())
+    {
+        xcb_window_t to_focus = (ws.focused_window != XCB_NONE) ? ws.focused_window : ws.windows.back().id;
+        focus_window(to_focus);
+    }
+    else
+    {
+        ewmh_.set_active_window(XCB_NONE);
+    }
+
+    update_all_bars();
+    conn_.flush();
 }
 
 std::string WindowManager::get_window_name(xcb_window_t window)
