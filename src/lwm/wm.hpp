@@ -206,6 +206,7 @@ private:
     void end_drag();
     MouseBinding const* resolve_mouse_binding(uint16_t state, uint8_t button) const;
     bool supports_protocol(xcb_window_t window, xcb_atom_t protocol) const;
+    bool is_focus_eligible(xcb_window_t window) const;
     bool should_set_input_focus(xcb_window_t window) const;
     void send_wm_take_focus(xcb_window_t window, uint32_t timestamp);
     void send_wm_ping(xcb_window_t window, uint32_t timestamp);

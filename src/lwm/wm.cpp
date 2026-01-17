@@ -1870,6 +1870,9 @@ void WindowManager::focus_window(xcb_window_t window)
     if (showing_desktop_)
         return;
 
+    if (!is_focus_eligible(window))
+        return;
+
     if (iconic_windows_.contains(window))
     {
         deiconify_window(window, false);
@@ -1925,6 +1928,9 @@ void WindowManager::focus_floating_window(xcb_window_t window)
 
     auto* floating_window = find_floating_window(window);
     if (!floating_window)
+        return;
+
+    if (!is_focus_eligible(window))
         return;
 
     if (iconic_windows_.contains(window))
@@ -2551,9 +2557,12 @@ void WindowManager::focus_or_fallback(Monitor& monitor)
         return;
     }
 
+    auto eligible = [this](xcb_window_t window)
+    { return window != XCB_NONE && !iconic_windows_.contains(window) && is_focus_eligible(window); };
+
     // Verify focused_window actually exists in the workspace (defensive programming)
     if (ws.focused_window != XCB_NONE && ws.find_window(ws.focused_window) != ws.windows.end()
-        && !iconic_windows_.contains(ws.focused_window))
+        && eligible(ws.focused_window))
     {
         focus_window(ws.focused_window);
     }
@@ -2562,7 +2571,7 @@ void WindowManager::focus_or_fallback(Monitor& monitor)
         xcb_window_t candidate = XCB_NONE;
         for (auto it = ws.windows.rbegin(); it != ws.windows.rend(); ++it)
         {
-            if (!iconic_windows_.contains(it->id))
+            if (eligible(it->id))
             {
                 candidate = it->id;
                 break;
@@ -2581,8 +2590,7 @@ void WindowManager::focus_or_fallback(Monitor& monitor)
                 [&](FloatingWindow const& floating_window)
                 {
                     return floating_window.monitor == monitor_idx
-                        && floating_window.workspace == monitor.current_workspace
-                        && !iconic_windows_.contains(floating_window.id);
+                        && floating_window.workspace == monitor.current_workspace && eligible(floating_window.id);
                 }
             );
             if (it != floating_windows_.rend())
@@ -3074,6 +3082,21 @@ bool WindowManager::supports_protocol(xcb_window_t window, xcb_atom_t protocol) 
     }
     xcb_icccm_get_wm_protocols_reply_wipe(&reply);
     return supported;
+}
+
+bool WindowManager::is_focus_eligible(xcb_window_t window) const
+{
+    xcb_icccm_wm_hints_t hints;
+    if (!xcb_icccm_get_wm_hints_reply(conn_.get(), xcb_icccm_get_wm_hints(conn_.get(), window), &hints, nullptr))
+        return true;
+
+    if (!(hints.flags & XCB_ICCCM_WM_HINT_INPUT))
+        return true;
+
+    if (hints.input)
+        return true;
+
+    return supports_protocol(window, wm_take_focus_);
 }
 
 bool WindowManager::should_set_input_focus(xcb_window_t window) const

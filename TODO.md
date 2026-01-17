@@ -1,7 +1,7 @@
 # Review TODOs
 
 - [x] 1) ICCCM focus: WM_HINTS.input=False + WM_TAKE_FOCUS should not call SetInputFocus.
-- [ ] 2) ICCCM focus: do not activate/focus windows that are not focus-eligible.
+- [x] 2) ICCCM focus: do not activate/focus windows that are not focus-eligible.
 - [ ] 3) EWMH ping: send/receive _NET_WM_PING via WM_PROTOCOLS format.
 - [ ] 4) EWMH sync: wait for _NET_WM_SYNC_REQUEST_COUNTER updates or timeout.
 - [ ] 5) IconicState on map: manage but do not map (avoid map/unmap flicker).
