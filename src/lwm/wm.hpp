@@ -145,8 +145,8 @@ private:
     void handle_randr_screen_change();
     void handle_timeouts();
 
-    void manage_window(xcb_window_t window);
-    void manage_floating_window(xcb_window_t window);
+    void manage_window(xcb_window_t window, bool start_iconic = false);
+    void manage_floating_window(xcb_window_t window, bool start_iconic = false);
     void unmanage_window(xcb_window_t window);
     void unmanage_floating_window(xcb_window_t window);
     void focus_window(xcb_window_t window);

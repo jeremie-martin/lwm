@@ -641,11 +641,7 @@ void WindowManager::handle_map_request(xcb_map_request_event_t const& e)
                 start_iconic = true;
             }
         }
-        manage_floating_window(e.window);
-        if (start_iconic)
-        {
-            iconify_window(e.window);
-        }
+        manage_floating_window(e.window, start_iconic);
         return;
     }
 
@@ -669,12 +665,8 @@ void WindowManager::handle_map_request(xcb_map_request_event_t const& e)
         }
     }
 
-    manage_window(e.window);
-    if (start_iconic)
-    {
-        iconify_window(e.window);
-    }
-    else
+    manage_window(e.window, start_iconic);
+    if (!start_iconic)
     {
         auto monitor_idx = monitor_index_for_window(e.window);
         auto workspace_idx = workspace_index_for_window(e.window);
@@ -1522,7 +1514,7 @@ void WindowManager::handle_randr_screen_change()
     conn_.flush();
 }
 
-void WindowManager::manage_window(xcb_window_t window)
+void WindowManager::manage_window(xcb_window_t window, bool start_iconic)
 {
     auto [instance_name, class_name] = get_wm_class(window);
     Window newWindow = { window, get_window_name(window), class_name, instance_name };
@@ -1543,8 +1535,14 @@ void WindowManager::manage_window(xcb_window_t window)
 
     if (wm_state_ != XCB_NONE)
     {
-        uint32_t data[] = { WM_STATE_NORMAL, 0 };
+        uint32_t data[] = { start_iconic ? WM_STATE_ICONIC : WM_STATE_NORMAL, 0 };
         xcb_change_property(conn_.get(), XCB_PROP_MODE_REPLACE, window, wm_state_, wm_state_, 32, 2, data);
+    }
+
+    if (start_iconic)
+    {
+        iconic_windows_.insert(window);
+        ewmh_.set_window_state(window, ewmh_.get()->_NET_WM_STATE_HIDDEN, true);
     }
 
     update_sync_state(window);
@@ -1566,24 +1564,27 @@ void WindowManager::manage_window(xcb_window_t window)
     update_ewmh_client_list();
 
     keybinds_.grab_keys(window);
-    if (is_workspace_visible(target_monitor_idx, target_workspace_idx))
+    if (!start_iconic)
     {
-        rearrange_monitor(monitors_[target_monitor_idx]);
-    }
-    else
-    {
-        auto attr_cookie = xcb_get_window_attributes(conn_.get(), window);
-        auto* attr_reply = xcb_get_window_attributes_reply(conn_.get(), attr_cookie, nullptr);
-        if (attr_reply)
+        if (is_workspace_visible(target_monitor_idx, target_workspace_idx))
         {
-            bool viewable = attr_reply->map_state == XCB_MAP_STATE_VIEWABLE;
-            free(attr_reply);
-            if (viewable)
-                wm_unmap_window(window);
+            rearrange_monitor(monitors_[target_monitor_idx]);
         }
         else
         {
-            wm_unmap_window(window);
+            auto attr_cookie = xcb_get_window_attributes(conn_.get(), window);
+            auto* attr_reply = xcb_get_window_attributes_reply(conn_.get(), attr_cookie, nullptr);
+            if (attr_reply)
+            {
+                bool viewable = attr_reply->map_state == XCB_MAP_STATE_VIEWABLE;
+                free(attr_reply);
+                if (viewable)
+                    wm_unmap_window(window);
+            }
+            else
+            {
+                wm_unmap_window(window);
+            }
         }
     }
     update_all_bars();
@@ -1610,7 +1611,7 @@ void WindowManager::manage_window(xcb_window_t window)
     }
 }
 
-void WindowManager::manage_floating_window(xcb_window_t window)
+void WindowManager::manage_floating_window(xcb_window_t window, bool start_iconic)
 {
     auto transient = transient_for_window(window);
     std::optional<size_t> monitor_idx;
@@ -1684,8 +1685,14 @@ void WindowManager::manage_floating_window(xcb_window_t window)
 
     if (wm_state_ != XCB_NONE)
     {
-        uint32_t data[] = { WM_STATE_NORMAL, 0 };
+        uint32_t data[] = { start_iconic ? WM_STATE_ICONIC : WM_STATE_NORMAL, 0 };
         xcb_change_property(conn_.get(), XCB_PROP_MODE_REPLACE, window, wm_state_, wm_state_, 32, 2, data);
+    }
+
+    if (start_iconic)
+    {
+        iconic_windows_.insert(window);
+        ewmh_.set_window_state(window, ewmh_.get()->_NET_WM_STATE_HIDDEN, true);
     }
 
     update_sync_state(window);
@@ -1709,9 +1716,12 @@ void WindowManager::manage_floating_window(xcb_window_t window)
     update_ewmh_client_list();
 
     keybinds_.grab_keys(window);
-    update_floating_visibility(*monitor_idx);
-    if (!suppress_focus_ && *monitor_idx == focused_monitor_ && is_workspace_visible(*monitor_idx, *workspace_idx))
-        focus_floating_window(window);
+    if (!start_iconic)
+    {
+        update_floating_visibility(*monitor_idx);
+        if (!suppress_focus_ && *monitor_idx == focused_monitor_ && is_workspace_visible(*monitor_idx, *workspace_idx))
+            focus_floating_window(window);
+    }
 
     if (ewmh_.has_window_state(window, ewmh_.get()->_NET_WM_STATE_SKIP_TASKBAR))
         skip_taskbar_windows_.insert(window);
