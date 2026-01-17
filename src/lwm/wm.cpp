@@ -103,6 +103,7 @@ WindowManager::WindowManager(Config config)
     scan_existing_windows();
     keybinds_.grab_keys(conn_.screen()->root);
     update_ewmh_client_list();
+    update_ewmh_client_list();
     update_all_bars();
     conn_.flush();
 }
