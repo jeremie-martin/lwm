@@ -252,9 +252,21 @@ void WindowManager::handle_window_removal(xcb_window_t window)
 
 void WindowManager::handle_enter_notify(xcb_enter_notify_event_t const& e)
 {
-    // Only handle normal mode (not grab/ungrab)
-    if (e.mode != XCB_NOTIFY_MODE_NORMAL)
-        return;
+    // For non-root windows: only handle if mode=NORMAL and detail!=INFERIOR
+    // detail=INFERIOR means pointer entered because a child window closed,
+    // not because the mouse actually moved - ignore these spurious events.
+    // For root window: always handle (following DWM behavior)
+    if (e.event != conn_.screen()->root)
+    {
+        if (e.mode != XCB_NOTIFY_MODE_NORMAL || e.detail == XCB_NOTIFY_DETAIL_INFERIOR)
+            return;
+    }
+    else
+    {
+        // Root window: only require normal mode
+        if (e.mode != XCB_NOTIFY_MODE_NORMAL)
+            return;
+    }
 
     // Ignore internal bar windows
     for (auto const& monitor : monitors_)
