@@ -23,6 +23,7 @@ constexpr uint32_t WM_STATE_NORMAL = 1;
 constexpr uint32_t WM_STATE_ICONIC = 3;
 constexpr auto PING_TIMEOUT = std::chrono::seconds(5);
 constexpr auto KILL_TIMEOUT = std::chrono::seconds(5);
+constexpr auto SYNC_WAIT_TIMEOUT = std::chrono::milliseconds(200);
 
 void sigchld_handler(int /*sig*/)
 {
@@ -3181,6 +3182,40 @@ void WindowManager::send_sync_request(xcb_window_t window, uint32_t timestamp)
     ev.data.data32[3] = static_cast<uint32_t>((value >> 32) & 0xffffffff);
 
     xcb_send_event(conn_.get(), 0, window, XCB_EVENT_MASK_NO_EVENT, reinterpret_cast<char*>(&ev));
+    conn_.flush();
+    wait_for_sync_counter(window, value);
+}
+
+bool WindowManager::wait_for_sync_counter(xcb_window_t window, uint64_t expected_value)
+{
+    auto it = sync_counters_.find(window);
+    if (it == sync_counters_.end())
+        return false;
+
+    xcb_sync_counter_t counter = it->second;
+    auto deadline = std::chrono::steady_clock::now() + SYNC_WAIT_TIMEOUT;
+
+    while (std::chrono::steady_clock::now() < deadline)
+    {
+        auto cookie = xcb_sync_query_counter(conn_.get(), counter);
+        auto* reply = xcb_sync_query_counter_reply(conn_.get(), cookie, nullptr);
+        if (!reply)
+            return false;
+
+        uint64_t current = (static_cast<uint64_t>(reply->counter_value.hi) << 32)
+            | static_cast<uint64_t>(reply->counter_value.lo);
+        free(reply);
+
+        if (current >= expected_value)
+        {
+            sync_values_[window] = current;
+            return true;
+        }
+
+        usleep(1000);
+    }
+
+    return false;
 }
 
 void WindowManager::update_sync_state(xcb_window_t window)

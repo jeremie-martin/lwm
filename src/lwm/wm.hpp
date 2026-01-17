@@ -211,6 +211,7 @@ private:
     void send_wm_take_focus(xcb_window_t window, uint32_t timestamp);
     void send_wm_ping(xcb_window_t window, uint32_t timestamp);
     void send_sync_request(xcb_window_t window, uint32_t timestamp);
+    bool wait_for_sync_counter(xcb_window_t window, uint64_t expected_value);
     void update_sync_state(xcb_window_t window);
     void update_fullscreen_monitor_state(xcb_window_t window);
     void update_focused_monitor_at_point(int16_t x, int16_t y);
