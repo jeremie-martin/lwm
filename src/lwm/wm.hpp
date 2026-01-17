@@ -101,6 +101,8 @@ private:
     std::unordered_map<xcb_window_t, std::chrono::steady_clock::time_point> pending_kills_;
     std::unordered_map<xcb_window_t, std::chrono::steady_clock::time_point> pending_pings_;
     std::unordered_map<xcb_window_t, uint32_t> user_times_;
+    std::unordered_map<xcb_window_t, uint64_t> client_order_;
+    uint64_t next_client_order_ = 0;
     xcb_window_t active_window_ = XCB_NONE;
     size_t focused_monitor_ = 0; // Active monitor index (window focus tracked separately).
     xcb_window_t wm_window_ = XCB_NONE;
@@ -233,6 +235,7 @@ private:
     void update_window_title(xcb_window_t window);
     void update_all_bars();
     void update_ewmh_workarea();
+    void register_client_window(xcb_window_t window);
 
     // Dock/strut helpers
     void update_struts();

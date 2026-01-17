@@ -477,6 +477,7 @@ void WindowManager::scan_existing_windows()
             {
                 desktop_windows_.push_back(window);
             }
+            register_client_window(window);
             skip_taskbar_windows_.insert(window);
             skip_pager_windows_.insert(window);
             ewmh_.set_window_state(window, ewmh_.get()->_NET_WM_STATE_SKIP_TASKBAR, true);
@@ -665,6 +666,7 @@ void WindowManager::handle_map_request(xcb_map_request_event_t const& e)
         {
             desktop_windows_.push_back(e.window);
         }
+        register_client_window(e.window);
         skip_taskbar_windows_.insert(e.window);
         skip_pager_windows_.insert(e.window);
         ewmh_.set_window_state(e.window, ewmh_.get()->_NET_WM_STATE_SKIP_TASKBAR, true);
@@ -1659,6 +1661,7 @@ void WindowManager::manage_window(xcb_window_t window, bool start_iconic)
         target ? target->second : monitors_[target_monitor_idx].current_workspace;
 
     monitors_[target_monitor_idx].workspaces[target_workspace_idx].windows.push_back(newWindow);
+    register_client_window(window);
     user_times_[window] = get_user_time(window);
 
     uint32_t values[] = { XCB_EVENT_MASK_ENTER_WINDOW | XCB_EVENT_MASK_FOCUS_CHANGE | XCB_EVENT_MASK_PROPERTY_CHANGE
@@ -1882,6 +1885,7 @@ void WindowManager::manage_floating_window(xcb_window_t window, bool start_iconi
     floating_window.geometry = placement;
     floating_window.name = get_window_name(window);
     floating_windows_.push_back(floating_window);
+    register_client_window(window);
     user_times_[window] = get_user_time(window);
 
     uint32_t values[] = { XCB_EVENT_MASK_ENTER_WINDOW | XCB_EVENT_MASK_FOCUS_CHANGE | XCB_EVENT_MASK_PROPERTY_CHANGE
@@ -2003,6 +2007,7 @@ void WindowManager::unmanage_window(xcb_window_t window)
     pending_kills_.erase(window);
     pending_pings_.erase(window);
     user_times_.erase(window);
+    client_order_.erase(window);
 
     for (auto& monitor : monitors_)
     {
@@ -2071,6 +2076,7 @@ void WindowManager::unmanage_floating_window(xcb_window_t window)
     pending_kills_.erase(window);
     pending_pings_.erase(window);
     user_times_.erase(window);
+    client_order_.erase(window);
 
     auto it = std::ranges::find_if(
         floating_windows_,
@@ -4176,6 +4182,13 @@ void WindowManager::update_all_bars()
     }
 }
 
+void WindowManager::register_client_window(xcb_window_t window)
+{
+    if (client_order_.contains(window))
+        return;
+    client_order_[window] = next_client_order_++;
+}
+
 void WindowManager::update_struts()
 {
     // Reset all monitor struts
@@ -4233,6 +4246,7 @@ void WindowManager::unmanage_desktop_window(xcb_window_t window)
         desktop_windows_.erase(it);
         skip_taskbar_windows_.erase(window);
         skip_pager_windows_.erase(window);
+        client_order_.erase(window);
         update_ewmh_client_list();
     }
 }
@@ -4293,82 +4307,51 @@ void WindowManager::update_ewmh_desktops()
 
 void WindowManager::update_ewmh_client_list()
 {
-    std::vector<xcb_window_t> windows;
-    for (auto const& monitor : monitors_)
+    std::vector<std::pair<uint64_t, xcb_window_t>> ordered;
+    ordered.reserve(client_order_.size());
+    for (auto const& [window, order] : client_order_)
     {
-        for (auto const& workspace : monitor.workspaces)
-        {
-            for (auto const& window : workspace.windows)
-            {
-                windows.push_back(window.id);
-            }
-        }
+        ordered.push_back({ order, window });
     }
-    for (auto const& floating_window : floating_windows_)
+    std::sort(ordered.begin(), ordered.end(), [](auto const& a, auto const& b) { return a.first < b.first; });
+
+    std::vector<xcb_window_t> windows;
+    windows.reserve(ordered.size());
+    for (auto const& entry : ordered)
     {
-        windows.push_back(floating_window.id);
+        windows.push_back(entry.second);
     }
     ewmh_.update_client_list(windows);
 
-    // Build stacking order: below < tiled < floating < above < fullscreen
     std::vector<xcb_window_t> stacking;
     stacking.reserve(windows.size());
+    std::unordered_set<xcb_window_t> managed(windows.begin(), windows.end());
 
-    auto is_below = [this](xcb_window_t id)
+    auto cookie = xcb_query_tree(conn_.get(), conn_.screen()->root);
+    auto* reply = xcb_query_tree_reply(conn_.get(), cookie, nullptr);
+    if (reply)
     {
-        return below_windows_.contains(id) && !fullscreen_windows_.contains(id);
-    };
-
-    auto is_above = [this](xcb_window_t id)
-    {
-        return above_windows_.contains(id) && !fullscreen_windows_.contains(id);
-    };
-
-    // Helper to check if window is in "normal" tier (not below, not above, not fullscreen)
-    auto is_normal = [this](xcb_window_t id)
-    {
-        return !below_windows_.contains(id) && !above_windows_.contains(id) && !fullscreen_windows_.contains(id);
-    };
-
-    auto append_tiled = [&](auto predicate)
-    {
-        for (auto const& monitor : monitors_)
+        int length = xcb_query_tree_children_length(reply);
+        xcb_window_t* children = xcb_query_tree_children(reply);
+        for (int i = 0; i < length; ++i)
         {
-            for (auto const& workspace : monitor.workspaces)
+            if (managed.contains(children[i]))
             {
-                for (auto const& window : workspace.windows)
-                {
-                    if (predicate(window.id))
-                        stacking.push_back(window.id);
-                }
+                stacking.push_back(children[i]);
+                managed.erase(children[i]);
             }
         }
-    };
+        free(reply);
+    }
 
-    auto append_floating = [&](auto predicate)
+    if (!managed.empty())
     {
-        for (auto const& floating_window : floating_windows_)
+        for (auto const& entry : ordered)
         {
-            if (predicate(floating_window.id))
-                stacking.push_back(floating_window.id);
+            if (managed.contains(entry.second))
+                stacking.push_back(entry.second);
         }
-    };
-
-    // BELOW windows (bottom of stack)
-    append_tiled(is_below);
-    append_floating(is_below);
-
-    // Normal windows
-    append_tiled(is_normal);
-    append_floating(is_normal);
-
-    // ABOVE windows
-    append_tiled(is_above);
-    append_floating(is_above);
-
-    // Fullscreen windows (top of stack, deterministic order)
-    append_tiled([this](xcb_window_t id) { return fullscreen_windows_.contains(id); });
-    append_floating([this](xcb_window_t id) { return fullscreen_windows_.contains(id); });
+    }
 
     ewmh_.update_client_list_stacking(stacking);
 }

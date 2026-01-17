@@ -11,7 +11,7 @@
 - [x] 9) Strut updates: react to _NET_WM_STRUT(_PARTIAL) property changes.
 - [x] 10) Window types: recognize first-known type from list; support required types; fix _NET_SUPPORTED.
 - [x] 11) Window states: implement required _NET_WM_STATE handling incl. HIDDEN and others.
-- [ ] 12) Client list ordering/stacking: match COMPLIANCE requirements or track order.
+- [x] 12) Client list ordering/stacking: match COMPLIANCE requirements or track order.
 - [ ] 13) Per-monitor workspaces vs EWMH desktops: document mapping and limitations.
 - [ ] 14) Cursor warping: make configurable per BEHAVIOR.md.
 - [ ] 15) Move-to-workspace focus: restore focus with floating candidates per policy.
