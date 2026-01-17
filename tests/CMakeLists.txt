@@ -8,6 +8,7 @@ FetchContent_MakeAvailable(Catch2)
 
 add_executable(lwm_tests
     test_focus_policy.cpp
+    test_floating_policy.cpp
     test_workspace.cpp
 )
 

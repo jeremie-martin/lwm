@@ -77,6 +77,37 @@ This is the key behavior for multi-monitor setups:
 
 ---
 
+## Floating Windows
+
+### Managed Floating Windows
+LWM manages floating windows for:
+- Dialogs, utility windows, and splash windows
+- Any window with `WM_TRANSIENT_FOR` (e.g., file pickers)
+
+Menus, tooltips, notifications, and other short-lived popups are mapped but not managed.
+
+### Placement
+- Floating windows appear on the **same monitor** as their transient parent if one exists
+- Otherwise, they appear on the **active monitor**
+- Initial placement centers the window within the monitor working area (or over the parent)
+- Client configure requests for floating windows are honored
+
+### Focus
+- Floating windows are focusable (focus-follows-mouse)
+- Focusing a floating window updates the active monitor
+- Closing a floating window restores focus to the workspace's remembered window or another floating window
+
+### Workspace and Monitor Association
+- Floating windows belong to a monitor and workspace
+- They are mapped/unmapped when that monitor switches workspaces
+- Moving a floating window across monitors reassigns it to the new monitor and its current workspace
+
+### Move/Resize
+- **Super + Left Click drag** → move floating window
+- **Super + Right Click drag** → resize floating window
+
+---
+
 ## Workspace Behavior
 
 ### Visibility
@@ -126,7 +157,9 @@ MapRequest received
     ↓
 Is dock window? → Track in dock_windows_, map, update struts, DONE
     ↓
-Is dialog/menu/etc? → Map without managing, DONE
+Is managed floating? → Track as floating, place, map, focus, DONE
+    ↓
+Is popup/menu/etc? → Map without managing, DONE
     ↓
 Add to active monitor's current workspace
     ↓
@@ -233,6 +266,8 @@ Mapped (visible) ───→ Unmapped by WM (hidden) ───┘
 | Super+Shift+1-9 | Move focused window to workspace N (default) |
 | Super+Left/Right | Focus adjacent monitor |
 | Super+Shift+Left/Right | Move window to adjacent monitor |
+| Super+Left Click (drag) | Move floating window |
+| Super+Right Click (drag) | Resize floating window |
 
 ---
 
