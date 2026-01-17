@@ -23,6 +23,7 @@ public:
     void set_wm_name(std::string const& name);
     void set_number_of_desktops(uint32_t count);
     void set_desktop_names(std::vector<std::string> const& names);
+    void set_workarea(std::vector<Geometry> const& workareas);
 
     // Dynamic updates
     void set_current_desktop(uint32_t desktop);

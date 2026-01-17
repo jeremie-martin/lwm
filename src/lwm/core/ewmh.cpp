@@ -65,11 +65,17 @@ void Ewmh::set_supported_atoms()
         ewmh_._NET_CLIENT_LIST,
         ewmh_._NET_WM_DESKTOP,
         ewmh_._NET_DESKTOP_VIEWPORT,
+        ewmh_._NET_WORKAREA,
         ewmh_._NET_WM_STATE,
         ewmh_._NET_WM_STATE_DEMANDS_ATTENTION,
         ewmh_._NET_WM_STATE_FULLSCREEN,
         ewmh_._NET_WM_STATE_ABOVE,
         ewmh_._NET_WM_STATE_HIDDEN,
+        ewmh_._NET_WM_PING,
+        ewmh_._NET_WM_SYNC_REQUEST,
+        ewmh_._NET_WM_SYNC_REQUEST_COUNTER,
+        ewmh_._NET_CLOSE_WINDOW,
+        ewmh_._NET_WM_FULLSCREEN_MONITORS,
         ewmh_._NET_WM_WINDOW_TYPE,
         ewmh_._NET_WM_WINDOW_TYPE_DOCK,
         ewmh_._NET_WM_WINDOW_TYPE_NORMAL,
@@ -97,6 +103,24 @@ void Ewmh::set_desktop_names(std::vector<std::string> const& names)
         combined += '\0';
     }
     xcb_ewmh_set_desktop_names(&ewmh_, 0, combined.length(), combined.c_str());
+}
+
+void Ewmh::set_workarea(std::vector<Geometry> const& workareas)
+{
+    std::vector<xcb_ewmh_geometry_t> areas;
+    areas.reserve(workareas.size());
+    for (auto const& area : workareas)
+    {
+        areas.push_back({ static_cast<uint32_t>(area.x),
+                          static_cast<uint32_t>(area.y),
+                          area.width,
+                          area.height });
+    }
+
+    if (!areas.empty())
+    {
+        xcb_ewmh_set_workarea(&ewmh_, 0, areas.size(), areas.data());
+    }
 }
 
 void Ewmh::set_current_desktop(uint32_t desktop) { xcb_ewmh_set_current_desktop(&ewmh_, 0, desktop); }

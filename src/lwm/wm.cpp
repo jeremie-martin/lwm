@@ -3,12 +3,15 @@
 #include "lwm/core/focus.hpp"
 #include "lwm/core/log.hpp"
 #include <algorithm>
+#include <chrono>
 #include <csignal>
 #include <cstdlib>
 #include <cstring>
 #include <memory>
+#include <poll.h>
 #include <sys/wait.h>
 #include <unistd.h>
+#include <xcb/xcb_icccm.h>
 
 namespace lwm {
 
@@ -16,6 +19,8 @@ namespace {
 
 constexpr uint32_t WM_STATE_NORMAL = 1;
 constexpr uint32_t WM_STATE_ICONIC = 3;
+constexpr auto PING_TIMEOUT = std::chrono::seconds(5);
+constexpr auto KILL_TIMEOUT = std::chrono::seconds(5);
 
 void sigchld_handler(int /*sig*/)
 {
@@ -29,6 +34,28 @@ void setup_signal_handlers()
     sa.sa_handler = sigchld_handler;
     sa.sa_flags = SA_RESTART | SA_NOCLDSTOP;
     sigaction(SIGCHLD, &sa, nullptr);
+}
+
+uint32_t extract_event_time(uint8_t response_type, xcb_generic_event_t const& event)
+{
+    switch (response_type)
+    {
+        case XCB_KEY_PRESS:
+        case XCB_KEY_RELEASE:
+            return reinterpret_cast<xcb_key_press_event_t const&>(event).time;
+        case XCB_BUTTON_PRESS:
+        case XCB_BUTTON_RELEASE:
+            return reinterpret_cast<xcb_button_press_event_t const&>(event).time;
+        case XCB_MOTION_NOTIFY:
+            return reinterpret_cast<xcb_motion_notify_event_t const&>(event).time;
+        case XCB_ENTER_NOTIFY:
+        case XCB_LEAVE_NOTIFY:
+            return reinterpret_cast<xcb_enter_notify_event_t const&>(event).time;
+        case XCB_PROPERTY_NOTIFY:
+            return reinterpret_cast<xcb_property_notify_event_t const&>(event).time;
+        default:
+            return 0;
+    }
 }
 
 } // namespace
@@ -54,6 +81,18 @@ WindowManager::WindowManager(Config config)
     wm_state_ = intern_atom("WM_STATE");
     wm_change_state_ = intern_atom("WM_CHANGE_STATE");
     utf8_string_ = intern_atom("UTF8_STRING");
+    wm_protocols_ = intern_atom("WM_PROTOCOLS");
+    wm_delete_window_ = intern_atom("WM_DELETE_WINDOW");
+    wm_take_focus_ = intern_atom("WM_TAKE_FOCUS");
+    wm_normal_hints_ = intern_atom("WM_NORMAL_HINTS");
+    net_wm_ping_ = ewmh_.get()->_NET_WM_PING;
+    net_wm_sync_request_ = ewmh_.get()->_NET_WM_SYNC_REQUEST;
+    net_wm_sync_request_counter_ = ewmh_.get()->_NET_WM_SYNC_REQUEST_COUNTER;
+    net_close_window_ = ewmh_.get()->_NET_CLOSE_WINDOW;
+    net_wm_fullscreen_monitors_ = ewmh_.get()->_NET_WM_FULLSCREEN_MONITORS;
+    layout_.set_sync_request_callback([this](xcb_window_t window) {
+        send_sync_request(window, last_event_time_);
+    });
     detect_monitors();
     setup_ewmh();
     if (bar_)
@@ -68,10 +107,55 @@ WindowManager::WindowManager(Config config)
 
 void WindowManager::run()
 {
-    while (auto event = xcb_wait_for_event(conn_.get()))
+    int fd = xcb_get_file_descriptor(conn_.get());
+    pollfd pfd = {};
+    pfd.fd = fd;
+    pfd.events = POLLIN;
+
+    while (true)
     {
-        std::unique_ptr<xcb_generic_event_t, decltype(&free)> eventPtr(event, free);
-        handle_event(*eventPtr);
+        int timeout_ms = -1;
+        auto now = std::chrono::steady_clock::now();
+        std::optional<std::chrono::steady_clock::time_point> next_deadline;
+
+        for (auto const& [window, deadline] : pending_kills_)
+        {
+            if (!next_deadline || deadline < *next_deadline)
+                next_deadline = deadline;
+        }
+        for (auto const& [window, deadline] : pending_pings_)
+        {
+            if (!next_deadline || deadline < *next_deadline)
+                next_deadline = deadline;
+        }
+
+        if (next_deadline)
+        {
+            if (*next_deadline <= now)
+            {
+                timeout_ms = 0;
+            }
+            else
+            {
+                auto delta = std::chrono::duration_cast<std::chrono::milliseconds>(*next_deadline - now);
+                timeout_ms = static_cast<int>(delta.count());
+            }
+        }
+
+        int poll_result = poll(&pfd, 1, timeout_ms);
+        if (poll_result > 0)
+        {
+            while (auto event = xcb_poll_for_event(conn_.get()))
+            {
+                std::unique_ptr<xcb_generic_event_t, decltype(&free)> eventPtr(event, free);
+                handle_event(*eventPtr);
+            }
+        }
+
+        handle_timeouts();
+
+        if (xcb_connection_has_error(conn_.get()))
+            break;
     }
 }
 
@@ -370,6 +454,9 @@ void WindowManager::scan_existing_windows()
 void WindowManager::handle_event(xcb_generic_event_t const& event)
 {
     uint8_t response_type = event.response_type & ~0x80;
+    uint32_t event_time = extract_event_time(response_type, event);
+    if (event_time != 0)
+        last_event_time_ = event_time;
 
     if (conn_.has_randr() && response_type == conn_.randr_event_base() + XCB_RANDR_SCREEN_CHANGE_NOTIFY)
     {
@@ -661,6 +748,30 @@ void WindowManager::handle_client_message(xcb_client_message_event_t const& e)
 {
     xcb_ewmh_connection_t* ewmh = ewmh_.get();
 
+    if (e.type == net_wm_ping_)
+    {
+        xcb_window_t window = static_cast<xcb_window_t>(e.data.data32[1]);
+        pending_pings_.erase(window);
+        return;
+    }
+
+    if (e.type == net_close_window_)
+    {
+        kill_window(e.window);
+        return;
+    }
+
+    if (e.type == net_wm_fullscreen_monitors_)
+    {
+        FullscreenMonitors monitors;
+        monitors.top = e.data.data32[0];
+        monitors.bottom = e.data.data32[1];
+        monitors.left = e.data.data32[2];
+        monitors.right = e.data.data32[3];
+        set_fullscreen_monitors(e.window, monitors);
+        return;
+    }
+
     if (e.type == wm_change_state_)
     {
         if (e.data.data32[0] == WM_STATE_ICONIC)
@@ -786,6 +897,12 @@ void WindowManager::handle_configure_request(xcb_configure_request_event_t const
         if (mask & XCB_CONFIG_WINDOW_HEIGHT)
             floating_window->geometry.height = std::max<uint16_t>(1, e.height);
 
+        uint32_t hinted_width = floating_window->geometry.width;
+        uint32_t hinted_height = floating_window->geometry.height;
+        layout_.apply_size_hints(floating_window->id, hinted_width, hinted_height);
+        floating_window->geometry.width = static_cast<uint16_t>(std::max<uint32_t>(1, hinted_width));
+        floating_window->geometry.height = static_cast<uint16_t>(std::max<uint32_t>(1, hinted_height));
+
         update_floating_monitor_for_geometry(*floating_window);
         if (active_window_ == floating_window->id)
         {
@@ -804,12 +921,81 @@ void WindowManager::handle_property_notify(xcb_property_notify_event_t const& e)
     {
         update_window_title(e.window);
     }
+    if (wm_normal_hints_ != XCB_NONE && e.atom == wm_normal_hints_)
+    {
+        if (auto* floating_window = find_floating_window(e.window))
+        {
+            uint32_t hinted_width = floating_window->geometry.width;
+            uint32_t hinted_height = floating_window->geometry.height;
+            layout_.apply_size_hints(floating_window->id, hinted_width, hinted_height);
+            floating_window->geometry.width = static_cast<uint16_t>(std::max<uint32_t>(1, hinted_width));
+            floating_window->geometry.height = static_cast<uint16_t>(std::max<uint32_t>(1, hinted_height));
+            if (floating_window->workspace == monitors_[floating_window->monitor].current_workspace
+                && !iconic_windows_.contains(floating_window->id)
+                && !fullscreen_windows_.contains(floating_window->id))
+            {
+                apply_floating_geometry(*floating_window);
+            }
+        }
+        else if (monitor_containing_window(e.window))
+        {
+            if (auto monitor_idx = monitor_index_for_window(e.window))
+            {
+                rearrange_monitor(monitors_[*monitor_idx]);
+            }
+        }
+    }
+    if ((wm_protocols_ != XCB_NONE && e.atom == wm_protocols_)
+        || (net_wm_sync_request_counter_ != XCB_NONE && e.atom == net_wm_sync_request_counter_))
+    {
+        update_sync_state(e.window);
+    }
+    if (net_wm_fullscreen_monitors_ != XCB_NONE && e.atom == net_wm_fullscreen_monitors_)
+    {
+        update_fullscreen_monitor_state(e.window);
+        if (fullscreen_windows_.contains(e.window))
+        {
+            apply_fullscreen_if_needed(e.window);
+        }
+    }
+}
+
+void WindowManager::handle_timeouts()
+{
+    auto now = std::chrono::steady_clock::now();
+
+    for (auto it = pending_pings_.begin(); it != pending_pings_.end();)
+    {
+        if (it->second <= now)
+        {
+            it = pending_pings_.erase(it);
+        }
+        else
+        {
+            ++it;
+        }
+    }
+
+    for (auto it = pending_kills_.begin(); it != pending_kills_.end();)
+    {
+        if (it->second <= now)
+        {
+            xcb_kill_client(conn_.get(), it->first);
+            it = pending_kills_.erase(it);
+        }
+        else
+        {
+            ++it;
+        }
+    }
+    conn_.flush();
 }
 
 void WindowManager::handle_randr_screen_change()
 {
     std::vector<Window> all_windows;
     std::vector<FloatingWindow> all_floating = floating_windows_;
+    fullscreen_monitors_.clear();
     for (auto& monitor : monitors_)
     {
         for (auto& workspace : monitor.workspaces)
@@ -907,6 +1093,9 @@ void WindowManager::manage_window(xcb_window_t window)
         );
     }
 
+    update_sync_state(window);
+    update_fullscreen_monitor_state(window);
+
     // Set EWMH desktop for this window
     uint32_t desktop = get_ewmh_desktop_index(focused_monitor_, focused_monitor().current_workspace);
     ewmh_.set_window_desktop(window, desktop);
@@ -952,8 +1141,8 @@ void WindowManager::manage_floating_window(xcb_window_t window)
     if (!workspace_idx)
         workspace_idx = monitors_[*monitor_idx].current_workspace;
 
-    uint16_t width = 300;
-    uint16_t height = 200;
+    uint32_t width = 300;
+    uint32_t height = 200;
     auto geom_cookie = xcb_get_geometry(conn_.get(), window);
     auto* geom_reply = xcb_get_geometry_reply(conn_.get(), geom_cookie, nullptr);
     if (geom_reply)
@@ -966,11 +1155,12 @@ void WindowManager::manage_floating_window(xcb_window_t window)
         width = 300;
     if (height == 0)
         height = 200;
+    layout_.apply_size_hints(window, width, height);
 
     Geometry placement = floating::place_floating(
         monitors_[*monitor_idx].working_area(),
-        width,
-        height,
+        static_cast<uint16_t>(width),
+        static_cast<uint16_t>(height),
         parent_geom
     );
 
@@ -1001,6 +1191,9 @@ void WindowManager::manage_floating_window(xcb_window_t window)
         );
     }
 
+    update_sync_state(window);
+    update_fullscreen_monitor_state(window);
+
     uint32_t desktop = get_ewmh_desktop_index(*monitor_idx, *workspace_idx);
     ewmh_.set_window_desktop(window, desktop);
     update_ewmh_client_list();
@@ -1026,6 +1219,11 @@ void WindowManager::unmanage_window(xcb_window_t window)
     fullscreen_restore_.erase(window);
     above_windows_.erase(window);
     iconic_windows_.erase(window);
+    fullscreen_monitors_.erase(window);
+    sync_counters_.erase(window);
+    sync_values_.erase(window);
+    pending_kills_.erase(window);
+    pending_pings_.erase(window);
 
     for (auto& monitor : monitors_)
     {
@@ -1072,6 +1270,11 @@ void WindowManager::unmanage_floating_window(xcb_window_t window)
     fullscreen_restore_.erase(window);
     above_windows_.erase(window);
     iconic_windows_.erase(window);
+    fullscreen_monitors_.erase(window);
+    sync_counters_.erase(window);
+    sync_values_.erase(window);
+    pending_kills_.erase(window);
+    pending_pings_.erase(window);
 
     auto it = std::ranges::find_if(
         floating_windows_,
@@ -1153,7 +1356,20 @@ void WindowManager::focus_window(xcb_window_t window)
 
     xcb_change_window_attributes(conn_.get(), window, XCB_CW_BORDER_PIXEL, &config_.appearance.border_color);
     xcb_configure_window(conn_.get(), window, XCB_CONFIG_WINDOW_BORDER_WIDTH, &config_.appearance.border_width);
-    xcb_set_input_focus(conn_.get(), XCB_INPUT_FOCUS_POINTER_ROOT, window, XCB_CURRENT_TIME);
+    send_wm_take_focus(window, last_event_time_);
+    if (should_set_input_focus(window))
+    {
+        xcb_set_input_focus(conn_.get(), XCB_INPUT_FOCUS_POINTER_ROOT, window, XCB_CURRENT_TIME);
+    }
+    else
+    {
+        xcb_set_input_focus(
+            conn_.get(),
+            XCB_INPUT_FOCUS_POINTER_ROOT,
+            conn_.screen()->root,
+            XCB_CURRENT_TIME
+        );
+    }
 
     // Clear urgent hint when window receives focus
     ewmh_.set_demands_attention(window, false);
@@ -1212,7 +1428,20 @@ void WindowManager::focus_floating_window(xcb_window_t window)
     clear_all_borders();
     xcb_change_window_attributes(conn_.get(), window, XCB_CW_BORDER_PIXEL, &config_.appearance.border_color);
     xcb_configure_window(conn_.get(), window, XCB_CONFIG_WINDOW_BORDER_WIDTH, &config_.appearance.border_width);
-    xcb_set_input_focus(conn_.get(), XCB_INPUT_FOCUS_POINTER_ROOT, window, XCB_CURRENT_TIME);
+    send_wm_take_focus(window, last_event_time_);
+    if (should_set_input_focus(window))
+    {
+        xcb_set_input_focus(conn_.get(), XCB_INPUT_FOCUS_POINTER_ROOT, window, XCB_CURRENT_TIME);
+    }
+    else
+    {
+        xcb_set_input_focus(
+            conn_.get(),
+            XCB_INPUT_FOCUS_POINTER_ROOT,
+            conn_.screen()->root,
+            XCB_CURRENT_TIME
+        );
+    }
 
     uint32_t stack_mode = XCB_STACK_MODE_ABOVE;
     xcb_configure_window(conn_.get(), window, XCB_CONFIG_WINDOW_STACK_MODE, &stack_mode);
@@ -1341,7 +1570,7 @@ void WindowManager::apply_fullscreen_if_needed(xcb_window_t window)
             return;
     }
 
-    Geometry area = monitors_[*monitor_idx].geometry();
+    Geometry area = fullscreen_geometry_for_window(window);
     uint32_t values[] = {
         static_cast<uint32_t>(area.x),
         static_cast<uint32_t>(area.y),
@@ -1356,6 +1585,84 @@ void WindowManager::apply_fullscreen_if_needed(xcb_window_t window)
 
     uint32_t stack_mode = XCB_STACK_MODE_ABOVE;
     xcb_configure_window(conn_.get(), window, XCB_CONFIG_WINDOW_STACK_MODE, &stack_mode);
+}
+
+void WindowManager::set_fullscreen_monitors(xcb_window_t window, FullscreenMonitors const& monitors)
+{
+    fullscreen_monitors_[window] = monitors;
+
+    if (net_wm_fullscreen_monitors_ != XCB_NONE)
+    {
+        xcb_ewmh_set_wm_fullscreen_monitors(
+            ewmh_.get(),
+            window,
+            monitors.top,
+            monitors.bottom,
+            monitors.left,
+            monitors.right
+        );
+    }
+
+    if (fullscreen_windows_.contains(window))
+    {
+        apply_fullscreen_if_needed(window);
+        conn_.flush();
+    }
+}
+
+Geometry WindowManager::fullscreen_geometry_for_window(xcb_window_t window) const
+{
+    if (monitors_.empty())
+        return {};
+
+    auto it = fullscreen_monitors_.find(window);
+    if (it == fullscreen_monitors_.end())
+    {
+        if (auto monitor_idx = monitor_index_for_window(window))
+            return monitors_[*monitor_idx].geometry();
+        return monitors_[0].geometry();
+    }
+
+    std::vector<size_t> indices;
+    indices.reserve(4);
+    auto const& spec = it->second;
+    size_t total = monitors_.size();
+    if (spec.top < total)
+        indices.push_back(spec.top);
+    if (spec.bottom < total)
+        indices.push_back(spec.bottom);
+    if (spec.left < total)
+        indices.push_back(spec.left);
+    if (spec.right < total)
+        indices.push_back(spec.right);
+
+    if (indices.empty())
+    {
+        if (auto monitor_idx = monitor_index_for_window(window))
+            return monitors_[*monitor_idx].geometry();
+        return monitors_[0].geometry();
+    }
+
+    int16_t min_x = monitors_[indices[0]].x;
+    int16_t min_y = monitors_[indices[0]].y;
+    int32_t max_x = monitors_[indices[0]].x + monitors_[indices[0]].width;
+    int32_t max_y = monitors_[indices[0]].y + monitors_[indices[0]].height;
+
+    for (size_t i = 1; i < indices.size(); ++i)
+    {
+        auto const& mon = monitors_[indices[i]];
+        min_x = std::min<int16_t>(min_x, mon.x);
+        min_y = std::min<int16_t>(min_y, mon.y);
+        max_x = std::max<int32_t>(max_x, mon.x + mon.width);
+        max_y = std::max<int32_t>(max_y, mon.y + mon.height);
+    }
+
+    Geometry area;
+    area.x = min_x;
+    area.y = min_y;
+    area.width = static_cast<uint16_t>(std::max<int32_t>(1, max_x - min_x));
+    area.height = static_cast<uint16_t>(std::max<int32_t>(1, max_y - min_y));
+    return area;
 }
 
 void WindowManager::iconify_window(xcb_window_t window)
@@ -1475,32 +1782,25 @@ void WindowManager::clear_focus()
 
 void WindowManager::kill_window(xcb_window_t window)
 {
-    // Per ICCCM, WM_DELETE_WINDOW must be sent as ClientMessage with type=WM_PROTOCOLS
-    auto protocols_cookie = xcb_intern_atom(conn_.get(), 0, 12, "WM_PROTOCOLS");
-    auto delete_cookie = xcb_intern_atom(conn_.get(), 0, 16, "WM_DELETE_WINDOW");
-    auto* protocols_reply = xcb_intern_atom_reply(conn_.get(), protocols_cookie, nullptr);
-    auto* delete_reply = xcb_intern_atom_reply(conn_.get(), delete_cookie, nullptr);
-
-    if (protocols_reply && delete_reply)
+    if (supports_protocol(window, wm_delete_window_))
     {
         xcb_client_message_event_t ev = {};
         ev.response_type = XCB_CLIENT_MESSAGE;
         ev.window = window;
-        ev.type = protocols_reply->atom; // Must be WM_PROTOCOLS per ICCCM
+        ev.type = wm_protocols_;
         ev.format = 32;
-        ev.data.data32[0] = delete_reply->atom; // WM_DELETE_WINDOW
-        ev.data.data32[1] = XCB_CURRENT_TIME;
+        ev.data.data32[0] = wm_delete_window_;
+        ev.data.data32[1] = last_event_time_ ? last_event_time_ : XCB_CURRENT_TIME;
 
         xcb_send_event(conn_.get(), 0, window, XCB_EVENT_MASK_NO_EVENT, reinterpret_cast<char*>(&ev));
-        conn_.flush(); // Flush before sleeping to ensure message is sent
+        conn_.flush();
+
+        send_wm_ping(window, last_event_time_);
+        pending_kills_[window] = std::chrono::steady_clock::now() + KILL_TIMEOUT;
+        return;
     }
 
-    free(protocols_reply);
-    free(delete_reply);
-
-    usleep(100000);
     xcb_kill_client(conn_.get(), window);
-    unmanage_window(window);
     conn_.flush();
 }
 
@@ -1942,14 +2242,199 @@ void WindowManager::update_floating_monitor_for_geometry(FloatingWindow& window)
 
 void WindowManager::apply_floating_geometry(FloatingWindow const& window)
 {
+    uint32_t width = window.geometry.width;
+    uint32_t height = window.geometry.height;
+    layout_.apply_size_hints(window.id, width, height);
+
+    send_sync_request(window.id, last_event_time_);
+
     uint32_t values[] = {
         static_cast<uint32_t>(window.geometry.x),
         static_cast<uint32_t>(window.geometry.y),
-        window.geometry.width,
-        window.geometry.height
+        width,
+        height
     };
     uint16_t mask = XCB_CONFIG_WINDOW_X | XCB_CONFIG_WINDOW_Y | XCB_CONFIG_WINDOW_WIDTH | XCB_CONFIG_WINDOW_HEIGHT;
     xcb_configure_window(conn_.get(), window.id, mask, values);
+}
+
+bool WindowManager::supports_protocol(xcb_window_t window, xcb_atom_t protocol) const
+{
+    if (protocol == XCB_NONE || wm_protocols_ == XCB_NONE)
+        return false;
+
+    xcb_icccm_get_wm_protocols_reply_t reply;
+    if (!xcb_icccm_get_wm_protocols_reply(
+            conn_.get(),
+            xcb_icccm_get_wm_protocols(conn_.get(), window, wm_protocols_),
+            &reply,
+            nullptr))
+    {
+        return false;
+    }
+
+    bool supported = false;
+    for (uint32_t i = 0; i < reply.atoms_len; ++i)
+    {
+        if (reply.atoms[i] == protocol)
+        {
+            supported = true;
+            break;
+        }
+    }
+    xcb_icccm_get_wm_protocols_reply_wipe(&reply);
+    return supported;
+}
+
+bool WindowManager::should_set_input_focus(xcb_window_t window) const
+{
+    xcb_icccm_wm_hints_t hints;
+    if (!xcb_icccm_get_wm_hints_reply(conn_.get(), xcb_icccm_get_wm_hints(conn_.get(), window), &hints, nullptr))
+        return true;
+
+    if (!(hints.flags & XCB_ICCCM_WM_HINT_INPUT))
+        return true;
+
+    if (hints.input)
+        return true;
+
+    return supports_protocol(window, wm_take_focus_);
+}
+
+void WindowManager::send_wm_take_focus(xcb_window_t window, uint32_t timestamp)
+{
+    if (wm_protocols_ == XCB_NONE || wm_take_focus_ == XCB_NONE)
+        return;
+
+    if (!supports_protocol(window, wm_take_focus_))
+        return;
+
+    xcb_client_message_event_t ev = {};
+    ev.response_type = XCB_CLIENT_MESSAGE;
+    ev.window = window;
+    ev.type = wm_protocols_;
+    ev.format = 32;
+    ev.data.data32[0] = wm_take_focus_;
+    ev.data.data32[1] = timestamp ? timestamp : XCB_CURRENT_TIME;
+
+    xcb_send_event(conn_.get(), 0, window, XCB_EVENT_MASK_NO_EVENT, reinterpret_cast<char*>(&ev));
+}
+
+void WindowManager::send_wm_ping(xcb_window_t window, uint32_t timestamp)
+{
+    if (net_wm_ping_ == XCB_NONE)
+        return;
+
+    if (!supports_protocol(window, net_wm_ping_))
+        return;
+
+    xcb_client_message_event_t ev = {};
+    ev.response_type = XCB_CLIENT_MESSAGE;
+    ev.window = window;
+    ev.type = net_wm_ping_;
+    ev.format = 32;
+    ev.data.data32[0] = timestamp ? timestamp : XCB_CURRENT_TIME;
+    ev.data.data32[1] = window;
+
+    xcb_send_event(conn_.get(), 0, window, XCB_EVENT_MASK_NO_EVENT, reinterpret_cast<char*>(&ev));
+    pending_pings_[window] = std::chrono::steady_clock::now() + PING_TIMEOUT;
+}
+
+void WindowManager::send_sync_request(xcb_window_t window, uint32_t timestamp)
+{
+    if (net_wm_sync_request_ == XCB_NONE)
+        return;
+
+    auto it = sync_counters_.find(window);
+    if (it == sync_counters_.end())
+        return;
+
+    uint64_t value = ++sync_values_[window];
+
+    xcb_client_message_event_t ev = {};
+    ev.response_type = XCB_CLIENT_MESSAGE;
+    ev.window = window;
+    ev.type = net_wm_sync_request_;
+    ev.format = 32;
+    ev.data.data32[0] = timestamp ? timestamp : XCB_CURRENT_TIME;
+    ev.data.data32[1] = static_cast<uint32_t>(value & 0xffffffff);
+    ev.data.data32[2] = static_cast<uint32_t>((value >> 32) & 0xffffffff);
+
+    xcb_send_event(conn_.get(), 0, window, XCB_EVENT_MASK_NO_EVENT, reinterpret_cast<char*>(&ev));
+}
+
+void WindowManager::update_sync_state(xcb_window_t window)
+{
+    if (net_wm_sync_request_counter_ == XCB_NONE || net_wm_sync_request_ == XCB_NONE)
+        return;
+
+    if (!supports_protocol(window, net_wm_sync_request_))
+    {
+        sync_counters_.erase(window);
+        sync_values_.erase(window);
+        return;
+    }
+
+    auto cookie =
+        xcb_get_property(conn_.get(), 0, window, net_wm_sync_request_counter_, XCB_ATOM_CARDINAL, 0, 1);
+    auto* reply = xcb_get_property_reply(conn_.get(), cookie, nullptr);
+    if (!reply)
+        return;
+
+    xcb_sync_counter_t counter = XCB_NONE;
+    if (xcb_get_property_value_length(reply) >= static_cast<int>(sizeof(xcb_sync_counter_t)))
+    {
+        auto* value = static_cast<xcb_sync_counter_t*>(xcb_get_property_value(reply));
+        if (value)
+            counter = *value;
+    }
+    free(reply);
+
+    if (counter == XCB_NONE)
+    {
+        sync_counters_.erase(window);
+        sync_values_.erase(window);
+        return;
+    }
+
+    sync_counters_[window] = counter;
+
+    auto counter_cookie = xcb_sync_query_counter(conn_.get(), counter);
+    auto* counter_reply = xcb_sync_query_counter_reply(conn_.get(), counter_cookie, nullptr);
+    if (counter_reply)
+    {
+        uint64_t value = (static_cast<uint64_t>(counter_reply->counter_value.hi) << 32)
+            | static_cast<uint64_t>(counter_reply->counter_value.lo);
+        sync_values_[window] = value;
+        free(counter_reply);
+    }
+    else
+    {
+        sync_values_[window] = 0;
+    }
+}
+
+void WindowManager::update_fullscreen_monitor_state(xcb_window_t window)
+{
+    if (net_wm_fullscreen_monitors_ == XCB_NONE)
+        return;
+
+    xcb_ewmh_get_wm_fullscreen_monitors_reply_t reply;
+    if (!xcb_ewmh_get_wm_fullscreen_monitors_reply(
+            ewmh_.get(),
+            xcb_ewmh_get_wm_fullscreen_monitors(ewmh_.get(), window),
+            &reply,
+            nullptr))
+    {
+        return;
+    }
+
+    FullscreenMonitors monitors;
+    monitors.top = reply.top;
+    monitors.bottom = reply.bottom;
+    monitors.left = reply.left;
+    monitors.right = reply.right;
+    fullscreen_monitors_[window] = monitors;
 }
 
 void WindowManager::send_configure_notify(xcb_window_t window)
@@ -2031,6 +2516,12 @@ void WindowManager::update_drag(int16_t root_x, int16_t root_y)
         int32_t new_h = static_cast<int32_t>(drag_state_.start_geometry.height) + dy;
         updated.width = static_cast<uint16_t>(std::max<int32_t>(1, new_w));
         updated.height = static_cast<uint16_t>(std::max<int32_t>(1, new_h));
+
+        uint32_t hinted_width = updated.width;
+        uint32_t hinted_height = updated.height;
+        layout_.apply_size_hints(floating_window->id, hinted_width, hinted_height);
+        updated.width = static_cast<uint16_t>(std::max<uint32_t>(1, hinted_width));
+        updated.height = static_cast<uint16_t>(std::max<uint32_t>(1, hinted_height));
     }
     else
     {
@@ -2201,6 +2692,8 @@ void WindowManager::update_struts()
             target->strut.bottom = std::max(target->strut.bottom, strut.bottom);
         }
     }
+
+    update_ewmh_workarea();
 }
 
 void WindowManager::unmanage_dock_window(xcb_window_t window)
@@ -2252,6 +2745,7 @@ void WindowManager::update_ewmh_desktops()
     }
     ewmh_.set_desktop_names(names);
     ewmh_.set_desktop_viewport(monitors_);
+    update_ewmh_workarea();
 }
 
 void WindowManager::update_ewmh_client_list()
@@ -2278,6 +2772,21 @@ void WindowManager::update_ewmh_current_desktop()
 {
     uint32_t desktop = get_ewmh_desktop_index(focused_monitor_, focused_monitor().current_workspace);
     ewmh_.set_current_desktop(desktop);
+}
+
+void WindowManager::update_ewmh_workarea()
+{
+    std::vector<Geometry> workareas;
+    workareas.reserve(monitors_.size() * config_.workspaces.count);
+    for (auto const& monitor : monitors_)
+    {
+        Geometry area = monitor.working_area();
+        for (size_t i = 0; i < config_.workspaces.count; ++i)
+        {
+            workareas.push_back(area);
+        }
+    }
+    ewmh_.set_workarea(workareas);
 }
 
 uint32_t WindowManager::get_ewmh_desktop_index(size_t monitor_idx, size_t workspace_idx) const
