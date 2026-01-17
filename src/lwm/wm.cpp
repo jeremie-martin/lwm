@@ -352,6 +352,18 @@ void WindowManager::handle_randr_screen_change()
         }
     }
 
+    // Destroy old bar windows before detecting new monitors
+    if (bar_)
+    {
+        for (auto const& monitor : monitors_)
+        {
+            if (monitor.bar_window != XCB_NONE)
+            {
+                bar_->destroy(monitor.bar_window);
+            }
+        }
+    }
+
     detect_monitors();
     if (bar_)
     {
@@ -500,22 +512,28 @@ void WindowManager::focus_window(xcb_window_t window)
 
 void WindowManager::kill_window(xcb_window_t window)
 {
-    xcb_intern_atom_cookie_t cookie = xcb_intern_atom(conn_.get(), 0, 16, "WM_DELETE_WINDOW");
-    xcb_intern_atom_reply_t* reply = xcb_intern_atom_reply(conn_.get(), cookie, nullptr);
+    // Per ICCCM, WM_DELETE_WINDOW must be sent as ClientMessage with type=WM_PROTOCOLS
+    auto protocols_cookie = xcb_intern_atom(conn_.get(), 0, 12, "WM_PROTOCOLS");
+    auto delete_cookie = xcb_intern_atom(conn_.get(), 0, 16, "WM_DELETE_WINDOW");
+    auto* protocols_reply = xcb_intern_atom_reply(conn_.get(), protocols_cookie, nullptr);
+    auto* delete_reply = xcb_intern_atom_reply(conn_.get(), delete_cookie, nullptr);
 
-    if (reply)
+    if (protocols_reply && delete_reply)
     {
         xcb_client_message_event_t ev = {};
         ev.response_type = XCB_CLIENT_MESSAGE;
         ev.window = window;
-        ev.type = reply->atom;
+        ev.type = protocols_reply->atom; // Must be WM_PROTOCOLS per ICCCM
         ev.format = 32;
-        ev.data.data32[0] = reply->atom;
+        ev.data.data32[0] = delete_reply->atom; // WM_DELETE_WINDOW
         ev.data.data32[1] = XCB_CURRENT_TIME;
 
         xcb_send_event(conn_.get(), 0, window, XCB_EVENT_MASK_NO_EVENT, reinterpret_cast<char*>(&ev));
-        free(reply);
+        conn_.flush(); // Flush before sleeping to ensure message is sent
     }
+
+    free(protocols_reply);
+    free(delete_reply);
 
     usleep(100000);
     xcb_kill_client(conn_.get(), window);
@@ -598,8 +616,14 @@ void WindowManager::move_window_to_workspace(int ws)
     {
         focus_window(current_ws.windows.back().id);
     }
+    else
+    {
+        // Workspace is now empty - update EWMH to reflect no active window
+        ewmh_.set_active_window(XCB_NONE);
+    }
 
     update_all_bars();
+    conn_.flush();
 }
 
 size_t WindowManager::wrap_monitor_index(int idx) const
@@ -625,13 +649,17 @@ void WindowManager::warp_to_monitor(Monitor const& monitor)
 
 void WindowManager::focus_or_fallback(Monitor& monitor)
 {
-    if (monitor.current().focused_window != XCB_NONE)
+    auto& ws = monitor.current();
+
+    // Verify focused_window actually exists in the workspace (defensive programming)
+    if (ws.focused_window != XCB_NONE && ws.find_window(ws.focused_window) != ws.windows.end())
     {
-        focus_window(monitor.current().focused_window);
+        focus_window(ws.focused_window);
     }
-    else if (!monitor.current().windows.empty())
+    else if (!ws.windows.empty())
     {
-        focus_window(monitor.current().windows.back().id);
+        // focused_window was stale or XCB_NONE - focus last window
+        focus_window(ws.windows.back().id);
     }
     else
     {
