@@ -15,7 +15,7 @@
 - [x] 13) Per-monitor workspaces vs EWMH desktops: document mapping and limitations.
 - [x] 14) Cursor warping: make configurable per BEHAVIOR.md.
 - [x] 15) Move-to-workspace focus: restore focus with floating candidates per policy.
-- [ ] 16) Move-to-monitor focus behavior: document current focus-follows-window behavior.
+- [x] 16) Move-to-monitor focus behavior: document current focus-follows-window behavior.
 - [ ] 17) Unmap tracking race: replace boolean set with per-window counter.
 - [ ] 18) Signed geometry: avoid unsigned wrap for monitor/ewmh geometry and workarea.
 - [x] 19) Transients: enforce stacking above parent and skip taskbar/pager by default.

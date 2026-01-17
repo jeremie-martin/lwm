@@ -115,7 +115,7 @@ Configuration: `[focus].warp_cursor_on_monitor_change = true`.
 When moving a window to another monitor:
 - The window is reassigned to the destination monitor’s currently visible workspace (default policy).
 - Layout is recomputed on both involved monitors/workspaces.
-- Focus in the source context is restored according to Section 2.4.
+- The destination monitor becomes active and the moved window is focused.
 
 ---
 
