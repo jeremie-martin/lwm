@@ -870,9 +870,13 @@ void WindowManager::handle_client_message(xcb_client_message_event_t const& e)
 {
     xcb_ewmh_connection_t* ewmh = ewmh_.get();
 
-    if (e.type == net_wm_ping_)
+    if (e.type == wm_protocols_ && e.data.data32[0] == net_wm_ping_)
     {
-        xcb_window_t window = static_cast<xcb_window_t>(e.data.data32[1]);
+        xcb_window_t window = static_cast<xcb_window_t>(e.data.data32[2]);
+        if (window == XCB_NONE)
+        {
+            window = e.window;
+        }
         pending_pings_.erase(window);
         return;
     }
@@ -3135,7 +3139,7 @@ void WindowManager::send_wm_take_focus(xcb_window_t window, uint32_t timestamp)
 
 void WindowManager::send_wm_ping(xcb_window_t window, uint32_t timestamp)
 {
-    if (net_wm_ping_ == XCB_NONE)
+    if (wm_protocols_ == XCB_NONE || net_wm_ping_ == XCB_NONE)
         return;
 
     if (!supports_protocol(window, net_wm_ping_))
@@ -3144,10 +3148,11 @@ void WindowManager::send_wm_ping(xcb_window_t window, uint32_t timestamp)
     xcb_client_message_event_t ev = {};
     ev.response_type = XCB_CLIENT_MESSAGE;
     ev.window = window;
-    ev.type = net_wm_ping_;
+    ev.type = wm_protocols_;
     ev.format = 32;
-    ev.data.data32[0] = timestamp ? timestamp : XCB_CURRENT_TIME;
-    ev.data.data32[1] = window;
+    ev.data.data32[0] = net_wm_ping_;
+    ev.data.data32[1] = timestamp ? timestamp : XCB_CURRENT_TIME;
+    ev.data.data32[2] = window;
 
     xcb_send_event(conn_.get(), 0, window, XCB_EVENT_MASK_NO_EVENT, reinterpret_cast<char*>(&ev));
     pending_pings_[window] = std::chrono::steady_clock::now() + PING_TIMEOUT;
