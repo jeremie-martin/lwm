@@ -41,10 +41,14 @@ The WM must read and honor these client-set properties:
 
 #### WM_NORMAL_HINTS (Size Hints)
 - `min_width`, `min_height`: enforce minimum dimensions.
-- `max_width`, `max_height`: enforce maximum dimensions.
+- `max_width`, `max_height`: **not enforced** (tiling WM controls sizing).
 - `base_width`, `base_height`: use as base for increment calculations.
-- `width_inc`, `height_inc`: constrain resizes to increments.
-- `min_aspect`, `max_aspect`: constrain aspect ratio.
+- `width_inc`, `height_inc`: **intentionally not enforced** for tiled windows.
+  - Rationale: Resize increments (e.g., terminal character sizes) would cause
+    inconsistent gaps between windows. Tiling WMs prioritize uniform spacing
+    over pixel-perfect character alignment. Applications will render with
+    slightly imperfect character boundaries but consistent visual layout.
+- `min_aspect`, `max_aspect`: **not enforced** (could cause layout gaps).
 - `win_gravity`: use for positioning after resize.
 - `PPosition`, `USPosition`: honor user-specified position for floating windows.
 - `PSize`, `USSize`: honor user-specified size for initial mapping.

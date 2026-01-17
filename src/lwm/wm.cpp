@@ -644,7 +644,7 @@ void WindowManager::handle_map_request(xcb_map_request_event_t const& e)
     }
     else
     {
-        xcb_map_window(conn_.get(), e.window);
+        // Window already mapped by layout_.arrange() in manage_window()
         focus_window(e.window);
     }
 }
@@ -1411,6 +1411,9 @@ void WindowManager::manage_window(xcb_window_t window)
     uint32_t values[] = { XCB_EVENT_MASK_ENTER_WINDOW | XCB_EVENT_MASK_FOCUS_CHANGE | XCB_EVENT_MASK_PROPERTY_CHANGE
                           | XCB_EVENT_MASK_STRUCTURE_NOTIFY };
     xcb_change_window_attributes(conn_.get(), window, XCB_CW_EVENT_MASK, values);
+
+    // Set border width BEFORE layout so positions are calculated correctly
+    xcb_configure_window(conn_.get(), window, XCB_CONFIG_WINDOW_BORDER_WIDTH, &config_.appearance.border_width);
 
     if (wm_state_ != XCB_NONE)
     {
@@ -2527,8 +2530,7 @@ void WindowManager::update_floating_visibility(size_t monitor_idx)
 
         if (floating_window.workspace == monitor.current_workspace && !iconic_windows_.contains(floating_window.id))
         {
-            xcb_map_window(conn_.get(), floating_window.id);
-            wm_unmapped_windows_.erase(floating_window.id);
+            // Configure BEFORE mapping so window appears at correct position
             if (fullscreen_windows_.contains(floating_window.id))
             {
                 apply_fullscreen_if_needed(floating_window.id);
@@ -2537,6 +2539,8 @@ void WindowManager::update_floating_visibility(size_t monitor_idx)
             {
                 apply_floating_geometry(floating_window);
             }
+            xcb_map_window(conn_.get(), floating_window.id);
+            wm_unmapped_windows_.erase(floating_window.id);
         }
         else
         {
@@ -2577,12 +2581,27 @@ void WindowManager::apply_floating_geometry(FloatingWindow const& window)
 
     send_sync_request(window.id, last_event_time_);
 
-    uint32_t values[] = { static_cast<uint32_t>(window.geometry.x),
-                          static_cast<uint32_t>(window.geometry.y),
-                          width,
-                          height };
+    int32_t x = static_cast<int32_t>(window.geometry.x);
+    int32_t y = static_cast<int32_t>(window.geometry.y);
+
+    uint32_t values[] = { static_cast<uint32_t>(x), static_cast<uint32_t>(y), width, height };
     uint16_t mask = XCB_CONFIG_WINDOW_X | XCB_CONFIG_WINDOW_Y | XCB_CONFIG_WINDOW_WIDTH | XCB_CONFIG_WINDOW_HEIGHT;
     xcb_configure_window(conn_.get(), window.id, mask, values);
+
+    // Send synthetic ConfigureNotify so client knows its geometry immediately
+    xcb_configure_notify_event_t ev = {};
+    ev.response_type = XCB_CONFIGURE_NOTIFY;
+    ev.event = window.id;
+    ev.window = window.id;
+    ev.x = static_cast<int16_t>(x);
+    ev.y = static_cast<int16_t>(y);
+    ev.width = static_cast<uint16_t>(width);
+    ev.height = static_cast<uint16_t>(height);
+    ev.border_width = static_cast<uint16_t>(config_.appearance.border_width);
+    ev.above_sibling = XCB_NONE;
+    ev.override_redirect = 0;
+
+    xcb_send_event(conn_.get(), 0, window.id, XCB_EVENT_MASK_STRUCTURE_NOTIFY, reinterpret_cast<char*>(&ev));
 }
 
 bool WindowManager::supports_protocol(xcb_window_t window, xcb_atom_t protocol) const
