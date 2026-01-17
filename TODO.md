@@ -20,5 +20,5 @@
 - [ ] 18) Signed geometry: avoid unsigned wrap for monitor/ewmh geometry and workarea.
 - [ ] 19) Transients: enforce stacking above parent and skip taskbar/pager by default.
 - [ ] A) Spec: implement _NET_WM_PING and _NET_WM_SYNC_REQUEST correctly and test.
-- [ ] B) Spec: document that size increments are not enforced for any windows.
+- [x] B) Spec: document that size increments are not enforced for any windows.
 - [ ] C) Spec: keep per-monitor workspaces and document EWMH desktop mapping.

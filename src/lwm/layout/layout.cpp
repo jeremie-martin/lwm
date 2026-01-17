@@ -241,7 +241,7 @@ void Layout::apply_size_hints(xcb_window_t window, uint32_t& width, uint32_t& he
 
     // Only enforce minimum size constraints.
     // We intentionally ignore:
-    // - Resize increments (would cause gaps with terminals)
+    // - Base size and resize increments (pixel-granular resizing for all windows)
     // - Maximum size (tiling WM controls sizing)
     // - Aspect ratio (could cause unexpected gaps)
     // This ensures windows fill their allocated space completely.
