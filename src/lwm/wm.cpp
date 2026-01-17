@@ -1326,18 +1326,18 @@ void WindowManager::apply_fullscreen_if_needed(xcb_window_t window)
     if (auto* floating_window = find_floating_window(window))
     {
         monitor_idx = floating_window->monitor;
-        if (monitor_idx && *monitor_idx < monitors_.size())
-        {
-            if (floating_window->workspace != monitors_[*monitor_idx].current_workspace)
-                return;
-        }
+        if (!monitor_idx || *monitor_idx >= monitors_.size())
+            return;
+        if (floating_window->workspace != monitors_[*monitor_idx].current_workspace)
+            return;
     }
     else
     {
         monitor_idx = monitor_index_for_window(window);
         auto workspace_idx = workspace_index_for_window(window);
-        if (!monitor_idx || !workspace_idx || *monitor_idx >= monitors_.size()
-            || *workspace_idx != monitors_[*monitor_idx].current_workspace)
+        if (!monitor_idx || *monitor_idx >= monitors_.size())
+            return;
+        if (!workspace_idx || *workspace_idx != monitors_[*monitor_idx].current_workspace)
             return;
     }
 
