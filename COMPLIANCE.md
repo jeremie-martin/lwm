@@ -170,6 +170,7 @@ The WM must set and maintain:
 #### _NET_NUMBER_OF_DESKTOPS
 - Total number of virtual desktops/workspaces.
 - Update if desktops are added/removed dynamically.
+- For per-monitor workspaces: count is `monitors * workspaces_per_monitor`.
 
 #### _NET_DESKTOP_GEOMETRY
 - Size of the desktop (viewport) in pixels.
@@ -178,10 +179,12 @@ The WM must set and maintain:
 #### _NET_DESKTOP_VIEWPORT
 - Top-left corner of each desktop's viewport.
 - For non-large-desktop WMs: typically (0,0) for each.
+- For per-monitor workspaces: repeat each monitor’s origin once per workspace slot.
 
 #### _NET_CURRENT_DESKTOP
 - Index of the currently active desktop.
 - Update on desktop switch.
+- For per-monitor workspaces: track the active monitor’s current workspace.
 
 #### _NET_DESKTOP_NAMES
 - UTF-8 names for each desktop.

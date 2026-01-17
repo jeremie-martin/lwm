@@ -35,6 +35,14 @@ Once classified, windows behave as follows:
   except for special visibility rules (e.g., sticky behavior) defined by configuration/compliance.
 - Only visible windows may be focused.
 
+### 1.5 EWMH Desktop Mapping (Per-Monitor Workspaces)
+LWM uses per-monitor workspaces and maps them into EWMH desktops as follows:
+- `_NET_NUMBER_OF_DESKTOPS = monitors * workspaces_per_monitor`.
+- Desktop index = `monitor_index * workspaces_per_monitor + workspace_index`.
+- `_NET_CURRENT_DESKTOP` reflects the **active monitor’s** current workspace only.
+- `_NET_DESKTOP_VIEWPORT` repeats each monitor’s origin per workspace slot.
+This mapping is intentionally per-monitor; some pagers may assume global desktops.
+
 ---
 
 ## 2. Focus and Active Monitor Policy

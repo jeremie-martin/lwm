@@ -12,7 +12,7 @@
 - [x] 10) Window types: recognize first-known type from list; support required types; fix _NET_SUPPORTED.
 - [x] 11) Window states: implement required _NET_WM_STATE handling incl. HIDDEN and others.
 - [x] 12) Client list ordering/stacking: match COMPLIANCE requirements or track order.
-- [ ] 13) Per-monitor workspaces vs EWMH desktops: document mapping and limitations.
+- [x] 13) Per-monitor workspaces vs EWMH desktops: document mapping and limitations.
 - [ ] 14) Cursor warping: make configurable per BEHAVIOR.md.
 - [ ] 15) Move-to-workspace focus: restore focus with floating candidates per policy.
 - [ ] 16) Move-to-monitor focus behavior: document current focus-follows-window behavior.
@@ -21,4 +21,4 @@
 - [x] 19) Transients: enforce stacking above parent and skip taskbar/pager by default.
 - [ ] A) Spec: implement _NET_WM_PING and _NET_WM_SYNC_REQUEST correctly and test.
 - [x] B) Spec: document that size increments are not enforced for any windows.
-- [ ] C) Spec: keep per-monitor workspaces and document EWMH desktop mapping.
+- [x] C) Spec: keep per-monitor workspaces and document EWMH desktop mapping.

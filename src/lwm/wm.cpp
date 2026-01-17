@@ -4430,6 +4430,7 @@ void WindowManager::update_ewmh_client_list()
 
 void WindowManager::update_ewmh_current_desktop()
 {
+    // Per-monitor workspaces: report the active monitor's current workspace only.
     uint32_t desktop = get_ewmh_desktop_index(focused_monitor_, focused_monitor().current_workspace);
     ewmh_.set_current_desktop(desktop);
 }
