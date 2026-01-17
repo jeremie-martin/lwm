@@ -444,7 +444,8 @@ void WindowManager::scan_existing_windows()
 
         if (ewmh_.is_dock_window(window))
         {
-            uint32_t values[] = { XCB_EVENT_MASK_ENTER_WINDOW | XCB_EVENT_MASK_POINTER_MOTION };
+            uint32_t values[] = { XCB_EVENT_MASK_ENTER_WINDOW | XCB_EVENT_MASK_POINTER_MOTION
+                                  | XCB_EVENT_MASK_PROPERTY_CHANGE };
             xcb_change_window_attributes(conn_.get(), window, XCB_CW_EVENT_MASK, values);
             if (std::ranges::find(dock_windows_, window) == dock_windows_.end())
             {
@@ -592,7 +593,8 @@ void WindowManager::handle_map_request(xcb_map_request_event_t const& e)
     if (ewmh_.is_dock_window(e.window))
     {
         // Map but don't manage - let it float above
-        uint32_t values[] = { XCB_EVENT_MASK_ENTER_WINDOW | XCB_EVENT_MASK_POINTER_MOTION };
+        uint32_t values[] = { XCB_EVENT_MASK_ENTER_WINDOW | XCB_EVENT_MASK_POINTER_MOTION
+                              | XCB_EVENT_MASK_PROPERTY_CHANGE };
         xcb_change_window_attributes(conn_.get(), e.window, XCB_CW_EVENT_MASK, values);
         xcb_map_window(conn_.get(), e.window);
         if (std::ranges::find(dock_windows_, e.window) == dock_windows_.end())
@@ -1381,6 +1383,14 @@ void WindowManager::handle_property_notify(xcb_property_notify_event_t const& e)
     if (net_wm_user_time_ != XCB_NONE && e.atom == net_wm_user_time_)
     {
         user_times_[e.window] = get_user_time(e.window);
+    }
+    if ((e.atom == ewmh_.get()->_NET_WM_STRUT || e.atom == ewmh_.get()->_NET_WM_STRUT_PARTIAL)
+        && std::ranges::find(dock_windows_, e.window) != dock_windows_.end())
+    {
+        update_struts();
+        rearrange_all_monitors();
+        update_all_bars();
+        conn_.flush();
     }
 }
 
