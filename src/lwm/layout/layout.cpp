@@ -10,12 +10,6 @@ Layout::Layout(Connection& conn, AppearanceConfig const& appearance)
 
 void Layout::arrange(std::vector<Window> const& windows, Geometry const& geometry, bool has_internal_bar)
 {
-    // Map all windows
-    for (auto const& window : windows)
-    {
-        xcb_map_window(conn_.get(), window.id);
-    }
-
     if (windows.empty())
         return;
 
@@ -26,6 +20,7 @@ void Layout::arrange(std::vector<Window> const& windows, Geometry const& geometr
     int32_t baseY = geometry.y;
     uint32_t screenWidth = geometry.width;
     uint32_t padding = appearance_.padding;
+    uint32_t border = appearance_.border_width;
 
     // Only account for internal bar if it's enabled
     // External docks (Polybar) are handled via struts in working_area()
@@ -35,59 +30,85 @@ void Layout::arrange(std::vector<Window> const& windows, Geometry const& geometr
     // Helper to safely subtract with minimum bound
     auto safe_sub = [](uint32_t a, uint32_t b) -> uint32_t { return (a > b) ? std::max(a - b, 50u) : 50u; };
 
+    // In X11, window position is for client area, border is drawn outside.
+    // To get uniform visual gaps, we must account for border width.
+    // Visual gap = padding, so client position = base + padding + border
+    // Client width = available - 2*padding - 2*border (for both sides)
+
     if (windows.size() == 1)
     {
-        uint32_t width = safe_sub(screenWidth, 2 * padding);
-        uint32_t height = safe_sub(screenHeight, 2 * padding);
+        uint32_t width = safe_sub(screenWidth, 2 * padding + 2 * border);
+        uint32_t height = safe_sub(screenHeight, 2 * padding + 2 * border);
         apply_size_hints(windows[0].id, width, height);
-        configure_window(windows[0].id, baseX + padding, baseY + padding + barHeight, width, height);
+        configure_window(windows[0].id, baseX + padding + border, baseY + padding + border + barHeight, width, height);
     }
     else if (windows.size() == 2)
     {
-        uint32_t halfWidth = safe_sub(screenWidth, 3 * padding) / 2;
-        uint32_t winHeight = safe_sub(screenHeight, 2 * padding);
+        // Two windows side by side: padding | border | win1 | border | padding | border | win2 | border | padding
+        // Total borders: 4 * border (2 per window)
+        // Total padding: 3 * padding
+        uint32_t totalBorders = 4 * border;
+        uint32_t totalPadding = 3 * padding;
+        uint32_t availWidth = safe_sub(screenWidth, totalPadding + totalBorders);
+        uint32_t halfWidth = availWidth / 2;
+        uint32_t winHeight = safe_sub(screenHeight, 2 * padding + 2 * border);
 
         uint32_t leftWidth = halfWidth;
         uint32_t leftHeight = winHeight;
         apply_size_hints(windows[0].id, leftWidth, leftHeight);
-        configure_window(windows[0].id, baseX + padding, baseY + padding + barHeight, leftWidth, leftHeight);
+        int32_t leftX = baseX + padding + border;
+        int32_t leftY = baseY + padding + border + barHeight;
+        configure_window(windows[0].id, leftX, leftY, leftWidth, leftHeight);
 
-        // Calculate right window width from remaining space for consistent padding
-        uint32_t rightX = baseX + padding + leftWidth + padding;
-        uint32_t rightWidth = safe_sub(screenWidth, leftWidth + 3 * padding);
+        // Right window position accounts for left window's actual size + borders
+        uint32_t rightWidth = safe_sub(availWidth, leftWidth);
         uint32_t rightHeight = winHeight;
         apply_size_hints(windows[1].id, rightWidth, rightHeight);
-        configure_window(windows[1].id, rightX, baseY + padding + barHeight, rightWidth, rightHeight);
+        int32_t rightX = leftX + leftWidth + border + padding + border;
+        configure_window(windows[1].id, rightX, leftY, rightWidth, rightHeight);
     }
     else
     {
-        // Master-stack layout: first window on left half, rest stacked on right
-        uint32_t halfWidth = safe_sub(screenWidth, 3 * padding) / 2;
-        uint32_t masterHeight = safe_sub(screenHeight, 2 * padding);
+        // Master-stack layout: master on left, stack on right
+        // Horizontal: padding | border | master | border | padding | border | stack | border | padding
+        uint32_t totalHBorders = 4 * border;
+        uint32_t totalHPadding = 3 * padding;
+        uint32_t availWidth = safe_sub(screenWidth, totalHPadding + totalHBorders);
+        uint32_t halfWidth = availWidth / 2;
 
         uint32_t masterWidth = halfWidth;
-        uint32_t masterH = masterHeight;
-        apply_size_hints(windows[0].id, masterWidth, masterH);
-        configure_window(windows[0].id, baseX + padding, baseY + padding + barHeight, masterWidth, masterH);
+        uint32_t masterHeight = safe_sub(screenHeight, 2 * padding + 2 * border);
+        apply_size_hints(windows[0].id, masterWidth, masterHeight);
+        int32_t masterX = baseX + padding + border;
+        int32_t masterY = baseY + padding + border + barHeight;
+        configure_window(windows[0].id, masterX, masterY, masterWidth, masterHeight);
 
-        // Stack windows on right, positioned relative to actual master width
-        int32_t stackX = baseX + padding + masterWidth + padding;
-        uint32_t stackAvailWidth = safe_sub(screenWidth, masterWidth + 3 * padding);
+        // Stack windows on right
+        int32_t stackX = masterX + masterWidth + border + padding + border;
+        uint32_t stackAvailWidth = safe_sub(availWidth, masterWidth);
 
         size_t stackCount = windows.size() - 1;
-        uint32_t totalStackPadding = static_cast<uint32_t>((stackCount + 1) * padding);
-        uint32_t stackSlotHeight = safe_sub(screenHeight, totalStackPadding) / stackCount;
+        // Vertical: (stackCount + 1) paddings, stackCount * 2 borders
+        uint32_t totalVPadding = static_cast<uint32_t>((stackCount + 1) * padding);
+        uint32_t totalVBorders = static_cast<uint32_t>(stackCount * 2 * border);
+        uint32_t stackAvailHeight = safe_sub(screenHeight, totalVPadding + totalVBorders);
+        uint32_t stackSlotHeight = stackAvailHeight / stackCount;
 
-        // Track Y position for sequential placement with consistent padding
-        int32_t currentY = baseY + padding + barHeight;
+        int32_t currentY = baseY + padding + border + barHeight;
         for (size_t i = 1; i < windows.size(); ++i)
         {
             uint32_t stackWidth = stackAvailWidth;
             uint32_t stackH = stackSlotHeight;
             apply_size_hints(windows[i].id, stackWidth, stackH);
             configure_window(windows[i].id, stackX, currentY, stackWidth, stackH);
-            currentY += stackH + padding;
+            currentY += stackH + border + padding + border;
         }
+    }
+
+    // Map all windows AFTER configuring (ensures correct geometry on map)
+    for (auto const& window : windows)
+    {
+        xcb_map_window(conn_.get(), window.id);
     }
 
     conn_.flush();
@@ -107,6 +128,21 @@ void Layout::configure_window(xcb_window_t window, int32_t x, int32_t y, uint32_
         XCB_CONFIG_WINDOW_X | XCB_CONFIG_WINDOW_Y | XCB_CONFIG_WINDOW_WIDTH | XCB_CONFIG_WINDOW_HEIGHT,
         values
     );
+
+    // Send synthetic ConfigureNotify so client knows its geometry immediately
+    xcb_configure_notify_event_t ev = {};
+    ev.response_type = XCB_CONFIGURE_NOTIFY;
+    ev.event = window;
+    ev.window = window;
+    ev.x = static_cast<int16_t>(x);
+    ev.y = static_cast<int16_t>(y);
+    ev.width = static_cast<uint16_t>(width);
+    ev.height = static_cast<uint16_t>(height);
+    ev.border_width = static_cast<uint16_t>(appearance_.border_width);
+    ev.above_sibling = XCB_NONE;
+    ev.override_redirect = 0;
+
+    xcb_send_event(conn_.get(), 0, window, XCB_EVENT_MASK_STRUCTURE_NOTIFY, reinterpret_cast<char*>(&ev));
 }
 
 void Layout::set_sync_request_callback(std::function<void(xcb_window_t)> callback)
@@ -132,56 +168,17 @@ void Layout::apply_size_hints(xcb_window_t window, uint32_t& width, uint32_t& he
     if (error)
         free(error);
 
+    // Only enforce minimum size constraints.
+    // We intentionally ignore:
+    // - Resize increments (would cause gaps with terminals)
+    // - Maximum size (tiling WM controls sizing)
+    // - Aspect ratio (could cause unexpected gaps)
+    // This ensures windows fill their allocated space completely.
+
     if (hints.flags & XCB_ICCCM_SIZE_HINT_P_MIN_SIZE)
     {
         width = std::max<uint32_t>(width, hints.min_width);
         height = std::max<uint32_t>(height, hints.min_height);
-    }
-
-    if (hints.flags & XCB_ICCCM_SIZE_HINT_P_MAX_SIZE)
-    {
-        if (hints.max_width > 0)
-            width = std::min<uint32_t>(width, hints.max_width);
-        if (hints.max_height > 0)
-            height = std::min<uint32_t>(height, hints.max_height);
-    }
-
-    uint32_t base_width = 0;
-    uint32_t base_height = 0;
-    if (hints.flags & XCB_ICCCM_SIZE_HINT_BASE_SIZE)
-    {
-        base_width = hints.base_width;
-        base_height = hints.base_height;
-    }
-
-    if (hints.flags & XCB_ICCCM_SIZE_HINT_P_RESIZE_INC)
-    {
-        uint32_t inc_width = std::max<uint32_t>(1, hints.width_inc);
-        uint32_t inc_height = std::max<uint32_t>(1, hints.height_inc);
-        if (width > base_width)
-        {
-            width = base_width + ((width - base_width) / inc_width) * inc_width;
-        }
-        if (height > base_height)
-        {
-            height = base_height + ((height - base_height) / inc_height) * inc_height;
-        }
-    }
-
-    if (hints.flags & XCB_ICCCM_SIZE_HINT_P_ASPECT)
-    {
-        double min_ratio = static_cast<double>(hints.min_aspect_num) / std::max<int>(1, hints.min_aspect_den);
-        double max_ratio = static_cast<double>(hints.max_aspect_num) / std::max<int>(1, hints.max_aspect_den);
-        double ratio = static_cast<double>(width) / std::max<uint32_t>(1, height);
-
-        if (ratio < min_ratio)
-        {
-            width = static_cast<uint32_t>(min_ratio * static_cast<double>(height));
-        }
-        else if (ratio > max_ratio)
-        {
-            height = static_cast<uint32_t>(static_cast<double>(width) / max_ratio);
-        }
     }
 
     width = std::max<uint32_t>(1, width);
