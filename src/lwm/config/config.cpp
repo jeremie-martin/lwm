@@ -144,6 +144,12 @@ std::optional<Config> load_config(std::string const& path)
                 cfg.appearance.enable_internal_bar = *v;
         }
 
+        if (auto focus = tbl["focus"].as_table())
+        {
+            if (auto v = (*focus)["warp_cursor_on_monitor_change"].value<bool>())
+                cfg.focus.warp_cursor_on_monitor_change = *v;
+        }
+
         // Programs
         if (auto programs = tbl["programs"].as_table())
         {

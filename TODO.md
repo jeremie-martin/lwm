@@ -13,7 +13,7 @@
 - [x] 11) Window states: implement required _NET_WM_STATE handling incl. HIDDEN and others.
 - [x] 12) Client list ordering/stacking: match COMPLIANCE requirements or track order.
 - [x] 13) Per-monitor workspaces vs EWMH desktops: document mapping and limitations.
-- [ ] 14) Cursor warping: make configurable per BEHAVIOR.md.
+- [x] 14) Cursor warping: make configurable per BEHAVIOR.md.
 - [ ] 15) Move-to-workspace focus: restore focus with floating candidates per policy.
 - [ ] 16) Move-to-monitor focus behavior: document current focus-follows-window behavior.
 - [ ] 17) Unmap tracking race: replace boolean set with per-window counter.

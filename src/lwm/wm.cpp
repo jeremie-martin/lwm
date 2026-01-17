@@ -3108,7 +3108,10 @@ void WindowManager::focus_monitor(int direction)
 
     auto& monitor = focused_monitor();
     focus_or_fallback(monitor);
-    warp_to_monitor(monitor);
+    if (config_.focus.warp_cursor_on_monitor_change)
+    {
+        warp_to_monitor(monitor);
+    }
 
     update_all_bars();
     conn_.flush();
@@ -3152,7 +3155,10 @@ void WindowManager::move_window_to_monitor(int direction)
         focused_monitor_ = target_idx;
         update_ewmh_current_desktop();
         focus_floating_window(window_to_move);
-        warp_to_monitor(monitors_[target_idx]);
+        if (config_.focus.warp_cursor_on_monitor_change)
+        {
+            warp_to_monitor(monitors_[target_idx]);
+        }
 
         update_all_bars();
         conn_.flush();
@@ -3198,7 +3204,10 @@ void WindowManager::move_window_to_monitor(int direction)
     focused_monitor_ = target_idx;
     update_ewmh_current_desktop();
     focus_window(window_to_move);
-    warp_to_monitor(target_monitor);
+    if (config_.focus.warp_cursor_on_monitor_change)
+    {
+        warp_to_monitor(target_monitor);
+    }
 
     update_all_bars();
     conn_.flush();

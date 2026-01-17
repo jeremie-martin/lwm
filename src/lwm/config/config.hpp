@@ -41,6 +41,11 @@ struct ProgramsConfig
     std::string launcher = "dmenu_run";
 };
 
+struct FocusConfig
+{
+    bool warp_cursor_on_monitor_change = false;
+};
+
 struct WorkspacesConfig
 {
     size_t count = 10;
@@ -50,6 +55,7 @@ struct WorkspacesConfig
 struct Config
 {
     AppearanceConfig appearance;
+    FocusConfig focus;
     ProgramsConfig programs;
     WorkspacesConfig workspaces;
     std::vector<KeybindConfig> keybinds;

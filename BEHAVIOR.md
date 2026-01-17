@@ -109,6 +109,7 @@ When explicitly switching the active monitor:
 - Focus is restored on that monitor’s visible workspace according to Section 2.4.
 
 Cursor warping is a configurable UI behavior; it is not required unless explicitly enabled.
+Configuration: `[focus].warp_cursor_on_monitor_change = true`.
 
 ### 4.2 Moving a Window to Another Monitor
 When moving a window to another monitor:

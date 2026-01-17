@@ -10,6 +10,10 @@ status_bar_color = 0x808080   # Gray (hex)
 enable_internal_bar = false   # Set to true to use LWM's built-in status bar
                               # Set to false (default) when using Polybar or other external panels
 
+[focus]
+# If true, warp cursor to the target monitor center on explicit monitor changes.
+warp_cursor_on_monitor_change = false
+
 [programs]
 terminal = "/usr/local/bin/st"
 browser = "/usr/bin/firefox"
