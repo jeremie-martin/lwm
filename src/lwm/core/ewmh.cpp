@@ -187,7 +187,7 @@ void Ewmh::set_current_desktop(uint32_t desktop) { xcb_ewmh_set_current_desktop(
 
 void Ewmh::set_active_window(xcb_window_t window) { xcb_ewmh_set_active_window(&ewmh_, 0, window); }
 
-void Ewmh::set_desktop_viewport(std::vector<Monitor> const& monitors)
+void Ewmh::set_desktop_viewport(std::vector<Monitor> const& monitors, int32_t origin_x, int32_t origin_y)
 {
     // For multi-monitor with per-monitor workspaces, we set viewport coordinates
     // Each workspace maps to a monitor's position
@@ -197,7 +197,12 @@ void Ewmh::set_desktop_viewport(std::vector<Monitor> const& monitors)
     {
         for (size_t i = 0; i < monitor.workspaces.size(); ++i)
         {
-            viewports.push_back({ static_cast<uint32_t>(monitor.x), static_cast<uint32_t>(monitor.y) });
+            int32_t offset_x = static_cast<int32_t>(monitor.x) - origin_x;
+            int32_t offset_y = static_cast<int32_t>(monitor.y) - origin_y;
+            viewports.push_back(
+                { static_cast<uint32_t>(std::max<int32_t>(0, offset_x)),
+                  static_cast<uint32_t>(std::max<int32_t>(0, offset_y)) }
+            );
         }
     }
 

@@ -30,7 +30,7 @@ public:
     // Dynamic updates
     void set_current_desktop(uint32_t desktop);
     void set_active_window(xcb_window_t window);
-    void set_desktop_viewport(std::vector<Monitor> const& monitors);
+    void set_desktop_viewport(std::vector<Monitor> const& monitors, int32_t origin_x, int32_t origin_y);
 
     // Per-window properties
     void set_window_desktop(xcb_window_t window, uint32_t desktop);

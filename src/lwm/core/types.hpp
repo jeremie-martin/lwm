@@ -71,12 +71,16 @@ struct Monitor
     Geometry working_area() const
     {
         // Clamp struts to prevent underflow
-        uint32_t h_strut = std::min(static_cast<uint32_t>(width), strut.left + strut.right);
-        uint32_t v_strut = std::min(static_cast<uint32_t>(height), strut.top + strut.bottom);
-        return { static_cast<int16_t>(x + strut.left),
-                 static_cast<int16_t>(y + strut.top),
-                 static_cast<uint16_t>(width - h_strut),
-                 static_cast<uint16_t>(height - v_strut) };
+        int32_t h_strut = std::min<int32_t>(static_cast<int32_t>(width), static_cast<int32_t>(strut.left + strut.right));
+        int32_t v_strut = std::min<int32_t>(static_cast<int32_t>(height), static_cast<int32_t>(strut.top + strut.bottom));
+        int32_t area_x = static_cast<int32_t>(x) + static_cast<int32_t>(strut.left);
+        int32_t area_y = static_cast<int32_t>(y) + static_cast<int32_t>(strut.top);
+        int32_t area_w = std::max<int32_t>(1, static_cast<int32_t>(width) - h_strut);
+        int32_t area_h = std::max<int32_t>(1, static_cast<int32_t>(height) - v_strut);
+        return { static_cast<int16_t>(area_x),
+                 static_cast<int16_t>(area_y),
+                 static_cast<uint16_t>(area_w),
+                 static_cast<uint16_t>(area_h) };
     }
 };
 

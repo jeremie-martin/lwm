@@ -104,6 +104,8 @@ private:
     std::unordered_map<xcb_window_t, uint32_t> user_times_;
     std::unordered_map<xcb_window_t, uint64_t> client_order_;
     uint64_t next_client_order_ = 0;
+    int32_t desktop_origin_x_ = 0;
+    int32_t desktop_origin_y_ = 0;
     xcb_window_t active_window_ = XCB_NONE;
     size_t focused_monitor_ = 0; // Active monitor index (window focus tracked separately).
     xcb_window_t wm_window_ = XCB_NONE;

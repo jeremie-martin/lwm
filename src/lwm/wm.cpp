@@ -4347,24 +4347,38 @@ void WindowManager::setup_ewmh()
     ewmh_.init_atoms();
     ewmh_.set_wm_name("lwm");
 
-    // Calculate total desktop geometry (bounding box of all monitors)
-    uint32_t max_x = 0;
-    uint32_t max_y = 0;
-    for (auto const& monitor : monitors_)
-    {
-        uint32_t right = static_cast<uint32_t>(monitor.x) + monitor.width;
-        uint32_t bottom = static_cast<uint32_t>(monitor.y) + monitor.height;
-        max_x = std::max(max_x, right);
-        max_y = std::max(max_y, bottom);
-    }
-    ewmh_.set_desktop_geometry(max_x, max_y);
-
     update_ewmh_desktops();
     update_ewmh_current_desktop();
 }
 
 void WindowManager::update_ewmh_desktops()
 {
+    int32_t min_x = 0;
+    int32_t min_y = 0;
+    int32_t max_x = 0;
+    int32_t max_y = 0;
+    if (!monitors_.empty())
+    {
+        min_x = monitors_[0].x;
+        min_y = monitors_[0].y;
+        max_x = static_cast<int32_t>(monitors_[0].x) + monitors_[0].width;
+        max_y = static_cast<int32_t>(monitors_[0].y) + monitors_[0].height;
+        for (auto const& monitor : monitors_)
+        {
+            min_x = std::min<int32_t>(min_x, monitor.x);
+            min_y = std::min<int32_t>(min_y, monitor.y);
+            max_x = std::max<int32_t>(max_x, static_cast<int32_t>(monitor.x) + monitor.width);
+            max_y = std::max<int32_t>(max_y, static_cast<int32_t>(monitor.y) + monitor.height);
+        }
+    }
+
+    desktop_origin_x_ = min_x;
+    desktop_origin_y_ = min_y;
+
+    uint32_t desktop_width = static_cast<uint32_t>(std::max<int32_t>(1, max_x - min_x));
+    uint32_t desktop_height = static_cast<uint32_t>(std::max<int32_t>(1, max_y - min_y));
+    ewmh_.set_desktop_geometry(desktop_width, desktop_height);
+
     size_t workspaces_per_monitor = config_.workspaces.count;
     uint32_t total_desktops = static_cast<uint32_t>(monitors_.size() * workspaces_per_monitor);
     ewmh_.set_number_of_desktops(total_desktops);
@@ -4386,7 +4400,7 @@ void WindowManager::update_ewmh_desktops()
         }
     }
     ewmh_.set_desktop_names(names);
-    ewmh_.set_desktop_viewport(monitors_);
+    ewmh_.set_desktop_viewport(monitors_, desktop_origin_x_, desktop_origin_y_);
     update_ewmh_workarea();
 }
 
@@ -4468,6 +4482,12 @@ void WindowManager::update_ewmh_workarea()
                 area.height = 1;
             }
         }
+        int32_t offset_x = static_cast<int32_t>(area.x) - desktop_origin_x_;
+        int32_t offset_y = static_cast<int32_t>(area.y) - desktop_origin_y_;
+        offset_x = std::clamp<int32_t>(offset_x, 0, std::numeric_limits<int16_t>::max());
+        offset_y = std::clamp<int32_t>(offset_y, 0, std::numeric_limits<int16_t>::max());
+        area.x = static_cast<int16_t>(offset_x);
+        area.y = static_cast<int16_t>(offset_y);
         for (size_t i = 0; i < config_.workspaces.count; ++i)
         {
             workareas.push_back(area);
