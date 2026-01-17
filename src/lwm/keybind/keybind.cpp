@@ -27,22 +27,25 @@ void KeybindManager::grab_keys(xcb_window_t window)
 
     for (auto const& [binding, action] : bindings_)
     {
-        xcb_keycode_t* keycode = xcb_key_symbols_get_keycode(conn_.keysyms(), binding.keysym);
-        if (keycode)
+        xcb_keycode_t* keycodes = xcb_key_symbols_get_keycode(conn_.keysyms(), binding.keysym);
+        if (keycodes)
         {
-            // Grab the key with and without Num Lock / Caps Lock
-            uint16_t const modifiers[] = {
-                binding.modifier,
-                static_cast<uint16_t>(binding.modifier | XCB_MOD_MASK_2),
-                static_cast<uint16_t>(binding.modifier | XCB_MOD_MASK_LOCK),
-                static_cast<uint16_t>(binding.modifier | XCB_MOD_MASK_2 | XCB_MOD_MASK_LOCK)
-            };
-
-            for (auto mod : modifiers)
+            for (xcb_keycode_t* keycode = keycodes; *keycode != XCB_NO_SYMBOL; ++keycode)
             {
-                xcb_grab_key(conn_.get(), 1, window, mod, *keycode, XCB_GRAB_MODE_ASYNC, XCB_GRAB_MODE_ASYNC);
+                // Grab the key with and without Num Lock / Caps Lock
+                uint16_t const modifiers[] = {
+                    binding.modifier,
+                    static_cast<uint16_t>(binding.modifier | XCB_MOD_MASK_2),
+                    static_cast<uint16_t>(binding.modifier | XCB_MOD_MASK_LOCK),
+                    static_cast<uint16_t>(binding.modifier | XCB_MOD_MASK_2 | XCB_MOD_MASK_LOCK)
+                };
+
+                for (auto mod : modifiers)
+                {
+                    xcb_grab_key(conn_.get(), 1, window, mod, *keycode, XCB_GRAB_MODE_ASYNC, XCB_GRAB_MODE_ASYNC);
+                }
             }
-            free(keycode);
+            free(keycodes);
         }
     }
 
