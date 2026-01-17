@@ -103,7 +103,6 @@ WindowManager::WindowManager(Config config)
     scan_existing_windows();
     keybinds_.grab_keys(conn_.screen()->root);
     update_ewmh_client_list();
-    update_ewmh_client_list();
     update_all_bars();
     conn_.flush();
 }
@@ -1964,6 +1963,7 @@ void WindowManager::set_fullscreen(xcb_window_t window, bool enabled)
         xcb_configure_window(conn_.get(), window, XCB_CONFIG_WINDOW_BORDER_WIDTH, &config_.appearance.border_width);
     }
 
+    update_ewmh_client_list();
     update_all_bars();
     conn_.flush();
 }
