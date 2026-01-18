@@ -43,6 +43,11 @@ void Ewmh::init_atoms()
     set_supported_atoms();
 }
 
+void Ewmh::set_extra_supported_atoms(std::vector<xcb_atom_t> atoms)
+{
+    extra_supported_atoms_ = std::move(atoms);
+}
+
 void Ewmh::create_supporting_window()
 {
     supporting_window_ = xcb_generate_id(conn_.get());
@@ -69,7 +74,7 @@ void Ewmh::create_supporting_window()
 
 void Ewmh::set_supported_atoms()
 {
-    xcb_atom_t supported[] = {
+    std::vector<xcb_atom_t> supported = {
         ewmh_._NET_SUPPORTED,
         ewmh_._NET_SUPPORTING_WM_CHECK,
         ewmh_._NET_WM_NAME,
@@ -94,7 +99,6 @@ void Ewmh::set_supported_atoms()
         ewmh_._NET_WM_STATE_MAXIMIZED_HORZ,
         ewmh_._NET_WM_STATE_SHADED,
         ewmh_._NET_WM_STATE_MODAL,
-        ewmh_._NET_WM_STATE_FOCUSED,
         ewmh_._NET_WM_STATE_SKIP_TASKBAR,
         ewmh_._NET_WM_STATE_SKIP_PAGER,
         ewmh_._NET_WM_PING,
@@ -140,7 +144,8 @@ void Ewmh::set_supported_atoms()
         ewmh_._NET_RESTACK_WINDOW,
     };
 
-    xcb_ewmh_set_supported(&ewmh_, 0, sizeof(supported) / sizeof(supported[0]), supported);
+    supported.insert(supported.end(), extra_supported_atoms_.begin(), extra_supported_atoms_.end());
+    xcb_ewmh_set_supported(&ewmh_, 0, supported.size(), supported.data());
 }
 
 void Ewmh::set_wm_name(std::string const& name)

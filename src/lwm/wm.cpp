@@ -96,6 +96,11 @@ WindowManager::WindowManager(Config config)
     net_close_window_ = ewmh_.get()->_NET_CLOSE_WINDOW;
     net_wm_fullscreen_monitors_ = ewmh_.get()->_NET_WM_FULLSCREEN_MONITORS;
     net_wm_user_time_ = ewmh_.get()->_NET_WM_USER_TIME;
+    net_wm_state_focused_ = intern_atom("_NET_WM_STATE_FOCUSED");
+    if (net_wm_state_focused_ != XCB_NONE)
+    {
+        ewmh_.set_extra_supported_atoms({ net_wm_state_focused_ });
+    }
     layout_.set_sync_request_callback([this](xcb_window_t window) { send_sync_request(window, last_event_time_); });
     detect_monitors();
     setup_ewmh();
@@ -1072,7 +1077,7 @@ void WindowManager::handle_client_message(xcb_client_message_event_t const& e)
                 bool enable = compute_enable(modal_windows_.contains(e.window));
                 set_window_modal(e.window, enable);
             }
-            else if (state == ewmh->_NET_WM_STATE_FOCUSED)
+            else if (net_wm_state_focused_ != XCB_NONE && state == net_wm_state_focused_)
             {
                 return;
             }
@@ -2202,11 +2207,14 @@ void WindowManager::focus_window(xcb_window_t window)
     // Clear urgent hint when window receives focus
     ewmh_.set_demands_attention(window, false);
     ewmh_.set_active_window(window);
-    if (previous_active != XCB_NONE && previous_active != window)
+    if (net_wm_state_focused_ != XCB_NONE)
     {
-        ewmh_.set_window_state(previous_active, ewmh_.get()->_NET_WM_STATE_FOCUSED, false);
+        if (previous_active != XCB_NONE && previous_active != window)
+        {
+            ewmh_.set_window_state(previous_active, net_wm_state_focused_, false);
+        }
+        ewmh_.set_window_state(window, net_wm_state_focused_, true);
     }
-    ewmh_.set_window_state(window, ewmh_.get()->_NET_WM_STATE_FOCUSED, true);
     user_times_[window] = last_event_time_;
 
     apply_fullscreen_if_needed(window);
@@ -2289,11 +2297,14 @@ void WindowManager::focus_floating_window(xcb_window_t window)
 
     ewmh_.set_demands_attention(window, false);
     ewmh_.set_active_window(window);
-    if (previous_active != XCB_NONE && previous_active != window)
+    if (net_wm_state_focused_ != XCB_NONE)
     {
-        ewmh_.set_window_state(previous_active, ewmh_.get()->_NET_WM_STATE_FOCUSED, false);
+        if (previous_active != XCB_NONE && previous_active != window)
+        {
+            ewmh_.set_window_state(previous_active, net_wm_state_focused_, false);
+        }
+        ewmh_.set_window_state(window, net_wm_state_focused_, true);
     }
-    ewmh_.set_window_state(window, ewmh_.get()->_NET_WM_STATE_FOCUSED, true);
     user_times_[window] = last_event_time_;
 
     apply_fullscreen_if_needed(window);
@@ -2803,9 +2814,9 @@ void WindowManager::deiconify_window(xcb_window_t window, bool focus)
 void WindowManager::clear_focus()
 {
     clear_all_borders();
-    if (active_window_ != XCB_NONE)
+    if (active_window_ != XCB_NONE && net_wm_state_focused_ != XCB_NONE)
     {
-        ewmh_.set_window_state(active_window_, ewmh_.get()->_NET_WM_STATE_FOCUSED, false);
+        ewmh_.set_window_state(active_window_, net_wm_state_focused_, false);
     }
     active_window_ = XCB_NONE;
     xcb_set_input_focus(conn_.get(), XCB_INPUT_FOCUS_POINTER_ROOT, conn_.screen()->root, XCB_CURRENT_TIME);

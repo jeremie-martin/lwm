@@ -126,6 +126,7 @@ private:
     xcb_atom_t net_close_window_ = XCB_NONE;
     xcb_atom_t net_wm_fullscreen_monitors_ = XCB_NONE;
     xcb_atom_t net_wm_user_time_ = XCB_NONE;
+    xcb_atom_t net_wm_state_focused_ = XCB_NONE;
     bool suppress_focus_ = false;
     uint32_t last_event_time_ = XCB_CURRENT_TIME;
     DragState drag_state_;

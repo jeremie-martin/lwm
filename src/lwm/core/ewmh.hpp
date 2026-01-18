@@ -20,6 +20,7 @@ public:
     // Root window properties (called once at startup)
     void init_atoms();
     void set_supported_atoms();
+    void set_extra_supported_atoms(std::vector<xcb_atom_t> atoms);
     void set_wm_name(std::string const& name);
     void set_number_of_desktops(uint32_t count);
     void set_desktop_names(std::vector<std::string> const& names);
@@ -63,6 +64,7 @@ private:
     Connection& conn_;
     mutable xcb_ewmh_connection_t ewmh_; // mutable: XCB EWMH API isn't const-correct
     xcb_window_t supporting_window_ = XCB_NONE;
+    std::vector<xcb_atom_t> extra_supported_atoms_;
 
     void create_supporting_window();
 };
