@@ -77,12 +77,25 @@ std::unordered_map<xcb_window_t, Client> clients_;
 
 | Structure | Reason |
 |-----------|--------|
-| `wm_unmapped_windows_` | ICCCM unmap tracking (transient) |
+| `wm_unmapped_windows_` | ICCCM unmap tracking (transient counter) |
 | `fullscreen_monitors_` | Per-window monitor span config |
-| `sync_counters_`, `sync_values_` | Sync protocol tracking |
+| `sync_counters_`, `sync_values_` | Sync protocol (could migrate to Client) |
 | `pending_kills_`, `pending_pings_` | Process management |
-| `user_times_`, `user_time_windows_` | Focus stealing prevention |
-| `client_order_` | EWMH client list ordering |
+| `user_times_`, `user_time_windows_` | Focus stealing (could migrate to Client) |
+
+### Also Removed (consolidated into Client)
+
+| Structure | Replaced By |
+|-----------|-------------|
+| `client_order_` | `client->order` (used for `_NET_CLIENT_LIST`) |
+
+### Performance Optimizations
+
+| Function | Before | After |
+|----------|--------|-------|
+| `monitor_index_for_window()` | O(monitors × workspaces) | O(1) via `client->monitor` |
+| `workspace_index_for_window()` | O(monitors × workspaces) | O(1) via `client->workspace` |
+| `update_ewmh_client_list()` | Used `client_order_` map | Uses `clients_` directly |
 
 ---
 
@@ -122,11 +135,17 @@ void set_client_demands_attention(xcb_window_t window, bool enabled);
 Run these searches - all should return **no matches**:
 
 ```bash
+# State sets
 grep -E 'fullscreen_windows_\.|iconic_windows_\.|sticky_windows_\.' src/lwm/wm.cpp
 grep -E 'above_windows_\.|below_windows_\.|shaded_windows_\.' src/lwm/wm.cpp
 grep -E 'modal_windows_\.|maximized_horz_windows_\.|maximized_vert_windows_\.' src/lwm/wm.cpp
 grep -E 'skip_taskbar_windows_\.|skip_pager_windows_\.' src/lwm/wm.cpp
+
+# Restore maps
 grep -E 'fullscreen_restore_\.|maximize_restore_\.' src/lwm/wm.cpp
+
+# Order map
+grep 'client_order_\.' src/lwm/wm.cpp
 ```
 
 ### 2. Client populated on manage
