@@ -854,22 +854,28 @@ void WindowManager::handle_motion_notify(xcb_motion_notify_event_t const& e)
         return;
     }
 
+    // Determine which window the pointer is over.
+    // Motion events come to root (which selects POINTER_MOTION), with e.child
+    // indicating any managed window under the cursor.
+    xcb_window_t window_under_cursor = (e.event == conn_.screen()->root && e.child != XCB_NONE)
+        ? e.child : e.event;
+
     // Focus-follows-mouse on motion: if motion occurs within a managed window
     // that is not currently focused, focus it. This handles the case where a
     // new window took focus (per EWMH compliance) but the cursor remained in
     // another window. Moving the mouse within that window re-establishes focus.
-    if (e.event != conn_.screen()->root)
+    if (window_under_cursor != conn_.screen()->root)
     {
-        if (find_floating_window(e.event))
+        if (find_floating_window(window_under_cursor))
         {
-            if (e.event != active_window_)
-                focus_floating_window(e.event);
+            if (window_under_cursor != active_window_)
+                focus_floating_window(window_under_cursor);
             return;
         }
-        if (monitor_containing_window(e.event))
+        if (monitor_containing_window(window_under_cursor))
         {
-            if (e.event != active_window_)
-                focus_window(e.event);
+            if (window_under_cursor != active_window_)
+                focus_window(window_under_cursor);
             return;
         }
     }
@@ -925,7 +931,10 @@ void WindowManager::handle_button_press(xcb_button_press_event_t const& e)
     // Click-to-focus: clicking on a managed window focuses it (even without modifiers).
     // This complements motion-based FFM for cases where the user clicks in a window
     // that lost focus to a newly created window.
-    if (e.event != conn_.screen()->root)
+    //
+    // Note: For floating windows, e.event is the window itself (they select BUTTON_PRESS).
+    // For tiled windows, e.event is root and target was set to e.child above.
+    if (target != conn_.screen()->root)
     {
         if (find_floating_window(target))
         {
@@ -939,10 +948,9 @@ void WindowManager::handle_button_press(xcb_button_press_event_t const& e)
                 focus_window(target);
             return;
         }
-        return;
     }
 
-    // Update focused monitor based on click position
+    // Update focused monitor based on click position (for clicks on empty space)
     update_focused_monitor_at_point(e.root_x, e.root_y);
 }
 
