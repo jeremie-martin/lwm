@@ -48,7 +48,7 @@ The WM must read and honor these client-set properties:
     pixel-granular resizing. LWM prioritizes smooth, consistent layout and
     uniform gaps over character-cell alignment for every window type.
 - `min_aspect`, `max_aspect`: **not enforced** (could cause layout gaps).
-- `win_gravity`: use for positioning after resize.
+- `win_gravity`: **not currently used** (TODO: apply for positioning after resize).
 - `PPosition`, `USPosition`: honor user-specified position for floating windows.
 - `PSize`, `USSize`: honor user-specified size for initial mapping.
 
@@ -77,7 +77,7 @@ The WM must read and honor these client-set properties:
   - `_NET_WM_SYNC_REQUEST`: synchronized resizing.
 
 #### WM_COLORMAP_WINDOWS
-- Install colormaps for listed windows when appropriate (legacy).
+- **Not implemented** (legacy feature; modern applications use TrueColor).
 
 ### 3. Client Window Properties (Write)
 
@@ -144,9 +144,9 @@ ICCCM requires distinguishing WM-initiated unmaps from client-initiated unmaps:
 
 ### 9. Reparenting
 
-- Reparent managed windows into a frame window (if decorating).
-- Save and restore original window position/border on unmanage.
-- Handle reparent-back correctly on unmanage or shutdown.
+- **LWM does not reparent windows** (no frame decorations).
+- Windows remain children of the root window.
+- `_NET_FRAME_EXTENTS` is set to (0,0,0,0) for all windows.
 
 ### 10. Focus Management
 
@@ -158,9 +158,10 @@ ICCCM requires distinguishing WM-initiated unmaps from client-initiated unmaps:
 
 ### 11. Session Management Integration
 
-- Set `WM_CLIENT_LEADER` if acting as session participant.
-- Honor `WM_WINDOW_ROLE` for session restoration.
-- Respond to `WM_SAVE_YOURSELF` if supported (legacy).
+- **Not currently implemented**. Future versions may add support for:
+  - `WM_CLIENT_LEADER` for session participation
+  - `WM_WINDOW_ROLE` for window restoration
+  - `WM_SAVE_YOURSELF` (legacy protocol)
 
 ---
 
@@ -423,28 +424,28 @@ Types to support (in priority order, first match wins):
 
 ## Startup Notification Protocol (Optional)
 
-- Monitor `_NET_STARTUP_ID` on new windows.
-- Match to pending startup sequences.
-- Complete sequences and remove visual feedback.
-- Apply workspace/focus from startup notification.
+**Not currently implemented.** Future versions may add support for:
+- Monitoring `_NET_STARTUP_ID` on new windows
+- Matching to pending startup sequences
+- Applying workspace/focus from startup notification
 
 ---
 
 ## XDG Specifications (Supplementary)
 
 ### Application Identification
-- Use `_NET_WM_PID` + `WM_CLIENT_MACHINE` for process identification.
-- Match against `.desktop` files via `StartupWMClass` or binary name.
+- `_NET_WM_PID` + `WM_CLIENT_MACHINE`: read for process identification (used in ping/kill).
+- `.desktop` file matching: **not implemented**.
 
 ---
 
 ## System Tray Protocol (Optional)
 
-If implementing system tray support:
-- Claim `_NET_SYSTEM_TRAY_S{screen}` selection.
-- Handle `_NET_SYSTEM_TRAY_OPCODE` messages.
-- Embed tray icons via reparenting.
-- Support `_NET_SYSTEM_TRAY_ORIENTATION`.
+**Not implemented.** Use a standalone system tray application (e.g., `stalonetray`).
+If implementing in the future:
+- Claim `_NET_SYSTEM_TRAY_S{screen}` selection
+- Handle `_NET_SYSTEM_TRAY_OPCODE` messages
+- Embed tray icons via reparenting
 
 ---
 
