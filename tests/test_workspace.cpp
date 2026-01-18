@@ -22,7 +22,7 @@ TEST_CASE("Windows persist across workspace switches", "[workspace][critical]")
     init_workspaces(mon);
 
     // Add window to workspace 0
-    mon.workspaces[0].windows.push_back({0x1000, "terminal"});
+    mon.workspaces[0].windows.push_back(0x1000);
     mon.workspaces[0].focused_window = 0x1000;
 
     // "Switch" to workspace 1 (data structure operation only)
@@ -30,27 +30,27 @@ TEST_CASE("Windows persist across workspace switches", "[workspace][critical]")
 
     // Verify window still exists in workspace 0
     REQUIRE(mon.workspaces[0].windows.size() == 1);
-    REQUIRE(mon.workspaces[0].windows[0].id == 0x1000);
+    REQUIRE(mon.workspaces[0].windows[0] == 0x1000);
 
     // "Switch" back to workspace 0
     mon.current_workspace = 0;
 
     // Window should still be there
     REQUIRE(mon.current().windows.size() == 1);
-    REQUIRE(mon.current().windows[0].id == 0x1000);
+    REQUIRE(mon.current().windows[0] == 0x1000);
 }
 
 TEST_CASE("Focus fallback when focused window removed", "[focus]")
 {
     Workspace ws;
-    ws.windows.push_back({0x1000, "first"});
-    ws.windows.push_back({0x2000, "second"});
+    ws.windows.push_back(0x1000);
+    ws.windows.push_back(0x2000);
     ws.focused_window = 0x1000;
 
     // Remove focused window
     auto it = ws.find_window(ws.focused_window);
     ws.windows.erase(it);
-    ws.focused_window = ws.windows.empty() ? XCB_NONE : ws.windows.back().id;
+    ws.focused_window = ws.windows.empty() ? XCB_NONE : ws.windows.back();
 
     REQUIRE(ws.focused_window == 0x2000);
 }
@@ -62,9 +62,9 @@ TEST_CASE("Window can be found across workspaces", "[workspace]")
     init_workspaces(mon);
 
     // Add windows to different workspaces
-    mon.workspaces[0].windows.push_back({0x1000, "ws0_win"});
-    mon.workspaces[3].windows.push_back({0x2000, "ws3_win"});
-    mon.workspaces[7].windows.push_back({0x3000, "ws7_win"});
+    mon.workspaces[0].windows.push_back(0x1000);
+    mon.workspaces[3].windows.push_back(0x2000);
+    mon.workspaces[7].windows.push_back(0x3000);
 
     // Should find windows in their respective workspaces
     REQUIRE(mon.workspaces[0].find_window(0x1000) != mon.workspaces[0].windows.end());
@@ -123,23 +123,22 @@ TEST_CASE("Moving window between workspaces preserves data", "[workspace]")
     init_workspaces(mon);
 
     // Add window to workspace 0
-    Window win{0x1000, "mywindow"};
+    xcb_window_t win = 0x1000;
     mon.workspaces[0].windows.push_back(win);
     mon.workspaces[0].focused_window = 0x1000;
 
     // Move window to workspace 2
     auto it = mon.workspaces[0].find_window(0x1000);
-    Window moved = *it;
+    xcb_window_t moved = *it;
     mon.workspaces[0].windows.erase(it);
     mon.workspaces[0].focused_window = XCB_NONE;
     mon.workspaces[2].windows.push_back(moved);
-    mon.workspaces[2].focused_window = moved.id;
+    mon.workspaces[2].focused_window = moved;
 
     // Verify window moved correctly
     REQUIRE(mon.workspaces[0].windows.empty());
     REQUIRE(mon.workspaces[0].focused_window == XCB_NONE);
     REQUIRE(mon.workspaces[2].windows.size() == 1);
-    REQUIRE(mon.workspaces[2].windows[0].id == 0x1000);
-    REQUIRE(mon.workspaces[2].windows[0].name == "mywindow");
+    REQUIRE(mon.workspaces[2].windows[0] == 0x1000);
     REQUIRE(mon.workspaces[2].focused_window == 0x1000);
 }

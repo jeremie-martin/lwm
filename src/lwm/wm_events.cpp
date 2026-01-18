@@ -734,16 +734,16 @@ void WindowManager::handle_client_message(xcb_client_message_event_t const& e)
             if (it == source_ws.windows.end())
                 return;
 
-            Window win = *it;
+            xcb_window_t win = *it;
             source_ws.windows.erase(it);
             if (source_ws.focused_window == e.window)
             {
                 source_ws.focused_window = XCB_NONE;
                 for (auto rit = source_ws.windows.rbegin(); rit != source_ws.windows.rend(); ++rit)
                 {
-                    if (!is_client_iconic(rit->id))
+                    if (!is_client_iconic(*rit))
                     {
-                        source_ws.focused_window = rit->id;
+                        source_ws.focused_window = *rit;
                         break;
                     }
                 }
@@ -754,6 +754,12 @@ void WindowManager::handle_client_message(xcb_client_message_event_t const& e)
             if (!target_visible(target_monitor, target_workspace) || was_active)
             {
                 target_ws.focused_window = e.window;
+            }
+            // Sync Client for O(1) lookup
+            if (auto* client = get_client(e.window))
+            {
+                client->monitor = target_monitor;
+                client->workspace = target_workspace;
             }
             ewmh_.set_window_desktop(e.window, desktop);
 
@@ -780,9 +786,11 @@ void WindowManager::handle_client_message(xcb_client_message_event_t const& e)
         // Handle floating windows
         else if (auto* fw = find_floating_window(e.window))
         {
-            size_t source_monitor = fw->monitor;
-            fw->monitor = target_monitor;
-            fw->workspace = target_workspace;
+            auto* client = get_client(e.window);
+            if (!client)
+                return;
+
+            size_t source_monitor = client->monitor;
             if (source_monitor != target_monitor)
             {
                 fw->geometry = floating::place_floating(
@@ -792,6 +800,10 @@ void WindowManager::handle_client_message(xcb_client_message_event_t const& e)
                     std::nullopt
                 );
             }
+            // Update Client (authoritative for monitor, workspace, geometry)
+            client->monitor = target_monitor;
+            client->workspace = target_workspace;
+            client->floating_geometry = fw->geometry;
             ewmh_.set_window_desktop(e.window, desktop);
 
             if (source_monitor != target_monitor)
@@ -838,9 +850,14 @@ void WindowManager::handle_client_message(xcb_client_message_event_t const& e)
         if (has_height)
             fw->geometry.height = static_cast<uint16_t>(std::max<int32_t>(1, e.data.data32[4]));
 
+        // Sync Client.floating_geometry (authoritative)
+        auto* client = get_client(e.window);
+        if (client)
+            client->floating_geometry = fw->geometry;
+
         update_floating_monitor_for_geometry(*fw);
-        if (fw->workspace == monitors_[fw->monitor].current_workspace && !is_client_iconic(fw->id)
-            && !is_client_fullscreen(fw->id))
+        if (client && client->workspace == monitors_[client->monitor].current_workspace
+            && !is_client_iconic(fw->id) && !is_client_fullscreen(fw->id))
         {
             apply_floating_geometry(*fw);
         }
@@ -890,14 +907,15 @@ void WindowManager::handle_client_message(xcb_client_message_event_t const& e)
                 // Hide all windows
                 for (auto const& monitor : monitors_)
                 {
-                    for (auto const& window : monitor.current().windows)
+                    for (xcb_window_t window : monitor.current().windows)
                     {
-                        wm_unmap_window(window.id);
+                        wm_unmap_window(window);
                     }
                 }
                 for (auto const& fw : floating_windows_)
                 {
-                    if (fw.monitor < monitors_.size() && fw.workspace == monitors_[fw.monitor].current_workspace)
+                    auto const* c = get_client(fw.id);
+                    if (c && c->monitor < monitors_.size() && c->workspace == monitors_[c->monitor].current_workspace)
                     {
                         wm_unmap_window(fw.id);
                     }
@@ -1005,15 +1023,20 @@ void WindowManager::handle_configure_request(xcb_configure_request_event_t const
         floating_window->geometry.width = static_cast<uint16_t>(std::max<uint32_t>(1, hinted_width));
         floating_window->geometry.height = static_cast<uint16_t>(std::max<uint32_t>(1, hinted_height));
 
+        // Sync Client.floating_geometry (authoritative)
+        auto* client = get_client(e.window);
+        if (client)
+            client->floating_geometry = floating_window->geometry;
+
         if (requested_width != floating_window->geometry.width || requested_height != floating_window->geometry.height)
         {
             apply_floating_geometry(*floating_window);
         }
 
         update_floating_monitor_for_geometry(*floating_window);
-        if (active_window_ == floating_window->id)
+        if (client && active_window_ == floating_window->id)
         {
-            focused_monitor_ = floating_window->monitor;
+            focused_monitor_ = client->monitor;
             update_ewmh_current_desktop();
             update_all_bars();
         }
@@ -1037,7 +1060,11 @@ void WindowManager::handle_property_notify(xcb_property_notify_event_t const& e)
             layout_.apply_size_hints(floating_window->id, hinted_width, hinted_height);
             floating_window->geometry.width = static_cast<uint16_t>(std::max<uint32_t>(1, hinted_width));
             floating_window->geometry.height = static_cast<uint16_t>(std::max<uint32_t>(1, hinted_height));
-            if (floating_window->workspace == monitors_[floating_window->monitor].current_workspace
+            // Sync Client.floating_geometry (authoritative)
+            auto* client = get_client(e.window);
+            if (client)
+                client->floating_geometry = floating_window->geometry;
+            if (client && client->workspace == monitors_[client->monitor].current_workspace
                 && !is_client_iconic(floating_window->id) && !is_client_fullscreen(floating_window->id))
             {
                 apply_floating_geometry(*floating_window);
@@ -1178,7 +1205,7 @@ void WindowManager::handle_randr_screen_change()
         set_fullscreen(window, false);
     }
 
-    std::vector<Window> all_windows;
+    std::vector<xcb_window_t> all_windows;
     std::vector<FloatingWindow> all_floating = floating_windows_;
     // Clear fullscreen_monitors from all clients since monitor indices may have changed
     for (auto& [id, client] : clients_)
@@ -1189,7 +1216,7 @@ void WindowManager::handle_randr_screen_change()
     {
         for (auto& workspace : monitor.workspaces)
         {
-            for (auto& window : workspace.windows)
+            for (xcb_window_t window : workspace.windows)
             {
                 all_windows.push_back(window);
             }
@@ -1219,23 +1246,43 @@ void WindowManager::handle_randr_screen_change()
     {
         // Move all windows to first monitor, current workspace
         uint32_t desktop = get_ewmh_desktop_index(0, monitors_[0].current_workspace);
-        for (auto& window : all_windows)
+        for (xcb_window_t window : all_windows)
         {
             monitors_[0].current().windows.push_back(window);
-            ewmh_.set_window_desktop(window.id, desktop);
+            ewmh_.set_window_desktop(window, desktop);
+            // Sync Client for O(1) lookup
+            if (auto* client = get_client(window))
+            {
+                client->monitor = 0;
+                client->workspace = monitors_[0].current_workspace;
+            }
         }
 
         floating_windows_.clear();
         for (auto& floating_window : all_floating)
         {
-            floating_window.monitor = 0;
-            floating_window.workspace = monitors_[0].current_workspace;
-            floating_window.geometry = floating::place_floating(
-                monitors_[0].working_area(),
-                floating_window.geometry.width,
-                floating_window.geometry.height,
-                std::nullopt
-            );
+            // Update Client (authoritative) for monitor/workspace
+            if (auto* client = get_client(floating_window.id))
+            {
+                client->monitor = 0;
+                client->workspace = monitors_[0].current_workspace;
+                client->floating_geometry = floating::place_floating(
+                    monitors_[0].working_area(),
+                    floating_window.geometry.width,
+                    floating_window.geometry.height,
+                    std::nullopt
+                );
+                floating_window.geometry = client->floating_geometry;
+            }
+            else
+            {
+                floating_window.geometry = floating::place_floating(
+                    monitors_[0].working_area(),
+                    floating_window.geometry.width,
+                    floating_window.geometry.height,
+                    std::nullopt
+                );
+            }
             floating_windows_.push_back(floating_window);
             ewmh_.set_window_desktop(floating_window.id, desktop);
         }

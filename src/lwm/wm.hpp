@@ -26,14 +26,12 @@ public:
     void run();
 
 private:
+    // FloatingWindow tracks only runtime geometry state.
+    // All other fields (monitor, workspace, name, transient_for) are in Client.
     struct FloatingWindow
     {
         xcb_window_t id = XCB_NONE;
-        size_t monitor = 0;
-        size_t workspace = 0;
         Geometry geometry;
-        std::string name;
-        xcb_window_t transient_for = XCB_NONE;
     };
 
     struct DragState

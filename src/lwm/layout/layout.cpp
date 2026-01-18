@@ -9,7 +9,7 @@ Layout::Layout(Connection& conn, AppearanceConfig const& appearance)
     , appearance_(appearance)
 { }
 
-void Layout::arrange(std::vector<Window> const& windows, Geometry const& geometry, bool has_internal_bar)
+void Layout::arrange(std::vector<xcb_window_t> const& windows, Geometry const& geometry, bool has_internal_bar)
 {
     auto slots = calculate_slots(windows.size(), geometry, has_internal_bar);
     if (slots.empty())
@@ -19,14 +19,14 @@ void Layout::arrange(std::vector<Window> const& windows, Geometry const& geometr
     {
         uint32_t width = slots[i].width;
         uint32_t height = slots[i].height;
-        apply_size_hints(windows[i].id, width, height);
-        configure_window(windows[i].id, slots[i].x, slots[i].y, width, height);
+        apply_size_hints(windows[i], width, height);
+        configure_window(windows[i], slots[i].x, slots[i].y, width, height);
     }
 
     // Map all windows AFTER configuring (ensures correct geometry on map)
-    for (auto const& window : windows)
+    for (xcb_window_t window : windows)
     {
-        xcb_map_window(conn_.get(), window.id);
+        xcb_map_window(conn_.get(), window);
     }
 
     conn_.flush();

@@ -151,31 +151,19 @@ struct Client
     uint64_t order = 0;  ///< Mapping order for _NET_CLIENT_LIST
 };
 
-// ─────────────────────────────────────────────────────────────────────────────
-// Legacy struct: retained during migration, will be removed in Phase 6
-// ─────────────────────────────────────────────────────────────────────────────
-
-struct Window
-{
-    xcb_window_t id;
-    std::string name;
-    std::string wm_class;
-    std::string wm_class_name;
-};
-
 struct Workspace
 {
-    std::vector<Window> windows;
+    std::vector<xcb_window_t> windows;
     xcb_window_t focused_window = XCB_NONE;
 
     auto find_window(xcb_window_t id)
     {
-        return std::ranges::find_if(windows, [id](Window const& w) { return w.id == id; });
+        return std::ranges::find(windows, id);
     }
 
     auto find_window(xcb_window_t id) const
     {
-        return std::ranges::find_if(windows, [id](Window const& w) { return w.id == id; });
+        return std::ranges::find(windows, id);
     }
 };
 

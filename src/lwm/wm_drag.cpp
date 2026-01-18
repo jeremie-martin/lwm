@@ -139,12 +139,18 @@ void WindowManager::update_drag(int16_t root_x, int16_t root_y)
     }
 
     floating_window->geometry = updated;
+    // Sync Client.floating_geometry (authoritative)
+    if (auto* client = get_client(drag_state_.window))
+        client->floating_geometry = floating_window->geometry;
+
     apply_floating_geometry(*floating_window);
     update_floating_monitor_for_geometry(*floating_window);
 
     if (active_window_ == floating_window->id)
     {
-        focused_monitor_ = floating_window->monitor;
+        // Use Client (authoritative) for monitor
+        if (auto* client = get_client(floating_window->id))
+            focused_monitor_ = client->monitor;
         update_ewmh_current_desktop();
         update_all_bars();
     }
@@ -177,7 +183,7 @@ void WindowManager::end_drag()
                 auto source_it = source_ws.find_window(window);
                 if (source_it != source_ws.windows.end())
                 {
-                    Window moved_window = *source_it;
+                    xcb_window_t moved_window = *source_it;
 
                     auto& target_ws = monitors_[target_monitor_idx].workspaces[target_workspace_idx];
                     size_t layout_count = target_ws.windows.size();
@@ -205,11 +211,17 @@ void WindowManager::end_drag()
                     if (!same_workspace && source_ws.focused_window == window)
                     {
                         source_ws.focused_window =
-                            source_ws.windows.empty() ? XCB_NONE : source_ws.windows.back().id;
+                            source_ws.windows.empty() ? XCB_NONE : source_ws.windows.back();
                     }
 
                     if (!same_workspace)
                     {
+                        // Sync Client for O(1) lookup
+                        if (auto* client = get_client(window))
+                        {
+                            client->monitor = target_monitor_idx;
+                            client->workspace = target_workspace_idx;
+                        }
                         uint32_t desktop = get_ewmh_desktop_index(target_monitor_idx, target_workspace_idx);
                         ewmh_.set_window_desktop(window, desktop);
                     }

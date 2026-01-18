@@ -49,7 +49,7 @@ TEST_CASE("Focusing a window updates active monitor and workspace", "[focus][win
     monitors.push_back(make_monitor(1920, 0, 1920, 1080));
 
     monitors[1].current_workspace = 1;
-    monitors[1].workspaces[2].windows.push_back({ 0x2000, "target" });
+    monitors[1].workspaces[2].windows.push_back(0x2000);
 
     size_t active_monitor = 0;
     xcb_window_t active_window = XCB_NONE;

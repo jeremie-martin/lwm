@@ -1,47 +1,49 @@
 # Client Model Migration Note
 
-**Date**: January 2026  
-**Scope**: Unified Client record for per-window state management
+**Date**: January 2026
+**Status**: COMPLETE
+**Scope**: Unified Client record as single source of truth for all per-window state
 
 ---
 
 ## Purpose
 
-Replace scattered state stored across 11+ `unordered_set` and `unordered_map` structures with a single, authoritative `Client` struct per managed window.
+Replace scattered state stored across multiple structures with a single, authoritative `Client` struct per managed window.
 
 **Problems solved:**
 - State synchronization bugs between duplicate data structures
 - O(n) lookups replaced with O(1) via `clients_` map
 - Simplified invariant reasoning (all state in one place)
-- Foundation for future workspace unification
+- Eliminated redundant fields in FloatingWindow and Window structs
 
 ---
 
 ## What Changed
 
-### New: `Client` struct (`src/lwm/core/types.hpp`)
+### Authoritative `Client` struct (`src/lwm/core/types.hpp`)
 
 ```cpp
 struct Client {
     xcb_window_t id;
     enum class Kind { Tiled, Floating, Dock, Desktop };
     Kind kind;
-    size_t monitor, workspace;
-    
+    size_t monitor, workspace;           // Authoritative location
+
     // State flags (replaces 11 unordered_sets)
     bool fullscreen, iconic, sticky, above, below;
     bool maximized_horz, maximized_vert, shaded, modal;
     bool skip_taskbar, skip_pager, demands_attention;
-    
-    // Restore geometries (replaces 2 unordered_maps)
+
+    // Restore geometries
     std::optional<Geometry> fullscreen_restore;
     std::optional<Geometry> maximize_restore;
-    
-    // Metadata and tracking
+    std::optional<FullscreenMonitors> fullscreen_monitors;
+
+    // Metadata - authoritative source
     std::string name, wm_class, wm_class_name;
-    Geometry floating_geometry;
+    Geometry floating_geometry;          // Authoritative for floating windows
     xcb_window_t transient_for;
-    xcb_sync_counter_t sync_counter;
+    uint32_t sync_counter;
     uint64_t sync_value;
     uint32_t user_time;
     xcb_window_t user_time_window;
@@ -49,29 +51,54 @@ struct Client {
 };
 ```
 
-### New: Central registry (`src/lwm/wm.hpp`)
+### Simplified `FloatingWindow` struct (`src/lwm/wm.hpp`)
 
 ```cpp
-std::unordered_map<xcb_window_t, Client> clients_;
+struct FloatingWindow {
+    xcb_window_t id = XCB_NONE;
+    Geometry geometry;  // Runtime geometry for rendering
+};
 ```
 
-### Removed from `wm.hpp`
+All other fields (monitor, workspace, name, transient_for) now come from Client.
 
-| Removed Structure | Replaced By |
-|-------------------|-------------|
-| `fullscreen_windows_` | `client->fullscreen` |
-| `above_windows_` | `client->above` |
-| `below_windows_` | `client->below` |
-| `iconic_windows_` | `client->iconic` |
-| `sticky_windows_` | `client->sticky` |
-| `maximized_horz_windows_` | `client->maximized_horz` |
-| `maximized_vert_windows_` | `client->maximized_vert` |
-| `shaded_windows_` | `client->shaded` |
-| `modal_windows_` | `client->modal` |
-| `skip_taskbar_windows_` | `client->skip_taskbar` |
-| `skip_pager_windows_` | `client->skip_pager` |
-| `fullscreen_restore_` | `client->fullscreen_restore` |
-| `maximize_restore_` | `client->maximize_restore` |
+### Simplified `Workspace` struct (`src/lwm/core/types.hpp`)
+
+```cpp
+struct Workspace {
+    std::vector<xcb_window_t> windows;   // Just window IDs
+    xcb_window_t focused_window = XCB_NONE;
+
+    auto find_window(xcb_window_t id) { return std::ranges::find(windows, id); }
+    auto find_window(xcb_window_t id) const { return std::ranges::find(windows, id); }
+};
+```
+
+### Removed Structures
+
+| Removed | Replaced By |
+|---------|-------------|
+| `Window` struct | Client fields + xcb_window_t in Workspace |
+| `FloatingWindow::monitor` | `client->monitor` |
+| `FloatingWindow::workspace` | `client->workspace` |
+| `FloatingWindow::name` | `client->name` |
+| `FloatingWindow::transient_for` | `client->transient_for` |
+| `fullscreen_windows_` set | `client->fullscreen` |
+| `above_windows_` set | `client->above` |
+| `below_windows_` set | `client->below` |
+| `iconic_windows_` set | `client->iconic` |
+| `sticky_windows_` set | `client->sticky` |
+| `maximized_*_windows_` sets | `client->maximized_*` |
+| `shaded_windows_` set | `client->shaded` |
+| `modal_windows_` set | `client->modal` |
+| `skip_taskbar_windows_` set | `client->skip_taskbar` |
+| `skip_pager_windows_` set | `client->skip_pager` |
+| `fullscreen_restore_` map | `client->fullscreen_restore` |
+| `maximize_restore_` map | `client->maximize_restore` |
+| `client_order_` map | `client->order` |
+| `sync_counters_`, `sync_values_` maps | `client->sync_counter/value` |
+| `user_times_`, `user_time_windows_` maps | `client->user_time/user_time_window` |
+| `fullscreen_monitors_` map | `client->fullscreen_monitors` |
 
 ### Retained (not part of Client model)
 
@@ -80,31 +107,36 @@ std::unordered_map<xcb_window_t, Client> clients_;
 | `wm_unmapped_windows_` | ICCCM unmap tracking (transient counter) |
 | `pending_kills_`, `pending_pings_` | Process management runtime state |
 
-### Migrated to Client (Phase 9)
+---
 
-| Removed Structure | Client Field |
-|-------------------|--------------|
-| `fullscreen_monitors_` | `client->fullscreen_monitors` |
-| `sync_counters_`, `sync_values_` | `client->sync_counter`, `client->sync_value` |
-| `user_times_`, `user_time_windows_` | `client->user_time`, `client->user_time_window` |
+## Client Field Authority
 
-### Also Removed (consolidated into Client)
+All Client fields are now authoritative and kept in sync:
 
-| Structure | Replaced By |
-|-----------|-------------|
-| `client_order_` | `client->order` (used for `_NET_CLIENT_LIST`) |
-
-### Performance Optimizations
-
-| Function | Before | After |
-|----------|--------|-------|
-| `monitor_index_for_window()` | O(monitors × workspaces) | O(1) via `client->monitor` |
-| `workspace_index_for_window()` | O(monitors × workspaces) | O(1) via `client->workspace` |
-| `update_ewmh_client_list()` | Used `client_order_` map | Uses `clients_` directly |
+| Client Field | Synced When |
+|--------------|-------------|
+| `monitor` | Window moves, floating drag, randr changes, workspace operations |
+| `workspace` | Window moves, tiled drag, workspace operations |
+| `floating_geometry` | Floating drag, configure requests, randr changes |
+| `name` | Title updates via WM_NAME/_NET_WM_NAME |
+| `transient_for` | Set on manage only |
+| State flags | All set_* functions update both Client and EWMH |
 
 ---
 
-## Helper Functions Added (`wm.cpp`)
+## Performance Optimizations
+
+| Function | Complexity |
+|----------|------------|
+| `monitor_index_for_window()` | O(1) via `client->monitor` |
+| `workspace_index_for_window()` | O(1) via `client->workspace` |
+| `is_window_visible()` | O(1) via Client lookup |
+| `get_active_window_info()` | O(1) via Client lookup |
+| `build_bar_state()` | O(1) per floating window |
+
+---
+
+## Helper Functions (`wm.cpp`)
 
 ### Query helpers (return `false` for unmanaged windows)
 
@@ -123,133 +155,36 @@ bool is_client_skip_pager(xcb_window_t window) const;
 bool is_client_demands_attention(xcb_window_t window) const;
 ```
 
-### Setter helpers (update Client and EWMH)
-
-```cpp
-void set_client_skip_taskbar(xcb_window_t window, bool enabled);
-void set_client_skip_pager(xcb_window_t window, bool enabled);
-void set_client_demands_attention(xcb_window_t window, bool enabled);
-```
-
 ---
 
 ## Verification Checklist
 
 ### 1. No legacy set/map uses remain
 
-Run these searches - all should return **no matches**:
-
 ```bash
-# State sets
 grep -E 'fullscreen_windows_\.|iconic_windows_\.|sticky_windows_\.' src/lwm/wm.cpp
 grep -E 'above_windows_\.|below_windows_\.|shaded_windows_\.' src/lwm/wm.cpp
 grep -E 'modal_windows_\.|maximized_horz_windows_\.|maximized_vert_windows_\.' src/lwm/wm.cpp
 grep -E 'skip_taskbar_windows_\.|skip_pager_windows_\.' src/lwm/wm.cpp
-
-# Restore maps
-grep -E 'fullscreen_restore_\.|maximize_restore_\.' src/lwm/wm.cpp
-
-# Order map
 grep 'client_order_\.' src/lwm/wm.cpp
 ```
 
-### 2. Client populated on manage
+All should return **no matches**.
 
-In `manage_window()` and `manage_floating_window()`:
-- `Client` struct created with correct `Kind`
-- Added to `clients_[window]`
-- State flags initialized (e.g., `client.iconic = start_iconic`)
-
-### 3. Client removed on unmanage
-
-In `unmanage_window()` and `unmanage_floating_window()`:
-- `clients_.erase(window)` called
-- No erases from removed legacy sets
-
-### 4. State mutations use Client directly
-
-Each function gets `Client*` and modifies it:
-
-| Function | Client fields modified |
-|----------|----------------------|
-| `set_fullscreen()` | `fullscreen`, `fullscreen_restore`, `above`, `below` |
-| `set_window_above()` | `above`, `below` |
-| `set_window_below()` | `below`, `above` |
-| `set_window_sticky()` | `sticky` |
-| `set_window_maximized()` | `maximized_horz`, `maximized_vert`, `maximize_restore` |
-| `set_window_shaded()` | `shaded` |
-| `set_window_modal()` | `modal` |
-| `set_client_skip_taskbar()` | `skip_taskbar` |
-| `set_client_skip_pager()` | `skip_pager` |
-| `set_client_demands_attention()` | `demands_attention` |
-| `iconify_window()` | `iconic` |
-| `deiconify_window()` | `iconic` |
-
-### 5. State queries use helpers
-
-All state checks use `is_client_*()` helpers, not direct set access.
-
-### 6. Build and tests pass
+### 2. Window struct removed
 
 ```bash
-cd build && make clean && make -j$(nproc)
-./tests/lwm_tests  # All 58 assertions pass
+grep 'struct Window' src/lwm/core/types.hpp
 ```
 
----
+Should return **no matches**.
 
-## Commit History
+### 3. Build and tests pass
 
+```bash
+cd build && make -j$(nproc)
+./tests/lwm_tests  # All tests pass
 ```
-17e5179 Complete Client migration: skip_taskbar, skip_pager, demands_attention
-1dffcf6 Update documentation for unified Client model
-72f6366 Phase 5: Remove scattered state unordered_sets
-3545d34 Phase 4b: Complete migration of state query uses
-35fba41 Phase 4: Continue migrating state queries to helpers
-c887abf Phase 4: Add state query helpers and start migration
-b7fced3 Introduce unified Client record (Phases 1-3)
-```
-
----
-
-## Correctness Review (January 2026)
-
-A deep correctness review was performed on the refactored code. Key findings:
-
-### Verified Correct
-
-| Area | Verification |
-|------|--------------|
-| State mutations (`set_fullscreen`, `set_window_above`, etc.) | All correctly update `Client` fields and handle null client |
-| State queries (`is_client_*` helpers) | All correctly read from `Client` registry |
-| Move operations (`move_window_to_workspace`, `move_window_to_monitor`) | Correctly update both `FloatingWindow`/`Workspace` and `Client.monitor`/`Client.workspace` |
-| `handle_client_message` | Uses proper `is_client_*` queries and `set_*` mutations |
-| `update_floating_visibility` | Uses `is_client_sticky/iconic/fullscreen/maximized_*` correctly |
-| Unmanage functions | Properly erase from `clients_` registry |
-
-### Bug Fixed
-
-**`Client::user_time` synchronization**: In `focus_window()`, `focus_floating_window()`, and `handle_property_notify`, `user_times_[window]` was updated but `Client::user_time` was not. Fixed by adding sync updates.
-
-### Remaining Non-Authoritative Fields
-
-These Client fields are set once on manage but may become stale:
-
-| Client Field | Authoritative Source | Status |
-|--------------|---------------------|--------|
-| `floating_geometry` | `FloatingWindow::geometry` | Set once, becomes stale |
-| `name` | `Window::name`, `FloatingWindow::name` | Set once, becomes stale |
-| `mapped` | Not tracked | Never set |
-
-**Note**: These fields don't cause bugs because all reads go through the authoritative sources (FloatingWindow, Window structs). They exist for future migration phases.
-
----
-
-## Future Work (Optional)
-
-1. **Phase 6**: Change `Workspace.windows` to store `xcb_window_t` IDs only (layout looks up Client)
-2. **Unify `floating_windows_`** vector into workspace storage
-3. **Complete field migration**: Make remaining Client fields authoritative (sync state, geometry, name)
 
 ---
 
@@ -257,7 +192,12 @@ These Client fields are set once on manage but may become stale:
 
 | File | Changes |
 |------|---------|
-| `src/lwm/core/types.hpp` | Added `Client` struct with all state flags |
-| `src/lwm/wm.hpp` | Added `clients_` map, removed 13 legacy structures |
+| `src/lwm/core/types.hpp` | Client struct, removed Window struct, simplified Workspace |
+| `src/lwm/wm.hpp` | Simplified FloatingWindow struct |
 | `src/lwm/wm.cpp` | All state management uses Client |
-| `BEHAVIOR.md` | Implementation note about unified Client |
+| `src/lwm/wm_events.cpp` | Uses Client for all window state |
+| `src/lwm/wm_drag.cpp` | Syncs Client on geometry/location changes |
+| `src/lwm/layout/layout.cpp` | Takes `vector<xcb_window_t>` |
+| `src/lwm/core/invariants.hpp` | Updated for xcb_window_t windows |
+| `tests/test_workspace.cpp` | Updated for xcb_window_t windows |
+| `tests/test_focus_policy.cpp` | Updated for xcb_window_t windows |

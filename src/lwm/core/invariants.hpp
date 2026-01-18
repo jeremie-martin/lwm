@@ -161,24 +161,24 @@ inline void assert_workspace_consistency(
     {
         for (size_t w = 0; w < monitors[m].workspaces.size(); ++w)
         {
-            for (auto const& win : monitors[m].workspaces[w].windows)
+            for (xcb_window_t win : monitors[m].workspaces[w].windows)
             {
-                if (seen.contains(win.id))
+                if (seen.contains(win))
                 {
-                    LWM_DEBUG("INVARIANT VIOLATION: Window 0x" << std::hex << win.id
+                    LWM_DEBUG("INVARIANT VIOLATION: Window 0x" << std::hex << win
                         << " appears in multiple workspaces");
                 }
-                seen.insert(win.id);
+                seen.insert(win);
 
-                auto it = clients.find(win.id);
+                auto it = clients.find(win);
                 if (it == clients.end())
                 {
-                    LWM_DEBUG("INVARIANT VIOLATION: Window 0x" << std::hex << win.id
+                    LWM_DEBUG("INVARIANT VIOLATION: Window 0x" << std::hex << win
                         << " in workspace but not in clients registry");
                 }
                 else if (it->second.kind != Client::Kind::Tiled)
                 {
-                    LWM_DEBUG("INVARIANT VIOLATION: Window 0x" << std::hex << win.id
+                    LWM_DEBUG("INVARIANT VIOLATION: Window 0x" << std::hex << win
                         << " in workspace but not Kind::Tiled");
                 }
             }
