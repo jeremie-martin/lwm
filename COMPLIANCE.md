@@ -409,9 +409,9 @@ Types to support (in priority order, first match wins):
 #### _NET_WM_SYNC_REQUEST
 - Send before WM-initiated resizes.
 - Wait for client to update `_NET_WM_SYNC_REQUEST_COUNTER`.
-- Proceed after counter update or timeout.
-- **Limitation**: Current implementation uses blocking wait during configure, which can
-  introduce latency. A future version should use non-blocking async waiting.
+- Proceed after counter update or timeout (50ms).
+- **Limitation**: Uses blocking wait during configure. Timeout is kept short to minimize
+  latency impact. A fully async implementation is noted as future improvement.
 
 ### 7. Compositing Manager Interaction
 

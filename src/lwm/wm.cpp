@@ -23,7 +23,10 @@ constexpr uint32_t WM_STATE_NORMAL = 1;
 constexpr uint32_t WM_STATE_ICONIC = 3;
 constexpr auto PING_TIMEOUT = std::chrono::seconds(5);
 constexpr auto KILL_TIMEOUT = std::chrono::seconds(5);
-constexpr auto SYNC_WAIT_TIMEOUT = std::chrono::milliseconds(200);
+// Sync wait timeout is intentionally short to minimize blocking during layout.
+// A fully non-blocking async implementation would be ideal but requires significant
+// architectural changes. Most clients respond quickly; this timeout is a compromise.
+constexpr auto SYNC_WAIT_TIMEOUT = std::chrono::milliseconds(50);
 
 void sigchld_handler(int /*sig*/)
 {
@@ -3921,6 +3924,18 @@ void WindowManager::send_wm_ping(xcb_window_t window, uint32_t timestamp)
     pending_pings_[window] = std::chrono::steady_clock::now() + PING_TIMEOUT;
 }
 
+/**
+ * @brief Send _NET_WM_SYNC_REQUEST to synchronize with client before resize.
+ *
+ * This notifies the client that the WM is about to resize the window and waits
+ * (briefly) for the client to update its sync counter, indicating it's ready.
+ *
+ * LIMITATION: The current implementation blocks while waiting for the counter.
+ * The timeout is kept short (50ms) to minimize impact on responsiveness.
+ * A fully non-blocking implementation would require async state tracking.
+ *
+ * Many tiling WMs skip sync requests entirely since window geometry is WM-controlled.
+ */
 void WindowManager::send_sync_request(xcb_window_t window, uint32_t timestamp)
 {
     if (wm_protocols_ == XCB_NONE || net_wm_sync_request_ == XCB_NONE)
@@ -3948,6 +3963,14 @@ void WindowManager::send_sync_request(xcb_window_t window, uint32_t timestamp)
     wait_for_sync_counter(window, value);
 }
 
+/**
+ * @brief Wait for sync counter to reach expected value.
+ *
+ * WARNING: This function blocks with a busy-wait loop, repeatedly querying
+ * the X server. The timeout is kept short to minimize impact.
+ *
+ * TODO: Implement async version using XSync alarms or event-driven waiting.
+ */
 bool WindowManager::wait_for_sync_counter(xcb_window_t window, uint64_t expected_value)
 {
     auto it = sync_counters_.find(window);
