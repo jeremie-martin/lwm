@@ -100,8 +100,7 @@ private:
     std::unordered_map<xcb_window_t, std::chrono::steady_clock::time_point> pending_pings_;
     std::unordered_map<xcb_window_t, uint32_t> user_times_;
     std::unordered_map<xcb_window_t, xcb_window_t> user_time_windows_; // client → user time window
-    std::unordered_map<xcb_window_t, uint64_t> client_order_;
-    uint64_t next_client_order_ = 0;
+    uint64_t next_client_order_ = 0;  // Counter for Client.order field
     int32_t desktop_origin_x_ = 0;
     int32_t desktop_origin_y_ = 0;
     xcb_window_t active_window_ = XCB_NONE;
@@ -267,7 +266,6 @@ private:
     void update_window_title(xcb_window_t window);
     void update_all_bars();
     void update_ewmh_workarea();
-    void register_client_window(xcb_window_t window);
 
     // Dock/strut helpers
     void update_struts();

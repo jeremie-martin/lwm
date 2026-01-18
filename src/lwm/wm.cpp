@@ -486,7 +486,7 @@ void WindowManager::scan_existing_windows()
             {
                 desktop_windows_.push_back(window);
             }
-            register_client_window(window);
+            // Desktop windows are excluded from _NET_CLIENT_LIST per EWMH
             set_client_skip_taskbar(window, true);
             set_client_skip_pager(window, true);
             continue;
@@ -682,7 +682,7 @@ void WindowManager::handle_map_request(xcb_map_request_event_t const& e)
         {
             desktop_windows_.push_back(e.window);
         }
-        register_client_window(e.window);
+        // Desktop windows are excluded from _NET_CLIENT_LIST per EWMH
         set_client_skip_taskbar(e.window, true);
         set_client_skip_pager(e.window, true);
         update_ewmh_client_list();
@@ -1744,11 +1744,8 @@ void WindowManager::manage_window(xcb_window_t window, bool start_iconic)
         target ? target->second : monitors_[target_monitor_idx].current_workspace;
 
     monitors_[target_monitor_idx].workspaces[target_workspace_idx].windows.push_back(newWindow);
-    register_client_window(window);
 
-    // ─────────────────────────────────────────────────────────────────────────
-    // Populate unified Client registry (Phase 3 of Client refactor)
-    // ─────────────────────────────────────────────────────────────────────────
+    // Populate unified Client registry
     {
         Client client;
         client.id = window;
@@ -1758,11 +1755,8 @@ void WindowManager::manage_window(xcb_window_t window, bool start_iconic)
         client.name = newWindow.name;
         client.wm_class = newWindow.wm_class;
         client.wm_class_name = newWindow.wm_class_name;
-        client.order = next_client_order_++;  // Note: also set in register_client_window; will consolidate later
+        client.order = next_client_order_++;
         client.iconic = start_iconic;
-        // Note: other state flags (fullscreen, sticky, etc.) will be updated by
-        // the set_* calls below. During migration, we update both clients_ and
-        // the legacy sets.
         clients_[window] = std::move(client);
     }
 
@@ -2031,11 +2025,7 @@ void WindowManager::manage_floating_window(xcb_window_t window, bool start_iconi
     floating_window.name = get_window_name(window);
     floating_window.transient_for = transient.value_or(XCB_NONE);
     floating_windows_.push_back(floating_window);
-    register_client_window(window);
-
-    // ─────────────────────────────────────────────────────────────────────────
-    // Populate unified Client registry (Phase 3 of Client refactor)
-    // ─────────────────────────────────────────────────────────────────────────
+    // Populate unified Client registry
     {
         auto [instance_name, class_name] = get_wm_class(window);
         Client client;
@@ -2048,9 +2038,8 @@ void WindowManager::manage_floating_window(xcb_window_t window, bool start_iconi
         client.wm_class_name = instance_name;
         client.floating_geometry = placement;
         client.transient_for = transient.value_or(XCB_NONE);
-        client.order = next_client_order_++;  // Note: also set in register_client_window; will consolidate later
+        client.order = next_client_order_++;
         client.iconic = start_iconic;
-        // Note: other state flags will be set by the set_* calls below
         clients_[window] = std::move(client);
     }
 
@@ -2215,9 +2204,8 @@ void WindowManager::unmanage_window(xcb_window_t window)
     pending_pings_.erase(window);
     user_times_.erase(window);
     user_time_windows_.erase(window);
-    client_order_.erase(window);
 
-    // Remove from unified Client registry (handles all client state)
+    // Remove from unified Client registry (handles all client state including order)
     clients_.erase(window);
 
     for (auto& monitor : monitors_)
@@ -2276,9 +2264,8 @@ void WindowManager::unmanage_floating_window(xcb_window_t window)
     pending_pings_.erase(window);
     user_times_.erase(window);
     user_time_windows_.erase(window);
-    client_order_.erase(window);
 
-    // Remove from unified Client registry (handles all client state)
+    // Remove from unified Client registry (handles all client state including order)
     clients_.erase(window);
 
     auto it = std::ranges::find_if(
@@ -3235,6 +3222,10 @@ void WindowManager::move_window_to_workspace(int ws)
         size_t monitor_idx = floating_window->monitor;
 
         floating_window->workspace = target_ws;
+        // Update Client workspace for O(1) lookup
+        if (auto* client = get_client(window_to_move))
+            client->workspace = target_ws;
+
         uint32_t desktop = get_ewmh_desktop_index(monitor_idx, target_ws);
         if (is_client_sticky(window_to_move))
             ewmh_.set_window_desktop(window_to_move, 0xFFFFFFFF);
@@ -3270,6 +3261,10 @@ void WindowManager::move_window_to_workspace(int ws)
     size_t target_ws = static_cast<size_t>(ws);
     monitor.workspaces[target_ws].windows.push_back(moved_window);
     monitor.workspaces[target_ws].focused_window = window_to_move;
+
+    // Update Client workspace for O(1) lookup
+    if (auto* client = get_client(window_to_move))
+        client->workspace = target_ws;
 
     // Update EWMH desktop for moved window
     uint32_t desktop = get_ewmh_desktop_index(focused_monitor_, target_ws);
@@ -3420,6 +3415,13 @@ void WindowManager::move_window_to_monitor(int direction)
             std::nullopt
         );
 
+        // Update Client for O(1) lookup
+        if (auto* client = get_client(window_to_move))
+        {
+            client->monitor = target_idx;
+            client->workspace = floating_window->workspace;
+        }
+
         uint32_t desktop = get_ewmh_desktop_index(target_idx, floating_window->workspace);
         if (is_client_sticky(window_to_move))
             ewmh_.set_window_desktop(window_to_move, 0xFFFFFFFF);
@@ -3467,6 +3469,13 @@ void WindowManager::move_window_to_monitor(int direction)
     auto& target_monitor = monitors_[target_idx];
     target_monitor.current().windows.push_back(moved_window);
     target_monitor.current().focused_window = window_to_move;
+
+    // Update Client for O(1) lookup
+    if (auto* client = get_client(window_to_move))
+    {
+        client->monitor = target_idx;
+        client->workspace = target_monitor.current_workspace;
+    }
 
     // Update EWMH desktop for moved window
     uint32_t desktop = get_ewmh_desktop_index(target_idx, target_monitor.current_workspace);
@@ -3647,41 +3656,17 @@ WindowManager::FloatingWindow const* WindowManager::find_floating_window(xcb_win
 
 std::optional<size_t> WindowManager::monitor_index_for_window(xcb_window_t window) const
 {
-    for (size_t m = 0; m < monitors_.size(); ++m)
-    {
-        for (auto const& workspace : monitors_[m].workspaces)
-        {
-            if (workspace.find_window(window) != workspace.windows.end())
-                return m;
-        }
-    }
-
-    for (auto const& floating_window : floating_windows_)
-    {
-        if (floating_window.id == window)
-            return floating_window.monitor;
-    }
-
+    // O(1) lookup using Client registry
+    if (auto const* c = get_client(window))
+        return c->monitor;
     return std::nullopt;
 }
 
 std::optional<size_t> WindowManager::workspace_index_for_window(xcb_window_t window) const
 {
-    for (size_t m = 0; m < monitors_.size(); ++m)
-    {
-        for (size_t w = 0; w < monitors_[m].workspaces.size(); ++w)
-        {
-            if (monitors_[m].workspaces[w].find_window(window) != monitors_[m].workspaces[w].windows.end())
-                return w;
-        }
-    }
-
-    for (auto const& floating_window : floating_windows_)
-    {
-        if (floating_window.id == window)
-            return floating_window.workspace;
-    }
-
+    // O(1) lookup using Client registry
+    if (auto const* c = get_client(window))
+        return c->workspace;
     return std::nullopt;
 }
 
@@ -4710,13 +4695,6 @@ void WindowManager::update_all_bars()
     }
 }
 
-void WindowManager::register_client_window(xcb_window_t window)
-{
-    if (client_order_.contains(window))
-        return;
-    client_order_[window] = next_client_order_++;
-}
-
 void WindowManager::update_struts()
 {
     // Reset all monitor struts
@@ -4772,7 +4750,6 @@ void WindowManager::unmanage_desktop_window(xcb_window_t window)
     if (it != desktop_windows_.end())
     {
         desktop_windows_.erase(it);
-        client_order_.erase(window);
         update_ewmh_client_list();
     }
 }
@@ -4879,11 +4856,12 @@ void WindowManager::update_ewmh_desktops()
 
 void WindowManager::update_ewmh_client_list()
 {
+    // Build client list sorted by mapping order using Client registry
     std::vector<std::pair<uint64_t, xcb_window_t>> ordered;
-    ordered.reserve(client_order_.size());
-    for (auto const& [window, order] : client_order_)
+    ordered.reserve(clients_.size());
+    for (auto const& [window, client] : clients_)
     {
-        ordered.push_back({ order, window });
+        ordered.push_back({ client.order, window });
     }
     std::sort(ordered.begin(), ordered.end(), [](auto const& a, auto const& b) { return a.first < b.first; });
 
@@ -4895,6 +4873,7 @@ void WindowManager::update_ewmh_client_list()
     }
     ewmh_.update_client_list(windows);
 
+    // Build stacking order from X server
     std::vector<xcb_window_t> stacking;
     stacking.reserve(windows.size());
     std::unordered_set<xcb_window_t> managed(windows.begin(), windows.end());
@@ -4916,6 +4895,7 @@ void WindowManager::update_ewmh_client_list()
         free(reply);
     }
 
+    // Append any windows not found in X tree (shouldn't happen, but be safe)
     if (!managed.empty())
     {
         for (auto const& entry : ordered)
