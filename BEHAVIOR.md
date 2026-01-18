@@ -17,8 +17,13 @@ and are not duplicated here.
 - Each monitor has N workspaces (configurable; commonly 0–9).
 - Exactly **one workspace per monitor is visible** at a time.
 - Each workspace maintains:
-  - an ordered list of managed windows
-  - a remembered “last-focused” window (if any)
+  - an ordered list of **tiled** windows (the tiling layout order)
+  - a remembered "last-focused" tiled window (if any)
+- **Floating windows** are tracked separately at the window manager level:
+  - They are associated with a monitor and workspace but stored in a separate list.
+  - Workspace focus memory tracks only tiled windows; if the last-focused window was floating,
+    focus restoration may fall back to a tiled window or none.
+  - This is an architectural simplification; future versions may unify the window model.
 
 ### 1.3 Window Classes (Behavioral)
 Once classified, windows behave as follows:
@@ -150,6 +155,8 @@ When a new window appears:
 
 ### 6.1 Association and Visibility
 - Floating windows are associated with a monitor and workspace, and appear/disappear with that workspace.
+- Unlike tiled windows (stored per-workspace), floating windows are tracked in a separate global list
+  with explicit monitor/workspace association. This affects focus restoration (see §1.2).
 
 ### 6.2 Placement and Interaction
 - Floating windows appear in a sensible default position (e.g., centered on usable area or relative
@@ -159,6 +166,8 @@ When a new window appears:
 ### 6.3 Focus
 - Floating windows participate in focus-follows-mouse if focus-eligible.
 - Closing a floating window restores focus according to Section 2.4.
+- **Note**: Per-workspace "last-focused" memory only tracks tiled windows; if focus should be restored
+  to a floating window, the WM searches floating windows on that workspace in most-recently-used order.
 
 ---
 
