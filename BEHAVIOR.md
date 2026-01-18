@@ -31,11 +31,21 @@ Once classified, windows behave as follows:
 (Exact classification signals are defined in COMPLIANCE.md.)
 
 ### 1.4 Visibility
-- A window is **visible** iff it belongs to the monitor’s currently visible workspace,
-  except for special visibility rules (e.g., sticky behavior) defined by configuration/compliance.
+- A window is **visible** iff it belongs to the monitor's currently visible workspace,
+  except for special visibility rules (see §1.5 Sticky Windows).
 - Only visible windows may be focused.
 
-### 1.5 EWMH Desktop Mapping (Per-Monitor Workspaces)
+### 1.5 Sticky Windows
+**Sticky windows** have special visibility rules:
+- A sticky window is **visible on all workspaces of its owning monitor** (not globally across all monitors).
+- Sticky windows are included in layout regardless of which workspace is currently active on their monitor.
+- **Focusing a sticky window does NOT switch workspaces**. The current workspace remains unchanged.
+- Sticky state is indicated by:
+  - `_NET_WM_STATE_STICKY` in the window's state atoms.
+  - `_NET_WM_DESKTOP = 0xFFFFFFFF` (per EWMH specification).
+- Sticky scope is per-monitor: a sticky window on monitor A is NOT visible on monitor B.
+
+### 1.6 EWMH Desktop Mapping (Per-Monitor Workspaces)
 LWM uses per-monitor workspaces and maps them into EWMH desktops as follows:
 - `_NET_NUMBER_OF_DESKTOPS = monitors * workspaces_per_monitor`.
 - Desktop index = `monitor_index * workspaces_per_monitor + workspace_index`.

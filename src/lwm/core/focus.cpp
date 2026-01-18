@@ -37,7 +37,8 @@ std::optional<FocusWindowChange> focus_window_state(
     std::vector<Monitor>& monitors,
     size_t& active_monitor,
     xcb_window_t& active_window,
-    xcb_window_t window
+    xcb_window_t window,
+    bool is_sticky
 )
 {
     for (size_t m = 0; m < monitors.size(); ++m)
@@ -50,11 +51,16 @@ std::optional<FocusWindowChange> focus_window_state(
                 size_t old_workspace = target_monitor.current_workspace;
                 size_t new_workspace = w;
 
-                if (old_workspace != new_workspace)
+                // Sticky windows are visible on all workspaces, so focusing them
+                // should NOT switch workspaces. Only update workspace if not sticky.
+                bool actually_changed = false;
+                if (!is_sticky && old_workspace != new_workspace)
                 {
                     target_monitor.previous_workspace = old_workspace;
+                    target_monitor.current_workspace = new_workspace;
+                    actually_changed = true;
                 }
-                target_monitor.current_workspace = new_workspace;
+
                 target_monitor.current().focused_window = window;
                 active_monitor = m;
                 active_window = window;
@@ -62,8 +68,8 @@ std::optional<FocusWindowChange> focus_window_state(
                 FocusWindowChange change;
                 change.target_monitor = m;
                 change.old_workspace = old_workspace;
-                change.new_workspace = new_workspace;
-                change.workspace_changed = old_workspace != new_workspace;
+                change.new_workspace = is_sticky ? old_workspace : new_workspace;
+                change.workspace_changed = actually_changed;
                 return change;
             }
         }

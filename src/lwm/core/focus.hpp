@@ -26,11 +26,22 @@ struct FocusWindowChange
     bool workspace_changed = false;
 };
 
+/**
+ * @brief Update internal state when focusing a tiled window.
+ *
+ * @param monitors The list of monitors.
+ * @param active_monitor The currently active monitor index (updated).
+ * @param active_window The currently active window (updated).
+ * @param window The window to focus.
+ * @param is_sticky If true, do NOT switch workspaces (sticky windows are visible on all workspaces).
+ * @return The focus change details, or nullopt if window not found.
+ */
 std::optional<FocusWindowChange> focus_window_state(
     std::vector<Monitor>& monitors,
     size_t& active_monitor,
     xcb_window_t& active_window,
-    xcb_window_t window
+    xcb_window_t window,
+    bool is_sticky = false
 );
 
 } // namespace lwm::focus

@@ -2168,7 +2168,9 @@ void WindowManager::focus_window(xcb_window_t window)
 
     xcb_window_t previous_active = active_window_;
 
-    auto change = focus::focus_window_state(monitors_, focused_monitor_, active_window_, window);
+    // Sticky windows are visible on all workspaces - focusing them should NOT switch workspaces.
+    bool is_sticky = sticky_windows_.contains(window);
+    auto change = focus::focus_window_state(monitors_, focused_monitor_, active_window_, window, is_sticky);
     if (!change)
         return;
 
@@ -2244,9 +2246,12 @@ void WindowManager::focus_floating_window(xcb_window_t window)
 
     xcb_window_t previous_active = active_window_;
 
+    // Sticky windows are visible on all workspaces - focusing them should NOT switch workspaces.
+    bool is_sticky = sticky_windows_.contains(window);
+
     focused_monitor_ = floating_window->monitor;
     auto& monitor = monitors_[floating_window->monitor];
-    if (monitor.current_workspace != floating_window->workspace)
+    if (!is_sticky && monitor.current_workspace != floating_window->workspace)
     {
         for (auto const& w : monitor.current().windows)
         {
