@@ -1089,7 +1089,7 @@ void WindowManager::handle_client_message(xcb_client_message_event_t const& e)
             }
             else if (state == ewmh->_NET_WM_STATE_HIDDEN)
             {
-                bool enable = compute_enable(iconic_windows_.contains(e.window));
+                bool enable = compute_enable(is_client_iconic(e.window));
                 if (enable)
                     iconify_window(e.window);
                 else
@@ -1097,7 +1097,7 @@ void WindowManager::handle_client_message(xcb_client_message_event_t const& e)
             }
             else if (state == ewmh->_NET_WM_STATE_STICKY)
             {
-                bool enable = compute_enable(sticky_windows_.contains(e.window));
+                bool enable = compute_enable(is_client_sticky(e.window));
                 set_window_sticky(e.window, enable);
             }
             else if (state == ewmh->_NET_WM_STATE_MAXIMIZED_HORZ)
@@ -2387,7 +2387,7 @@ void WindowManager::focus_window(xcb_window_t window)
     if (!is_focus_eligible(window))
         return;
 
-    if (iconic_windows_.contains(window))
+    if (is_client_iconic(window))
     {
         deiconify_window(window, false);
     }
@@ -2395,7 +2395,7 @@ void WindowManager::focus_window(xcb_window_t window)
     xcb_window_t previous_active = active_window_;
 
     // Sticky windows are visible on all workspaces - focusing them should NOT switch workspaces.
-    bool is_sticky = sticky_windows_.contains(window);
+    bool is_sticky = is_client_sticky(window);
     auto change = focus::focus_window_state(monitors_, focused_monitor_, active_window_, window, is_sticky);
     if (!change)
         return;
@@ -2405,7 +2405,7 @@ void WindowManager::focus_window(xcb_window_t window)
     {
         for (auto const& w : target_monitor.workspaces[change->old_workspace].windows)
         {
-            if (sticky_windows_.contains(w.id))
+            if (is_client_sticky(w.id))
                 continue;
             wm_unmap_window(w.id);
         }
@@ -2467,7 +2467,7 @@ void WindowManager::focus_floating_window(xcb_window_t window)
     if (!is_focus_eligible(window))
         return;
 
-    if (iconic_windows_.contains(window))
+    if (is_client_iconic(window))
     {
         deiconify_window(window, false);
     }
@@ -2478,7 +2478,7 @@ void WindowManager::focus_floating_window(xcb_window_t window)
     xcb_window_t previous_active = active_window_;
 
     // Sticky windows are visible on all workspaces - focusing them should NOT switch workspaces.
-    bool is_sticky = sticky_windows_.contains(window);
+    bool is_sticky = is_client_sticky(window);
 
     focused_monitor_ = floating_window->monitor;
     auto& monitor = monitors_[floating_window->monitor];
@@ -2486,7 +2486,7 @@ void WindowManager::focus_floating_window(xcb_window_t window)
     {
         for (auto const& w : monitor.current().windows)
         {
-            if (sticky_windows_.contains(w.id))
+            if (is_client_sticky(w.id))
                 continue;
             wm_unmap_window(w.id);
         }
@@ -2893,9 +2893,9 @@ void WindowManager::set_window_modal(xcb_window_t window, bool enabled)
 
 void WindowManager::apply_fullscreen_if_needed(xcb_window_t window)
 {
-    if (!fullscreen_windows_.contains(window))
+    if (!is_client_fullscreen(window))
         return;
-    if (iconic_windows_.contains(window))
+    if (is_client_iconic(window))
         return;
 
     std::optional<size_t> monitor_idx;
@@ -3374,7 +3374,7 @@ void WindowManager::focus_or_fallback(Monitor& monitor)
     }
 
     auto eligible = [this](xcb_window_t window)
-    { return window != XCB_NONE && !iconic_windows_.contains(window) && is_focus_eligible(window); };
+    { return window != XCB_NONE && !is_client_iconic(window) && is_focus_eligible(window); };
 
     // Verify focused_window actually exists in the workspace (defensive programming)
     if (ws.focused_window != XCB_NONE && ws.find_window(ws.focused_window) != ws.windows.end()
@@ -3948,12 +3948,12 @@ void WindowManager::update_floating_visibility(size_t monitor_idx)
         if (floating_window.monitor != monitor_idx)
             continue;
 
-        bool sticky = sticky_windows_.contains(floating_window.id);
+        bool sticky = is_client_sticky(floating_window.id);
         if ((sticky || floating_window.workspace == monitor.current_workspace)
-            && !iconic_windows_.contains(floating_window.id))
+            && !is_client_iconic(floating_window.id))
         {
             // Configure BEFORE mapping so window appears at correct position
-            if (fullscreen_windows_.contains(floating_window.id))
+            if (is_client_fullscreen(floating_window.id))
             {
                 apply_fullscreen_if_needed(floating_window.id);
             }
