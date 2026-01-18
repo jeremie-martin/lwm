@@ -207,10 +207,46 @@ b7fced3 Introduce unified Client record (Phases 1-3)
 
 ---
 
+## Correctness Review (January 2026)
+
+A deep correctness review was performed on the refactored code. Key findings:
+
+### Verified Correct
+
+| Area | Verification |
+|------|--------------|
+| State mutations (`set_fullscreen`, `set_window_above`, etc.) | All correctly update `Client` fields and handle null client |
+| State queries (`is_client_*` helpers) | All correctly read from `Client` registry |
+| Move operations (`move_window_to_workspace`, `move_window_to_monitor`) | Correctly update both `FloatingWindow`/`Workspace` and `Client.monitor`/`Client.workspace` |
+| `handle_client_message` | Uses proper `is_client_*` queries and `set_*` mutations |
+| `update_floating_visibility` | Uses `is_client_sticky/iconic/fullscreen/maximized_*` correctly |
+| Unmanage functions | Properly erase from `clients_` registry |
+
+### Bug Fixed
+
+**`Client::user_time` synchronization**: In `focus_window()`, `focus_floating_window()`, and `handle_property_notify`, `user_times_[window]` was updated but `Client::user_time` was not. Fixed by adding sync updates.
+
+### Partially Migrated Fields (Not Currently Authoritative)
+
+These Client fields are defined but the old data structures remain authoritative. They are populated during manage but may become stale:
+
+| Client Field | Authoritative Source | Status |
+|--------------|---------------------|--------|
+| `sync_counter`, `sync_value` | `sync_counters_`, `sync_values_` maps | Defined but not used |
+| `fullscreen_monitors` | `fullscreen_monitors_` map | Defined but not used |
+| `floating_geometry` | `FloatingWindow::geometry` | Set once, becomes stale |
+| `name` | `Window::name`, `FloatingWindow::name` | Set once, becomes stale |
+| `mapped` | Not tracked | Never set |
+
+**Note**: These fields don't cause bugs because all reads go through the authoritative sources. They exist for future migration phases.
+
+---
+
 ## Future Work (Optional)
 
 1. **Phase 6**: Change `Workspace.windows` to store `xcb_window_t` IDs only (layout looks up Client)
 2. **Unify `floating_windows_`** vector into workspace storage
+3. **Complete field migration**: Make remaining Client fields authoritative (sync state, geometry, name)
 
 ---
 

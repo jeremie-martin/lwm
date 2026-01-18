@@ -1558,7 +1558,11 @@ void WindowManager::handle_property_notify(xcb_property_notify_event_t const& e)
                 break;
             }
         }
-        user_times_[client_window] = get_user_time(client_window);
+        uint32_t new_time = get_user_time(client_window);
+        user_times_[client_window] = new_time;
+        // Keep Client.user_time in sync
+        if (auto* c = get_client(client_window))
+            c->user_time = new_time;
     }
     // Handle WM_HINTS urgency flag changes (ICCCM → EWMH DEMANDS_ATTENTION)
     if (wm_hints_ != XCB_NONE && e.atom == wm_hints_)
@@ -2384,6 +2388,9 @@ void WindowManager::focus_window(xcb_window_t window)
         ewmh_.set_window_state(window, net_wm_state_focused_, true);
     }
     user_times_[window] = last_event_time_;
+    // Keep Client.user_time in sync
+    if (auto* client = get_client(window))
+        client->user_time = last_event_time_;
 
     apply_fullscreen_if_needed(window);
     restack_transients(window);
@@ -2481,6 +2488,9 @@ void WindowManager::focus_floating_window(xcb_window_t window)
         ewmh_.set_window_state(window, net_wm_state_focused_, true);
     }
     user_times_[window] = last_event_time_;
+    // Keep Client.user_time in sync
+    if (auto* client = get_client(window))
+        client->user_time = last_event_time_;
 
     apply_fullscreen_if_needed(window);
     restack_transients(window);
