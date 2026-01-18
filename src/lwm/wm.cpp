@@ -1102,24 +1102,24 @@ void WindowManager::handle_client_message(xcb_client_message_event_t const& e)
             }
             else if (state == ewmh->_NET_WM_STATE_MAXIMIZED_HORZ)
             {
-                bool enable = compute_enable(maximized_horz_windows_.contains(e.window));
-                bool vert = maximized_vert_windows_.contains(e.window);
+                bool enable = compute_enable(is_client_maximized_horz(e.window));
+                bool vert = is_client_maximized_vert(e.window);
                 set_window_maximized(e.window, enable, vert);
             }
             else if (state == ewmh->_NET_WM_STATE_MAXIMIZED_VERT)
             {
-                bool enable = compute_enable(maximized_vert_windows_.contains(e.window));
-                bool horiz = maximized_horz_windows_.contains(e.window);
+                bool enable = compute_enable(is_client_maximized_vert(e.window));
+                bool horiz = is_client_maximized_horz(e.window);
                 set_window_maximized(e.window, horiz, enable);
             }
             else if (state == ewmh->_NET_WM_STATE_SHADED)
             {
-                bool enable = compute_enable(shaded_windows_.contains(e.window));
+                bool enable = compute_enable(is_client_shaded(e.window));
                 set_window_shaded(e.window, enable);
             }
             else if (state == ewmh->_NET_WM_STATE_MODAL)
             {
-                bool enable = compute_enable(modal_windows_.contains(e.window));
+                bool enable = compute_enable(is_client_modal(e.window));
                 set_window_modal(e.window, enable);
             }
             else if (net_wm_state_focused_ != XCB_NONE && state == net_wm_state_focused_)
@@ -1661,8 +1661,13 @@ void WindowManager::handle_timeouts()
 void WindowManager::handle_randr_screen_change()
 {
     // Exit fullscreen for all windows before reconfiguring monitors
-    // This prevents stale geometry in fullscreen_restore_ after monitor layout changes
-    std::vector<xcb_window_t> fullscreen_copy(fullscreen_windows_.begin(), fullscreen_windows_.end());
+    // This prevents stale geometry in Client::fullscreen_restore after monitor layout changes
+    std::vector<xcb_window_t> fullscreen_copy;
+    for (auto const& [id, client] : clients_)
+    {
+        if (client.fullscreen)
+            fullscreen_copy.push_back(id);
+    }
     for (auto window : fullscreen_copy)
     {
         set_fullscreen(window, false);
@@ -1825,7 +1830,7 @@ void WindowManager::manage_window(xcb_window_t window, bool start_iconic)
 
     if (start_iconic)
     {
-        iconic_windows_.insert(window);
+        // client->iconic is already set in the Client initialization above
         ewmh_.set_window_state(window, ewmh_.get()->_NET_WM_STATE_HIDDEN, true);
     }
 
@@ -2114,7 +2119,7 @@ void WindowManager::manage_floating_window(xcb_window_t window, bool start_iconi
 
     if (start_iconic)
     {
-        iconic_windows_.insert(window);
+        // client->iconic is already set in the Client initialization above
         ewmh_.set_window_state(window, ewmh_.get()->_NET_WM_STATE_HIDDEN, true);
     }
 
@@ -2231,29 +2236,21 @@ void WindowManager::unmanage_window(xcb_window_t window)
         xcb_change_property(conn_.get(), XCB_PROP_MODE_REPLACE, window, wm_state_, wm_state_, 32, 2, data);
     }
 
-    fullscreen_windows_.erase(window);
-    fullscreen_restore_.erase(window);
-    above_windows_.erase(window);
-    below_windows_.erase(window);
-    iconic_windows_.erase(window);
-    sticky_windows_.erase(window);
-    maximized_horz_windows_.erase(window);
-    maximized_vert_windows_.erase(window);
-    shaded_windows_.erase(window);
-    modal_windows_.erase(window);
+    // Legacy state sets (kept until all state is migrated to Client)
     skip_taskbar_windows_.erase(window);
     skip_pager_windows_.erase(window);
+
+    // Tracking state that remains outside Client
     fullscreen_monitors_.erase(window);
     sync_counters_.erase(window);
     sync_values_.erase(window);
-    maximize_restore_.erase(window);
     pending_kills_.erase(window);
     pending_pings_.erase(window);
     user_times_.erase(window);
     user_time_windows_.erase(window);
     client_order_.erase(window);
 
-    // Remove from unified Client registry (Phase 3)
+    // Remove from unified Client registry (handles all client state)
     clients_.erase(window);
 
     for (auto& monitor : monitors_)
@@ -2304,29 +2301,21 @@ void WindowManager::unmanage_floating_window(xcb_window_t window)
         xcb_change_property(conn_.get(), XCB_PROP_MODE_REPLACE, window, wm_state_, wm_state_, 32, 2, data);
     }
 
-    fullscreen_windows_.erase(window);
-    fullscreen_restore_.erase(window);
-    above_windows_.erase(window);
-    below_windows_.erase(window);
-    iconic_windows_.erase(window);
-    sticky_windows_.erase(window);
-    maximized_horz_windows_.erase(window);
-    maximized_vert_windows_.erase(window);
-    shaded_windows_.erase(window);
-    modal_windows_.erase(window);
+    // Legacy state sets (kept until all state is migrated to Client)
     skip_taskbar_windows_.erase(window);
     skip_pager_windows_.erase(window);
+
+    // Tracking state that remains outside Client
     fullscreen_monitors_.erase(window);
     sync_counters_.erase(window);
     sync_values_.erase(window);
-    maximize_restore_.erase(window);
     pending_kills_.erase(window);
     pending_pings_.erase(window);
     user_times_.erase(window);
     user_time_windows_.erase(window);
     client_order_.erase(window);
 
-    // Remove from unified Client registry (Phase 3)
+    // Remove from unified Client registry (handles all client state)
     clients_.erase(window);
 
     auto it = std::ranges::find_if(
@@ -2557,13 +2546,18 @@ void WindowManager::set_fullscreen(xcb_window_t window, bool enabled)
     if (!monitor_idx)
         return;
 
+    auto* client = get_client(window);
+    if (!client)
+        return;  // Only managed clients can be fullscreen
+
     if (enabled)
     {
-        if (!fullscreen_windows_.contains(window))
+        if (!client->fullscreen)
         {
+            // Save restore geometry before going fullscreen
             if (auto* floating_window = find_floating_window(window))
             {
-                fullscreen_restore_[window] = floating_window->geometry;
+                client->fullscreen_restore = floating_window->geometry;
             }
             else
             {
@@ -2571,34 +2565,24 @@ void WindowManager::set_fullscreen(xcb_window_t window, bool enabled)
                 auto* geom_reply = xcb_get_geometry_reply(conn_.get(), geom_cookie, nullptr);
                 if (geom_reply)
                 {
-                    fullscreen_restore_[window] =
+                    client->fullscreen_restore =
                         Geometry{ geom_reply->x, geom_reply->y, geom_reply->width, geom_reply->height };
                     free(geom_reply);
                 }
             }
         }
 
-        fullscreen_windows_.insert(window);
-        // Update Client (Phase 3)
-        if (auto* client = get_client(window))
-        {
-            client->fullscreen = true;
-            client->fullscreen_restore = fullscreen_restore_[window];
-        }
+        client->fullscreen = true;
 
         // Fullscreen is incompatible with ABOVE/BELOW states - clear them
-        if (above_windows_.contains(window))
+        if (client->above)
         {
-            above_windows_.erase(window);
-            if (auto* client = get_client(window))
-                client->above = false;
+            client->above = false;
             ewmh_.set_window_state(window, ewmh_.get()->_NET_WM_STATE_ABOVE, false);
         }
-        if (below_windows_.contains(window))
+        if (client->below)
         {
-            below_windows_.erase(window);
-            if (auto* client = get_client(window))
-                client->below = false;
+            client->below = false;
             ewmh_.set_window_state(window, ewmh_.get()->_NET_WM_STATE_BELOW, false);
         }
 
@@ -2607,26 +2591,19 @@ void WindowManager::set_fullscreen(xcb_window_t window, bool enabled)
     }
     else
     {
-        if (!fullscreen_windows_.contains(window))
+        if (!client->fullscreen)
             return;
 
-        fullscreen_windows_.erase(window);
-        // Update Client (Phase 3)
-        if (auto* client = get_client(window))
-        {
-            client->fullscreen = false;
-            client->fullscreen_restore = std::nullopt;
-        }
+        client->fullscreen = false;
         ewmh_.set_window_state(window, ewmh_.get()->_NET_WM_STATE_FULLSCREEN, false);
 
         if (auto* floating_window = find_floating_window(window))
         {
-            auto restore = fullscreen_restore_.find(window);
-            if (restore != fullscreen_restore_.end())
+            if (client->fullscreen_restore)
             {
-                floating_window->geometry = restore->second;
+                floating_window->geometry = *client->fullscreen_restore;
                 if (floating_window->workspace == monitors_[floating_window->monitor].current_workspace
-                    && !iconic_windows_.contains(window))
+                    && !client->iconic)
                 {
                     apply_floating_geometry(*floating_window);
                 }
@@ -2641,7 +2618,7 @@ void WindowManager::set_fullscreen(xcb_window_t window, bool enabled)
             }
         }
 
-        fullscreen_restore_.erase(window);
+        client->fullscreen_restore = std::nullopt;
         xcb_configure_window(conn_.get(), window, XCB_CONFIG_WINDOW_BORDER_WIDTH, &config_.appearance.border_width);
     }
 
@@ -2655,16 +2632,16 @@ void WindowManager::set_window_above(xcb_window_t window, bool enabled)
     if (!monitor_index_for_window(window))
         return;
 
+    auto* client = get_client(window);
+    if (!client)
+        return;  // Only managed clients can have above state
+
     if (enabled)
     {
-        above_windows_.insert(window);
-        if (auto* client = get_client(window))
-            client->above = true;
-        if (below_windows_.contains(window))
+        client->above = true;
+        if (client->below)
         {
-            below_windows_.erase(window);
-            if (auto* client = get_client(window))
-                client->below = false;
+            client->below = false;
             ewmh_.set_window_state(window, ewmh_.get()->_NET_WM_STATE_BELOW, false);
         }
         uint32_t stack_mode = XCB_STACK_MODE_ABOVE;
@@ -2672,9 +2649,7 @@ void WindowManager::set_window_above(xcb_window_t window, bool enabled)
     }
     else
     {
-        above_windows_.erase(window);
-        if (auto* client = get_client(window))
-            client->above = false;
+        client->above = false;
     }
 
     ewmh_.set_window_state(window, ewmh_.get()->_NET_WM_STATE_ABOVE, enabled);
@@ -2687,16 +2662,16 @@ void WindowManager::set_window_below(xcb_window_t window, bool enabled)
     if (!monitor_index_for_window(window))
         return;
 
+    auto* client = get_client(window);
+    if (!client)
+        return;  // Only managed clients can have below state
+
     if (enabled)
     {
-        below_windows_.insert(window);
-        if (auto* client = get_client(window))
-            client->below = true;
-        if (above_windows_.contains(window))
+        client->below = true;
+        if (client->above)
         {
-            above_windows_.erase(window);
-            if (auto* client = get_client(window))
-                client->above = false;
+            client->above = false;
             ewmh_.set_window_state(window, ewmh_.get()->_NET_WM_STATE_ABOVE, false);
         }
         uint32_t stack_mode = XCB_STACK_MODE_BELOW;
@@ -2704,9 +2679,7 @@ void WindowManager::set_window_below(xcb_window_t window, bool enabled)
     }
     else
     {
-        below_windows_.erase(window);
-        if (auto* client = get_client(window))
-            client->below = false;
+        client->below = false;
     }
 
     ewmh_.set_window_state(window, ewmh_.get()->_NET_WM_STATE_BELOW, enabled);
@@ -2716,19 +2689,19 @@ void WindowManager::set_window_below(xcb_window_t window, bool enabled)
 
 void WindowManager::set_window_sticky(xcb_window_t window, bool enabled)
 {
+    auto* client = get_client(window);
+    if (!client)
+        return;  // Only managed clients can be sticky
+
     if (enabled)
     {
-        sticky_windows_.insert(window);
-        if (auto* client = get_client(window))
-            client->sticky = true;
+        client->sticky = true;
         ewmh_.set_window_state(window, ewmh_.get()->_NET_WM_STATE_STICKY, true);
         ewmh_.set_window_desktop(window, 0xFFFFFFFF);
     }
     else
     {
-        sticky_windows_.erase(window);
-        if (auto* client = get_client(window))
-            client->sticky = false;
+        client->sticky = false;
         ewmh_.set_window_state(window, ewmh_.get()->_NET_WM_STATE_STICKY, false);
         if (auto monitor_idx = monitor_index_for_window(window))
         {
@@ -2754,51 +2727,39 @@ void WindowManager::set_window_sticky(xcb_window_t window, bool enabled)
 
 void WindowManager::set_window_maximized(xcb_window_t window, bool horiz, bool vert)
 {
-    if (horiz)
-        maximized_horz_windows_.insert(window);
-    else
-        maximized_horz_windows_.erase(window);
+    auto* client = get_client(window);
+    if (!client)
+        return;  // Only managed clients can be maximized
 
-    if (vert)
-        maximized_vert_windows_.insert(window);
-    else
-        maximized_vert_windows_.erase(window);
-
-    // Update Client (Phase 3)
-    if (auto* client = get_client(window))
-    {
-        client->maximized_horz = horiz;
-        client->maximized_vert = vert;
-    }
+    client->maximized_horz = horiz;
+    client->maximized_vert = vert;
 
     ewmh_.set_window_state(window, ewmh_.get()->_NET_WM_STATE_MAXIMIZED_HORZ, horiz);
     ewmh_.set_window_state(window, ewmh_.get()->_NET_WM_STATE_MAXIMIZED_VERT, vert);
 
-    bool fullscreen = fullscreen_windows_.contains(window);
-    if (!fullscreen)
+    if (!client->fullscreen)
     {
         if (!horiz && !vert)
         {
-            auto restore = maximize_restore_.find(window);
-            if (restore != maximize_restore_.end())
+            if (client->maximize_restore)
             {
                 if (auto* floating_window = find_floating_window(window))
                 {
-                    floating_window->geometry = restore->second;
+                    floating_window->geometry = *client->maximize_restore;
                     if (floating_window->workspace == monitors_[floating_window->monitor].current_workspace
-                        && !iconic_windows_.contains(window))
+                        && !client->iconic)
                     {
                         apply_floating_geometry(*floating_window);
                     }
                 }
-                maximize_restore_.erase(window);
+                client->maximize_restore = std::nullopt;
             }
         }
         else if (auto* floating_window = find_floating_window(window))
         {
-            if (!maximize_restore_.contains(window))
+            if (!client->maximize_restore)
             {
-                maximize_restore_[window] = floating_window->geometry;
+                client->maximize_restore = floating_window->geometry;
             }
             apply_maximized_geometry(window);
         }
@@ -2811,6 +2772,10 @@ void WindowManager::set_window_maximized(xcb_window_t window, bool horiz, bool v
 
 void WindowManager::apply_maximized_geometry(xcb_window_t window)
 {
+    auto* client = get_client(window);
+    if (!client)
+        return;
+
     auto* floating_window = find_floating_window(window);
     if (!floating_window)
         return;
@@ -2818,18 +2783,18 @@ void WindowManager::apply_maximized_geometry(xcb_window_t window)
         return;
 
     Geometry base = floating_window->geometry;
-    if (auto restore = maximize_restore_.find(window); restore != maximize_restore_.end())
+    if (client->maximize_restore)
     {
-        base = restore->second;
+        base = *client->maximize_restore;
     }
 
     Geometry area = monitors_[floating_window->monitor].working_area();
-    if (maximized_horz_windows_.contains(window))
+    if (client->maximized_horz)
     {
         base.x = area.x;
         base.width = area.width;
     }
-    if (maximized_vert_windows_.contains(window))
+    if (client->maximized_vert)
     {
         base.y = area.y;
         base.height = area.height;
@@ -2837,7 +2802,7 @@ void WindowManager::apply_maximized_geometry(xcb_window_t window)
 
     floating_window->geometry = base;
     if (floating_window->workspace == monitors_[floating_window->monitor].current_workspace
-        && !iconic_windows_.contains(window))
+        && !client->iconic)
     {
         apply_floating_geometry(*floating_window);
     }
@@ -2845,14 +2810,17 @@ void WindowManager::apply_maximized_geometry(xcb_window_t window)
 
 void WindowManager::set_window_shaded(xcb_window_t window, bool enabled)
 {
+    auto* client = get_client(window);
+    if (!client)
+        return;  // Only managed clients can be shaded
+
     if (enabled)
     {
-        if (shaded_windows_.insert(window).second)
+        if (!client->shaded)
         {
-            if (auto* client = get_client(window))
-                client->shaded = true;
+            client->shaded = true;
             ewmh_.set_window_state(window, ewmh_.get()->_NET_WM_STATE_SHADED, true);
-            if (!iconic_windows_.contains(window))
+            if (!client->iconic)
             {
                 iconify_window(window);
             }
@@ -2860,12 +2828,11 @@ void WindowManager::set_window_shaded(xcb_window_t window, bool enabled)
     }
     else
     {
-        if (shaded_windows_.erase(window) > 0)
+        if (client->shaded)
         {
-            if (auto* client = get_client(window))
-                client->shaded = false;
+            client->shaded = false;
             ewmh_.set_window_state(window, ewmh_.get()->_NET_WM_STATE_SHADED, false);
-            if (iconic_windows_.contains(window))
+            if (client->iconic)
             {
                 deiconify_window(window, false);
             }
@@ -2875,14 +2842,11 @@ void WindowManager::set_window_shaded(xcb_window_t window, bool enabled)
 
 void WindowManager::set_window_modal(xcb_window_t window, bool enabled)
 {
-    if (enabled)
-        modal_windows_.insert(window);
-    else
-        modal_windows_.erase(window);
+    auto* client = get_client(window);
+    if (!client)
+        return;  // Only managed clients can be modal
 
-    // Update Client (Phase 3)
-    if (auto* client = get_client(window))
-        client->modal = enabled;
+    client->modal = enabled;
 
     ewmh_.set_window_state(window, ewmh_.get()->_NET_WM_STATE_MODAL, enabled);
     if (enabled)
@@ -2943,7 +2907,7 @@ void WindowManager::set_fullscreen_monitors(xcb_window_t window, FullscreenMonit
         );
     }
 
-    if (fullscreen_windows_.contains(window))
+    if (is_client_fullscreen(window))
     {
         apply_fullscreen_if_needed(window);
         conn_.flush();
@@ -3011,13 +2975,14 @@ void WindowManager::iconify_window(xcb_window_t window)
     if (!monitor_idx)
         return;
 
-    if (iconic_windows_.contains(window))
+    auto* client = get_client(window);
+    if (!client)
+        return;  // Only managed clients can be iconified
+
+    if (client->iconic)
         return;
 
-    iconic_windows_.insert(window);
-    // Update Client (Phase 3)
-    if (auto* client = get_client(window))
-        client->iconic = true;
+    client->iconic = true;
 
     if (wm_state_ != XCB_NONE)
     {
@@ -3062,10 +3027,11 @@ void WindowManager::deiconify_window(xcb_window_t window, bool focus)
     if (!monitor_idx)
         return;
 
-    iconic_windows_.erase(window);
-    // Update Client (Phase 3)
-    if (auto* client = get_client(window))
-        client->iconic = false;
+    auto* client = get_client(window);
+    if (!client)
+        return;  // Only managed clients can be deiconified
+
+    client->iconic = false;
 
     if (wm_state_ != XCB_NONE)
     {
@@ -3588,35 +3554,63 @@ bool WindowManager::is_client_fullscreen(xcb_window_t window) const
 {
     if (auto const* c = get_client(window))
         return c->fullscreen;
-    return fullscreen_windows_.contains(window);
+    return false;  // Unmanaged windows are not fullscreen
 }
 
 bool WindowManager::is_client_iconic(xcb_window_t window) const
 {
     if (auto const* c = get_client(window))
         return c->iconic;
-    return iconic_windows_.contains(window);
+    return false;  // Unmanaged windows are not iconic
 }
 
 bool WindowManager::is_client_sticky(xcb_window_t window) const
 {
     if (auto const* c = get_client(window))
         return c->sticky;
-    return sticky_windows_.contains(window);
+    return false;  // Unmanaged windows are not sticky
 }
 
 bool WindowManager::is_client_above(xcb_window_t window) const
 {
     if (auto const* c = get_client(window))
         return c->above;
-    return above_windows_.contains(window);
+    return false;  // Unmanaged windows are not above
 }
 
 bool WindowManager::is_client_below(xcb_window_t window) const
 {
     if (auto const* c = get_client(window))
         return c->below;
-    return below_windows_.contains(window);
+    return false;  // Unmanaged windows are not below
+}
+
+bool WindowManager::is_client_maximized_horz(xcb_window_t window) const
+{
+    if (auto const* c = get_client(window))
+        return c->maximized_horz;
+    return false;
+}
+
+bool WindowManager::is_client_maximized_vert(xcb_window_t window) const
+{
+    if (auto const* c = get_client(window))
+        return c->maximized_vert;
+    return false;
+}
+
+bool WindowManager::is_client_shaded(xcb_window_t window) const
+{
+    if (auto const* c = get_client(window))
+        return c->shaded;
+    return false;
+}
+
+bool WindowManager::is_client_modal(xcb_window_t window) const
+{
+    if (auto const* c = get_client(window))
+        return c->modal;
+    return false;
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -3957,8 +3951,8 @@ void WindowManager::update_floating_visibility(size_t monitor_idx)
             {
                 apply_fullscreen_if_needed(floating_window.id);
             }
-            else if (maximized_horz_windows_.contains(floating_window.id)
-                || maximized_vert_windows_.contains(floating_window.id))
+            else if (is_client_maximized_horz(floating_window.id)
+                || is_client_maximized_vert(floating_window.id))
             {
                 apply_maximized_geometry(floating_window.id);
             }

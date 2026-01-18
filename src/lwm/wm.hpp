@@ -82,26 +82,19 @@ private:
     // This map is the authoritative source of truth for all managed windows.
     // During the migration period, it coexists with the legacy data structures
     // above. Once migration is complete, the scattered sets/maps below will be
-    // removed and all state will be accessed through clients_.
+    // ─────────────────────────────────────────────────────────────────────────
+    // Unified Client registry - all per-window state is consolidated here
     // ─────────────────────────────────────────────────────────────────────────
     std::unordered_map<xcb_window_t, Client> clients_;
 
-    std::unordered_map<xcb_window_t, uint32_t> wm_unmapped_windows_;
-    std::unordered_set<xcb_window_t> fullscreen_windows_;
-    std::unordered_set<xcb_window_t> above_windows_;
-    std::unordered_set<xcb_window_t> below_windows_;
-    std::unordered_set<xcb_window_t> iconic_windows_;
-    std::unordered_set<xcb_window_t> sticky_windows_;
-    std::unordered_set<xcb_window_t> maximized_horz_windows_;
-    std::unordered_set<xcb_window_t> maximized_vert_windows_;
-    std::unordered_set<xcb_window_t> shaded_windows_;
-    std::unordered_set<xcb_window_t> modal_windows_;
+    // Per-window tracking state (not part of Client model)
+    std::unordered_map<xcb_window_t, uint32_t> wm_unmapped_windows_;  // Unmap tracking for ICCCM compliance
+    std::unordered_map<xcb_window_t, FullscreenMonitors> fullscreen_monitors_;  // _NET_WM_FULLSCREEN_MONITORS
+
+    // Legacy state sets (to be migrated to Client in future phases)
     std::unordered_set<xcb_window_t> skip_taskbar_windows_;
     std::unordered_set<xcb_window_t> skip_pager_windows_;
     bool showing_desktop_ = false;
-    std::unordered_map<xcb_window_t, Geometry> fullscreen_restore_;
-    std::unordered_map<xcb_window_t, Geometry> maximize_restore_;
-    std::unordered_map<xcb_window_t, FullscreenMonitors> fullscreen_monitors_;
     std::unordered_map<xcb_window_t, xcb_sync_counter_t> sync_counters_;
     std::unordered_map<xcb_window_t, uint64_t> sync_values_;
     std::unordered_map<xcb_window_t, std::chrono::steady_clock::time_point> pending_kills_;
@@ -208,12 +201,16 @@ private:
     Client const* get_client(xcb_window_t window) const;
     bool is_managed(xcb_window_t window) const { return clients_.contains(window); }
 
-    // State query helpers (prefer Client, fall back to legacy sets during migration)
+    // State query helpers (use Client registry)
     bool is_client_fullscreen(xcb_window_t window) const;
     bool is_client_iconic(xcb_window_t window) const;
     bool is_client_sticky(xcb_window_t window) const;
     bool is_client_above(xcb_window_t window) const;
     bool is_client_below(xcb_window_t window) const;
+    bool is_client_maximized_horz(xcb_window_t window) const;
+    bool is_client_maximized_vert(xcb_window_t window) const;
+    bool is_client_shaded(xcb_window_t window) const;
+    bool is_client_modal(xcb_window_t window) const;
 
     // Helpers
     Monitor& focused_monitor() { return monitors_[focused_monitor_]; }
