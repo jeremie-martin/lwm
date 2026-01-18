@@ -1746,20 +1746,6 @@ void WindowManager::manage_window(xcb_window_t window, bool start_iconic)
     if (ewmh_.has_window_state(window, ewmh_.get()->_NET_WM_STATE_SKIP_PAGER))
         skip_pager_windows_.insert(window);
 
-    if (transient)
-    {
-        if (!skip_taskbar_windows_.contains(window))
-        {
-            skip_taskbar_windows_.insert(window);
-            ewmh_.set_window_state(window, ewmh_.get()->_NET_WM_STATE_SKIP_TASKBAR, true);
-        }
-        if (!skip_pager_windows_.contains(window))
-        {
-            skip_pager_windows_.insert(window);
-            ewmh_.set_window_state(window, ewmh_.get()->_NET_WM_STATE_SKIP_PAGER, true);
-        }
-    }
-
     if (ewmh_.has_window_state(window, ewmh_.get()->_NET_WM_STATE_STICKY))
     {
         set_window_sticky(window, true);
