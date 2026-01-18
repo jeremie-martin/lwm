@@ -1379,10 +1379,6 @@ void WindowManager::focus_floating_window(xcb_window_t window)
 
 void WindowManager::set_fullscreen(xcb_window_t window, bool enabled)
 {
-    auto monitor_idx = monitor_index_for_window(window);
-    if (!monitor_idx)
-        return;
-
     auto* client = get_client(window);
     if (!client)
         return;  // Only managed clients can be fullscreen
@@ -1448,12 +1444,11 @@ void WindowManager::set_fullscreen(xcb_window_t window, bool enabled)
                 }
             }
         }
-        else if (*monitor_idx < monitors_.size())
+        else if (client->monitor < monitors_.size())
         {
-            auto workspace_idx = workspace_index_for_window(window);
-            if (workspace_idx && *workspace_idx == monitors_[*monitor_idx].current_workspace)
+            if (client->workspace == monitors_[client->monitor].current_workspace)
             {
-                rearrange_monitor(monitors_[*monitor_idx]);
+                rearrange_monitor(monitors_[client->monitor]);
             }
         }
 
@@ -1468,9 +1463,6 @@ void WindowManager::set_fullscreen(xcb_window_t window, bool enabled)
 
 void WindowManager::set_window_above(xcb_window_t window, bool enabled)
 {
-    if (!monitor_index_for_window(window))
-        return;
-
     auto* client = get_client(window);
     if (!client)
         return;  // Only managed clients can have above state
@@ -1498,9 +1490,6 @@ void WindowManager::set_window_above(xcb_window_t window, bool enabled)
 
 void WindowManager::set_window_below(xcb_window_t window, bool enabled)
 {
-    if (!monitor_index_for_window(window))
-        return;
-
     auto* client = get_client(window);
     if (!client)
         return;  // Only managed clients can have below state
@@ -1542,12 +1531,8 @@ void WindowManager::set_window_sticky(xcb_window_t window, bool enabled)
     {
         client->sticky = false;
         ewmh_.set_window_state(window, ewmh_.get()->_NET_WM_STATE_STICKY, false);
-        if (auto monitor_idx = monitor_index_for_window(window))
-        {
-            size_t workspace_idx = workspace_index_for_window(window).value_or(monitors_[*monitor_idx].current_workspace);
-            uint32_t desktop = get_ewmh_desktop_index(*monitor_idx, workspace_idx);
-            ewmh_.set_window_desktop(window, desktop);
-        }
+        uint32_t desktop = get_ewmh_desktop_index(client->monitor, client->workspace);
+        ewmh_.set_window_desktop(window, desktop);
     }
 
     if (find_floating_window(window))
@@ -1700,25 +1685,19 @@ void WindowManager::set_window_modal(xcb_window_t window, bool enabled)
 
 void WindowManager::set_client_skip_taskbar(xcb_window_t window, bool enabled)
 {
-    if (auto* client = get_client(window))
-        client->skip_taskbar = enabled;
-
+    if (auto* c = get_client(window)) c->skip_taskbar = enabled;
     ewmh_.set_window_state(window, ewmh_.get()->_NET_WM_STATE_SKIP_TASKBAR, enabled);
 }
 
 void WindowManager::set_client_skip_pager(xcb_window_t window, bool enabled)
 {
-    if (auto* client = get_client(window))
-        client->skip_pager = enabled;
-
+    if (auto* c = get_client(window)) c->skip_pager = enabled;
     ewmh_.set_window_state(window, ewmh_.get()->_NET_WM_STATE_SKIP_PAGER, enabled);
 }
 
 void WindowManager::set_client_demands_attention(xcb_window_t window, bool enabled)
 {
-    if (auto* client = get_client(window))
-        client->demands_attention = enabled;
-
+    if (auto* c = get_client(window)) c->demands_attention = enabled;
     ewmh_.set_demands_attention(window, enabled);
 }
 
@@ -1832,10 +1811,6 @@ Geometry WindowManager::fullscreen_geometry_for_window(xcb_window_t window) cons
 
 void WindowManager::iconify_window(xcb_window_t window)
 {
-    auto monitor_idx = monitor_index_for_window(window);
-    if (!monitor_idx)
-        return;
-
     auto* client = get_client(window);
     if (!client)
         return;  // Only managed clients can be iconified
@@ -1858,10 +1833,10 @@ void WindowManager::iconify_window(xcb_window_t window)
         wm_unmap_window(window);
         update_floating_visibility(client->monitor);
     }
-    else if (*monitor_idx < monitors_.size())
+    else if (client->monitor < monitors_.size())
     {
         wm_unmap_window(window);
-        rearrange_monitor(monitors_[*monitor_idx]);
+        rearrange_monitor(monitors_[client->monitor]);
     }
 
     if (active_window_ == window)
@@ -2427,93 +2402,29 @@ Client const* WindowManager::get_client(xcb_window_t window) const
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// State query helpers (prefer Client, fall back to legacy sets during migration)
-// These will eventually just use clients_ once migration is complete.
+// State query helpers - returns false for unmanaged windows
 // ─────────────────────────────────────────────────────────────────────────────
 
-bool WindowManager::is_client_fullscreen(xcb_window_t window) const
-{
-    if (auto const* c = get_client(window))
-        return c->fullscreen;
-    return false;  // Unmanaged windows are not fullscreen
-}
+#define DEFINE_CLIENT_STATE_QUERY(method, field) \
+    bool WindowManager::method(xcb_window_t window) const { \
+        if (auto const* c = get_client(window)) return c->field; \
+        return false; \
+    }
 
-bool WindowManager::is_client_iconic(xcb_window_t window) const
-{
-    if (auto const* c = get_client(window))
-        return c->iconic;
-    return false;  // Unmanaged windows are not iconic
-}
+DEFINE_CLIENT_STATE_QUERY(is_client_fullscreen, fullscreen)
+DEFINE_CLIENT_STATE_QUERY(is_client_iconic, iconic)
+DEFINE_CLIENT_STATE_QUERY(is_client_sticky, sticky)
+DEFINE_CLIENT_STATE_QUERY(is_client_above, above)
+DEFINE_CLIENT_STATE_QUERY(is_client_below, below)
+DEFINE_CLIENT_STATE_QUERY(is_client_maximized_horz, maximized_horz)
+DEFINE_CLIENT_STATE_QUERY(is_client_maximized_vert, maximized_vert)
+DEFINE_CLIENT_STATE_QUERY(is_client_shaded, shaded)
+DEFINE_CLIENT_STATE_QUERY(is_client_modal, modal)
+DEFINE_CLIENT_STATE_QUERY(is_client_skip_taskbar, skip_taskbar)
+DEFINE_CLIENT_STATE_QUERY(is_client_skip_pager, skip_pager)
+DEFINE_CLIENT_STATE_QUERY(is_client_demands_attention, demands_attention)
 
-bool WindowManager::is_client_sticky(xcb_window_t window) const
-{
-    if (auto const* c = get_client(window))
-        return c->sticky;
-    return false;  // Unmanaged windows are not sticky
-}
-
-bool WindowManager::is_client_above(xcb_window_t window) const
-{
-    if (auto const* c = get_client(window))
-        return c->above;
-    return false;  // Unmanaged windows are not above
-}
-
-bool WindowManager::is_client_below(xcb_window_t window) const
-{
-    if (auto const* c = get_client(window))
-        return c->below;
-    return false;  // Unmanaged windows are not below
-}
-
-bool WindowManager::is_client_maximized_horz(xcb_window_t window) const
-{
-    if (auto const* c = get_client(window))
-        return c->maximized_horz;
-    return false;
-}
-
-bool WindowManager::is_client_maximized_vert(xcb_window_t window) const
-{
-    if (auto const* c = get_client(window))
-        return c->maximized_vert;
-    return false;
-}
-
-bool WindowManager::is_client_shaded(xcb_window_t window) const
-{
-    if (auto const* c = get_client(window))
-        return c->shaded;
-    return false;
-}
-
-bool WindowManager::is_client_modal(xcb_window_t window) const
-{
-    if (auto const* c = get_client(window))
-        return c->modal;
-    return false;
-}
-
-bool WindowManager::is_client_skip_taskbar(xcb_window_t window) const
-{
-    if (auto const* c = get_client(window))
-        return c->skip_taskbar;
-    return false;
-}
-
-bool WindowManager::is_client_skip_pager(xcb_window_t window) const
-{
-    if (auto const* c = get_client(window))
-        return c->skip_pager;
-    return false;
-}
-
-bool WindowManager::is_client_demands_attention(xcb_window_t window) const
-{
-    if (auto const* c = get_client(window))
-        return c->demands_attention;
-    return false;
-}
+#undef DEFINE_CLIENT_STATE_QUERY
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Legacy floating window helpers (will be removed in Phase 6)
@@ -2556,49 +2467,28 @@ std::optional<size_t> WindowManager::workspace_index_for_window(xcb_window_t win
 }
 
 /**
- * @brief Get the _NET_WM_DESKTOP value for a window.
- *
- * @return The desktop index, or nullopt if not set or if 0xFFFFFFFF (sticky).
- *         Use is_sticky_desktop() to check for sticky separately.
+ * @brief Get raw _NET_WM_DESKTOP value for a window.
+ * @return The desktop index, or nullopt if not set. 0xFFFFFFFF indicates sticky.
  */
-std::optional<uint32_t> WindowManager::get_window_desktop(xcb_window_t window) const
+std::optional<uint32_t> WindowManager::get_raw_window_desktop(xcb_window_t window) const
 {
     uint32_t desktop = 0;
-    if (!xcb_ewmh_get_wm_desktop_reply(
-            ewmh_.get(),
-            xcb_ewmh_get_wm_desktop(ewmh_.get(), window),
-            &desktop,
-            nullptr
-        ))
-    {
+    if (!xcb_ewmh_get_wm_desktop_reply(ewmh_.get(),
+            xcb_ewmh_get_wm_desktop(ewmh_.get(), window), &desktop, nullptr))
         return std::nullopt;
-    }
-
-    if (desktop == 0xFFFFFFFF)
-        return std::nullopt;
-
     return desktop;
 }
 
-/**
- * @brief Check if window requests sticky via _NET_WM_DESKTOP = 0xFFFFFFFF.
- *
- * EWMH specifies that _NET_WM_DESKTOP of 0xFFFFFFFF means the window should
- * be visible on all desktops (sticky).
- */
+std::optional<uint32_t> WindowManager::get_window_desktop(xcb_window_t window) const
+{
+    auto desktop = get_raw_window_desktop(window);
+    return (desktop && *desktop != 0xFFFFFFFF) ? desktop : std::nullopt;
+}
+
 bool WindowManager::is_sticky_desktop(xcb_window_t window) const
 {
-    uint32_t desktop = 0;
-    if (!xcb_ewmh_get_wm_desktop_reply(
-            ewmh_.get(),
-            xcb_ewmh_get_wm_desktop(ewmh_.get(), window),
-            &desktop,
-            nullptr
-        ))
-    {
-        return false;
-    }
-    return desktop == 0xFFFFFFFF;
+    auto desktop = get_raw_window_desktop(window);
+    return desktop && *desktop == 0xFFFFFFFF;
 }
 
 std::optional<std::pair<size_t, size_t>> WindowManager::resolve_window_desktop(xcb_window_t window) const
@@ -2922,19 +2812,9 @@ bool WindowManager::is_focus_eligible(xcb_window_t window) const
             return false;
     }
 
-    // Check ICCCM WM_HINTS.input hint
-    xcb_icccm_wm_hints_t hints;
-    if (!xcb_icccm_get_wm_hints_reply(conn_.get(), xcb_icccm_get_wm_hints(conn_.get(), window), &hints, nullptr))
-        return true;
-
-    if (!(hints.flags & XCB_ICCCM_WM_HINT_INPUT))
-        return true;
-
-    if (hints.input)
-        return true;
-
-    // If input=False, window can only receive focus via WM_TAKE_FOCUS
-    return supports_protocol(window, wm_take_focus_);
+    // Window is focus-eligible if it accepts direct input focus
+    // OR supports WM_TAKE_FOCUS protocol
+    return should_set_input_focus(window) || supports_protocol(window, wm_take_focus_);
 }
 
 bool WindowManager::should_set_input_focus(xcb_window_t window) const

@@ -224,6 +224,7 @@ private:
     FloatingWindow const* find_floating_window(xcb_window_t window) const;
     std::optional<size_t> monitor_index_for_window(xcb_window_t window) const;
     std::optional<size_t> workspace_index_for_window(xcb_window_t window) const;
+    std::optional<uint32_t> get_raw_window_desktop(xcb_window_t window) const;
     std::optional<uint32_t> get_window_desktop(xcb_window_t window) const;
     bool is_sticky_desktop(xcb_window_t window) const;
     std::optional<std::pair<size_t, size_t>> resolve_window_desktop(xcb_window_t window) const;

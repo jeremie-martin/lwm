@@ -134,15 +134,10 @@ void WindowManager::handle_event(xcb_generic_event_t const& event)
 void WindowManager::handle_map_request(xcb_map_request_event_t const& e)
 {
     // Case 1: Already managed window requesting map (deiconify)
-    if (monitor_containing_window(e.window) || find_floating_window(e.window))
+    if (auto const* client = get_client(e.window))
     {
-        bool focus = false;
-        auto monitor_idx = monitor_index_for_window(e.window);
-        auto workspace_idx = workspace_index_for_window(e.window);
-        if (monitor_idx && workspace_idx && *monitor_idx < monitors_.size())
-        {
-            focus = *monitor_idx == focused_monitor_ && *workspace_idx == monitors_[*monitor_idx].current_workspace;
-        }
+        bool focus = client->monitor == focused_monitor_
+            && client->workspace == monitors_[client->monitor].current_workspace;
         deiconify_window(e.window, focus);
         return;
     }
@@ -266,12 +261,13 @@ void WindowManager::handle_map_request(xcb_map_request_event_t const& e)
 
             if (!start_iconic)
             {
-                auto monitor_idx = monitor_index_for_window(e.window);
-                auto workspace_idx = workspace_index_for_window(e.window);
-                if (monitor_idx && workspace_idx && *monitor_idx == focused_monitor_
-                    && *workspace_idx == monitors_[*monitor_idx].current_workspace)
+                if (auto const* client = get_client(e.window))
                 {
-                    focus_window(e.window);
+                    if (client->monitor == focused_monitor_
+                        && client->workspace == monitors_[client->monitor].current_workspace)
+                    {
+                        focus_window(e.window);
+                    }
                 }
             }
             return;
@@ -1070,12 +1066,10 @@ void WindowManager::handle_property_notify(xcb_property_notify_event_t const& e)
                 apply_floating_geometry(*floating_window);
             }
         }
-        else if (monitor_containing_window(e.window))
+        else if (auto const* client = get_client(e.window))
         {
-            if (auto monitor_idx = monitor_index_for_window(e.window))
-            {
-                rearrange_monitor(monitors_[*monitor_idx]);
-            }
+            if (client->kind == Client::Kind::Tiled && client->monitor < monitors_.size())
+                rearrange_monitor(monitors_[client->monitor]);
         }
     }
     if ((wm_protocols_ != XCB_NONE && e.atom == wm_protocols_)
