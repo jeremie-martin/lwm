@@ -1757,6 +1757,26 @@ void WindowManager::manage_window(xcb_window_t window, bool start_iconic)
     monitors_[target_monitor_idx].workspaces[target_workspace_idx].windows.push_back(newWindow);
     register_client_window(window);
 
+    // ─────────────────────────────────────────────────────────────────────────
+    // Populate unified Client registry (Phase 3 of Client refactor)
+    // ─────────────────────────────────────────────────────────────────────────
+    {
+        Client client;
+        client.id = window;
+        client.kind = Client::Kind::Tiled;
+        client.monitor = target_monitor_idx;
+        client.workspace = target_workspace_idx;
+        client.name = newWindow.name;
+        client.wm_class = newWindow.wm_class;
+        client.wm_class_name = newWindow.wm_class_name;
+        client.order = next_client_order_++;  // Note: also set in register_client_window; will consolidate later
+        client.iconic = start_iconic;
+        // Note: other state flags (fullscreen, sticky, etc.) will be updated by
+        // the set_* calls below. During migration, we update both clients_ and
+        // the legacy sets.
+        clients_[window] = std::move(client);
+    }
+
     // Read _NET_WM_USER_TIME_WINDOW if present (EWMH focus stealing prevention)
     if (net_wm_user_time_window_ != XCB_NONE)
     {
@@ -1770,6 +1790,9 @@ void WindowManager::manage_window(xcb_window_t window, bool start_iconic)
                 if (time_window != XCB_NONE)
                 {
                     user_time_windows_[window] = time_window;
+                    // Also update Client (Phase 3)
+                    if (auto* client = get_client(window))
+                        client->user_time_window = time_window;
                     // Select PropertyNotify on the user time window to track changes
                     uint32_t mask = XCB_EVENT_MASK_PROPERTY_CHANGE;
                     xcb_change_window_attributes(conn_.get(), time_window, XCB_CW_EVENT_MASK, &mask);
@@ -1779,6 +1802,9 @@ void WindowManager::manage_window(xcb_window_t window, bool start_iconic)
         }
     }
     user_times_[window] = get_user_time(window);
+    // Also update Client (Phase 3)
+    if (auto* client = get_client(window))
+        client->user_time = user_times_[window];
 
     // Note: We intentionally do NOT select STRUCTURE_NOTIFY on client windows.
     // We receive UnmapNotify/DestroyNotify via root's SubstructureNotifyMask.
@@ -1850,11 +1876,24 @@ void WindowManager::manage_window(xcb_window_t window, bool start_iconic)
     update_all_bars();
 
     if (ewmh_.has_window_state(window, ewmh_.get()->_NET_WM_STATE_SKIP_TASKBAR))
+    {
         skip_taskbar_windows_.insert(window);
+        if (auto* client = get_client(window))
+            client->skip_taskbar = true;
+    }
     if (ewmh_.has_window_state(window, ewmh_.get()->_NET_WM_STATE_SKIP_PAGER))
+    {
         skip_pager_windows_.insert(window);
+        if (auto* client = get_client(window))
+            client->skip_pager = true;
+    }
 
-    if (ewmh_.has_window_state(window, ewmh_.get()->_NET_WM_STATE_STICKY))
+    // Honor _NET_WM_DESKTOP = 0xFFFFFFFF as sticky at manage time
+    if (is_sticky_desktop(window))
+    {
+        set_window_sticky(window, true);
+    }
+    else if (ewmh_.has_window_state(window, ewmh_.get()->_NET_WM_STATE_STICKY))
     {
         set_window_sticky(window, true);
     }
@@ -2008,6 +2047,27 @@ void WindowManager::manage_floating_window(xcb_window_t window, bool start_iconi
     floating_windows_.push_back(floating_window);
     register_client_window(window);
 
+    // ─────────────────────────────────────────────────────────────────────────
+    // Populate unified Client registry (Phase 3 of Client refactor)
+    // ─────────────────────────────────────────────────────────────────────────
+    {
+        auto [instance_name, class_name] = get_wm_class(window);
+        Client client;
+        client.id = window;
+        client.kind = Client::Kind::Floating;
+        client.monitor = *monitor_idx;
+        client.workspace = *workspace_idx;
+        client.name = floating_window.name;
+        client.wm_class = class_name;
+        client.wm_class_name = instance_name;
+        client.floating_geometry = placement;
+        client.transient_for = transient.value_or(XCB_NONE);
+        client.order = next_client_order_++;  // Note: also set in register_client_window; will consolidate later
+        client.iconic = start_iconic;
+        // Note: other state flags will be set by the set_* calls below
+        clients_[window] = std::move(client);
+    }
+
     // Read _NET_WM_USER_TIME_WINDOW if present (EWMH focus stealing prevention)
     if (net_wm_user_time_window_ != XCB_NONE)
     {
@@ -2021,6 +2081,9 @@ void WindowManager::manage_floating_window(xcb_window_t window, bool start_iconi
                 if (time_window != XCB_NONE)
                 {
                     user_time_windows_[window] = time_window;
+                    // Also update Client (Phase 3)
+                    if (auto* client = get_client(window))
+                        client->user_time_window = time_window;
                     // Select PropertyNotify on the user time window to track changes
                     uint32_t mask = XCB_EVENT_MASK_PROPERTY_CHANGE;
                     xcb_change_window_attributes(conn_.get(), time_window, XCB_CW_EVENT_MASK, &mask);
@@ -2030,6 +2093,9 @@ void WindowManager::manage_floating_window(xcb_window_t window, bool start_iconi
         }
     }
     user_times_[window] = get_user_time(window);
+    // Also update Client (Phase 3)
+    if (auto* client = get_client(window))
+        client->user_time = user_times_[window];
 
     // Note: We intentionally do NOT select STRUCTURE_NOTIFY on client windows.
     // We receive UnmapNotify/DestroyNotify via root's SubstructureNotifyMask.
@@ -2087,20 +2153,37 @@ void WindowManager::manage_floating_window(xcb_window_t window, bool start_iconi
     if (transient && !ewmh_.has_window_state(window, ewmh_.get()->_NET_WM_STATE_SKIP_TASKBAR))
     {
         skip_taskbar_windows_.insert(window);
+        if (auto* client = get_client(window))
+            client->skip_taskbar = true;
         ewmh_.set_window_state(window, ewmh_.get()->_NET_WM_STATE_SKIP_TASKBAR, true);
     }
     if (transient && !ewmh_.has_window_state(window, ewmh_.get()->_NET_WM_STATE_SKIP_PAGER))
     {
         skip_pager_windows_.insert(window);
+        if (auto* client = get_client(window))
+            client->skip_pager = true;
         ewmh_.set_window_state(window, ewmh_.get()->_NET_WM_STATE_SKIP_PAGER, true);
     }
     // Also honor explicit client requests
     if (ewmh_.has_window_state(window, ewmh_.get()->_NET_WM_STATE_SKIP_TASKBAR))
+    {
         skip_taskbar_windows_.insert(window);
+        if (auto* client = get_client(window))
+            client->skip_taskbar = true;
+    }
     if (ewmh_.has_window_state(window, ewmh_.get()->_NET_WM_STATE_SKIP_PAGER))
+    {
         skip_pager_windows_.insert(window);
+        if (auto* client = get_client(window))
+            client->skip_pager = true;
+    }
 
-    if (ewmh_.has_window_state(window, ewmh_.get()->_NET_WM_STATE_STICKY))
+    // Honor _NET_WM_DESKTOP = 0xFFFFFFFF as sticky at manage time
+    if (is_sticky_desktop(window))
+    {
+        set_window_sticky(window, true);
+    }
+    else if (ewmh_.has_window_state(window, ewmh_.get()->_NET_WM_STATE_STICKY))
     {
         set_window_sticky(window, true);
     }
@@ -2169,6 +2252,9 @@ void WindowManager::unmanage_window(xcb_window_t window)
     user_times_.erase(window);
     user_time_windows_.erase(window);
     client_order_.erase(window);
+
+    // Remove from unified Client registry (Phase 3)
+    clients_.erase(window);
 
     for (auto& monitor : monitors_)
     {
@@ -2239,6 +2325,9 @@ void WindowManager::unmanage_floating_window(xcb_window_t window)
     user_times_.erase(window);
     user_time_windows_.erase(window);
     client_order_.erase(window);
+
+    // Remove from unified Client registry (Phase 3)
+    clients_.erase(window);
 
     auto it = std::ranges::find_if(
         floating_windows_,
@@ -2490,16 +2579,26 @@ void WindowManager::set_fullscreen(xcb_window_t window, bool enabled)
         }
 
         fullscreen_windows_.insert(window);
+        // Update Client (Phase 3)
+        if (auto* client = get_client(window))
+        {
+            client->fullscreen = true;
+            client->fullscreen_restore = fullscreen_restore_[window];
+        }
 
         // Fullscreen is incompatible with ABOVE/BELOW states - clear them
         if (above_windows_.contains(window))
         {
             above_windows_.erase(window);
+            if (auto* client = get_client(window))
+                client->above = false;
             ewmh_.set_window_state(window, ewmh_.get()->_NET_WM_STATE_ABOVE, false);
         }
         if (below_windows_.contains(window))
         {
             below_windows_.erase(window);
+            if (auto* client = get_client(window))
+                client->below = false;
             ewmh_.set_window_state(window, ewmh_.get()->_NET_WM_STATE_BELOW, false);
         }
 
@@ -2512,6 +2611,12 @@ void WindowManager::set_fullscreen(xcb_window_t window, bool enabled)
             return;
 
         fullscreen_windows_.erase(window);
+        // Update Client (Phase 3)
+        if (auto* client = get_client(window))
+        {
+            client->fullscreen = false;
+            client->fullscreen_restore = std::nullopt;
+        }
         ewmh_.set_window_state(window, ewmh_.get()->_NET_WM_STATE_FULLSCREEN, false);
 
         if (auto* floating_window = find_floating_window(window))
@@ -2553,9 +2658,13 @@ void WindowManager::set_window_above(xcb_window_t window, bool enabled)
     if (enabled)
     {
         above_windows_.insert(window);
+        if (auto* client = get_client(window))
+            client->above = true;
         if (below_windows_.contains(window))
         {
             below_windows_.erase(window);
+            if (auto* client = get_client(window))
+                client->below = false;
             ewmh_.set_window_state(window, ewmh_.get()->_NET_WM_STATE_BELOW, false);
         }
         uint32_t stack_mode = XCB_STACK_MODE_ABOVE;
@@ -2564,6 +2673,8 @@ void WindowManager::set_window_above(xcb_window_t window, bool enabled)
     else
     {
         above_windows_.erase(window);
+        if (auto* client = get_client(window))
+            client->above = false;
     }
 
     ewmh_.set_window_state(window, ewmh_.get()->_NET_WM_STATE_ABOVE, enabled);
@@ -2579,9 +2690,13 @@ void WindowManager::set_window_below(xcb_window_t window, bool enabled)
     if (enabled)
     {
         below_windows_.insert(window);
+        if (auto* client = get_client(window))
+            client->below = true;
         if (above_windows_.contains(window))
         {
             above_windows_.erase(window);
+            if (auto* client = get_client(window))
+                client->above = false;
             ewmh_.set_window_state(window, ewmh_.get()->_NET_WM_STATE_ABOVE, false);
         }
         uint32_t stack_mode = XCB_STACK_MODE_BELOW;
@@ -2590,6 +2705,8 @@ void WindowManager::set_window_below(xcb_window_t window, bool enabled)
     else
     {
         below_windows_.erase(window);
+        if (auto* client = get_client(window))
+            client->below = false;
     }
 
     ewmh_.set_window_state(window, ewmh_.get()->_NET_WM_STATE_BELOW, enabled);
@@ -2602,12 +2719,16 @@ void WindowManager::set_window_sticky(xcb_window_t window, bool enabled)
     if (enabled)
     {
         sticky_windows_.insert(window);
+        if (auto* client = get_client(window))
+            client->sticky = true;
         ewmh_.set_window_state(window, ewmh_.get()->_NET_WM_STATE_STICKY, true);
         ewmh_.set_window_desktop(window, 0xFFFFFFFF);
     }
     else
     {
         sticky_windows_.erase(window);
+        if (auto* client = get_client(window))
+            client->sticky = false;
         ewmh_.set_window_state(window, ewmh_.get()->_NET_WM_STATE_STICKY, false);
         if (auto monitor_idx = monitor_index_for_window(window))
         {
@@ -2642,6 +2763,13 @@ void WindowManager::set_window_maximized(xcb_window_t window, bool horiz, bool v
         maximized_vert_windows_.insert(window);
     else
         maximized_vert_windows_.erase(window);
+
+    // Update Client (Phase 3)
+    if (auto* client = get_client(window))
+    {
+        client->maximized_horz = horiz;
+        client->maximized_vert = vert;
+    }
 
     ewmh_.set_window_state(window, ewmh_.get()->_NET_WM_STATE_MAXIMIZED_HORZ, horiz);
     ewmh_.set_window_state(window, ewmh_.get()->_NET_WM_STATE_MAXIMIZED_VERT, vert);
@@ -2721,6 +2849,8 @@ void WindowManager::set_window_shaded(xcb_window_t window, bool enabled)
     {
         if (shaded_windows_.insert(window).second)
         {
+            if (auto* client = get_client(window))
+                client->shaded = true;
             ewmh_.set_window_state(window, ewmh_.get()->_NET_WM_STATE_SHADED, true);
             if (!iconic_windows_.contains(window))
             {
@@ -2732,6 +2862,8 @@ void WindowManager::set_window_shaded(xcb_window_t window, bool enabled)
     {
         if (shaded_windows_.erase(window) > 0)
         {
+            if (auto* client = get_client(window))
+                client->shaded = false;
             ewmh_.set_window_state(window, ewmh_.get()->_NET_WM_STATE_SHADED, false);
             if (iconic_windows_.contains(window))
             {
@@ -2747,6 +2879,10 @@ void WindowManager::set_window_modal(xcb_window_t window, bool enabled)
         modal_windows_.insert(window);
     else
         modal_windows_.erase(window);
+
+    // Update Client (Phase 3)
+    if (auto* client = get_client(window))
+        client->modal = enabled;
 
     ewmh_.set_window_state(window, ewmh_.get()->_NET_WM_STATE_MODAL, enabled);
     if (enabled)
@@ -2879,6 +3015,9 @@ void WindowManager::iconify_window(xcb_window_t window)
         return;
 
     iconic_windows_.insert(window);
+    // Update Client (Phase 3)
+    if (auto* client = get_client(window))
+        client->iconic = true;
 
     if (wm_state_ != XCB_NONE)
     {
@@ -2924,6 +3063,9 @@ void WindowManager::deiconify_window(xcb_window_t window, bool focus)
         return;
 
     iconic_windows_.erase(window);
+    // Update Client (Phase 3)
+    if (auto* client = get_client(window))
+        client->iconic = false;
 
     if (wm_state_ != XCB_NONE)
     {
@@ -3420,6 +3562,26 @@ Monitor* WindowManager::monitor_containing_window(xcb_window_t window)
     }
     return nullptr;
 }
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Client registry helpers
+// ─────────────────────────────────────────────────────────────────────────────
+
+Client* WindowManager::get_client(xcb_window_t window)
+{
+    auto it = clients_.find(window);
+    return it != clients_.end() ? &it->second : nullptr;
+}
+
+Client const* WindowManager::get_client(xcb_window_t window) const
+{
+    auto it = clients_.find(window);
+    return it != clients_.end() ? &it->second : nullptr;
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Legacy floating window helpers (will be removed in Phase 6)
+// ─────────────────────────────────────────────────────────────────────────────
 
 WindowManager::FloatingWindow* WindowManager::find_floating_window(xcb_window_t window)
 {

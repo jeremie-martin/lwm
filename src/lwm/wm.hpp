@@ -55,13 +55,7 @@ private:
         std::string action;
     };
 
-    struct FullscreenMonitors
-    {
-        uint32_t top = 0;
-        uint32_t bottom = 0;
-        uint32_t left = 0;
-        uint32_t right = 0;
-    };
+    // Note: FullscreenMonitors moved to types.hpp as part of unified Client refactor
 
     struct ActiveWindowInfo
     {
@@ -81,6 +75,17 @@ private:
     std::vector<xcb_window_t> dock_windows_;
     std::vector<xcb_window_t> desktop_windows_;
     std::vector<FloatingWindow> floating_windows_;
+
+    // ─────────────────────────────────────────────────────────────────────────
+    // Unified client registry (Phase 2 of Client refactor)
+    //
+    // This map is the authoritative source of truth for all managed windows.
+    // During the migration period, it coexists with the legacy data structures
+    // above. Once migration is complete, the scattered sets/maps below will be
+    // removed and all state will be accessed through clients_.
+    // ─────────────────────────────────────────────────────────────────────────
+    std::unordered_map<xcb_window_t, Client> clients_;
+
     std::unordered_map<xcb_window_t, uint32_t> wm_unmapped_windows_;
     std::unordered_set<xcb_window_t> fullscreen_windows_;
     std::unordered_set<xcb_window_t> above_windows_;
@@ -195,6 +200,13 @@ private:
     void move_window_to_monitor(int direction);
 
     void launch_program(std::string const& path);
+
+    // ─────────────────────────────────────────────────────────────────────────
+    // Client registry helpers
+    // ─────────────────────────────────────────────────────────────────────────
+    Client* get_client(xcb_window_t window);
+    Client const* get_client(xcb_window_t window) const;
+    bool is_managed(xcb_window_t window) const { return clients_.contains(window); }
 
     // Helpers
     Monitor& focused_monitor() { return monitors_[focused_monitor_]; }

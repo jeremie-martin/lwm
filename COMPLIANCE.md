@@ -424,28 +424,28 @@ Types to support (in priority order, first match wins):
 
 ## Startup Notification Protocol (Optional)
 
-**Not currently implemented.** Future versions may add support for:
-- Monitoring `_NET_STARTUP_ID` on new windows
-- Matching to pending startup sequences
-- Applying workspace/focus from startup notification
+- Monitor `_NET_STARTUP_ID` on new windows.
+- Match to pending startup sequences.
+- Complete sequences and remove visual feedback.
+- Apply workspace/focus from startup notification.
 
 ---
 
 ## XDG Specifications (Supplementary)
 
 ### Application Identification
-- `_NET_WM_PID` + `WM_CLIENT_MACHINE`: read for process identification (used in ping/kill).
-- `.desktop` file matching: **not implemented**.
+- Use `_NET_WM_PID` + `WM_CLIENT_MACHINE` for process identification.
+- Match against `.desktop` files via `StartupWMClass` or binary name.
 
 ---
 
 ## System Tray Protocol (Optional)
 
-**Not implemented.** Use a standalone system tray application (e.g., `stalonetray`).
-If implementing in the future:
-- Claim `_NET_SYSTEM_TRAY_S{screen}` selection
-- Handle `_NET_SYSTEM_TRAY_OPCODE` messages
-- Embed tray icons via reparenting
+If implementing system tray support:
+- Claim `_NET_SYSTEM_TRAY_S{screen}` selection.
+- Handle `_NET_SYSTEM_TRAY_OPCODE` messages.
+- Embed tray icons via reparenting.
+- Support `_NET_SYSTEM_TRAY_ORIENTATION`.
 
 ---
 
@@ -458,10 +458,6 @@ If implementing in the future:
    - `_NET_ACTIVE_WINDOW` = None ↔ no window has input focus.
    - `_NET_CLIENT_LIST` contains exactly all managed, non-override-redirect windows.
    - `_NET_CLIENT_LIST_STACKING` has same windows as `_NET_CLIENT_LIST`.
-   - **DOCK windows are NOT included in `_NET_CLIENT_LIST`**: Docks (panels, bars) are tracked
-     separately for strut handling but are not considered "managed" for client list purposes.
-     They have their own stacking layer (above normal windows) and do not participate in
-     workspace membership or normal focus handling.
 
 3. **Desktop Consistency**:
    - `_NET_CURRENT_DESKTOP` < `_NET_NUMBER_OF_DESKTOPS`.

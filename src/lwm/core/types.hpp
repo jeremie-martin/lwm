@@ -2,12 +2,147 @@
 
 #include <algorithm>
 #include <cstdint>
+#include <optional>
 #include <string>
 #include <vector>
 #include <xcb/randr.h>
 #include <xcb/xcb.h>
 
 namespace lwm {
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Basic geometry types (must be defined before Client)
+// ─────────────────────────────────────────────────────────────────────────────
+
+struct Geometry
+{
+    int16_t x = 0;
+    int16_t y = 0;
+    uint16_t width = 0;
+    uint16_t height = 0;
+};
+
+struct Strut
+{
+    uint32_t left = 0;
+    uint32_t right = 0;
+    uint32_t top = 0;
+    uint32_t bottom = 0;
+};
+
+/**
+ * @brief Fullscreen monitor configuration for _NET_WM_FULLSCREEN_MONITORS.
+ *
+ * Specifies which monitors a fullscreen window should span.
+ */
+struct FullscreenMonitors
+{
+    uint32_t top = 0;
+    uint32_t bottom = 0;
+    uint32_t left = 0;
+    uint32_t right = 0;
+};
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Unified Client record
+// ─────────────────────────────────────────────────────────────────────────────
+
+/**
+ * @brief Unified client record representing any managed window.
+ *
+ * This struct consolidates all window state that was previously scattered
+ * across multiple unordered_set and unordered_map structures. It provides
+ * a single source of truth for each managed window's state.
+ *
+ * Design rationale:
+ * - Eliminates state synchronization bugs between multiple data structures
+ * - Provides O(1) lookup for any window property via the clients_ map
+ * - Simplifies invariant reasoning (all state for a window is in one place)
+ * - Unifies tiled and floating window handling
+ *
+ * @see WindowManager::clients_ for the central registry
+ */
+struct Client
+{
+    xcb_window_t id = XCB_NONE;
+
+    /**
+     * @brief Classification of the window type.
+     *
+     * - Tiled: Participates in workspace tiling layout
+     * - Floating: Positioned independently, does not affect tiling
+     * - Dock: Panel/bar that reserves screen edges (struts)
+     * - Desktop: Background/desktop window (_NET_WM_WINDOW_TYPE_DESKTOP)
+     */
+    enum class Kind { Tiled, Floating, Dock, Desktop };
+    Kind kind = Kind::Tiled;
+
+    // ─────────────────────────────────────────────────────────────────────────
+    // Location (meaningful for Tiled/Floating kinds)
+    // ─────────────────────────────────────────────────────────────────────────
+    size_t monitor = 0;
+    size_t workspace = 0;
+
+    // ─────────────────────────────────────────────────────────────────────────
+    // Identification (from WM_NAME, WM_CLASS)
+    // ─────────────────────────────────────────────────────────────────────────
+    std::string name;
+    std::string wm_class;
+    std::string wm_class_name;
+
+    // ─────────────────────────────────────────────────────────────────────────
+    // Window state flags (replaces scattered unordered_set<xcb_window_t>)
+    //
+    // These flags are kept in sync with _NET_WM_STATE atoms on the window.
+    // ─────────────────────────────────────────────────────────────────────────
+    bool mapped = false;           ///< WM's tracked map state
+    bool fullscreen = false;       ///< _NET_WM_STATE_FULLSCREEN
+    bool above = false;            ///< _NET_WM_STATE_ABOVE
+    bool below = false;            ///< _NET_WM_STATE_BELOW
+    bool iconic = false;           ///< _NET_WM_STATE_HIDDEN (minimized)
+    bool sticky = false;           ///< _NET_WM_STATE_STICKY
+    bool maximized_horz = false;   ///< _NET_WM_STATE_MAXIMIZED_HORZ
+    bool maximized_vert = false;   ///< _NET_WM_STATE_MAXIMIZED_VERT
+    bool shaded = false;           ///< _NET_WM_STATE_SHADED
+    bool modal = false;            ///< _NET_WM_STATE_MODAL
+    bool skip_taskbar = false;     ///< _NET_WM_STATE_SKIP_TASKBAR
+    bool skip_pager = false;       ///< _NET_WM_STATE_SKIP_PAGER
+    bool demands_attention = false; ///< _NET_WM_STATE_DEMANDS_ATTENTION
+
+    // ─────────────────────────────────────────────────────────────────────────
+    // Floating-specific data (only used when kind == Floating)
+    // ─────────────────────────────────────────────────────────────────────────
+    Geometry floating_geometry;
+    xcb_window_t transient_for = XCB_NONE;
+
+    // ─────────────────────────────────────────────────────────────────────────
+    // Geometry restore points
+    // ─────────────────────────────────────────────────────────────────────────
+    std::optional<Geometry> fullscreen_restore;  ///< Geometry before fullscreen
+    std::optional<Geometry> maximize_restore;    ///< Geometry before maximize
+    std::optional<FullscreenMonitors> fullscreen_monitors; ///< Multi-monitor fullscreen
+
+    // ─────────────────────────────────────────────────────────────────────────
+    // Sync protocol state (_NET_WM_SYNC_REQUEST)
+    // ─────────────────────────────────────────────────────────────────────────
+    uint32_t sync_counter = 0;  ///< XSync counter ID (0 if none)
+    uint64_t sync_value = 0;    ///< Expected counter value
+
+    // ─────────────────────────────────────────────────────────────────────────
+    // Focus stealing prevention (_NET_WM_USER_TIME)
+    // ─────────────────────────────────────────────────────────────────────────
+    uint32_t user_time = 0;                       ///< Last user interaction time
+    xcb_window_t user_time_window = XCB_NONE;     ///< _NET_WM_USER_TIME_WINDOW
+
+    // ─────────────────────────────────────────────────────────────────────────
+    // Management tracking
+    // ─────────────────────────────────────────────────────────────────────────
+    uint64_t order = 0;  ///< Mapping order for _NET_CLIENT_LIST
+};
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Legacy struct: retained during migration, will be removed in Phase 6
+// ─────────────────────────────────────────────────────────────────────────────
 
 struct Window
 {
@@ -33,21 +168,9 @@ struct Workspace
     }
 };
 
-struct Geometry
-{
-    int16_t x = 0;
-    int16_t y = 0;
-    uint16_t width = 0;
-    uint16_t height = 0;
-};
-
-struct Strut
-{
-    uint32_t left = 0;
-    uint32_t right = 0;
-    uint32_t top = 0;
-    uint32_t bottom = 0;
-};
+// ─────────────────────────────────────────────────────────────────────────────
+// Monitor and workspace types
+// ─────────────────────────────────────────────────────────────────────────────
 
 struct Monitor
 {
@@ -83,6 +206,10 @@ struct Monitor
                  static_cast<uint16_t>(area_h) };
     }
 };
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Keybinding types
+// ─────────────────────────────────────────────────────────────────────────────
 
 struct KeyBinding
 {
