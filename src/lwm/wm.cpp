@@ -854,10 +854,24 @@ void WindowManager::handle_motion_notify(xcb_motion_notify_event_t const& e)
         return;
     }
 
+    // Focus-follows-mouse on motion: if motion occurs within a managed window
+    // that is not currently focused, focus it. This handles the case where a
+    // new window took focus (per EWMH compliance) but the cursor remained in
+    // another window. Moving the mouse within that window re-establishes focus.
     if (e.event != conn_.screen()->root)
     {
-        if (find_floating_window(e.event) || monitor_containing_window(e.event))
+        if (find_floating_window(e.event))
+        {
+            if (e.event != active_window_)
+                focus_floating_window(e.event);
             return;
+        }
+        if (monitor_containing_window(e.event))
+        {
+            if (e.event != active_window_)
+                focus_window(e.event);
+            return;
+        }
     }
 
     update_focused_monitor_at_point(e.root_x, e.root_y);
@@ -908,9 +922,25 @@ void WindowManager::handle_button_press(xcb_button_press_event_t const& e)
         }
     }
 
-    // Only handle clicks on root window (empty areas or gaps)
+    // Click-to-focus: clicking on a managed window focuses it (even without modifiers).
+    // This complements motion-based FFM for cases where the user clicks in a window
+    // that lost focus to a newly created window.
     if (e.event != conn_.screen()->root)
+    {
+        if (find_floating_window(target))
+        {
+            if (target != active_window_)
+                focus_floating_window(target);
+            return;
+        }
+        if (monitor_containing_window(target))
+        {
+            if (target != active_window_)
+                focus_window(target);
+            return;
+        }
         return;
+    }
 
     // Update focused monitor based on click position
     update_focused_monitor_at_point(e.root_x, e.root_y);

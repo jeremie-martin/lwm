@@ -78,6 +78,11 @@ This mapping is intentionally per-monitor; some pagers may assume global desktop
 
 ### 2.2 Focus-Follows-Mouse (FFM)
 - When the pointer enters a focus-eligible window, that window becomes focused.
+- **Motion within a window**: If the pointer moves within a focus-eligible window that is not
+  currently focused, that window gains focus. This handles the case where a new window took
+  focus (per §5.2), but the cursor remained in a different window.
+- **Click within a window**: Clicking within a focus-eligible window focuses it, even without
+  modifier keys.
 
 ### 2.3 Empty Space Semantics (Key Multi-Monitor Behavior)
 LWM defines focus behavior for pointer movement over “gaps/background” as follows:
@@ -158,6 +163,9 @@ When a new window appears:
 - By default, a newly created window **receives focus** if it is focus-eligible and visible.
 - Exceptions are permitted when required by COMPLIANCE.md (e.g., initial iconic state, focus-ineligible
   windows, or focus-stealing prevention constraints).
+- **Interaction with FFM**: When a new window takes focus, if the cursor is physically inside
+  another window, that other window regains focus as soon as the user moves or clicks within it
+  (see §2.2 Focus-Follows-Mouse).
 
 ---
 
