@@ -1424,6 +1424,8 @@ void WindowManager::handle_client_message(xcb_client_message_event_t const& e)
         }
 
         xcb_configure_window(conn_.get(), e.window, mask, values);
+        // Update _NET_CLIENT_LIST_STACKING to reflect the new stacking order
+        update_ewmh_client_list();
         conn_.flush();
     }
 }
@@ -2346,6 +2348,8 @@ void WindowManager::focus_window(xcb_window_t window)
 
     apply_fullscreen_if_needed(window);
     restack_transients(window);
+    // Update stacking order in EWMH after restacking transients
+    update_ewmh_client_list();
 
     update_all_bars();
     conn_.flush();

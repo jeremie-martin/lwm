@@ -361,8 +361,8 @@ Types to support (in priority order, first match wins):
 
 #### _NET_RESTACK_WINDOW
 - Restack window relative to sibling.
-- **Limitation**: Source indication rules are not fully applied.
-- **Limitation**: `_NET_CLIENT_LIST_STACKING` may not be updated immediately after restack.
+- `_NET_CLIENT_LIST_STACKING` is updated after restack operations.
+- **Limitation**: Source indication rules are not fully applied (all sources treated equally).
 
 #### _NET_REQUEST_FRAME_EXTENTS
 - Set `_NET_FRAME_EXTENTS` before window is mapped.
