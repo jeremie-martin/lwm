@@ -84,7 +84,13 @@ The WM must set and maintain:
 #### WM_STATE
 - Set on all managed windows.
 - Values: `WithdrawnState` (0), `NormalState` (1), `IconicState` (3).
-- Update when visibility changes.
+- State transitions:
+  - `NormalState`: Window is managed and logically visible (may be unmapped due to workspace).
+  - `IconicState`: Window is explicitly minimized/iconified by user action.
+  - `WithdrawnState`: Window is unmanaged (client withdrew or WM unmanaged it).
+- **Workspace visibility does NOT change WM_STATE**: A window on a non-visible workspace
+  remains in `NormalState` even though it is unmapped. Visibility across workspaces is
+  expressed via `_NET_WM_DESKTOP` and physical mapping state, not WM_STATE.
 - Remove or set to Withdrawn when unmanaging.
 
 ### 4. Client Messages (Handle)
@@ -112,9 +118,22 @@ The WM must set and maintain:
 
 ### 7. Unmap Handling
 
-- Distinguish client-initiated unmaps from WM-initiated unmaps.
-- On client-initiated unmap: unmanage the window, set `WM_STATE` to Withdrawn.
-- Track synthetic vs. real unmap events.
+ICCCM requires distinguishing WM-initiated unmaps from client-initiated unmaps:
+
+- **WM-initiated unmaps** (e.g., hiding windows during workspace switches):
+  - The WM tracks pending unmaps with a counter before calling `xcb_unmap_window()`.
+  - The counter is only incremented if the window is currently viewable (to avoid leaks).
+  - When `UnmapNotify` arrives, if counter > 0, decrement and ignore the event.
+  - Window remains managed; WM_STATE stays `NormalState`.
+
+- **Client-initiated unmaps** (withdraw requests):
+  - `UnmapNotify` arrives with counter == 0 (no pending WM unmap).
+  - Unmanage the window and set `WM_STATE` to `WithdrawnState`.
+  - Remove from all internal structures.
+
+- **Event source**: We receive `UnmapNotify` events via root window's `SubstructureNotifyMask`.
+  We intentionally do NOT select `STRUCTURE_NOTIFY` on client windows to avoid receiving
+  duplicate `UnmapNotify` events (which would break the counting mechanism).
 
 ### 8. Destroy Handling
 

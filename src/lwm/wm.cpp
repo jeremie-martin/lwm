@@ -557,7 +557,11 @@ void WindowManager::handle_event(xcb_generic_event_t const& event)
         case XCB_UNMAP_NOTIFY:
         {
             auto const& e = reinterpret_cast<xcb_unmap_notify_event_t const&>(event);
-            // Ignore if WM initiated this unmap (workspace switch)
+            // ICCCM requires distinguishing WM-initiated unmaps (hide for workspace switch)
+            // from client-initiated unmaps (withdraw request). We track WM-initiated unmaps
+            // and decrement the counter here. If counter reaches zero, the entry is removed.
+            // We receive exactly ONE UnmapNotify per unmap via root's SubstructureNotifyMask
+            // (we intentionally do NOT select STRUCTURE_NOTIFY on client windows).
             if (auto it = wm_unmapped_windows_.find(e.window); it != wm_unmapped_windows_.end())
             {
                 if (it->second > 0)
@@ -567,7 +571,7 @@ void WindowManager::handle_event(xcb_generic_event_t const& event)
                     break;
                 }
             }
-            // Client-initiated unmap - remove the window
+            // Client-initiated unmap - unmanage the window and set WM_STATE to Withdrawn
             handle_window_removal(e.window);
             break;
         }
@@ -1676,8 +1680,12 @@ void WindowManager::manage_window(xcb_window_t window, bool start_iconic)
     register_client_window(window);
     user_times_[window] = get_user_time(window);
 
-    uint32_t values[] = { XCB_EVENT_MASK_ENTER_WINDOW | XCB_EVENT_MASK_FOCUS_CHANGE | XCB_EVENT_MASK_PROPERTY_CHANGE
-                          | XCB_EVENT_MASK_STRUCTURE_NOTIFY };
+    // Note: We intentionally do NOT select STRUCTURE_NOTIFY on client windows.
+    // We receive UnmapNotify/DestroyNotify via root's SubstructureNotifyMask.
+    // Selecting STRUCTURE_NOTIFY on clients would cause duplicate UnmapNotify events,
+    // leading to incorrect unmanagement of windows during workspace switches (ICCCM compliance).
+    uint32_t values[] = { XCB_EVENT_MASK_ENTER_WINDOW | XCB_EVENT_MASK_FOCUS_CHANGE
+                          | XCB_EVENT_MASK_PROPERTY_CHANGE };
     xcb_change_window_attributes(conn_.get(), window, XCB_CW_EVENT_MASK, values);
 
     // Set border width BEFORE layout so positions are calculated correctly
@@ -1901,8 +1909,12 @@ void WindowManager::manage_floating_window(xcb_window_t window, bool start_iconi
     register_client_window(window);
     user_times_[window] = get_user_time(window);
 
-    uint32_t values[] = { XCB_EVENT_MASK_ENTER_WINDOW | XCB_EVENT_MASK_FOCUS_CHANGE | XCB_EVENT_MASK_PROPERTY_CHANGE
-                          | XCB_EVENT_MASK_STRUCTURE_NOTIFY | XCB_EVENT_MASK_BUTTON_PRESS };
+    // Note: We intentionally do NOT select STRUCTURE_NOTIFY on client windows.
+    // We receive UnmapNotify/DestroyNotify via root's SubstructureNotifyMask.
+    // Selecting STRUCTURE_NOTIFY on clients would cause duplicate UnmapNotify events,
+    // leading to incorrect unmanagement of windows during workspace switches (ICCCM compliance).
+    uint32_t values[] = { XCB_EVENT_MASK_ENTER_WINDOW | XCB_EVENT_MASK_FOCUS_CHANGE
+                          | XCB_EVENT_MASK_PROPERTY_CHANGE | XCB_EVENT_MASK_BUTTON_PRESS };
     xcb_change_window_attributes(conn_.get(), window, XCB_CW_EVENT_MASK, values);
     xcb_configure_window(conn_.get(), window, XCB_CONFIG_WINDOW_BORDER_WIDTH, &config_.appearance.border_width);
 
@@ -4333,10 +4345,42 @@ void WindowManager::unmanage_desktop_window(xcb_window_t window)
     }
 }
 
+/**
+ * @brief Unmap a window with WM tracking to distinguish from client-initiated unmaps.
+ *
+ * ICCCM requires window managers to distinguish between WM-initiated unmaps
+ * (e.g., hiding windows during workspace switches) and client-initiated unmaps
+ * (withdraw requests). This function tracks WM-initiated unmaps by incrementing
+ * a counter before calling xcb_unmap_window. The counter is decremented in
+ * the UnmapNotify handler, and if the count is positive, the unmap is ignored.
+ *
+ * To avoid counter leaks (incrementing without a matching UnmapNotify), we only
+ * increment if the window is currently mapped (XCB_MAP_STATE_VIEWABLE).
+ * Unmapping an already-unmapped window produces no UnmapNotify event.
+ */
 void WindowManager::wm_unmap_window(xcb_window_t window)
 {
-    wm_unmapped_windows_[window] += 1;
-    xcb_unmap_window(conn_.get(), window);
+    // Only increment counter if window is currently viewable.
+    // Unmapping an already-unmapped window produces no UnmapNotify,
+    // which would leak the counter and cause future client unmaps to be ignored.
+    auto attr_cookie = xcb_get_window_attributes(conn_.get(), window);
+    auto* attr = xcb_get_window_attributes_reply(conn_.get(), attr_cookie, nullptr);
+    if (attr)
+    {
+        bool viewable = attr->map_state == XCB_MAP_STATE_VIEWABLE;
+        free(attr);
+        if (viewable)
+        {
+            wm_unmapped_windows_[window] += 1;
+            xcb_unmap_window(conn_.get(), window);
+        }
+        // Window already unmapped - no action needed
+    }
+    else
+    {
+        // Window might be destroyed - still try to unmap but don't track
+        xcb_unmap_window(conn_.get(), window);
+    }
 }
 
 void WindowManager::setup_ewmh()
