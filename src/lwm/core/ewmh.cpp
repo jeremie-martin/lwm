@@ -154,6 +154,7 @@ void Ewmh::set_supported_atoms()
         ewmh_._NET_WM_MOVERESIZE,
         ewmh_._NET_SHOWING_DESKTOP,
         ewmh_._NET_RESTACK_WINDOW,
+        ewmh_._NET_WM_USER_TIME,
     };
 
     supported.insert(supported.end(), extra_supported_atoms_.begin(), extra_supported_atoms_.end());

@@ -79,9 +79,15 @@ WindowManager::WindowManager(Config config)
     net_wm_user_time_ = ewmh_.get()->_NET_WM_USER_TIME;
     net_wm_user_time_window_ = intern_atom("_NET_WM_USER_TIME_WINDOW");
     net_wm_state_focused_ = intern_atom("_NET_WM_STATE_FOCUSED");
-    if (net_wm_state_focused_ != XCB_NONE)
+    // Add extra supported atoms not in xcb_ewmh library
     {
-        ewmh_.set_extra_supported_atoms({ net_wm_state_focused_ });
+        std::vector<xcb_atom_t> extra;
+        if (net_wm_user_time_window_ != XCB_NONE)
+            extra.push_back(net_wm_user_time_window_);
+        if (net_wm_state_focused_ != XCB_NONE)
+            extra.push_back(net_wm_state_focused_);
+        if (!extra.empty())
+            ewmh_.set_extra_supported_atoms(extra);
     }
     layout_.set_sync_request_callback([this](xcb_window_t window) { send_sync_request(window, last_event_time_); });
     detect_monitors();
