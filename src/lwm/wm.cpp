@@ -2062,6 +2062,19 @@ void WindowManager::manage_floating_window(xcb_window_t window, bool start_iconi
             focus_floating_window(window);
     }
 
+    // Transient windows should not appear in taskbars/pagers (ICCCM/EWMH convention)
+    // Set SKIP_TASKBAR and SKIP_PAGER unless the window explicitly overrides this
+    if (transient && !ewmh_.has_window_state(window, ewmh_.get()->_NET_WM_STATE_SKIP_TASKBAR))
+    {
+        skip_taskbar_windows_.insert(window);
+        ewmh_.set_window_state(window, ewmh_.get()->_NET_WM_STATE_SKIP_TASKBAR, true);
+    }
+    if (transient && !ewmh_.has_window_state(window, ewmh_.get()->_NET_WM_STATE_SKIP_PAGER))
+    {
+        skip_pager_windows_.insert(window);
+        ewmh_.set_window_state(window, ewmh_.get()->_NET_WM_STATE_SKIP_PAGER, true);
+    }
+    // Also honor explicit client requests
     if (ewmh_.has_window_state(window, ewmh_.get()->_NET_WM_STATE_SKIP_TASKBAR))
         skip_taskbar_windows_.insert(window);
     if (ewmh_.has_window_state(window, ewmh_.get()->_NET_WM_STATE_SKIP_PAGER))

@@ -63,7 +63,9 @@ The WM must read and honor these client-set properties:
 - Identify transient relationships.
 - Transients inherit workspace from their parent.
 - Transients stack above their parent when both visible.
-- Transients should not appear in taskbars/pagers independently.
+- **Transients automatically get `_NET_WM_STATE_SKIP_TASKBAR` and `_NET_WM_STATE_SKIP_PAGER`**
+  set on manage (unless already set by the client). This ensures transient dialogs don't
+  clutter taskbars/pagers independently of their parent window.
 
 #### WM_PROTOCOLS
 - Check which protocols the client supports.
