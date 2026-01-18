@@ -50,17 +50,28 @@ struct FullscreenMonitors
 /**
  * @brief Unified client record representing any managed window.
  *
- * This struct consolidates all window state that was previously scattered
- * across multiple unordered_set and unordered_map structures. It provides
- * a single source of truth for each managed window's state.
+ * This struct is the authoritative source of truth for all per-window state.
+ * It replaces the scattered unordered_set and unordered_map structures that
+ * were previously used (fullscreen_windows_, iconic_windows_, etc.).
  *
  * Design rationale:
+ * - Single authoritative source: all state for a window is in one place
+ * - O(1) lookup for any window property via the clients_ map
  * - Eliminates state synchronization bugs between multiple data structures
- * - Provides O(1) lookup for any window property via the clients_ map
- * - Simplifies invariant reasoning (all state for a window is in one place)
- * - Unifies tiled and floating window handling
+ * - Simplifies invariant reasoning and debugging
+ * - Unifies tiled and floating window handling for state management
+ *
+ * State flags managed here:
+ * - fullscreen, iconic, sticky, above, below
+ * - maximized_horz, maximized_vert, shaded, modal
+ * - skip_taskbar, skip_pager (pending migration)
+ *
+ * Restore geometries:
+ * - fullscreen_restore: geometry before entering fullscreen
+ * - maximize_restore: geometry before maximizing
  *
  * @see WindowManager::clients_ for the central registry
+ * @see is_client_fullscreen(), is_client_iconic(), etc. for accessors
  */
 struct Client
 {

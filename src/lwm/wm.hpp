@@ -77,21 +77,24 @@ private:
     std::vector<FloatingWindow> floating_windows_;
 
     // ─────────────────────────────────────────────────────────────────────────
-    // Unified client registry (Phase 2 of Client refactor)
-    //
-    // This map is the authoritative source of truth for all managed windows.
-    // During the migration period, it coexists with the legacy data structures
-    // above. Once migration is complete, the scattered sets/maps below will be
     // ─────────────────────────────────────────────────────────────────────────
-    // Unified Client registry - all per-window state is consolidated here
+    // Unified Client registry
+    //
+    // This is the authoritative source of truth for all managed window state.
+    // All state flags (fullscreen, iconic, sticky, above, below, maximized,
+    // shaded, modal) are stored in Client records, not in separate sets.
+    //
+    // See types.hpp Client struct for full documentation.
     // ─────────────────────────────────────────────────────────────────────────
     std::unordered_map<xcb_window_t, Client> clients_;
 
-    // Per-window tracking state (not part of Client model)
-    std::unordered_map<xcb_window_t, uint32_t> wm_unmapped_windows_;  // Unmap tracking for ICCCM compliance
+    // ─────────────────────────────────────────────────────────────────────────
+    // Per-window tracking state (separate from Client model)
+    // ─────────────────────────────────────────────────────────────────────────
+    std::unordered_map<xcb_window_t, uint32_t> wm_unmapped_windows_;  // ICCCM unmap tracking
     std::unordered_map<xcb_window_t, FullscreenMonitors> fullscreen_monitors_;  // _NET_WM_FULLSCREEN_MONITORS
 
-    // Legacy state sets (to be migrated to Client in future phases)
+    // TODO: Migrate skip_taskbar/skip_pager to Client in a future phase
     std::unordered_set<xcb_window_t> skip_taskbar_windows_;
     std::unordered_set<xcb_window_t> skip_pager_windows_;
     bool showing_desktop_ = false;

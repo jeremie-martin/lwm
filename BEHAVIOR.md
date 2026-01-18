@@ -23,7 +23,9 @@ and are not duplicated here.
   - They are associated with a monitor and workspace but stored in a separate list.
   - Workspace focus memory tracks only tiled windows; if the last-focused window was floating,
     focus restoration may fall back to a tiled window or none.
-  - This is an architectural simplification; future versions may unify the window model.
+- **Implementation Note**: All window state (fullscreen, iconic, sticky, above, below, maximized,
+  shaded, modal) is stored in a unified `Client` record. The tiled/floating distinction affects
+  only layout participation and workspace storage, not state management.
 
 ### 1.3 Window Classes (Behavioral)
 Once classified, windows behave as follows:
