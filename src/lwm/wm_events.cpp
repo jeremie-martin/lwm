@@ -661,12 +661,12 @@ void WindowManager::handle_client_message(xcb_client_message_event_t const& e)
         // check if the request timestamp is newer than the current active window's user time
         if (source == 1 && active_window_ != XCB_NONE && timestamp != 0)
         {
-            auto active_time_it = user_times_.find(active_window_);
-            if (active_time_it != user_times_.end() && active_time_it->second != 0)
+            auto* active_client = get_client(active_window_);
+            if (active_client && active_client->user_time != 0)
             {
                 // If the requesting window's timestamp is older than the active window's last
                 // user interaction, set demands attention instead of stealing focus
-                if (timestamp < active_time_it->second)
+                if (timestamp < active_client->user_time)
                 {
                     LWM_DEBUG("Focus stealing prevented, setting demands attention");
                     set_client_demands_attention(window, true);
@@ -1069,19 +1069,17 @@ void WindowManager::handle_property_notify(xcb_property_notify_event_t const& e)
         // Check if this PropertyNotify is from a user time window
         // If so, find the client that owns it and update that client's user time
         xcb_window_t client_window = e.window;
-        for (auto const& [client, time_window] : user_time_windows_)
+        for (auto const& [id, client] : clients_)
         {
-            if (time_window == e.window)
+            if (client.user_time_window == e.window)
             {
-                client_window = client;
+                client_window = id;
                 break;
             }
         }
-        uint32_t new_time = get_user_time(client_window);
-        user_times_[client_window] = new_time;
-        // Keep Client.user_time in sync
+        // User time is authoritative in Client
         if (auto* c = get_client(client_window))
-            c->user_time = new_time;
+            c->user_time = get_user_time(client_window);
     }
     // Handle WM_HINTS urgency flag changes (ICCCM → EWMH DEMANDS_ATTENTION)
     if (wm_hints_ != XCB_NONE && e.atom == wm_hints_)
@@ -1182,7 +1180,11 @@ void WindowManager::handle_randr_screen_change()
 
     std::vector<Window> all_windows;
     std::vector<FloatingWindow> all_floating = floating_windows_;
-    fullscreen_monitors_.clear();
+    // Clear fullscreen_monitors from all clients since monitor indices may have changed
+    for (auto& [id, client] : clients_)
+    {
+        client.fullscreen_monitors.reset();
+    }
     for (auto& monitor : monitors_)
     {
         for (auto& workspace : monitor.workspaces)

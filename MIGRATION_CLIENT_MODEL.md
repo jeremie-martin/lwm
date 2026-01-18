@@ -78,10 +78,15 @@ std::unordered_map<xcb_window_t, Client> clients_;
 | Structure | Reason |
 |-----------|--------|
 | `wm_unmapped_windows_` | ICCCM unmap tracking (transient counter) |
-| `fullscreen_monitors_` | Per-window monitor span config |
-| `sync_counters_`, `sync_values_` | Sync protocol (could migrate to Client) |
-| `pending_kills_`, `pending_pings_` | Process management |
-| `user_times_`, `user_time_windows_` | Focus stealing (could migrate to Client) |
+| `pending_kills_`, `pending_pings_` | Process management runtime state |
+
+### Migrated to Client (Phase 9)
+
+| Removed Structure | Client Field |
+|-------------------|--------------|
+| `fullscreen_monitors_` | `client->fullscreen_monitors` |
+| `sync_counters_`, `sync_values_` | `client->sync_counter`, `client->sync_value` |
+| `user_times_`, `user_time_windows_` | `client->user_time`, `client->user_time_window` |
 
 ### Also Removed (consolidated into Client)
 
@@ -226,19 +231,17 @@ A deep correctness review was performed on the refactored code. Key findings:
 
 **`Client::user_time` synchronization**: In `focus_window()`, `focus_floating_window()`, and `handle_property_notify`, `user_times_[window]` was updated but `Client::user_time` was not. Fixed by adding sync updates.
 
-### Partially Migrated Fields (Not Currently Authoritative)
+### Remaining Non-Authoritative Fields
 
-These Client fields are defined but the old data structures remain authoritative. They are populated during manage but may become stale:
+These Client fields are set once on manage but may become stale:
 
 | Client Field | Authoritative Source | Status |
 |--------------|---------------------|--------|
-| `sync_counter`, `sync_value` | `sync_counters_`, `sync_values_` maps | Defined but not used |
-| `fullscreen_monitors` | `fullscreen_monitors_` map | Defined but not used |
 | `floating_geometry` | `FloatingWindow::geometry` | Set once, becomes stale |
 | `name` | `Window::name`, `FloatingWindow::name` | Set once, becomes stale |
 | `mapped` | Not tracked | Never set |
 
-**Note**: These fields don't cause bugs because all reads go through the authoritative sources. They exist for future migration phases.
+**Note**: These fields don't cause bugs because all reads go through the authoritative sources (FloatingWindow, Window structs). They exist for future migration phases.
 
 ---
 

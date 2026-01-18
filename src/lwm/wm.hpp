@@ -93,14 +93,9 @@ private:
     // Per-window tracking state (separate from Client model)
     // ─────────────────────────────────────────────────────────────────────────
     std::unordered_map<xcb_window_t, uint32_t> wm_unmapped_windows_;  // ICCCM unmap tracking
-    std::unordered_map<xcb_window_t, FullscreenMonitors> fullscreen_monitors_;  // _NET_WM_FULLSCREEN_MONITORS
     bool showing_desktop_ = false;
-    std::unordered_map<xcb_window_t, xcb_sync_counter_t> sync_counters_;
-    std::unordered_map<xcb_window_t, uint64_t> sync_values_;
     std::unordered_map<xcb_window_t, std::chrono::steady_clock::time_point> pending_kills_;
     std::unordered_map<xcb_window_t, std::chrono::steady_clock::time_point> pending_pings_;
-    std::unordered_map<xcb_window_t, uint32_t> user_times_;
-    std::unordered_map<xcb_window_t, xcb_window_t> user_time_windows_; // client → user time window
     uint64_t next_client_order_ = 0;  // Counter for Client.order field
     int32_t desktop_origin_x_ = 0;
     int32_t desktop_origin_y_ = 0;

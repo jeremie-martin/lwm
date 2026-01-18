@@ -613,8 +613,7 @@ void WindowManager::manage_window(xcb_window_t window, bool start_iconic)
                 xcb_window_t time_window = *static_cast<xcb_window_t*>(xcb_get_property_value(reply));
                 if (time_window != XCB_NONE)
                 {
-                    user_time_windows_[window] = time_window;
-                    // Also update Client (Phase 3)
+                    // User time window is authoritative in Client
                     if (auto* client = get_client(window))
                         client->user_time_window = time_window;
                     // Select PropertyNotify on the user time window to track changes
@@ -625,10 +624,9 @@ void WindowManager::manage_window(xcb_window_t window, bool start_iconic)
             free(reply);
         }
     }
-    user_times_[window] = get_user_time(window);
-    // Also update Client (Phase 3)
+    // User time is authoritative in Client
     if (auto* client = get_client(window))
-        client->user_time = user_times_[window];
+        client->user_time = get_user_time(window);
 
     // Note: We intentionally do NOT select STRUCTURE_NOTIFY on client windows.
     // We receive UnmapNotify/DestroyNotify via root's SubstructureNotifyMask.
@@ -941,8 +939,7 @@ void WindowManager::manage_floating_window(xcb_window_t window, bool start_iconi
                 xcb_window_t time_window = *static_cast<xcb_window_t*>(xcb_get_property_value(reply));
                 if (time_window != XCB_NONE)
                 {
-                    user_time_windows_[window] = time_window;
-                    // Also update Client (Phase 3)
+                    // User time window is authoritative in Client
                     if (auto* client = get_client(window))
                         client->user_time_window = time_window;
                     // Select PropertyNotify on the user time window to track changes
@@ -953,10 +950,9 @@ void WindowManager::manage_floating_window(xcb_window_t window, bool start_iconi
             free(reply);
         }
     }
-    user_times_[window] = get_user_time(window);
-    // Also update Client (Phase 3)
+    // User time is authoritative in Client
     if (auto* client = get_client(window))
-        client->user_time = user_times_[window];
+        client->user_time = get_user_time(window);
 
     // Note: We intentionally do NOT select STRUCTURE_NOTIFY on client windows.
     // We receive UnmapNotify/DestroyNotify via root's SubstructureNotifyMask.
@@ -1083,13 +1079,8 @@ void WindowManager::unmanage_window(xcb_window_t window)
     }
 
     // Tracking state that remains outside Client
-    fullscreen_monitors_.erase(window);
-    sync_counters_.erase(window);
-    sync_values_.erase(window);
     pending_kills_.erase(window);
     pending_pings_.erase(window);
-    user_times_.erase(window);
-    user_time_windows_.erase(window);
 
     // Remove from unified Client registry (handles all client state including order)
     clients_.erase(window);
@@ -1143,13 +1134,8 @@ void WindowManager::unmanage_floating_window(xcb_window_t window)
     }
 
     // Tracking state that remains outside Client
-    fullscreen_monitors_.erase(window);
-    sync_counters_.erase(window);
-    sync_values_.erase(window);
     pending_kills_.erase(window);
     pending_pings_.erase(window);
-    user_times_.erase(window);
-    user_time_windows_.erase(window);
 
     // Remove from unified Client registry (handles all client state including order)
     clients_.erase(window);
@@ -1269,8 +1255,7 @@ void WindowManager::focus_window(xcb_window_t window)
         }
         ewmh_.set_window_state(window, net_wm_state_focused_, true);
     }
-    user_times_[window] = last_event_time_;
-    // Keep Client.user_time in sync
+    // User time is authoritative in Client
     if (auto* client = get_client(window))
         client->user_time = last_event_time_;
 
@@ -1369,8 +1354,7 @@ void WindowManager::focus_floating_window(xcb_window_t window)
         }
         ewmh_.set_window_state(window, net_wm_state_focused_, true);
     }
-    user_times_[window] = last_event_time_;
-    // Keep Client.user_time in sync
+    // User time is authoritative in Client
     if (auto* client = get_client(window))
         client->user_time = last_event_time_;
 
@@ -1759,7 +1743,9 @@ void WindowManager::apply_fullscreen_if_needed(xcb_window_t window)
 
 void WindowManager::set_fullscreen_monitors(xcb_window_t window, FullscreenMonitors const& monitors)
 {
-    fullscreen_monitors_[window] = monitors;
+    // Fullscreen monitors are authoritative in Client
+    if (auto* client = get_client(window))
+        client->fullscreen_monitors = monitors;
 
     if (net_wm_fullscreen_monitors_ != XCB_NONE)
     {
@@ -1785,8 +1771,9 @@ Geometry WindowManager::fullscreen_geometry_for_window(xcb_window_t window) cons
     if (monitors_.empty())
         return {};
 
-    auto it = fullscreen_monitors_.find(window);
-    if (it == fullscreen_monitors_.end())
+    // Fullscreen monitors are authoritative in Client
+    auto const* client = get_client(window);
+    if (!client || !client->fullscreen_monitors)
     {
         if (auto monitor_idx = monitor_index_for_window(window))
             return monitors_[*monitor_idx].geometry();
@@ -1795,7 +1782,7 @@ Geometry WindowManager::fullscreen_geometry_for_window(xcb_window_t window) cons
 
     std::vector<size_t> indices;
     indices.reserve(4);
-    auto const& spec = it->second;
+    auto const& spec = *client->fullscreen_monitors;
     size_t total = monitors_.size();
     if (spec.top < total)
         indices.push_back(spec.top);
@@ -3038,11 +3025,11 @@ void WindowManager::send_sync_request(xcb_window_t window, uint32_t timestamp)
     if (wm_protocols_ == XCB_NONE || net_wm_sync_request_ == XCB_NONE)
         return;
 
-    auto it = sync_counters_.find(window);
-    if (it == sync_counters_.end())
+    auto* client = get_client(window);
+    if (!client || client->sync_counter == 0)
         return;
 
-    uint64_t value = ++sync_values_[window];
+    uint64_t value = ++client->sync_value;
 
     // _NET_WM_SYNC_REQUEST is sent via WM_PROTOCOLS (EWMH spec)
     xcb_client_message_event_t ev = {};
@@ -3070,11 +3057,11 @@ void WindowManager::send_sync_request(xcb_window_t window, uint32_t timestamp)
  */
 bool WindowManager::wait_for_sync_counter(xcb_window_t window, uint64_t expected_value)
 {
-    auto it = sync_counters_.find(window);
-    if (it == sync_counters_.end())
+    auto* client = get_client(window);
+    if (!client || client->sync_counter == 0)
         return false;
 
-    xcb_sync_counter_t counter = it->second;
+    xcb_sync_counter_t counter = client->sync_counter;
     auto deadline = std::chrono::steady_clock::now() + SYNC_WAIT_TIMEOUT;
 
     while (std::chrono::steady_clock::now() < deadline)
@@ -3090,7 +3077,7 @@ bool WindowManager::wait_for_sync_counter(xcb_window_t window, uint64_t expected
 
         if (current >= expected_value)
         {
-            sync_values_[window] = current;
+            client->sync_value = current;
             return true;
         }
 
@@ -3105,10 +3092,14 @@ void WindowManager::update_sync_state(xcb_window_t window)
     if (net_wm_sync_request_counter_ == XCB_NONE || net_wm_sync_request_ == XCB_NONE)
         return;
 
+    auto* client = get_client(window);
+    if (!client)
+        return;
+
     if (!supports_protocol(window, net_wm_sync_request_))
     {
-        sync_counters_.erase(window);
-        sync_values_.erase(window);
+        client->sync_counter = 0;
+        client->sync_value = 0;
         return;
     }
 
@@ -3128,12 +3119,12 @@ void WindowManager::update_sync_state(xcb_window_t window)
 
     if (counter == XCB_NONE)
     {
-        sync_counters_.erase(window);
-        sync_values_.erase(window);
+        client->sync_counter = 0;
+        client->sync_value = 0;
         return;
     }
 
-    sync_counters_[window] = counter;
+    client->sync_counter = counter;
 
     auto counter_cookie = xcb_sync_query_counter(conn_.get(), counter);
     auto* counter_reply = xcb_sync_query_counter_reply(conn_.get(), counter_cookie, nullptr);
@@ -3141,18 +3132,22 @@ void WindowManager::update_sync_state(xcb_window_t window)
     {
         uint64_t value = (static_cast<uint64_t>(counter_reply->counter_value.hi) << 32)
             | static_cast<uint64_t>(counter_reply->counter_value.lo);
-        sync_values_[window] = value;
+        client->sync_value = value;
         free(counter_reply);
     }
     else
     {
-        sync_values_[window] = 0;
+        client->sync_value = 0;
     }
 }
 
 void WindowManager::update_fullscreen_monitor_state(xcb_window_t window)
 {
     if (net_wm_fullscreen_monitors_ == XCB_NONE)
+        return;
+
+    auto* client = get_client(window);
+    if (!client)
         return;
 
     xcb_ewmh_get_wm_fullscreen_monitors_reply_t reply;
@@ -3163,7 +3158,7 @@ void WindowManager::update_fullscreen_monitor_state(xcb_window_t window)
             nullptr
         ))
     {
-        fullscreen_monitors_.erase(window);
+        client->fullscreen_monitors.reset();
         return;
     }
 
@@ -3172,7 +3167,7 @@ void WindowManager::update_fullscreen_monitor_state(xcb_window_t window)
     monitors.bottom = reply.bottom;
     monitors.left = reply.left;
     monitors.right = reply.right;
-    fullscreen_monitors_[window] = monitors;
+    client->fullscreen_monitors = monitors;
 }
 
 void WindowManager::send_configure_notify(xcb_window_t window)
@@ -3297,12 +3292,12 @@ uint32_t WindowManager::get_user_time(xcb_window_t window)
     if (net_wm_user_time_ == XCB_NONE)
         return 0;
 
-    // Check if this window has a separate user time window
+    // Check if this window has a separate user time window (from Client.user_time_window)
     xcb_window_t time_window = window;
-    auto it = user_time_windows_.find(window);
-    if (it != user_time_windows_.end() && it->second != XCB_NONE)
+    if (auto const* client = get_client(window))
     {
-        time_window = it->second;
+        if (client->user_time_window != XCB_NONE)
+            time_window = client->user_time_window;
     }
 
     auto cookie = xcb_get_property(conn_.get(), 0, time_window, net_wm_user_time_, XCB_ATOM_CARDINAL, 0, 1);
