@@ -149,7 +149,6 @@ void WindowManager::handle_map_request(xcb_map_request_event_t const& e)
     // Check if this is a dock window (e.g., Polybar)
     if (ewmh_.is_dock_window(e.window))
     {
-        // Map but don't manage - let it float above
         uint32_t values[] = { XCB_EVENT_MASK_ENTER_WINDOW | XCB_EVENT_MASK_POINTER_MOTION
                               | XCB_EVENT_MASK_PROPERTY_CHANGE };
         xcb_change_window_attributes(conn_.get(), e.window, XCB_CW_EVENT_MASK, values);
@@ -157,9 +156,18 @@ void WindowManager::handle_map_request(xcb_map_request_event_t const& e)
         if (std::ranges::find(dock_windows_, e.window) == dock_windows_.end())
         {
             dock_windows_.push_back(e.window);
+            // Add to clients_ registry for _NET_CLIENT_LIST (per SPEC_CLARIFICATIONS.md)
+            Client client;
+            client.id = e.window;
+            client.kind = Client::Kind::Dock;
+            client.skip_taskbar = true;
+            client.skip_pager = true;
+            client.order = next_client_order_++;
+            clients_[e.window] = std::move(client);
         }
         update_struts();
         rearrange_all_monitors();
+        update_ewmh_client_list();
         conn_.flush();
         return;
     }
@@ -190,10 +198,15 @@ void WindowManager::handle_map_request(xcb_map_request_event_t const& e)
         if (std::ranges::find(desktop_windows_, e.window) == desktop_windows_.end())
         {
             desktop_windows_.push_back(e.window);
+            // Add to clients_ registry for _NET_CLIENT_LIST (per SPEC_CLARIFICATIONS.md)
+            Client client;
+            client.id = e.window;
+            client.kind = Client::Kind::Desktop;
+            client.skip_taskbar = true;
+            client.skip_pager = true;
+            client.order = next_client_order_++;
+            clients_[e.window] = std::move(client);
         }
-        // Desktop windows are excluded from _NET_CLIENT_LIST per EWMH
-        set_client_skip_taskbar(e.window, true);
-        set_client_skip_pager(e.window, true);
         update_ewmh_client_list();
         conn_.flush();
         return;

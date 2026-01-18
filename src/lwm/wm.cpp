@@ -437,6 +437,14 @@ void WindowManager::scan_existing_windows()
             if (std::ranges::find(dock_windows_, window) == dock_windows_.end())
             {
                 dock_windows_.push_back(window);
+                // Add to clients_ registry for _NET_CLIENT_LIST (per SPEC_CLARIFICATIONS.md)
+                Client client;
+                client.id = window;
+                client.kind = Client::Kind::Dock;
+                client.skip_taskbar = true;
+                client.skip_pager = true;
+                client.order = next_client_order_++;
+                clients_[window] = std::move(client);
                 update_struts();
             }
             continue;
@@ -463,10 +471,15 @@ void WindowManager::scan_existing_windows()
             if (std::ranges::find(desktop_windows_, window) == desktop_windows_.end())
             {
                 desktop_windows_.push_back(window);
+                // Add to clients_ registry for _NET_CLIENT_LIST (per SPEC_CLARIFICATIONS.md)
+                Client client;
+                client.id = window;
+                client.kind = Client::Kind::Desktop;
+                client.skip_taskbar = true;
+                client.skip_pager = true;
+                client.order = next_client_order_++;
+                clients_[window] = std::move(client);
             }
-            // Desktop windows are excluded from _NET_CLIENT_LIST per EWMH
-            set_client_skip_taskbar(window, true);
-            set_client_skip_pager(window, true);
             continue;
         }
 
@@ -3315,8 +3328,10 @@ void WindowManager::unmanage_dock_window(xcb_window_t window)
     if (it != dock_windows_.end())
     {
         dock_windows_.erase(it);
+        clients_.erase(window);  // Remove from unified Client registry
         update_struts();
         rearrange_all_monitors();
+        update_ewmh_client_list();
     }
 }
 
@@ -3326,6 +3341,7 @@ void WindowManager::unmanage_desktop_window(xcb_window_t window)
     if (it != desktop_windows_.end())
     {
         desktop_windows_.erase(it);
+        clients_.erase(window);  // Remove from unified Client registry
         update_ewmh_client_list();
     }
 }

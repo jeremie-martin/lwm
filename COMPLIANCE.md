@@ -183,7 +183,8 @@ ICCCM requires distinguishing WM-initiated unmaps from client-initiated unmaps:
 
 #### _NET_CLIENT_LIST
 - List all managed windows in initial mapping order.
-- Update on map/unmap.
+- Update on manage/unmanage (NOT on workspace visibility changes).
+- See SPEC_CLARIFICATIONS.md for rationale on update timing.
 
 #### _NET_CLIENT_LIST_STACKING
 - List all managed windows in bottom-to-top stacking order.

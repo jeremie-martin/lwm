@@ -33,10 +33,11 @@ Once classified, windows behave as follows:
 - **Floating**: positioned independently; does not affect the tiling layout.
 - **Panels/Docks** (`_NET_WM_WINDOW_TYPE_DOCK`):
   - Reserve screen edges via struts (reduce usable area for tiling).
-  - Not included in `_NET_CLIENT_LIST` (tracked separately).
+  - Included in `_NET_CLIENT_LIST` per EWMH (with `_NET_WM_STATE_SKIP_TASKBAR/PAGER`).
   - Do not participate in workspace membership or normal focus.
   - Always visible across all workspaces (effectively sticky).
   - Stacked above normal windows but below fullscreen.
+  - See SPEC_CLARIFICATIONS.md for rationale.
 - **Desktop Windows** (`_NET_WM_WINDOW_TYPE_DESKTOP`):
   - Positioned below all other windows.
   - Not focus-eligible; do not participate in workspace membership.

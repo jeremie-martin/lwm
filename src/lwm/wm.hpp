@@ -4,6 +4,7 @@
 #include "lwm/config/config.hpp"
 #include "lwm/core/connection.hpp"
 #include "lwm/core/ewmh.hpp"
+#include "lwm/core/invariants.hpp"
 #include "lwm/core/types.hpp"
 #include "lwm/keybind/keybind.hpp"
 #include "lwm/layout/layout.hpp"
