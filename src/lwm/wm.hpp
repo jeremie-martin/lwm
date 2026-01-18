@@ -102,6 +102,7 @@ private:
     std::unordered_map<xcb_window_t, std::chrono::steady_clock::time_point> pending_kills_;
     std::unordered_map<xcb_window_t, std::chrono::steady_clock::time_point> pending_pings_;
     std::unordered_map<xcb_window_t, uint32_t> user_times_;
+    std::unordered_map<xcb_window_t, xcb_window_t> user_time_windows_; // client → user time window
     std::unordered_map<xcb_window_t, uint64_t> client_order_;
     uint64_t next_client_order_ = 0;
     int32_t desktop_origin_x_ = 0;
@@ -126,6 +127,7 @@ private:
     xcb_atom_t net_close_window_ = XCB_NONE;
     xcb_atom_t net_wm_fullscreen_monitors_ = XCB_NONE;
     xcb_atom_t net_wm_user_time_ = XCB_NONE;
+    xcb_atom_t net_wm_user_time_window_ = XCB_NONE;
     xcb_atom_t net_wm_state_focused_ = XCB_NONE;
     bool suppress_focus_ = false;
     uint32_t last_event_time_ = XCB_CURRENT_TIME;

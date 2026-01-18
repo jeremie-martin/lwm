@@ -96,6 +96,7 @@ WindowManager::WindowManager(Config config)
     net_close_window_ = ewmh_.get()->_NET_CLOSE_WINDOW;
     net_wm_fullscreen_monitors_ = ewmh_.get()->_NET_WM_FULLSCREEN_MONITORS;
     net_wm_user_time_ = ewmh_.get()->_NET_WM_USER_TIME;
+    net_wm_user_time_window_ = intern_atom("_NET_WM_USER_TIME_WINDOW");
     net_wm_state_focused_ = intern_atom("_NET_WM_STATE_FOCUSED");
     if (net_wm_state_focused_ != XCB_NONE)
     {
@@ -1542,7 +1543,18 @@ void WindowManager::handle_property_notify(xcb_property_notify_event_t const& e)
     }
     if (net_wm_user_time_ != XCB_NONE && e.atom == net_wm_user_time_)
     {
-        user_times_[e.window] = get_user_time(e.window);
+        // Check if this PropertyNotify is from a user time window
+        // If so, find the client that owns it and update that client's user time
+        xcb_window_t client_window = e.window;
+        for (auto const& [client, time_window] : user_time_windows_)
+        {
+            if (time_window == e.window)
+            {
+                client_window = client;
+                break;
+            }
+        }
+        user_times_[client_window] = get_user_time(client_window);
     }
     // Handle WM_HINTS urgency flag changes (ICCCM → EWMH DEMANDS_ATTENTION)
     if (wm_hints_ != XCB_NONE && e.atom == wm_hints_)
@@ -1724,6 +1736,28 @@ void WindowManager::manage_window(xcb_window_t window, bool start_iconic)
 
     monitors_[target_monitor_idx].workspaces[target_workspace_idx].windows.push_back(newWindow);
     register_client_window(window);
+
+    // Read _NET_WM_USER_TIME_WINDOW if present (EWMH focus stealing prevention)
+    if (net_wm_user_time_window_ != XCB_NONE)
+    {
+        auto cookie = xcb_get_property(conn_.get(), 0, window, net_wm_user_time_window_, XCB_ATOM_WINDOW, 0, 1);
+        auto* reply = xcb_get_property_reply(conn_.get(), cookie, nullptr);
+        if (reply)
+        {
+            if (xcb_get_property_value_length(reply) >= 4)
+            {
+                xcb_window_t time_window = *static_cast<xcb_window_t*>(xcb_get_property_value(reply));
+                if (time_window != XCB_NONE)
+                {
+                    user_time_windows_[window] = time_window;
+                    // Select PropertyNotify on the user time window to track changes
+                    uint32_t mask = XCB_EVENT_MASK_PROPERTY_CHANGE;
+                    xcb_change_window_attributes(conn_.get(), time_window, XCB_CW_EVENT_MASK, &mask);
+                }
+            }
+            free(reply);
+        }
+    }
     user_times_[window] = get_user_time(window);
 
     // Note: We intentionally do NOT select STRUCTURE_NOTIFY on client windows.
@@ -1953,6 +1987,28 @@ void WindowManager::manage_floating_window(xcb_window_t window, bool start_iconi
     floating_window.transient_for = transient.value_or(XCB_NONE);
     floating_windows_.push_back(floating_window);
     register_client_window(window);
+
+    // Read _NET_WM_USER_TIME_WINDOW if present (EWMH focus stealing prevention)
+    if (net_wm_user_time_window_ != XCB_NONE)
+    {
+        auto cookie = xcb_get_property(conn_.get(), 0, window, net_wm_user_time_window_, XCB_ATOM_WINDOW, 0, 1);
+        auto* reply = xcb_get_property_reply(conn_.get(), cookie, nullptr);
+        if (reply)
+        {
+            if (xcb_get_property_value_length(reply) >= 4)
+            {
+                xcb_window_t time_window = *static_cast<xcb_window_t*>(xcb_get_property_value(reply));
+                if (time_window != XCB_NONE)
+                {
+                    user_time_windows_[window] = time_window;
+                    // Select PropertyNotify on the user time window to track changes
+                    uint32_t mask = XCB_EVENT_MASK_PROPERTY_CHANGE;
+                    xcb_change_window_attributes(conn_.get(), time_window, XCB_CW_EVENT_MASK, &mask);
+                }
+            }
+            free(reply);
+        }
+    }
     user_times_[window] = get_user_time(window);
 
     // Note: We intentionally do NOT select STRUCTURE_NOTIFY on client windows.
@@ -2078,6 +2134,7 @@ void WindowManager::unmanage_window(xcb_window_t window)
     pending_kills_.erase(window);
     pending_pings_.erase(window);
     user_times_.erase(window);
+    user_time_windows_.erase(window);
     client_order_.erase(window);
 
     for (auto& monitor : monitors_)
@@ -2147,6 +2204,7 @@ void WindowManager::unmanage_floating_window(xcb_window_t window)
     pending_kills_.erase(window);
     pending_pings_.erase(window);
     user_times_.erase(window);
+    user_time_windows_.erase(window);
     client_order_.erase(window);
 
     auto it = std::ranges::find_if(
@@ -4252,12 +4310,27 @@ std::pair<std::string, std::string> WindowManager::get_wm_class(xcb_window_t win
     return { "", "" };
 }
 
+/**
+ * @brief Get the user interaction time for a window.
+ *
+ * EWMH specifies that _NET_WM_USER_TIME tracks the last user interaction time.
+ * If _NET_WM_USER_TIME_WINDOW is set, we read the time from that window instead.
+ * This is used for focus stealing prevention.
+ */
 uint32_t WindowManager::get_user_time(xcb_window_t window)
 {
     if (net_wm_user_time_ == XCB_NONE)
         return 0;
 
-    auto cookie = xcb_get_property(conn_.get(), 0, window, net_wm_user_time_, XCB_ATOM_CARDINAL, 0, 1);
+    // Check if this window has a separate user time window
+    xcb_window_t time_window = window;
+    auto it = user_time_windows_.find(window);
+    if (it != user_time_windows_.end() && it->second != XCB_NONE)
+    {
+        time_window = it->second;
+    }
+
+    auto cookie = xcb_get_property(conn_.get(), 0, time_window, net_wm_user_time_, XCB_ATOM_CARDINAL, 0, 1);
     auto* reply = xcb_get_property_reply(conn_.get(), cookie, nullptr);
     if (reply)
     {
