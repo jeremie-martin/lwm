@@ -133,6 +133,7 @@ void WindowManager::handle_event(xcb_generic_event_t const& event)
 
 void WindowManager::handle_map_request(xcb_map_request_event_t const& e)
 {
+    // Case 1: Already managed window requesting map (deiconify)
     if (monitor_containing_window(e.window) || find_floating_window(e.window))
     {
         bool focus = false;
@@ -146,136 +147,17 @@ void WindowManager::handle_map_request(xcb_map_request_event_t const& e)
         return;
     }
 
-    // Check if this is a dock window (e.g., Polybar)
-    if (ewmh_.is_dock_window(e.window))
-    {
-        uint32_t values[] = { XCB_EVENT_MASK_ENTER_WINDOW | XCB_EVENT_MASK_POINTER_MOTION
-                              | XCB_EVENT_MASK_PROPERTY_CHANGE };
-        xcb_change_window_attributes(conn_.get(), e.window, XCB_CW_EVENT_MASK, values);
-        xcb_map_window(conn_.get(), e.window);
-        if (std::ranges::find(dock_windows_, e.window) == dock_windows_.end())
-        {
-            dock_windows_.push_back(e.window);
-            // Add to clients_ registry for _NET_CLIENT_LIST (per SPEC_CLARIFICATIONS.md)
-            Client client;
-            client.id = e.window;
-            client.kind = Client::Kind::Dock;
-            client.skip_taskbar = true;
-            client.skip_pager = true;
-            client.order = next_client_order_++;
-            clients_[e.window] = std::move(client);
-        }
-        update_struts();
-        rearrange_all_monitors();
-        update_ewmh_client_list();
-        conn_.flush();
-        return;
-    }
-
+    // Case 2: Override redirect windows are not managed
     if (is_override_redirect_window(e.window))
     {
         return;
     }
 
-    xcb_atom_t type = ewmh_.get_window_type(e.window);
-    bool is_desktop = type == ewmh_.get()->_NET_WM_WINDOW_TYPE_DESKTOP;
-    bool is_menu = type == ewmh_.get()->_NET_WM_WINDOW_TYPE_MENU
-        || type == ewmh_.get()->_NET_WM_WINDOW_TYPE_DROPDOWN_MENU || type == ewmh_.get()->_NET_WM_WINDOW_TYPE_POPUP_MENU
-        || type == ewmh_.get()->_NET_WM_WINDOW_TYPE_TOOLTIP || type == ewmh_.get()->_NET_WM_WINDOW_TYPE_NOTIFICATION
-        || type == ewmh_.get()->_NET_WM_WINDOW_TYPE_COMBO || type == ewmh_.get()->_NET_WM_WINDOW_TYPE_DND;
-    bool is_floating_type = type == ewmh_.get()->_NET_WM_WINDOW_TYPE_DIALOG
-        || type == ewmh_.get()->_NET_WM_WINDOW_TYPE_UTILITY || type == ewmh_.get()->_NET_WM_WINDOW_TYPE_SPLASH
-        || type == ewmh_.get()->_NET_WM_WINDOW_TYPE_TOOLBAR;
+    // Classify the window using centralized EWMH type classification
     bool has_transient = transient_for_window(e.window).has_value();
+    auto classification = ewmh_.classify_window(e.window, has_transient);
 
-    if (is_desktop)
-    {
-        uint32_t values[] = { XCB_EVENT_MASK_PROPERTY_CHANGE };
-        xcb_change_window_attributes(conn_.get(), e.window, XCB_CW_EVENT_MASK, values);
-        xcb_map_window(conn_.get(), e.window);
-        uint32_t stack_mode = XCB_STACK_MODE_BELOW;
-        xcb_configure_window(conn_.get(), e.window, XCB_CONFIG_WINDOW_STACK_MODE, &stack_mode);
-        if (std::ranges::find(desktop_windows_, e.window) == desktop_windows_.end())
-        {
-            desktop_windows_.push_back(e.window);
-            // Add to clients_ registry for _NET_CLIENT_LIST (per SPEC_CLARIFICATIONS.md)
-            Client client;
-            client.id = e.window;
-            client.kind = Client::Kind::Desktop;
-            client.skip_taskbar = true;
-            client.skip_pager = true;
-            client.order = next_client_order_++;
-            clients_[e.window] = std::move(client);
-        }
-        update_ewmh_client_list();
-        conn_.flush();
-        return;
-    }
-
-    // Ignore short-lived popup windows and tooltips.
-    if (is_menu)
-    {
-        xcb_map_window(conn_.get(), e.window);
-        conn_.flush();
-        return;
-    }
-
-    if (is_floating_type || has_transient)
-    {
-        // Check WM_HINTS initial_state and urgency for floating windows (ICCCM)
-        bool start_iconic = false;
-        bool urgent = false;
-        constexpr uint32_t XUrgencyHint = 256; // (1L << 8)
-        xcb_icccm_wm_hints_t hints;
-        if (xcb_icccm_get_wm_hints_reply(conn_.get(), xcb_icccm_get_wm_hints(conn_.get(), e.window), &hints, nullptr))
-        {
-            if ((hints.flags & XCB_ICCCM_WM_HINT_STATE) && hints.initial_state == XCB_ICCCM_WM_STATE_ICONIC)
-            {
-                start_iconic = true;
-            }
-            if (hints.flags & XUrgencyHint)
-            {
-                urgent = true;
-            }
-        }
-        if (ewmh_.has_window_state(e.window, ewmh_.get()->_NET_WM_STATE_HIDDEN))
-        {
-            start_iconic = true;
-        }
-        manage_floating_window(e.window, start_iconic);
-        // Set DEMANDS_ATTENTION if urgency hint is set (ICCCM → EWMH)
-        if (urgent)
-        {
-            set_client_demands_attention(e.window, true);
-        }
-        // Honor _NET_WM_DESKTOP = 0xFFFFFFFF as sticky (EWMH)
-        if (is_sticky_desktop(e.window) && !is_client_sticky(e.window))
-        {
-            set_window_sticky(e.window, true);
-        }
-        if (type == ewmh_.get()->_NET_WM_WINDOW_TYPE_TOOLBAR || type == ewmh_.get()->_NET_WM_WINDOW_TYPE_UTILITY
-            || type == ewmh_.get()->_NET_WM_WINDOW_TYPE_SPLASH)
-        {
-            set_client_skip_taskbar(e.window, true);
-            set_client_skip_pager(e.window, true);
-        }
-        if (type == ewmh_.get()->_NET_WM_WINDOW_TYPE_UTILITY)
-        {
-            set_window_above(e.window, true);
-        }
-        return;
-    }
-
-    // Check if window should not be tiled (dialogs, menus, etc.)
-    if (!ewmh_.should_tile_window(e.window))
-    {
-        // Map but don't tile - let it float unmanaged
-        xcb_map_window(conn_.get(), e.window);
-        conn_.flush();
-        return;
-    }
-
-    // Check WM_HINTS initial_state and urgency (ICCCM)
+    // Read WM_HINTS for initial_state and urgency (ICCCM)
     bool start_iconic = false;
     bool urgent = false;
     constexpr uint32_t XUrgencyHint = 256; // (1L << 8)
@@ -291,31 +173,108 @@ void WindowManager::handle_map_request(xcb_map_request_event_t const& e)
             urgent = true;
         }
     }
+    // Also check _NET_WM_STATE_HIDDEN
     if (ewmh_.has_window_state(e.window, ewmh_.get()->_NET_WM_STATE_HIDDEN))
     {
         start_iconic = true;
     }
 
-    manage_window(e.window, start_iconic);
-    // Set DEMANDS_ATTENTION if urgency hint is set (ICCCM → EWMH)
-    if (urgent)
+    // Handle based on classification
+    switch (classification.kind)
     {
-        set_client_demands_attention(e.window, true);
-    }
-    // Honor _NET_WM_DESKTOP = 0xFFFFFFFF as sticky (EWMH)
-    if (is_sticky_desktop(e.window) && !is_client_sticky(e.window))
-    {
-        set_window_sticky(e.window, true);
-    }
-    if (!start_iconic)
-    {
-        auto monitor_idx = monitor_index_for_window(e.window);
-        auto workspace_idx = workspace_index_for_window(e.window);
-        if (monitor_idx && workspace_idx && *monitor_idx == focused_monitor_
-            && *workspace_idx == monitors_[*monitor_idx].current_workspace)
+        case WindowClassification::Kind::Desktop:
         {
-            // Window already mapped by layout_.arrange() in manage_window()
-            focus_window(e.window);
+            uint32_t values[] = { XCB_EVENT_MASK_PROPERTY_CHANGE };
+            xcb_change_window_attributes(conn_.get(), e.window, XCB_CW_EVENT_MASK, values);
+            xcb_map_window(conn_.get(), e.window);
+            uint32_t stack_mode = XCB_STACK_MODE_BELOW;
+            xcb_configure_window(conn_.get(), e.window, XCB_CONFIG_WINDOW_STACK_MODE, &stack_mode);
+            if (std::ranges::find(desktop_windows_, e.window) == desktop_windows_.end())
+            {
+                desktop_windows_.push_back(e.window);
+                Client client;
+                client.id = e.window;
+                client.kind = Client::Kind::Desktop;
+                client.skip_taskbar = true;
+                client.skip_pager = true;
+                client.order = next_client_order_++;
+                clients_[e.window] = std::move(client);
+            }
+            update_ewmh_client_list();
+            conn_.flush();
+            return;
+        }
+
+        case WindowClassification::Kind::Dock:
+        {
+            uint32_t values[] = { XCB_EVENT_MASK_ENTER_WINDOW | XCB_EVENT_MASK_POINTER_MOTION
+                                  | XCB_EVENT_MASK_PROPERTY_CHANGE };
+            xcb_change_window_attributes(conn_.get(), e.window, XCB_CW_EVENT_MASK, values);
+            xcb_map_window(conn_.get(), e.window);
+            if (std::ranges::find(dock_windows_, e.window) == dock_windows_.end())
+            {
+                dock_windows_.push_back(e.window);
+                Client client;
+                client.id = e.window;
+                client.kind = Client::Kind::Dock;
+                client.skip_taskbar = true;
+                client.skip_pager = true;
+                client.order = next_client_order_++;
+                clients_[e.window] = std::move(client);
+            }
+            update_struts();
+            rearrange_all_monitors();
+            update_ewmh_client_list();
+            conn_.flush();
+            return;
+        }
+
+        case WindowClassification::Kind::Popup:
+        {
+            // Popup windows (menus, tooltips, notifications) are just mapped, not managed
+            xcb_map_window(conn_.get(), e.window);
+            conn_.flush();
+            return;
+        }
+
+        case WindowClassification::Kind::Floating:
+        {
+            manage_floating_window(e.window, start_iconic);
+
+            // Apply classification flags
+            if (classification.skip_taskbar)
+                set_client_skip_taskbar(e.window, true);
+            if (classification.skip_pager)
+                set_client_skip_pager(e.window, true);
+            if (classification.above)
+                set_window_above(e.window, true);
+            if (urgent)
+                set_client_demands_attention(e.window, true);
+            if (is_sticky_desktop(e.window) && !is_client_sticky(e.window))
+                set_window_sticky(e.window, true);
+            return;
+        }
+
+        case WindowClassification::Kind::Tiled:
+        {
+            manage_window(e.window, start_iconic);
+
+            if (urgent)
+                set_client_demands_attention(e.window, true);
+            if (is_sticky_desktop(e.window) && !is_client_sticky(e.window))
+                set_window_sticky(e.window, true);
+
+            if (!start_iconic)
+            {
+                auto monitor_idx = monitor_index_for_window(e.window);
+                auto workspace_idx = workspace_index_for_window(e.window);
+                if (monitor_idx && workspace_idx && *monitor_idx == focused_monitor_
+                    && *workspace_idx == monitors_[*monitor_idx].current_workspace)
+                {
+                    focus_window(e.window);
+                }
+            }
+            return;
         }
     }
 }

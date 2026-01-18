@@ -429,83 +429,74 @@ void WindowManager::scan_existing_windows()
         if (!is_viewable || override_redirect)
             continue;
 
-        if (ewmh_.is_dock_window(window))
-        {
-            uint32_t values[] = { XCB_EVENT_MASK_ENTER_WINDOW | XCB_EVENT_MASK_POINTER_MOTION
-                                  | XCB_EVENT_MASK_PROPERTY_CHANGE };
-            xcb_change_window_attributes(conn_.get(), window, XCB_CW_EVENT_MASK, values);
-            if (std::ranges::find(dock_windows_, window) == dock_windows_.end())
-            {
-                dock_windows_.push_back(window);
-                // Add to clients_ registry for _NET_CLIENT_LIST (per SPEC_CLARIFICATIONS.md)
-                Client client;
-                client.id = window;
-                client.kind = Client::Kind::Dock;
-                client.skip_taskbar = true;
-                client.skip_pager = true;
-                client.order = next_client_order_++;
-                clients_[window] = std::move(client);
-                update_struts();
-            }
-            continue;
-        }
-
-        xcb_atom_t type = ewmh_.get_window_type(window);
-        bool is_desktop = type == ewmh_.get()->_NET_WM_WINDOW_TYPE_DESKTOP;
-        bool is_menu = type == ewmh_.get()->_NET_WM_WINDOW_TYPE_MENU
-            || type == ewmh_.get()->_NET_WM_WINDOW_TYPE_DROPDOWN_MENU
-            || type == ewmh_.get()->_NET_WM_WINDOW_TYPE_POPUP_MENU || type == ewmh_.get()->_NET_WM_WINDOW_TYPE_TOOLTIP
-            || type == ewmh_.get()->_NET_WM_WINDOW_TYPE_NOTIFICATION || type == ewmh_.get()->_NET_WM_WINDOW_TYPE_COMBO
-            || type == ewmh_.get()->_NET_WM_WINDOW_TYPE_DND;
-        bool is_floating_type = type == ewmh_.get()->_NET_WM_WINDOW_TYPE_DIALOG
-            || type == ewmh_.get()->_NET_WM_WINDOW_TYPE_UTILITY || type == ewmh_.get()->_NET_WM_WINDOW_TYPE_SPLASH
-            || type == ewmh_.get()->_NET_WM_WINDOW_TYPE_TOOLBAR;
+        // Use centralized classification
         bool has_transient = transient_for_window(window).has_value();
+        auto classification = ewmh_.classify_window(window, has_transient);
 
-        if (is_desktop)
+        switch (classification.kind)
         {
-            uint32_t values[] = { XCB_EVENT_MASK_PROPERTY_CHANGE };
-            xcb_change_window_attributes(conn_.get(), window, XCB_CW_EVENT_MASK, values);
-            uint32_t stack_mode = XCB_STACK_MODE_BELOW;
-            xcb_configure_window(conn_.get(), window, XCB_CONFIG_WINDOW_STACK_MODE, &stack_mode);
-            if (std::ranges::find(desktop_windows_, window) == desktop_windows_.end())
+            case WindowClassification::Kind::Desktop:
             {
-                desktop_windows_.push_back(window);
-                // Add to clients_ registry for _NET_CLIENT_LIST (per SPEC_CLARIFICATIONS.md)
-                Client client;
-                client.id = window;
-                client.kind = Client::Kind::Desktop;
-                client.skip_taskbar = true;
-                client.skip_pager = true;
-                client.order = next_client_order_++;
-                clients_[window] = std::move(client);
+                uint32_t values[] = { XCB_EVENT_MASK_PROPERTY_CHANGE };
+                xcb_change_window_attributes(conn_.get(), window, XCB_CW_EVENT_MASK, values);
+                uint32_t stack_mode = XCB_STACK_MODE_BELOW;
+                xcb_configure_window(conn_.get(), window, XCB_CONFIG_WINDOW_STACK_MODE, &stack_mode);
+                if (std::ranges::find(desktop_windows_, window) == desktop_windows_.end())
+                {
+                    desktop_windows_.push_back(window);
+                    Client client;
+                    client.id = window;
+                    client.kind = Client::Kind::Desktop;
+                    client.skip_taskbar = true;
+                    client.skip_pager = true;
+                    client.order = next_client_order_++;
+                    clients_[window] = std::move(client);
+                }
+                break;
             }
-            continue;
+
+            case WindowClassification::Kind::Dock:
+            {
+                uint32_t values[] = { XCB_EVENT_MASK_ENTER_WINDOW | XCB_EVENT_MASK_POINTER_MOTION
+                                      | XCB_EVENT_MASK_PROPERTY_CHANGE };
+                xcb_change_window_attributes(conn_.get(), window, XCB_CW_EVENT_MASK, values);
+                if (std::ranges::find(dock_windows_, window) == dock_windows_.end())
+                {
+                    dock_windows_.push_back(window);
+                    Client client;
+                    client.id = window;
+                    client.kind = Client::Kind::Dock;
+                    client.skip_taskbar = true;
+                    client.skip_pager = true;
+                    client.order = next_client_order_++;
+                    clients_[window] = std::move(client);
+                    update_struts();
+                }
+                break;
+            }
+
+            case WindowClassification::Kind::Popup:
+                // Popup windows (already mapped) are not managed
+                break;
+
+            case WindowClassification::Kind::Floating:
+            {
+                manage_floating_window(window);
+                if (classification.skip_taskbar)
+                    set_client_skip_taskbar(window, true);
+                if (classification.skip_pager)
+                    set_client_skip_pager(window, true);
+                if (classification.above)
+                    set_window_above(window, true);
+                break;
+            }
+
+            case WindowClassification::Kind::Tiled:
+            {
+                manage_window(window);
+                break;
+            }
         }
-
-        if (is_menu)
-            continue;
-
-        if (is_floating_type || has_transient)
-        {
-            manage_floating_window(window);
-            if (type == ewmh_.get()->_NET_WM_WINDOW_TYPE_TOOLBAR || type == ewmh_.get()->_NET_WM_WINDOW_TYPE_UTILITY
-                || type == ewmh_.get()->_NET_WM_WINDOW_TYPE_SPLASH)
-            {
-                set_client_skip_taskbar(window, true);
-                set_client_skip_pager(window, true);
-            }
-            if (type == ewmh_.get()->_NET_WM_WINDOW_TYPE_UTILITY)
-            {
-                set_window_above(window, true);
-            }
-            continue;
-        }
-
-        if (!ewmh_.should_tile_window(window))
-            continue;
-
-        manage_window(window);
     }
 
     suppress_focus_ = false;
@@ -561,6 +552,46 @@ void WindowManager::manage_window(xcb_window_t window, bool start_iconic)
         client.wm_class_name = newWindow.wm_class_name;
         client.order = next_client_order_++;
         client.iconic = start_iconic;
+
+        // Read and apply initial _NET_WM_STATE atoms (EWMH)
+        xcb_ewmh_get_atoms_reply_t initial_state;
+        if (xcb_ewmh_get_wm_state_reply(ewmh_.get(), xcb_ewmh_get_wm_state(ewmh_.get(), window), &initial_state, nullptr))
+        {
+            xcb_ewmh_connection_t* ewmh = ewmh_.get();
+            for (uint32_t i = 0; i < initial_state.atoms_len; ++i)
+            {
+                xcb_atom_t state = initial_state.atoms[i];
+                if (state == ewmh->_NET_WM_STATE_FULLSCREEN)
+                    client.fullscreen = true;
+                else if (state == ewmh->_NET_WM_STATE_ABOVE)
+                    client.above = true;
+                else if (state == ewmh->_NET_WM_STATE_BELOW)
+                    client.below = true;
+                else if (state == ewmh->_NET_WM_STATE_STICKY)
+                    client.sticky = true;
+                else if (state == ewmh->_NET_WM_STATE_MAXIMIZED_HORZ)
+                    client.maximized_horz = true;
+                else if (state == ewmh->_NET_WM_STATE_MAXIMIZED_VERT)
+                    client.maximized_vert = true;
+                else if (state == ewmh->_NET_WM_STATE_SHADED)
+                    client.shaded = true;
+                else if (state == ewmh->_NET_WM_STATE_MODAL)
+                    client.modal = true;
+                else if (state == ewmh->_NET_WM_STATE_SKIP_TASKBAR)
+                    client.skip_taskbar = true;
+                else if (state == ewmh->_NET_WM_STATE_SKIP_PAGER)
+                    client.skip_pager = true;
+                else if (state == ewmh->_NET_WM_STATE_DEMANDS_ATTENTION)
+                    client.demands_attention = true;
+                else if (state == ewmh->_NET_WM_STATE_HIDDEN)
+                    client.iconic = true;
+            }
+            xcb_ewmh_get_atoms_reply_wipe(&initial_state);
+        }
+
+        // Read transient_for relationship
+        client.transient_for = transient_for_window(window).value_or(XCB_NONE);
+
         clients_[window] = std::move(client);
     }
 
@@ -829,6 +860,7 @@ void WindowManager::manage_floating_window(xcb_window_t window, bool start_iconi
     floating_window.name = get_window_name(window);
     floating_window.transient_for = transient.value_or(XCB_NONE);
     floating_windows_.push_back(floating_window);
+
     // Populate unified Client registry
     {
         auto [instance_name, class_name] = get_wm_class(window);
@@ -844,6 +876,50 @@ void WindowManager::manage_floating_window(xcb_window_t window, bool start_iconi
         client.transient_for = transient.value_or(XCB_NONE);
         client.order = next_client_order_++;
         client.iconic = start_iconic;
+
+        // Read and apply initial _NET_WM_STATE atoms (EWMH)
+        xcb_ewmh_get_atoms_reply_t initial_state;
+        if (xcb_ewmh_get_wm_state_reply(ewmh_.get(), xcb_ewmh_get_wm_state(ewmh_.get(), window), &initial_state, nullptr))
+        {
+            xcb_ewmh_connection_t* ewmh = ewmh_.get();
+            for (uint32_t i = 0; i < initial_state.atoms_len; ++i)
+            {
+                xcb_atom_t state = initial_state.atoms[i];
+                if (state == ewmh->_NET_WM_STATE_FULLSCREEN)
+                    client.fullscreen = true;
+                else if (state == ewmh->_NET_WM_STATE_ABOVE)
+                    client.above = true;
+                else if (state == ewmh->_NET_WM_STATE_BELOW)
+                    client.below = true;
+                else if (state == ewmh->_NET_WM_STATE_STICKY)
+                    client.sticky = true;
+                else if (state == ewmh->_NET_WM_STATE_MAXIMIZED_HORZ)
+                    client.maximized_horz = true;
+                else if (state == ewmh->_NET_WM_STATE_MAXIMIZED_VERT)
+                    client.maximized_vert = true;
+                else if (state == ewmh->_NET_WM_STATE_SHADED)
+                    client.shaded = true;
+                else if (state == ewmh->_NET_WM_STATE_MODAL)
+                    client.modal = true;
+                else if (state == ewmh->_NET_WM_STATE_SKIP_TASKBAR)
+                    client.skip_taskbar = true;
+                else if (state == ewmh->_NET_WM_STATE_SKIP_PAGER)
+                    client.skip_pager = true;
+                else if (state == ewmh->_NET_WM_STATE_DEMANDS_ATTENTION)
+                    client.demands_attention = true;
+                else if (state == ewmh->_NET_WM_STATE_HIDDEN)
+                    client.iconic = true;
+            }
+            xcb_ewmh_get_atoms_reply_wipe(&initial_state);
+        }
+
+        // Transients automatically get skip_taskbar/skip_pager (per COMPLIANCE.md)
+        if (transient)
+        {
+            client.skip_taskbar = true;
+            client.skip_pager = true;
+        }
+
         clients_[window] = std::move(client);
     }
 
