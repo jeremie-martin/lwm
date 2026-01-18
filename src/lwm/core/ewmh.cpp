@@ -72,6 +72,18 @@ void Ewmh::create_supporting_window()
     xcb_ewmh_set_supporting_wm_check(&ewmh_, supporting_window_, supporting_window_);
 }
 
+/**
+ * @brief Set the _NET_SUPPORTED atom list.
+ *
+ * This list declares which EWMH features the WM supports. Per EWMH spec,
+ * every atom listed here must have a working implementation.
+ *
+ * Notable limitations documented in COMPLIANCE.md:
+ * - MAXIMIZED_* states: Only apply geometry changes to floating windows
+ * - _NET_MOVERESIZE_WINDOW, _NET_WM_MOVERESIZE: Floating windows only
+ * - _NET_RESTACK_WINDOW: May not update _NET_CLIENT_LIST_STACKING immediately
+ * - _NET_WM_SYNC_REQUEST: Uses blocking wait (latency concern)
+ */
 void Ewmh::set_supported_atoms()
 {
     std::vector<xcb_atom_t> supported = {

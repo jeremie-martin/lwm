@@ -252,23 +252,27 @@ Types to support (in priority order, first match wins):
 - Read on map to apply initial states.
 - States to support:
   - `_NET_WM_STATE_MODAL`: treat as modal dialog.
-  - `_NET_WM_STATE_STICKY`: visible on all desktops.
-  - `_NET_WM_STATE_MAXIMIZED_VERT`: maximize vertically.
-  - `_NET_WM_STATE_MAXIMIZED_HORZ`: maximize horizontally.
+  - `_NET_WM_STATE_STICKY`: visible on all workspaces of the owning monitor (see BEHAVIOR.md §1.5).
+  - `_NET_WM_STATE_MAXIMIZED_VERT`: maximize vertically (**floating windows only**; tiled windows
+    ignore this as they already fill the tiling area).
+  - `_NET_WM_STATE_MAXIMIZED_HORZ`: maximize horizontally (**floating windows only**).
   - `_NET_WM_STATE_SHADED`: show only title bar (implemented as iconify due to no decorations).
   - `_NET_WM_STATE_SKIP_TASKBAR`: exclude from taskbar.
   - `_NET_WM_STATE_SKIP_PAGER`: exclude from pager.
   - `_NET_WM_STATE_HIDDEN`: iconified/minimized.
-  - `_NET_WM_STATE_FULLSCREEN`: fullscreen mode.
+  - `_NET_WM_STATE_FULLSCREEN`: fullscreen mode (works for both tiled and floating).
   - `_NET_WM_STATE_ABOVE`: always on top.
   - `_NET_WM_STATE_BELOW`: always on bottom.
-  - `_NET_WM_STATE_DEMANDS_ATTENTION`: urgency indicator.
+  - `_NET_WM_STATE_DEMANDS_ATTENTION`: urgency indicator (also reflects ICCCM WM_HINTS urgency).
   - `_NET_WM_STATE_FOCUSED`: has input focus (WM sets this).
 
 #### _NET_WM_STRUT / _NET_WM_STRUT_PARTIAL
 - Reserve screen edges for panels/docks.
 - Reduce workarea accordingly.
 - Apply to window placement and tiling.
+- **Limitation**: Partial strut ranges (start/end coordinates) are read but only the basic
+  extents (left/right/top/bottom) are used. Multi-monitor partial struts may not be
+  handled correctly if they span monitors.
 
 #### _NET_WM_ICON
 - Read for taskbar/pager/switcher display.
@@ -342,15 +346,21 @@ Types to support (in priority order, first match wins):
 #### _NET_MOVERESIZE_WINDOW
 - Apply gravity-adjusted move/resize.
 - Honor flags for which fields to apply.
-- Respect size hints.
+- Respect size hints (minimum dimensions enforced).
+- **Limitation**: Only supported for **floating windows**. Requests for tiled windows are ignored
+  (tiled window geometry is controlled by the tiling layout).
+- **Limitation**: Gravity parameter is currently ignored; position is applied directly.
 
 #### _NET_WM_MOVERESIZE
 - Initiate interactive move or resize based on direction.
 - Cancel ongoing operation if `_NET_WM_MOVERESIZE_CANCEL`.
+- **Limitation**: Only supported for **floating windows**. Tiled windows cannot be interactively
+  moved/resized via this mechanism (use keybindings or mouse drag with modifier).
 
 #### _NET_RESTACK_WINDOW
 - Restack window relative to sibling.
-- Apply source indication rules.
+- **Limitation**: Source indication rules are not fully applied.
+- **Limitation**: `_NET_CLIENT_LIST_STACKING` may not be updated immediately after restack.
 
 #### _NET_REQUEST_FRAME_EXTENTS
 - Set `_NET_FRAME_EXTENTS` before window is mapped.
@@ -375,10 +385,12 @@ Types to support (in priority order, first match wins):
 ### 5. Focus Stealing Prevention
 
 - Track `_NET_WM_USER_TIME` for windows.
+- Support `_NET_WM_USER_TIME_WINDOW`: if set, read user time from the specified window.
 - Compare timestamps when handling `_NET_ACTIVE_WINDOW`:
   - Source indication 1 (application): apply prevention.
   - Source indication 2 (pager/user): allow activation.
 - For prevented activations: set `_NET_WM_STATE_DEMANDS_ATTENTION`.
+- User time is also updated when windows receive focus.
 
 ### 6. WM Protocols (EWMH Extensions)
 
@@ -386,11 +398,16 @@ Types to support (in priority order, first match wins):
 - Send via `WM_PROTOCOLS` format to check client liveness.
 - Track response; consider hung if no reply within timeout.
 - Use `_NET_WM_PID` and `WM_CLIENT_MACHINE` to offer kill option.
+- **Current behavior**: Ping is sent during `kill_window()` to check if window is responsive.
+  If no response within 5 seconds, the window is forcibly killed. This is more aggressive
+  than ideal—responsive windows doing slow shutdown may be killed prematurely.
 
 #### _NET_WM_SYNC_REQUEST
 - Send before WM-initiated resizes.
 - Wait for client to update `_NET_WM_SYNC_REQUEST_COUNTER`.
 - Proceed after counter update or timeout.
+- **Limitation**: Current implementation uses blocking wait during configure, which can
+  introduce latency. A future version should use non-blocking async waiting.
 
 ### 7. Compositing Manager Interaction
 
