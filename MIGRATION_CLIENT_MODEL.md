@@ -28,10 +28,10 @@ struct Client {
     Kind kind;
     size_t monitor, workspace;
     
-    // State flags (replaces 9 unordered_sets)
+    // State flags (replaces 11 unordered_sets)
     bool fullscreen, iconic, sticky, above, below;
     bool maximized_horz, maximized_vert, shaded, modal;
-    bool skip_taskbar, skip_pager;
+    bool skip_taskbar, skip_pager, demands_attention;
     
     // Restore geometries (replaces 2 unordered_maps)
     std::optional<Geometry> fullscreen_restore;
@@ -68,6 +68,8 @@ std::unordered_map<xcb_window_t, Client> clients_;
 | `maximized_vert_windows_` | `client->maximized_vert` |
 | `shaded_windows_` | `client->shaded` |
 | `modal_windows_` | `client->modal` |
+| `skip_taskbar_windows_` | `client->skip_taskbar` |
+| `skip_pager_windows_` | `client->skip_pager` |
 | `fullscreen_restore_` | `client->fullscreen_restore` |
 | `maximize_restore_` | `client->maximize_restore` |
 
@@ -77,8 +79,6 @@ std::unordered_map<xcb_window_t, Client> clients_;
 |-----------|--------|
 | `wm_unmapped_windows_` | ICCCM unmap tracking (transient) |
 | `fullscreen_monitors_` | Per-window monitor span config |
-| `skip_taskbar_windows_` | TODO: migrate to Client |
-| `skip_pager_windows_` | TODO: migrate to Client |
 | `sync_counters_`, `sync_values_` | Sync protocol tracking |
 | `pending_kills_`, `pending_pings_` | Process management |
 | `user_times_`, `user_time_windows_` | Focus stealing prevention |
@@ -88,7 +88,7 @@ std::unordered_map<xcb_window_t, Client> clients_;
 
 ## Helper Functions Added (`wm.cpp`)
 
-All return `false` for unmanaged windows:
+### Query helpers (return `false` for unmanaged windows)
 
 ```cpp
 bool is_client_fullscreen(xcb_window_t window) const;
@@ -100,6 +100,17 @@ bool is_client_maximized_horz(xcb_window_t window) const;
 bool is_client_maximized_vert(xcb_window_t window) const;
 bool is_client_shaded(xcb_window_t window) const;
 bool is_client_modal(xcb_window_t window) const;
+bool is_client_skip_taskbar(xcb_window_t window) const;
+bool is_client_skip_pager(xcb_window_t window) const;
+bool is_client_demands_attention(xcb_window_t window) const;
+```
+
+### Setter helpers (update Client and EWMH)
+
+```cpp
+void set_client_skip_taskbar(xcb_window_t window, bool enabled);
+void set_client_skip_pager(xcb_window_t window, bool enabled);
+void set_client_demands_attention(xcb_window_t window, bool enabled);
 ```
 
 ---
@@ -114,6 +125,7 @@ Run these searches - all should return **no matches**:
 grep -E 'fullscreen_windows_\.|iconic_windows_\.|sticky_windows_\.' src/lwm/wm.cpp
 grep -E 'above_windows_\.|below_windows_\.|shaded_windows_\.' src/lwm/wm.cpp
 grep -E 'modal_windows_\.|maximized_horz_windows_\.|maximized_vert_windows_\.' src/lwm/wm.cpp
+grep -E 'skip_taskbar_windows_\.|skip_pager_windows_\.' src/lwm/wm.cpp
 grep -E 'fullscreen_restore_\.|maximize_restore_\.' src/lwm/wm.cpp
 ```
 
@@ -143,6 +155,9 @@ Each function gets `Client*` and modifies it:
 | `set_window_maximized()` | `maximized_horz`, `maximized_vert`, `maximize_restore` |
 | `set_window_shaded()` | `shaded` |
 | `set_window_modal()` | `modal` |
+| `set_client_skip_taskbar()` | `skip_taskbar` |
+| `set_client_skip_pager()` | `skip_pager` |
+| `set_client_demands_attention()` | `demands_attention` |
 | `iconify_window()` | `iconic` |
 | `deiconify_window()` | `iconic` |
 
@@ -162,6 +177,7 @@ cd build && make clean && make -j$(nproc)
 ## Commit History
 
 ```
+17e5179 Complete Client migration: skip_taskbar, skip_pager, demands_attention
 1dffcf6 Update documentation for unified Client model
 72f6366 Phase 5: Remove scattered state unordered_sets
 3545d34 Phase 4b: Complete migration of state query uses
@@ -172,11 +188,10 @@ b7fced3 Introduce unified Client record (Phases 1-3)
 
 ---
 
-## Future Work
+## Future Work (Optional)
 
-1. **Migrate `skip_taskbar_windows_` / `skip_pager_windows_`** to `Client`
-2. **Phase 6**: Change `Workspace.windows` to store `xcb_window_t` IDs only (layout looks up Client)
-3. **Unify `floating_windows_`** vector into workspace storage
+1. **Phase 6**: Change `Workspace.windows` to store `xcb_window_t` IDs only (layout looks up Client)
+2. **Unify `floating_windows_`** vector into workspace storage
 
 ---
 
@@ -184,7 +199,7 @@ b7fced3 Introduce unified Client record (Phases 1-3)
 
 | File | Changes |
 |------|---------|
-| `src/lwm/core/types.hpp` | Added `Client` struct |
-| `src/lwm/wm.hpp` | Added `clients_` map, removed 11 legacy structures |
+| `src/lwm/core/types.hpp` | Added `Client` struct with all state flags |
+| `src/lwm/wm.hpp` | Added `clients_` map, removed 13 legacy structures |
 | `src/lwm/wm.cpp` | All state management uses Client |
 | `BEHAVIOR.md` | Implementation note about unified Client |
