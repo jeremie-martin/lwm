@@ -209,6 +209,7 @@ private:
     std::optional<size_t> monitor_index_for_window(xcb_window_t window) const;
     std::optional<size_t> workspace_index_for_window(xcb_window_t window) const;
     std::optional<uint32_t> get_window_desktop(xcb_window_t window) const;
+    bool is_sticky_desktop(xcb_window_t window) const;
     std::optional<std::pair<size_t, size_t>> resolve_window_desktop(xcb_window_t window) const;
     std::optional<xcb_window_t> transient_for_window(xcb_window_t window) const;
     bool is_window_visible(xcb_window_t window) const;

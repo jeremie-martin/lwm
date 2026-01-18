@@ -729,6 +729,11 @@ void WindowManager::handle_map_request(xcb_map_request_event_t const& e)
         {
             ewmh_.set_demands_attention(e.window, true);
         }
+        // Honor _NET_WM_DESKTOP = 0xFFFFFFFF as sticky (EWMH)
+        if (is_sticky_desktop(e.window) && !sticky_windows_.contains(e.window))
+        {
+            set_window_sticky(e.window, true);
+        }
         if (type == ewmh_.get()->_NET_WM_WINDOW_TYPE_TOOLBAR || type == ewmh_.get()->_NET_WM_WINDOW_TYPE_UTILITY
             || type == ewmh_.get()->_NET_WM_WINDOW_TYPE_SPLASH)
         {
@@ -779,6 +784,11 @@ void WindowManager::handle_map_request(xcb_map_request_event_t const& e)
     if (urgent)
     {
         ewmh_.set_demands_attention(e.window, true);
+    }
+    // Honor _NET_WM_DESKTOP = 0xFFFFFFFF as sticky (EWMH)
+    if (is_sticky_desktop(e.window) && !sticky_windows_.contains(e.window))
+    {
+        set_window_sticky(e.window, true);
     }
     if (!start_iconic)
     {
@@ -3435,6 +3445,12 @@ std::optional<size_t> WindowManager::workspace_index_for_window(xcb_window_t win
     return std::nullopt;
 }
 
+/**
+ * @brief Get the _NET_WM_DESKTOP value for a window.
+ *
+ * @return The desktop index, or nullopt if not set or if 0xFFFFFFFF (sticky).
+ *         Use is_sticky_desktop() to check for sticky separately.
+ */
 std::optional<uint32_t> WindowManager::get_window_desktop(xcb_window_t window) const
 {
     uint32_t desktop = 0;
@@ -3452,6 +3468,27 @@ std::optional<uint32_t> WindowManager::get_window_desktop(xcb_window_t window) c
         return std::nullopt;
 
     return desktop;
+}
+
+/**
+ * @brief Check if window requests sticky via _NET_WM_DESKTOP = 0xFFFFFFFF.
+ *
+ * EWMH specifies that _NET_WM_DESKTOP of 0xFFFFFFFF means the window should
+ * be visible on all desktops (sticky).
+ */
+bool WindowManager::is_sticky_desktop(xcb_window_t window) const
+{
+    uint32_t desktop = 0;
+    if (!xcb_ewmh_get_wm_desktop_reply(
+            ewmh_.get(),
+            xcb_ewmh_get_wm_desktop(ewmh_.get(), window),
+            &desktop,
+            nullptr
+        ))
+    {
+        return false;
+    }
+    return desktop == 0xFFFFFFFF;
 }
 
 std::optional<std::pair<size_t, size_t>> WindowManager::resolve_window_desktop(xcb_window_t window) const
