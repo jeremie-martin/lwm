@@ -8,6 +8,8 @@ add_library(liblwm STATIC
     keybind/keybind.cpp
     bar/bar.cpp
     wm.cpp
+    wm_events.cpp
+    wm_drag.cpp
 )
 
 target_include_directories(liblwm PUBLIC
