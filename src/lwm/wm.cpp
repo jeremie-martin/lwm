@@ -702,8 +702,10 @@ void WindowManager::handle_map_request(xcb_map_request_event_t const& e)
 
     if (is_floating_type || has_transient)
     {
-        // Check WM_HINTS initial_state for floating windows (ICCCM)
+        // Check WM_HINTS initial_state and urgency for floating windows (ICCCM)
         bool start_iconic = false;
+        bool urgent = false;
+        constexpr uint32_t XUrgencyHint = 256; // (1L << 8)
         xcb_icccm_wm_hints_t hints;
         if (xcb_icccm_get_wm_hints_reply(conn_.get(), xcb_icccm_get_wm_hints(conn_.get(), e.window), &hints, nullptr))
         {
@@ -711,12 +713,21 @@ void WindowManager::handle_map_request(xcb_map_request_event_t const& e)
             {
                 start_iconic = true;
             }
+            if (hints.flags & XUrgencyHint)
+            {
+                urgent = true;
+            }
         }
         if (ewmh_.has_window_state(e.window, ewmh_.get()->_NET_WM_STATE_HIDDEN))
         {
             start_iconic = true;
         }
         manage_floating_window(e.window, start_iconic);
+        // Set DEMANDS_ATTENTION if urgency hint is set (ICCCM → EWMH)
+        if (urgent)
+        {
+            ewmh_.set_demands_attention(e.window, true);
+        }
         if (type == ewmh_.get()->_NET_WM_WINDOW_TYPE_TOOLBAR || type == ewmh_.get()->_NET_WM_WINDOW_TYPE_UTILITY
             || type == ewmh_.get()->_NET_WM_WINDOW_TYPE_SPLASH)
         {
@@ -741,14 +752,20 @@ void WindowManager::handle_map_request(xcb_map_request_event_t const& e)
         return;
     }
 
-    // Check WM_HINTS initial_state (ICCCM)
+    // Check WM_HINTS initial_state and urgency (ICCCM)
     bool start_iconic = false;
+    bool urgent = false;
+    constexpr uint32_t XUrgencyHint = 256; // (1L << 8)
     xcb_icccm_wm_hints_t hints;
     if (xcb_icccm_get_wm_hints_reply(conn_.get(), xcb_icccm_get_wm_hints(conn_.get(), e.window), &hints, nullptr))
     {
         if ((hints.flags & XCB_ICCCM_WM_HINT_STATE) && hints.initial_state == XCB_ICCCM_WM_STATE_ICONIC)
         {
             start_iconic = true;
+        }
+        if (hints.flags & XUrgencyHint)
+        {
+            urgent = true;
         }
     }
     if (ewmh_.has_window_state(e.window, ewmh_.get()->_NET_WM_STATE_HIDDEN))
@@ -757,6 +774,11 @@ void WindowManager::handle_map_request(xcb_map_request_event_t const& e)
     }
 
     manage_window(e.window, start_iconic);
+    // Set DEMANDS_ATTENTION if urgency hint is set (ICCCM → EWMH)
+    if (urgent)
+    {
+        ewmh_.set_demands_attention(e.window, true);
+    }
     if (!start_iconic)
     {
         auto monitor_idx = monitor_index_for_window(e.window);
@@ -1521,6 +1543,30 @@ void WindowManager::handle_property_notify(xcb_property_notify_event_t const& e)
     if (net_wm_user_time_ != XCB_NONE && e.atom == net_wm_user_time_)
     {
         user_times_[e.window] = get_user_time(e.window);
+    }
+    // Handle WM_HINTS urgency flag changes (ICCCM → EWMH DEMANDS_ATTENTION)
+    if (wm_hints_ != XCB_NONE && e.atom == wm_hints_)
+    {
+        // Only process for managed windows (tiled or floating)
+        if (monitor_containing_window(e.window) || find_floating_window(e.window))
+        {
+            xcb_icccm_wm_hints_t hints;
+            if (xcb_icccm_get_wm_hints_reply(conn_.get(), xcb_icccm_get_wm_hints(conn_.get(), e.window), &hints, nullptr))
+            {
+                // XUrgencyHint is defined as (1L << 8) = 256
+                constexpr uint32_t XUrgencyHint = 256;
+                bool urgent = (hints.flags & XUrgencyHint) != 0;
+                // Set DEMANDS_ATTENTION if urgent, unless this window is already focused
+                if (urgent && e.window != active_window_)
+                {
+                    ewmh_.set_demands_attention(e.window, true);
+                }
+                else if (!urgent)
+                {
+                    ewmh_.set_demands_attention(e.window, false);
+                }
+            }
+        }
     }
     if ((e.atom == ewmh_.get()->_NET_WM_STRUT || e.atom == ewmh_.get()->_NET_WM_STRUT_PARTIAL)
         && std::ranges::find(dock_windows_, e.window) != dock_windows_.end())
