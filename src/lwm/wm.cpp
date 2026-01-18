@@ -733,7 +733,7 @@ void WindowManager::handle_map_request(xcb_map_request_event_t const& e)
             ewmh_.set_demands_attention(e.window, true);
         }
         // Honor _NET_WM_DESKTOP = 0xFFFFFFFF as sticky (EWMH)
-        if (is_sticky_desktop(e.window) && !sticky_windows_.contains(e.window))
+        if (is_sticky_desktop(e.window) && !is_client_sticky(e.window))
         {
             set_window_sticky(e.window, true);
         }
@@ -789,7 +789,7 @@ void WindowManager::handle_map_request(xcb_map_request_event_t const& e)
         ewmh_.set_demands_attention(e.window, true);
     }
     // Honor _NET_WM_DESKTOP = 0xFFFFFFFF as sticky (EWMH)
-    if (is_sticky_desktop(e.window) && !sticky_windows_.contains(e.window))
+    if (is_sticky_desktop(e.window) && !is_client_sticky(e.window))
     {
         set_window_sticky(e.window, true);
     }
@@ -1056,17 +1056,17 @@ void WindowManager::handle_client_message(xcb_client_message_event_t const& e)
 
             if (state == ewmh->_NET_WM_STATE_FULLSCREEN)
             {
-                bool enable = compute_enable(fullscreen_windows_.contains(e.window));
+                bool enable = compute_enable(is_client_fullscreen(e.window));
                 set_fullscreen(e.window, enable);
             }
             else if (state == ewmh->_NET_WM_STATE_ABOVE)
             {
-                bool enable = compute_enable(above_windows_.contains(e.window));
+                bool enable = compute_enable(is_client_above(e.window));
                 set_window_above(e.window, enable);
             }
             else if (state == ewmh->_NET_WM_STATE_BELOW)
             {
-                bool enable = compute_enable(below_windows_.contains(e.window));
+                bool enable = compute_enable(is_client_below(e.window));
                 set_window_below(e.window, enable);
             }
             else if (state == ewmh->_NET_WM_STATE_SKIP_TASKBAR)
@@ -1173,7 +1173,7 @@ void WindowManager::handle_client_message(xcb_client_message_event_t const& e)
             }
         }
 
-        if (iconic_windows_.contains(window))
+        if (is_client_iconic(window))
         {
             deiconify_window(window, false);
         }
@@ -1198,7 +1198,7 @@ void WindowManager::handle_client_message(xcb_client_message_event_t const& e)
             set_window_sticky(e.window, true);
             return;
         }
-        if (sticky_windows_.contains(e.window))
+        if (is_client_sticky(e.window))
         {
             set_window_sticky(e.window, false);
         }
@@ -1238,7 +1238,7 @@ void WindowManager::handle_client_message(xcb_client_message_event_t const& e)
                 source_ws.focused_window = XCB_NONE;
                 for (auto rit = source_ws.windows.rbegin(); rit != source_ws.windows.rend(); ++rit)
                 {
-                    if (!iconic_windows_.contains(rit->id))
+                    if (!is_client_iconic(rit->id))
                     {
                         source_ws.focused_window = rit->id;
                         break;
@@ -1336,8 +1336,8 @@ void WindowManager::handle_client_message(xcb_client_message_event_t const& e)
             fw->geometry.height = static_cast<uint16_t>(std::max<int32_t>(1, e.data.data32[4]));
 
         update_floating_monitor_for_geometry(*fw);
-        if (fw->workspace == monitors_[fw->monitor].current_workspace && !iconic_windows_.contains(fw->id)
-            && !fullscreen_windows_.contains(fw->id))
+        if (fw->workspace == monitors_[fw->monitor].current_workspace && !is_client_iconic(fw->id)
+            && !is_client_fullscreen(fw->id))
         {
             apply_floating_geometry(*fw);
         }
@@ -1446,7 +1446,7 @@ void WindowManager::handle_configure_request(xcb_configure_request_event_t const
         return;
     }
 
-    if (fullscreen_windows_.contains(e.window))
+    if (is_client_fullscreen(e.window))
     {
         apply_fullscreen_if_needed(e.window);
         send_configure_notify(e.window);
@@ -1535,7 +1535,7 @@ void WindowManager::handle_property_notify(xcb_property_notify_event_t const& e)
             floating_window->geometry.width = static_cast<uint16_t>(std::max<uint32_t>(1, hinted_width));
             floating_window->geometry.height = static_cast<uint16_t>(std::max<uint32_t>(1, hinted_height));
             if (floating_window->workspace == monitors_[floating_window->monitor].current_workspace
-                && !iconic_windows_.contains(floating_window->id) && !fullscreen_windows_.contains(floating_window->id))
+                && !is_client_iconic(floating_window->id) && !is_client_fullscreen(floating_window->id))
             {
                 apply_floating_geometry(*floating_window);
             }
@@ -1556,7 +1556,7 @@ void WindowManager::handle_property_notify(xcb_property_notify_event_t const& e)
     if (net_wm_fullscreen_monitors_ != XCB_NONE && e.atom == net_wm_fullscreen_monitors_)
     {
         update_fullscreen_monitor_state(e.window);
-        if (fullscreen_windows_.contains(e.window))
+        if (is_client_fullscreen(e.window))
         {
             apply_fullscreen_if_needed(e.window);
         }
@@ -3283,7 +3283,7 @@ void WindowManager::move_window_to_workspace(int ws)
 
         floating_window->workspace = target_ws;
         uint32_t desktop = get_ewmh_desktop_index(monitor_idx, target_ws);
-        if (sticky_windows_.contains(window_to_move))
+        if (is_client_sticky(window_to_move))
             ewmh_.set_window_desktop(window_to_move, 0xFFFFFFFF);
         else
             ewmh_.set_window_desktop(window_to_move, desktop);
@@ -3306,7 +3306,7 @@ void WindowManager::move_window_to_workspace(int ws)
         current_ws.focused_window = XCB_NONE;
         for (auto rit = current_ws.windows.rbegin(); rit != current_ws.windows.rend(); ++rit)
         {
-            if (!iconic_windows_.contains(rit->id))
+            if (!is_client_iconic(rit->id))
             {
                 current_ws.focused_window = rit->id;
                 break;
@@ -3320,12 +3320,12 @@ void WindowManager::move_window_to_workspace(int ws)
 
     // Update EWMH desktop for moved window
     uint32_t desktop = get_ewmh_desktop_index(focused_monitor_, target_ws);
-    if (sticky_windows_.contains(window_to_move))
+    if (is_client_sticky(window_to_move))
         ewmh_.set_window_desktop(window_to_move, 0xFFFFFFFF);
     else
         ewmh_.set_window_desktop(window_to_move, desktop);
 
-    if (!sticky_windows_.contains(window_to_move))
+    if (!is_client_sticky(window_to_move))
     {
         wm_unmap_window(window_to_move);
     }
@@ -3468,7 +3468,7 @@ void WindowManager::move_window_to_monitor(int direction)
         );
 
         uint32_t desktop = get_ewmh_desktop_index(target_idx, floating_window->workspace);
-        if (sticky_windows_.contains(window_to_move))
+        if (is_client_sticky(window_to_move))
             ewmh_.set_window_desktop(window_to_move, 0xFFFFFFFF);
         else
             ewmh_.set_window_desktop(window_to_move, desktop);
@@ -3517,7 +3517,7 @@ void WindowManager::move_window_to_monitor(int direction)
 
     // Update EWMH desktop for moved window
     uint32_t desktop = get_ewmh_desktop_index(target_idx, target_monitor.current_workspace);
-    if (sticky_windows_.contains(window_to_move))
+    if (is_client_sticky(window_to_move))
         ewmh_.set_window_desktop(window_to_move, 0xFFFFFFFF);
     else
         ewmh_.set_window_desktop(window_to_move, desktop);
@@ -4313,7 +4313,7 @@ void WindowManager::send_configure_notify(xcb_window_t window)
 
 void WindowManager::begin_drag(xcb_window_t window, bool resize, int16_t root_x, int16_t root_y)
 {
-    if (fullscreen_windows_.contains(window))
+    if (is_client_fullscreen(window))
         return;
 
     auto* floating_window = find_floating_window(window);
@@ -4348,7 +4348,7 @@ void WindowManager::begin_tiled_drag(xcb_window_t window, int16_t root_x, int16_
 {
     if (showing_desktop_)
         return;
-    if (fullscreen_windows_.contains(window))
+    if (is_client_fullscreen(window))
         return;
     if (find_floating_window(window))
         return;
@@ -5000,7 +5000,7 @@ void WindowManager::switch_to_ewmh_desktop(uint32_t desktop)
     // Unmap windows from OLD workspace before switching
     for (auto const& window : monitor.current().windows)
     {
-        if (sticky_windows_.contains(window.id))
+        if (is_client_sticky(window.id))
             continue;
         wm_unmap_window(window.id);
     }
