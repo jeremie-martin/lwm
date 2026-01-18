@@ -3172,7 +3172,7 @@ void WindowManager::rearrange_monitor(Monitor& monitor)
     std::unordered_set<xcb_window_t> seen;
     for (auto const& window : monitor.current().windows)
     {
-        if (iconic_windows_.contains(window.id))
+        if (is_client_iconic(window.id))
         {
             wm_unmap_window(window.id);
             continue;
@@ -3185,9 +3185,9 @@ void WindowManager::rearrange_monitor(Monitor& monitor)
     {
         for (auto const& window : workspace.windows)
         {
-            if (!sticky_windows_.contains(window.id))
+            if (!is_client_sticky(window.id))
                 continue;
-            if (iconic_windows_.contains(window.id))
+            if (is_client_iconic(window.id))
             {
                 wm_unmap_window(window.id);
                 continue;
@@ -3231,7 +3231,7 @@ void WindowManager::switch_workspace(int ws)
     monitor.previous_workspace = monitor.current_workspace;
     for (auto const& window : monitor.current().windows)
     {
-        if (sticky_windows_.contains(window.id))
+        if (is_client_sticky(window.id))
             continue;
         wm_unmap_window(window.id);
     }
@@ -3580,6 +3580,46 @@ Client const* WindowManager::get_client(xcb_window_t window) const
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
+// State query helpers (prefer Client, fall back to legacy sets during migration)
+// These will eventually just use clients_ once migration is complete.
+// ─────────────────────────────────────────────────────────────────────────────
+
+bool WindowManager::is_client_fullscreen(xcb_window_t window) const
+{
+    if (auto const* c = get_client(window))
+        return c->fullscreen;
+    return fullscreen_windows_.contains(window);
+}
+
+bool WindowManager::is_client_iconic(xcb_window_t window) const
+{
+    if (auto const* c = get_client(window))
+        return c->iconic;
+    return iconic_windows_.contains(window);
+}
+
+bool WindowManager::is_client_sticky(xcb_window_t window) const
+{
+    if (auto const* c = get_client(window))
+        return c->sticky;
+    return sticky_windows_.contains(window);
+}
+
+bool WindowManager::is_client_above(xcb_window_t window) const
+{
+    if (auto const* c = get_client(window))
+        return c->above;
+    return above_windows_.contains(window);
+}
+
+bool WindowManager::is_client_below(xcb_window_t window) const
+{
+    if (auto const* c = get_client(window))
+        return c->below;
+    return below_windows_.contains(window);
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
 // Legacy floating window helpers (will be removed in Phase 6)
 // ─────────────────────────────────────────────────────────────────────────────
 
@@ -3736,21 +3776,21 @@ bool WindowManager::is_window_visible(xcb_window_t window) const
 {
     if (showing_desktop_)
         return false;
-    if (iconic_windows_.contains(window))
+    if (is_client_iconic(window))
         return false;
 
     if (auto const* floating_window = find_floating_window(window))
     {
         if (floating_window->monitor >= monitors_.size())
             return false;
-        if (sticky_windows_.contains(window))
+        if (is_client_sticky(window))
             return true;
         return floating_window->workspace == monitors_[floating_window->monitor].current_workspace;
     }
 
     if (auto monitor_idx = monitor_index_for_window(window))
     {
-        if (sticky_windows_.contains(window))
+        if (is_client_sticky(window))
             return true;
         auto workspace_idx = workspace_index_for_window(window);
         if (!workspace_idx)

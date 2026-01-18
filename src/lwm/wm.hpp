@@ -208,6 +208,13 @@ private:
     Client const* get_client(xcb_window_t window) const;
     bool is_managed(xcb_window_t window) const { return clients_.contains(window); }
 
+    // State query helpers (prefer Client, fall back to legacy sets during migration)
+    bool is_client_fullscreen(xcb_window_t window) const;
+    bool is_client_iconic(xcb_window_t window) const;
+    bool is_client_sticky(xcb_window_t window) const;
+    bool is_client_above(xcb_window_t window) const;
+    bool is_client_below(xcb_window_t window) const;
+
     // Helpers
     Monitor& focused_monitor() { return monitors_[focused_monitor_]; }
     Monitor const& focused_monitor() const { return monitors_[focused_monitor_]; }
