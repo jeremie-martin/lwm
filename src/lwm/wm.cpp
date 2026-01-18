@@ -2938,6 +2938,14 @@ bool WindowManager::supports_protocol(xcb_window_t window, xcb_atom_t protocol) 
 
 bool WindowManager::is_focus_eligible(xcb_window_t window) const
 {
+    // Dock and desktop windows are never focus-eligible (per BEHAVIOR.md)
+    if (auto* client = get_client(window))
+    {
+        if (client->kind == Client::Kind::Dock || client->kind == Client::Kind::Desktop)
+            return false;
+    }
+
+    // Check ICCCM WM_HINTS.input hint
     xcb_icccm_wm_hints_t hints;
     if (!xcb_icccm_get_wm_hints_reply(conn_.get(), xcb_icccm_get_wm_hints(conn_.get(), window), &hints, nullptr))
         return true;
@@ -2948,6 +2956,7 @@ bool WindowManager::is_focus_eligible(xcb_window_t window) const
     if (hints.input)
         return true;
 
+    // If input=False, window can only receive focus via WM_TAKE_FOCUS
     return supports_protocol(window, wm_take_focus_);
 }
 
