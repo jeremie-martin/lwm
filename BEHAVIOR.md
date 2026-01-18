@@ -29,7 +29,15 @@ and are not duplicated here.
 Once classified, windows behave as follows:
 - **Tiled**: participates in the workspace tiling layout.
 - **Floating**: positioned independently; does not affect the tiling layout.
-- **Panels/Docks**: reserve usable area; not tiled.
+- **Panels/Docks** (`_NET_WM_WINDOW_TYPE_DOCK`):
+  - Reserve screen edges via struts (reduce usable area for tiling).
+  - Not included in `_NET_CLIENT_LIST` (tracked separately).
+  - Do not participate in workspace membership or normal focus.
+  - Always visible across all workspaces (effectively sticky).
+  - Stacked above normal windows but below fullscreen.
+- **Desktop Windows** (`_NET_WM_WINDOW_TYPE_DESKTOP`):
+  - Positioned below all other windows.
+  - Not focus-eligible; do not participate in workspace membership.
 - **Ephemeral Popups** (menus/tooltips/notifications): may be displayed but do not behave like
   normal managed windows (do not participate in tiling, workspace membership, or normal focus).
 

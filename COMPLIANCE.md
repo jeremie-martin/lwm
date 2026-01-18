@@ -453,6 +453,10 @@ If implementing system tray support:
    - `_NET_ACTIVE_WINDOW` = None ↔ no window has input focus.
    - `_NET_CLIENT_LIST` contains exactly all managed, non-override-redirect windows.
    - `_NET_CLIENT_LIST_STACKING` has same windows as `_NET_CLIENT_LIST`.
+   - **DOCK windows are NOT included in `_NET_CLIENT_LIST`**: Docks (panels, bars) are tracked
+     separately for strut handling but are not considered "managed" for client list purposes.
+     They have their own stacking layer (above normal windows) and do not participate in
+     workspace membership or normal focus handling.
 
 3. **Desktop Consistency**:
    - `_NET_CURRENT_DESKTOP` < `_NET_NUMBER_OF_DESKTOPS`.
