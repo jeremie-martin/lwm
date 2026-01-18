@@ -990,12 +990,17 @@ void WindowManager::handle_client_message(xcb_client_message_event_t const& e)
 
     if (e.type == wm_protocols_ && e.data.data32[0] == net_wm_ping_)
     {
+        // Ping response received - window is responsive
         xcb_window_t window = static_cast<xcb_window_t>(e.data.data32[2]);
         if (window == XCB_NONE)
         {
             window = e.window;
         }
         pending_pings_.erase(window);
+        // Cancel pending kill since window proved responsive.
+        // The window will close itself in response to WM_DELETE_WINDOW.
+        // Force kill only happens if ping times out (window is hung).
+        pending_kills_.erase(window);
         return;
     }
 
@@ -2957,10 +2962,23 @@ void WindowManager::clear_focus()
     ewmh_.set_active_window(XCB_NONE);
 }
 
+/**
+ * @brief Initiate window close with graceful fallback to force kill.
+ *
+ * Protocol:
+ * 1. If window supports WM_DELETE_WINDOW, send the close request.
+ * 2. Send _NET_WM_PING to check if the window is responsive.
+ * 3. If ping response is received within timeout, the window is responsive
+ *    and will close itself. Cancel the pending force kill.
+ * 4. If ping times out without response, the window is hung - force kill it.
+ *
+ * If window doesn't support WM_DELETE_WINDOW, kill it immediately.
+ */
 void WindowManager::kill_window(xcb_window_t window)
 {
     if (supports_protocol(window, wm_delete_window_))
     {
+        // Send WM_DELETE_WINDOW request
         xcb_client_message_event_t ev = {};
         ev.response_type = XCB_CLIENT_MESSAGE;
         ev.window = window;
@@ -2972,11 +2990,15 @@ void WindowManager::kill_window(xcb_window_t window)
         xcb_send_event(conn_.get(), 0, window, XCB_EVENT_MASK_NO_EVENT, reinterpret_cast<char*>(&ev));
         conn_.flush();
 
+        // Send ping to check if window is responsive.
+        // If ping response arrives, pending_kills_ entry is removed (window is responsive).
+        // If ping times out, force kill the hung window.
         send_wm_ping(window, last_event_time_);
         pending_kills_[window] = std::chrono::steady_clock::now() + KILL_TIMEOUT;
         return;
     }
 
+    // Window doesn't support graceful close - force kill immediately
     xcb_kill_client(conn_.get(), window);
     conn_.flush();
 }

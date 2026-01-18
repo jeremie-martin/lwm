@@ -400,9 +400,11 @@ Types to support (in priority order, first match wins):
 - Send via `WM_PROTOCOLS` format to check client liveness.
 - Track response; consider hung if no reply within timeout.
 - Use `_NET_WM_PID` and `WM_CLIENT_MACHINE` to offer kill option.
-- **Current behavior**: Ping is sent during `kill_window()` to check if window is responsive.
-  If no response within 5 seconds, the window is forcibly killed. This is more aggressive
-  than ideal—responsive windows doing slow shutdown may be killed prematurely.
+- **Kill behavior**: When closing a window:
+  1. Send `WM_DELETE_WINDOW` to request graceful close.
+  2. Send `_NET_WM_PING` to check if window is responsive.
+  3. If ping response received: Window is responsive, let it close naturally (cancel force kill).
+  4. If ping times out (5 seconds): Window is hung, force kill it.
 
 #### _NET_WM_SYNC_REQUEST
 - Send before WM-initiated resizes.
