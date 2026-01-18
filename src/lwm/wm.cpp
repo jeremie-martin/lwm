@@ -2331,14 +2331,17 @@ void WindowManager::focus_window(xcb_window_t window)
 
     xcb_change_window_attributes(conn_.get(), window, XCB_CW_BORDER_PIXEL, &config_.appearance.border_color);
     xcb_configure_window(conn_.get(), window, XCB_CONFIG_WINDOW_BORDER_WIDTH, &config_.appearance.border_width);
+    // Use event timestamp for SetInputFocus to ensure proper focus ordering.
+    // Using CurrentTime can cause focus to be ignored or reordered incorrectly.
+    xcb_timestamp_t focus_time = last_event_time_ ? last_event_time_ : XCB_CURRENT_TIME;
     send_wm_take_focus(window, last_event_time_);
     if (should_set_input_focus(window))
     {
-        xcb_set_input_focus(conn_.get(), XCB_INPUT_FOCUS_POINTER_ROOT, window, XCB_CURRENT_TIME);
+        xcb_set_input_focus(conn_.get(), XCB_INPUT_FOCUS_POINTER_ROOT, window, focus_time);
     }
     else
     {
-        xcb_set_input_focus(conn_.get(), XCB_INPUT_FOCUS_POINTER_ROOT, conn_.screen()->root, XCB_CURRENT_TIME);
+        xcb_set_input_focus(conn_.get(), XCB_INPUT_FOCUS_POINTER_ROOT, conn_.screen()->root, focus_time);
     }
 
     // Clear urgent hint when window receives focus
@@ -2424,14 +2427,16 @@ void WindowManager::focus_floating_window(xcb_window_t window)
     clear_all_borders();
     xcb_change_window_attributes(conn_.get(), window, XCB_CW_BORDER_PIXEL, &config_.appearance.border_color);
     xcb_configure_window(conn_.get(), window, XCB_CONFIG_WINDOW_BORDER_WIDTH, &config_.appearance.border_width);
+    // Use event timestamp for SetInputFocus to ensure proper focus ordering.
+    xcb_timestamp_t focus_time = last_event_time_ ? last_event_time_ : XCB_CURRENT_TIME;
     send_wm_take_focus(window, last_event_time_);
     if (should_set_input_focus(window))
     {
-        xcb_set_input_focus(conn_.get(), XCB_INPUT_FOCUS_POINTER_ROOT, window, XCB_CURRENT_TIME);
+        xcb_set_input_focus(conn_.get(), XCB_INPUT_FOCUS_POINTER_ROOT, window, focus_time);
     }
     else
     {
-        xcb_set_input_focus(conn_.get(), XCB_INPUT_FOCUS_POINTER_ROOT, conn_.screen()->root, XCB_CURRENT_TIME);
+        xcb_set_input_focus(conn_.get(), XCB_INPUT_FOCUS_POINTER_ROOT, conn_.screen()->root, focus_time);
     }
 
     uint32_t stack_mode = XCB_STACK_MODE_ABOVE;
@@ -2961,7 +2966,9 @@ void WindowManager::clear_focus()
         ewmh_.set_window_state(active_window_, net_wm_state_focused_, false);
     }
     active_window_ = XCB_NONE;
-    xcb_set_input_focus(conn_.get(), XCB_INPUT_FOCUS_POINTER_ROOT, conn_.screen()->root, XCB_CURRENT_TIME);
+    // Use event timestamp for SetInputFocus when available
+    xcb_timestamp_t focus_time = last_event_time_ ? last_event_time_ : XCB_CURRENT_TIME;
+    xcb_set_input_focus(conn_.get(), XCB_INPUT_FOCUS_POINTER_ROOT, conn_.screen()->root, focus_time);
     ewmh_.set_active_window(XCB_NONE);
 }
 
