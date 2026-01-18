@@ -93,10 +93,6 @@ private:
     // ─────────────────────────────────────────────────────────────────────────
     std::unordered_map<xcb_window_t, uint32_t> wm_unmapped_windows_;  // ICCCM unmap tracking
     std::unordered_map<xcb_window_t, FullscreenMonitors> fullscreen_monitors_;  // _NET_WM_FULLSCREEN_MONITORS
-
-    // TODO: Migrate skip_taskbar/skip_pager to Client in a future phase
-    std::unordered_set<xcb_window_t> skip_taskbar_windows_;
-    std::unordered_set<xcb_window_t> skip_pager_windows_;
     bool showing_desktop_ = false;
     std::unordered_map<xcb_window_t, xcb_sync_counter_t> sync_counters_;
     std::unordered_map<xcb_window_t, uint64_t> sync_values_;
@@ -214,6 +210,14 @@ private:
     bool is_client_maximized_vert(xcb_window_t window) const;
     bool is_client_shaded(xcb_window_t window) const;
     bool is_client_modal(xcb_window_t window) const;
+    bool is_client_skip_taskbar(xcb_window_t window) const;
+    bool is_client_skip_pager(xcb_window_t window) const;
+    bool is_client_demands_attention(xcb_window_t window) const;
+
+    // State setters (update Client and EWMH)
+    void set_client_skip_taskbar(xcb_window_t window, bool enabled);
+    void set_client_skip_pager(xcb_window_t window, bool enabled);
+    void set_client_demands_attention(xcb_window_t window, bool enabled);
 
     // Helpers
     Monitor& focused_monitor() { return monitors_[focused_monitor_]; }

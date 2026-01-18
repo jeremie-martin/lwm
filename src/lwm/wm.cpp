@@ -487,10 +487,8 @@ void WindowManager::scan_existing_windows()
                 desktop_windows_.push_back(window);
             }
             register_client_window(window);
-            skip_taskbar_windows_.insert(window);
-            skip_pager_windows_.insert(window);
-            ewmh_.set_window_state(window, ewmh_.get()->_NET_WM_STATE_SKIP_TASKBAR, true);
-            ewmh_.set_window_state(window, ewmh_.get()->_NET_WM_STATE_SKIP_PAGER, true);
+            set_client_skip_taskbar(window, true);
+            set_client_skip_pager(window, true);
             continue;
         }
 
@@ -503,10 +501,8 @@ void WindowManager::scan_existing_windows()
             if (type == ewmh_.get()->_NET_WM_WINDOW_TYPE_TOOLBAR || type == ewmh_.get()->_NET_WM_WINDOW_TYPE_UTILITY
                 || type == ewmh_.get()->_NET_WM_WINDOW_TYPE_SPLASH)
             {
-                skip_taskbar_windows_.insert(window);
-                skip_pager_windows_.insert(window);
-                ewmh_.set_window_state(window, ewmh_.get()->_NET_WM_STATE_SKIP_TASKBAR, true);
-                ewmh_.set_window_state(window, ewmh_.get()->_NET_WM_STATE_SKIP_PAGER, true);
+                set_client_skip_taskbar(window, true);
+                set_client_skip_pager(window, true);
             }
             if (type == ewmh_.get()->_NET_WM_WINDOW_TYPE_UTILITY)
             {
@@ -687,10 +683,8 @@ void WindowManager::handle_map_request(xcb_map_request_event_t const& e)
             desktop_windows_.push_back(e.window);
         }
         register_client_window(e.window);
-        skip_taskbar_windows_.insert(e.window);
-        skip_pager_windows_.insert(e.window);
-        ewmh_.set_window_state(e.window, ewmh_.get()->_NET_WM_STATE_SKIP_TASKBAR, true);
-        ewmh_.set_window_state(e.window, ewmh_.get()->_NET_WM_STATE_SKIP_PAGER, true);
+        set_client_skip_taskbar(e.window, true);
+        set_client_skip_pager(e.window, true);
         update_ewmh_client_list();
         conn_.flush();
         return;
@@ -730,7 +724,7 @@ void WindowManager::handle_map_request(xcb_map_request_event_t const& e)
         // Set DEMANDS_ATTENTION if urgency hint is set (ICCCM → EWMH)
         if (urgent)
         {
-            ewmh_.set_demands_attention(e.window, true);
+            set_client_demands_attention(e.window, true);
         }
         // Honor _NET_WM_DESKTOP = 0xFFFFFFFF as sticky (EWMH)
         if (is_sticky_desktop(e.window) && !is_client_sticky(e.window))
@@ -740,10 +734,8 @@ void WindowManager::handle_map_request(xcb_map_request_event_t const& e)
         if (type == ewmh_.get()->_NET_WM_WINDOW_TYPE_TOOLBAR || type == ewmh_.get()->_NET_WM_WINDOW_TYPE_UTILITY
             || type == ewmh_.get()->_NET_WM_WINDOW_TYPE_SPLASH)
         {
-            skip_taskbar_windows_.insert(e.window);
-            skip_pager_windows_.insert(e.window);
-            ewmh_.set_window_state(e.window, ewmh_.get()->_NET_WM_STATE_SKIP_TASKBAR, true);
-            ewmh_.set_window_state(e.window, ewmh_.get()->_NET_WM_STATE_SKIP_PAGER, true);
+            set_client_skip_taskbar(e.window, true);
+            set_client_skip_pager(e.window, true);
         }
         if (type == ewmh_.get()->_NET_WM_WINDOW_TYPE_UTILITY)
         {
@@ -786,7 +778,7 @@ void WindowManager::handle_map_request(xcb_map_request_event_t const& e)
     // Set DEMANDS_ATTENTION if urgency hint is set (ICCCM → EWMH)
     if (urgent)
     {
-        ewmh_.set_demands_attention(e.window, true);
+        set_client_demands_attention(e.window, true);
     }
     // Honor _NET_WM_DESKTOP = 0xFFFFFFFF as sticky (EWMH)
     if (is_sticky_desktop(e.window) && !is_client_sticky(e.window))
@@ -1071,21 +1063,13 @@ void WindowManager::handle_client_message(xcb_client_message_event_t const& e)
             }
             else if (state == ewmh->_NET_WM_STATE_SKIP_TASKBAR)
             {
-                bool enable = compute_enable(skip_taskbar_windows_.contains(e.window));
-                if (enable)
-                    skip_taskbar_windows_.insert(e.window);
-                else
-                    skip_taskbar_windows_.erase(e.window);
-                ewmh_.set_window_state(e.window, ewmh->_NET_WM_STATE_SKIP_TASKBAR, enable);
+                bool enable = compute_enable(is_client_skip_taskbar(e.window));
+                set_client_skip_taskbar(e.window, enable);
             }
             else if (state == ewmh->_NET_WM_STATE_SKIP_PAGER)
             {
-                bool enable = compute_enable(skip_pager_windows_.contains(e.window));
-                if (enable)
-                    skip_pager_windows_.insert(e.window);
-                else
-                    skip_pager_windows_.erase(e.window);
-                ewmh_.set_window_state(e.window, ewmh->_NET_WM_STATE_SKIP_PAGER, enable);
+                bool enable = compute_enable(is_client_skip_pager(e.window));
+                set_client_skip_pager(e.window, enable);
             }
             else if (state == ewmh->_NET_WM_STATE_HIDDEN)
             {
@@ -1128,8 +1112,8 @@ void WindowManager::handle_client_message(xcb_client_message_event_t const& e)
             }
             else if (state == ewmh->_NET_WM_STATE_DEMANDS_ATTENTION)
             {
-                bool enable = compute_enable(ewmh_.has_urgent_hint(e.window));
-                ewmh_.set_demands_attention(e.window, enable);
+                bool enable = compute_enable(is_client_demands_attention(e.window));
+                set_client_demands_attention(e.window, enable);
                 update_all_bars();
             }
         };
@@ -1166,7 +1150,7 @@ void WindowManager::handle_client_message(xcb_client_message_event_t const& e)
                 if (timestamp < active_time_it->second)
                 {
                     LWM_DEBUG("Focus stealing prevented, setting demands attention");
-                    ewmh_.set_demands_attention(window, true);
+                    set_client_demands_attention(window, true);
                     update_all_bars();
                     return;
                 }
@@ -1591,11 +1575,11 @@ void WindowManager::handle_property_notify(xcb_property_notify_event_t const& e)
                 // Set DEMANDS_ATTENTION if urgent, unless this window is already focused
                 if (urgent && e.window != active_window_)
                 {
-                    ewmh_.set_demands_attention(e.window, true);
+                    set_client_demands_attention(e.window, true);
                 }
                 else if (!urgent)
                 {
-                    ewmh_.set_demands_attention(e.window, false);
+                    set_client_demands_attention(e.window, false);
                 }
             }
         }
@@ -1880,17 +1864,14 @@ void WindowManager::manage_window(xcb_window_t window, bool start_iconic)
     }
     update_all_bars();
 
+    // Honor existing _NET_WM_STATE flags
     if (ewmh_.has_window_state(window, ewmh_.get()->_NET_WM_STATE_SKIP_TASKBAR))
     {
-        skip_taskbar_windows_.insert(window);
-        if (auto* client = get_client(window))
-            client->skip_taskbar = true;
+        set_client_skip_taskbar(window, true);
     }
     if (ewmh_.has_window_state(window, ewmh_.get()->_NET_WM_STATE_SKIP_PAGER))
     {
-        skip_pager_windows_.insert(window);
-        if (auto* client = get_client(window))
-            client->skip_pager = true;
+        set_client_skip_pager(window, true);
     }
 
     // Honor _NET_WM_DESKTOP = 0xFFFFFFFF as sticky at manage time
@@ -2157,30 +2138,20 @@ void WindowManager::manage_floating_window(xcb_window_t window, bool start_iconi
     // Set SKIP_TASKBAR and SKIP_PAGER unless the window explicitly overrides this
     if (transient && !ewmh_.has_window_state(window, ewmh_.get()->_NET_WM_STATE_SKIP_TASKBAR))
     {
-        skip_taskbar_windows_.insert(window);
-        if (auto* client = get_client(window))
-            client->skip_taskbar = true;
-        ewmh_.set_window_state(window, ewmh_.get()->_NET_WM_STATE_SKIP_TASKBAR, true);
+        set_client_skip_taskbar(window, true);
     }
     if (transient && !ewmh_.has_window_state(window, ewmh_.get()->_NET_WM_STATE_SKIP_PAGER))
     {
-        skip_pager_windows_.insert(window);
-        if (auto* client = get_client(window))
-            client->skip_pager = true;
-        ewmh_.set_window_state(window, ewmh_.get()->_NET_WM_STATE_SKIP_PAGER, true);
+        set_client_skip_pager(window, true);
     }
     // Also honor explicit client requests
     if (ewmh_.has_window_state(window, ewmh_.get()->_NET_WM_STATE_SKIP_TASKBAR))
     {
-        skip_taskbar_windows_.insert(window);
-        if (auto* client = get_client(window))
-            client->skip_taskbar = true;
+        set_client_skip_taskbar(window, true);
     }
     if (ewmh_.has_window_state(window, ewmh_.get()->_NET_WM_STATE_SKIP_PAGER))
     {
-        skip_pager_windows_.insert(window);
-        if (auto* client = get_client(window))
-            client->skip_pager = true;
+        set_client_skip_pager(window, true);
     }
 
     // Honor _NET_WM_DESKTOP = 0xFFFFFFFF as sticky at manage time
@@ -2235,10 +2206,6 @@ void WindowManager::unmanage_window(xcb_window_t window)
         uint32_t data[] = { WM_STATE_WITHDRAWN, 0 };
         xcb_change_property(conn_.get(), XCB_PROP_MODE_REPLACE, window, wm_state_, wm_state_, 32, 2, data);
     }
-
-    // Legacy state sets (kept until all state is migrated to Client)
-    skip_taskbar_windows_.erase(window);
-    skip_pager_windows_.erase(window);
 
     // Tracking state that remains outside Client
     fullscreen_monitors_.erase(window);
@@ -2300,10 +2267,6 @@ void WindowManager::unmanage_floating_window(xcb_window_t window)
         uint32_t data[] = { WM_STATE_WITHDRAWN, 0 };
         xcb_change_property(conn_.get(), XCB_PROP_MODE_REPLACE, window, wm_state_, wm_state_, 32, 2, data);
     }
-
-    // Legacy state sets (kept until all state is migrated to Client)
-    skip_taskbar_windows_.erase(window);
-    skip_pager_windows_.erase(window);
 
     // Tracking state that remains outside Client
     fullscreen_monitors_.erase(window);
@@ -2423,7 +2386,7 @@ void WindowManager::focus_window(xcb_window_t window)
     }
 
     // Clear urgent hint when window receives focus
-    ewmh_.set_demands_attention(window, false);
+    set_client_demands_attention(window, false);
     ewmh_.set_active_window(window);
     if (net_wm_state_focused_ != XCB_NONE)
     {
@@ -2520,7 +2483,7 @@ void WindowManager::focus_floating_window(xcb_window_t window)
     uint32_t stack_mode = XCB_STACK_MODE_ABOVE;
     xcb_configure_window(conn_.get(), window, XCB_CONFIG_WINDOW_STACK_MODE, &stack_mode);
 
-    ewmh_.set_demands_attention(window, false);
+    set_client_demands_attention(window, false);
     ewmh_.set_active_window(window);
     if (net_wm_state_focused_ != XCB_NONE)
     {
@@ -2853,6 +2816,30 @@ void WindowManager::set_window_modal(xcb_window_t window, bool enabled)
     {
         set_window_above(window, true);
     }
+}
+
+void WindowManager::set_client_skip_taskbar(xcb_window_t window, bool enabled)
+{
+    if (auto* client = get_client(window))
+        client->skip_taskbar = enabled;
+
+    ewmh_.set_window_state(window, ewmh_.get()->_NET_WM_STATE_SKIP_TASKBAR, enabled);
+}
+
+void WindowManager::set_client_skip_pager(xcb_window_t window, bool enabled)
+{
+    if (auto* client = get_client(window))
+        client->skip_pager = enabled;
+
+    ewmh_.set_window_state(window, ewmh_.get()->_NET_WM_STATE_SKIP_PAGER, enabled);
+}
+
+void WindowManager::set_client_demands_attention(xcb_window_t window, bool enabled)
+{
+    if (auto* client = get_client(window))
+        client->demands_attention = enabled;
+
+    ewmh_.set_demands_attention(window, enabled);
 }
 
 void WindowManager::apply_fullscreen_if_needed(xcb_window_t window)
@@ -3610,6 +3597,27 @@ bool WindowManager::is_client_modal(xcb_window_t window) const
 {
     if (auto const* c = get_client(window))
         return c->modal;
+    return false;
+}
+
+bool WindowManager::is_client_skip_taskbar(xcb_window_t window) const
+{
+    if (auto const* c = get_client(window))
+        return c->skip_taskbar;
+    return false;
+}
+
+bool WindowManager::is_client_skip_pager(xcb_window_t window) const
+{
+    if (auto const* c = get_client(window))
+        return c->skip_pager;
+    return false;
+}
+
+bool WindowManager::is_client_demands_attention(xcb_window_t window) const
+{
+    if (auto const* c = get_client(window))
+        return c->demands_attention;
     return false;
 }
 
@@ -4764,8 +4772,6 @@ void WindowManager::unmanage_desktop_window(xcb_window_t window)
     if (it != desktop_windows_.end())
     {
         desktop_windows_.erase(it);
-        skip_taskbar_windows_.erase(window);
-        skip_pager_windows_.erase(window);
         client_order_.erase(window);
         update_ewmh_client_list();
     }
