@@ -199,10 +199,9 @@ struct Monitor {
 ## Adding Features
 
 **New keybind action:**
-1. Add action type enum in `keybind.hpp`
+1. Handle action string in `wm_events.cpp` handle_key_press (actions are compared as strings)
 2. Parse in `config.cpp`
-3. Handle in `wm_events.cpp` handle_key_press
-4. Document in `config.toml.example` and `README.md`
+3. Document in `config.toml.example` and `README.md`
 
 **New layout:**
 1. Add layout mode to Layout class

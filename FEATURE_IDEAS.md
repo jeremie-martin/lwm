@@ -43,13 +43,11 @@ new concepts. The goal is to keep the system simple, consistent, and future-proo
 
 - Per-workspace layout toggle (e.g., master-stack <-> monocle).
 - Layout ratio control (grow/shrink master, swap master).
-- "Send to monitor and follow" (move focused window and switch to target).
 - "Focus next/prev window in stack" (cyclic focus without changing order).
 - "Swap with next/prev" (reorder without dragging).
 - "Move within stack" (nudge up/down in stack).
 - Smart focus restore after window close (prefer last focused non-iconic).
 - Config option: focus new windows or not (spawn follow).
-- Config option: warp pointer on monitor switch (on/off).
 - Config option: focus-follows-mouse on/off.
 - Config option: tiling padding per monitor/workspace.
 - Toggle borders per-workspace or per-window.

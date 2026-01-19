@@ -121,6 +121,22 @@ LWM supports the following keybinding actions:
 | `move_to_monitor_left` | None | Move window to monitor on left, follow it |
 | `move_to_monitor_right` | None | Move window to monitor on right, follow it |
 
+### Default Keybindings
+
+Common default keybindings:
+
+| Action | Key |
+|--------|------|
+| Launch terminal | Super+Return |
+| Launch app launcher | Super+d |
+| Close window | Super+q |
+| Switch workspace 1-10 | Super+1..0 (QWERTY) or Super+&..= (AZERTY) |
+| Move window to workspace 1-10 | Super+Shift+1..0 or Super+Shift+&..= |
+| Focus monitor left/right | Super+Left/Right |
+| Move window to adjacent monitor | Super+Shift+Left/Right |
+
+See `config.toml.example` for the complete default configuration including AZERTY support.
+
 ### Modifier Keys
 
 Modifiers can be combined with `+`:

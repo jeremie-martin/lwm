@@ -60,12 +60,6 @@ command = "terminal"
 
 [[keybinds]]
 mod = "super"
-key = "f"
-action = "spawn"
-command = "browser"
-
-[[keybinds]]
-mod = "super"
 key = "d"
 action = "spawn"
 command = "launcher"
@@ -74,11 +68,6 @@ command = "launcher"
 mod = "super"
 key = "q"
 action = "kill"
-
-[[keybinds]]
-mod = "super"
-key = "Tab"
-action = "toggle_workspace"
 
 # Workspace switching (AZERTY layout)
 [[keybinds]]
