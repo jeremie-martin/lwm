@@ -185,11 +185,10 @@ new concepts. The goal is to keep the system simple, consistent, and future-proo
 
 ## Open Questions / Decisions Needed
 
-1) Should we allow sticky windows? If yes, do they appear on all monitors or only the current one?
-2) Do we want any tag-like multi-assignment or keep strict workspaces?
-3) Do we want true dynamic layouts (params per workspace), or global?
-4) Should tiled windows ever respond to client move/resize requests?
-5) Should focus follow pointer always, or be configurable per-monitor?
+1) Do we want any tag-like multi-assignment or keep strict workspaces?
+2) Do we want true dynamic layouts (params per workspace), or global?
+3) Should tiled windows ever respond to client move/resize requests?
+4) Should focus follow pointer be configurable per-monitor?
 
 ---
 
