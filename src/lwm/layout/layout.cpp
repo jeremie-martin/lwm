@@ -1,6 +1,5 @@
 #include "layout.hpp"
 #include <limits>
-#include <xcb/xcb_icccm.h>
 
 namespace lwm::layout_policy {
 
@@ -251,34 +250,14 @@ void Layout::set_sync_request_callback(std::function<void(xcb_window_t)> callbac
 
 void Layout::apply_size_hints(xcb_window_t window, uint32_t& width, uint32_t& height) const
 {
-    xcb_size_hints_t hints;
-    xcb_generic_error_t* error = nullptr;
-    if (!xcb_icccm_get_wm_normal_hints_reply(
-            conn_.get(),
-            xcb_icccm_get_wm_normal_hints(conn_.get(), window),
-            &hints,
-            &error
-        ))
-    {
-        if (error)
-            free(error);
-        return;
-    }
-    if (error)
-        free(error);
-
-    // Only enforce minimum size constraints.
-    // We intentionally ignore:
-    // - Base size and resize increments (pixel-granular resizing for all windows)
-    // - Maximum size (tiling WM controls sizing)
-    // - Aspect ratio (could cause unexpected gaps)
-    // This ensures windows fill their allocated space completely.
-
-    if (hints.flags & XCB_ICCCM_SIZE_HINT_P_MIN_SIZE)
-    {
-        width = std::max<uint32_t>(width, hints.min_width);
-        height = std::max<uint32_t>(height, hints.min_height);
-    }
+    // For tiled windows, we intentionally ignore ALL size hints including minimum size.
+    // The WM controls tiled window geometry completely. If a window specifies a minimum
+    // size larger than its allocated slot, honoring it causes overlap with other windows.
+    // This matches the behavior of other tiling WMs (DWM, i3, bspwm).
+    //
+    // Applications should handle being smaller than their preferred size gracefully.
+    // Most modern toolkits (Qt, GTK) do this by scrolling, truncating, or adapting layout.
+    (void)window;  // Unused - kept for potential future per-window logic
 
     width = std::max<uint32_t>(1, width);
     height = std::max<uint32_t>(1, height);
