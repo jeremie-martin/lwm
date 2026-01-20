@@ -7,6 +7,7 @@ add_library(liblwm STATIC
     layout/layout.cpp
     keybind/keybind.cpp
     bar/bar.cpp
+    wm_focus.cpp
     wm.cpp
     wm_events.cpp
     wm_drag.cpp
