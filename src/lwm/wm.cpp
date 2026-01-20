@@ -2178,10 +2178,24 @@ void WindowManager::focus_or_fallback(Monitor& monitor)
         floating_candidates.push_back({ fw.id, c->monitor, c->workspace, c->sticky });
     }
 
+    std::vector<xcb_window_t> sticky_tiled_candidates;
+    sticky_tiled_candidates.reserve(ws.windows.size());
+    for (size_t w = 0; w < monitor.workspaces.size(); ++w)
+    {
+        if (w == monitor.current_workspace)
+            continue;
+        for (xcb_window_t window : monitor.workspaces[w].windows)
+        {
+            if (is_client_sticky(window))
+                sticky_tiled_candidates.push_back(window);
+        }
+    }
+
     auto selection = focus_policy::select_focus_candidate(
         ws,
         monitor_idx,
         monitor.current_workspace,
+        sticky_tiled_candidates,
         floating_candidates,
         eligible
     );

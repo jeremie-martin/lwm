@@ -91,6 +91,7 @@ inline std::optional<FocusSelection> select_focus_candidate(
     Workspace const& workspace,
     size_t monitor_idx,
     size_t workspace_idx,
+    std::span<xcb_window_t const> sticky_tiled,
     std::span<FloatingCandidate const> floating_mru,
     std::function<bool(xcb_window_t)> const& is_eligible
 )
@@ -107,6 +108,12 @@ inline std::optional<FocusSelection> select_focus_candidate(
     }
 
     for (auto it = workspace.windows.rbegin(); it != workspace.windows.rend(); ++it)
+    {
+        if (eligible(*it))
+            return FocusSelection{ *it, false };
+    }
+
+    for (auto it = sticky_tiled.rbegin(); it != sticky_tiled.rend(); ++it)
     {
         if (eligible(*it))
             return FocusSelection{ *it, false };
