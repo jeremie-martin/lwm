@@ -121,7 +121,8 @@ private:
     xcb_atom_t net_wm_state_focused_ = XCB_NONE;
     bool suppress_focus_ = false;
     uint32_t last_event_time_ = XCB_CURRENT_TIME;
-    std::chrono::steady_clock::time_point last_toggle_workspace_time_{};
+    xcb_keysym_t last_toggle_keysym_ = XCB_NO_SYMBOL;  // Track toggle key to ignore auto-repeat
+    bool toggle_key_released_ = true;                  // Allow next toggle only after key release
     DragState drag_state_;
     std::vector<MouseBinding> mousebinds_;
 
@@ -144,6 +145,7 @@ private:
     void handle_button_press(xcb_button_press_event_t const& e);
     void handle_button_release(xcb_button_release_event_t const& e);
     void handle_key_press(xcb_key_press_event_t const& e);
+    void handle_key_release(xcb_key_release_event_t const& e);
     void handle_client_message(xcb_client_message_event_t const& e);
     void handle_configure_request(xcb_configure_request_event_t const& e);
     void handle_property_notify(xcb_property_notify_event_t const& e);

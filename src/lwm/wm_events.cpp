@@ -106,6 +106,9 @@ void WindowManager::handle_event(xcb_generic_event_t const& event)
         case XCB_KEY_PRESS:
             handle_key_press(reinterpret_cast<xcb_key_press_event_t const&>(event));
             break;
+        case XCB_KEY_RELEASE:
+            handle_key_release(reinterpret_cast<xcb_key_release_event_t const&>(event));
+            break;
         case XCB_CLIENT_MESSAGE:
             handle_client_message(reinterpret_cast<xcb_client_message_event_t const&>(event));
             break;
@@ -466,6 +469,12 @@ void WindowManager::handle_key_press(xcb_key_press_event_t const& e)
     }
     else if (action->type == "toggle_workspace")
     {
+        // Prevent key auto-repeat from triggering multiple toggles.
+        // Only toggle on the first keypress; ignore until key is released.
+        if (keysym == last_toggle_keysym_ && !toggle_key_released_)
+            return;
+        last_toggle_keysym_ = keysym;
+        toggle_key_released_ = false;
         toggle_workspace();
     }
     else if (action->type == "move_to_workspace" && action->workspace >= 0)
@@ -491,6 +500,18 @@ void WindowManager::handle_key_press(xcb_key_press_event_t const& e)
     else if (action->type == "spawn")
     {
         launch_program(keybinds_.resolve_command(action->command, config_));
+    }
+}
+
+void WindowManager::handle_key_release(xcb_key_release_event_t const& e)
+{
+    xcb_keysym_t keysym = xcb_key_press_lookup_keysym(conn_.keysyms(), const_cast<xcb_key_release_event_t*>(&e), 0);
+
+    // Reset toggle key state when the key is released.
+    // This allows the next press to trigger a toggle.
+    if (keysym == last_toggle_keysym_)
+    {
+        toggle_key_released_ = true;
     }
 }
 

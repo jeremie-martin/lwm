@@ -38,13 +38,6 @@ void WindowManager::toggle_workspace()
     if (target >= workspace_count || target == monitor.current_workspace)
         return;
 
-    constexpr auto debounce = std::chrono::milliseconds(150);
-    auto now = std::chrono::steady_clock::now();
-    // Temporary debounce to avoid rapid re-entry from event storms; remove if root cause is fixed.
-    if (now - last_toggle_workspace_time_ < debounce)
-        return;
-    last_toggle_workspace_time_ = now;
-
     switch_workspace(static_cast<int>(target));
 }
 
