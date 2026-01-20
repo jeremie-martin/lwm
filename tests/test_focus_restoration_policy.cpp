@@ -52,6 +52,23 @@ TEST_CASE("Focus restoration falls back to last eligible tiled window", "[focus]
     REQUIRE_FALSE(selection->is_floating);
 }
 
+TEST_CASE("Focus restoration ignores stale focused window", "[focus][policy]")
+{
+    Workspace ws = make_workspace({ 0x1000, 0x2000 }, 0x9999);
+
+    std::unordered_set<xcb_window_t> eligible_set = { 0x1000, 0x2000 };
+    auto eligible = [&](xcb_window_t window) { return eligible_set.contains(window); };
+
+    std::vector<focus_policy::FloatingCandidate> floating;
+    std::vector<xcb_window_t> sticky_tiled;
+
+    auto selection = focus_policy::select_focus_candidate(ws, 0, 0, sticky_tiled, floating, eligible);
+
+    REQUIRE(selection);
+    REQUIRE(selection->window == 0x2000);
+    REQUIRE_FALSE(selection->is_floating);
+}
+
 TEST_CASE("Focus restoration falls back to floating MRU", "[focus][policy]")
 {
     Workspace ws = make_workspace({ 0x1000 }, 0x1000);
@@ -71,6 +88,23 @@ TEST_CASE("Focus restoration falls back to floating MRU", "[focus][policy]")
     REQUIRE(selection);
     REQUIRE(selection->window == 0x6000);
     REQUIRE(selection->is_floating);
+}
+
+TEST_CASE("Floating candidate on another monitor is ignored even if sticky", "[focus][policy]")
+{
+    Workspace ws = make_workspace({}, XCB_NONE);
+
+    std::unordered_set<xcb_window_t> eligible_set = { 0x8000 };
+    auto eligible = [&](xcb_window_t window) { return eligible_set.contains(window); };
+
+    std::vector<focus_policy::FloatingCandidate> floating = {
+        { 0x8000, 1, 0, true },
+    };
+
+    std::vector<xcb_window_t> sticky_tiled;
+    auto selection = focus_policy::select_focus_candidate(ws, 0, 0, sticky_tiled, floating, eligible);
+
+    REQUIRE_FALSE(selection);
 }
 
 TEST_CASE("Sticky tiled candidate is eligible across workspaces", "[focus][policy]")

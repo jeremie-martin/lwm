@@ -74,6 +74,25 @@ TEST_CASE("Move tiled window updates focus fallback", "[workspace][policy]")
     REQUIRE(monitor.workspaces[1].focused_window == 0x3000);
 }
 
+TEST_CASE("Move tiled window clears focus when remaining windows are iconic", "[workspace][policy]")
+{
+    Monitor monitor = make_monitor(2);
+    monitor.current_workspace = 0;
+    monitor.workspaces[0].windows = { 0x1000, 0x2000 };
+    monitor.workspaces[0].focused_window = 0x2000;
+
+    std::unordered_set<xcb_window_t> iconic = { 0x1000 };
+    auto is_iconic = [&](xcb_window_t window) { return iconic.contains(window); };
+
+    bool moved = workspace_policy::move_tiled_window(monitor, 0x2000, 1, is_iconic);
+
+    REQUIRE(moved);
+    REQUIRE(monitor.workspaces[0].windows == std::vector<xcb_window_t>{ 0x1000 });
+    REQUIRE(monitor.workspaces[0].focused_window == XCB_NONE);
+    REQUIRE(monitor.workspaces[1].windows == std::vector<xcb_window_t>{ 0x2000 });
+    REQUIRE(monitor.workspaces[1].focused_window == 0x2000);
+}
+
 TEST_CASE("Moving non-focused window preserves focus", "[workspace][policy]")
 {
     Monitor monitor = make_monitor(2);
