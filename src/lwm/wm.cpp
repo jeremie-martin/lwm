@@ -1324,16 +1324,12 @@ void WindowManager::focus_floating_window(xcb_window_t window)
     update_ewmh_current_desktop();
 
     // Keep most-recently-focused floating window at the end.
-    auto it = std::find_if(
-        floating_windows_.begin(),
-        floating_windows_.end(),
-        [window](FloatingWindow const& fw) { return fw.id == window; }
-    );
-    if (it != floating_windows_.end() && (it + 1) != floating_windows_.end())
+    if (focus_policy::promote_mru(
+            floating_windows_,
+            window,
+            [](FloatingWindow const& fw) { return fw.id; }
+        ))
     {
-        FloatingWindow saved = *it;
-        floating_windows_.erase(it);
-        floating_windows_.push_back(saved);
         floating_window = &floating_windows_.back();
     }
 
@@ -2179,7 +2175,7 @@ void WindowManager::focus_or_fallback(Monitor& monitor)
         auto const* c = get_client(fw.id);
         if (!c)
             continue;
-        floating_candidates.push_back({ fw.id, c->monitor, c->workspace });
+        floating_candidates.push_back({ fw.id, c->monitor, c->workspace, c->sticky });
     }
 
     auto selection = focus_policy::select_focus_candidate(

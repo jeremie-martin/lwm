@@ -1,5 +1,6 @@
 #pragma once
 
+#include <algorithm>
 #include "lwm/core/types.hpp"
 #include <functional>
 #include <optional>
@@ -77,6 +78,7 @@ struct FloatingCandidate
     xcb_window_t id = XCB_NONE;
     size_t monitor = 0;
     size_t workspace = 0;
+    bool sticky = false;
 };
 
 struct FocusSelection
@@ -112,13 +114,30 @@ inline std::optional<FocusSelection> select_focus_candidate(
 
     for (auto it = floating_mru.rbegin(); it != floating_mru.rend(); ++it)
     {
-        if (it->monitor != monitor_idx || it->workspace != workspace_idx)
+        if (it->monitor != monitor_idx)
+            continue;
+        if (!it->sticky && it->workspace != workspace_idx)
             continue;
         if (eligible(it->id))
             return FocusSelection{ it->id, true };
     }
 
     return std::nullopt;
+}
+
+template <typename T, typename IdGetter>
+inline bool promote_mru(std::vector<T>& items, xcb_window_t id, IdGetter get_id)
+{
+    auto it = std::find_if(items.begin(), items.end(), [&](T const& item) { return get_id(item) == id; });
+    if (it == items.end())
+        return false;
+    if ((it + 1) == items.end())
+        return false;
+
+    T saved = *it;
+    items.erase(it);
+    items.push_back(saved);
+    return true;
 }
 
 } // namespace lwm::focus_policy

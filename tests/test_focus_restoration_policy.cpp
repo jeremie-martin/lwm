@@ -70,6 +70,70 @@ TEST_CASE("Focus restoration falls back to floating MRU", "[focus][policy]")
     REQUIRE(selection->is_floating);
 }
 
+TEST_CASE("Sticky floating candidate is eligible across workspaces", "[focus][policy]")
+{
+    Workspace ws = make_workspace({}, XCB_NONE);
+
+    std::unordered_set<xcb_window_t> eligible_set = { 0x8000 };
+    auto eligible = [&](xcb_window_t window) { return eligible_set.contains(window); };
+
+    std::vector<focus_policy::FloatingCandidate> floating = {
+        { 0x8000, 0, 0, true },
+    };
+
+    auto selection = focus_policy::select_focus_candidate(ws, 0, 1, floating, eligible);
+
+    REQUIRE(selection);
+    REQUIRE(selection->window == 0x8000);
+    REQUIRE(selection->is_floating);
+}
+
+TEST_CASE("Non-sticky floating on another workspace is ignored", "[focus][policy]")
+{
+    Workspace ws = make_workspace({}, XCB_NONE);
+
+    std::unordered_set<xcb_window_t> eligible_set = { 0x9000 };
+    auto eligible = [&](xcb_window_t window) { return eligible_set.contains(window); };
+
+    std::vector<focus_policy::FloatingCandidate> floating = {
+        { 0x9000, 0, 0, false },
+    };
+
+    auto selection = focus_policy::select_focus_candidate(ws, 0, 1, floating, eligible);
+
+    REQUIRE_FALSE(selection);
+}
+
+TEST_CASE("Floating MRU promotion moves item to end", "[focus][policy]")
+{
+    std::vector<xcb_window_t> items = { 0x1000, 0x2000, 0x3000 };
+
+    bool moved = focus_policy::promote_mru(items, 0x2000, [](xcb_window_t value) { return value; });
+
+    REQUIRE(moved);
+    REQUIRE(items == std::vector<xcb_window_t>{ 0x1000, 0x3000, 0x2000 });
+}
+
+TEST_CASE("Floating MRU promotion is a no-op for last item", "[focus][policy]")
+{
+    std::vector<xcb_window_t> items = { 0x1000, 0x2000 };
+
+    bool moved = focus_policy::promote_mru(items, 0x2000, [](xcb_window_t value) { return value; });
+
+    REQUIRE_FALSE(moved);
+    REQUIRE(items == std::vector<xcb_window_t>{ 0x1000, 0x2000 });
+}
+
+TEST_CASE("Floating MRU promotion ignores missing items", "[focus][policy]")
+{
+    std::vector<xcb_window_t> items = { 0x1000, 0x2000 };
+
+    bool moved = focus_policy::promote_mru(items, 0x9999, [](xcb_window_t value) { return value; });
+
+    REQUIRE_FALSE(moved);
+    REQUIRE(items == std::vector<xcb_window_t>{ 0x1000, 0x2000 });
+}
+
 TEST_CASE("Focus restoration returns none when no candidates", "[focus][policy]")
 {
     Workspace ws = make_workspace({}, XCB_NONE);
