@@ -10,6 +10,7 @@ add_executable(lwm_tests
     test_ewmh_classification.cpp
     test_ewmh_policy.cpp
     test_focus_policy.cpp
+    test_focus_restoration_policy.cpp
     test_focus_visibility_policy.cpp
     test_floating_policy.cpp
     test_layout_policy.cpp

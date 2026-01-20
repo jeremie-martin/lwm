@@ -72,6 +72,55 @@ inline bool is_focus_eligible(Client::Kind kind, bool accepts_input_focus, bool 
     return accepts_input_focus || supports_take_focus;
 }
 
+struct FloatingCandidate
+{
+    xcb_window_t id = XCB_NONE;
+    size_t monitor = 0;
+    size_t workspace = 0;
+};
+
+struct FocusSelection
+{
+    xcb_window_t window = XCB_NONE;
+    bool is_floating = false;
+};
+
+inline std::optional<FocusSelection> select_focus_candidate(
+    Workspace const& workspace,
+    size_t monitor_idx,
+    size_t workspace_idx,
+    std::span<FloatingCandidate const> floating_mru,
+    std::function<bool(xcb_window_t)> const& is_eligible
+)
+{
+    auto eligible = [&](xcb_window_t window) {
+        return window != XCB_NONE && is_eligible(window);
+    };
+
+    if (workspace.focused_window != XCB_NONE
+        && workspace.find_window(workspace.focused_window) != workspace.windows.end()
+        && eligible(workspace.focused_window))
+    {
+        return FocusSelection{ workspace.focused_window, false };
+    }
+
+    for (auto it = workspace.windows.rbegin(); it != workspace.windows.rend(); ++it)
+    {
+        if (eligible(*it))
+            return FocusSelection{ *it, false };
+    }
+
+    for (auto it = floating_mru.rbegin(); it != floating_mru.rend(); ++it)
+    {
+        if (it->monitor != monitor_idx || it->workspace != workspace_idx)
+            continue;
+        if (eligible(it->id))
+            return FocusSelection{ it->id, true };
+    }
+
+    return std::nullopt;
+}
+
 } // namespace lwm::focus_policy
 
 namespace lwm::workspace_policy {

@@ -2168,54 +2168,38 @@ void WindowManager::focus_or_fallback(Monitor& monitor)
         return;
     }
 
-    auto eligible = [this](xcb_window_t window)
-    { return window != XCB_NONE && !is_client_iconic(window) && is_focus_eligible(window); };
+    auto eligible = [this](xcb_window_t window) {
+        return !is_client_iconic(window) && is_focus_eligible(window);
+    };
 
-    // Verify focused_window actually exists in the workspace (defensive programming)
-    if (ws.focused_window != XCB_NONE && ws.find_window(ws.focused_window) != ws.windows.end()
-        && eligible(ws.focused_window))
+    std::vector<focus_policy::FloatingCandidate> floating_candidates;
+    floating_candidates.reserve(floating_windows_.size());
+    for (auto const& fw : floating_windows_)
     {
-        focus_window(ws.focused_window);
+        auto const* c = get_client(fw.id);
+        if (!c)
+            continue;
+        floating_candidates.push_back({ fw.id, c->monitor, c->workspace });
     }
+
+    auto selection = focus_policy::select_focus_candidate(
+        ws,
+        monitor_idx,
+        monitor.current_workspace,
+        floating_candidates,
+        eligible
+    );
+
+    if (!selection)
+    {
+        clear_focus();
+        return;
+    }
+
+    if (selection->is_floating)
+        focus_floating_window(selection->window);
     else
-    {
-        xcb_window_t candidate = XCB_NONE;
-        for (auto it = ws.windows.rbegin(); it != ws.windows.rend(); ++it)
-        {
-            if (eligible(*it))
-            {
-                candidate = *it;
-                break;
-            }
-        }
-        if (candidate != XCB_NONE)
-        {
-            // focused_window was stale or XCB_NONE - focus last visible window
-            focus_window(candidate);
-        }
-        else
-        {
-            auto it = std::find_if(
-                floating_windows_.rbegin(),
-                floating_windows_.rend(),
-                [&](FloatingWindow const& fw)
-                {
-                    auto const* c = get_client(fw.id);
-                    return c && c->monitor == monitor_idx
-                        && c->workspace == monitor.current_workspace && eligible(fw.id);
-                }
-            );
-            if (it != floating_windows_.rend())
-            {
-                focus_floating_window(it->id);
-            }
-            else
-            {
-                // No windows - clear focus per EWMH spec
-                clear_focus();
-            }
-        }
-    }
+        focus_window(selection->window);
 }
 
 void WindowManager::focus_monitor(int direction)
