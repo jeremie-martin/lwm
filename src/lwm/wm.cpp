@@ -2,6 +2,7 @@
 #include "lwm/core/floating.hpp"
 #include "lwm/core/focus.hpp"
 #include "lwm/core/log.hpp"
+#include "lwm/core/policy.hpp"
 #include <algorithm>
 #include <chrono>
 #include <csignal>
@@ -2017,22 +2018,18 @@ void WindowManager::rearrange_all_monitors()
 void WindowManager::switch_workspace(int ws)
 {
     auto& monitor = focused_monitor();
-    size_t workspace_count = monitor.workspaces.size();
-    if (workspace_count == 0)
+    auto switch_result = workspace_policy::apply_workspace_switch(monitor, ws);
+    if (!switch_result)
         return;
 
-    if (ws < 0 || static_cast<size_t>(ws) >= workspace_count || static_cast<size_t>(ws) == monitor.current_workspace)
-        return;
-
-    monitor.previous_workspace = monitor.current_workspace;
-    for (xcb_window_t window : monitor.current().windows)
+    auto& old_workspace = monitor.workspaces[switch_result->old_workspace];
+    for (xcb_window_t window : old_workspace.windows)
     {
         if (is_client_sticky(window))
             continue;
         wm_unmap_window(window);
     }
 
-    monitor.current_workspace = static_cast<size_t>(ws);
     update_ewmh_current_desktop();
     rearrange_monitor(monitor);
     update_floating_visibility(focused_monitor_);
@@ -2075,9 +2072,8 @@ void WindowManager::move_window_to_workspace(int ws)
     if (active_window_ == XCB_NONE)
         return;
 
-    auto& current_ws = monitor.current();
-
     xcb_window_t window_to_move = active_window_;
+    size_t target_ws = static_cast<size_t>(ws);
 
     if (find_floating_window(window_to_move))
     {
@@ -2085,7 +2081,6 @@ void WindowManager::move_window_to_workspace(int ws)
         if (!client)
             return;
 
-        size_t target_ws = static_cast<size_t>(ws);
         size_t monitor_idx = client->monitor;
 
         // Update Client workspace (authoritative)
@@ -2104,28 +2099,15 @@ void WindowManager::move_window_to_workspace(int ws)
         return;
     }
 
-    auto it = current_ws.find_window(window_to_move);
-    if (it == current_ws.windows.end())
-        return;
-
-    xcb_window_t moved_window = *it;
-    current_ws.windows.erase(it);
-    if (current_ws.focused_window == window_to_move)
+    if (!workspace_policy::move_tiled_window(
+            monitor,
+            window_to_move,
+            target_ws,
+            [this](xcb_window_t window) { return is_client_iconic(window); }
+        ))
     {
-        current_ws.focused_window = XCB_NONE;
-        for (auto rit = current_ws.windows.rbegin(); rit != current_ws.windows.rend(); ++rit)
-        {
-            if (!is_client_iconic(*rit))
-            {
-                current_ws.focused_window = *rit;
-                break;
-            }
-        }
+        return;
     }
-
-    size_t target_ws = static_cast<size_t>(ws);
-    monitor.workspaces[target_ws].windows.push_back(moved_window);
-    monitor.workspaces[target_ws].focused_window = window_to_move;
 
     // Update Client workspace for O(1) lookup
     if (auto* client = get_client(window_to_move))
@@ -2507,8 +2489,11 @@ std::optional<std::pair<size_t, size_t>> WindowManager::resolve_window_desktop(x
     if (!desktop)
         return std::nullopt;
 
-    size_t monitor_idx = static_cast<size_t>(*desktop / config_.workspaces.count);
-    size_t workspace_idx = static_cast<size_t>(*desktop % config_.workspaces.count);
+    auto indices = ewmh_policy::desktop_to_indices(*desktop, config_.workspaces.count);
+    if (!indices)
+        return std::nullopt;
+    size_t monitor_idx = indices->first;
+    size_t workspace_idx = indices->second;
 
     if (monitor_idx >= monitors_.size())
         return std::nullopt;
@@ -2543,20 +2528,17 @@ std::optional<xcb_window_t> WindowManager::transient_for_window(xcb_window_t win
 
 bool WindowManager::is_window_visible(xcb_window_t window) const
 {
-    if (showing_desktop_)
-        return false;
-    if (is_client_iconic(window))
-        return false;
-
     auto const* client = get_client(window);
     if (!client)
         return false;
-
-    if (client->monitor >= monitors_.size())
-        return false;
-    if (is_client_sticky(window))
-        return true;
-    return client->workspace == monitors_[client->monitor].current_workspace;
+    return visibility_policy::is_window_visible(
+        showing_desktop_,
+        is_client_iconic(window),
+        is_client_sticky(window),
+        client->monitor,
+        client->workspace,
+        monitors_
+    );
 }
 
 void WindowManager::restack_transients(xcb_window_t parent)
@@ -2596,11 +2578,7 @@ bool WindowManager::is_override_redirect_window(xcb_window_t window) const
 
 bool WindowManager::is_workspace_visible(size_t monitor_idx, size_t workspace_idx) const
 {
-    if (showing_desktop_)
-        return false;
-    if (monitor_idx >= monitors_.size())
-        return false;
-    return workspace_idx == monitors_[monitor_idx].current_workspace;
+    return visibility_policy::is_workspace_visible(showing_desktop_, monitor_idx, workspace_idx, monitors_);
 }
 
 std::optional<WindowManager::ActiveWindowInfo> WindowManager::get_active_window_info() const
@@ -2813,15 +2791,23 @@ bool WindowManager::supports_protocol(xcb_window_t window, xcb_atom_t protocol) 
 bool WindowManager::is_focus_eligible(xcb_window_t window) const
 {
     // Dock and desktop windows are never focus-eligible (per BEHAVIOR.md)
+    Client::Kind kind = Client::Kind::Tiled;
     if (auto* client = get_client(window))
     {
-        if (client->kind == Client::Kind::Dock || client->kind == Client::Kind::Desktop)
+        kind = client->kind;
+        if (kind == Client::Kind::Dock || kind == Client::Kind::Desktop)
             return false;
     }
 
     // Window is focus-eligible if it accepts direct input focus
     // OR supports WM_TAKE_FOCUS protocol
-    return should_set_input_focus(window) || supports_protocol(window, wm_take_focus_);
+    bool accepts_input_focus = should_set_input_focus(window);
+    bool supports_take_focus = false;
+    if (!accepts_input_focus)
+    {
+        supports_take_focus = supports_protocol(window, wm_take_focus_);
+    }
+    return focus_policy::is_focus_eligible(kind, accepts_input_focus, supports_take_focus);
 }
 
 bool WindowManager::should_set_input_focus(xcb_window_t window) const
@@ -3501,18 +3487,18 @@ void WindowManager::update_ewmh_workarea()
 uint32_t WindowManager::get_ewmh_desktop_index(size_t monitor_idx, size_t workspace_idx) const
 {
     // Desktop index = monitor_idx * workspaces_per_monitor + workspace_idx
-    return static_cast<uint32_t>(monitor_idx * config_.workspaces.count + workspace_idx);
+    return ewmh_policy::desktop_index(monitor_idx, workspace_idx, config_.workspaces.count);
 }
 
 void WindowManager::switch_to_ewmh_desktop(uint32_t desktop)
 {
     // Convert EWMH desktop index to monitor + workspace
     size_t workspaces_per_monitor = config_.workspaces.count;
-    if (workspaces_per_monitor == 0)
+    auto indices = ewmh_policy::desktop_to_indices(desktop, workspaces_per_monitor);
+    if (!indices)
         return;
-
-    size_t monitor_idx = desktop / workspaces_per_monitor;
-    size_t workspace_idx = desktop % workspaces_per_monitor;
+    size_t monitor_idx = indices->first;
+    size_t workspace_idx = indices->second;
 
     if (monitor_idx >= monitors_.size())
         return;

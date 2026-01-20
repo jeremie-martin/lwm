@@ -8,10 +8,13 @@ FetchContent_MakeAvailable(Catch2)
 
 add_executable(lwm_tests
     test_ewmh_classification.cpp
+    test_ewmh_policy.cpp
     test_focus_policy.cpp
+    test_focus_visibility_policy.cpp
     test_floating_policy.cpp
     test_layout_policy.cpp
     test_workspace.cpp
+    test_workspace_policy.cpp
 )
 
 target_link_libraries(lwm_tests PRIVATE liblwm Catch2::Catch2WithMain)
