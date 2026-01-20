@@ -1136,11 +1136,9 @@ void WindowManager::unmanage_floating_window(xcb_window_t window)
 
     // Get monitor/workspace from Client before erasing
     size_t monitor_idx = 0;
-    size_t workspace_idx = 0;
     if (auto const* client = get_client(window))
     {
         monitor_idx = client->monitor;
-        workspace_idx = client->workspace;
     }
 
     // Remove from unified Client registry (handles all client state including order)
@@ -1159,34 +1157,9 @@ void WindowManager::unmanage_floating_window(xcb_window_t window)
 
     if (was_active)
     {
-        if (monitor_idx == focused_monitor_ && workspace_idx == monitors_[monitor_idx].current_workspace)
+        if (monitor_idx == focused_monitor_ && monitor_idx < monitors_.size())
         {
-            auto& ws = monitors_[monitor_idx].current();
-            if (ws.focused_window != XCB_NONE)
-            {
-                focus_window(ws.focused_window);
-            }
-            else
-            {
-                // Find another floating window on this workspace
-                auto it2 = std::find_if(
-                    floating_windows_.rbegin(),
-                    floating_windows_.rend(),
-                    [&](FloatingWindow const& fw)
-                    {
-                        auto const* c = get_client(fw.id);
-                        return c && c->monitor == monitor_idx && c->workspace == workspace_idx;
-                    }
-                );
-                if (it2 != floating_windows_.rend())
-                {
-                    focus_floating_window(it2->id);
-                }
-                else
-                {
-                    clear_focus();
-                }
-            }
+            focus_or_fallback(monitors_[monitor_idx]);
         }
         else
         {
