@@ -370,97 +370,57 @@ bool Ewmh::should_tile_window(xcb_window_t window) const
     return type == ewmh_._NET_WM_WINDOW_TYPE_NORMAL;
 }
 
-WindowClassification Ewmh::classify_window(xcb_window_t window, bool is_transient) const
+WindowClassification classify_window_type(WindowType type, bool is_transient)
 {
     WindowClassification result;
     result.is_transient = is_transient;
 
-    xcb_atom_t type = get_window_type(window);
-
-    // Check types in EWMH priority order (per COMPLIANCE.md)
-
-    // 1. DESKTOP - background windows
-    if (type == ewmh_._NET_WM_WINDOW_TYPE_DESKTOP)
+    switch (type)
     {
+    case WindowType::Desktop:
         result.kind = WindowClassification::Kind::Desktop;
         result.skip_taskbar = true;
         result.skip_pager = true;
         return result;
-    }
-
-    // 2. DOCK - panels/bars
-    if (type == ewmh_._NET_WM_WINDOW_TYPE_DOCK)
-    {
+    case WindowType::Dock:
         result.kind = WindowClassification::Kind::Dock;
         result.skip_taskbar = true;
         result.skip_pager = true;
         return result;
-    }
-
-    // 3. TOOLBAR - floating, no taskbar
-    if (type == ewmh_._NET_WM_WINDOW_TYPE_TOOLBAR)
-    {
+    case WindowType::Toolbar:
+    case WindowType::Menu:
+    case WindowType::Splash:
         result.kind = WindowClassification::Kind::Floating;
         result.skip_taskbar = true;
         result.skip_pager = true;
         return result;
-    }
-
-    // 4. MENU - floating, no taskbar
-    if (type == ewmh_._NET_WM_WINDOW_TYPE_MENU)
-    {
-        result.kind = WindowClassification::Kind::Floating;
-        result.skip_taskbar = true;
-        result.skip_pager = true;
-        return result;
-    }
-
-    // 5. UTILITY - floating, no taskbar, above siblings
-    if (type == ewmh_._NET_WM_WINDOW_TYPE_UTILITY)
-    {
+    case WindowType::Utility:
         result.kind = WindowClassification::Kind::Floating;
         result.skip_taskbar = true;
         result.skip_pager = true;
         result.above = true;
         return result;
-    }
-
-    // 6. SPLASH - floating, no decorations, no taskbar
-    if (type == ewmh_._NET_WM_WINDOW_TYPE_SPLASH)
-    {
+    case WindowType::Dialog:
         result.kind = WindowClassification::Kind::Floating;
-        result.skip_taskbar = true;
-        result.skip_pager = true;
         return result;
-    }
-
-    // 7. DIALOG - floating, centered, transient-like
-    if (type == ewmh_._NET_WM_WINDOW_TYPE_DIALOG)
-    {
-        result.kind = WindowClassification::Kind::Floating;
-        // Dialogs may or may not appear in taskbar - let application decide
-        return result;
-    }
-
-    // 8. Popup types - not fully managed, just mapped
-    if (type == ewmh_._NET_WM_WINDOW_TYPE_DROPDOWN_MENU
-        || type == ewmh_._NET_WM_WINDOW_TYPE_POPUP_MENU
-        || type == ewmh_._NET_WM_WINDOW_TYPE_TOOLTIP
-        || type == ewmh_._NET_WM_WINDOW_TYPE_NOTIFICATION
-        || type == ewmh_._NET_WM_WINDOW_TYPE_COMBO
-        || type == ewmh_._NET_WM_WINDOW_TYPE_DND)
-    {
+    case WindowType::DropdownMenu:
+    case WindowType::PopupMenu:
+    case WindowType::Tooltip:
+    case WindowType::Notification:
+    case WindowType::Combo:
+    case WindowType::Dnd:
         result.kind = WindowClassification::Kind::Popup;
         result.skip_taskbar = true;
         result.skip_pager = true;
         return result;
+    case WindowType::Normal:
+        break;
     }
 
-    // 9. NORMAL or unknown - default to tiled unless transient
     if (is_transient)
     {
         result.kind = WindowClassification::Kind::Floating;
-        result.skip_taskbar = true;  // Transients don't clutter taskbar
+        result.skip_taskbar = true;
         result.skip_pager = true;
     }
     else
@@ -469,6 +429,40 @@ WindowClassification Ewmh::classify_window(xcb_window_t window, bool is_transien
     }
 
     return result;
+}
+
+WindowClassification Ewmh::classify_window(xcb_window_t window, bool is_transient) const
+{
+    xcb_atom_t type = get_window_type(window);
+    WindowType type_kind = WindowType::Normal;
+    if (type == ewmh_._NET_WM_WINDOW_TYPE_DESKTOP)
+        type_kind = WindowType::Desktop;
+    else if (type == ewmh_._NET_WM_WINDOW_TYPE_DOCK)
+        type_kind = WindowType::Dock;
+    else if (type == ewmh_._NET_WM_WINDOW_TYPE_TOOLBAR)
+        type_kind = WindowType::Toolbar;
+    else if (type == ewmh_._NET_WM_WINDOW_TYPE_MENU)
+        type_kind = WindowType::Menu;
+    else if (type == ewmh_._NET_WM_WINDOW_TYPE_UTILITY)
+        type_kind = WindowType::Utility;
+    else if (type == ewmh_._NET_WM_WINDOW_TYPE_SPLASH)
+        type_kind = WindowType::Splash;
+    else if (type == ewmh_._NET_WM_WINDOW_TYPE_DIALOG)
+        type_kind = WindowType::Dialog;
+    else if (type == ewmh_._NET_WM_WINDOW_TYPE_DROPDOWN_MENU)
+        type_kind = WindowType::DropdownMenu;
+    else if (type == ewmh_._NET_WM_WINDOW_TYPE_POPUP_MENU)
+        type_kind = WindowType::PopupMenu;
+    else if (type == ewmh_._NET_WM_WINDOW_TYPE_TOOLTIP)
+        type_kind = WindowType::Tooltip;
+    else if (type == ewmh_._NET_WM_WINDOW_TYPE_NOTIFICATION)
+        type_kind = WindowType::Notification;
+    else if (type == ewmh_._NET_WM_WINDOW_TYPE_COMBO)
+        type_kind = WindowType::Combo;
+    else if (type == ewmh_._NET_WM_WINDOW_TYPE_DND)
+        type_kind = WindowType::Dnd;
+
+    return classify_window_type(type_kind, is_transient);
 }
 
 Strut Ewmh::get_window_strut(xcb_window_t window) const

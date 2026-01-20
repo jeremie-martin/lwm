@@ -25,6 +25,26 @@ struct WindowClassification
     bool is_transient = false;
 };
 
+enum class WindowType
+{
+    Desktop,
+    Dock,
+    Toolbar,
+    Menu,
+    Utility,
+    Splash,
+    Dialog,
+    DropdownMenu,
+    PopupMenu,
+    Tooltip,
+    Notification,
+    Combo,
+    Dnd,
+    Normal
+};
+
+WindowClassification classify_window_type(WindowType type, bool is_transient);
+
 class Ewmh
 {
 public:
