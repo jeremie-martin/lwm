@@ -10,6 +10,7 @@ add_library(liblwm STATIC
     wm_focus.cpp
     wm_floating.cpp
     wm_workspace.cpp
+    wm_ewmh.cpp
     wm.cpp
     wm_events.cpp
     wm_drag.cpp
