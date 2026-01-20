@@ -2,7 +2,6 @@
 #include "lwm/core/floating.hpp"
 #include "lwm/core/focus.hpp"
 #include <algorithm>
-#include <ranges>
 #include <xcb/xcb_icccm.h>
 
 namespace lwm {

@@ -1,7 +1,5 @@
 #include "wm.hpp"
-#include "lwm/core/floating.hpp"
 #include "lwm/core/focus.hpp"
-#include "lwm/core/log.hpp"
 #include "lwm/core/policy.hpp"
 #include <algorithm>
 #include <chrono>
