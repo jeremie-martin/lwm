@@ -121,6 +121,7 @@ private:
     xcb_atom_t net_wm_state_focused_ = XCB_NONE;
     bool suppress_focus_ = false;
     uint32_t last_event_time_ = XCB_CURRENT_TIME;
+    std::chrono::steady_clock::time_point last_toggle_workspace_time_{};
     DragState drag_state_;
     std::vector<MouseBinding> mousebinds_;
 
