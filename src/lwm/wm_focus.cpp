@@ -313,4 +313,96 @@ void WindowManager::send_wm_take_focus(xcb_window_t window, uint32_t timestamp)
     xcb_send_event(conn_.get(), 0, window, XCB_EVENT_MASK_NO_EVENT, reinterpret_cast<char*>(&ev));
 }
 
+void WindowManager::focus_next()
+{
+    if (monitors_.empty())
+        return;
+
+    auto& monitor = focused_monitor();
+    auto& ws = monitor.current();
+
+    // Build list of focusable windows: tiled + floating on this workspace
+    std::vector<xcb_window_t> candidates;
+
+    // Add non-iconic tiled windows
+    for (xcb_window_t w : ws.windows)
+    {
+        if (!is_client_iconic(w) && is_focus_eligible(w))
+            candidates.push_back(w);
+    }
+
+    // Add visible floating windows on this workspace
+    for (auto const& fw : floating_windows_)
+    {
+        auto const* c = get_client(fw.id);
+        if (c && c->monitor == focused_monitor_ && c->workspace == monitor.current_workspace
+            && !is_client_iconic(fw.id) && is_focus_eligible(fw.id))
+        {
+            candidates.push_back(fw.id);
+        }
+    }
+
+    if (candidates.empty())
+        return;
+
+    // Find current position
+    auto it = std::ranges::find(candidates, active_window_);
+    size_t current = (it != candidates.end()) ? static_cast<size_t>(std::distance(candidates.begin(), it)) : 0;
+
+    // Move to next with wrap
+    size_t next = (current + 1) % candidates.size();
+
+    xcb_window_t target = candidates[next];
+    if (find_floating_window(target))
+        focus_floating_window(target);
+    else
+        focus_window(target);
+}
+
+void WindowManager::focus_prev()
+{
+    if (monitors_.empty())
+        return;
+
+    auto& monitor = focused_monitor();
+    auto& ws = monitor.current();
+
+    // Build list of focusable windows: tiled + floating on this workspace
+    std::vector<xcb_window_t> candidates;
+
+    // Add non-iconic tiled windows
+    for (xcb_window_t w : ws.windows)
+    {
+        if (!is_client_iconic(w) && is_focus_eligible(w))
+            candidates.push_back(w);
+    }
+
+    // Add visible floating windows on this workspace
+    for (auto const& fw : floating_windows_)
+    {
+        auto const* c = get_client(fw.id);
+        if (c && c->monitor == focused_monitor_ && c->workspace == monitor.current_workspace
+            && !is_client_iconic(fw.id) && is_focus_eligible(fw.id))
+        {
+            candidates.push_back(fw.id);
+        }
+    }
+
+    if (candidates.empty())
+        return;
+
+    // Find current position
+    auto it = std::ranges::find(candidates, active_window_);
+    size_t current = (it != candidates.end()) ? static_cast<size_t>(std::distance(candidates.begin(), it)) : 0;
+
+    // Move to prev with wrap
+    size_t prev = (current + candidates.size() - 1) % candidates.size();
+
+    xcb_window_t target = candidates[prev];
+    if (find_floating_window(target))
+        focus_floating_window(target);
+    else
+        focus_window(target);
+}
+
 } // namespace lwm

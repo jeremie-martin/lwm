@@ -31,7 +31,8 @@ names = ["1", "2", "3", "4", "5", "6", "7", "8", "9", "10"]
 # key: X11 keysym name (e.g., "Return", "q", "ampersand", "Left", "Right")
 # action: "spawn", "kill", "switch_workspace", "toggle_workspace", "move_to_workspace",
 #         "focus_monitor_left", "focus_monitor_right",
-#         "move_to_monitor_left", "move_to_monitor_right"
+#         "move_to_monitor_left", "move_to_monitor_right",
+#         "toggle_fullscreen", "focus_next", "focus_prev"
 # command: for "spawn" action, use "terminal", "browser", "launcher", or a path
 # workspace: for "switch_workspace"/"move_to_workspace" actions, the workspace index (0..count-1)
 #            (not used for "toggle_workspace")
@@ -212,3 +213,20 @@ action = "move_to_monitor_left"
 mod = "super+shift"
 key = "Right"
 action = "move_to_monitor_right"
+
+# Toggle fullscreen
+[[keybinds]]
+mod = "super"
+key = "f"
+action = "toggle_fullscreen"
+
+# Focus cycling
+[[keybinds]]
+mod = "super"
+key = "j"
+action = "focus_next"
+
+[[keybinds]]
+mod = "super"
+key = "k"
+action = "focus_prev"

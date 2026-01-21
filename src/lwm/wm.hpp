@@ -159,6 +159,8 @@ private:
     void unmanage_floating_window(xcb_window_t window);
     void focus_window(xcb_window_t window);
     void focus_floating_window(xcb_window_t window);
+    void focus_next();
+    void focus_prev();
     void set_fullscreen(xcb_window_t window, bool enabled);
     void set_window_above(xcb_window_t window, bool enabled);
     void set_window_below(xcb_window_t window, bool enabled);

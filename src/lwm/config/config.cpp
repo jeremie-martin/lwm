@@ -110,6 +110,11 @@ Config default_config()
         // Move window to adjacent monitor
         { "super+shift",       "Left",  "move_to_monitor_left",         "", -1 },
         { "super+shift",      "Right", "move_to_monitor_right",         "", -1 },
+        // Toggle fullscreen
+        {       "super",          "f",     "toggle_fullscreen",         "", -1 },
+        // Focus cycling
+        {       "super",          "j",           "focus_next",         "", -1 },
+        {       "super",          "k",           "focus_prev",         "", -1 },
     };
 
     cfg.mousebinds = {

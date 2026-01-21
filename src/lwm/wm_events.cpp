@@ -524,6 +524,21 @@ void WindowManager::handle_key_press(xcb_key_press_event_t const& e)
     {
         launch_program(keybinds_.resolve_command(action->command, config_));
     }
+    else if (action->type == "toggle_fullscreen")
+    {
+        if (active_window_ != XCB_NONE)
+        {
+            set_fullscreen(active_window_, !is_client_fullscreen(active_window_));
+        }
+    }
+    else if (action->type == "focus_next")
+    {
+        focus_next();
+    }
+    else if (action->type == "focus_prev")
+    {
+        focus_prev();
+    }
 }
 
 void WindowManager::handle_key_release(xcb_key_release_event_t const& e)
