@@ -226,7 +226,49 @@ How the drop position maps to an insertion index is layout-dependent.
 
 ---
 
-## 9. Non-Goals for This Document
+## 9. Window Rules
+
+### 9.1 Overview
+Window rules allow automatic configuration of windows based on their properties (class, instance, title, type).
+Rules are applied at map time (when the window first appears) and provide a way to customize
+window behavior beyond EWMH classification.
+
+### 9.2 Rule Evaluation
+- Rules are defined in configuration as an ordered list.
+- **First-match-wins**: The first rule whose criteria match is applied; subsequent rules are ignored.
+- An empty criteria set matches all windows.
+
+### 9.3 Matching Criteria
+All specified criteria in a rule must match (AND logic). Available criteria:
+- **class**: WM_CLASS class name (regex pattern)
+- **instance**: WM_CLASS instance name (regex pattern)
+- **title**: Window title (regex pattern)
+- **type**: EWMH window type (normal, dialog, utility, toolbar, splash, menu)
+- **transient**: Match only transient (child) windows
+
+If a criterion is not specified, it matches any value.
+
+### 9.4 Rule Actions
+When a rule matches, the following actions can be applied:
+- **floating**: Force floating (true) or tiled (false) mode
+- **workspace/workspace_name**: Assign to a specific workspace
+- **monitor/monitor_name**: Assign to a specific monitor
+- **fullscreen**: Start in fullscreen state
+- **above/below**: Set stacking order
+- **sticky**: Make visible on all workspaces
+- **skip_taskbar/skip_pager**: Exclude from taskbar/pager
+- **geometry**: Set position/size for floating windows
+- **center**: Center on monitor (floating windows only)
+
+### 9.5 Relationship to EWMH Classification
+- Window rules are applied **after** EWMH classification.
+- Rules cannot override fundamental window type behavior (dock, desktop, popup windows).
+- Rules can override the tiled/floating decision for normal windows.
+- EWMH state atoms are set according to rule actions (e.g., sticky, above, below).
+
+---
+
+## 10. Non-Goals for This Document
 - Protocol-level property/message requirements (COMPLIANCE.md).
 - Internal data structures, event names, or flowcharts tied to X11 mechanics.
 - Exact keybinding tables (configuration-level documentation).

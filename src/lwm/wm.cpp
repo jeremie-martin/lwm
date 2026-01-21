@@ -98,6 +98,7 @@ WindowManager::WindowManager(Config config)
         setup_monitor_bars();
     }
     scan_existing_windows();
+    run_autostart();
     keybinds_.grab_keys(conn_.screen()->root);
     update_ewmh_client_list();
     update_all_bars();
@@ -526,6 +527,16 @@ void WindowManager::scan_existing_windows()
 
     if (!monitors_.empty())
         focus_or_fallback(monitors_[focused_monitor_]);
+}
+
+void WindowManager::run_autostart()
+{
+    for (auto const& cmd : config_.autostart.commands)
+    {
+        std::string resolved = keybinds_.resolve_command(cmd, config_);
+        LOG_INFO("Autostart: {}", resolved);
+        launch_program(resolved);
+    }
 }
 
 // Event handlers are implemented in wm_events.cpp

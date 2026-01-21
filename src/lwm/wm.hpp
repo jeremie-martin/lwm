@@ -138,6 +138,7 @@ private:
     void setup_monitor_bars();
     void init_monitor_workspaces(Monitor& monitor);
     void scan_existing_windows();
+    void run_autostart();
 
     void handle_event(xcb_generic_event_t const& event);
     void handle_map_request(xcb_map_request_event_t const& e);

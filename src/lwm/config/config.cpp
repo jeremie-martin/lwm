@@ -188,6 +188,19 @@ std::optional<Config> load_config(std::string const& path)
         }
         normalize_workspaces_config(cfg.workspaces, workspaces_count_set, workspaces_names_set);
 
+        // Autostart
+        if (auto autostart = tbl["autostart"].as_table())
+        {
+            if (auto commands = (*autostart)["commands"].as_array())
+            {
+                for (auto const& cmd : *commands)
+                {
+                    if (auto v = cmd.value<std::string>())
+                        cfg.autostart.commands.push_back(*v);
+                }
+            }
+        }
+
         // Keybinds
         if (auto keybinds = tbl["keybinds"].as_array())
         {

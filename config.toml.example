@@ -26,6 +26,21 @@ count = 10
 # If omitted, defaults to "1".."count".
 names = ["1", "2", "3", "4", "5", "6", "7", "8", "9", "10"]
 
+# ─────────────────────────────────────────────────────────────────────────────
+# Autostart
+# ─────────────────────────────────────────────────────────────────────────────
+#
+# Commands to run when LWM starts. Executed asynchronously (non-blocking).
+# Use "terminal", "browser", or "launcher" to reference [programs] values.
+#
+# [autostart]
+# commands = [
+#     "picom",              # Compositor
+#     "nitrogen --restore", # Wallpaper
+#     "dunst",              # Notifications
+#     "terminal",           # Resolves to programs.terminal
+# ]
+
 # Keybindings
 # mod: "super", "super+shift", "super+ctrl", etc.
 # key: X11 keysym name (e.g., "Return", "q", "ampersand", "Left", "Right")

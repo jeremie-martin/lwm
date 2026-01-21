@@ -93,12 +93,18 @@ struct WorkspacesConfig
     std::vector<std::string> names;
 };
 
+struct AutostartConfig
+{
+    std::vector<std::string> commands;
+};
+
 struct Config
 {
     AppearanceConfig appearance;
     FocusConfig focus;
     ProgramsConfig programs;
     WorkspacesConfig workspaces;
+    AutostartConfig autostart;
     std::vector<KeybindConfig> keybinds;
     std::vector<MousebindConfig> mousebinds;
     std::vector<WindowRuleConfig> rules;

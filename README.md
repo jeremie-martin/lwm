@@ -15,6 +15,7 @@ A minimal tiling window manager for X11 written in modern C++23.
 - Multi-monitor support with hotplug handling
 - Window states: fullscreen, maximize, sticky, above/below, shaded, modal
 - Smart window classification (dock, desktop, dialog, popup types)
+- Window rules for automatic window configuration (floating, workspace, monitor, etc.)
 
 ## Dependencies
 
