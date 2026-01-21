@@ -82,7 +82,7 @@ void Ewmh::create_supporting_window()
  * - MAXIMIZED_* states: Only apply geometry changes to floating windows
  * - _NET_MOVERESIZE_WINDOW, _NET_WM_MOVERESIZE: Floating windows only
  * - _NET_RESTACK_WINDOW: May not update _NET_CLIENT_LIST_STACKING immediately
- * - _NET_WM_SYNC_REQUEST: Uses blocking wait (latency concern)
+ * - _NET_WM_SYNC_REQUEST: Uses fire-and-forget (non-blocking)
  */
 void Ewmh::set_supported_atoms()
 {

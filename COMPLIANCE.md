@@ -48,7 +48,7 @@ The WM must read and honor these client-set properties:
     pixel-granular resizing. LWM prioritizes smooth, consistent layout and
     uniform gaps over character-cell alignment for every window type.
 - `min_aspect`, `max_aspect`: **not enforced** (could cause layout gaps).
-- `win_gravity`: **not currently used** (TODO: apply for positioning after resize).
+- `win_gravity`: **not implemented** (no plans to implement; tiled windows use WM-controlled positioning).
 - `PPosition`, `USPosition`: honor user-specified position for floating windows.
 - `PSize`, `USSize`: honor user-specified size for initial mapping.
 
@@ -223,12 +223,7 @@ ICCCM requires distinguishing WM-initiated unmaps from client-initiated unmaps:
 - Update when struts change.
 
 #### _NET_VIRTUAL_ROOTS
-- List virtual root windows if using virtual roots.
-- Omit if not applicable.
-
-#### _NET_DESKTOP_LAYOUT
-- Pager layout hint (rows, columns, orientation).
-- Honor if set by pager; may set if WM controls layout.
+- **Not implemented** (LWM does not use virtual roots).
 
 #### _NET_SHOWING_DESKTOP
 - Set to 1 when in "show desktop" mode, 0 otherwise.
@@ -279,10 +274,10 @@ Types to support (in priority order, first match wins):
   handled correctly if they span monitors.
 
 #### _NET_WM_ICON
-- Read for taskbar/pager/switcher display.
+- **Not implemented** (LWM has no icon display UI).
 
 #### _NET_WM_PID
-- Read for process identification and management.
+- **Not implemented** (not used for process management).
 
 #### _NET_WM_USER_TIME
 - Compare for focus stealing prevention.
@@ -326,7 +321,7 @@ Types to support (in priority order, first match wins):
 - Update based on window type and state.
 
 #### _NET_WM_VISIBLE_NAME / _NET_WM_VISIBLE_ICON_NAME
-- Set if displayed name differs from `_NET_WM_NAME`.
+- **Not implemented** (LWM does not modify window names for display).
 
 #### _NET_FRAME_EXTENTS
 - Set frame dimensions (left, right, top, bottom) in pixels.
@@ -410,10 +405,9 @@ Types to support (in priority order, first match wins):
 
 #### _NET_WM_SYNC_REQUEST
 - Send before WM-initiated resizes.
-- Wait for client to update `_NET_WM_SYNC_REQUEST_COUNTER`.
-- Proceed after counter update or timeout (50ms).
-- **Limitation**: Uses blocking wait during configure. Timeout is kept short to minimize
-  latency impact. A fully async implementation is noted as future improvement.
+- **Note**: Sync requests are sent without blocking (fire-and-forget). We do not wait
+  for the client to update its counter, as blocking would impact event loop responsiveness.
+  This is consistent with how most tiling WMs handle sync requests.
 
 ### 7. Compositing Manager Interaction
 

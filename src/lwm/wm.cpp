@@ -1,5 +1,6 @@
 #include "wm.hpp"
 #include "lwm/core/focus.hpp"
+#include "lwm/core/log.hpp"
 #include "lwm/core/policy.hpp"
 #include <algorithm>
 #include <chrono>
@@ -152,7 +153,10 @@ void WindowManager::run()
         handle_timeouts();
 
         if (xcb_connection_has_error(conn_.get()))
+        {
+            LOG_ERROR("X connection error, shutting down");
             break;
+        }
     }
 }
 
@@ -1751,16 +1755,16 @@ void WindowManager::send_wm_ping(xcb_window_t window, uint32_t timestamp)
 }
 
 /**
- * @brief Send _NET_WM_SYNC_REQUEST to synchronize with client before resize.
+ * @brief Send _NET_WM_SYNC_REQUEST to notify client before resize.
  *
- * This notifies the client that the WM is about to resize the window and waits
- * (briefly) for the client to update its sync counter, indicating it's ready.
+ * This notifies the client that the WM is about to resize the window.
+ * The sync request is sent without blocking - we don't wait for the client
+ * to update its counter. This "fire and forget" approach is consistent with
+ * how most tiling WMs handle sync requests, since window geometry is
+ * WM-controlled and blocking would kill event loop responsiveness.
  *
- * LIMITATION: The current implementation blocks while waiting for the counter.
- * The timeout is kept short (50ms) to minimize impact on responsiveness.
- * A fully non-blocking implementation would require async state tracking.
- *
- * Many tiling WMs skip sync requests entirely since window geometry is WM-controlled.
+ * Clients that support _NET_WM_SYNC_REQUEST will use the request to
+ * synchronize their rendering, but we proceed with the configure regardless.
  */
 void WindowManager::send_sync_request(xcb_window_t window, uint32_t timestamp)
 {
@@ -1785,17 +1789,15 @@ void WindowManager::send_sync_request(xcb_window_t window, uint32_t timestamp)
     ev.data.data32[3] = static_cast<uint32_t>((value >> 32) & 0xffffffff);
 
     xcb_send_event(conn_.get(), 0, window, XCB_EVENT_MASK_NO_EVENT, reinterpret_cast<char*>(&ev));
-    conn_.flush();
-    wait_for_sync_counter(window, value);
+    // Non-blocking: we don't wait for the client to update its counter
 }
 
 /**
- * @brief Wait for sync counter to reach expected value.
+ * @brief Wait for sync counter to reach expected value (unused).
  *
- * WARNING: This function blocks with a busy-wait loop, repeatedly querying
- * the X server. The timeout is kept short to minimize impact.
- *
- * TODO: Implement async version using XSync alarms or event-driven waiting.
+ * This function is preserved for potential future use but is not currently
+ * called. The blocking busy-wait approach was replaced with non-blocking
+ * sync requests to improve event loop responsiveness.
  */
 bool WindowManager::wait_for_sync_counter(xcb_window_t window, uint64_t expected_value)
 {

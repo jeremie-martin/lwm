@@ -148,7 +148,8 @@ void WindowManager::handle_map_request(xcb_map_request_event_t const& e)
     // Case 1: Already managed window requesting map (deiconify)
     if (auto const* client = get_client(e.window))
     {
-        bool focus = client->monitor == focused_monitor_
+        bool focus = client->monitor < monitors_.size()
+            && client->monitor == focused_monitor_
             && client->workspace == monitors_[client->monitor].current_workspace;
         deiconify_window(e.window, focus);
         return;
@@ -275,7 +276,8 @@ void WindowManager::handle_map_request(xcb_map_request_event_t const& e)
             {
                 if (auto const* client = get_client(e.window))
                 {
-                    if (client->monitor == focused_monitor_
+                    if (client->monitor < monitors_.size()
+                        && client->monitor == focused_monitor_
                         && client->workspace == monitors_[client->monitor].current_workspace)
                     {
                         focus_window(e.window);
@@ -898,7 +900,8 @@ void WindowManager::handle_client_message(xcb_client_message_event_t const& e)
             client->floating_geometry = fw->geometry;
 
         update_floating_monitor_for_geometry(*fw);
-        if (client && client->workspace == monitors_[client->monitor].current_workspace
+        if (client && client->monitor < monitors_.size()
+            && client->workspace == monitors_[client->monitor].current_workspace
             && !is_client_iconic(fw->id) && !is_client_fullscreen(fw->id))
         {
             apply_floating_geometry(*fw);
@@ -1106,7 +1109,8 @@ void WindowManager::handle_property_notify(xcb_property_notify_event_t const& e)
             auto* client = get_client(e.window);
             if (client)
                 client->floating_geometry = floating_window->geometry;
-            if (client && client->workspace == monitors_[client->monitor].current_workspace
+            if (client && client->monitor < monitors_.size()
+                && client->workspace == monitors_[client->monitor].current_workspace
                 && !is_client_iconic(floating_window->id) && !is_client_fullscreen(floating_window->id))
             {
                 apply_floating_geometry(*floating_window);
