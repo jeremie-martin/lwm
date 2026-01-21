@@ -1,5 +1,6 @@
 #include "wm.hpp"
 #include "lwm/core/floating.hpp"
+#include "lwm/core/log.hpp"
 #include "lwm/core/policy.hpp"
 
 namespace lwm {
@@ -7,9 +8,18 @@ namespace lwm {
 void WindowManager::switch_workspace(int ws)
 {
     auto& monitor = focused_monitor();
+    LOG_TRACE("switch_workspace({}) called, current={} previous={}",
+              ws, monitor.current_workspace, monitor.previous_workspace);
+
     auto switch_result = workspace_policy::apply_workspace_switch(monitor, ws);
     if (!switch_result)
+    {
+        LOG_TRACE("switch_workspace: policy rejected switch");
         return;
+    }
+
+    LOG_TRACE("switch_workspace: policy approved, old_ws={} new_ws={}",
+              switch_result->old_workspace, switch_result->new_workspace);
 
     auto& old_workspace = monitor.workspaces[switch_result->old_workspace];
     for (xcb_window_t window : old_workspace.windows)
@@ -19,26 +29,45 @@ void WindowManager::switch_workspace(int ws)
         wm_unmap_window(window);
     }
 
+    LOG_TRACE("switch_workspace: unmapped old windows, now updating EWMH");
     update_ewmh_current_desktop();
+    LOG_TRACE("switch_workspace: rearranging monitor");
     rearrange_monitor(monitor);
+    LOG_TRACE("switch_workspace: updating floating visibility");
     update_floating_visibility(focused_monitor_);
+    LOG_TRACE("switch_workspace: focus_or_fallback");
     focus_or_fallback(monitor);
+    LOG_TRACE("switch_workspace: update_all_bars");
     update_all_bars();
+    LOG_TRACE("switch_workspace: flushing");
     conn_.flush();
+    LOG_TRACE("switch_workspace: DONE, now current={} previous={}",
+              monitor.current_workspace, monitor.previous_workspace);
 }
 
 void WindowManager::toggle_workspace()
 {
     auto& monitor = focused_monitor();
     size_t workspace_count = monitor.workspaces.size();
+    LOG_TRACE("toggle_workspace() called, workspace_count={} current={} previous={}",
+              workspace_count, monitor.current_workspace, monitor.previous_workspace);
+
     if (workspace_count <= 1)
+    {
+        LOG_TRACE("toggle_workspace: only 1 workspace, returning");
         return;
+    }
 
     size_t target = monitor.previous_workspace;
     if (target >= workspace_count || target == monitor.current_workspace)
+    {
+        LOG_TRACE("toggle_workspace: invalid target={}, returning", target);
         return;
+    }
 
+    LOG_TRACE("toggle_workspace: switching to workspace {}", target);
     switch_workspace(static_cast<int>(target));
+    LOG_TRACE("toggle_workspace: DONE");
 }
 
 void WindowManager::move_window_to_workspace(int ws)

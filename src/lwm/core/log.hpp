@@ -1,27 +1,67 @@
 #pragma once
 
-// Zero-cost debug logging for LWM
+// Logging for LWM using spdlog
 //
-// In debug builds: logs to stderr with file:line info
-// In release builds (NDEBUG defined): compiles to nothing
+// Log levels (compile-time filtered via SPDLOG_ACTIVE_LEVEL):
+//   - TRACE: Very verbose, per-event logging (e.g., every X11 event)
+//   - DEBUG: Detailed debugging info (e.g., state changes, decisions)
+//   - INFO:  Normal operational messages (e.g., startup, config loaded)
+//   - WARN:  Warning conditions
+//   - ERROR: Error conditions
+//
+// In Release builds: TRACE and DEBUG are compiled out (zero cost)
+// In Debug builds: All levels are active
 //
 // Usage:
-//   LWM_DEBUG("message");
-//   LWM_DEBUG("value = " << value);
+//   LOG_DEBUG("Processing window {:#x}", window_id);
+//   LOG_INFO("Workspace switched to {}", workspace);
 
-#ifndef NDEBUG
+#include <spdlog/spdlog.h>
+#include <spdlog/sinks/stdout_color_sinks.h>
+#include <spdlog/sinks/basic_file_sink.h>
 
-#    include <iostream>
+namespace lwm::log {
 
-#    define LWM_DEBUG(msg) std::cerr << "[LWM] " << __FILE__ << ":" << __LINE__ << " " << msg << std::endl
+// Initialize logging - call once at startup
+inline void init()
+{
+    // Create console sink (stderr) with colors
+    auto console_sink = std::make_shared<spdlog::sinks::stderr_color_sink_mt>();
+    console_sink->set_level(spdlog::level::trace);
+    console_sink->set_pattern("[%H:%M:%S.%e] [%^%l%$] %v");
 
-#    define LWM_DEBUG_KEY(state, keysym) \
-        std::cerr << "[LWM] Key: state=0x" << std::hex << state << " keysym=0x" << keysym << std::dec << std::endl
+    // Create file sink for persistent logs
+    auto file_sink = std::make_shared<spdlog::sinks::basic_file_sink_mt>("/tmp/lwm.log", true);
+    file_sink->set_level(spdlog::level::trace);
+    file_sink->set_pattern("[%Y-%m-%d %H:%M:%S.%e] [%l] [%s:%#] %v");
 
-#else
+    // Create logger with both sinks
+    auto logger = std::make_shared<spdlog::logger>("lwm", spdlog::sinks_init_list{console_sink, file_sink});
+    logger->set_level(spdlog::level::trace);  // Runtime level (compile-time is separate)
+    logger->flush_on(spdlog::level::debug);   // Flush on debug and above
 
-// Release mode: these expand to nothing (zero cost)
-#    define LWM_DEBUG(msg) ((void)0)
-#    define LWM_DEBUG_KEY(state, keysym) ((void)0)
+    // Set as default logger
+    spdlog::set_default_logger(logger);
+}
 
-#endif
+// Shutdown logging - call at exit
+inline void shutdown()
+{
+    spdlog::shutdown();
+}
+
+} // namespace lwm::log
+
+// Convenience macros using spdlog's compile-time filtered macros
+// These are zero-cost when level is below SPDLOG_ACTIVE_LEVEL
+
+#define LOG_TRACE(...) SPDLOG_TRACE(__VA_ARGS__)
+#define LOG_DEBUG(...) SPDLOG_DEBUG(__VA_ARGS__)
+#define LOG_INFO(...)  SPDLOG_INFO(__VA_ARGS__)
+#define LOG_WARN(...)  SPDLOG_WARN(__VA_ARGS__)
+#define LOG_ERROR(...) SPDLOG_ERROR(__VA_ARGS__)
+#define LOG_CRITICAL(...) SPDLOG_CRITICAL(__VA_ARGS__)
+
+// Key event logging helper (trace level)
+#define LOG_KEY(state, keysym) \
+    SPDLOG_TRACE("Key: state={:#x} keysym={:#x}", state, keysym)

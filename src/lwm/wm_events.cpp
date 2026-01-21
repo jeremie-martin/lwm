@@ -11,7 +11,6 @@
 
 #include "wm.hpp"
 #include "lwm/core/floating.hpp"
-#include "lwm/core/focus.hpp"
 #include "lwm/core/log.hpp"
 #include <xcb/xcb_icccm.h>
 
@@ -104,11 +103,21 @@ void WindowManager::handle_event(xcb_generic_event_t const& event)
             handle_button_release(reinterpret_cast<xcb_button_release_event_t const&>(event));
             break;
         case XCB_KEY_PRESS:
-            handle_key_press(reinterpret_cast<xcb_key_press_event_t const&>(event));
+        {
+            auto const& e = reinterpret_cast<xcb_key_press_event_t const&>(event);
+            LOG_TRACE("EVENT: XCB_KEY_PRESS keycode={} time={} state={:#x}",
+                      static_cast<int>(e.detail), e.time, e.state);
+            handle_key_press(e);
             break;
+        }
         case XCB_KEY_RELEASE:
-            handle_key_release(reinterpret_cast<xcb_key_release_event_t const&>(event));
+        {
+            auto const& e = reinterpret_cast<xcb_key_release_event_t const&>(event);
+            LOG_TRACE("EVENT: XCB_KEY_RELEASE keycode={} time={} state={:#x}",
+                      static_cast<int>(e.detail), e.time, e.state);
+            handle_key_release(e);
             break;
+        }
         case XCB_CLIENT_MESSAGE:
             handle_client_message(reinterpret_cast<xcb_client_message_event_t const&>(event));
             break;
@@ -448,16 +457,16 @@ void WindowManager::handle_key_press(xcb_key_press_event_t const& e)
 {
     xcb_keysym_t keysym = xcb_key_press_lookup_keysym(conn_.keysyms(), const_cast<xcb_key_press_event_t*>(&e), 0);
 
-    LWM_DEBUG_KEY(e.state, keysym);
+    LOG_KEY(e.state, keysym);
 
     auto action = keybinds_.resolve(e.state, keysym);
     if (!action)
     {
-        LWM_DEBUG("No action for keysym");
+        LOG_TRACE("No action for keysym");
         return;
     }
 
-    LWM_DEBUG("Action: " << action->type);
+    LOG_DEBUG("Action: {}", action->type);
 
     if (action->type == "kill" && active_window_ != XCB_NONE)
     {
@@ -470,12 +479,24 @@ void WindowManager::handle_key_press(xcb_key_press_event_t const& e)
     else if (action->type == "toggle_workspace")
     {
         // Prevent key auto-repeat from triggering multiple toggles.
-        // Only toggle on the first keypress; ignore until key is released.
-        if (keysym == last_toggle_keysym_ && !toggle_key_released_)
+        // X11 auto-repeat sends KeyRelease-KeyPress pairs with identical timestamps.
+        // If this KeyPress has the same timestamp as the last KeyRelease, it's auto-repeat.
+        LOG_TRACE("KeyPress: keysym={:#x} time={} last_keysym={:#x} last_release_time={}",
+                  keysym, e.time, last_toggle_keysym_, last_toggle_release_time_);
+        bool same_key = (keysym == last_toggle_keysym_);
+        bool same_time = (e.time == last_toggle_release_time_);
+        LOG_TRACE("check: same_key={} same_time={} would_block={}",
+                  same_key, same_time, (same_key && same_time));
+        if (same_key && same_time)
+        {
+            LOG_TRACE("BLOCKED (auto-repeat detected)");
             return;
+        }
+        LOG_TRACE("ALLOWED - calling toggle_workspace()");
         last_toggle_keysym_ = keysym;
-        toggle_key_released_ = false;
+        last_toggle_release_time_ = 0;  // Reset on new toggle
         toggle_workspace();
+        LOG_TRACE("toggle_workspace() returned");
     }
     else if (action->type == "move_to_workspace" && action->workspace >= 0)
     {
@@ -507,11 +528,15 @@ void WindowManager::handle_key_release(xcb_key_release_event_t const& e)
 {
     xcb_keysym_t keysym = xcb_key_press_lookup_keysym(conn_.keysyms(), const_cast<xcb_key_release_event_t*>(&e), 0);
 
-    // Reset toggle key state when the key is released.
-    // This allows the next press to trigger a toggle.
+    LOG_TRACE("KeyRelease: keysym={:#x} time={} last_toggle_keysym={:#x}",
+              keysym, e.time, last_toggle_keysym_);
+
+    // Record timestamp for auto-repeat detection.
+    // X11 auto-repeat sends KeyRelease-KeyPress pairs with identical timestamps.
     if (keysym == last_toggle_keysym_)
     {
-        toggle_key_released_ = true;
+        LOG_TRACE("KeyRelease matches toggle key, recording time={}", e.time);
+        last_toggle_release_time_ = e.time;
     }
 }
 
@@ -663,7 +688,7 @@ void WindowManager::handle_client_message(xcb_client_message_event_t const& e)
     if (e.type == ewmh->_NET_CURRENT_DESKTOP)
     {
         uint32_t desktop = e.data.data32[0];
-        LWM_DEBUG("_NET_CURRENT_DESKTOP request: desktop=" << desktop);
+        LOG_DEBUG("_NET_CURRENT_DESKTOP request: desktop={}", desktop);
         switch_to_ewmh_desktop(desktop);
     }
     // Handle _NET_ACTIVE_WINDOW requests
@@ -672,7 +697,7 @@ void WindowManager::handle_client_message(xcb_client_message_event_t const& e)
         xcb_window_t window = e.window;
         uint32_t source = e.data.data32[0]; // 1 = application, 2 = pager
         uint32_t timestamp = e.data.data32[1];
-        LWM_DEBUG("_NET_ACTIVE_WINDOW request: window=0x" << std::hex << window << std::dec << " source=" << source);
+        LOG_DEBUG("_NET_ACTIVE_WINDOW request: window={:#x} source={}", window, source);
 
         // Focus stealing prevention: for application-initiated requests (source=1),
         // check if the request timestamp is newer than the current active window's user time
@@ -685,7 +710,7 @@ void WindowManager::handle_client_message(xcb_client_message_event_t const& e)
                 // user interaction, set demands attention instead of stealing focus
                 if (timestamp < active_client->user_time)
                 {
-                    LWM_DEBUG("Focus stealing prevented, setting demands attention");
+                    LOG_DEBUG("Focus stealing prevented, setting demands attention");
                     set_client_demands_attention(window, true);
                     update_all_bars();
                     return;
@@ -710,7 +735,7 @@ void WindowManager::handle_client_message(xcb_client_message_event_t const& e)
     else if (e.type == ewmh->_NET_WM_DESKTOP)
     {
         uint32_t desktop = e.data.data32[0];
-        LWM_DEBUG("_NET_WM_DESKTOP request: window=0x" << std::hex << e.window << std::dec << " desktop=" << desktop);
+        LOG_DEBUG("_NET_WM_DESKTOP request: window={:#x} desktop={}", e.window, desktop);
 
         // 0xFFFFFFFF means sticky (visible on all desktops)
         if (desktop == 0xFFFFFFFF)

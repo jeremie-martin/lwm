@@ -48,7 +48,7 @@ inline void assert_client_managed(
     auto it = clients.find(window);
     if (it == clients.end())
     {
-        LWM_DEBUG("INVARIANT VIOLATION: Window 0x" << std::hex << window << " not in clients registry");
+        LOG_ERROR("INVARIANT VIOLATION: Window {:#x} not in clients registry", window);
         return;
     }
 
@@ -57,13 +57,13 @@ inline void assert_client_managed(
     {
         if (client.monitor >= monitors.size())
         {
-            LWM_DEBUG("INVARIANT VIOLATION: Window 0x" << std::hex << window
-                << " has invalid monitor index " << client.monitor);
+            LOG_ERROR("INVARIANT VIOLATION: Window {:#x} has invalid monitor index {}",
+                      window, client.monitor);
         }
         if (client.monitor < monitors.size() && client.workspace >= monitors[client.monitor].workspaces.size())
         {
-            LWM_DEBUG("INVARIANT VIOLATION: Window 0x" << std::hex << window
-                << " has invalid workspace index " << client.workspace);
+            LOG_ERROR("INVARIANT VIOLATION: Window {:#x} has invalid workspace index {}",
+                      window, client.workspace);
         }
     }
 }
@@ -86,16 +86,14 @@ inline void assert_focus_consistency(
     auto it = clients.find(active_window);
     if (it == clients.end())
     {
-        LWM_DEBUG("INVARIANT VIOLATION: Active window 0x" << std::hex << active_window
-            << " not in clients registry");
+        LOG_ERROR("INVARIANT VIOLATION: Active window {:#x} not in clients registry", active_window);
         return;
     }
 
     auto const& client = it->second;
     if (client.iconic)
     {
-        LWM_DEBUG("INVARIANT VIOLATION: Active window 0x" << std::hex << active_window
-            << " is iconic (minimized)");
+        LOG_ERROR("INVARIANT VIOLATION: Active window {:#x} is iconic (minimized)", active_window);
     }
 }
 
@@ -110,13 +108,11 @@ inline void assert_client_state_consistency(Client const& client)
 {
     if (client.fullscreen && client.iconic)
     {
-        LWM_DEBUG("INVARIANT VIOLATION: Window 0x" << std::hex << client.id
-            << " is both fullscreen and iconic");
+        LOG_ERROR("INVARIANT VIOLATION: Window {:#x} is both fullscreen and iconic", client.id);
     }
     if (client.above && client.below)
     {
-        LWM_DEBUG("INVARIANT VIOLATION: Window 0x" << std::hex << client.id
-            << " is both above and below");
+        LOG_ERROR("INVARIANT VIOLATION: Window {:#x} is both above and below", client.id);
     }
 }
 
@@ -138,8 +134,8 @@ inline void assert_valid_desktop(
     uint32_t max_desktop = static_cast<uint32_t>(num_monitors * workspaces_per_monitor);
     if (desktop >= max_desktop)
     {
-        LWM_DEBUG("INVARIANT VIOLATION: Desktop index " << desktop
-            << " exceeds maximum " << (max_desktop - 1));
+        LOG_ERROR("INVARIANT VIOLATION: Desktop index {} exceeds maximum {}",
+                  desktop, (max_desktop - 1));
     }
 }
 
@@ -165,21 +161,18 @@ inline void assert_workspace_consistency(
             {
                 if (seen.contains(win))
                 {
-                    LWM_DEBUG("INVARIANT VIOLATION: Window 0x" << std::hex << win
-                        << " appears in multiple workspaces");
+                    LOG_ERROR("INVARIANT VIOLATION: Window {:#x} appears in multiple workspaces", win);
                 }
                 seen.insert(win);
 
                 auto it = clients.find(win);
                 if (it == clients.end())
                 {
-                    LWM_DEBUG("INVARIANT VIOLATION: Window 0x" << std::hex << win
-                        << " in workspace but not in clients registry");
+                    LOG_ERROR("INVARIANT VIOLATION: Window {:#x} in workspace but not in clients registry", win);
                 }
                 else if (it->second.kind != Client::Kind::Tiled)
                 {
-                    LWM_DEBUG("INVARIANT VIOLATION: Window 0x" << std::hex << win
-                        << " in workspace but not Kind::Tiled");
+                    LOG_ERROR("INVARIANT VIOLATION: Window {:#x} in workspace but not Kind::Tiled", win);
                 }
             }
         }
@@ -190,8 +183,7 @@ inline void assert_workspace_consistency(
     {
         if (client.kind == Client::Kind::Tiled && !seen.contains(id))
         {
-            LWM_DEBUG("INVARIANT VIOLATION: Tiled client 0x" << std::hex << id
-                << " not found in any workspace");
+            LOG_ERROR("INVARIANT VIOLATION: Tiled client {:#x} not found in any workspace", id);
         }
     }
 }

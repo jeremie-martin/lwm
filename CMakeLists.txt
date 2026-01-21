@@ -17,14 +17,24 @@ set(CMAKE_CXX_FLAGS_RELEASE "-O2 -DNDEBUG")
 find_package(PkgConfig REQUIRED)
 pkg_check_modules(XCB REQUIRED IMPORTED_TARGET xcb xcb-keysyms xcb-randr xcb-ewmh xcb-icccm xcb-sync x11)
 
-# toml++ for configuration
+# Dependencies via FetchContent
 include(FetchContent)
+
+# toml++ for configuration
 FetchContent_Declare(
     tomlplusplus
     GIT_REPOSITORY https://github.com/marzer/tomlplusplus.git
     GIT_TAG v3.4.0
 )
-FetchContent_MakeAvailable(tomlplusplus)
+
+# spdlog for logging (header-only mode for simplicity)
+FetchContent_Declare(
+    spdlog
+    GIT_REPOSITORY https://github.com/gabime/spdlog.git
+    GIT_TAG v1.15.0
+)
+
+FetchContent_MakeAvailable(tomlplusplus spdlog)
 
 add_subdirectory(src)
 

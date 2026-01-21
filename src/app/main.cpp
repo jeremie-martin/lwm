@@ -1,7 +1,7 @@
 #include <cstdlib>
 #include <filesystem>
-#include <iostream>
 #include <lwm/config/config.hpp>
+#include <lwm/core/log.hpp>
 #include <lwm/wm.hpp>
 #include <string>
 
@@ -32,16 +32,18 @@ std::string get_config_path(int argc, char* argv[])
 
 int main(int argc, char* argv[])
 {
+    lwm::log::init();
+
     try
     {
-        std::cout << "Starting LWM window manager" << std::endl;
+        LOG_INFO("Starting LWM window manager");
 
         std::string config_path = get_config_path(argc, argv);
         lwm::Config config;
 
         if (!config_path.empty() && fs::exists(config_path))
         {
-            std::cout << "Loading config from: " << config_path << std::endl;
+            LOG_INFO("Loading config from: {}", config_path);
             auto loaded = lwm::load_config(config_path);
             if (loaded)
             {
@@ -49,13 +51,13 @@ int main(int argc, char* argv[])
             }
             else
             {
-                std::cerr << "Failed to load config, using defaults" << std::endl;
+                LOG_WARN("Failed to load config, using defaults");
                 config = lwm::default_config();
             }
         }
         else
         {
-            std::cout << "No config file found, using defaults" << std::endl;
+            LOG_INFO("No config file found, using defaults");
             config = lwm::default_config();
         }
 
@@ -64,10 +66,12 @@ int main(int argc, char* argv[])
     }
     catch (std::exception const& e)
     {
-        std::cerr << "Error: " << e.what() << std::endl;
+        LOG_ERROR("Error: {}", e.what());
+        lwm::log::shutdown();
         return 1;
     }
 
-    std::cout << "LWM exiting" << std::endl;
+    LOG_INFO("LWM exiting");
+    lwm::log::shutdown();
     return 0;
 }

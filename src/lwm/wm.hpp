@@ -121,8 +121,8 @@ private:
     xcb_atom_t net_wm_state_focused_ = XCB_NONE;
     bool suppress_focus_ = false;
     uint32_t last_event_time_ = XCB_CURRENT_TIME;
-    xcb_keysym_t last_toggle_keysym_ = XCB_NO_SYMBOL;  // Track toggle key to ignore auto-repeat
-    bool toggle_key_released_ = true;                  // Allow next toggle only after key release
+    xcb_keysym_t last_toggle_keysym_ = XCB_NO_SYMBOL;   // Track toggle key to ignore auto-repeat
+    xcb_timestamp_t last_toggle_release_time_ = 0;    // Timestamp of last KeyRelease for auto-repeat detection
     DragState drag_state_;
     std::vector<MouseBinding> mousebinds_;
 
