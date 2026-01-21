@@ -321,42 +321,31 @@ void WindowManager::focus_next()
     auto& monitor = focused_monitor();
     auto& ws = monitor.current();
 
-    // Build list of focusable windows: tiled + floating on this workspace
-    std::vector<xcb_window_t> candidates;
+    auto eligible = [this](xcb_window_t window) {
+        return !is_client_iconic(window) && is_focus_eligible(window);
+    };
 
-    // Add non-iconic tiled windows
-    for (xcb_window_t w : ws.windows)
-    {
-        if (!is_client_iconic(w) && is_focus_eligible(w))
-            candidates.push_back(w);
-    }
-
-    // Add visible floating windows on this workspace
+    // Build floating candidates
+    std::vector<focus_policy::FloatingCandidate> floating_candidates;
     for (auto const& fw : floating_windows_)
     {
         auto const* c = get_client(fw.id);
-        if (c && c->monitor == focused_monitor_ && c->workspace == monitor.current_workspace
-            && !is_client_iconic(fw.id) && is_focus_eligible(fw.id))
-        {
-            candidates.push_back(fw.id);
-        }
+        if (c)
+            floating_candidates.push_back({ fw.id, c->monitor, c->workspace, c->sticky });
     }
 
-    if (candidates.empty())
+    auto candidates = focus_policy::build_cycle_candidates(
+        ws.windows, floating_candidates, focused_monitor_, monitor.current_workspace, eligible
+    );
+
+    auto target = focus_policy::cycle_focus_next(candidates, active_window_);
+    if (!target)
         return;
 
-    // Find current position
-    auto it = std::ranges::find(candidates, active_window_);
-    size_t current = (it != candidates.end()) ? static_cast<size_t>(std::distance(candidates.begin(), it)) : 0;
-
-    // Move to next with wrap
-    size_t next = (current + 1) % candidates.size();
-
-    xcb_window_t target = candidates[next];
-    if (find_floating_window(target))
-        focus_floating_window(target);
+    if (target->is_floating)
+        focus_floating_window(target->id);
     else
-        focus_window(target);
+        focus_window(target->id);
 }
 
 void WindowManager::focus_prev()
@@ -367,42 +356,31 @@ void WindowManager::focus_prev()
     auto& monitor = focused_monitor();
     auto& ws = monitor.current();
 
-    // Build list of focusable windows: tiled + floating on this workspace
-    std::vector<xcb_window_t> candidates;
+    auto eligible = [this](xcb_window_t window) {
+        return !is_client_iconic(window) && is_focus_eligible(window);
+    };
 
-    // Add non-iconic tiled windows
-    for (xcb_window_t w : ws.windows)
-    {
-        if (!is_client_iconic(w) && is_focus_eligible(w))
-            candidates.push_back(w);
-    }
-
-    // Add visible floating windows on this workspace
+    // Build floating candidates
+    std::vector<focus_policy::FloatingCandidate> floating_candidates;
     for (auto const& fw : floating_windows_)
     {
         auto const* c = get_client(fw.id);
-        if (c && c->monitor == focused_monitor_ && c->workspace == monitor.current_workspace
-            && !is_client_iconic(fw.id) && is_focus_eligible(fw.id))
-        {
-            candidates.push_back(fw.id);
-        }
+        if (c)
+            floating_candidates.push_back({ fw.id, c->monitor, c->workspace, c->sticky });
     }
 
-    if (candidates.empty())
+    auto candidates = focus_policy::build_cycle_candidates(
+        ws.windows, floating_candidates, focused_monitor_, monitor.current_workspace, eligible
+    );
+
+    auto target = focus_policy::cycle_focus_prev(candidates, active_window_);
+    if (!target)
         return;
 
-    // Find current position
-    auto it = std::ranges::find(candidates, active_window_);
-    size_t current = (it != candidates.end()) ? static_cast<size_t>(std::distance(candidates.begin(), it)) : 0;
-
-    // Move to prev with wrap
-    size_t prev = (current + candidates.size() - 1) % candidates.size();
-
-    xcb_window_t target = candidates[prev];
-    if (find_floating_window(target))
-        focus_floating_window(target);
+    if (target->is_floating)
+        focus_floating_window(target->id);
     else
-        focus_window(target);
+        focus_window(target->id);
 }
 
 } // namespace lwm

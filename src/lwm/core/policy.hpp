@@ -147,6 +147,97 @@ inline bool promote_mru(std::vector<T>& items, xcb_window_t id, IdGetter get_id)
     return true;
 }
 
+struct FocusCycleCandidate
+{
+    xcb_window_t id = XCB_NONE;
+    bool is_floating = false;
+};
+
+/// Build a list of focus-cycleable candidates from tiled and floating windows.
+/// Returns candidates in order: tiled first, then floating.
+inline std::vector<FocusCycleCandidate> build_cycle_candidates(
+    std::span<xcb_window_t const> tiled_windows,
+    std::span<FloatingCandidate const> floating_windows,
+    size_t monitor_idx,
+    size_t workspace_idx,
+    std::function<bool(xcb_window_t)> const& is_eligible
+)
+{
+    std::vector<FocusCycleCandidate> candidates;
+
+    // Add eligible tiled windows
+    for (xcb_window_t w : tiled_windows)
+    {
+        if (is_eligible(w))
+            candidates.push_back({ w, false });
+    }
+
+    // Add eligible floating windows on this monitor/workspace
+    for (auto const& fw : floating_windows)
+    {
+        if (fw.monitor != monitor_idx)
+            continue;
+        if (!fw.sticky && fw.workspace != workspace_idx)
+            continue;
+        if (is_eligible(fw.id))
+            candidates.push_back({ fw.id, true });
+    }
+
+    return candidates;
+}
+
+/// Find the next window in focus cycle order.
+/// Returns nullopt if no candidates or cycling not possible.
+inline std::optional<FocusCycleCandidate> cycle_focus_next(
+    std::span<FocusCycleCandidate const> candidates,
+    xcb_window_t current_window
+)
+{
+    if (candidates.empty())
+        return std::nullopt;
+
+    // Find current position
+    size_t current = 0;
+    for (size_t i = 0; i < candidates.size(); ++i)
+    {
+        if (candidates[i].id == current_window)
+        {
+            current = i;
+            break;
+        }
+    }
+
+    // Move to next with wrap
+    size_t next = (current + 1) % candidates.size();
+    return candidates[next];
+}
+
+/// Find the previous window in focus cycle order.
+/// Returns nullopt if no candidates or cycling not possible.
+inline std::optional<FocusCycleCandidate> cycle_focus_prev(
+    std::span<FocusCycleCandidate const> candidates,
+    xcb_window_t current_window
+)
+{
+    if (candidates.empty())
+        return std::nullopt;
+
+    // Find current position
+    size_t current = 0;
+    for (size_t i = 0; i < candidates.size(); ++i)
+    {
+        if (candidates[i].id == current_window)
+        {
+            current = i;
+            break;
+        }
+    }
+
+    // Move to prev with wrap
+    size_t prev = (current + candidates.size() - 1) % candidates.size();
+    return candidates[prev];
+}
+
 } // namespace lwm::focus_policy
 
 namespace lwm::workspace_policy {

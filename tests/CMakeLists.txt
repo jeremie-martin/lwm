@@ -9,6 +9,7 @@ FetchContent_MakeAvailable(Catch2)
 add_executable(lwm_tests
     test_ewmh_classification.cpp
     test_ewmh_policy.cpp
+    test_focus_cycling_policy.cpp
     test_focus_policy.cpp
     test_focus_restoration_policy.cpp
     test_focus_visibility_policy.cpp
