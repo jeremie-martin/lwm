@@ -7,6 +7,7 @@ FetchContent_Declare(
 FetchContent_MakeAvailable(Catch2)
 
 add_executable(lwm_tests
+    test_client_state_policy.cpp
     test_ewmh_classification.cpp
     test_ewmh_policy.cpp
     test_focus_cycling_policy.cpp
@@ -16,6 +17,7 @@ add_executable(lwm_tests
     test_integration_focus.cpp
     test_floating_policy.cpp
     test_layout_policy.cpp
+    test_multimonitor_policy.cpp
     test_workspace.cpp
     test_workspace_policy.cpp
 )
