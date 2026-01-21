@@ -3,6 +3,7 @@ add_library(liblwm STATIC
     core/ewmh.cpp
     core/floating.cpp
     core/focus.cpp
+    core/window_rules.cpp
     config/config.cpp
     layout/layout.cpp
     keybind/keybind.cpp

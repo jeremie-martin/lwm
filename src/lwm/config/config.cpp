@@ -232,6 +232,73 @@ std::optional<Config> load_config(std::string const& path)
             }
         }
 
+        // Window rules
+        if (auto rules = tbl["rules"].as_array())
+        {
+            for (auto const& item : *rules)
+            {
+                if (auto rule = item.as_table())
+                {
+                    WindowRuleConfig rule_cfg;
+
+                    // Matching criteria
+                    if (auto v = (*rule)["class"].value<std::string>())
+                        rule_cfg.class_pattern = *v;
+                    if (auto v = (*rule)["instance"].value<std::string>())
+                        rule_cfg.instance_pattern = *v;
+                    if (auto v = (*rule)["title"].value<std::string>())
+                        rule_cfg.title_pattern = *v;
+                    if (auto v = (*rule)["type"].value<std::string>())
+                        rule_cfg.type = *v;
+                    if (auto v = (*rule)["transient"].value<bool>())
+                        rule_cfg.transient = *v;
+
+                    // Actions
+                    if (auto v = (*rule)["floating"].value<bool>())
+                        rule_cfg.floating = *v;
+                    if (auto v = (*rule)["workspace"].value<int64_t>())
+                        rule_cfg.workspace = static_cast<int>(*v);
+                    if (auto v = (*rule)["workspace_name"].value<std::string>())
+                        rule_cfg.workspace_name = *v;
+                    if (auto v = (*rule)["monitor"].value<int64_t>())
+                        rule_cfg.monitor = static_cast<int>(*v);
+                    if (auto v = (*rule)["monitor_name"].value<std::string>())
+                        rule_cfg.monitor_name = *v;
+                    if (auto v = (*rule)["fullscreen"].value<bool>())
+                        rule_cfg.fullscreen = *v;
+                    if (auto v = (*rule)["above"].value<bool>())
+                        rule_cfg.above = *v;
+                    if (auto v = (*rule)["below"].value<bool>())
+                        rule_cfg.below = *v;
+                    if (auto v = (*rule)["sticky"].value<bool>())
+                        rule_cfg.sticky = *v;
+                    if (auto v = (*rule)["skip_taskbar"].value<bool>())
+                        rule_cfg.skip_taskbar = *v;
+                    if (auto v = (*rule)["skip_pager"].value<bool>())
+                        rule_cfg.skip_pager = *v;
+                    if (auto v = (*rule)["center"].value<bool>())
+                        rule_cfg.center = *v;
+
+                    // Geometry (inline table)
+                    if (auto geom = (*rule)["geometry"].as_table())
+                    {
+                        RuleGeometry geo;
+                        if (auto v = (*geom)["x"].value<int64_t>())
+                            geo.x = static_cast<int32_t>(*v);
+                        if (auto v = (*geom)["y"].value<int64_t>())
+                            geo.y = static_cast<int32_t>(*v);
+                        if (auto v = (*geom)["width"].value<int64_t>())
+                            geo.width = static_cast<uint32_t>(*v);
+                        if (auto v = (*geom)["height"].value<int64_t>())
+                            geo.height = static_cast<uint32_t>(*v);
+                        rule_cfg.geometry = geo;
+                    }
+
+                    cfg.rules.push_back(rule_cfg);
+                }
+            }
+        }
+
         return cfg;
     }
     catch (toml::parse_error const& err)

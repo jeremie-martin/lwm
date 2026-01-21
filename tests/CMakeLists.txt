@@ -18,6 +18,7 @@ add_executable(lwm_tests
     test_floating_policy.cpp
     test_layout_policy.cpp
     test_multimonitor_policy.cpp
+    test_window_rules.cpp
     test_workspace.cpp
     test_workspace_policy.cpp
 )

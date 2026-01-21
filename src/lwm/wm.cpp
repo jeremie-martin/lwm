@@ -90,6 +90,7 @@ WindowManager::WindowManager(Config config)
             ewmh_.set_extra_supported_atoms(extra);
     }
     layout_.set_sync_request_callback([this](xcb_window_t window) { send_sync_request(window, last_event_time_); });
+    window_rules_.load_rules(config_.rules);
     detect_monitors();
     setup_ewmh();
     if (bar_)

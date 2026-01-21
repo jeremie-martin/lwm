@@ -87,6 +87,7 @@ public:
 
     // Window type detection and classification
     xcb_atom_t get_window_type(xcb_window_t window) const;
+    WindowType get_window_type_enum(xcb_window_t window) const;
     bool is_dock_window(xcb_window_t window) const;
     bool is_dialog_window(xcb_window_t window) const;
     bool should_tile_window(xcb_window_t window) const;

@@ -6,6 +6,7 @@
 #include "lwm/core/ewmh.hpp"
 #include "lwm/core/invariants.hpp"
 #include "lwm/core/types.hpp"
+#include "lwm/core/window_rules.hpp"
 #include "lwm/keybind/keybind.hpp"
 #include "lwm/layout/layout.hpp"
 #include <chrono>
@@ -68,6 +69,7 @@ private:
     Ewmh ewmh_;
     KeybindManager keybinds_;
     Layout layout_;
+    WindowRules window_rules_;
     std::optional<StatusBar> bar_;
 
     std::vector<Monitor> monitors_;

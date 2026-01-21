@@ -12,6 +12,7 @@
 #include "wm.hpp"
 #include "lwm/core/floating.hpp"
 #include "lwm/core/log.hpp"
+#include "lwm/core/window_rules.hpp"
 #include <xcb/xcb_icccm.h>
 
 namespace lwm {
@@ -165,6 +166,35 @@ void WindowManager::handle_map_request(xcb_map_request_event_t const& e)
     bool has_transient = transient_for_window(e.window).has_value();
     auto classification = ewmh_.classify_window(e.window, has_transient);
 
+    // Match window against user-defined rules
+    auto [instance_name, class_name] = get_wm_class(e.window);
+    std::string title = get_window_name(e.window);
+    WindowMatchInfo match_info{
+        .wm_class = class_name,
+        .wm_class_name = instance_name,
+        .title = title,
+        .ewmh_type = ewmh_.get_window_type_enum(e.window),
+        .is_transient = has_transient
+    };
+    auto rule_result = window_rules_.match(match_info, monitors_, config_.workspaces.names);
+
+    // Override classification based on rules (respecting EWMH protocol priorities)
+    if (rule_result.matched && classification.kind != WindowClassification::Kind::Dock
+        && classification.kind != WindowClassification::Kind::Desktop
+        && classification.kind != WindowClassification::Kind::Popup)
+    {
+        if (rule_result.floating.has_value())
+        {
+            classification.kind = *rule_result.floating
+                ? WindowClassification::Kind::Floating
+                : WindowClassification::Kind::Tiled;
+        }
+        if (rule_result.skip_taskbar.has_value())
+            classification.skip_taskbar = *rule_result.skip_taskbar;
+        if (rule_result.skip_pager.has_value())
+            classification.skip_pager = *rule_result.skip_pager;
+    }
+
     // Read WM_HINTS for initial_state and urgency (ICCCM)
     bool start_iconic = false;
     bool urgent = false;
@@ -260,6 +290,75 @@ void WindowManager::handle_map_request(xcb_map_request_event_t const& e)
                 set_client_demands_attention(e.window, true);
             if (is_sticky_desktop(e.window) && !is_client_sticky(e.window))
                 set_window_sticky(e.window, true);
+
+            // Apply window rule actions
+            if (rule_result.matched)
+            {
+                auto* client = get_client(e.window);
+                auto* fw = find_floating_window(e.window);
+
+                // Apply target monitor and workspace
+                if (client && (rule_result.target_monitor.has_value() || rule_result.target_workspace.has_value()))
+                {
+                    size_t target_mon = rule_result.target_monitor.value_or(client->monitor);
+                    size_t target_ws = rule_result.target_workspace.value_or(client->workspace);
+
+                    if (target_mon < monitors_.size())
+                    {
+                        target_ws = std::min(target_ws, monitors_[target_mon].workspaces.size() - 1);
+                        client->monitor = target_mon;
+                        client->workspace = target_ws;
+                        uint32_t desktop = get_ewmh_desktop_index(target_mon, target_ws);
+                        ewmh_.set_window_desktop(e.window, desktop);
+
+                        // Reposition floating window to target monitor
+                        if (fw)
+                        {
+                            fw->geometry = floating::place_floating(
+                                monitors_[target_mon].working_area(),
+                                fw->geometry.width,
+                                fw->geometry.height,
+                                std::nullopt
+                            );
+                            client->floating_geometry = fw->geometry;
+                        }
+                    }
+                }
+
+                // Apply geometry from rules
+                if (client && fw && rule_result.geometry.has_value())
+                {
+                    fw->geometry = *rule_result.geometry;
+                    client->floating_geometry = fw->geometry;
+                }
+
+                // Center on monitor
+                if (client && fw && rule_result.center)
+                {
+                    size_t mon = client->monitor;
+                    if (mon < monitors_.size())
+                    {
+                        auto area = monitors_[mon].working_area();
+                        fw->geometry.x = area.x + static_cast<int16_t>((area.width - fw->geometry.width) / 2);
+                        fw->geometry.y = area.y + static_cast<int16_t>((area.height - fw->geometry.height) / 2);
+                        client->floating_geometry = fw->geometry;
+                    }
+                }
+
+                // Apply state flags
+                if (rule_result.above.has_value() && *rule_result.above)
+                    set_window_above(e.window, true);
+                if (rule_result.below.has_value() && *rule_result.below)
+                    set_window_below(e.window, true);
+                if (rule_result.sticky.has_value() && *rule_result.sticky)
+                    set_window_sticky(e.window, true);
+                if (rule_result.fullscreen.has_value() && *rule_result.fullscreen)
+                    set_fullscreen(e.window, true);
+
+                // Update visibility after placement changes
+                if (client)
+                    update_floating_visibility(client->monitor);
+            }
             return;
         }
 
@@ -271,6 +370,69 @@ void WindowManager::handle_map_request(xcb_map_request_event_t const& e)
                 set_client_demands_attention(e.window, true);
             if (is_sticky_desktop(e.window) && !is_client_sticky(e.window))
                 set_window_sticky(e.window, true);
+
+            // Apply window rule actions
+            if (rule_result.matched)
+            {
+                auto* client = get_client(e.window);
+
+                // Apply target monitor and workspace (move tiled window)
+                if (client && (rule_result.target_monitor.has_value() || rule_result.target_workspace.has_value()))
+                {
+                    size_t source_mon = client->monitor;
+                    size_t source_ws = client->workspace;
+                    size_t target_mon = rule_result.target_monitor.value_or(source_mon);
+                    size_t target_ws = rule_result.target_workspace.value_or(source_ws);
+
+                    if (target_mon < monitors_.size())
+                    {
+                        target_ws = std::min(target_ws, monitors_[target_mon].workspaces.size() - 1);
+
+                        // Only move if different location
+                        if (target_mon != source_mon || target_ws != source_ws)
+                        {
+                            // Remove from source workspace
+                            auto& source_workspace = monitors_[source_mon].workspaces[source_ws];
+                            auto it = source_workspace.find_window(e.window);
+                            if (it != source_workspace.windows.end())
+                            {
+                                source_workspace.windows.erase(it);
+                                if (source_workspace.focused_window == e.window)
+                                    source_workspace.focused_window = XCB_NONE;
+                            }
+
+                            // Add to target workspace
+                            auto& target_workspace = monitors_[target_mon].workspaces[target_ws];
+                            target_workspace.windows.push_back(e.window);
+
+                            // Update client
+                            client->monitor = target_mon;
+                            client->workspace = target_ws;
+                            uint32_t desktop = get_ewmh_desktop_index(target_mon, target_ws);
+                            ewmh_.set_window_desktop(e.window, desktop);
+
+                            // Rearrange affected monitors
+                            rearrange_monitor(monitors_[source_mon]);
+                            if (target_mon != source_mon)
+                                rearrange_monitor(monitors_[target_mon]);
+
+                            // Hide if moved to non-visible workspace
+                            if (target_ws != monitors_[target_mon].current_workspace)
+                                wm_unmap_window(e.window);
+                        }
+                    }
+                }
+
+                // Apply state flags
+                if (rule_result.above.has_value() && *rule_result.above)
+                    set_window_above(e.window, true);
+                if (rule_result.below.has_value() && *rule_result.below)
+                    set_window_below(e.window, true);
+                if (rule_result.sticky.has_value() && *rule_result.sticky)
+                    set_window_sticky(e.window, true);
+                if (rule_result.fullscreen.has_value() && *rule_result.fullscreen)
+                    set_fullscreen(e.window, true);
+            }
 
             if (!start_iconic)
             {

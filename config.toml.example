@@ -230,3 +230,64 @@ action = "focus_next"
 mod = "super"
 key = "k"
 action = "focus_prev"
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Window Rules
+# ─────────────────────────────────────────────────────────────────────────────
+#
+# Rules are evaluated in order - first match wins.
+# All specified criteria in a rule are combined with AND logic.
+#
+# Matching criteria (all optional, all use regex):
+#   class       = "Firefox"           # WM_CLASS class name
+#   instance    = "Navigator"         # WM_CLASS instance name
+#   title       = ".*YouTube.*"       # Window title (_NET_WM_NAME or WM_NAME)
+#   type        = "dialog"            # EWMH type: normal, dialog, utility, toolbar, splash, menu
+#   transient   = true                # Match only transient windows
+#
+# Actions:
+#   floating    = true/false          # Force floating or tiled mode
+#   workspace   = 5                   # Target workspace (by index, 0-based)
+#   workspace_name = "dev"            # Target workspace (by name)
+#   monitor     = 1                   # Target monitor (by index, 0-based)
+#   monitor_name = "HDMI-1"           # Target monitor (by RANDR name)
+#   fullscreen  = true                # Start fullscreen
+#   above       = true                # Always on top
+#   below       = true                # Always below
+#   sticky      = true                # Visible on all workspaces
+#   skip_taskbar = true               # Exclude from taskbar
+#   skip_pager  = true                # Exclude from pager
+#   geometry    = { x = 100, y = 100, width = 800, height = 600 }  # Floating only
+#   center      = true                # Center on monitor (floating only)
+#
+# Note: Rules cannot override dock/desktop/popup window behavior (EWMH compliance).
+
+# Example: Force all dialog windows to float
+# [[rules]]
+# type = "dialog"
+# floating = true
+
+# Example: Put Firefox on workspace 2
+# [[rules]]
+# class = "Firefox"
+# workspace = 1
+
+# Example: Float and center a specific app with custom size
+# [[rules]]
+# class = "pavucontrol"
+# floating = true
+# center = true
+# geometry = { width = 800, height = 600 }
+
+# Example: Put Slack on HDMI-1, workspace "chat"
+# [[rules]]
+# class = "Slack"
+# monitor_name = "HDMI-1"
+# workspace_name = "chat"
+
+# Example: Make picture-in-picture windows float and stay above
+# [[rules]]
+# title = "Picture-in-Picture"
+# floating = true
+# above = true
+# sticky = true

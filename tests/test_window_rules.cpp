@@ -1,0 +1,572 @@
+#include "lwm/core/window_rules.hpp"
+#include <catch2/catch_test_macros.hpp>
+
+using namespace lwm;
+
+namespace {
+
+// Helper to create a minimal Monitor with a name
+Monitor make_monitor(std::string name)
+{
+    Monitor m;
+    m.name = std::move(name);
+    return m;
+}
+
+} // namespace
+
+TEST_CASE("Empty rules return no match", "[rules]")
+{
+    WindowRules rules;
+    rules.load_rules({});
+
+    WindowMatchInfo info{ .wm_class = "Firefox",
+                          .wm_class_name = "Navigator",
+                          .title = "Test",
+                          .ewmh_type = WindowType::Normal,
+                          .is_transient = false };
+
+    auto result = rules.match(info, {}, {});
+
+    REQUIRE_FALSE(result.matched);
+}
+
+TEST_CASE("Exact class name matching", "[rules]")
+{
+    WindowRuleConfig cfg;
+    cfg.class_pattern = "Firefox";
+    cfg.floating = true;
+
+    WindowRules rules;
+    rules.load_rules({ cfg });
+
+    SECTION("Exact match succeeds")
+    {
+        WindowMatchInfo info{ .wm_class = "Firefox",
+                              .wm_class_name = "Navigator",
+                              .title = "Test",
+                              .ewmh_type = WindowType::Normal,
+                              .is_transient = false };
+
+        auto result = rules.match(info, {}, {});
+
+        REQUIRE(result.matched);
+        REQUIRE(result.floating.has_value());
+        REQUIRE(*result.floating == true);
+    }
+
+    SECTION("Partial match succeeds (regex search)")
+    {
+        WindowMatchInfo info{ .wm_class = "Firefox Developer Edition",
+                              .wm_class_name = "Navigator",
+                              .title = "Test",
+                              .ewmh_type = WindowType::Normal,
+                              .is_transient = false };
+
+        auto result = rules.match(info, {}, {});
+
+        REQUIRE(result.matched);
+    }
+
+    SECTION("Non-matching class fails")
+    {
+        WindowMatchInfo info{ .wm_class = "Chrome",
+                              .wm_class_name = "Navigator",
+                              .title = "Test",
+                              .ewmh_type = WindowType::Normal,
+                              .is_transient = false };
+
+        auto result = rules.match(info, {}, {});
+
+        REQUIRE_FALSE(result.matched);
+    }
+}
+
+TEST_CASE("Regex pattern matching", "[rules]")
+{
+    WindowRuleConfig cfg;
+    cfg.title_pattern = ".*YouTube.*";
+    cfg.floating = true;
+
+    WindowRules rules;
+    rules.load_rules({ cfg });
+
+    SECTION("Regex matches")
+    {
+        WindowMatchInfo info{ .wm_class = "Firefox",
+                              .wm_class_name = "Navigator",
+                              .title = "Watching YouTube Videos",
+                              .ewmh_type = WindowType::Normal,
+                              .is_transient = false };
+
+        auto result = rules.match(info, {}, {});
+
+        REQUIRE(result.matched);
+    }
+
+    SECTION("Regex does not match")
+    {
+        WindowMatchInfo info{ .wm_class = "Firefox",
+                              .wm_class_name = "Navigator",
+                              .title = "GitHub - Code Repository",
+                              .ewmh_type = WindowType::Normal,
+                              .is_transient = false };
+
+        auto result = rules.match(info, {}, {});
+
+        REQUIRE_FALSE(result.matched);
+    }
+}
+
+TEST_CASE("AND logic - all criteria must match", "[rules]")
+{
+    WindowRuleConfig cfg;
+    cfg.class_pattern = "Firefox";
+    cfg.title_pattern = ".*YouTube.*";
+    cfg.floating = true;
+
+    WindowRules rules;
+    rules.load_rules({ cfg });
+
+    SECTION("Both class and title match")
+    {
+        WindowMatchInfo info{ .wm_class = "Firefox",
+                              .wm_class_name = "Navigator",
+                              .title = "YouTube - Music",
+                              .ewmh_type = WindowType::Normal,
+                              .is_transient = false };
+
+        auto result = rules.match(info, {}, {});
+
+        REQUIRE(result.matched);
+    }
+
+    SECTION("Class matches but title does not")
+    {
+        WindowMatchInfo info{ .wm_class = "Firefox",
+                              .wm_class_name = "Navigator",
+                              .title = "GitHub",
+                              .ewmh_type = WindowType::Normal,
+                              .is_transient = false };
+
+        auto result = rules.match(info, {}, {});
+
+        REQUIRE_FALSE(result.matched);
+    }
+
+    SECTION("Title matches but class does not")
+    {
+        WindowMatchInfo info{ .wm_class = "Chrome",
+                              .wm_class_name = "chrome",
+                              .title = "YouTube",
+                              .ewmh_type = WindowType::Normal,
+                              .is_transient = false };
+
+        auto result = rules.match(info, {}, {});
+
+        REQUIRE_FALSE(result.matched);
+    }
+}
+
+TEST_CASE("First match wins", "[rules]")
+{
+    WindowRuleConfig rule1;
+    rule1.class_pattern = "Firefox";
+    rule1.floating = true;
+    rule1.workspace = 5;
+
+    WindowRuleConfig rule2;
+    rule2.class_pattern = "Firefox";
+    rule2.floating = false;
+    rule2.workspace = 3;
+
+    WindowRules rules;
+    rules.load_rules({ rule1, rule2 });
+
+    WindowMatchInfo info{ .wm_class = "Firefox",
+                          .wm_class_name = "Navigator",
+                          .title = "Test",
+                          .ewmh_type = WindowType::Normal,
+                          .is_transient = false };
+
+    std::vector<std::string> workspace_names = { "1", "2", "3", "4", "5", "6" };
+    auto result = rules.match(info, {}, workspace_names);
+
+    REQUIRE(result.matched);
+    REQUIRE(result.floating.has_value());
+    REQUIRE(*result.floating == true); // From first rule
+    REQUIRE(result.target_workspace.has_value());
+    REQUIRE(*result.target_workspace == 5); // From first rule
+}
+
+TEST_CASE("Window type matching", "[rules]")
+{
+    WindowRuleConfig cfg;
+    cfg.type = "dialog";
+    cfg.floating = true;
+
+    WindowRules rules;
+    rules.load_rules({ cfg });
+
+    SECTION("Dialog type matches")
+    {
+        WindowMatchInfo info{ .wm_class = "Firefox",
+                              .wm_class_name = "Navigator",
+                              .title = "Preferences",
+                              .ewmh_type = WindowType::Dialog,
+                              .is_transient = false };
+
+        auto result = rules.match(info, {}, {});
+
+        REQUIRE(result.matched);
+    }
+
+    SECTION("Normal type does not match dialog rule")
+    {
+        WindowMatchInfo info{ .wm_class = "Firefox",
+                              .wm_class_name = "Navigator",
+                              .title = "Preferences",
+                              .ewmh_type = WindowType::Normal,
+                              .is_transient = false };
+
+        auto result = rules.match(info, {}, {});
+
+        REQUIRE_FALSE(result.matched);
+    }
+}
+
+TEST_CASE("Transient flag matching", "[rules]")
+{
+    WindowRuleConfig cfg;
+    cfg.transient = true;
+    cfg.floating = true;
+
+    WindowRules rules;
+    rules.load_rules({ cfg });
+
+    SECTION("Transient window matches")
+    {
+        WindowMatchInfo info{ .wm_class = "Firefox",
+                              .wm_class_name = "Navigator",
+                              .title = "Dialog",
+                              .ewmh_type = WindowType::Normal,
+                              .is_transient = true };
+
+        auto result = rules.match(info, {}, {});
+
+        REQUIRE(result.matched);
+    }
+
+    SECTION("Non-transient window does not match")
+    {
+        WindowMatchInfo info{ .wm_class = "Firefox",
+                              .wm_class_name = "Navigator",
+                              .title = "Main Window",
+                              .ewmh_type = WindowType::Normal,
+                              .is_transient = false };
+
+        auto result = rules.match(info, {}, {});
+
+        REQUIRE_FALSE(result.matched);
+    }
+}
+
+TEST_CASE("Instance name matching", "[rules]")
+{
+    WindowRuleConfig cfg;
+    cfg.instance_pattern = "Navigator";
+    cfg.floating = true;
+
+    WindowRules rules;
+    rules.load_rules({ cfg });
+
+    SECTION("Instance name matches")
+    {
+        WindowMatchInfo info{ .wm_class = "Firefox",
+                              .wm_class_name = "Navigator",
+                              .title = "Test",
+                              .ewmh_type = WindowType::Normal,
+                              .is_transient = false };
+
+        auto result = rules.match(info, {}, {});
+
+        REQUIRE(result.matched);
+    }
+
+    SECTION("Different instance name does not match")
+    {
+        WindowMatchInfo info{ .wm_class = "Firefox",
+                              .wm_class_name = "Toolbox",
+                              .title = "Test",
+                              .ewmh_type = WindowType::Normal,
+                              .is_transient = false };
+
+        auto result = rules.match(info, {}, {});
+
+        REQUIRE_FALSE(result.matched);
+    }
+}
+
+TEST_CASE("Workspace index resolution", "[rules]")
+{
+    WindowRuleConfig cfg;
+    cfg.class_pattern = "Test";
+    cfg.workspace = 2;
+
+    WindowRules rules;
+    rules.load_rules({ cfg });
+
+    std::vector<std::string> workspace_names = { "1", "2", "3", "4", "5" };
+
+    WindowMatchInfo info{ .wm_class = "Test",
+                          .wm_class_name = "test",
+                          .title = "Test",
+                          .ewmh_type = WindowType::Normal,
+                          .is_transient = false };
+
+    auto result = rules.match(info, {}, workspace_names);
+
+    REQUIRE(result.matched);
+    REQUIRE(result.target_workspace.has_value());
+    REQUIRE(*result.target_workspace == 2);
+}
+
+TEST_CASE("Workspace name resolution", "[rules]")
+{
+    WindowRuleConfig cfg;
+    cfg.class_pattern = "Test";
+    cfg.workspace_name = "dev";
+
+    WindowRules rules;
+    rules.load_rules({ cfg });
+
+    std::vector<std::string> workspace_names = { "main", "web", "dev", "chat" };
+
+    WindowMatchInfo info{ .wm_class = "Test",
+                          .wm_class_name = "test",
+                          .title = "Test",
+                          .ewmh_type = WindowType::Normal,
+                          .is_transient = false };
+
+    auto result = rules.match(info, {}, workspace_names);
+
+    REQUIRE(result.matched);
+    REQUIRE(result.target_workspace.has_value());
+    REQUIRE(*result.target_workspace == 2); // "dev" is at index 2
+}
+
+TEST_CASE("Monitor index resolution", "[rules]")
+{
+    WindowRuleConfig cfg;
+    cfg.class_pattern = "Test";
+    cfg.monitor = 1;
+
+    WindowRules rules;
+    rules.load_rules({ cfg });
+
+    std::vector<Monitor> monitors = { make_monitor("DP-1"), make_monitor("HDMI-1") };
+
+    WindowMatchInfo info{ .wm_class = "Test",
+                          .wm_class_name = "test",
+                          .title = "Test",
+                          .ewmh_type = WindowType::Normal,
+                          .is_transient = false };
+
+    auto result = rules.match(info, monitors, {});
+
+    REQUIRE(result.matched);
+    REQUIRE(result.target_monitor.has_value());
+    REQUIRE(*result.target_monitor == 1);
+}
+
+TEST_CASE("Monitor name resolution", "[rules]")
+{
+    WindowRuleConfig cfg;
+    cfg.class_pattern = "Test";
+    cfg.monitor_name = "HDMI-1";
+
+    WindowRules rules;
+    rules.load_rules({ cfg });
+
+    std::vector<Monitor> monitors = { make_monitor("DP-1"), make_monitor("HDMI-1") };
+
+    WindowMatchInfo info{ .wm_class = "Test",
+                          .wm_class_name = "test",
+                          .title = "Test",
+                          .ewmh_type = WindowType::Normal,
+                          .is_transient = false };
+
+    auto result = rules.match(info, monitors, {});
+
+    REQUIRE(result.matched);
+    REQUIRE(result.target_monitor.has_value());
+    REQUIRE(*result.target_monitor == 1); // "HDMI-1" is at index 1
+}
+
+TEST_CASE("Invalid monitor/workspace returns nullopt", "[rules]")
+{
+    WindowRuleConfig cfg;
+    cfg.class_pattern = "Test";
+    cfg.workspace = 99; // Out of range
+    cfg.monitor = 99;   // Out of range
+
+    WindowRules rules;
+    rules.load_rules({ cfg });
+
+    std::vector<Monitor> monitors = { make_monitor("DP-1") };
+    std::vector<std::string> workspace_names = { "1", "2", "3" };
+
+    WindowMatchInfo info{ .wm_class = "Test",
+                          .wm_class_name = "test",
+                          .title = "Test",
+                          .ewmh_type = WindowType::Normal,
+                          .is_transient = false };
+
+    auto result = rules.match(info, monitors, workspace_names);
+
+    REQUIRE(result.matched);
+    REQUIRE_FALSE(result.target_workspace.has_value());
+    REQUIRE_FALSE(result.target_monitor.has_value());
+}
+
+TEST_CASE("Geometry preservation", "[rules]")
+{
+    WindowRuleConfig cfg;
+    cfg.class_pattern = "Test";
+
+    RuleGeometry geo;
+    geo.x = 100;
+    geo.y = 200;
+    geo.width = 800;
+    geo.height = 600;
+    cfg.geometry = geo;
+
+    WindowRules rules;
+    rules.load_rules({ cfg });
+
+    WindowMatchInfo info{ .wm_class = "Test",
+                          .wm_class_name = "test",
+                          .title = "Test",
+                          .ewmh_type = WindowType::Normal,
+                          .is_transient = false };
+
+    auto result = rules.match(info, {}, {});
+
+    REQUIRE(result.matched);
+    REQUIRE(result.geometry.has_value());
+    REQUIRE(result.geometry->x == 100);
+    REQUIRE(result.geometry->y == 200);
+    REQUIRE(result.geometry->width == 800);
+    REQUIRE(result.geometry->height == 600);
+}
+
+TEST_CASE("State flags are preserved", "[rules]")
+{
+    WindowRuleConfig cfg;
+    cfg.class_pattern = "Test";
+    cfg.fullscreen = true;
+    cfg.above = true;
+    cfg.sticky = true;
+    cfg.skip_taskbar = true;
+
+    WindowRules rules;
+    rules.load_rules({ cfg });
+
+    WindowMatchInfo info{ .wm_class = "Test",
+                          .wm_class_name = "test",
+                          .title = "Test",
+                          .ewmh_type = WindowType::Normal,
+                          .is_transient = false };
+
+    auto result = rules.match(info, {}, {});
+
+    REQUIRE(result.matched);
+    REQUIRE(result.fullscreen.has_value());
+    REQUIRE(*result.fullscreen == true);
+    REQUIRE(result.above.has_value());
+    REQUIRE(*result.above == true);
+    REQUIRE(result.sticky.has_value());
+    REQUIRE(*result.sticky == true);
+    REQUIRE(result.skip_taskbar.has_value());
+    REQUIRE(*result.skip_taskbar == true);
+}
+
+TEST_CASE("Center flag is preserved", "[rules]")
+{
+    WindowRuleConfig cfg;
+    cfg.class_pattern = "Test";
+    cfg.center = true;
+
+    WindowRules rules;
+    rules.load_rules({ cfg });
+
+    WindowMatchInfo info{ .wm_class = "Test",
+                          .wm_class_name = "test",
+                          .title = "Test",
+                          .ewmh_type = WindowType::Normal,
+                          .is_transient = false };
+
+    auto result = rules.match(info, {}, {});
+
+    REQUIRE(result.matched);
+    REQUIRE(result.center == true);
+}
+
+TEST_CASE("Rule count is tracked", "[rules]")
+{
+    WindowRules rules;
+    REQUIRE(rules.rule_count() == 0);
+
+    WindowRuleConfig cfg1, cfg2, cfg3;
+    cfg1.class_pattern = "Test1";
+    cfg2.class_pattern = "Test2";
+    cfg3.class_pattern = "Test3";
+
+    rules.load_rules({ cfg1, cfg2, cfg3 });
+    REQUIRE(rules.rule_count() == 3);
+
+    rules.load_rules({});
+    REQUIRE(rules.rule_count() == 0);
+}
+
+TEST_CASE("Window type string parsing is case-insensitive", "[rules]")
+{
+    WindowRuleConfig cfg;
+    cfg.type = "DIALOG"; // uppercase
+    cfg.floating = true;
+
+    WindowRules rules;
+    rules.load_rules({ cfg });
+
+    WindowMatchInfo info{ .wm_class = "Test",
+                          .wm_class_name = "test",
+                          .title = "Test",
+                          .ewmh_type = WindowType::Dialog,
+                          .is_transient = false };
+
+    auto result = rules.match(info, {}, {});
+
+    REQUIRE(result.matched);
+}
+
+TEST_CASE("No criteria matches all windows", "[rules]")
+{
+    // Rule with no criteria should match everything
+    WindowRuleConfig cfg;
+    cfg.floating = true;
+
+    WindowRules rules;
+    rules.load_rules({ cfg });
+
+    WindowMatchInfo info{ .wm_class = "AnyClass",
+                          .wm_class_name = "any",
+                          .title = "Any Title",
+                          .ewmh_type = WindowType::Normal,
+                          .is_transient = false };
+
+    auto result = rules.match(info, {}, {});
+
+    REQUIRE(result.matched);
+    REQUIRE(result.floating.has_value());
+    REQUIRE(*result.floating == true);
+}

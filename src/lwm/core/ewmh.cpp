@@ -431,38 +431,41 @@ WindowClassification classify_window_type(WindowType type, bool is_transient)
     return result;
 }
 
-WindowClassification Ewmh::classify_window(xcb_window_t window, bool is_transient) const
+WindowType Ewmh::get_window_type_enum(xcb_window_t window) const
 {
     xcb_atom_t type = get_window_type(window);
-    WindowType type_kind = WindowType::Normal;
     if (type == ewmh_._NET_WM_WINDOW_TYPE_DESKTOP)
-        type_kind = WindowType::Desktop;
-    else if (type == ewmh_._NET_WM_WINDOW_TYPE_DOCK)
-        type_kind = WindowType::Dock;
-    else if (type == ewmh_._NET_WM_WINDOW_TYPE_TOOLBAR)
-        type_kind = WindowType::Toolbar;
-    else if (type == ewmh_._NET_WM_WINDOW_TYPE_MENU)
-        type_kind = WindowType::Menu;
-    else if (type == ewmh_._NET_WM_WINDOW_TYPE_UTILITY)
-        type_kind = WindowType::Utility;
-    else if (type == ewmh_._NET_WM_WINDOW_TYPE_SPLASH)
-        type_kind = WindowType::Splash;
-    else if (type == ewmh_._NET_WM_WINDOW_TYPE_DIALOG)
-        type_kind = WindowType::Dialog;
-    else if (type == ewmh_._NET_WM_WINDOW_TYPE_DROPDOWN_MENU)
-        type_kind = WindowType::DropdownMenu;
-    else if (type == ewmh_._NET_WM_WINDOW_TYPE_POPUP_MENU)
-        type_kind = WindowType::PopupMenu;
-    else if (type == ewmh_._NET_WM_WINDOW_TYPE_TOOLTIP)
-        type_kind = WindowType::Tooltip;
-    else if (type == ewmh_._NET_WM_WINDOW_TYPE_NOTIFICATION)
-        type_kind = WindowType::Notification;
-    else if (type == ewmh_._NET_WM_WINDOW_TYPE_COMBO)
-        type_kind = WindowType::Combo;
-    else if (type == ewmh_._NET_WM_WINDOW_TYPE_DND)
-        type_kind = WindowType::Dnd;
+        return WindowType::Desktop;
+    if (type == ewmh_._NET_WM_WINDOW_TYPE_DOCK)
+        return WindowType::Dock;
+    if (type == ewmh_._NET_WM_WINDOW_TYPE_TOOLBAR)
+        return WindowType::Toolbar;
+    if (type == ewmh_._NET_WM_WINDOW_TYPE_MENU)
+        return WindowType::Menu;
+    if (type == ewmh_._NET_WM_WINDOW_TYPE_UTILITY)
+        return WindowType::Utility;
+    if (type == ewmh_._NET_WM_WINDOW_TYPE_SPLASH)
+        return WindowType::Splash;
+    if (type == ewmh_._NET_WM_WINDOW_TYPE_DIALOG)
+        return WindowType::Dialog;
+    if (type == ewmh_._NET_WM_WINDOW_TYPE_DROPDOWN_MENU)
+        return WindowType::DropdownMenu;
+    if (type == ewmh_._NET_WM_WINDOW_TYPE_POPUP_MENU)
+        return WindowType::PopupMenu;
+    if (type == ewmh_._NET_WM_WINDOW_TYPE_TOOLTIP)
+        return WindowType::Tooltip;
+    if (type == ewmh_._NET_WM_WINDOW_TYPE_NOTIFICATION)
+        return WindowType::Notification;
+    if (type == ewmh_._NET_WM_WINDOW_TYPE_COMBO)
+        return WindowType::Combo;
+    if (type == ewmh_._NET_WM_WINDOW_TYPE_DND)
+        return WindowType::Dnd;
+    return WindowType::Normal;
+}
 
-    return classify_window_type(type_kind, is_transient);
+WindowClassification Ewmh::classify_window(xcb_window_t window, bool is_transient) const
+{
+    return classify_window_type(get_window_type_enum(window), is_transient);
 }
 
 Strut Ewmh::get_window_strut(xcb_window_t window) const
