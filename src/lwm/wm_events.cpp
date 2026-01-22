@@ -1426,23 +1426,50 @@ void WindowManager::handle_randr_screen_change()
         set_fullscreen(window, false);
     }
 
-    std::vector<xcb_window_t> all_windows;
-    std::vector<FloatingWindow> all_floating = floating_windows_;
+    // Save window locations by monitor NAME (not index) so we can restore after detect_monitors()
+    // This preserves window positions when monitors are turned off and back on
+    struct WindowLocation
+    {
+        xcb_window_t id;
+        std::string monitor_name;
+        size_t workspace;
+    };
+    std::vector<WindowLocation> tiled_locations;
+    std::vector<std::pair<FloatingWindow, WindowLocation>> floating_locations;
+
     // Clear fullscreen_monitors from all clients since monitor indices may have changed
     for (auto& [id, client] : clients_)
     {
         client.fullscreen_monitors.reset();
     }
-    for (auto& monitor : monitors_)
+
+    // Save tiled window locations
+    for (size_t mi = 0; mi < monitors_.size(); ++mi)
     {
-        for (auto& workspace : monitor.workspaces)
+        auto const& monitor = monitors_[mi];
+        for (size_t wi = 0; wi < monitor.workspaces.size(); ++wi)
         {
-            for (xcb_window_t window : workspace.windows)
+            for (xcb_window_t window : monitor.workspaces[wi].windows)
             {
-                all_windows.push_back(window);
+                tiled_locations.push_back({ window, monitor.name, wi });
             }
         }
     }
+
+    // Save floating window locations
+    for (auto const& floating_window : floating_windows_)
+    {
+        if (auto* client = get_client(floating_window.id))
+        {
+            std::string monitor_name = (client->monitor < monitors_.size())
+                ? monitors_[client->monitor].name
+                : "";
+            floating_locations.push_back({ floating_window, { floating_window.id, monitor_name, client->workspace } });
+        }
+    }
+
+    // Save focused monitor name for restoration
+    std::string focused_monitor_name = monitors_.empty() ? "" : monitors_[focused_monitor_].name;
 
     // Destroy old bar windows before detecting new monitors
     if (bar_)
@@ -1465,47 +1492,79 @@ void WindowManager::handle_randr_screen_change()
 
     if (!monitors_.empty())
     {
-        // Move all windows to first monitor, current workspace
-        uint32_t desktop = get_ewmh_desktop_index(0, monitors_[0].current_workspace);
-        for (xcb_window_t window : all_windows)
+        // Build map from monitor name to new index
+        std::unordered_map<std::string, size_t> name_to_index;
+        for (size_t i = 0; i < monitors_.size(); ++i)
         {
-            monitors_[0].current().windows.push_back(window);
-            ewmh_.set_window_desktop(window, desktop);
-            // Sync Client for O(1) lookup
-            if (auto* client = get_client(window))
+            name_to_index[monitors_[i].name] = i;
+        }
+
+        // Restore tiled windows to their original monitors (by name)
+        for (auto const& loc : tiled_locations)
+        {
+            size_t target_monitor = 0;
+            size_t target_workspace = loc.workspace;
+
+            // Try to find the original monitor by name
+            if (auto it = name_to_index.find(loc.monitor_name); it != name_to_index.end())
             {
-                client->monitor = 0;
-                client->workspace = monitors_[0].current_workspace;
+                target_monitor = it->second;
+            }
+            // else: monitor no longer exists, fall back to monitor 0
+
+            // Clamp workspace to valid range
+            if (target_workspace >= monitors_[target_monitor].workspaces.size())
+            {
+                target_workspace = monitors_[target_monitor].current_workspace;
+            }
+
+            monitors_[target_monitor].workspaces[target_workspace].windows.push_back(loc.id);
+            uint32_t desktop = get_ewmh_desktop_index(target_monitor, target_workspace);
+            ewmh_.set_window_desktop(loc.id, desktop);
+
+            if (auto* client = get_client(loc.id))
+            {
+                client->monitor = target_monitor;
+                client->workspace = target_workspace;
             }
         }
 
+        // Restore floating windows to their original monitors
         floating_windows_.clear();
-        for (auto& floating_window : all_floating)
+        for (auto& [floating_window, loc] : floating_locations)
         {
-            // Update Client (authoritative) for monitor/workspace
+            size_t target_monitor = 0;
+            size_t target_workspace = loc.workspace;
+
+            // Try to find the original monitor by name
+            if (auto it = name_to_index.find(loc.monitor_name); it != name_to_index.end())
+            {
+                target_monitor = it->second;
+            }
+
+            // Clamp workspace to valid range
+            if (target_workspace >= monitors_[target_monitor].workspaces.size())
+            {
+                target_workspace = monitors_[target_monitor].current_workspace;
+            }
+
+            uint32_t desktop = get_ewmh_desktop_index(target_monitor, target_workspace);
+
             if (auto* client = get_client(floating_window.id))
             {
-                client->monitor = 0;
-                client->workspace = monitors_[0].current_workspace;
-                client->floating_geometry = floating::place_floating(
-                    monitors_[0].working_area(),
-                    floating_window.geometry.width,
-                    floating_window.geometry.height,
-                    std::nullopt
-                );
-                floating_window.geometry = client->floating_geometry;
-            }
-            else
-            {
-                floating_window.geometry = floating::place_floating(
-                    monitors_[0].working_area(),
-                    floating_window.geometry.width,
-                    floating_window.geometry.height,
-                    std::nullopt
-                );
+                client->monitor = target_monitor;
+                client->workspace = target_workspace;
+                // Keep original geometry - don't reposition
             }
             floating_windows_.push_back(floating_window);
             ewmh_.set_window_desktop(floating_window.id, desktop);
+        }
+
+        // Restore focused monitor by name, or fall back to 0
+        focused_monitor_ = 0;
+        if (auto it = name_to_index.find(focused_monitor_name); it != name_to_index.end())
+        {
+            focused_monitor_ = it->second;
         }
     }
 
@@ -1513,14 +1572,13 @@ void WindowManager::handle_randr_screen_change()
     update_ewmh_desktops();
     update_ewmh_client_list();
 
-    focused_monitor_ = 0;
     update_ewmh_current_desktop();
     rearrange_all_monitors();
 
     // Focus a window after reconfiguration (Bug fix: was leaving focus unset)
     if (!monitors_.empty())
     {
-        focus_or_fallback(monitors_[0]);
+        focus_or_fallback(monitors_[focused_monitor_]);
     }
 
     update_all_bars();
