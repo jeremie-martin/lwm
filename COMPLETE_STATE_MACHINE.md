@@ -86,7 +86,34 @@ WindowManager (wm.cpp)
 **Interaction with ICCCM**:
 - With off-screen visibility, ALL UnmapNotify events are treated as client-initiated withdraw requests
 - WM never unmaps windows (always uses off-screen positioning)
- - No counter tracking exists (unlike traditional unmap-based visibility)
+  - No counter tracking exists (unlike traditional unmap-based visibility)
+
+**Function Implementations**:
+
+**hide_window(window)**:
+- Sets client.hidden=true
+- Moves window to OFF_SCREEN_X, preserves y coordinate
+- For sticky windows: early return without setting hidden flag or moving off-screen
+  - Sticky windows remain visible on all workspaces
+  - Controlled via workspace tiling algorithm and layout filtering (not via hide/show visibility management)
+
+Implementation details:
+- Uses XCB_CONFIG_WINDOW_X with OFF_SCREEN_X constant
+- Flushes connection after configuration
+- Sticky windows skip all processing (return early at start)
+
+**show_window(window)**:
+- Sets client.hidden=false only
+- Does NOT send configure events or restore position
+- Caller must call:
+  - rearrange_monitor() for tiled windows
+  - apply_floating_geometry() for floating windows
+- Desktop windows are always on-screen, no restoration needed
+
+Implementation details:
+- Only clears client->hidden flag
+- Does NOT configure geometry or call flush
+- Caller is responsible for geometry restoration
 
 ---
 
@@ -342,8 +369,10 @@ MapRequest → classify_window()
 - Top-level window states: UNMANAGED, MANAGED (with VISIBLE/ICONIC substates), WITHDRAWN (ICCCM WM_STATE)
 - `hidden` is a physical state flag (positioned off-screen at OFF_SCREEN_X)
 - `iconic` is a logical state flag (minimized by user, WM_STATE Iconic)
-- **iconic=true always implies hidden=true** (minimized windows are off-screen)
+- **iconic=true implies hidden=true for NON-STICKY windows** (minimized windows are off-screen; sticky windows are the exception)
 - **hidden=true does NOT imply iconic=true** (workspace switches also hide windows)
+- **hidden=false implies iconic=false for NON-STICKY windows** (on-screen windows cannot be minimized)
+- **Exception for sticky windows**: Iconic sticky windows have iconic=true but hidden=false (hide_window() returns early for sticky windows, so they remain at their on-screen position while iconic flag is set)
 - State modifiers apply to VISIBLE windows: fullscreen, above, below, sticky, maximized, shaded, modal
 - `fullscreen` can combine with VISIBLE state; fullscreen windows are excluded from tiling
 - Modal state is tightly coupled: `modal=true` ⇒ `above=true` (when modal is enabled, above is also enabled; when modal is disabled, above is also cleared). **Note:** This coupling is NOT bidirectional: disabling modal ALWAYS disables above, even if above was set independently before modal was enabled.
@@ -353,7 +382,7 @@ MapRequest → classify_window()
 | hidden | iconic | fullscreen | Visible On-Screen? | Valid? | Notes |
 |--------|--------|-----------|-------------------|--------|-------|
 | true   | true   | false     | No                | Yes    | Iconic (minimized) window |
-| true   | true   | true      | No                | Yes    | Iconic fullscreen window |
+| true   | true   | true      | No                | Yes    | Iconic fullscreen window (fullscreen flag preserved while off-screen) |
 | true   | false  | false     | No                | Yes    | Hidden (workspace switch) |
 | true   | false  | true      | No                | Yes    | Fullscreen on non-visible workspace |
 | false  | false  | false     | Yes               | Yes    | Normal visible window |
@@ -365,7 +394,7 @@ MapRequest → classify_window()
 - hidden=true does NOT imply iconic=true (can be hidden for other reasons)
 - hidden=false ⇒ iconic=false for NON-STICKY windows (on-screen windows cannot be minimized)
 - **Exception for sticky windows**: Iconic sticky windows have iconic=true but hidden=false (hide_window() returns early for sticky windows, so they remain at their on-screen position while iconic flag is set)
- - fullscreen+iconic: Window remains fullscreen flag but is off-screen until deiconified
+- fullscreen+iconic: Window retains fullscreen flag while off-screen until deiconified (fullscreen and iconic are NOT mutually exclusive)
 
 ### State Conflicts
 
@@ -396,26 +425,9 @@ constexpr uint32_t WM_STATE_ICONIC = 3;
 - **MRU**: Most Recently Used ordering. Reverse iteration through vectors (newest items at end) provides MRU ordering for focus restoration and floating window stacking.
 - **Best-effort**: Value is maintained but not guaranteed to be accurate. May become stale after state changes (e.g., workspace.focused_window). Should be validated before relying on it.
 - **State modifiers**: Flags that apply to VISIBLE windows to modify their behavior/appearance: fullscreen, above, below, sticky, modal, maximized, shaded, skip_*, demands_attention.
-- **Silent abort**: Graceful early return with no error logging (intentional no-op for invalid state or unsupported operations).
+- **Intentional no-op**: Graceful early return with no error logging (intentional no-op for invalid state or unsupported operations).
 - **Proper visibility channels**: The intended mechanisms for controlling window visibility (hide_window/show_window for workspace switches, layout filtering for sticky windows, etc.).
 - **Interaction modes**: Global WindowManager operation modes - NORMAL (default), DRAG (drag state active), SHOWING_DESKTOP (desktop mode enabled).
-
-**hide_window(window)**: Sets client.hidden=true, moves window to OFF_SCREEN_X, preserves y coordinate. For sticky windows: early return without setting hidden flag or moving off-screen (sticky windows remain visible on all workspaces and are controlled via workspace tiling algorithm and layout filtering, not via hide/show visibility management).
-
-Implementation details:
-- Uses XCB_CONFIG_WINDOW_X with OFF_SCREEN_X constant
-- Flushes connection after configuration
-- Sticky windows skip all processing (return early)
-
-**show_window(window)**: Sets client.hidden=false only. Does NOT send configure events or restore position. Caller must call:
-- rearrange_monitor() for tiled windows
-- apply_floating_geometry() for floating windows
-- Desktop windows are always on-screen, no restoration needed
-
-Implementation details:
-- Only clears client->hidden flag
-- Does NOT configure geometry or call flush
-- Caller is responsible for geometry restoration
 
 **See [State Transitions](#state-transitions) for complete state transition documentation including:**
 - Window lifecycle (manage/unmanage, iconify/deiconify)
@@ -561,6 +573,8 @@ is_focus_eligible(window) =
 2. Call focus_policy::select_focus_candidate()
 3. Focus selected or clear focus
 
+**Note**: Sticky tiled windows from non-current workspaces are explicitly included in the candidate list, as they are visible across all workspaces due to their sticky nature.
+
 ### Focus Policy
 
 **Focus-Follows-Mouse**
@@ -593,7 +607,7 @@ The following conditions can prevent focus even for focus-eligible windows:
 
 Two-tier focus restoration model:
 
-1. **Workspace focus memory** (tiled windows only): Each Workspace.focused_window stores the last-focused tiled window. Only tiled windows are remembered per-workspace (by design).
+1. **Workspace focus memory** (tiled windows only): Each Workspace.focused_window stores the last-focused tiled window. Only tiled windows are remembered per-workspace (by design). This is a **best-effort** value that may become stale (e.g., after window removal, when the focused window moves to a different workspace). Callers validate existence and eligibility before using it (e.g., select_focus_candidate() validates it before using it).
 2. **Global floating window search** (MRU order): When workspace focus memory is not applicable, floating_windows_ is searched in reverse iteration (MRU) for fallback focus restoration.
 
 **See [State Transitions → Window Removal](#window-removal) for detailed restoration logic.**
@@ -1132,14 +1146,14 @@ is_floating_visible(window) =
 ├─ Window in workspace (for tiled drag only - monitor_containing_window returns valid monitor)
 └─ monitors_ is not empty
 
-If any condition fails → Silent no-op (returns immediately)
+If any condition fails → Intentional no-op (returns immediately)
 
 ```
 [ButtonRelease] OR [_NET_WM_MOVERESIZE direction=11 (cancel)]
     ↓
 end_drag()
     ├─ If tiled:
-    │  ├─ Silent abort conditions:
+    │  ├─ Intentional no-op conditions:
     │  │  ├─ If monitor_index_for_window() lookup fails → Abort
     │  │  ├─ If workspace_index_for_window() lookup fails → Abort
     │  │  ├─ If source workspace window lookup fails → Abort
@@ -1153,7 +1167,7 @@ end_drag()
     └─ Ungrab pointer
 ```
 
-**Silent Abort Conditions** (end_drag()):
+**Intentional No-Op Conditions** (end_drag()):
 - Source monitor or workspace lookup fails (window state corrupted)
 - Window removed from source workspace during drag (window already removed)
 - Client has been unmanaged during drag
@@ -1182,20 +1196,17 @@ end_drag()
 
 **Drag Edge Cases**:
 - If window is destroyed or unmapped during drag, end_drag() aborts silently:
-  - drag_state_.active, drag_state_.tiled, drag_state_.resizing are set to false
-  - drag_state_.window = XCB_NONE
-  - xcb_ungrab_pointer() is called to release pointer grab
-  - No attempt to restore window geometry or update layout
-  - Window remains at last drag position (or is gone if destroyed)
+   - drag_state_.active, drag_state_.tiled, drag_state_.resizing are set to false
+   - drag_state_.window = XCB_NONE
+   - xcb_ungrab_pointer() is called to release pointer grab
+   - No attempt to restore window geometry or update layout
+   - Window remains at last drag position (or is gone if destroyed)
 - If all monitors disconnect during drag (monitors_.empty() becomes true):
-  - Drag operation is aborted (end_drag() returns early)
-  - drag_state_.active is set to false
-  - Pointer is ungrabbed
-  - Window remains at last drag position
-  - No error is logged (silent abort)
-- If window becomes fullscreen during drag:
-  - Drag continues normally
-  - Fullscreen is applied when drag ends (potential visual glitch)
+   - Drag operation is aborted (end_drag() returns early)
+   - drag_state_.active is set to false
+   - Pointer is ungrabbed
+   - Window remains at last drag position
+   - No error is logged (intentional no-op)
 
 ### Tiled Window Drag (Reorder Mode)
 
@@ -1393,7 +1404,7 @@ handle_timeouts()
 - **LOG_DEBUG**: Expected early returns for invalid state (e.g., invalid monitor index, window not found)
 - **LOG_TRACE**: Detailed diagnostics for debugging (e.g., property changes, event details)
 
-### Silent No-Op vs Error No-Op
+### Intentional No-Op vs Error No-Op
 
 | Operation | Success Behavior | Failure Behavior | Failure Type |
 |-----------|-----------------|-----------------|-------------|
@@ -1517,6 +1528,8 @@ handle_timeouts()
 2. Fullscreen geometry (if fullscreen enabled)
 3. Maximized geometry (if maximized enabled and not fullscreen)
 4. Placement logic / hints (lowest priority)
+
+**Note**: When a rule sets both `fullscreen=true` AND explicit `geometry={x,y,width,height}`, fullscreen geometry takes precedence and rule geometry is saved for restoration when fullscreen is disabled. The rule geometry only applies to non-fullscreen windows.
 
 **Rule State Precedence**:
 - Window rules CAN override initial _NET_WM_STATE (except for Dock/Desktop/Popup types)
@@ -1757,10 +1770,11 @@ If disabled:
 
 **Iconic Window Becoming Sticky**:
 - If set_window_sticky(true) is called on an iconic (off-screen, hidden=true) window:
-  - sticky flag is set
-  - window remains off-screen (hidden=true, at OFF_SCREEN_X)
-  - No call to show_window() occurs
-  - When deiconified, window becomes visible on current workspace, then behaves as sticky on subsequent workspace switches
+   - sticky flag is set
+   - window remains off-screen (hidden=true, at OFF_SCREEN_X)
+   - No call to show_window() occurs
+   - When deiconified, window becomes visible on current workspace, then behaves as sticky on subsequent workspace switches
+- **Note**: When a sticky window is later iconified, hide_window() returns early (because it's sticky), so iconic sticky windows have iconic=true but hidden=false (they remain at their on-screen position while iconic flag is set)
 
 **Sticky Window Becoming Iconic**:
 - When an already-sticky window is iconified:
@@ -1768,7 +1782,7 @@ If disabled:
     - hide_window() returns early for sticky windows (doesn't set hidden=true or move off-screen)
     - Window remains at on-screen positioned (hidden=false) but marked as minimized
     - Result: Iconic sticky windows have iconic=true but hidden=false (marked as minimized but remain at their on-screen position)
-    - **Note**: While iconic sticky windows are on-screen positioned, they are NOT focusable and do not receive input focus until deiconified (NOT iconic condition in visibility formula)
+    - **Note**: While iconic sticky windows are on-screen positioned, they are NOT focusable and do not receive input focus until deiconified (blocked by iconic focus barrier, not is_focus_eligible)
 
 **Sticky Window Becoming Non-Sticky**:
 - If set_window_sticky(false) is called on an iconic window:
@@ -1806,7 +1820,7 @@ Erase clients_[window]
     ↓
 Remove from workspace.windows or floating_windows_
     ↓
-Update workspace.focused_window
+Update workspace.focused_window (reverse iteration to skip iconic windows)
     ↓
 If was active_window_:
     ├─ If removed window's workspace is the **current workspace** of its monitor AND that monitor is the currently focused monitor:
@@ -1817,7 +1831,7 @@ If was active_window_:
 Update _NET_CLIENT_LIST, bars
 ```
 
-**Note**: The conditional logic ensures focus is only restored when the removed window was on the **current workspace** of its monitor AND that monitor is the currently focused monitor. If a window on a different workspace (even on the same monitor) or on a different monitor is removed, focus doesn't need to be restored on the currently viewed workspace.
+**Note**: The conditional logic ensures focus is only restored when the removed window was on the **current workspace** of its monitor AND that monitor is the currently focused monitor. If a window on a different workspace (even on the same monitor) or on a different monitor is removed, focus doesn't need to be restored on the currently viewed workspace. The workspace.focused_window update uses reverse iteration to skip iconic windows when selecting the new focused window.
 
 ---
 
@@ -1932,6 +1946,8 @@ toggle_workspace()
 **Implementation Details**:
 - Block occurs if same keysym AND same timestamp as KeyRelease
 - State tracked via last_toggle_keysym_ and last_toggle_release_time_ (wm.hpp lines 124-125)
+- When a valid toggle occurs (not blocked), last_toggle_release_time_ is reset to 0
+- This ensures the next KeyRelease can't match until the next key release cycle
 - Prevents multiple workspace toggles from single key hold
 
 ---
@@ -2052,7 +2068,6 @@ toggle_workspace()
 ### Client State Internal Consistency
 
 **Mutually exclusive states are not both true:**
-- NOT (fullscreen AND iconic)
 - NOT (above AND below)
 
 **State flag relationships:**
@@ -2060,7 +2075,7 @@ toggle_workspace()
 - hidden does NOT ⇒ iconic (can be hidden for workspace visibility without being iconic)
 - hidden = true ⇒ window is at OFF_SCREEN_X (-20000)
 - hidden = false ⇒ window is at on-screen position
-- modal ⇒ above: When modal is enabled, above is also enabled. **Note:** This coupling is NOT bidirectional: disabling modal ALWAYS disables above, even if above was set independently before modal was enabled.
+- modal ⇒ above: When modal is enabled, above is also enabled. If above was already true before enabling modal, it remains true. **Note:** This coupling is NOT bidirectional: disabling modal ALWAYS disables above, regardless of whether above was true before modal was enabled.
 
 ### Desktop Index Validity
 
