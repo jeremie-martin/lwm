@@ -1178,7 +1178,7 @@ _NET_DESKTOP_VIEWPORT = Each workspace's monitor origin
 
 Used for `toggle_workspace()` behavior to restore previous workspace. Note that `previous_workspace` is independent per monitor.
 
- ### Workspace Switch
+### Workspace Switch
 
 ```
 switch_workspace(target_ws)
@@ -1284,15 +1284,7 @@ move_window_to_workspace(target_ws)
 - Sticky windows remain visible during showing_desktop mode
 - Z-order during showing_desktop: Sticky windows are NOT explicitly restacked; they maintain their stacking position because they are not hidden like non-sticky windows
 
-**Sticky Window Visibility Mechanism**:
-- Sticky windows are never moved off-screen via hide_window()
-- Their visibility is controlled by:
-   - "Proper visibility channels" = hide_window() skip logic + layout filtering
-   - During showing_desktop: hide_window() called for all windows, but sticky windows are skipped (remain visible)
-   - During workspace switch: hide_window() called for all non-sticky windows, sticky windows skipped (remain visible)
-   - During tiling: layout algorithm explicitly excludes sticky windows from Workspace::windows before calculating tiles
-
-**Sticky + Iconic Window Behavior**: See [Window State Machine → Sticky Toggle](#sticky-toggle) for detailed edge cases involving sticky windows becoming iconic.
+**See [Window State Machine → Sticky Toggle](#sticky-toggle) for detailed behavior including iconification and edge cases.**
 
 ---
 
@@ -1485,11 +1477,6 @@ Desktop mode enabled (showing_desktop_ = true).
 - Calls rearrange_monitor() to restore layout
 - Calls focus_or_fallback() to restore focus
 
-**Sticky window behavior:**
-- Sticky windows remain visible during showing_desktop mode
-- They maintain their stacking position
-- No explicit restacking occurs
-
 ---
 
 ## Geometry Management
@@ -1553,18 +1540,10 @@ Critical sequence for preventing "flash" artifacts during window state changes:
 
 ### Fullscreen Geometry
 
-**apply_fullscreen_if_needed() Preconditions**:
-1. Window must be fullscreen (`client.fullscreen == true`)
-2. Window must not be iconic (`client.iconic == false`)
-3. Client must exist in `clients_`
-4. Client must have valid monitor index (`client.monitor < monitors_.size()`)
-5. Client's workspace must match the monitor's current workspace
-
-If any precondition fails, the function returns early without applying geometry.
-
-**Sticky fullscreen windows**: Sticky fullscreen windows remain fullscreen on all workspaces. When workspace becomes visible, show_window() and apply_fullscreen_if_needed() restore on-screen geometry.
-
-**Fullscreen on non-visible workspaces**: Fullscreen windows have hidden=true (off-screen) but fullscreen=true. When workspace becomes visible, apply_fullscreen_if_needed() restores geometry.
+**See [Window State Machine → Fullscreen Transition](#fullscreen-transition) for preconditions and behavior:**
+- apply_fullscreen_if_needed() preconditions and early return conditions
+- Fullscreen window visibility behavior on non-visible workspaces
+- Sticky fullscreen window behavior
 
 ### Maximized Geometry
 
@@ -1719,12 +1698,6 @@ If any condition fails → Intentional no-op (returns immediately)
     ↓
 end_drag()
     ├─ If tiled:
-    │  ├─ Intentional no-op conditions:
-    │  │  ├─ If monitor_index_for_window() lookup fails → Abort
-    │  │  ├─ If workspace_index_for_window() lookup fails → Abort
-    │  │  ├─ If source workspace window lookup fails → Abort
-    │  │  ├─ If monitors_.empty() → Abort
-    │  │  └─ If client unmanaged → Abort
     │  ├─ Determine target monitor from pointer
     │  ├─ If target workspace empty → Insert at position 0
     │  ├─ Else → Insert at nearest slot (drop_target_index)
@@ -1745,13 +1718,6 @@ end_drag()
 - Calls update_ewmh_current_desktop()
 - Calls update_all_bars()
 - Does NOT call focus_or_fallback() (no automatic focus restoration)
-
-**Drag Rejection Conditions** (begin_drag() / begin_tiled_drag()):
-- Fullscreen windows (is_client_fullscreen returns true)
-- For tiled drag only: showing_desktop mode active
-- For tiled drag only: window is floating (has FloatingWindow record)
-- For tiled drag only: window not in any workspace (monitor_containing_window returns nullptr)
-- For tiled drag only: monitors_.empty()
 
 **Tiled window drag**: Window follows cursor visually (temporary geometry), tiling layout NOT recalculated until drop
 - Drop target: nearest slot center (Euclidean distance)
