@@ -34,7 +34,7 @@
 
 **On-screen**: The opposite of off-screen. A window that is not positioned at OFF_SCREEN_X (hidden=false). Note: A window can be on-screen positioned but not actually viewable due to workspace or showing_desktop state.
 
-**Visible**: Window is actually viewable by user. Requires: NOT off-screen, on current workspace (or sticky), NOT iconic, NOT in showing_desktop mode.
+**Visible**: Window is actually viewable by user. Requires: NOT off-screen, on current workspace (or sticky), NOT iconic (except for sticky iconic windows which are on-screen but marked as minimized and not focusable), NOT in showing_desktop mode.
 
 **Iconic**: ICCCM term for minimized windows (WM_STATE = IconicState). For non-sticky windows, iconic windows are always off-screen (hidden=true). For sticky windows, iconic windows remain on-screen positioned but marked as minimized.
 
@@ -387,7 +387,14 @@ MapRequest → classify_window()
 - hidden=true does NOT imply iconic=true (can be hidden for other reasons)
 - hidden=false ⇒ iconic=false for NON-STICKY windows (on-screen windows cannot be minimized)
 - **Exception for sticky windows**: Iconic sticky windows have iconic=true but hidden=false (hide_window() returns early for sticky windows, so they remain at their on-screen position while iconic flag is set)
-- fullscreen+iconic: Window remains fullscreen flag but is off-screen until deiconified
+ - fullscreen+iconic: Window remains fullscreen flag but is off-screen until deiconified
+
+### State Conflicts
+
+- **Modal and Above**: When modal is enabled, above is also enabled. This coupling is NOT bidirectional: disabling modal ALWAYS disables above, even if above was set independently before modal was enabled.
+- **Fullscreen and Maximized**: Fullscreen supersedes maximized. When fullscreen is enabled, maximized flags are cleared. Maximization changes are ignored while window is fullscreen.
+- **Above and Below**: Mutually exclusive - a window cannot be both above and below simultaneously.
+- **Fullscreen and Iconic**: Windows can be fullscreen while iconic (off-screen). Fullscreen geometry is applied when window becomes deiconified and on current workspace.
 
 **Off-Screen Constant** (defined in src/lwm/core/types.hpp):
 ```cpp
@@ -1728,17 +1735,18 @@ If disabled:
 
 **Sticky Window Becoming Iconic**:
 - When an already-sticky window is iconified:
-   - iconic flag is set
-   - hide_window() returns early for sticky windows (doesn't set hidden=true or move off-screen)
-   - Window remains at on-screen positioned (hidden=false) but marked as minimized
-   - Result: Iconic sticky windows have iconic=true but hidden=false (marked as minimized but remain at their on-screen position)
+    - iconic flag is set
+    - hide_window() returns early for sticky windows (doesn't set hidden=true or move off-screen)
+    - Window remains at on-screen positioned (hidden=false) but marked as minimized
+    - Result: Iconic sticky windows have iconic=true but hidden=false (marked as minimized but remain at their on-screen position)
+    - **Note**: While iconic sticky windows are on-screen positioned, they are NOT focusable and do not receive input focus until deiconified (NOT iconic condition in visibility formula)
 
 **Sticky Window Becoming Non-Sticky**:
 - If set_window_sticky(false) is called on an iconic window:
-  - sticky flag is cleared
-  - _NET_WM_DESKTOP is set to actual workspace
-  - Window remains iconic (still off-screen)
-  - When deiconified, window becomes visible on its assigned workspace only
+   - sticky flag is cleared
+   - _NET_WM_DESKTOP is set to actual workspace (the workspace where the window was when it became sticky)
+   - Window remains iconic (still off-screen)
+   - When deiconified, window becomes visible on its assigned workspace only
 
 **Multiple Windows with Same User Time Window**:
 - Multiple clients with the same user_time_window value is unlikely but possible (violates EWMH spec)
@@ -1753,22 +1761,6 @@ If disabled:
   - If sticky on non-current workspace: window is off-screen (hidden) but fullscreen flag is set
   - When switching to its workspace: apply_fullscreen_if_needed() applies fullscreen geometry
 - Fullscreen windows respect sticky flag for workspace visibility (like normal windows)
-[Trigger: keybind or _NET_WM_STATE]
-    ↓
-set_window_sticky(window, enabled)
-    ↓
-If enabled:
-    ├─ Set client.sticky = true
-    ├─ Set _NET_WM_STATE_STICKY = true
-    ├─ Set _NET_WM_DESKTOP = 0xFFFFFFFF
-    └─ Update visibility (show on all workspaces)
-    ↓
-If disabled:
-    ├─ Set client.sticky = false
-    ├─ Clear _NET_WM_STATE_STICKY
-    ├─ Set _NET_WM_DESKTOP = actual workspace
-    └─ Update visibility (show only on current workspace)
-```
 
 ### Focus Transition
 
@@ -1971,10 +1963,6 @@ toggle_workspace()
 - State tracked via last_toggle_keysym_ and last_toggle_release_time_ (wm.hpp lines 124-125)
 - Prevents multiple workspace toggles from single key hold
 
-**Constants**:
-- `PING_TIMEOUT = 5 seconds` (ping response window)
-- `KILL_TIMEOUT = 5 seconds` (force-kill timeout)
-
 ---
 
 ## Special Behaviors
@@ -1998,8 +1986,6 @@ toggle_workspace()
 - Reset to `false` after scan completes
 - `manage_floating_window()` checks `suppress_focus_` before focusing new windows
 - Only allows focus if window is on focused monitor and visible workspace
-
-### MapRequest on Already Managed Window
 
 ### MapRequest on Already Managed Window
 
@@ -2267,7 +2253,7 @@ toggle_workspace()
 - NOT (above AND below)
 
 **State flag relationships:**
-- iconic ⇒ hidden (iconic windows are always hidden off-screen)
+- iconic ⇒ hidden for NON-STICKY windows (iconic windows are always hidden off-screen; sticky windows are exception)
 - hidden does NOT ⇒ iconic (can be hidden for workspace visibility without being iconic)
 - hidden = true ⇒ window is at OFF_SCREEN_X (-20000)
 - hidden = false ⇒ window is at on-screen position
