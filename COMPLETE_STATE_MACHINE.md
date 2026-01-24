@@ -13,8 +13,7 @@
 10. [Floating Windows](#floating-windows)
 11. [Drag Operations](#drag-operations)
 12. [Focus System](#focus-system)
-    - [Auto-Repeat Detection](#auto-repeat-detection)
-    - [WM_TAKE_FOCUS Protocol](#wm_take_focus-protocol)
+     - [WM_TAKE_FOCUS Protocol](#wm_take_focus-protocol)
 13. [ICCCM Compliance](#icccm-compliance)
 14. [EWMH Protocol](#ewmh-protocol)
 15. [Configuration](#configuration)
@@ -208,11 +207,7 @@ struct FullscreenMonitors {
 
 ### Runtime Invariant Check Status
 
-**The formal invariants defined in core/invariants.hpp are NEVER actually invoked in the codebase.** The invariant assertion system (LWM_ASSERT_INVARIANTS, LWM_ASSERT_CLIENT_STATE, LWM_ASSERT_FOCUS_CONSISTENCY) exists but provides no runtime protection. These invariants are documentation-only.
-
-**Reason**: Invariant checks are only compiled in debug builds (LWM_DEBUG defined) but never called in codebase.
-
-**Current State**: No runtime invariant protection exists. State consistency relies on careful implementation rather than assertion checks.
+Invariant checks (LWM_ASSERT_INVARIANTS, LWM_ASSERT_CLIENT_STATE, LWM_ASSERT_FOCUS_CONSISTENCY) are documentation-only. They are compiled in debug builds but never invoked in the codebase.
 
 ### Single Source of Truth
 
@@ -870,10 +865,6 @@ constexpr uint32_t WM_STATE_ICONIC = 3;
 
 ---
 
-
-
----
-
 ## Event Loop
 
 ### Main Loop Structure
@@ -1040,11 +1031,10 @@ The following conditions can prevent focus even for focus-eligible windows:
  **Focus Restoration**
 
 Two-tier focus restoration model:
+1. **Workspace focus memory** (tiled windows only): Each Workspace.focused_window stores last-focused tiled window (best-effort, may become stale)
+2. **Global floating window search** (MRU order): floating_windows_ searched in reverse iteration for fallback
 
-1. **Workspace focus memory** (tiled windows only): Each Workspace.focused_window stores the last-focused tiled window. Only tiled windows are remembered per-workspace (by design). When updating after window removal, it's set to `workspace.windows.back()` (most recent window) or XCB_NONE if empty. This is a **best-effort** value that may become stale (e.g., after window removal, when the focused window moves to a different workspace). Callers validate existence and eligibility before using it (e.g., select_focus_candidate() validates it before using it; if invalid, falls back to reverse iteration through workspace.windows).
-2. **Global floating window search** (MRU order): When workspace focus memory is not applicable, floating_windows_ is searched in reverse iteration (MRU) for fallback focus restoration.
-
-**See [Window State Machine → Window Removal](#window-removal) for detailed restoration logic.**
+**See [Window State Machine → Window Removal Focus Restoration](#window-removal-focus-restoration) for detailed restoration logic.**
 
 **INFERIOR event filtering**:
 - EnterNotify with detail=INFERIOR is filtered out
@@ -1134,32 +1124,6 @@ Update _NET_CLIENT_LIST_STACKING
     ↓
 Update bars
 ```
-
----
-
-## Auto-Repeat Detection
-
-**Purpose**: Prevent toggle_workspace action from rapid-fire execution on key hold.
-
-**Mechanism**:
-- X11 auto-repeat sends: KeyRelease → KeyPress (identical timestamps)
-- LWM tracks: `last_toggle_keysym_` and `last_toggle_release_time_`
-
-```
-toggle_workspace()
-    ├─ On KeyPress:
-    │  ├─ If same_keysym && same_time → BLOCK (auto-repeat)
-    │  └─ Else proceed with workspace switch
-    └─ On KeyRelease:
-       └─ If same_key → Record last_toggle_release_time_
-```
-
-**Implementation Details**:
-- Block occurs if same keysym AND same timestamp as KeyRelease
-- State tracked via last_toggle_keysym_ and last_toggle_release_time_ (wm.hpp lines 124-125)
-- After allowing a new toggle, last_toggle_release_time_ is reset to 0
-- This ensures the next KeyRelease can't match until the next key release cycle
-- Prevents multiple workspace toggles from single key hold
 
 ---
 
@@ -1293,9 +1257,11 @@ toggle_workspace()
 - previous_workspace == current: Already on previous workspace, no action needed
 
 **Auto-Repeat Prevention**:
-- X11 auto-repeat: KeyRelease → KeyPress (same timestamp)
-- Blocks KeyPress if same keysym && same timestamp as KeyRelease
-- Prevents rapid workspace toggling from key hold
+- X11 auto-repeat sends KeyRelease → KeyPress (identical timestamps)
+- toggle_workspace() tracks last_toggle_keysym_ and last_toggle_release_time_
+- Blocks KeyPress if same keysym AND same timestamp as KeyRelease
+- After allowing new toggle, last_toggle_release_time_ is reset to 0
+- Prevents multiple workspace toggles from single key hold
 
 **Note**: toggle_workspace() updates previous_workspace on each switch via switch_workspace()'s call to workspace_policy::apply_workspace_switch(). The previous_workspace value reflects the workspace that was active before the switch.
 
@@ -1550,9 +1516,9 @@ Critical sequence for preventing "flash" artifacts during window state changes:
 
 If any precondition fails, the function returns early without applying geometry.
 
-Fullscreen + Sticky: If sticky is enabled on a fullscreen window, the fullscreen flag remains set. Sticky fullscreen windows respect the sticky flag for workspace visibility - they remain fullscreen when visible on any workspace.
+**Sticky fullscreen windows**: Sticky fullscreen windows remain fullscreen on all workspaces. When workspace becomes visible, show_window() and apply_fullscreen_if_needed() restore on-screen geometry.
 
-Fullscreen windows on non-visible workspaces have hidden=true (off-screen) but fullscreen=true. When workspace is switched, they are shown via show_window() and apply_fullscreen_if_needed() restores their geometry.
+**Fullscreen on non-visible workspaces**: Fullscreen windows have hidden=true (off-screen) but fullscreen=true. When workspace becomes visible, apply_fullscreen_if_needed() restores geometry.
 
 ### Maximized Geometry
 
