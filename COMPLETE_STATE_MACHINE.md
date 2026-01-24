@@ -1,8 +1,8 @@
-# LWM Window Manager - Complete Logic Specification
+ # LWM Window Manager - Complete Logic Specification
 
 ## Table of Contents
-1. [Off-Screen Visibility Architecture](#off-screen-visibility-architecture)
-2. [Architecture Overview](#architecture-overview)
+1. [Architecture Overview](#architecture-overview)
+2. [Off-Screen Visibility Architecture](#off-screen-visibility-architecture)
 3. [Data Structures](#data-structures)
 4. [Window State Machine](#window-state-machine)
 5. [Event Loop](#event-loop)
@@ -27,6 +27,12 @@
 **Hidden** (client.hidden flag): Boolean flag that implements off-screen visibility. When true, the window is positioned at OFF_SCREEN_X. When false, the window is at its on-screen position.
 
 **On-screen**: The opposite of off-screen. A window that is not positioned at OFF_SCREEN_X.
+
+**Visible**: Window is visible on-screen (not at OFF_SCREEN_X).
+
+**Iconic**: ICCCM term for minimized windows (WM_STATE = IconicState). Iconic windows are always off-screen (hidden=true).
+
+**Minimized**: User-facing term for iconic state.
 
 **Use consistent**: off-screen/on-screen for visibility state, hidden for the flag name.
 
@@ -323,22 +329,27 @@ MapRequest → classify_window()
 │       NO_FOCUS is a global WindowManager condition.             │
 └───────────────────────────────────────────────────────────────┘
 
-┌───────────────────────────────────────────────────────────────┐
-│ Interaction Modes                                              │
-│                                                                │
-│ NORMAL: Default interaction mode                               │
+ ┌───────────────────────────────────────────────────────────────┐
+ │ Interaction Modes                                              │
+ │                                                                │
+ │ NORMAL: Default interaction mode                               │
+ │   - All events processed normally                               │
+ │   - EnterNotify: Focus-follows-mouse applies                  │
+ │   - MotionNotify: Re-establish focus if lost                   │
+ │   - ButtonPress: Focus window, begin drag                     │
+ │                                                                │
  │ DRAG: Drag state active (drag_state_.active = true)           │
  │   - Ignores EnterNotify events (focus-follows-mouse disabled)  │
  │   - Ignores MotionNotify events (except for drag updates via update_drag()) │
  │   - ButtonRelease calls end_drag()                            │
  │   - Silently rejects: fullscreen windows, showing_desktop mode  │
-│                                                                │
-│ SHOWING_DESKTOP: Desktop mode enabled (showing_desktop_ = true)│
-│   - Hides all non-sticky windows (off-screen)                  │
-│   - Clears focus                                               │
-│   - rearrange_monitor() returns early (no layout)              │
-│   - Cannot start tiled drag operations                         │
-└───────────────────────────────────────────────────────────────┘
+ │                                                                │
+ │ SHOWING_DESKTOP: Desktop mode enabled (showing_desktop_ = true)│
+ │   - Hides all non-sticky windows (off-screen)                  │
+ │   - Clears focus                                               │
+ │   - rearrange_monitor() returns early (no layout)              │
+ │   - Cannot start tiled drag operations                         │
+ └───────────────────────────────────────────────────────────────┘
  ```
 
 **State Model Notes:**
@@ -350,6 +361,24 @@ MapRequest → classify_window()
 - State modifiers apply to VISIBLE windows: fullscreen, above, below, sticky, maximized, shaded, modal
 - `fullscreen` can combine with VISIBLE state; fullscreen windows are excluded from tiling
 - Modal state is tightly coupled: `modal=true` ⇒ `above=true` (when modal is enabled, above is also enabled; when modal is disabled, above is also cleared)
+
+**State Truth Table:**
+
+| hidden | iconic | fullscreen | Visible On-Screen? | Valid? | Notes |
+|--------|--------|-----------|-------------------|--------|-------|
+| true   | true   | false     | No                | Yes    | Iconic (minimized) window |
+| true   | true   | true      | No                | Yes    | Iconic fullscreen window |
+| true   | false  | false     | No                | Yes    | Hidden (workspace switch) |
+| true   | false  | true      | No                | Yes    | Fullscreen on non-visible workspace |
+| false  | false  | false     | Yes               | Yes    | Normal visible window |
+| false  | false  | true      | Yes               | Yes    | Visible fullscreen window |
+| false  | true   | any       | No                | **INVALID** | iconic implies hidden |
+
+**Key State Rules:**
+- iconic=true ⇒ hidden=true (minimized windows always off-screen)
+- hidden=true does NOT imply iconic=true (can be hidden for other reasons)
+- hidden=false ⇒ iconic=false (on-screen windows cannot be minimized)
+- fullscreen+iconic: Window remains fullscreen flag but is off-screen until deiconified
 
 **Visibility Model**: LWM uses off-screen visibility, not unmap/map cycles. Windows are always mapped (XCB_MAP_STATE_VIEWABLE). Visibility is controlled by:
 - `hidden` flag: true = moved off-screen to OFF_SCREEN_X (-20000)
@@ -381,10 +410,20 @@ constexpr uint32_t WM_STATE_ICONIC = 3;
 
 **hide_window(window)**: Sets client.hidden=true, moves window to OFF_SCREEN_X, preserves y coordinate. For sticky windows: early return without setting hidden flag or moving off-screen (by design - callers use proper visibility channels).
 
+Implementation details:
+- Uses XCB_CONFIG_WINDOW_X with OFF_SCREEN_X constant
+- Flushes connection after configuration
+- Sticky windows skip all processing (return early)
+
 **show_window(window)**: Sets client.hidden=false only. Does NOT send configure events or restore position. Caller must call:
 - rearrange_monitor() for tiled windows
 - apply_floating_geometry() for floating windows
 - Desktop windows are always on-screen, no restoration needed
+
+Implementation details:
+- Only clears client->hidden flag
+- Does NOT configure geometry or call flush
+- Caller is responsible for geometry restoration
 
 ### State Transitions
 
@@ -469,6 +508,15 @@ constexpr uint32_t WM_STATE_ICONIC = 3;
 - Condition: All candidates in select_focus_candidate() return nullopt (no focus-eligible windows)
 - Note: Exiting fullscreen does not trigger focus restoration; the window remains focused if it was active
 - Additional: Workspace switch where all windows are iconic also triggers NO_FOCUS state
+
+**apply_fullscreen_if_needed() Preconditions**:
+Fullscreen geometry is only applied when ALL of:
+- Window is fullscreen (is_client_fullscreen(window))
+- Window is NOT iconic (!is_client_iconic(window))
+- Window's monitor is valid (client.monitor < monitors_.size())
+- Window is on its monitor's current workspace
+
+If any precondition fails, function returns early without applying geometry.
 
 ### State Conflicts
 
@@ -598,10 +646,19 @@ is_focus_eligible(window) =
 6. Set X input focus
 7. Update _NET_ACTIVE_WINDOW
 8. Apply fullscreen geometry, restack transients
-   - Restacks all visible, non-iconic transient windows (where client.transient_for == parent) above the focused window
-   - Skips hidden, iconic, or transients on other workspaces
-   - Also occurs when showing floating windows via update_floating_visibility()
+    - Restacks all visible, non-iconic transient windows (where client.transient_for == parent)
+    - Skips hidden, iconic, or transients on other workspaces
+    - Also occurs when showing floating windows via update_floating_visibility()
 9. Update bars
+
+**restack_transients()** - Restacks modal/transient windows above parent:
+- Identifies transients via client.transient_for field
+- Only restacks transients that are:
+  - Visible (client.hidden == false)
+  - Not iconic
+  - On current workspace
+- Skips transients on other workspaces
+- Ensures modal windows stay above parent during focus changes
 
 **focus_floating_window(window)** - Floating windows
 1. Same checks as tiled (including NOT hidden)
@@ -628,6 +685,14 @@ is_focus_eligible(window) =
   - Prevents off-screen windows from receiving focus
   - Check occurs early, returns immediately for hidden windows
   - Note: is_focus_eligible() does NOT check client.hidden; filtering happens in event handlers
+
+**Focus Barriers**:
+The following conditions can prevent focus even for focus-eligible windows:
+1. **showing_desktop_ == true** - Blocks all focus except desktop mode exit
+2. **client.hidden == true** - Off-screen windows (filtered in event handlers)
+3. **is_client_iconic(window)** - Minimized windows
+4. **Windows on non-visible workspaces** - Wrong workspace
+5. **!is_focus_eligible(window)** - Dock/Desktop kinds or no input focus support
 
 **Monitor Crossing**
 - Pointer moves to different monitor → Set `focused_monitor_` to new monitor (via update_focused_monitor_at_point())
@@ -669,18 +734,6 @@ Two-tier focus restoration model:
 - Selection order: Tiled windows first, then floating windows (both in MRU order via reverse iteration)
 - Wrap-around behavior: Cycles from last→first (next) and first→last (prev)
 - Returns without focus if no candidates exist (nullopt)
-
-  ### Focus Barriers Summary
-
-See Focus System section above for details. Key focus barriers:
-
-1. **showing_desktop_ == true** - blocks all focus except desktop mode exit
-2. **!is_focus_eligible(window)** - Dock/Desktop kinds or no input focus support
-3. **client.hidden == true** - off-screen windows (filtered in event handlers)
-4. **is_client_iconic(window)** - minimized windows
-   - MapRequest to already-managed iconic window triggers deiconify
-   - focus_window() automatically deiconifies iconic windows before focus eligibility check
-   - Iconic windows cannot receive focus through EnterNotify/ButtonPress (filtering prevents this)
 
 **Focus behavior across monitors**:
 - Explicit monitor switch (keybind): Warps cursor if warp_cursor_on_monitor_change configured
@@ -846,10 +899,19 @@ move_window_to_workspace(target_ws)
 - NOT hidden during workspace switch
 - hide_window() skips sticky windows (early return, does not set hidden flag or move off-screen)
 - Included in Workspace::windows vectors but do NOT consume tile space (they overlay the tiled layout)
+- During tiling in rearrange_monitor(), sticky windows in Workspace::windows are filtered out before layout calculation
 - _NET_WM_DESKTOP = 0xFFFFFFFF
 - Focusing sticky window does NOT switch workspaces
 - Sticky windows remain visible during showing_desktop mode
 - Z-order during showing_desktop: Sticky windows are NOT explicitly restacked; they maintain their stacking position because they are not hidden like non-sticky windows (they're already stacked above normal windows by their "above" or "modal" attributes, or by natural stacking)
+
+**Sticky Window Visibility Mechanism**:
+- Sticky windows are never moved off-screen via hide_window()
+- Their visibility is controlled by:
+  - "Proper visibility channels" = hide_window() skip logic + layout filtering
+  - During showing_desktop: hide_window() called for all windows, but sticky windows are skipped (remain visible)
+  - During workspace switch: hide_window() called for all non-sticky windows, sticky windows skipped (remain visible)
+  - During tiling: layout algorithm explicitly excludes sticky windows from Workspace::windows before calculating tiles
 
 ---
 
@@ -1049,6 +1111,13 @@ is_floating_visible(window) =
 ```
 
 **Note**: This is the conceptual visibility condition. In code, update_floating_visibility() explicitly sets client.hidden based on this formula and applies geometry. The function checks showing_desktop separately and returns early if true.
+
+**Floating Window Workspace Tracking**:
+- Floating windows are tracked globally in `floating_windows_` vector (NOT per-workspace)
+- Each floating window has Client.monitor and Client.workspace fields
+- Visibility determined by workspace assignment (not by membership in Workspace::windows)
+- build_bar_state() tracks floating windows per workspace by iterating clients_ and matching Client.workspace
+- This allows floating windows to appear on bar for their assigned workspace
 
 ### Floating Geometry
 
@@ -1497,7 +1566,31 @@ handle_timeouts()
 
 ## State Transitions
 
- ### Window Lifecycle
+### State Transition Summary
+
+| From State | To State | Trigger | Key Actions |
+|------------|-----------|---------|-------------|
+| UNMANAGED | MANAGED | MapRequest | Create Client, classify, configure, map window |
+| MANAGED | WITHDRAWN | UnmapNotify/DestroyNotify | WM_STATE Withdrawn, erase from clients_, remove from workspace |
+| VISIBLE | ICONIC | iconify_window() | Set iconic=true, hide_window(), WM_STATE Iconic |
+| ICONIC | VISIBLE | deiconify_window() | Set iconic=false, show_window(), restore geometry |
+| VISIBLE | FULLSCREEN | set_fullscreen(true) | Save geometry, set fullscreen flag, apply fullscreen geometry |
+| FULLSCREEN | VISIBLE | set_fullscreen(false) | Restore geometry, clear fullscreen flag |
+| VISIBLE | MAXIMIZED | set_window_maximized() | Save geometry, set maximized flags, apply maximized geometry |
+| MAXIMIZED | VISIBLE | set_window_maximized(false) | Restore geometry, clear maximized flags |
+| VISIBLE | ABOVE | set_window_above(true) | Set above flag, restack above normal windows |
+| ABOVE | VISIBLE | set_window_above(false) | Clear above flag, restack normally |
+| VISIBLE | BELOW | set_window_below(true) | Set below flag, restack below all windows |
+| BELOW | VISIBLE | set_window_below(false) | Clear below flag, restack normally |
+| VISIBLE | STICKY | set_window_sticky(true) | Set sticky flag, _NET_WM_DESKTOP=0xFFFFFFFF |
+| STICKY | VISIBLE | set_window_sticky(false) | Clear sticky flag, _NET_WM_DESKTOP=actual workspace |
+| VISIBLE | SHOWING_DESKTOP | _NET_SHOWING_DESKTOP true | Hide non-sticky windows, clear focus |
+| SHOWING_DESKTOP | VISIBLE | _NET_SHOWING_DESKTOP false | Show hidden windows, rearrange, focus_or_fallback() |
+| FOCUS | NO_FOCUS | Last window removed, empty workspace, pointer on root | active_window_=XCB_NONE, clear_focus() |
+| NO_FOCUS | FOCUS | Focus request, EnterNotify, ButtonPress | Set active_window_, focus window |
+| FOCUS | FOCUS | focus_next/prev | Cycle to next/previous eligible window |
+
+### Window Lifecycle
 
 ```
 MapRequest
@@ -1559,7 +1652,7 @@ handle_window_removal()
     └─ Rearrange monitor, update _NET_CLIENT_LIST, bars
 ```
 
-**See also**: ICCCM Compliance → Window Lifecycle Events (lines 4982) for ICCCM-specific event handling
+**See also**: ICCCM Compliance → Window Lifecycle Events for ICCCM-specific event handling
 
 ### Fullscreen Transition
 
@@ -1652,6 +1745,39 @@ Update bars
 ### Sticky Toggle
 
 ```
+[Trigger: keybind or _NET_WM_STATE]
+    ↓
+set_window_sticky(window, enabled)
+    ↓
+If enabled:
+    ├─ Set client.sticky = true
+    ├─ Set _NET_WM_STICKY = true
+    ├─ Set _NET_WM_DESKTOP = 0xFFFFFFFF
+    └─ Update visibility (show on all workspaces)
+    ↓
+If disabled:
+    ├─ Set client.sticky = false
+    ├─ Clear _NET_WM_STICKY
+    ├─ Set _NET_WM_DESKTOP = actual workspace
+    └─ Update visibility (show only on current workspace)
+```
+
+**Edge Cases**:
+
+**Sticky Window Becoming Iconic**:
+- If set_window_sticky(true) is called on an iconic window:
+  - sticky flag is set
+  - window remains iconic (hidden, off-screen)
+  - When deiconified, window becomes visible on current workspace (not all workspaces) until workspace switch
+- iconify_window() does NOT check sticky flag - iconic windows are always hidden regardless of sticky status
+
+**Fullscreen Window Becoming Sticky**:
+- If sticky is toggled on a fullscreen window:
+  - fullscreen flag remains set
+  - sticky flag is set/cleared
+  - If sticky on non-current workspace: window is off-screen (hidden) but fullscreen flag is set
+  - When switching to its workspace: apply_fullscreen_if_needed() applies fullscreen geometry
+- Fullscreen windows respect sticky flag for workspace visibility (like normal windows)
 [Trigger: keybind or _NET_WM_STATE]
     ↓
 set_window_sticky(window, enabled)
@@ -2115,30 +2241,18 @@ toggle_workspace()
 
 ---
 
-## Terminology Notes
-
-**Key Terms:**
-- **Off-screen visibility**: LWM's visibility model using OFF_SCREEN_X (-20000) instead of unmap/map cycles
-- **Hidden flag** (`client.hidden`): The flag that implements off-screen visibility (true = at OFF_SCREEN_X)
-- **Iconic state**: ICCCM term for minimized windows (WM_STATE = IconicState)
-- **Minimized**: User-facing term, implemented via iconic state in LWM
-- **MRU**: Most Recently Used ordering (reverse iteration for focus restoration and floating window stacking)
-
-**Distinctions:**
-- "Off-screen" refers to the visibility concept
-- "Hidden" refers to the `client.hidden` flag that implements it
-- Use consistent: off-screen for visibility state, hidden for flag name
+(See [Key Terminology](#key-terminology) at the top of this document for terminology definitions)
 
 **Structure Relationships:**
 - `Client` struct: Authoritative source of truth for all window state
 - `FloatingWindow` struct: Runtime geometry only (synced with Client.floating_geometry)
 - `Workspace::windows`: Derived organization state for tiled windows
 
- ---
+  ---
 
-## System Invariants
+ ## System Invariants
 
-These invariants are validated by LWM_DEBUG builds via LWM_ASSERT_INVARIANTS() (see core/invariants.hpp):
+**Note**: The formal invariants defined in core/invariants.hpp exist but are NOT invoked in the codebase. These invariants provide documentation-only value; there is no runtime protection from LWM_ASSERT_INVARIANTS(), LWM_ASSERT_CLIENT_STATE, or LWM_ASSERT_FOCUS_CONSISTENCY. These checks are only compiled in debug builds (LWM_DEBUG defined) but never called. State consistency relies on careful implementation rather than assertion checks.
 
 **Client Registration Invariants**:
 - Window in clients_ must have valid monitor index (monitor < monitors_.size())
@@ -2177,41 +2291,19 @@ These invariants are validated by LWM_DEBUG builds via LWM_ASSERT_INVARIANTS() (
 
 These invariants help catch bugs early and ensure the window manager state remains consistent.
 
----
-
-## Additional State Conflicts and Invalid Transitions
-
-**Invalid/Ineffective Transitions**:
-- set_fullscreen() on iconic window: Flag is set, but geometry is NOT applied (apply_fullscreen_if_needed returns early)
-- set_window_maximized() on iconic window: Flags are set and geometry is saved, but geometry is NOT applied until window is deiconified
-- begin_drag() / begin_tiled_drag() on fullscreen window: Silently rejected
-- begin_tiled_drag() during showing_desktop mode: Silently rejected
-- begin_tiled_drag() on floating window: Silently rejected
-
-**State Conflicts**:
-- **fullscreen ↔ above/below**: Incompatible, clear others when enabling fullscreen
-- **fullscreen ↔ maximized**: Superseded, clear maximized flags when enabling fullscreen (but maximize_restore geometry is preserved for restoration)
-- **maximized when fullscreen**: set_window_maximized() has NO effect when fullscreen is enabled. Geometry is applied only when fullscreen is disabled.
-- **above ↔ below**: Mutually exclusive, clear opposite when enabling
-- **modal ⇔ above**: Modal state and above state are tightly coupled
-   - When modal is enabled, above is also enabled (set_window_modal calls set_window_above(true))
-   - When modal is disabled, above is also cleared (set_window_modal calls set_window_above(false))
-   - This coupling is NOT bidirectional: disabling modal ALWAYS disables above (even if above was set independently before modal was enabled)
-- **hidden vs iconic**: Iconic always implies hidden (iconic=true ⇒ hidden=true), but hidden can be true without iconic
-
-**Valid State Combinations**:
-- hidden=true, iconic=false: Off-screen but not minimized (workspace switch)
-- hidden=true, iconic=true: Off-screen and minimized (iconified)
-- hidden=false, iconic=false: On-screen, visible (normal)
-- hidden=false, iconic=true: NOT VALID (iconic implies hidden)
-- fullscreen=true, maximized_*=(anything): Maximization flags cleared but maximize_restore preserved
-- fullscreen=false, maximized_*=true: Normal maximized state
-- modal=true, above=true: Both set (modal enables above)
-- modal=false, above=true: Possible (above set independently)
-- modal=true, above=false: NOT VALID (modal forces above=true)
-- modal=false, above=false: Normal state
-
  ---
+
+### Invalid/Ineffective Transitions
+
+| Transition | Behavior | Notes |
+|------------|-----------|-------|
+| set_fullscreen() on iconic | Flag set, geometry NOT applied | apply_fullscreen_if_needed returns early |
+| set_window_maximized() on iconic | Flags set, geometry saved | Geometry applied on deiconify |
+| begin_drag() on fullscreen | Silently rejected | Cannot drag fullscreen windows |
+| begin_tiled_drag() during showing_desktop | Silently rejected | Desktop mode blocks tiled drag |
+| begin_tiled_drag() on floating | Silently rejected | Cannot drag floating windows as tiled |
+
+  ---
 
 ## Special Behaviors and Edge Cases
 
