@@ -1535,15 +1535,42 @@ void WindowManager::rearrange_monitor(Monitor& monitor)
 
     layout_.arrange(visible_windows, monitor.working_area(), bar_.has_value());
 
-    // Handle fullscreen windows separately - configure geometry THEN map
-    // This prevents the race condition where windows render at wrong geometry
+    // Handle fullscreen windows separately
+    // For GPU-accelerated apps (Chromium, Electron), we use a "nudge resize" trick:
+    // Chromium's renderer doesn't redraw after unmap/remap cycles. But resizing
+    // the window "wakes" the renderer. So we:
+    // 1. Map the window
+    // 2. Configure to a slightly wrong size (triggers resize handling)
+    // 3. Flush and sync
+    // 4. Configure to correct fullscreen size (triggers actual redraw)
+    // 5. Send ConfigureNotify so client knows final geometry
     for (xcb_window_t window : fullscreen_windows)
     {
         LOG_DEBUG("rearrange_monitor: handling fullscreen window {:#x}", window);
-        apply_fullscreen_if_needed(window);
+
+        Geometry area = fullscreen_geometry_for_window(window);
+
+        // Map first
         LOG_DEBUG("rearrange_monitor: mapping fullscreen window {:#x}", window);
         xcb_map_window(conn_.get(), window);
-        // Always raise fullscreen windows to top, even if apply_fullscreen_if_needed returned early
+        conn_.flush();
+
+        // NUDGE RESIZE TRICK: Configure to slightly wrong size first
+        // This forces GPU-accelerated apps (Chromium, Electron) to wake up their renderer
+        uint32_t nudge_w = area.width > 2 ? static_cast<uint32_t>(area.width - 2) : area.width;
+        uint32_t nudge_h = area.height > 2 ? static_cast<uint32_t>(area.height - 2) : area.height;
+        LOG_DEBUG("rearrange_monitor: nudge resize {:#x} to {}x{}", window, nudge_w, nudge_h);
+        uint32_t nudge_values[] = { static_cast<uint32_t>(area.x), static_cast<uint32_t>(area.y), nudge_w, nudge_h, 0 };
+        uint16_t mask = XCB_CONFIG_WINDOW_X | XCB_CONFIG_WINDOW_Y | XCB_CONFIG_WINDOW_WIDTH
+            | XCB_CONFIG_WINDOW_HEIGHT | XCB_CONFIG_WINDOW_BORDER_WIDTH;
+        xcb_configure_window(conn_.get(), window, mask, nudge_values);
+        conn_.flush();
+
+        // Now configure to correct fullscreen size - this triggers the actual redraw
+        LOG_DEBUG("rearrange_monitor: final configure {:#x} to {}x{}", window, area.width, area.height);
+        apply_fullscreen_if_needed(window);
+
+        // Raise to top
         uint32_t stack_mode = XCB_STACK_MODE_ABOVE;
         xcb_configure_window(conn_.get(), window, XCB_CONFIG_WINDOW_STACK_MODE, &stack_mode);
         LOG_DEBUG("rearrange_monitor: raised fullscreen window {:#x} to top", window);

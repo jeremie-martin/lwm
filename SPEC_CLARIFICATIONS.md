@@ -147,6 +147,64 @@ workspace visibility toggling (which causes map/unmap operations).
 
 ---
 
+## 8. Window Visibility: Unmap vs Move Off-Screen
+
+**Issue**: When switching workspaces, how should windows be hidden?
+
+**Decision**: **Use unmap/map with a "nudge resize" workaround for GPU-accelerated apps.**
+
+**Background**:
+There are two main approaches used by X11 window managers:
+
+| Approach | Used By | Pros | Cons |
+|----------|---------|------|------|
+| **Unmap/Map** | lwm, i3, bspwm | Memory efficient, cleaner semantics | GPU renderer issues after remap |
+| **Move off-screen** | dwm | No rendering issues, instant show | Higher memory usage, off-screen windows receive events |
+
+DWM's approach (from `showhide()`):
+```c
+if (ISVISIBLE(c)) {
+    XMoveWindow(dpy, c->win, c->x, c->y);      // show: normal position
+} else {
+    XMoveWindow(dpy, c->win, WIDTH(c) * -2, c->y);  // hide: off-screen
+}
+```
+
+**Problem with Unmap/Map**:
+GPU-accelerated applications (Chromium, Electron, Qt/PyQt with OpenGL) may not properly
+redraw after an unmap/remap cycle. The GPU renderer caches framebuffers and doesn't
+automatically invalidate them when the window is remapped at the same size. This causes:
+- Blank/gray windows after workspace switch
+- Stale content displayed until user interaction
+
+**Workaround - Nudge Resize**:
+Resizing a window "wakes" the GPU renderer. We exploit this by:
+1. Map the window
+2. Configure to slightly wrong size (width-2, height-2)
+3. Flush
+4. Configure to correct size + send ConfigureNotify
+5. The size change forces a redraw
+
+This is documented as the standard workaround in Chromium bug reports and forum discussions.
+
+**Rationale for keeping unmap/map**:
+- Memory efficiency (hidden windows don't keep GPU buffers)
+- Cleaner X11 semantics (unmapped windows don't receive events)
+- The nudge resize workaround is simple and effective
+- Switching to move-off-screen would be a larger architectural change
+
+**Implementation**:
+- `switch_workspace()` unmaps windows from old workspace
+- `rearrange_monitor()` applies nudge resize when mapping fullscreen windows
+- `apply_fullscreen_if_needed()` sends sync request + ConfigureNotify
+
+**Future consideration**:
+If the nudge resize proves insufficient for some apps, we could switch to dwm's
+move-off-screen approach, at least for fullscreen windows.
+
+---
+
 ## Version History
 
+- 2026-01-24: Added §8 documenting window visibility approach and GPU renderer workaround
 - 2026-01-18: Initial document created during production-ready implementation work
