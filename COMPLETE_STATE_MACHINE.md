@@ -13,10 +13,15 @@
 10. [Drag Operations](#drag-operations)
 11. [EWMH Protocol](#ewmh-protocol)
 12. [ICCCM Compliance](#icccm-compliance)
-13. [Configuration](#configuration)
-14. [State Transitions](#state-transitions)
-15. [Special Behaviors and Edge Cases](#special-behaviors-and-edge-cases)
-16. [Invariants](#invariants)
+13. [Error Severity Levels](#error-severity-levels)
+14. [Configuration](#configuration)
+15. [State Transitions](#state-transitions)
+16. [RANDR Monitor Hotplug Handling](#randr-monitor-hotplug-handling)
+17. [WM_TAKE_FOCUS Protocol](#wm_take_focus-protocol)
+18. [Auto-Repeat Detection](#auto-repeat-detection)
+19. [Special Behaviors](#special-behaviors)
+20. [Edge Cases](#edge-cases)
+21. [Invariants](#invariants)
 
 ---
 
@@ -26,15 +31,18 @@
 
 **Hidden** (client.hidden flag): Boolean flag that implements off-screen visibility. When true, the window is positioned at OFF_SCREEN_X. When false, the window is at its on-screen position.
 
-**On-screen**: The opposite of off-screen. A window that is not positioned at OFF_SCREEN_X.
+**On-screen**: The opposite of off-screen. A window that is not positioned at OFF_SCREEN_X (hidden=false). Note: A window can be on-screen positioned but not actually viewable due to workspace or showing_desktop state.
 
-**Visible**: Window is visible on-screen (not at OFF_SCREEN_X).
+**Visible**: Window is actually viewable by user. Requires: NOT off-screen, on current workspace (or sticky), NOT iconic, NOT in showing_desktop mode.
 
-**Iconic**: ICCCM term for minimized windows (WM_STATE = IconicState). Iconic windows are always off-screen (hidden=true).
+**Iconic**: ICCCM term for minimized windows (WM_STATE = IconicState). For non-sticky windows, iconic windows are always off-screen (hidden=true). For sticky windows, iconic windows remain on-screen positioned but marked as minimized.
 
 **Minimized**: User-facing term for iconic state.
 
-**Use consistent**: off-screen/on-screen for visibility state, hidden for the flag name.
+**Use consistent**:
+- "off-screen/on-screen" for flag-based positioning state
+- "hidden" for the Client.hidden flag name
+- "visible" for actually viewable by user (not just on-screen positioned)
 
 ---
 
@@ -74,6 +82,37 @@ WindowManager (wm.cpp)
 15. keybinds_.grab_keys()
 16. update_ewmh_client_list()
 17. update_all_bars()
+
+---
+
+## Off-Screen Visibility Architecture
+
+**Purpose**: LWM uses off-screen visibility instead of unmap/map cycles for controlling window visibility.
+
+**Mechanism**:
+- Windows are always mapped (XCB_MAP_STATE_VIEWABLE) at all times
+- Visibility is controlled by moving windows to off-screen position: `OFF_SCREEN_X = -20000`
+- The `client.hidden` flag tracks off-screen state: true = at OFF_SCREEN_X, false = at on-screen position
+
+**Key Functions**:
+- `hide_window(window)`: Sets client.hidden=true, moves window to OFF_SCREEN_X (skips sticky windows)
+- `show_window(window)`: Sets client.hidden=false only; caller must restore geometry
+
+**Visibility Control Channels**:
+1. **Iconification**: iconify_window() sets iconic=true AND calls hide_window()
+2. **Workspace switches**: hide_window() for windows leaving workspace, show_window() for entering
+3. **Showing Desktop**: hide_window() for all non-sticky windows
+4. **Sticky windows**: Never hidden by hide_window() (early return, remain visible across workspace switches)
+
+**Interaction with ICCCM**:
+- With off-screen visibility, ALL UnmapNotify events are treated as client-initiated withdraw requests
+- WM never unmaps windows (always uses off-screen positioning)
+- No counter tracking exists (unlike traditional unmap-based visibility)
+
+**See also**:
+- Key Terminology (above) for detailed definitions
+- Window State Machine → Visibility Model (line 395) for state interactions
+- ICCCM Compliance → Unmap Tracking (line 1399) for protocol handling
 
 ---
 
@@ -371,7 +410,7 @@ MapRequest → classify_window()
 - **hidden=true does NOT imply iconic=true** (workspace switches also hide windows)
 - State modifiers apply to VISIBLE windows: fullscreen, above, below, sticky, maximized, shaded, modal
 - `fullscreen` can combine with VISIBLE state; fullscreen windows are excluded from tiling
-- Modal state is tightly coupled: `modal=true` ⇒ `above=true` (when modal is enabled, above is also enabled; when modal is disabled, above is also cleared)
+- Modal state is tightly coupled: `modal=true` ⇒ `above=true` (when modal is enabled, above is also enabled; when modal is disabled, above is also cleared). **Note:** This coupling is NOT bidirectional: disabling modal ALWAYS disables above, even if above was set independently before modal was enabled.
 
 **State Truth Table:**
 
@@ -386,10 +425,10 @@ MapRequest → classify_window()
 | false | true   | any       | Yes (on-screen, marked minimized) | **SPECIAL** | *Only for sticky windows: hide_window() returns early, so iconic sticky windows have hidden=false (they remain at their on-screen position while iconic flag is set) |
 
 **Key State Rules:**
-- iconic=true ⇒ hidden=true for non-sticky windows (minimized windows always off-screen)
+- iconic=true ⇒ hidden=true for NON-STICKY windows (minimized windows are always off-screen; sticky windows are the exception)
 - hidden=true does NOT imply iconic=true (can be hidden for other reasons)
-- hidden=false ⇒ iconic=false for non-sticky windows (on-screen windows cannot be minimized)
-- **Exception**: Sticky iconic windows have iconic=true but hidden=false (hide_window() returns early for sticky windows)
+- hidden=false ⇒ iconic=false for NON-STICKY windows (on-screen windows cannot be minimized)
+- **Exception for sticky windows**: Iconic sticky windows have iconic=true but hidden=false (hide_window() returns early for sticky windows, so they remain at their on-screen position while iconic flag is set)
 - fullscreen+iconic: Window remains fullscreen flag but is off-screen until deiconified
 
 **Visibility Model**: LWM uses off-screen visibility, not unmap/map cycles. Windows are always mapped (XCB_MAP_STATE_VIEWABLE). Visibility is controlled by:
@@ -735,21 +774,14 @@ Two-tier focus restoration model:
 
 **Restoration scenarios**:
 - Window unmanaged:
-   - If removed window was on focused_monitor_ AND on current_workspace: focus_or_fallback() (workspace.focused_window is updated to last non-iconic window or XCB_NONE before restoration)
+   - If removed window was on the **current workspace** of its monitor AND that monitor is the currently focused monitor: focus_or_fallback()
    - Otherwise: clear_focus()
-   - Before calling focus_or_fallback(), workspace.focused_window is updated to last non-iconic window in workspace (or XCB_NONE if empty). The restoration logic uses this already-updated value.
+   - Before calling focus_or_fallback(), workspace.focused_window is updated to last non-iconic window in workspace (or XCB_NONE if empty)
 - Workspace switch: restore workspace.focused_window (may be stale/iconic, focus_or_fallback handles this)
 - Fullscreen exit: No automatic focus restoration (window remains focused if it was active)
 - Sticky toggle: No automatic focus restoration
 - Monitor switch via pointer: No automatic restoration when focused_monitor_ updates
 - Showing Desktop exit: rearrange_all_monitors(), update_floating_visibility_all(), focus_or_fallback()
-- Focus fallback: MRU order (floating windows, then tiled)
-- Workspace switch: restore workspace.focused_window (may be stale/iconic, focus_or_fallback handles this)
-- Fullscreen exit: No automatic focus restoration (window remains focused if it was active)
-- Sticky toggle: No automatic focus restoration
-- Monitor switch via pointer: No automatic restoration when focused_monitor_ updates
-- Showing Desktop exit: rearrange_all_monitors(), update_floating_visibility_all(), focus_or_fallback()
-- Focus fallback: MRU order (floating windows, then tiled)
 
 **Focus Cycling** (focus_next / focus_prev)
 - Uses `build_cycle_candidates()` to collect tiled and floating windows visible on current monitor/workspace
@@ -928,15 +960,14 @@ move_window_to_workspace(target_ws)
 
 ### Sticky Windows
 
-- Visible on ALL workspaces of owning monitor (not global)
-- NOT hidden during workspace switch
-- hide_window() skips sticky windows (early return, does not set hidden flag or move off-screen)
-- Included in Workspace::windows vectors but do NOT consume tile space (they overlay the tiled layout)
-- During tiling in rearrange_monitor(), sticky windows in Workspace::windows are filtered out before layout calculation
+- Have an assigned workspace (for placement/focus tracking) but are NOT hidden during workspace switches (overlay behavior)
+- NOT hidden during workspace switch (hide_window() returns early, does not set hidden flag or move off-screen)
+- Included in Workspace::windows vectors but are explicitly filtered out before layout calculation (do NOT consume tile space)
+- During tiling in rearrange_monitor(), sticky windows in Workspace::windows are filtered out of visible_windows passed to layout algorithm
 - _NET_WM_DESKTOP = 0xFFFFFFFF
-- Focusing sticky window does NOT switch workspaces
+- Focusing sticky window does NOT switch workspaces (visible without switching)
 - Sticky windows remain visible during showing_desktop mode
-- Z-order during showing_desktop: Sticky windows are NOT explicitly restacked; they maintain their stacking position because they are not hidden like non-sticky windows (they're already stacked above normal windows by their "above" or "modal" attributes, or by natural stacking)
+- Z-order during showing_desktop: Sticky windows are NOT explicitly restacked; they maintain their stacking position because they are not hidden like non-sticky windows
 
 **Sticky Window Visibility Mechanism**:
 - Sticky windows are never moved off-screen via hide_window()
@@ -950,42 +981,9 @@ move_window_to_workspace(target_ws)
 
 ## Monitor Behavior
 
-### Monitor Hotplug (RANDR Screen Change)
+### Monitor Hotplug
 
-**RANDR screen change event** triggers comprehensive reconfiguration:
-
-1. **Exit fullscreen on all windows** (before reconfiguring)
-    - Prevents stale geometry in Client.fullscreen_restore after monitor layout changes
-    - Clear Client.fullscreen_monitors for ALL clients (monitor indices may have changed)
-
-2. **Save window locations by monitor name**
-    - Save WindowLocation for each client (includes monitor_name, not index)
-    - Preserve floating window geometries (no repositioning)
-    - Save focused_monitor_name
-
-3. **Destroy status bars** (old bar windows)
-
-4. **Detect new monitor configuration**
-   - detect_monitors() rebuilds monitors_ vector
-
-5. **Restore window locations**
-   - Build name_to_index map for new monitor configuration
-   - Reassign windows to monitors with matching names
-   - Fallback to monitor 0 if original monitor no longer exists
-   - Restore focused_monitor_ by name lookup
-
-6. **Clamp workspace indices**
-   - If target workspace >= workspaces.size(), fall back to current workspace
-   - Prevents out-of-bounds workspace access after configuration change
-
-7. **Recreate status bars** for new monitor configuration
-
-8. **Update all EWMH properties**
-   - _NET_NUMBER_OF_DESKTOPS
-   - _NET_DESKTOP_NAMES
-   - _NET_DESKTOP_VIEWPORT
-   - _NET_WORKAREA
-   - _NET_DESKTOP_GEOMETRY
+**See**: [RANDR Monitor Hotplug Handling](#randr-monitor-hotplug-handling) for complete documentation of monitor hotplug, window restoration, and empty monitor state handling.
 
 ### Monitor Switch Behavior
 
@@ -1074,14 +1072,14 @@ Stack (N windows):
 
  ### Size Hints
 
-**Tiled windows**: ALL size hints ignored
-- Size hints are NEVER queried (window parameter unused in apply_size_hints, explicitly cast to void)
+**Tiled windows**: Size hints ignored for geometry calculations
+- Size hints are NOT used for geometry (window parameter unused in apply_size_hints, explicitly cast to void)
 - WM controls geometry completely
 - Applications must handle smaller sizes (scrolling, truncating, adapting)
 - Matches other tiling WMs (DWM, i3, bspwm)
 - Only clamp to minimum 1 pixel to prevent zero-size
 - Tiled windows never have zero dimensions due to layout algorithm
-- Tiled windows never have zero dimensions due to layout algorithm
+- **Note**: When WM_NORMAL_HINTS change on tiled windows, WM triggers rearrange_monitor() to reaffirm its authority over window placement (design choice, not logical necessity of using hints)
 
 **Floating windows**: Preferred size hints honored, constraints NOT enforced
 - Position hints (P_POSITION, US_POSITION) honored for initial placement
@@ -1852,11 +1850,13 @@ If disabled:
 **Sticky Window Becoming Iconic**:
 - If set_window_sticky(true) is called on an iconic window:
   - sticky flag is set
-  - window remains iconic (hidden, off-screen for non-sticky, on-screen at last position for sticky)
+  - window remains iconic (off-screen for non-sticky, on-screen at last position for sticky because hide_window() returns early)
   - hide_window() returns early for sticky windows (doesn't set hidden=true or move off-screen)
   - When deiconified, window becomes visible on current workspace (not all workspaces) until workspace switch
-- iconify_window() does NOT check sticky flag - iconic windows are always hidden regardless of sticky status
-- For sticky iconic windows: iconic=true but hidden=false (window remains at on-screen position while marked as minimized)
+- iconify_window() calls hide_window() to hide iconic windows, but hide_window() returns early for sticky windows
+- For non-sticky windows: iconify_window() → hide_window() moves off-screen (hidden=true)
+- For sticky windows: iconify_window() → hide_window() returns early (hidden=false, remains at on-screen position)
+- Result: Sticky iconic windows have iconic=true but hidden=false (marked as minimized but remain at on-screen position)
 
 **Sticky Window Becoming Non-Sticky**:
 - If set_window_sticky(false) is called on an iconic window:
@@ -1953,34 +1953,7 @@ Update bars
 
 ### Workspace Switch
 
-```
-[Trigger: keybind or _NET_CURRENT_DESKTOP]
-    ↓
-switch_workspace(target_ws)
-    ↓
-Validate workspace index
-    ↓
-workspace_policy::apply_workspace_switch():
-    ├─ previous_workspace = current_workspace
-    └─ current_workspace = target
-    ↓
-hide_window() for floating windows (old workspace, non-sticky)  ← Critical!
-    ↓
-hide_window() for tiled windows (old workspace, non-sticky)
-    ↓
-update_ewmh_current_desktop()
-    ↓
-rearrange_monitor(new_workspace)
-    ↓
-update_floating_visibility(new_workspace)
-    ↓
-focus_or_fallback(monitor)
-    ├─ Try workspace.focused_window first (validated to exist in workspace)
-    ├─ Fall back to any eligible window
-    └─ Clear focus if none
-    ↓
-Update bars
-```
+**See**: [Workspace Management → Workspace Switch](#workspace-switch) for complete documentation of workspace switch sequence, including critical ordering rationale.
 
 ### Window Removal
 
@@ -2000,7 +1973,7 @@ Remove from workspace.windows or floating_windows_
 Update workspace.focused_window
     ↓
 If was active_window_:
-    ├─ If removed window is on focused_monitor_ AND on current_workspace:
+    ├─ If removed window's workspace is the **current workspace** of its monitor AND that monitor is the currently focused monitor:
     │  └─ focus_or_fallback(focused_monitor())  // Try to restore focus
     └─ Else:
        └─ clear_focus()  // Just clear focus (different monitor/workspace)
@@ -2008,7 +1981,7 @@ If was active_window_:
 Update _NET_CLIENT_LIST, bars
 ```
 
-**Note**: The conditional logic ensures focus is only restored when the removed window was on the currently focused monitor and workspace. If a window on a different monitor/workspace is removed, focus doesn't need to be restored on the current monitor.
+**Note**: The conditional logic ensures focus is only restored when the removed window was on the **current workspace** of its monitor AND that monitor is the currently focused monitor. If a window on a different workspace (even on the same monitor) or on a different monitor is removed, focus doesn't need to be restored on the currently viewed workspace.
 
 ---
 
@@ -2131,7 +2104,7 @@ toggle_workspace()
 
 ---
 
-## Special Behaviors and Edge Cases
+## Special Behaviors
 
 ### Desktop Window Visibility
 
@@ -2227,9 +2200,10 @@ toggle_workspace()
   - Updates `Client.monitor` to new monitor
   - Updates `Client.workspace` to new monitor's current workspace
   - Updates `_NET_WM_DESKTOP` property
+  - If window IS active window: Updates focused_monitor_, calls update_ewmh_current_desktop() and update_all_bars()
 - Does NOT:
   - Call focus_or_fallback()
-  - Update focused_monitor_
+  - Update focused_monitor_ (for non-active windows)
   - Restack the window
   - Change focus state
 - This is intentional - the window simply "belongs" to a different monitor after moving
@@ -2431,7 +2405,7 @@ These invariants help catch bugs early and ensure the window manager state remai
 
   ---
 
-## Special Behaviors and Edge Cases
+## Edge Cases
 
 ### Workspace and Monitor Edge Cases
 
@@ -2581,7 +2555,7 @@ These invariants help catch bugs early and ensure the window manager state remai
 - NOT (above AND below)
 
 **Enforced invariants:**
-- `modal ⇒ above`: When modal is enabled, above is also enabled (set_window_modal enforces this)
+- `modal ⇒ above`: When modal is enabled, above is also enabled (set_window_modal enforces this). **Note:** This coupling is NOT bidirectional: disabling modal ALWAYS disables above, even if above was set independently before modal was enabled.
 
 ### Invariant 4: Desktop Index Validity
 
@@ -2709,4 +2683,3 @@ Window is focus_eligible IF:
 - Hidden windows (client.hidden == true) - filtered in event handlers (EnterNotify, MotionNotify, ButtonPress)
 - Windows on non-visible workspaces
 - showing_desktop_ mode blocks all focus except exit actions
- 
