@@ -448,21 +448,39 @@ If implementing system tray support:
 
 1. **_NET_SUPPORTED Accuracy**: Every atom in `_NET_SUPPORTED` must have working implementation.
 
-2. **State Consistency**:
+2. **Window State Application Ordering**: Geometry-affecting states MUST be applied BEFORE
+   the window is mapped. This prevents "flash" artifacts where windows briefly render at
+   wrong geometry before jumping to correct position. While ICCCM and EWMH do not specify
+   this ordering, it is a design principle for visual correctness.
+
+   Geometry-affecting states:
+   - `_NET_WM_STATE_FULLSCREEN` - Changes geometry to monitor bounds
+   - `_NET_WM_STATE_MAXIMIZED_HORZ/VERT` - Changes geometry to working area
+   - `_NET_WM_STATE_SHADED` - Affects height (implemented as iconify)
+
+   The ordering contract:
+   1. Create Client record with all state flags read from window properties
+   2. Determine window type (tiled/floating/dock/etc.)
+   3. Apply geometry-affecting states that change placement calculation
+   4. Calculate and configure final geometry
+   5. Map the window
+   6. Apply non-geometry states (above, below, skip_taskbar, etc.)
+
+3. **State Consistency**:
    - `WM_STATE=IconicState` ↔ `_NET_WM_STATE` contains `HIDDEN`.
    - `_NET_ACTIVE_WINDOW` = None ↔ no window has input focus.
    - `_NET_CLIENT_LIST` contains exactly all managed, non-override-redirect windows.
    - `_NET_CLIENT_LIST_STACKING` has same windows as `_NET_CLIENT_LIST`.
 
-3. **Desktop Consistency**:
+4. **Desktop Consistency**:
    - `_NET_CURRENT_DESKTOP` < `_NET_NUMBER_OF_DESKTOPS`.
    - All window `_NET_WM_DESKTOP` values are valid or 0xFFFFFFFF.
 
-4. **Workarea Accuracy**:
+5. **Workarea Accuracy**:
    - `_NET_WORKAREA` reflects all active struts.
    - Updated immediately when struts change.
 
-5. **Frame Extents**:
+6. **Frame Extents**:
    - `_NET_FRAME_EXTENTS` set before and after mapping.
    - Accurate for frame geometry calculations.
 

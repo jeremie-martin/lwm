@@ -686,6 +686,13 @@ void WindowManager::manage_window(xcb_window_t window, bool start_iconic)
 
     update_ewmh_client_list();
 
+    // Check fullscreen BEFORE rearrange so window is properly excluded from tiling
+    // and gets correct geometry when mapped. Other EWMH states are handled after.
+    if (ewmh_.has_window_state(window, ewmh_.get()->_NET_WM_STATE_FULLSCREEN))
+    {
+        set_fullscreen(window, true);
+    }
+
     keybinds_.grab_keys(window);
     if (!start_iconic)
     {
@@ -760,10 +767,7 @@ void WindowManager::manage_window(xcb_window_t window, bool start_iconic)
         set_window_below(window, true);
     }
 
-    if (ewmh_.has_window_state(window, ewmh_.get()->_NET_WM_STATE_FULLSCREEN))
-    {
-        set_fullscreen(window, true);
-    }
+    // Note: fullscreen is handled BEFORE rearrange_monitor to ensure correct geometry on map
 }
 
 void WindowManager::unmanage_window(xcb_window_t window)
@@ -1425,6 +1429,7 @@ void WindowManager::rearrange_monitor(Monitor& monitor)
     // Only arrange current workspace - callers handle hiding old workspace
     std::vector<xcb_window_t> visible_windows;
     visible_windows.reserve(monitor.current().windows.size());
+    std::vector<xcb_window_t> fullscreen_windows;
     std::unordered_set<xcb_window_t> seen;
     for (xcb_window_t window : monitor.current().windows)
     {
@@ -1432,6 +1437,14 @@ void WindowManager::rearrange_monitor(Monitor& monitor)
         {
             LOG_TRACE("rearrange_monitor: unmapping iconic window {:#x}", window);
             wm_unmap_window(window);
+            continue;
+        }
+        // Fullscreen windows bypass tiling layout entirely
+        if (is_client_fullscreen(window))
+        {
+            LOG_TRACE("rearrange_monitor: fullscreen window {:#x} excluded from tiling", window);
+            fullscreen_windows.push_back(window);
+            seen.insert(window);
             continue;
         }
         visible_windows.push_back(window);
@@ -1450,6 +1463,17 @@ void WindowManager::rearrange_monitor(Monitor& monitor)
                 wm_unmap_window(window);
                 continue;
             }
+            // Sticky fullscreen windows also bypass tiling
+            if (is_client_fullscreen(window))
+            {
+                if (!seen.contains(window))
+                {
+                    LOG_TRACE("rearrange_monitor: sticky fullscreen window {:#x} excluded from tiling", window);
+                    fullscreen_windows.push_back(window);
+                    seen.insert(window);
+                }
+                continue;
+            }
             if (!seen.contains(window))
             {
                 LOG_TRACE("rearrange_monitor: adding sticky window {:#x}", window);
@@ -1459,14 +1483,21 @@ void WindowManager::rearrange_monitor(Monitor& monitor)
         }
     }
 
-    LOG_DEBUG("rearrange_monitor({}): arranging {} visible windows on ws {}",
-              monitor_idx, visible_windows.size(), monitor.current_workspace);
+    LOG_DEBUG("rearrange_monitor({}): arranging {} visible windows ({} fullscreen) on ws {}",
+              monitor_idx, visible_windows.size(), fullscreen_windows.size(), monitor.current_workspace);
 
     layout_.arrange(visible_windows, monitor.working_area(), bar_.has_value());
 
-    for (xcb_window_t window : visible_windows)
+    // Handle fullscreen windows separately - configure geometry THEN map
+    // This prevents the race condition where windows render at wrong geometry
+    for (xcb_window_t window : fullscreen_windows)
     {
         apply_fullscreen_if_needed(window);
+        xcb_map_window(conn_.get(), window);
+    }
+    if (!fullscreen_windows.empty())
+    {
+        conn_.flush();
     }
 
     LOG_TRACE("rearrange_monitor: DONE");

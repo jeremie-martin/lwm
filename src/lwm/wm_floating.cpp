@@ -258,6 +258,27 @@ void WindowManager::manage_floating_window(xcb_window_t window, bool start_iconi
     update_ewmh_client_list();
 
     keybinds_.grab_keys(window);
+
+    // BEFORE mapping: Apply geometry-affecting states so window appears at correct position
+    // (See COMPLIANCE.md "Window State Application Ordering")
+    if (ewmh_.has_window_state(window, ewmh_.get()->_NET_WM_STATE_FULLSCREEN))
+    {
+        set_fullscreen(window, true);
+    }
+
+    bool wants_max_horz = ewmh_.has_window_state(window, ewmh_.get()->_NET_WM_STATE_MAXIMIZED_HORZ);
+    bool wants_max_vert = ewmh_.has_window_state(window, ewmh_.get()->_NET_WM_STATE_MAXIMIZED_VERT);
+    if (wants_max_horz || wants_max_vert)
+    {
+        set_window_maximized(window, wants_max_horz, wants_max_vert);
+    }
+
+    if (ewmh_.has_window_state(window, ewmh_.get()->_NET_WM_STATE_SHADED))
+    {
+        set_window_shaded(window, true);
+    }
+
+    // NOW map the window (with correct geometry already applied)
     if (!start_iconic)
     {
         update_floating_visibility(*monitor_idx);
@@ -265,6 +286,7 @@ void WindowManager::manage_floating_window(xcb_window_t window, bool start_iconi
             focus_floating_window(window);
     }
 
+    // AFTER mapping: Apply non-geometry states
     // Transient windows should not appear in taskbars/pagers (ICCCM/EWMH convention)
     // Set SKIP_TASKBAR and SKIP_PAGER unless the window explicitly overrides this
     if (transient && !ewmh_.has_window_state(window, ewmh_.get()->_NET_WM_STATE_SKIP_TASKBAR))
@@ -295,18 +317,6 @@ void WindowManager::manage_floating_window(xcb_window_t window, bool start_iconi
         set_window_sticky(window, true);
     }
 
-    bool wants_max_horz = ewmh_.has_window_state(window, ewmh_.get()->_NET_WM_STATE_MAXIMIZED_HORZ);
-    bool wants_max_vert = ewmh_.has_window_state(window, ewmh_.get()->_NET_WM_STATE_MAXIMIZED_VERT);
-    if (wants_max_horz || wants_max_vert)
-    {
-        set_window_maximized(window, wants_max_horz, wants_max_vert);
-    }
-
-    if (ewmh_.has_window_state(window, ewmh_.get()->_NET_WM_STATE_SHADED))
-    {
-        set_window_shaded(window, true);
-    }
-
     if (ewmh_.has_window_state(window, ewmh_.get()->_NET_WM_STATE_MODAL))
     {
         set_window_modal(window, true);
@@ -321,11 +331,6 @@ void WindowManager::manage_floating_window(xcb_window_t window, bool start_iconi
     else if (wants_below)
     {
         set_window_below(window, true);
-    }
-
-    if (ewmh_.has_window_state(window, ewmh_.get()->_NET_WM_STATE_FULLSCREEN))
-    {
-        set_fullscreen(window, true);
     }
 }
 
