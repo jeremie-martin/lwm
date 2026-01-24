@@ -847,6 +847,10 @@ void WindowManager::set_fullscreen(xcb_window_t window, bool enabled)
                         Geometry{ geom_reply->x, geom_reply->y, geom_reply->width, geom_reply->height };
                     free(geom_reply);
                 }
+                else
+                {
+                    client->fullscreen_restore = std::nullopt;
+                }
             }
         }
 
@@ -862,6 +866,15 @@ void WindowManager::set_fullscreen(xcb_window_t window, bool enabled)
         {
             client->below = false;
             ewmh_.set_window_state(window, ewmh_.get()->_NET_WM_STATE_BELOW, false);
+        }
+
+        // Fullscreen supersedes maximized state - clear it to avoid confusing EWMH state
+        if (client->maximized_horz || client->maximized_vert)
+        {
+            client->maximized_horz = false;
+            client->maximized_vert = false;
+            ewmh_.set_window_state(window, ewmh_.get()->_NET_WM_STATE_MAXIMIZED_HORZ, false);
+            ewmh_.set_window_state(window, ewmh_.get()->_NET_WM_STATE_MAXIMIZED_VERT, false);
         }
 
         ewmh_.set_window_state(window, ewmh_.get()->_NET_WM_STATE_FULLSCREEN, true);
@@ -1126,6 +1139,10 @@ void WindowManager::set_window_modal(xcb_window_t window, bool enabled)
     {
         set_window_above(window, true);
     }
+    else
+    {
+        set_window_above(window, false);
+    }
 }
 
 void WindowManager::set_client_skip_taskbar(xcb_window_t window, bool enabled)
@@ -1384,8 +1401,20 @@ void WindowManager::kill_window(xcb_window_t window)
 
 void WindowManager::rearrange_monitor(Monitor& monitor)
 {
+    // Find monitor index for logging
+    size_t monitor_idx = 0;
+    for (; monitor_idx < monitors_.size(); ++monitor_idx)
+    {
+        if (&monitors_[monitor_idx] == &monitor)
+            break;
+    }
+
+    LOG_TRACE("rearrange_monitor({}) called, current_ws={} windows_in_ws={}",
+              monitor_idx, monitor.current_workspace, monitor.current().windows.size());
+
     if (showing_desktop_)
     {
+        LOG_TRACE("rearrange_monitor: showing_desktop_, unmapping all");
         for (xcb_window_t window : monitor.current().windows)
         {
             wm_unmap_window(window);
@@ -1401,6 +1430,7 @@ void WindowManager::rearrange_monitor(Monitor& monitor)
     {
         if (is_client_iconic(window))
         {
+            LOG_TRACE("rearrange_monitor: unmapping iconic window {:#x}", window);
             wm_unmap_window(window);
             continue;
         }
@@ -1416,16 +1446,21 @@ void WindowManager::rearrange_monitor(Monitor& monitor)
                 continue;
             if (is_client_iconic(window))
             {
+                LOG_TRACE("rearrange_monitor: unmapping iconic sticky window {:#x}", window);
                 wm_unmap_window(window);
                 continue;
             }
             if (!seen.contains(window))
             {
+                LOG_TRACE("rearrange_monitor: adding sticky window {:#x}", window);
                 visible_windows.push_back(window);
                 seen.insert(window);
             }
         }
     }
+
+    LOG_DEBUG("rearrange_monitor({}): arranging {} visible windows on ws {}",
+              monitor_idx, visible_windows.size(), monitor.current_workspace);
 
     layout_.arrange(visible_windows, monitor.working_area(), bar_.has_value());
 
@@ -1434,6 +1469,7 @@ void WindowManager::rearrange_monitor(Monitor& monitor)
         apply_fullscreen_if_needed(window);
     }
 
+    LOG_TRACE("rearrange_monitor: DONE");
 }
 
 void WindowManager::rearrange_all_monitors()
@@ -2203,6 +2239,8 @@ void WindowManager::unmanage_desktop_window(xcb_window_t window)
  */
 void WindowManager::wm_unmap_window(xcb_window_t window)
 {
+    LOG_TRACE("wm_unmap_window({:#x}) called", window);
+
     // Only increment counter if window is currently viewable.
     // Unmapping an already-unmapped window produces no UnmapNotify,
     // which would leak the counter and cause future client unmaps to be ignored.
@@ -2215,12 +2253,18 @@ void WindowManager::wm_unmap_window(xcb_window_t window)
         if (viewable)
         {
             wm_unmapped_windows_[window] += 1;
+            LOG_TRACE("wm_unmap_window({:#x}): viewable, unmapping (counter={})",
+                      window, wm_unmapped_windows_[window]);
             xcb_unmap_window(conn_.get(), window);
         }
-        // Window already unmapped - no action needed
+        else
+        {
+            LOG_TRACE("wm_unmap_window({:#x}): already unmapped, skipping", window);
+        }
     }
     else
     {
+        LOG_TRACE("wm_unmap_window({:#x}): no attributes, trying unmap anyway", window);
         // Window might be destroyed - still try to unmap but don't track
         xcb_unmap_window(conn_.get(), window);
     }

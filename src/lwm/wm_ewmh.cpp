@@ -1,4 +1,5 @@
 #include "wm.hpp"
+#include "lwm/core/log.hpp"
 #include "lwm/core/policy.hpp"
 #include <algorithm>
 #include <limits>
@@ -125,6 +126,8 @@ void WindowManager::update_ewmh_current_desktop()
 {
     // Per-monitor workspaces: report the active monitor's current workspace only.
     uint32_t desktop = get_ewmh_desktop_index(focused_monitor_, focused_monitor().current_workspace);
+    LOG_TRACE("update_ewmh_current_desktop: focused_monitor_={} current_ws={} desktop={}",
+              focused_monitor_, focused_monitor().current_workspace, desktop);
     ewmh_.set_current_desktop(desktop);
 }
 
@@ -170,31 +173,51 @@ uint32_t WindowManager::get_ewmh_desktop_index(size_t monitor_idx, size_t worksp
 
 void WindowManager::switch_to_ewmh_desktop(uint32_t desktop)
 {
+    LOG_DEBUG("switch_to_ewmh_desktop({}) called, focused_monitor_={}", desktop, focused_monitor_);
+
     // Convert EWMH desktop index to monitor + workspace
     size_t workspaces_per_monitor = config_.workspaces.count;
     auto indices = ewmh_policy::desktop_to_indices(desktop, workspaces_per_monitor);
     if (!indices)
+    {
+        LOG_TRACE("switch_to_ewmh_desktop: invalid desktop index");
         return;
+    }
     size_t monitor_idx = indices->first;
     size_t workspace_idx = indices->second;
 
+    LOG_TRACE("switch_to_ewmh_desktop: target monitor_idx={} workspace_idx={}", monitor_idx, workspace_idx);
+
     if (monitor_idx >= monitors_.size())
+    {
+        LOG_TRACE("switch_to_ewmh_desktop: invalid monitor index");
         return;
+    }
 
     auto& monitor = monitors_[monitor_idx];
     if (workspace_idx >= monitor.workspaces.size())
+    {
+        LOG_TRACE("switch_to_ewmh_desktop: invalid workspace index");
         return;
+    }
 
     // Early return if already on target monitor and workspace (matches switch_workspace behavior)
     if (monitor_idx == focused_monitor_ && workspace_idx == monitor.current_workspace)
+    {
+        LOG_TRACE("switch_to_ewmh_desktop: already on target, returning");
         return;
+    }
 
     size_t old_workspace = monitor.current_workspace;
+    LOG_DEBUG("switch_to_ewmh_desktop: switching from ws {} to ws {} on monitor {}",
+              old_workspace, workspace_idx, monitor_idx);
+
     // Unmap windows from OLD workspace before switching
     for (xcb_window_t window : monitor.current().windows)
     {
         if (is_client_sticky(window))
             continue;
+        LOG_TRACE("switch_to_ewmh_desktop: unmapping window {:#x}", window);
         wm_unmap_window(window);
     }
 
@@ -205,12 +228,18 @@ void WindowManager::switch_to_ewmh_desktop(uint32_t desktop)
         monitor.previous_workspace = old_workspace;
     }
     monitor.current_workspace = workspace_idx;
+    LOG_TRACE("switch_to_ewmh_desktop: updating EWMH current desktop");
     update_ewmh_current_desktop();
+    LOG_TRACE("switch_to_ewmh_desktop: rearranging monitor");
     rearrange_monitor(monitor);
+    LOG_TRACE("switch_to_ewmh_desktop: updating floating visibility");
     update_floating_visibility(monitor_idx);
+    LOG_TRACE("switch_to_ewmh_desktop: focus_or_fallback");
     focus_or_fallback(monitor);
+    LOG_TRACE("switch_to_ewmh_desktop: update_all_bars");
     update_all_bars();
     conn_.flush();
+    LOG_DEBUG("switch_to_ewmh_desktop: DONE, now on monitor {} ws {}", focused_monitor_, monitor.current_workspace);
 }
 
 } // namespace lwm

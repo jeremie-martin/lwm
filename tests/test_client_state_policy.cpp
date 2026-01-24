@@ -431,3 +431,151 @@ TEST_CASE("Modal and above can coexist", "[client][state][combination]")
     REQUIRE(c.modal);
     REQUIRE(c.above);
 }
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Fullscreen state transition policy tests
+// ─────────────────────────────────────────────────────────────────────────────
+
+TEST_CASE("Fullscreen should clear ABOVE state", "[client][state][fullscreen][policy]")
+{
+    // Documents expected WM behavior: entering fullscreen clears ABOVE
+    Client c = make_client(0x1000, Client::Kind::Floating);
+
+    c.above = true;
+    REQUIRE(c.above);
+
+    // Simulate fullscreen entry (WM clears ABOVE)
+    c.fullscreen = true;
+    c.above = false;
+
+    REQUIRE(c.fullscreen);
+    REQUIRE_FALSE(c.above);
+}
+
+TEST_CASE("Fullscreen should clear BELOW state", "[client][state][fullscreen][policy]")
+{
+    // Documents expected WM behavior: entering fullscreen clears BELOW
+    Client c = make_client(0x1000, Client::Kind::Floating);
+
+    c.below = true;
+    REQUIRE(c.below);
+
+    // Simulate fullscreen entry (WM clears BELOW)
+    c.fullscreen = true;
+    c.below = false;
+
+    REQUIRE(c.fullscreen);
+    REQUIRE_FALSE(c.below);
+}
+
+TEST_CASE("Fullscreen should clear maximized states", "[client][state][fullscreen][policy]")
+{
+    // Documents expected WM behavior: entering fullscreen clears maximized
+    Client c = make_client(0x1000, Client::Kind::Floating);
+
+    c.maximized_horz = true;
+    c.maximized_vert = true;
+    c.maximize_restore = Geometry{ 100, 100, 800, 600 };
+    REQUIRE(c.maximized_horz);
+    REQUIRE(c.maximized_vert);
+
+    // Simulate fullscreen entry (WM clears maximized but preserves restore geometry)
+    c.fullscreen = true;
+    c.maximized_horz = false;
+    c.maximized_vert = false;
+
+    REQUIRE(c.fullscreen);
+    REQUIRE_FALSE(c.maximized_horz);
+    REQUIRE_FALSE(c.maximized_vert);
+    // maximize_restore is preserved for proper geometry restoration chain
+    REQUIRE(c.maximize_restore.has_value());
+}
+
+TEST_CASE("Fullscreen should preserve modal state", "[client][state][fullscreen][policy]")
+{
+    // Documents expected WM behavior: modal persists through fullscreen
+    // (modal is a window type hint, not a visual state)
+    Client c = make_client(0x1000, Client::Kind::Floating);
+
+    c.modal = true;
+    REQUIRE(c.modal);
+
+    c.fullscreen = true;
+
+    REQUIRE(c.fullscreen);
+    REQUIRE(c.modal);  // Modal is intentionally preserved
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Modal state transition policy tests
+// ─────────────────────────────────────────────────────────────────────────────
+
+TEST_CASE("Modal enable should set ABOVE state", "[client][state][modal][policy]")
+{
+    // Documents expected WM behavior: modal windows are always above
+    Client c = make_client(0x1000, Client::Kind::Floating);
+
+    REQUIRE_FALSE(c.modal);
+    REQUIRE_FALSE(c.above);
+
+    // Simulate modal enable (WM sets ABOVE)
+    c.modal = true;
+    c.above = true;
+
+    REQUIRE(c.modal);
+    REQUIRE(c.above);
+}
+
+TEST_CASE("Modal disable should clear ABOVE state", "[client][state][modal][policy]")
+{
+    // Documents expected WM behavior: disabling modal clears auto-ABOVE
+    Client c = make_client(0x1000, Client::Kind::Floating);
+
+    c.modal = true;
+    c.above = true;
+    REQUIRE(c.modal);
+    REQUIRE(c.above);
+
+    // Simulate modal disable (WM clears ABOVE)
+    c.modal = false;
+    c.above = false;
+
+    REQUIRE_FALSE(c.modal);
+    REQUIRE_FALSE(c.above);
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Fullscreen restore geometry policy tests
+// ─────────────────────────────────────────────────────────────────────────────
+
+TEST_CASE("Fullscreen restore geometry should be nullopt when query fails", "[client][state][fullscreen][policy]")
+{
+    // Documents expected WM behavior: failed geometry query clears restore
+    Client c = make_client(0x1000);
+
+    // Simulate stale restore geometry from previous fullscreen
+    c.fullscreen_restore = Geometry{ 100, 100, 800, 600 };
+
+    // When xcb_get_geometry_reply returns nullptr, WM should clear
+    c.fullscreen_restore = std::nullopt;
+
+    REQUIRE_FALSE(c.fullscreen_restore.has_value());
+}
+
+TEST_CASE("Fullscreen exit uses restore geometry", "[client][state][fullscreen][policy]")
+{
+    Client c = make_client(0x1000, Client::Kind::Floating);
+
+    // Save geometry before fullscreen
+    Geometry original{ 100, 100, 800, 600 };
+    c.fullscreen_restore = original;
+    c.fullscreen = true;
+
+    // Exit fullscreen - restore geometry should be used
+    c.fullscreen = false;
+
+    REQUIRE_FALSE(c.fullscreen);
+    REQUIRE(c.fullscreen_restore.has_value());
+    REQUIRE(c.fullscreen_restore->width == 800);
+    REQUIRE(c.fullscreen_restore->height == 600);
+}

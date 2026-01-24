@@ -461,8 +461,14 @@ void WindowManager::handle_window_removal(xcb_window_t window)
 
 void WindowManager::handle_enter_notify(xcb_enter_notify_event_t const& e)
 {
+    LOG_TRACE("EVENT: EnterNotify event={:#x} root_x={} root_y={} mode={} detail={} time={}",
+              e.event, e.root_x, e.root_y, static_cast<int>(e.mode), static_cast<int>(e.detail), e.time);
+
     if (drag_state_.active)
+    {
+        LOG_TRACE("EnterNotify: ignored (drag active)");
         return;
+    }
 
     // For non-root windows: only handle if mode=NORMAL and detail!=INFERIOR
     // detail=INFERIOR means pointer entered because a child window closed,
@@ -471,13 +477,19 @@ void WindowManager::handle_enter_notify(xcb_enter_notify_event_t const& e)
     if (e.event != conn_.screen()->root)
     {
         if (e.mode != XCB_NOTIFY_MODE_NORMAL || e.detail == XCB_NOTIFY_DETAIL_INFERIOR)
+        {
+            LOG_TRACE("EnterNotify: filtered (mode={} detail={})", static_cast<int>(e.mode), static_cast<int>(e.detail));
             return;
+        }
     }
     else
     {
         // Root window: only require normal mode
         if (e.mode != XCB_NOTIFY_MODE_NORMAL)
+        {
+            LOG_TRACE("EnterNotify: filtered root (mode={})", static_cast<int>(e.mode));
             return;
+        }
     }
 
     // Case 1: Entering a managed window - focus-follows-mouse
@@ -485,17 +497,20 @@ void WindowManager::handle_enter_notify(xcb_enter_notify_event_t const& e)
     {
         if (find_floating_window(e.event))
         {
+            LOG_DEBUG("EnterNotify: focusing floating window {:#x}", e.event);
             focus_floating_window(e.event);
             return;
         }
         if (monitor_containing_window(e.event))
         {
+            LOG_DEBUG("EnterNotify: focusing tiled window {:#x}", e.event);
             focus_window(e.event);
             return;
         }
     }
 
     // Case 2: Entering root or unmanaged window area (gaps/empty space)
+    LOG_TRACE("EnterNotify: updating focused monitor at ({}, {})", e.root_x, e.root_y);
     update_focused_monitor_at_point(e.root_x, e.root_y);
 }
 
@@ -522,13 +537,21 @@ void WindowManager::handle_motion_notify(xcb_motion_notify_event_t const& e)
         if (find_floating_window(window_under_cursor))
         {
             if (window_under_cursor != active_window_)
+            {
+                LOG_DEBUG("MotionNotify: focusing floating window {:#x} (was {:#x})",
+                          window_under_cursor, active_window_);
                 focus_floating_window(window_under_cursor);
+            }
             return;
         }
         if (monitor_containing_window(window_under_cursor))
         {
             if (window_under_cursor != active_window_)
+            {
+                LOG_DEBUG("MotionNotify: focusing tiled window {:#x} (was {:#x})",
+                          window_under_cursor, active_window_);
                 focus_window(window_under_cursor);
+            }
             return;
         }
     }

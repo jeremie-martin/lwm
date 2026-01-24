@@ -6,17 +6,20 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 **Build:**
 ```bash
-mkdir -p build && cd build && cmake .. && make -j$(nproc)
+make            # Release build
+make debug      # Debug build
+```
+
+**Install:**
+```bash
+sudo make install    # Install to /usr/local/bin
+sudo make uninstall  # Remove from /usr/local/bin
 ```
 
 **Test:**
 ```bash
-cd build && cmake -DBUILD_TESTS=ON .. && make -j$(nproc) && ./tests/lwm_tests
-```
-
-**Run single test:**
-```bash
-./tests/lwm_tests "test name pattern"
+make test                              # Build and run all tests
+./build/tests/lwm_tests "pattern"      # Run single test
 ```
 
 **Test with Xephyr:**
@@ -27,6 +30,11 @@ cd build && cmake -DBUILD_TESTS=ON .. && make -j$(nproc) && ./tests/lwm_tests
 **Format code:**
 ```bash
 find src -name '*.cpp' -o -name '*.hpp' | xargs clang-format -i
+```
+
+**Clean:**
+```bash
+make clean      # Remove build directory
 ```
 
 **Debug build:**

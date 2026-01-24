@@ -1,6 +1,7 @@
 #include "wm.hpp"
 #include "lwm/core/floating.hpp"
 #include "lwm/core/focus.hpp"
+#include "lwm/core/log.hpp"
 #include <algorithm>
 #include <xcb/xcb_icccm.h>
 
@@ -400,17 +401,25 @@ WindowManager::FloatingWindow const* WindowManager::find_floating_window(xcb_win
 
 void WindowManager::update_floating_visibility(size_t monitor_idx)
 {
+    LOG_TRACE("update_floating_visibility({}) called, current_ws={}",
+              monitor_idx, monitor_idx < monitors_.size() ? monitors_[monitor_idx].current_workspace : 0);
+
     if (monitor_idx >= monitors_.size())
+    {
+        LOG_TRACE("update_floating_visibility: invalid monitor index");
         return;
+    }
 
     auto& monitor = monitors_[monitor_idx];
     if (showing_desktop_)
     {
+        LOG_TRACE("update_floating_visibility: showing desktop, hiding all floating");
         for (auto& fw : floating_windows_)
         {
             auto const* client = get_client(fw.id);
             if (client && client->monitor == monitor_idx)
             {
+                LOG_TRACE("update_floating_visibility: unmapping floating {:#x} (showing desktop)", fw.id);
                 wm_unmap_window(fw.id);
             }
         }
@@ -424,8 +433,14 @@ void WindowManager::update_floating_visibility(size_t monitor_idx)
             continue;
 
         bool sticky = is_client_sticky(fw.id);
-        if ((sticky || client->workspace == monitor.current_workspace)
-            && !is_client_iconic(fw.id))
+        bool should_show = (sticky || client->workspace == monitor.current_workspace)
+            && !is_client_iconic(fw.id);
+
+        LOG_TRACE("update_floating_visibility: window {:#x} ws={} current_ws={} sticky={} iconic={} -> show={}",
+                  fw.id, client->workspace, monitor.current_workspace, sticky,
+                  is_client_iconic(fw.id), should_show);
+
+        if (should_show)
         {
             // Configure BEFORE mapping so window appears at correct position
             if (is_client_fullscreen(fw.id))
@@ -441,6 +456,7 @@ void WindowManager::update_floating_visibility(size_t monitor_idx)
             {
                 apply_floating_geometry(fw);
             }
+            LOG_TRACE("update_floating_visibility: mapping floating {:#x}", fw.id);
             xcb_map_window(conn_.get(), fw.id);
             if (client->transient_for != XCB_NONE)
             {
@@ -449,9 +465,11 @@ void WindowManager::update_floating_visibility(size_t monitor_idx)
         }
         else
         {
+            LOG_TRACE("update_floating_visibility: unmapping floating {:#x}", fw.id);
             wm_unmap_window(fw.id);
         }
     }
+    LOG_TRACE("update_floating_visibility: DONE");
 }
 
 void WindowManager::update_floating_visibility_all()
