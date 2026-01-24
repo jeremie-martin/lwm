@@ -248,64 +248,95 @@ MapRequest → classify_window()
 2. If not set, check WM_HINTS.initial_state == IconicState
 3. Precedence: _NET_WM_STATE_HIDDEN > WM_HINTS.initial_state
 
-### Complete State Machine
+ ### Complete State Machine
 
 ```
-                     ┌─────────────────────────────────────────┐
-                     │           UNMANAGED                       │
-                     └─────────────────┬───────────────────────┘
-                                       │ MapRequest
-                                       ▼
-                     ┌─────────────────────────────────────────┐
-                     │           MANAGED                         │
-                     │  kind: Tiled/Floating/Dock/Desktop       │
-                     │  hidden=false, iconic=false              │
-                     └─────────────────┬───────────────────────┘
-                                       │
-                     ┌─────────────────┼───────────────────────┐
-                     │                 │                       │
-           ┌─────────▼─────────┐  ┌──▼─────────┐  ┌────────▼────────┐
-           │     VISIBLE       │  │   ICONIC    │  │   NO_FOCUS       │
-           │  (mapped,         │  │ (minimized) │  │  (no focused    │
-           │   not hidden,     │  │ (mapped but  │  │   window)       │
-           │   on-screen)      │  │   off-screen)│  │                 │
-           └─────────┬─────────┘  └──┬─────────┘  └────────┬────────┘
-                     │                │                    │
-           ┌─────────┴─────────┐  ┌───┴──────────┐   ┌─────┴──────┐
-           │ State modifiers:  │  │              │   │            │
-           │ • hidden flag    │  │ hidden=true  │   │ active_    │
-           │ • iconic flag    │  │ iconic=true   │   │ window =   │
-           │ • fullscreen     │  │ off-screen    │   │ XCB_NONE   │
-           │ • above/below    │  │              │   │            │
-           │ • sticky         │  │              │   │            │
-           │ • modal          │  │              │   │            │
-           │ • maximized_*    │  │              │   │            │
-           │ • shaded         │  │              │   │            │
-           │ • skip_*         │  │              │   │            │
-           │ • demands_attent. │  │              │   │            │
-           └───────────────────┘  └──────────────┘   └────────────┘
-                     │                │                    │
-                     └─────────────────┴────────────────────┘
-                                       │
-                     ┌─────────────────┼─────────────────────┐
-                     │                 │                     │
-               UnmapNotify    DestroyNotify    Unmanage (error)
-                     │                 │                     │
-                     └─────────────────┴─────────────────────┘
-                                       ▼
-                     ┌─────────────────────────────────────────┐
-                     │           WITHDRAWN                      │
-                     │     (WM_STATE = WithdrawnState)        │
-                     └─────────────────────────────────────────┘
-```
+                      ┌─────────────────────────────────────────┐
+                      │           UNMANAGED                       │
+                      └─────────────────┬───────────────────────┘
+                                        │ MapRequest
+                                        ▼
+                      ┌─────────────────────────────────────────┐
+                      │           MANAGED                         │
+                      │  kind: Tiled/Floating/Dock/Desktop       │
+                      │  WM_STATE: Normal/Iconic                 │
+                      └─────────────────┬───────────────────────┘
+                                        │
+                      ┌─────────────────┼───────────────────────┐
+                      │                 │                       │
+            ┌─────────▼─────────┐  ┌──▼─────────┐
+            │     VISIBLE       │  │   ICONIC    │
+            │  (mapped,         │  │ (minimized) │
+            │   hidden=false,    │  │ (mapped but  │
+            │   iconic=false,   │  │   hidden=true,│
+            │   on-screen)      │  │   iconic=true,│
+            │                   │  │   off-screen) │
+            │  State modifiers:  │  │              │
+            │  • fullscreen     │  │              │
+            │  • above/below    │  │              │
+            │  • sticky         │  │              │
+            │  • modal          │  │              │
+            │  • maximized_*    │  │              │
+            │  • shaded         │  │              │
+            │  • skip_*         │  │              │
+            │  • demands_attent. │  │              │
+            └─────────┬─────────┘  └──┬─────────┘
+                      │                │
+                      └─────────────────┴────────────────────┘
+                                        │
+                      ┌─────────────────┼─────────────────────┐
+                      │                 │                     │
+                UnmapNotify    DestroyNotify    Unmanage (error)
+                      │                 │                     │
+                      └─────────────────┴─────────────────────┘
+                                        ▼
+                      ┌─────────────────────────────────────────┐
+                      │           WITHDRAWN                      │
+                      │     (WM_STATE = WithdrawnState)        │
+                      └─────────────────────────────────────────┘
+
+┌───────────────────────────────────────────────────────────────┐
+│ Global Focus State                                             │
+│                                                                │
+│ NO_FOCUS: active_window_ = XCB_NONE (not a window state)      │
+│                                                                │
+│ Triggered when:                                                │
+│   - Last window unmanaged and no replacement exists            │
+│   - Pointer enters root window (empty space)                   │
+│   - Entering showing_desktop mode                              │
+│   - focus_or_fallback() finds no eligible candidates           │
+│                                                                │
+│ Note: Windows themselves have VISIBLE or ICONIC states;       │
+│       NO_FOCUS is a global WindowManager condition.             │
+└───────────────────────────────────────────────────────────────┘
+
+┌───────────────────────────────────────────────────────────────┐
+│ Interaction Modes                                              │
+│                                                                │
+│ NORMAL: Default interaction mode                               │
+│ DRAG: Drag state active (drag_state_.active = true)           │
+│   - Ignores EnterNotify events (focus-follows-mouse disabled)  │
+│   - MotionNotify delegates to update_drag()                    │
+│   - ButtonRelease calls end_drag()                            │
+│   - Silently rejects: fullscreen windows, showing_desktop mode  │
+│                                                                │
+│ SHOWING_DESKTOP: Desktop mode enabled (showing_desktop_ = true)│
+│   - Hides all non-sticky windows (off-screen)                  │
+│   - Clears focus                                               │
+│   - rearrange_monitor() returns early (no layout)              │
+│   - Cannot start tiled drag operations                         │
+└───────────────────────────────────────────────────────────────┘
+ ```
 
 **State Model Notes:**
-- `hidden` and `fullscreen` are state modifiers, not top-level states
-- `hidden=true` means window is at OFF_SCREEN_X (-20000)
-- `iconic=true` always implies `hidden=true`, but `hidden=true` does not imply `iconic=true`
+- Top-level window states: UNMANAGED, MANAGED (with VISIBLE/ICONIC substates), WITHDRAWN (ICCCM WM_STATE)
+- `hidden` is a physical state flag (positioned off-screen at OFF_SCREEN_X)
+- `iconic` is a logical state flag (minimized by user, WM_STATE Iconic)
+- **iconic=true always implies hidden=true** (minimized windows are off-screen)
+- **hidden=true does NOT imply iconic=true** (workspace switches also hide windows)
+- State modifiers apply to VISIBLE windows: fullscreen, above, below, sticky, maximized, shaded, modal
 - `fullscreen` can combine with VISIBLE state; fullscreen windows are excluded from tiling
-- Modal state is tightly coupled: `modal=true` ⇒ `above=true`
-- NO_FOCUS is reached when: last window unmanaged, workspace becomes empty, all windows iconic on current workspace, or pointer crosses to different monitor and lands on root window
+- Modal state is tightly coupled: `modal=true` ⇒ `above=true` (when modal is enabled, above is also enabled; when modal is disabled, above is also cleared)
 
 **Visibility Model**: LWM uses off-screen visibility, not unmap/map cycles. Windows are always mapped (XCB_MAP_STATE_VIEWABLE). Visibility is controlled by:
 - `hidden` flag: true = moved off-screen to OFF_SCREEN_X (-20000)
@@ -381,13 +412,21 @@ constexpr uint32_t WM_STATE_ICONIC = 3;
 - Trigger: UnmapNotify/DestroyNotify (unmanage_window)
 - Actions: WM_STATE Withdrawn, erase from clients_, remove from workspace
 
-**↔ HIDDEN**
+ **↔ HIDDEN**
 - Trigger: hide_window() / show_window()
 - Actions:
   - Set/clear hidden flag
   - Move to/from OFF_SCREEN_X (preserves y coordinate)
   - Window remains mapped at all times
 - Used for workspace visibility, showing desktop, iconification
+
+**↔ SHOWING_DESKTOP**
+- Trigger: _NET_SHOWING_DESKTOP client message or keybind
+- Actions:
+  - Enter mode: Hide all non-sticky windows (off-screen via hide_window()), clear_focus()
+  - Exit mode: rearrange_all_monitors(), update_floating_visibility_all(), focus_or_fallback()
+- Note: Sticky windows remain visible during showing_desktop mode
+- Side effects: rearrange_monitor() returns early when showing_desktop_ is true (no layout)
 
 **→ NO_FOCUS**
 - Trigger: Last window unmanaged, workspace becomes empty, all windows iconic on current workspace, or pointer crosses to different monitor and lands on root window
@@ -404,6 +443,54 @@ constexpr uint32_t WM_STATE_ICONIC = 3;
    - When modal is disabled, above is also cleared (set_window_modal calls set_window_above(false))
    - This coupling is NOT bidirectional: disabling modal ALWAYS disables above (even if above was set independently before modal was enabled)
 - **hidden vs iconic**: Iconic always implies hidden (iconic=true ⇒ hidden=true), but hidden can be true without iconic
+
+---
+
+ ## Startup and Initialization
+
+### Window Management Initialization
+
+**Initialization Sequence** (from main() → WindowManager construction → run()):
+1. setup_signal_handlers()
+2. init_mousebinds()
+3. create_wm_window()
+4. setup_root() (SubstructureRedirect)
+5. grab_buttons()
+6. claim_wm_ownership() (WM_S0 selection)
+7. intern_atoms()
+8. window_rules_.load_rules()
+9. layout_.set_sync_request_callback()
+10. detect_monitors()
+11. setup_ewmh()
+12. setup_monitor_bars()
+13. scan_existing_windows()
+14. run_autostart()
+15. keybinds_.grab_keys()
+16. update_ewmh_client_list()
+17. update_all_bars()
+
+### Scan Existing Windows
+
+**scan_existing_windows()** - Restores windows from previous session:
+1. Query root window tree for all top-level windows
+2. Filter out override-redirect and non-viewable windows
+3. For each window: classify → manage without suppressing focus
+4. Determine pointer location using xcb_query_pointer
+5. Set focused_monitor_ based on pointer position
+6. Clear suppress_focus_ flag (was set to prevent focus changes during scanning)
+7. Call focus_or_fallback() to restore focus on appropriate monitor
+
+**suppress_focus_ flag**:
+- Set before scan_existing_windows() to prevent spurious focus changes
+- Cleared after scanning completes
+- Prevents focus operations from taking effect during WM startup
+
+### Initial Window State Detection
+
+**Initial Iconic State Precedence**:
+1. Check _NET_WM_STATE_HIDDEN property (takes precedence)
+2. If not set, check WM_HINTS.initial_state == IconicState
+3. Precedence: _NET_WM_STATE_HIDDEN > WM_HINTS.initial_state
 
 ---
 
@@ -439,8 +526,8 @@ run()
 | KeyPress | handle_key_press | Execute keybind actions |
 | KeyRelease | handle_key_release | Track for auto-repeat |
 | ClientMessage | handle_client_message | EWMH/ICCCM commands |
-| ConfigureRequest | handle_configure_request | Geometry requests |
-| PropertyNotify | handle_property_notify | State changes, including user_time_window indirection |
+ | ConfigureRequest | handle_configure_request | Geometry requests. Tiled: send synthetic ConfigureNotify. Floating: apply within size hints. Fullscreen: apply fullscreen geometry |
+| PropertyNotify | handle_property_notify | State changes, title, hints, sync counter, struts, user_time_window indirection for _NET_WM_USER_TIME |
 | Expose | handle_expose | Redraw status bars. Checks e.count != 0 to filter redundant events (only redraw on last one). Finds which monitor's bar window received the expose and calls bar_->update() with current window information. Only acts if bar_ is enabled. |
 | SelectionClear | (handled in run) | New WM taking over, exit |
 | RANDR change | handle_randr_screen_change | Monitor hotplug |
@@ -515,6 +602,31 @@ is_focus_eligible(window) =
 **Click-to-Focus**
 - ButtonPress on window → Focus immediately
 
+ **Focus Restoration**
+
+Two-tier focus restoration model:
+
+1. **Workspace focus memory** (tiled windows only):
+   - Each Workspace.focused_window stores the last-focused tiled window
+   - Only tiled windows are remembered per-workspace
+   - This limitation is by design; floating window focus is not tracked per-workspace
+
+2. **Global floating window search** (MRU order):
+   - When workspace focus memory is not applicable, floating_windows_ is searched in reverse iteration (MRU)
+   - Provides fallback focus restoration for floating windows
+
+**Restoration scenarios**:
+- Window unmanaged:
+  - If removed window was on focused_monitor_ AND on current_workspace: focus_or_fallback()
+  - Otherwise: clear_focus()
+  - Before restoration, workspace.focused_window is updated to last window in workspace (or XCB_NONE if empty)
+- Workspace switch: restore workspace.focused_window (may be stale/iconic, focus_or_fallback handles this)
+- Fullscreen exit: No automatic focus restoration (window remains focused if it was active)
+- Sticky toggle: No automatic focus restoration
+- Monitor switch via pointer: No automatic restoration when focused_monitor_ updates
+- Showing Desktop exit: rearrange_all_monitors(), update_floating_visibility_all(), focus_or_fallback()
+- Focus fallback: MRU order (floating windows, then tiled)
+
 **Focus Cycling** (focus_next / focus_prev)
 - Uses `build_cycle_candidates()` to collect tiled and floating windows visible on current monitor/workspace
 - Selection order: Tiled windows first, then floating windows (both in MRU order via reverse iteration)
@@ -532,18 +644,38 @@ is_focus_eligible(window) =
 - Focus fallback: MRU order (floating windows, then tiled)
 - Showing Desktop exit: rearrange all, update floating visibility, focus_or_fallback()
 
-### Focus Barriers Summary
+ ### Focus Barriers Summary
 
 All conditions that prevent focus:
-1. `showing_desktop_ == true` - blocks all focus except desktop mode exit
-2. `!is_focus_eligible(window)` - Dock/Desktop kinds or no input focus support
-3. `client.hidden == true` - off-screen windows (filtered in EnterNotify, MotionNotify, ButtonPress; is_focus_eligible() does NOT check this)
-4. `is_client_iconic(window)` - minimized windows (deiconified before focusing)
-5. Workspace not visible (for non-sticky windows) - triggers workspace switch on focus attempt
 
-**Note on focus behavior across monitors:**
-- Focusing a window on a different monitor does NOT automatically switch monitors
-- User must explicitly switch monitors first (via mouse crossing or keybind)
+1. **showing_desktop_ == true** - blocks all focus except desktop mode exit
+   - focus_window() and focus_floating_window() return early without attempting to focus
+
+2. **!is_focus_eligible(window)** - Dock/Desktop kinds or no input focus support
+   - is_focus_eligible() checks: NOT (kind == Dock OR kind == Desktop) AND (accepts_input_focus OR supports_take_focus)
+
+3. **client.hidden == true** - off-screen windows
+   - Filtered in EnterNotify, MotionNotify, and ButtonPress handlers
+   - is_focus_eligible() does NOT check client.hidden (design choice)
+   - Prevents off-screen windows from receiving focus
+
+4. **is_client_iconic(window)** - minimized windows
+   - Deiconified before focusing (iconify reverses via deiconify)
+
+5. **Workspace not visible (for non-sticky windows)** - triggers workspace switch on focus attempt
+   - Focusing a window on a non-visible workspace automatically switches to that workspace (and monitor)
+   - The 'workspace not visible' check in focus_barriers applies to focus candidates that would require workspace switches
+   - Only visible windows can be focused without workspace switching
+
+**Focus behavior across monitors**:
+- Explicit monitor switch (keybind): Warps cursor if warp_cursor_on_monitor_change configured
+- Automatic monitor switch (focus/window movement): Does NOT warp cursor
+- Focusing a window on a different monitor via focus_window() implicitly switches the monitor (as a side effect of workspace switch)
+
+**INFERIOR event filtering**:
+- EnterNotify with detail=INFERIOR is filtered out
+- INFERIOR means pointer entered a window because a child window closed, not because mouse moved
+- This is a spurious event that should be ignored
 
 ### Focus Stealing Prevention
 
@@ -602,7 +734,7 @@ _NET_DESKTOP_VIEWPORT = Each workspace's monitor origin
 
 Used for `toggle_workspace()` behavior to restore previous workspace. Note that `previous_workspace` is independent per monitor.
 
-### Workspace Switch
+ ### Workspace Switch
 
 ```
 switch_workspace(target_ws)
@@ -610,44 +742,58 @@ switch_workspace(target_ws)
 ├─ workspace_policy::apply_workspace_switch()
 │  ├─ Update previous_workspace = current
 │  └─ Update current_workspace = target
-├─ hide_window() for floating windows (old workspace, non-sticky)  ← Critical ordering!
+├─ hide_window() for floating windows (old workspace, non-sticky)
 ├─ hide_window() for tiled windows (old workspace, non-sticky)
+├─ conn_.flush()  ← Critical sync point!
 ├─ update_ewmh_current_desktop()
 ├─ rearrange_monitor(new workspace)
+│  ├─ For each visible window: show_window() (clears hidden flag)
+│  └─ layout_.arrange() (applies on-screen geometry)
 ├─ update_floating_visibility(new workspace)
 ├─ focus_or_fallback(monitor)
 └─ Update bars
 ```
 
-**Critical Ordering**: Hide floating windows BEFORE tiled windows, then flush before rearranging.
-Prevents old floating windows from briefly appearing over new workspace content due to X11 async rendering.
+**Critical Ordering**:
+1. Hide old workspace windows (floating first, then tiled)
+2. Flush X connection to ensure hide operations complete
+3. Show new workspace via rearrange_monitor and update_floating_visibility
+
+The flush prevents old floating windows from briefly appearing over new workspace content due to X11 async rendering.
 
 **Off-Screen Visibility**: Windows are hidden using hide_window(), NOT unmapped.
 
-**Tiled Window Visibility Restoration**:
+ **Tiled Window Visibility Restoration**:
 - hide_window() moves tiled windows off-screen (sets client.hidden = true, moves to OFF_SCREEN_X)
 - rearrange_monitor() restores visibility by:
-  1. Calculating geometry for all windows in the new workspace
-  2. Configuring each window to its calculated geometry (which is on-screen)
-  3. Setting client.hidden = false for tiled windows (done implicitly via layout)
-- show_window() is NOT called for tiled windows (geometry restoration and hidden flag clearing happen via layout calculations)
+  1. Explicitly calls show_window() for each visible window (clears hidden flag)
+  2. Calculates geometry for all windows in the new workspace
+  3. Configures each window to its calculated geometry (which is on-screen)
+- show_window() is called for tiled windows before layout_.arrange(), not implicitly via layout
 - For floating windows: update_floating_visibility() calls show_window()/hide_window() explicitly
 
-### Workspace Toggle
+ ### Workspace Toggle
 
 ```
 toggle_workspace()
 ├─ Check workspace count <= 1 → Return (no toggle with only 1 workspace)
 ├─ Check previous_workspace invalid or same as current → Return
+├─ Auto-repeat detection (same keysym, same timestamp as KeyRelease)
 ├─ target = monitor.previous_workspace
-├─ Auto-repeat detection (same keysym, same timestamp)
 └─ switch_workspace(target)
 ```
+
+**Early Return Conditions**:
+- Workspace count <= 1: No toggle possible with only one workspace
+- previous_workspace invalid: After monitor hotplug or workspace configuration changes, previous_workspace may be out-of-bounds. Returns without switching (same as 'same as current' case).
+- previous_workspace == current: Already on previous workspace, no action needed
 
 **Auto-Repeat Prevention**:
 - X11 auto-repeat: KeyRelease → KeyPress (same timestamp)
 - Blocks KeyPress if same keysym && same timestamp as KeyRelease
 - Prevents rapid workspace toggling from key hold
+
+**Note**: toggle_workspace() does NOT update previous_workspace when switching back (it's the target of the toggle, so the next toggle switches to the other workspace).
 
 ### Move Window to Workspace
 
@@ -681,7 +827,77 @@ move_window_to_workspace(target_ws)
 - Included in tiling layout on all workspaces (appears in all Workspace::windows vectors)
 - _NET_WM_DESKTOP = 0xFFFFFFFF
 - Focusing sticky window does NOT switch workspaces
-- Sticky windows remain visible during showing_desktop mode
+ - Sticky windows remain visible during showing_desktop mode
+
+---
+
+## Monitor Behavior
+
+### Monitor Hotplug (RANDR Screen Change)
+
+**RANDR screen change event** triggers comprehensive reconfiguration:
+
+1. **Exit fullscreen on all windows** (before reconfiguring)
+   - Prevents stale geometry in Client.fullscreen_restore after monitor layout changes
+   - Clear Client.fullscreen_monitors (monitor indices may have changed)
+
+2. **Save window locations by monitor name**
+   - Save WindowLocation for each client (includes monitor_name, not index)
+   - Preserve floating window geometries (no repositioning)
+   - Save focused_monitor_name
+
+3. **Destroy status bars** (old bar windows)
+
+4. **Detect new monitor configuration**
+   - detect_monitors() rebuilds monitors_ vector
+
+5. **Restore window locations**
+   - Build name_to_index map for new monitor configuration
+   - Reassign windows to monitors with matching names
+   - Fallback to monitor 0 if original monitor no longer exists
+   - Restore focused_monitor_ by name lookup
+
+6. **Clamp workspace indices**
+   - If target workspace >= workspaces.size(), fall back to current workspace
+   - Prevents out-of-bounds workspace access after configuration change
+
+7. **Recreate status bars** for new monitor configuration
+
+8. **Update all EWMH properties**
+   - _NET_NUMBER_OF_DESKTOPS
+   - _NET_DESKTOP_NAMES
+   - _NET_DESKTOP_VIEWPORT
+   - _NET_WORKAREA
+   - _NET_DESKTOP_GEOMETRY
+
+### Monitor Switch Behavior
+
+**Explicit monitor switch** (via keybind: focus_monitor_left/right):
+- Switch to target monitor (update focused_monitor_)
+- Warp cursor to center of new monitor if warp_cursor_on_monitor_change configured
+- No automatic focus restoration
+
+**Automatic monitor switch** (via focus or window movement):
+- Focusing a window on different monitor implicitly changes focused_monitor_
+- Moving a window to different monitor updates focused_monitor_ if window was active
+- Does NOT warp cursor (warping only happens for explicit switch)
+
+### Monitor Assignment for Floating Windows
+
+**Explicit monitor move** (via keybind: move_to_monitor_left/right):
+- Update Client.monitor and Client.workspace
+- Reposition to target monitor's working area
+- Update visibility on both monitors
+- Focus moved window if visible
+- Update _NET_WM_DESKTOP
+
+**Implicit monitor assignment** (via geometry change):
+- update_floating_monitor_for_geometry() called when floating window center crosses monitor boundary
+- Auto-assign to new monitor
+- Update Client.workspace to new monitor's current_workspace
+- Update _NET_WM_DESKTOP
+- **NO focus restoration** (different from explicit move)
+- Visibility must be manually updated via update_floating_visibility()
 
 ---
 
@@ -731,9 +947,10 @@ Stack (N windows):
 **Minimum Dimensions**
 - `MIN_DIM = 50` pixels enforced as lower bound for available space calculations
 
-### Size Hints
+ ### Size Hints
 
 **Tiled windows**: ALL size hints ignored
+- Size hints are NEVER queried (window parameter unused in apply_size_hints, explicitly cast to void)
 - WM controls geometry completely
 - Applications must handle smaller sizes (scrolling, truncating, adapting)
 - Matches other tiling WMs (DWM, i3, bspwm)
@@ -746,6 +963,33 @@ Stack (N windows):
 - max_width/max_height NOT enforced
 - Only clamp to minimum 1 pixel to prevent zero-size
 - Zero-sized windows fall back to 300x200 default
+
+ **Size Hints on Tiled Windows During Changes**:
+- When WM_NORMAL_HINTS change on tiled windows, trigger rearrange_monitor()
+- Even though size hints are ignored, WM must reaffirm its control
+- Applications may request geometry changes; WM reapplies its geometry
+
+### Internal Bar
+
+**Internal Bar** (optional, configurable via enable_internal_bar):
+- Height: appearance.status_bar_height (from config)
+- Applied during layout calculation in calculate_slots()
+- Condition: has_internal_bar ? appearance.status_bar_height : 0
+- External docks (Polybar, etc.) are handled via struts, not internal bar height
+
+**Bar State Building**:
+- build_bar_state() for each monitor:
+  - workspace_has_windows flags for all workspaces
+  - Includes floating windows in workspace tracking
+  - Determines focused_title based on active window or workspace.focused_window
+- Updated on: manage, unmanage, focus change, workspace switch, title change
+
+**Expose Event Handling**:
+- Only acts on last expose (e.count == 0) to filter redundant events
+- Finds which monitor's bar window received the event
+- Calls bar_->update() with current window information for that specific monitor
+- Only acts if bar_ is enabled
+- Other monitors' bars are unaffected
 
 ---
 
@@ -798,14 +1042,18 @@ is_floating_visible(window) =
 
 ## Drag Operations
 
-### Drag State Machine (wm_drag.cpp)
+ ### Drag State Machine (wm_drag.cpp)
 
 ```
-[ButtonRelease]
+[ButtonRelease] OR [_NET_WM_MOVERESIZE direction=11 (cancel)]
     ↓
 end_drag()
     ├─ If tiled:
-    │  ├─ If source monitor/workspace lookup failed OR client unmanaged → Abort silently
+    │  ├─ Silent abort conditions:
+    │  │  ├─ If monitor_index_for_window() lookup fails → Abort
+    │  │  ├─ If workspace_index_for_window() lookup fails → Abort
+    │  │  ├─ If monitors_.empty() → Abort
+    │  │  └─ If client unmanaged → Abort
     │  ├─ Determine target monitor from pointer
     │  ├─ If target workspace empty → Insert at position 0
     │  ├─ Else → Insert at nearest slot (drop_target_index)
@@ -813,6 +1061,24 @@ end_drag()
     │  └─ Focus moved window
     └─ Ungrab pointer
 ```
+
+**Silent Abort Conditions** (end_drag()):
+- Source monitor or workspace lookup fails (window state corrupted)
+- Client has been unmanaged during drag
+- monitors_.empty() (all monitors disconnected)
+
+**Drag Rejection Conditions** (begin_drag() / begin_tiled_drag()):
+- Fullscreen windows (is_client_fullscreen returns true)
+- For tiled drag only: showing_desktop mode active
+- For tiled drag only: window is floating (has FloatingWindow record)
+- For tiled drag only: monitors_.empty()
+
+**Tiled window drag**: Window follows cursor visually (temporary geometry), tiling layout NOT recalculated until drop
+- Drop target: nearest slot center (Euclidean distance)
+- Insertion position: layout_policy::drop_target_index()
+- Empty workspace target: insertion defaults to position 0 (beginning)
+- Same workspace drop: reorders within current workspace
+- Cross-workspace drop: moves window to target workspace, updates Client.monitor and Client.workspace
 
 ### Tiled Window Drag (Reorder Mode)
 
@@ -908,18 +1174,22 @@ Classification priority:
 | WM_PROTOCOLS:WM_TAKE_FOCUS | Used for input=False windows |
 | WM_CHANGE_STATE | Iconify/Deiconify (IconicState/NormalState) |
 
-### Ping-Kill Protocol
+ ### Ping-Kill Protocol
 
 ```
 kill_window()
-├─ If WM_DELETE_WINDOW supported → send graceful close
-├─ Send _NET_WM_PING
-├─ Schedule pending kill (5 second timeout)
-├─ If ping response → cancel pending kill
-└─ If timeout → xcb_kill_client() force kill
+├─ Check for WM_DELETE_WINDOW support
+├─ If supported:
+│  ├─ Send WM_DELETE_WINDOW client message (graceful close)
+│  ├─ Send _NET_WM_PING
+│  ├─ Schedule pending kill (5 second timeout)
+│  ├─ If ping response → cancel pending kill (window alive)
+│  └─ If timeout → xcb_kill_client() force kill
+└─ If NOT supported:
+   └─ Force kill immediately (no graceful close)
 
 handle_timeouts()
-├─ Clean up expired pending_pings_ entries
+├─ Clean up expired pending_pings_ entries (remove old entries)
 ├─ Force-kill windows with expired pending_kills_
 └─ xcb_kill_client() for unresponsive windows
 ```
@@ -930,22 +1200,28 @@ handle_timeouts()
 
 **User Time Window Handling**:
 - `_NET_WM_USER_TIME` property may be on `Client.user_time_window` instead of main window
+- WM selects PROPERTY_CHANGE on user_time_window during window management
 - PropertyNotify events on user_time_window are tracked during window management
 - When _NET_WM_USER_TIME changes on user_time_window:
   - Finds parent Client that owns this user_time_window
   - Updates parent Client.user_time with the new value
 - If PropertyNotify arrives on user_time_window that is not associated with any client, update is silently ignored
 - Focus stealing prevention uses parent Client.user_time for comparison
-- _NET_WM_PING response may also come from user_time_window (data[2] = ping origin)
+- _NET_WM_PING response may also come from user_time_window:
+  - data[2] = ping origin (original window)
+  - WM identifies which pending ping/kill to cancel by matching data[2]
 
-### Sync Request (Fire-and-Forget)
+ ### Sync Request (Fire-and-Forget)
 
 - Sent before WM-initiated resizes
 - Non-blocking: does NOT wait for client update
 - Client::sync_value incremented
+- Split 64-bit value into two 32-bit data fields for X11 protocol
 - Prevents event loop blocking
-- Implementation tries to wait for sync counter with 50ms timeout
-- Compromise between async and blocking approaches
+- Implementation tries to wait for sync counter with 50ms timeout:
+  - wait_for_sync_counter() attempts to read updated counter value
+  - If client doesn't respond within 50ms, operation proceeds anyway (non-blocking fallback)
+  - Compromise: most clients respond quickly, but hung clients don't block event loop
 
 ---
 
@@ -994,19 +1270,33 @@ handle_timeouts()
 | _NET_WM_USER_TIME | User time for focus stealing prevention. May be on user_time_window (indirect) |
 | _NET_WM_STATE_HIDDEN | Initial iconic state check (takes precedence over WM_HINTS.initial_state) |
 
-### Properties Written
+ ### Properties Written
 
 | Property | Timing |
 |----------|--------|
 | WM_STATE | Manage, unmanage, iconify, deiconify |
-| ConfigureNotify (synthetic) | After configure operations |
+| ConfigureNotify (synthetic) | After layout, fullscreen, floating geometry changes |
 | _NET_WM_STATE | All state flag changes |
-| _NET_WM_DESKTOP | Manage, move to workspace, sticky toggle |
+| _NET_WM_DESKTOP | Manage, move to workspace, sticky toggle, monitor assignment |
 | _NET_CLIENT_LIST | Manage, unmanage |
 | _NET_CLIENT_LIST_STACKING | Focus change, restack |
 | _NET_ACTIVE_WINDOW | Focus change |
 | _NET_WORKAREA | Strut change |
 | _NET_FULLSCREEN_MONITORS | Multi-monitor fullscreen |
+
+**Synthetic ConfigureNotify**:
+- Sent after layout_.arrange() to inform clients of their geometry
+- Sent after fullscreen transition
+- Sent after floating geometry changes
+- Critical for Electron/Chrome apps that need to know their geometry immediately
+- Construction: event_type=ConfigureNotify, synthetic=true, geometry from WM
+
+**WM_PROTOCOLS Selection on Client Windows**:
+- Event mask: XCB_EVENT_MASK_ENTER_WINDOW | XCB_EVENT_MASK_FOCUS_CHANGE | XCB_EVENT_MASK_PROPERTY_CHANGE
+- Floating windows additionally select: XCB_EVENT_MASK_BUTTON_PRESS
+- Note: STRUCTURE_NOTIFY is NOT selected on client windows
+  - Selecting STRUCTURE_NOTIFY causes duplicate UnmapNotify events
+  - Duplicate events would break off-screen visibility model (would incorrectly unmanage windows during workspace switches)
 
 ### Window Lifecycle Events
 
@@ -1111,14 +1401,24 @@ handle_timeouts()
 
 **Application Timing**: AFTER EWMH classification, BEFORE management. Cannot override DOCK, DESKTOP, or POPUP types (EWMH protocol protected).
 
-**Window Rule Application Order**:
+ **Window Rule Application Order**:
 1. EWMH type classification (classify_window)
 2. Initial _NET_WM_STATE read from window properties
 3. Window rules matching and application (can override EWMH states except Dock/Desktop/Popup)
-4. Geometry application (rule geometry or placement logic)
+4. Geometry application (rule geometry takes precedence)
+   - Rule geometry (if specified) → Applied BEFORE mapping
+   - Otherwise → Placement logic (center on monitor or relative to parent)
+   - Position hints honored for initial placement (P_POSITION, US_POSITION)
+   - Preferred size hints honored for initial geometry (P_SIZE, US_SIZE)
 5. Final state flag application (fullscreen, above, below, skip_*)
 6. Window mapping (xcb_map_window)
 7. Visibility control (hide_window if not visible)
+
+**Geometry Precedence**:
+1. Rule geometry (highest priority)
+2. Fullscreen geometry (if fullscreen enabled)
+3. Maximized geometry (if maximized enabled and not fullscreen)
+4. Placement logic / hints (lowest priority)
 
 **Rule State Precedence**:
 - Window rules CAN override initial _NET_WM_STATE (except for Dock/Desktop/Popup types)
@@ -1154,24 +1454,31 @@ handle_timeouts()
 
 ## State Transitions
 
-### Window Lifecycle
+ ### Window Lifecycle
 
 ```
 MapRequest
     ↓
-If already managed → deiconify_window()
+If already managed:
+    ├─ Determine focus = (window.monitor == focused_monitor_ && window.workspace == current_workspace)
+    ├─ deiconify_window(window, focus)
+    └─ Return (deiconify only, do not remanage)
     ↓
-If override-redirect → Ignore
+If override-redirect → Ignore (menus, dropdowns bypass state machine)
     ↓
 classify_window() → Kind (Tiled/Floating/Dock/Desktop/Popup)
+    ├─ If Popup (menus, tooltips, notifications): Map directly, NOT MANAGED, return
+    └─ Continue for Tiled/Floating/Dock/Desktop
     ↓
 apply_window_rules()
+    ├─ Can override EWMH states except Dock/Desktop/Popup types
+    └─ Applies rule geometry or uses placement logic
     ↓
 Create Client record (order = next_client_order_++)
     ↓
-Read initial EWMH state
+Read initial EWMH state (precedence: _NET_WM_STATE_HIDDEN > WM_HINTS.initial_state)
     ├─ Check _NET_WM_STATE_HIDDEN → start_iconic
-    └─ Check WM_HINTS.initial_state → start_iconic
+    └─ If not set, check WM_HINTS.initial_state → start_iconic
     ↓
 If Floating: Create FloatingWindow, determine placement
     ↓
@@ -1180,8 +1487,12 @@ Add to workspace.windows (Tiled) or floating_windows_ (Floating)
 Set WM_STATE (Normal/Iconic)
     ↓
 Apply geometry-affecting states (fullscreen, maximized)
+    ├─ Fullscreen: geometry applied if not iconic
+    └─ Maximized: geometry saved but not applied if fullscreen
     ↓
 Configure geometry
+    ├─ Apply rule geometry, fullscreen geometry, or placement logic
+    └─ Send synthetic ConfigureNotify after applying geometry
     ↓
 xcb_map_window() (always, even if will be hidden)
     ↓
@@ -1196,14 +1507,13 @@ Update _NET_CLIENT_LIST, bars
 UnmapNotify / DestroyNotify
     ↓
 handle_window_removal()
-    ↓
-Set WM_STATE = Withdrawn
-    ↓
-Erase from clients_, remove from workspace/floating
-    ↓
-Rearrange monitor, focus_or_fallback()
-    ↓
-Update _NET_CLIENT_LIST, bars
+    ├─ Set WM_STATE = Withdrawn
+    ├─ Erase from clients_, remove from workspace/floating
+    ├─ Update workspace.focused_window to last window (or XCB_NONE if empty)
+    ├─ If removed window was active:
+    │  ├─ If on focused_monitor_ AND on current_workspace: focus_or_fallback()
+    │  └─ Otherwise: clear_focus()
+    └─ Rearrange monitor, update _NET_CLIENT_LIST, bars
 ```
 
 **See also**: ICCCM Compliance → Window Lifecycle Events (lines 4982) for ICCCM-specific event handling
@@ -1747,6 +2057,189 @@ toggle_workspace()
 - `Client` struct: Authoritative source of truth for all window state
 - `FloatingWindow` struct: Runtime geometry only (synced with Client.floating_geometry)
 - `Workspace::windows`: Derived organization state for tiled windows
+
+ ---
+
+## System Invariants
+
+These invariants are validated by LWM_DEBUG builds via LWM_ASSERT_INVARIANTS() (see core/invariants.hpp):
+
+**Client Registration Invariants**:
+- Window in clients_ must have valid monitor index (monitor < monitors_.size())
+- Window in clients_ must have valid workspace index (workspace < monitors_[monitor].workspaces.size())
+- Each tiled window appears in exactly one Workspace.windows vector
+- Each floating window appears exactly once in floating_windows_ vector
+
+**Focus Consistency Invariants**:
+- active_window_ must be in clients_ (or XCB_NONE)
+- active_window_ must not be iconic (if not XCB_NONE)
+- active_window_ must be focus-eligible (not Dock/Desktop, accepts input or supports take_focus)
+- active_window_ must have showing_desktop_ == false (if not XCB_NONE)
+- active_window_ must be on visible workspace (if not XCB_NONE and not sticky)
+
+**State Consistency Invariants**:
+- Can't be fullscreen AND iconic (iconic windows are off-screen, fullscreen requires visible)
+- Can't be above AND below (mutually exclusive stacking)
+- modal=true implies above=true (modal forces above state)
+- iconic=true implies hidden=true (minimized windows are off-screen)
+- hidden=false implies iconic=false (on-screen windows can't be minimized)
+
+**Desktop Validity Invariants**:
+- Desktop index from get_ewmh_desktop_index() must be valid or 0xFFFFFFFF (sticky)
+- _NET_WM_DESKTOP queries return early if workspace_idx >= monitor.workspaces.size()
+
+**Workspace Consistency Invariants**:
+- Sticky windows appear in all Workspace.windows vectors (all workspaces of their monitor)
+- Each non-sticky tiled window appears in exactly one Workspace.windows vector
+- Floating windows are tracked globally in floating_windows_, not per-workspace
+
+**Monitor Bounds Invariants**:
+- All monitor index lookups must check bounds before access
+- Workspace indices are clamped to valid range when switching
+- Monitor lookups fail gracefully (early return) if index is invalid
+
+These invariants help catch bugs early and ensure the window manager state remains consistent.
+
+---
+
+## Additional State Conflicts and Invalid Transitions
+
+**Invalid/Ineffective Transitions**:
+- set_fullscreen() on iconic window: Flag is set, but geometry is NOT applied (apply_fullscreen_if_needed returns early)
+- set_window_maximized() on iconic window: Flags are set and geometry is saved, but geometry is NOT applied until window is deiconified
+- begin_drag() / begin_tiled_drag() on fullscreen window: Silently rejected
+- begin_tiled_drag() during showing_desktop mode: Silently rejected
+- begin_tiled_drag() on floating window: Silently rejected
+
+**State Conflicts**:
+- **fullscreen ↔ above/below**: Incompatible, clear others when enabling fullscreen
+- **fullscreen ↔ maximized**: Superseded, clear maximized flags when enabling fullscreen (but maximize_restore geometry is preserved for restoration)
+- **maximized when fullscreen**: set_window_maximized() has NO effect when fullscreen is enabled. Geometry is applied only when fullscreen is disabled.
+- **above ↔ below**: Mutually exclusive, clear opposite when enabling
+- **modal ⇔ above**: Modal state and above state are tightly coupled
+   - When modal is enabled, above is also enabled (set_window_modal calls set_window_above(true))
+   - When modal is disabled, above is also cleared (set_window_modal calls set_window_above(false))
+   - This coupling is NOT bidirectional: disabling modal ALWAYS disables above (even if above was set independently before modal was enabled)
+- **hidden vs iconic**: Iconic always implies hidden (iconic=true ⇒ hidden=true), but hidden can be true without iconic
+
+**Valid State Combinations**:
+- hidden=true, iconic=false: Off-screen but not minimized (workspace switch)
+- hidden=true, iconic=true: Off-screen and minimized (iconified)
+- hidden=false, iconic=false: On-screen, visible (normal)
+- hidden=false, iconic=true: NOT VALID (iconic implies hidden)
+- fullscreen=true, maximized_*=(anything): Maximization flags cleared but maximize_restore preserved
+- fullscreen=false, maximized_*=true: Normal maximized state
+- modal=true, above=true: Both set (modal enables above)
+- modal=false, above=true: Possible (above set independently)
+- modal=true, above=false: NOT VALID (modal forces above=true)
+- modal=false, above=false: Normal state
+
+ ---
+
+## Special Behaviors and Edge Cases
+
+### Workspace and Monitor Edge Cases
+
+**Empty Workspace Target**:
+- When dragging tiled window to empty workspace, insertion defaults to position 0 (beginning)
+- When switching to empty workspace, focus_or_fallback() finds no candidates and clears focus
+
+**Invalid Monitor Indices**:
+- All monitor index lookups check bounds before access
+- Early returns for invalid monitor indices in various functions:
+  - focus_window(): Checks client.monitor < monitors_.size()
+  - update_floating_visibility(): Early return if monitor_idx >= monitors_.size()
+  - Many other functions have similar checks
+- Fallback behavior: Return without action or use monitor 0
+
+**Workspace Index Clamping**:
+- Workspace indices are clamped to valid range when switching
+- target_ws = std::min(target_ws, monitors_[target_mon].workspaces.size() - 1)
+- Prevents out-of-bounds access to workspaces array
+- During monitor hotplug: workspace indices validated before assignment
+
+### Focus Edge Cases
+
+**Focus Restoration with No Candidates**:
+- focus_or_fallback() builds candidates in order:
+  1. workspace.focused_window (if exists and eligible)
+  2. Current workspace tiled windows (reverse iteration = MRU)
+  3. Sticky tiled windows from other workspaces (reverse iteration)
+  4. Floating windows visible on monitor (reverse iteration = MRU)
+- If all candidates filtered out (no focus-eligible windows), clear_focus() is called
+
+**Focus on Iconic Window**:
+- Focusing iconic window triggers deiconify() automatically
+- Window is restored (brought on-screen) then focused
+- workspace.focused_window updated to this window
+
+**Focus Across Monitors**:
+- Focusing window on different monitor does NOT warp cursor (warping only for explicit keybind)
+- Implicitly changes focused_monitor_ (as side effect of workspace switch)
+- Window's workspace becomes current_workspace on its monitor
+
+### State Change Edge Cases
+
+**Fullscreen on Non-Visible Workspace**:
+- Fullscreen windows on non-current workspaces remain off-screen (iconic or just hidden)
+- Fullscreen geometry is not applied until workspace becomes active
+- apply_fullscreen_if_needed() returns early for iconic or off-screen windows
+
+**Maximizing Iconic Windows**:
+- Maximizing an iconic window sets flags and saves geometry
+- Geometry is NOT applied until window is deiconified
+- This is intentional state preservation
+
+**Setting Fullscreen on Iconic Window**:
+- set_fullscreen() sets the fullscreen flag
+- Geometry is NOT applied (apply_fullscreen_if_needed returns early)
+- This is a silent no-op (flag is set but no visible effect until deiconify)
+
+**State Transitions During Workspace Switch**:
+- hide_window() is called for old workspace windows (floating first, then tiled)
+- conn_.flush() ensures hide operations complete before showing new workspace
+- rearrange_monitor() explicitly calls show_window() for new workspace windows
+- update_floating_visibility() handles floating window show/hide
+
+### Drag Operation Edge Cases
+
+**Silent Abort in end_drag()**:
+- If monitor_index_for_window() or workspace_index_for_window() fails → Abort without error
+- If client unmanaged during drag → Abort without error
+- If monitors_.empty() (all monitors disconnected) → Abort without error
+
+**Drag Rejection**:
+- Fullscreen windows: Cannot start drag (begin_drag returns silently)
+- showing_desktop mode: Cannot start tiled drag (begin_tiled_drag returns silently)
+- Floating windows: Cannot start tiled drag (begin_tiled_drag returns silently)
+
+**Cross-Workspace Drag**:
+- Tiled windows: Moves window to target workspace, updates Client.monitor and Client.workspace
+- Floating windows: Drag to different monitor triggers implicit monitor assignment via update_floating_monitor_for_geometry()
+  - Does NOT restore focus (different from explicit monitor move)
+  - Visibility must be updated manually
+
+### Protocol Interaction Edge Cases
+
+**PropertyNotify on User Time Window**:
+- When _NET_WM_USER_TIME changes on user_time_window, parent Client.user_time is updated
+- If PropertyNotify arrives on user_time_window not associated with any client, update is silently ignored
+- This handles race conditions where window is unmapped before property change
+
+**UnmapNotify with Off-Screen Visibility**:
+- With off-screen visibility, ANY UnmapNotify is treated as client-initiated withdraw request
+- WM never unmaps windows (always uses off-screen positioning)
+- No counter tracking exists (unlike traditional unmap-based visibility)
+
+**Duplicate UnmapNotify Prevention**:
+- WM does NOT select STRUCTURE_NOTIFY on client windows
+- Selecting STRUCTURE_NOTIFY causes duplicate UnmapNotify events
+- Duplicate events would break off-screen visibility model
+
+**Sync Request Timeout**:
+- wait_for_sync_counter() attempts to read updated counter value
+- If client doesn't respond within 50ms, operation proceeds anyway (non-blocking fallback)
+- Most clients respond quickly, but hung clients don't block event loop
 
 ---
 
