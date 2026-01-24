@@ -20,6 +20,18 @@
 
 ---
 
+## Key Terminology
+
+**Off-screen**: The visibility model used by LWM. Windows are always mapped (XCB_MAP_STATE_VIEWABLE). Visibility is controlled by positioning - windows are either at their visible location or at OFF_SCREEN_X (-20000).
+
+**Hidden** (client.hidden flag): Boolean flag that implements off-screen visibility. When true, the window is positioned at OFF_SCREEN_X. When false, the window is at its on-screen position.
+
+**On-screen**: The opposite of off-screen. A window that is not positioned at OFF_SCREEN_X.
+
+**Use consistent**: off-screen/on-screen for visibility state, hidden for the flag name.
+
+---
+
 ## Architecture Overview
 
 ### Core Components
@@ -388,8 +400,9 @@ constexpr uint32_t WM_STATE_ICONIC = 3;
 - **fullscreen ↔ maximized**: Superseded, clear maximized flags when enabling fullscreen (but maximize_restore geometry is preserved for restoration)
 - **above ↔ below**: Mutually exclusive, clear opposite when enabling
 - **modal ⇔ above**: Modal state and above state are tightly coupled
-  - When modal is enabled, above is also enabled (set_window_modal calls set_window_above)
-  - When modal is disabled, above is also cleared (set_window_modal calls set_window_above(false))
+   - When modal is enabled, above is also enabled (set_window_modal calls set_window_above(true))
+   - When modal is disabled, above is also cleared (set_window_modal calls set_window_above(false))
+   - This coupling is NOT bidirectional: disabling modal ALWAYS disables above (even if above was set independently before modal was enabled)
 - **hidden vs iconic**: Iconic always implies hidden (iconic=true ⇒ hidden=true), but hidden can be true without iconic
 
 ---
@@ -428,7 +441,7 @@ run()
 | ClientMessage | handle_client_message | EWMH/ICCCM commands |
 | ConfigureRequest | handle_configure_request | Geometry requests |
 | PropertyNotify | handle_property_notify | State changes, including user_time_window indirection |
-| Expose | handle_expose | Redraw status bars |
+| Expose | handle_expose | Redraw status bars. Checks e.count != 0 to filter redundant events (only redraw on last one). Finds which monitor's bar window received the expose and calls bar_->update() with current window information. Only acts if bar_ is enabled. |
 | SelectionClear | (handled in run) | New WM taking over, exit |
 | RANDR change | handle_randr_screen_change | Monitor hotplug |
 
@@ -456,12 +469,13 @@ is_focus_eligible(window) =
 1. Check not showing_desktop, not iconic, is_focus_eligible
 2. Deiconify if needed
 3. Call focus_window_state() - may switch workspace
-4. Clear all borders, set active border color
+4. Clear all borders (set all windows to black pixel), set active border color on focused window
 5. Send WM_TAKE_FOCUS if supported
 6. Set X input focus
 7. Update _NET_ACTIVE_WINDOW
 8. Apply fullscreen geometry, restack transients
    - Restacks all visible, non-iconic transient windows (where client.transient_for == parent) above the focused window
+   - Skips hidden, iconic, or transients on other workspaces
    - Also occurs when showing floating windows via update_floating_visibility()
 9. Update bars
 
@@ -473,10 +487,10 @@ is_focus_eligible(window) =
 
 **focus_or_fallback(monitor)** - Smart focus selection
 1. Build candidates (order of preference):
-   - `workspace.focused_window` if in current workspace and eligible
-   - Current workspace tiled windows (reverse iteration = MRU)
-   - Sticky tiled windows from other workspaces (reverse iteration)
-   - Floating windows visible on monitor (reverse iteration = MRU)
+    - `workspace.focused_window` if exists in workspace AND eligible (validated to exist)
+    - Current workspace tiled windows (reverse iteration = MRU)
+    - Sticky tiled windows from other workspaces (reverse iteration)
+    - Floating windows visible on monitor (reverse iteration = MRU)
 2. Call focus_policy::select_focus_candidate()
 3. Focus selected or clear focus
 
@@ -500,6 +514,12 @@ is_focus_eligible(window) =
 
 **Click-to-Focus**
 - ButtonPress on window → Focus immediately
+
+**Focus Cycling** (focus_next / focus_prev)
+- Uses `build_cycle_candidates()` to collect tiled and floating windows visible on current monitor/workspace
+- Selection order: Tiled windows first, then floating windows (both in MRU order via reverse iteration)
+- Wrap-around behavior: Cycles from last→first (next) and first→last (prev)
+- Returns without focus if no candidates exist (nullopt)
 
 **Focus Restoration**
 - Window unmanaged:
@@ -605,9 +625,12 @@ Prevents old floating windows from briefly appearing over new workspace content 
 **Off-Screen Visibility**: Windows are hidden using hide_window(), NOT unmapped.
 
 **Tiled Window Visibility Restoration**:
-- hide_window() moves tiled windows off-screen (sets client.hidden = true)
-- rearrange_monitor() implicitly restores visibility by calculating and applying new geometry
-- show_window() is NOT called for tiled windows (geometry restoration happens via layout)
+- hide_window() moves tiled windows off-screen (sets client.hidden = true, moves to OFF_SCREEN_X)
+- rearrange_monitor() restores visibility by:
+  1. Calculating geometry for all windows in the new workspace
+  2. Configuring each window to its calculated geometry (which is on-screen)
+  3. Setting client.hidden = false for tiled windows (done implicitly via layout)
+- show_window() is NOT called for tiled windows (geometry restoration and hidden flag clearing happen via layout calculations)
 - For floating windows: update_floating_visibility() calls show_window()/hide_window() explicitly
 
 ### Workspace Toggle
@@ -652,12 +675,13 @@ move_window_to_workspace(target_ws)
 
 ### Sticky Windows
 
-- Visible on ALL workspaces of owning monitor
+- Visible on ALL workspaces of owning monitor (not global)
 - NOT hidden during workspace switch
+- hide_window() skips sticky windows (early return, does not set hidden flag or move off-screen)
 - Included in tiling layout on all workspaces (appears in all Workspace::windows vectors)
 - _NET_WM_DESKTOP = 0xFFFFFFFF
 - Focusing sticky window does NOT switch workspaces
-- hide_window() skips sticky windows with early return (sticky windows are always shown)
+- Sticky windows remain visible during showing_desktop mode
 
 ---
 
@@ -753,11 +777,16 @@ is_floating_visible(window) =
     AND (sticky OR workspace == current_workspace)
 ```
 
+**Note**: This is the conceptual visibility condition. In code, update_floating_visibility() explicitly sets client.hidden based on this formula and applies geometry. The function checks showing_desktop separately and returns early if true.
+
 ### Floating Geometry
 
-- **Client.floating_geometry** is authoritative
-- **FloatingWindow.geometry** is runtime state
-- Updated together via sync
+- **Client.floating_geometry** is authoritative (persistent state)
+- **FloatingWindow.geometry** is runtime state (transient, for layout calculations)
+- These are always updated together via apply_floating_geometry(), which:
+  1. Reads from Client.floating_geometry (accounting for fullscreen/maximized overrides)
+  2. Updates FloatingWindow.geometry
+  3. Configures the X window to match
 
 ### Floating Restack
 
@@ -915,7 +944,7 @@ handle_timeouts()
 - Non-blocking: does NOT wait for client update
 - Client::sync_value incremented
 - Prevents event loop blocking
-- Implementation tries to wait for sync counter with 50ms timeout (SYNC_WAIT_TIMEOUT)
+- Implementation tries to wait for sync counter with 50ms timeout
 - Compromise between async and blocking approaches
 
 ---
@@ -988,6 +1017,8 @@ handle_timeouts()
 | DestroyNotify | Remove from all structures, restore focus if was active |
 | ConfigureRequest | Tiled: synthetic ConfigureNotify. Floating: apply within hints. Fullscreen: fullscreen geometry |
 | PropertyNotify | Update state, title, hints, sync counter, struts. Handle user_time_window indirection for _NET_WM_USER_TIME |
+
+**See also**: State Transitions → Window Lifecycle (lines 11226) for detailed sequence diagrams
 
 ---
 
@@ -1175,6 +1206,8 @@ Rearrange monitor, focus_or_fallback()
 Update _NET_CLIENT_LIST, bars
 ```
 
+**See also**: ICCCM Compliance → Window Lifecycle Events (lines 4982) for ICCCM-specific event handling
+
 ### Fullscreen Transition
 
 ```
@@ -1207,29 +1240,31 @@ If disabled:
     ↓
 set_window_maximized(window, horiz, vert)
     ↓
-If enabling (horz or vert):
-    ├─ Save geometry → client.maximize_restore (if not already set)
-    ├─ Set client.maximized_horz = horiz
-    ├─ Set client.maximized_vert = vert
-    ├─ Set _NET_WM_STATE_MAXIMIZED_HORZ/VERT
-    └─ Apply maximized geometry (working_area dimensions)
-        ├─ maximized_horz only: width fills working_area, height unchanged
-        ├─ maximized_vert only: height fills working_area, width unchanged
-        └─ Both: window fills entire working_area
-    ↓
-If disabling (both horz and vert false):
-    ├─ Set client.maximized_horz = false
-    ├─ Set client.maximized_vert = false
-    ├─ Clear _NET_WM_STATE_MAXIMIZED_HORZ/VERT
-    ├─ Restore geometry from maximize_restore
-    └─ apply_floating_geometry (floating only)
+If not fullscreen (maximize changes ignored when fullscreen):
+    ├─ If enabling (horz or vert):
+    │  ├─ Save geometry → client.maximize_restore (if not already set)
+    │  ├─ Set client.maximized_horz = horiz
+    │  ├─ Set client.maximized_vert = vert
+    │  ├─ Set _NET_WM_STATE_MAXIMIZED_HORZ/VERT
+    │  └─ Apply maximized geometry (floating only, working_area dimensions)
+    │     ├─ maximized_horz only: width fills working_area, height unchanged
+    │     ├─ maximized_vert only: height fills working_area, width unchanged
+    │     └─ Both: window fills entire working_area
+    └─ If disabling (both horz and vert false):
+       ├─ Set client.maximized_horz = false
+       ├─ Set client.maximized_vert = false
+       ├─ Clear _NET_WM_STATE_MAXIMIZED_HORZ/VERT
+       ├─ Restore geometry from maximize_restore
+       └─ apply_floating_geometry (floating only)
 ```
 
 **Note**: Tiled windows ignore maximize state (layout controls geometry).
 - Maximize state flags ARE stored on tiled windows
 - `maximize_restore` geometry IS saved when maximizing tiled windows
 - Geometry is never actually applied to tiled windows (layout controls all geometry)
+- This is because tiled windows don't have a FloatingWindow record, not an explicit design choice
 - Intentional behavior to preserve state for future floating conversion
+- Maximize state changes are ignored when a window is fullscreen (checked: `if (!client->fullscreen)`)
 
 ### Iconify Transition
 
@@ -1380,11 +1415,15 @@ Remove from workspace.windows or floating_windows_
 Update workspace.focused_window
     ↓
 If was active_window_:
-    ├─ If client.monitor == focused_monitor_ AND client.workspace == current_workspace → focus_or_fallback()
-    └─ Else → clear_focus()
+    ├─ If removed window is on focused_monitor_ AND on current_workspace:
+    │  └─ focus_or_fallback(focused_monitor())  // Try to restore focus
+    └─ Else:
+       └─ clear_focus()  // Just clear focus (different monitor/workspace)
     ↓
 Update _NET_CLIENT_LIST, bars
 ```
+
+**Note**: The conditional logic ensures focus is only restored when the removed window was on the currently focused monitor and workspace. If a window on a different monitor/workspace is removed, focus doesn't need to be restored on the current monitor.
 
 ---
 
@@ -1516,11 +1555,47 @@ toggle_workspace()
 - Does NOT clear focus when entering root window
 - Enables seamless monitor crossing without focus disruption
 
+### Monitor Switching (focus_monitor_left/right)
+
+**Function**: Explicit monitor switch via keybind
+
+**Behavior**:
+- Uses `wrap_monitor_index()` to cycle through monitors
+- Calls `focus_or_fallback()` on new monitor to restore appropriate focus
+- Calls `update_ewmh_current_desktop()` to update EWMH state
+- Conditionally calls `warp_to_monitor()` if `warp_cursor_on_monitor_change` is set
+- Calls `update_all_bars()` to update bar state
+- Early return if only 1 monitor exists
+
+### Move Window to Monitor (move_to_monitor_left/right)
+
+**Function**: Moves active window to left/right monitor via keybind
+
+**For floating windows**:
+- Repositions to center of target monitor's working area using `floating::place_floating()`
+- Updates Client.monitor/workspace and FloatingWindow.geometry
+- Updates `_NET_WM_DESKTOP` property
+- Updates floating visibility on both source and target monitors
+- Moves focused_monitor_ to target and calls `focus_floating_window()`
+- Warps cursor if enabled
+
+**For tiled windows**:
+- Removes from source workspace.windows
+- Updates source workspace.focused_window to last remaining window (or XCB_NONE if empty)
+- Adds to target monitor's current workspace.windows
+- Sets target workspace.focused_window to moved window
+- Rearranges both source and target monitors
+- Updates focused_monitor_ to target and calls `focus_window()`
+- Warps cursor if enabled
+
 ### Floating Window Monitor Auto-Assignment
 
 **Function**: `update_floating_monitor_for_geometry(window)`
 
-**When called**: After floating window geometry changes
+**When called**:
+- After `handle_configure_request()` for floating windows
+- During drag operations (`update_drag()`)
+- Any time floating window geometry changes
 
 **Behavior**:
 - Calculates window center point
@@ -1534,6 +1609,7 @@ toggle_workspace()
   - Update focused_monitor_
   - Restack the window
   - Change focus state
+- This is intentional - the window simply "belongs" to a different monitor after moving
 
 ### User Time Window Indirection
 
@@ -1626,16 +1702,6 @@ toggle_workspace()
 - Focus is cleared when no eligible windows exist
 - Layout algorithm handles empty workspace case (no windows to tile)
 - Empty workspace drag target: When dragging a tiled window to an empty workspace, insertion defaults to position 0
-
-### Sticky Window Tiling Participation
-
-**Behavior**:
-- Sticky windows are NOT hidden during workspace switches
-- Sticky windows are included in tiling layout on ALL workspaces
-- Sticky windows appear in ALL `Workspace::windows` vectors
-- hide_window() skips sticky windows (early return, does not set hidden flag or move off-screen)
-- Focusing sticky window does NOT switch workspaces
-- Sticky windows visible on ALL workspaces of owning monitor (not global)
 
 ### Zero-Size Window Fallback
 
@@ -1822,16 +1888,7 @@ Window is focus_eligible IF:
 - (accepts_input_focus OR supports_take_focus)
 ```
 
-**Additional focus barriers:**
-- Hidden windows (client.hidden == true) are never focus-eligible
-- Windows on non-visible workspaces are not focus-eligible
-- showing_desktop_ blocks all focus except exit actions
-```
-
-### Focus Eligibility Model
-
-```
-Window is focus_eligible IF:
-- Kind is NOT Dock or Desktop
-- (accepts_input_focus OR supports_take_focus)
-```
+**Additional focus barriers (these can prevent focus even for eligible windows):**
+- Hidden windows (client.hidden == true) - filtered in event handlers (EnterNotify, MotionNotify, ButtonPress)
+- Windows on non-visible workspaces
+- showing_desktop_ mode blocks all focus except exit actions
