@@ -47,6 +47,27 @@
 
 ---
 
+## Key Terminology
+
+**Off-screen**: The visibility model used by LWM. Windows are always mapped (XCB_MAP_STATE_VIEWABLE). Visibility is controlled by positioning - windows are either at their visible location or at OFF_SCREEN_X (-20000).
+
+**Hidden** (client.hidden flag): Boolean flag that implements off-screen visibility. When true, the window is positioned at OFF_SCREEN_X. When false, the window is at its on-screen position.
+
+**On-screen**: The opposite of off-screen. A window that is not positioned at OFF_SCREEN_X (hidden=false). Note: A window can be on-screen positioned but not actually viewable due to workspace or showing_desktop state.
+
+**Visible**: Window is actually viewable by user. Requires: NOT off-screen, on current workspace (or sticky), NOT iconic, NOT in showing_desktop mode.
+
+**Iconic**: ICCCM term for minimized windows (WM_STATE = IconicState). For non-sticky windows, iconic windows are always off-screen (hidden=true). For sticky windows, iconic windows remain on-screen positioned but marked as minimized.
+
+**Minimized**: User-facing term for iconic state.
+
+**Use consistent**:
+- "off-screen/on-screen" for flag-based positioning state
+- "hidden" for the Client.hidden flag name
+- "visible" for actually viewable by user (not just on-screen positioned)
+
+---
+
 ## Architecture Overview
 
 ### Core Components
@@ -358,46 +379,8 @@ MapRequest → classify_window()
                       ┌─────────────────────────────────────────┐
                       │           WITHDRAWN                      │
                       │     (WM_STATE = WithdrawnState)        │
-                      └─────────────────────────────────────────┘
-
-┌───────────────────────────────────────────────────────────────┐
-│ Global Focus State                                             │
-│                                                                │
-│ NO_FOCUS: active_window_ = XCB_NONE (not a window state)      │
-│                                                                │
-│ Triggered when:                                                │
-│   - Last window unmanaged and no replacement exists            │
-│   - Pointer enters root window (empty space)                   │
-│   - Entering showing_desktop mode                              │
-│   - focus_or_fallback() finds no eligible candidates           │
-│                                                                │
-│ Note: Windows themselves have VISIBLE or ICONIC states;       │
-│       NO_FOCUS is a global WindowManager condition.             │
-└───────────────────────────────────────────────────────────────┘
-
- ┌───────────────────────────────────────────────────────────────┐
- │ Interaction Modes                                              │
- │                                                                │
- │ NORMAL: Default interaction mode                               │
- │   - All events processed normally                               │
- │   - EnterNotify: Focus-follows-mouse applies                  │
- │   - MotionNotify: Re-establish focus if lost                   │
- │   - ButtonPress: Focus window, begin drag                     │
- │                                                                │
- │ DRAG: Drag state active (drag_state_.active = true)           │
- │   - Ignores EnterNotify events (focus-follows-mouse disabled)  │
- │   - Ignores MotionNotify events (except for drag updates via update_drag()) │
- │   - ButtonRelease calls end_drag()                            │
- │   - Silently rejects: fullscreen windows, showing_desktop mode  │
- │                                                                │
- │ SHOWING_DESKTOP: Desktop mode enabled (showing_desktop_ = true)│
- │   - Hides all non-sticky windows (off-screen)                  │
- │   - Clears focus                                               │
- │   - rearrange_monitor() returns early (no layout)              │
- │   - Cannot start tiled drag operations                         │
- └───────────────────────────────────────────────────────────────┘
- ```
-
+                       └─────────────────────────────────────────┘
+ 
 **State Model Notes:**
 - Top-level window states: UNMANAGED, MANAGED (with VISIBLE/ICONIC substates), WITHDRAWN (ICCCM WM_STATE)
 - `hidden` is a physical state flag (positioned off-screen at OFF_SCREEN_X)
@@ -488,9 +471,10 @@ Implementation details:
 **↔ FULLSCREEN**
 - Trigger: set_fullscreen()
 - Actions: Save/restore geometry, set/clear fullscreen flag, apply fullscreen geometry
-- When enabling: Clears above/below (incompatible), clears maximized flags (superseded), preserves maximize_restore geometry for restoration
+- When enabling: Clears above/below (incompatible), clears maximized flags (superseded), preserves maximize_restore geometry for restoration. Does NOT clear sticky flag (sticky fullscreen windows remain fullscreen).
 - When disabling: Restores geometry from fullscreen_restore
 - Note: Fullscreen windows on non-visible workspaces have hidden=true (off-screen) but fullscreen=true. When workspace is switched, they are shown via show_window() and apply_fullscreen_if_needed() restores their geometry.
+- Fullscreen + Sticky: If sticky is enabled on a fullscreen window, the fullscreen flag remains set. Sticky fullscreen windows respect the sticky flag for workspace visibility - they remain fullscreen when visible on any workspace.
 
 **↔ ABOVE/BELOW**
 - Trigger: set_window_above() / set_window_below()
@@ -625,6 +609,39 @@ run()
 
 ## Focus System
 
+### Global Focus State
+
+**NO_FOCUS**: `active_window_ = XCB_NONE` (not a window state)
+
+Triggered when:
+- Last window unmanaged and no replacement exists
+- Pointer enters root window (empty space)
+- Entering showing_desktop mode
+- focus_or_fallback() finds no eligible candidates
+
+Note: Windows themselves have VISIBLE or ICONIC states; NO_FOCUS is a global WindowManager condition.
+
+### Interaction Modes
+
+**NORMAL**: Default interaction mode
+- All events processed normally
+- EnterNotify: Focus-follows-mouse applies
+- MotionNotify: Re-establish focus if lost
+- ButtonPress: Focus window, begin drag
+
+**DRAG**: Drag state active (drag_state_.active = true)
+- Ignores EnterNotify events (focus-follows-mouse disabled)
+- Ignores MotionNotify events (except for drag updates via update_drag())
+- ButtonRelease calls end_drag()
+- KeyPress events ARE processed: keybinds can execute during drag (e.g., toggle_fullscreen, kill_window)
+- Silently rejects: fullscreen windows, showing_desktop mode
+
+**SHOWING_DESKTOP**: Desktop mode enabled (showing_desktop_ = true)
+- Hides all non-sticky windows (off-screen)
+- Clears focus
+- rearrange_monitor() returns early (no layout)
+- Cannot start tiled drag operations
+
 ### Focus Eligibility
 
 ```
@@ -690,7 +707,6 @@ The following conditions can prevent focus even for focus-eligible windows:
 2. **client.hidden == true** - Off-screen windows (filtered in event handlers)
 3. **is_client_iconic(window)** - Minimized windows
 4. **Windows on non-visible workspaces** - Wrong workspace
-5. **!is_focus_eligible(window)** - Dock/Desktop kinds or no input focus support
 
 **Monitor Crossing**
 - Pointer moves to different monitor → Set `focused_monitor_` to new monitor (via update_focused_monitor_at_point())
@@ -738,12 +754,14 @@ _NET_ACTIVE_WINDOW source=1 (application)
   - Otherwise, queries from main window
 - PropertyNotify events are tracked on user_time_window during window management
 - When _NET_WM_USER_TIME changes on user_time_window:
-   - Finds parent Client that owns this user_time_window
-   - Updates parent Client.user_time with the new value
+    - Finds parent Client that owns this user_time_window
+    - Updates parent Client.user_time with the new value
 - If PropertyNotify arrives on user_time_window not associated with any client, update is silently ignored (no parent found)
 - Focus stealing prevention uses parent Client.user_time for comparison
 - Race condition: If window is unmanaged after finding match but before get_client(), update is silently dropped
 - _NET_WM_PING response may also come from user_time_window (data[2] = ping origin)
+
+**Note**: See [EWMH Protocol → Ping-Kill Protocol](#ping-kill-protocol) for detailed user_time_window handling during ping/kill operations.
 
 **_NET_ACTIVE_WINDOW source=2 (pager)**
 - Always allowed (no timestamp check)
@@ -947,6 +965,98 @@ move_window_to_workspace(target_ws)
 
 ---
 
+## Geometry Management
+
+### Geometry Application Order
+
+Critical sequence for preventing "flash" artifacts during window state changes:
+
+1. Apply geometry-affecting states (fullscreen, maximized)
+2. Configure geometry
+3. Map window (xcb_map_window - always mapped)
+4. Apply non-geometry states (above, below, skip_*)
+5. If not visible: hide_window() (move off-screen)
+
+### Size Hints
+
+**Tiled windows**: Size hints ignored for geometry calculations
+- Size hints are NOT used for geometry (window parameter unused in apply_size_hints, explicitly cast to void)
+- WM controls geometry completely
+- Applications must handle smaller sizes (scrolling, truncating, adapting)
+- Matches other tiling WMs (DWM, i3, bspwm)
+- Only clamp to minimum 1 pixel to prevent zero-size
+- Tiled windows never have zero dimensions due to layout algorithm
+- **Note**: When WM_NORMAL_HINTS change on tiled windows, WM triggers rearrange_monitor() to reaffirm its authority over window placement (design choice, not logical necessity of using hints)
+
+**Floating windows**: Preferred size hints honored, constraints NOT enforced
+- Position hints (P_POSITION, US_POSITION) honored for initial placement
+- Preferred size (P_SIZE, US_SIZE) honored for initial geometry
+- min_width/min_height NOT enforced
+- max_width/max_height NOT enforced
+- Only clamp to minimum 1 pixel to prevent zero-size
+- Zero-sized windows (initial mapping only) fall back to 300x200 default
+- Client may resize to 0x0 later (clamped to minimum 1 pixel)
+
+**Size Hints on Tiled Windows During Changes**:
+- When WM_NORMAL_HINTS change on tiled windows, trigger rearrange_monitor()
+- Even though size hints are ignored, WM must reaffirm its control
+- Applications may request geometry changes; WM reapplies its geometry
+
+### Synthetic ConfigureNotify Generation
+
+**Function**: `send_configure_notify(window)`
+
+**Purpose**: Inform clients of their geometry after WM-initiated changes
+
+**Implementation**:
+- Queries current window geometry from X server
+- Constructs synthetic ConfigureNotify event with:
+  - event_type = ConfigureNotify
+  - synthetic = true
+  - geometry from WM
+- Sends to client via xcb_send_event
+
+**When called**:
+- After layout_.arrange() to inform tiled windows of their geometry
+- After fullscreen transition to inform window of fullscreen geometry
+- After floating geometry changes to inform floating window of new geometry
+- After apply_fullscreen_if_needed() when restoring fullscreen geometry
+
+**Why synthetic**: Required by ICCCM and EWMH compliance; clients (especially Electron/Chrome apps) need to know their geometry immediately after WM changes it
+
+### Fullscreen Geometry
+
+Fullscreen geometry is only applied when ALL of:
+- Window is fullscreen (is_client_fullscreen(window))
+- Window is NOT iconic (!is_client_iconic(window))
+- Window's monitor is valid (client.monitor < monitors_.size())
+- Window is on its monitor's current workspace
+
+If any precondition fails, function returns early without applying geometry.
+
+Fullscreen + Sticky: If sticky is enabled on a fullscreen window, the fullscreen flag remains set. Sticky fullscreen windows respect the sticky flag for workspace visibility - they remain fullscreen when visible on any workspace.
+
+Fullscreen windows on non-visible workspaces have hidden=true (off-screen) but fullscreen=true. When workspace is switched, they are shown via show_window() and apply_fullscreen_if_needed() restores their geometry.
+
+### Maximized Geometry
+
+For floating windows:
+- When enabling (horz or vert): Save geometry → client.maximize_restore (if not already set), set flags, apply maximized geometry (working_area dimensions)
+  - maximized_horz only: width fills working_area, height unchanged
+  - maximized_vert only: height fills working_area, width unchanged
+  - Both: window fills entire working_area
+- When disabling (both horz and vert false): Clear flags, restore geometry from maximize_restore, apply_floating_geometry()
+
+For tiled windows:
+- Maximize state flags ARE stored on tiled windows
+- maximize_restore geometry IS saved when maximizing tiled windows
+- Geometry is never actually applied to tiled windows (layout controls all geometry)
+- This is because tiled windows don't have a FloatingWindow record, not an explicit design choice
+- Intentional behavior to preserve state for future floating conversion
+- Maximize state changes are ignored when a window is fullscreen (checked: `if (!client->fullscreen)`)
+
+---
+
 ## Layout Algorithm
 
 ### Master-Stack Tiling (layout.cpp)
@@ -992,31 +1102,6 @@ Stack (N windows):
 
 **Minimum Dimensions**
 - `MIN_DIM = 50` pixels enforced as lower bound for available space calculations
-
- ### Size Hints
-
-**Tiled windows**: Size hints ignored for geometry calculations
-- Size hints are NOT used for geometry (window parameter unused in apply_size_hints, explicitly cast to void)
-- WM controls geometry completely
-- Applications must handle smaller sizes (scrolling, truncating, adapting)
-- Matches other tiling WMs (DWM, i3, bspwm)
-- Only clamp to minimum 1 pixel to prevent zero-size
-- Tiled windows never have zero dimensions due to layout algorithm
-- **Note**: When WM_NORMAL_HINTS change on tiled windows, WM triggers rearrange_monitor() to reaffirm its authority over window placement (design choice, not logical necessity of using hints)
-
-**Floating windows**: Preferred size hints honored, constraints NOT enforced
-- Position hints (P_POSITION, US_POSITION) honored for initial placement
-- Preferred size (P_SIZE, US_SIZE) honored for initial geometry
-- min_width/min_height NOT enforced
-- max_width/max_height NOT enforced
-- Only clamp to minimum 1 pixel to prevent zero-size
-- Zero-sized windows (initial mapping only) fall back to 300x200 default
-- Client may resize to 0x0 later (clamped to minimum 1 pixel)
-
-**Size Hints on Tiled Windows During Changes**:
-- When WM_NORMAL_HINTS change on tiled windows, trigger rearrange_monitor()
-- Even though size hints are ignored, WM must reaffirm its control
-- Applications may request geometry changes; WM reapplies its geometry
 
 ### Internal Bar
 
@@ -1270,20 +1355,9 @@ handle_timeouts()
 - PING_TIMEOUT = 5 seconds
 - KILL_TIMEOUT = 5 seconds
 
-**User Time Window Handling**:
-- `_NET_WM_USER_TIME` property may be on `Client.user_time_window` instead of main window
-- WM selects PROPERTY_CHANGE on user_time_window during window management
-- PropertyNotify events on user_time_window are tracked during window management
-- When _NET_WM_USER_TIME changes on user_time_window:
-  - Finds parent Client that owns this user_time_window
-  - Updates parent Client.user_time with the new value
-- If PropertyNotify arrives on user_time_window that is not associated with any client, update is silently ignored
-- Focus stealing prevention uses parent Client.user_time for comparison
-- _NET_WM_PING response may also come from user_time_window:
-  - data[2] = ping origin (original window)
-  - WM identifies which pending ping/kill to cancel by matching data[2]
+**Note**: See [Focus System → Focus Stealing Prevention](#focus-stealing-prevention) for detailed user_time_window handling for focus stealing prevention. _NET_WM_PING responses may also come from user_time_window (data[2] = ping origin).
 
- ### Sync Request (Fire-and-Forget)
+  ### Sync Request (Fire-and-Forget)
 
 - Sent before WM-initiated resizes
 - Non-blocking: does NOT wait for client update
@@ -1342,49 +1416,20 @@ handle_timeouts()
 | _NET_WM_USER_TIME | User time for focus stealing prevention. May be on user_time_window (indirect) |
  | _NET_WM_STATE_HIDDEN | Initial iconic state check (takes precedence over WM_HINTS.initial_state) |
 
-### Synthetic ConfigureNotify Generation
-
-**Function**: `send_configure_notify(window)`
-
-**Purpose**: Inform clients of their geometry after WM-initiated changes
-
-**Implementation**:
-- Queries current window geometry from X server
-- Constructs synthetic ConfigureNotify event with:
-  - event_type = ConfigureNotify
-  - synthetic = true
-  - geometry from WM
-- Sends to client via xcb_send_event
-
-**When called**:
-- After layout_.arrange() to inform tiled windows of their geometry
-- After fullscreen transition to inform window of fullscreen geometry
-- After floating geometry changes to inform floating window of new geometry
-- After apply_fullscreen_if_needed() when restoring fullscreen geometry
-
-**Why synthetic**: Required by ICCCM and EWMH compliance; clients (especially Electron/Chrome apps) need to know their geometry immediately after WM changes it
-
   ### Properties Written
 
-| Property | Timing |
-|----------|--------|
-| WM_STATE | Manage, unmanage, iconify, deiconify |
-| ConfigureNotify (synthetic) | After layout, fullscreen, floating geometry changes |
-| _NET_WM_STATE | All state flag changes |
-| _NET_WM_STATE_FOCUSED | Focus change (set on focused window, cleared from previously focused window) |
-| _NET_WM_DESKTOP | Manage, move to workspace, sticky toggle, monitor assignment |
-| _NET_CLIENT_LIST | Manage, unmanage |
-| _NET_CLIENT_LIST_STACKING | Focus change, restack |
-| _NET_ACTIVE_WINDOW | Focus change |
-| _NET_WORKAREA | Strut change |
-| _NET_FULLSCREEN_MONITORS | Multi-monitor fullscreen |
-
-**Synthetic ConfigureNotify**:
-- Sent after layout_.arrange() to inform clients of their geometry
-- Sent after fullscreen transition
-- Sent after floating geometry changes
-- Critical for Electron/Chrome apps that need to know their geometry immediately
-- Construction: event_type=ConfigureNotify, synthetic=true, geometry from WM
+ | Property | Timing |
+ |----------|--------|
+ | WM_STATE | Manage, unmanage, iconify, deiconify |
+ | ConfigureNotify (synthetic) | After layout, fullscreen, floating geometry changes. See [Geometry Management](#geometry-management) for details. |
+ | _NET_WM_STATE | All state flag changes |
+ | _NET_WM_STATE_FOCUSED | Focus change (set on focused window, cleared from previously focused window) |
+ | _NET_WM_DESKTOP | Manage, move to workspace, sticky toggle, monitor assignment |
+ | _NET_CLIENT_LIST | Manage, unmanage |
+ | _NET_CLIENT_LIST_STACKING | Focus change, restack |
+ | _NET_ACTIVE_WINDOW | Focus change |
+ | _NET_WORKAREA | Strut change |
+ | _NET_FULLSCREEN_MONITORS | Multi-monitor fullscreen |
 
 **WM_PROTOCOLS Selection on Client Windows**:
 - Event mask: XCB_EVENT_MASK_ENTER_WINDOW | XCB_EVENT_MASK_FOCUS_CHANGE | XCB_EVENT_MASK_PROPERTY_CHANGE
@@ -1748,6 +1793,16 @@ If was active_window_:
 Update bars
 ```
 
+**Iconic Fullscreen Windows**:
+- Fullscreen windows that become iconic have fullscreen=true but hidden=true (off-screen)
+- When deiconified, deiconify_window() calls apply_fullscreen_if_needed() which:
+  - Verifies window is fullscreen AND not iconic AND on current workspace
+  - Sends sync request
+  - Configures window to fullscreen geometry
+  - Sends synthetic ConfigureNotify
+  - Restacks window above all
+- Iconic fullscreen windows on non-current workspaces remain off-screen until both deiconified AND workspace becomes active
+
 ### Sticky Toggle
 
 ```
@@ -1770,12 +1825,19 @@ If disabled:
 
 **Edge Cases**:
 
-**Sticky Window Becoming Iconic**:
-- If set_window_sticky(true) is called on an iconic window:
+**Iconic Window Becoming Sticky**:
+- If set_window_sticky(true) is called on an iconic (off-screen, hidden=true) window:
   - sticky flag is set
-  - window remains iconic (off-screen for non-sticky, on-screen at last position for sticky because hide_window() returns early)
+  - window remains off-screen (hidden=true, at OFF_SCREEN_X)
+  - No call to show_window() occurs
+  - When deiconified, window becomes visible on current workspace, then behaves as sticky on subsequent workspace switches
+
+**Sticky Window Becoming Iconic**:
+- When an already-sticky window is iconified:
+  - iconic flag is set
   - hide_window() returns early for sticky windows (doesn't set hidden=true or move off-screen)
-  - When deiconified, window becomes visible on current workspace (not all workspaces) until workspace switch
+  - Window remains at on-screen positioned (hidden=false) but marked as minimized
+  - Result: Iconic sticky windows have iconic=true but hidden=false (marked as minimized but remain at their on-screen position)
 - iconify_window() calls hide_window() to hide iconic windows, but hide_window() returns early for sticky windows
 - For non-sticky windows: iconify_window() → hide_window() moves off-screen (hidden=true)
 - For sticky windows: iconify_window() → hide_window() returns early (hidden=false, remains at on-screen position)
@@ -2472,23 +2534,10 @@ toggle_workspace()
 
 ### Fullscreen Invariants
 
-**Fullscreen geometry is only applied when ALL of:**
-- Window is fullscreen (is_client_fullscreen(window))
-- Window is NOT iconic (!is_client_iconic(window))
-- Window's monitor is valid (client.monitor < monitors_.size())
-- Window is on its monitor's current workspace
-
 **Fullscreen windows are excluded from tiling layout calculations:**
 - Fullscreen windows never appear in `visible_windows` during rearrange_monitor()
 - Fullscreen windows have dedicated fullscreen_geometry calculation
 - Layout algorithm only considers non-fullscreen tiled windows
 - This invariant is enforced implicitly (fullscreen windows filtered before layout)
 
-### Geometry Application Order
-
-**Critical for preventing "flash" artifacts:**
-1. Apply geometry-affecting states (fullscreen, maximized)
-2. Configure geometry
-3. Map window (xcb_map_window - always mapped)
-4. Apply non-geometry states (above, below, skip_*)
-5. If not visible: hide_window() (move off-screen)
+**Note**: See [Geometry Management](#geometry-management) section for detailed geometry application order, fullscreen geometry preconditions, and fullscreen/sticky interaction behavior.
