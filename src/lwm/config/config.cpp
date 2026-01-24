@@ -141,12 +141,6 @@ std::optional<Config> load_config(std::string const& path)
                 cfg.appearance.border_width = static_cast<uint32_t>(*v);
             if (auto v = (*appearance)["border_color"].value<int64_t>())
                 cfg.appearance.border_color = static_cast<uint32_t>(*v);
-            if (auto v = (*appearance)["status_bar_height"].value<int64_t>())
-                cfg.appearance.status_bar_height = static_cast<uint32_t>(*v);
-            if (auto v = (*appearance)["status_bar_color"].value<int64_t>())
-                cfg.appearance.status_bar_color = static_cast<uint32_t>(*v);
-            if (auto v = (*appearance)["enable_internal_bar"].value<bool>())
-                cfg.appearance.enable_internal_bar = *v;
         }
 
         if (auto focus = tbl["focus"].as_table())

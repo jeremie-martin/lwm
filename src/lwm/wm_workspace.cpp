@@ -70,8 +70,6 @@ void WindowManager::switch_workspace(int ws)
     update_floating_visibility(focused_monitor_);
     LOG_TRACE("switch_workspace: focus_or_fallback");
     focus_or_fallback(monitor);
-    LOG_TRACE("switch_workspace: update_all_bars");
-    update_all_bars();
     LOG_TRACE("switch_workspace: flushing");
     conn_.flush();
     LOG_TRACE(
@@ -145,8 +143,7 @@ void WindowManager::move_window_to_workspace(int ws)
 
         update_floating_visibility(monitor_idx);
         focus_or_fallback(monitors_[monitor_idx]);
-        update_all_bars();
-        conn_.flush();
+            conn_.flush();
         return;
     }
 
@@ -178,7 +175,6 @@ void WindowManager::move_window_to_workspace(int ws)
     rearrange_monitor(monitor);
     focus_or_fallback(monitor);
 
-    update_all_bars();
     conn_.flush();
 }
 
@@ -218,7 +214,6 @@ void WindowManager::focus_monitor(int direction)
         warp_to_monitor(monitor);
     }
 
-    update_all_bars();
     conn_.flush();
 }
 
@@ -273,8 +268,7 @@ void WindowManager::move_window_to_monitor(int direction)
             warp_to_monitor(monitors_[target_idx]);
         }
 
-        update_all_bars();
-        conn_.flush();
+            conn_.flush();
         return;
     }
 
@@ -329,7 +323,6 @@ void WindowManager::move_window_to_monitor(int direction)
         warp_to_monitor(target_monitor);
     }
 
-    update_all_bars();
     conn_.flush();
 }
 

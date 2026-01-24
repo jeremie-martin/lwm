@@ -50,11 +50,6 @@ WindowManager::WindowManager(Config config)
     , ewmh_(conn_)
     , keybinds_(conn_, config_)
     , layout_(conn_, config_.appearance)
-    , bar_(
-          config_.appearance.enable_internal_bar
-              ? std::optional<StatusBar>(std::in_place, conn_, config_.appearance, config_.workspaces.names)
-              : std::nullopt
-      )
 {
     setup_signal_handlers();
     init_mousebinds();
@@ -93,15 +88,10 @@ WindowManager::WindowManager(Config config)
     window_rules_.load_rules(config_.rules);
     detect_monitors();
     setup_ewmh();
-    if (bar_)
-    {
-        setup_monitor_bars();
-    }
     scan_existing_windows();
     run_autostart();
     keybinds_.grab_keys(conn_.screen()->root);
     update_ewmh_client_list();
-    update_all_bars();
     conn_.flush();
 }
 
@@ -395,21 +385,6 @@ void WindowManager::init_monitor_workspaces(Monitor& monitor)
     monitor.workspaces.assign(config_.workspaces.count, Workspace{});
     monitor.current_workspace = 0;
     monitor.previous_workspace = 0;
-}
-
-void WindowManager::setup_monitor_bars()
-{
-    if (!bar_)
-        return;
-
-    for (auto& monitor : monitors_)
-    {
-        if (monitor.bar_window != XCB_NONE)
-        {
-            bar_->destroy(monitor.bar_window);
-        }
-        monitor.bar_window = bar_->create_for_monitor(monitor);
-    }
 }
 
 void WindowManager::scan_existing_windows()
@@ -715,7 +690,6 @@ void WindowManager::manage_window(xcb_window_t window, bool start_iconic)
         // Iconic windows should be hidden
         hide_window(window);
     }
-    update_all_bars();
 
     // Honor existing _NET_WM_STATE flags
     if (ewmh_.has_window_state(window, ewmh_.get()->_NET_WM_STATE_SKIP_TASKBAR))
@@ -815,8 +789,7 @@ void WindowManager::unmanage_window(xcb_window_t window)
                     }
                 }
 
-                update_all_bars();
-                conn_.flush();
+                            conn_.flush();
                 return;
             }
         }
@@ -915,7 +888,6 @@ void WindowManager::set_fullscreen(xcb_window_t window, bool enabled)
     }
 
     update_ewmh_client_list();
-    update_all_bars();
     conn_.flush();
 }
 
@@ -1003,7 +975,6 @@ void WindowManager::set_window_sticky(xcb_window_t window, bool enabled)
     }
 
     update_ewmh_client_list();
-    update_all_bars();
     conn_.flush();
 }
 
@@ -1049,7 +1020,6 @@ void WindowManager::set_window_maximized(xcb_window_t window, bool horiz, bool v
     }
 
     update_ewmh_client_list();
-    update_all_bars();
     conn_.flush();
 }
 
@@ -1357,7 +1327,6 @@ void WindowManager::iconify_window(xcb_window_t window)
         }
     }
 
-    update_all_bars();
     conn_.flush();
 }
 
@@ -1397,7 +1366,6 @@ void WindowManager::deiconify_window(xcb_window_t window, bool focus)
     }
 
     apply_fullscreen_if_needed(window);
-    update_all_bars();
     conn_.flush();
 }
 
@@ -1549,7 +1517,7 @@ void WindowManager::rearrange_monitor(Monitor& monitor)
         show_window(window);
     }
 
-    layout_.arrange(visible_windows, monitor.working_area(), bar_.has_value());
+    layout_.arrange(visible_windows, monitor.working_area());
 
     // Handle fullscreen windows separately
     // With off-screen visibility, windows stay mapped so no "nudge resize" trick is needed.
@@ -1797,68 +1765,6 @@ bool WindowManager::is_override_redirect_window(xcb_window_t window) const
 bool WindowManager::is_workspace_visible(size_t monitor_idx, size_t workspace_idx) const
 {
     return visibility_policy::is_workspace_visible(showing_desktop_, monitor_idx, workspace_idx, monitors_);
-}
-
-std::optional<WindowManager::ActiveWindowInfo> WindowManager::get_active_window_info() const
-{
-    if (active_window_ == XCB_NONE)
-        return std::nullopt;
-
-    auto const* client = get_client(active_window_);
-    if (!client)
-        return std::nullopt;
-
-    ActiveWindowInfo info;
-    info.monitor = client->monitor;
-    info.workspace = client->workspace;
-    info.title = client->name.empty() ? "Unknown" : client->name;
-    return info;
-}
-
-BarState WindowManager::build_bar_state(size_t monitor_idx, std::optional<ActiveWindowInfo> const& active_info) const
-{
-    BarState state;
-    if (monitor_idx >= monitors_.size())
-        return state;
-
-    auto const& monitor = monitors_[monitor_idx];
-    state.workspace_has_windows.assign(monitor.workspaces.size(), 0);
-
-    for (size_t i = 0; i < monitor.workspaces.size(); ++i)
-    {
-        if (!monitor.workspaces[i].windows.empty())
-            state.workspace_has_windows[i] = 1;
-    }
-
-    for (auto const& fw : floating_windows_)
-    {
-        auto const* c = get_client(fw.id);
-        if (c && c->monitor == monitor_idx && c->workspace < state.workspace_has_windows.size())
-        {
-            state.workspace_has_windows[c->workspace] = 1;
-        }
-    }
-
-    if (active_info && active_info->monitor == monitor_idx && active_info->workspace == monitor.current_workspace)
-    {
-        state.focused_title = active_info->title;
-        return state;
-    }
-
-    auto const& ws = monitor.current();
-    if (ws.focused_window != XCB_NONE)
-    {
-        if (auto const* client = get_client(ws.focused_window))
-        {
-            state.focused_title = client->name.empty() ? "Unknown" : client->name;
-        }
-        else
-        {
-            state.focused_title = "Unknown";
-        }
-    }
-
-    return state;
 }
 
 bool WindowManager::supports_protocol(xcb_window_t window, xcb_atom_t protocol) const
@@ -2119,7 +2025,6 @@ void WindowManager::update_focused_monitor_at_point(int16_t x, int16_t y)
     if (result.clear_focus)
         clear_focus();
 
-    update_all_bars();
     conn_.flush();
 }
 
@@ -2218,56 +2123,10 @@ uint32_t WindowManager::get_user_time(xcb_window_t window)
 void WindowManager::update_window_title(xcb_window_t window)
 {
     std::string name = get_window_name(window);
-    bool update_bars = false;
 
     // Sync Client.name (authoritative)
     if (auto* client = get_client(window))
         client->name = name;
-
-    // Check if window is tiled and visible (current workspace)
-    if (auto const* client = get_client(window))
-    {
-        if (client->kind == Client::Kind::Tiled)
-        {
-            if (client->monitor < monitors_.size())
-            {
-                auto const& monitor = monitors_[client->monitor];
-                if (client->workspace == monitor.current_workspace)
-                    update_bars = true;
-            }
-        }
-    }
-
-    if (find_floating_window(window))
-    {
-        // Client.name already updated above, just check if bar needs update
-        if (auto const* c = get_client(window))
-        {
-            if (is_workspace_visible(c->monitor, c->workspace))
-                update_bars = true;
-        }
-    }
-
-    if (active_window_ == window)
-        update_bars = true;
-
-    if (update_bars)
-    {
-        update_all_bars();
-        conn_.flush();
-    }
-}
-
-void WindowManager::update_all_bars()
-{
-    if (!bar_)
-        return;
-
-    auto active_info = get_active_window_info();
-    for (size_t i = 0; i < monitors_.size(); ++i)
-    {
-        bar_->update(monitors_[i], build_bar_state(i, active_info));
-    }
 }
 
 void WindowManager::update_struts()

@@ -4,7 +4,7 @@
 namespace lwm::layout_policy {
 
 std::vector<Geometry>
-calculate_slots(size_t count, Geometry const& geometry, AppearanceConfig const& appearance, bool has_internal_bar)
+calculate_slots(size_t count, Geometry const& geometry, AppearanceConfig const& appearance)
 {
     std::vector<Geometry> slots;
     if (count == 0)
@@ -18,13 +18,9 @@ calculate_slots(size_t count, Geometry const& geometry, AppearanceConfig const& 
     int32_t baseX = geometry.x;
     int32_t baseY = geometry.y;
     uint32_t screenWidth = geometry.width;
+    uint32_t screenHeight = geometry.height;
     uint32_t padding = appearance.padding;
     uint32_t border = appearance.border_width;
-
-    // Only account for internal bar if it's enabled
-    // External docks (Polybar) are handled via struts in working_area()
-    uint32_t barHeight = has_internal_bar ? appearance.status_bar_height : 0;
-    uint32_t screenHeight = (geometry.height > barHeight) ? geometry.height - barHeight : MIN_DIM;
 
     // Helper to safely subtract with minimum bound
     auto safe_sub = [MIN_DIM](uint32_t a, uint32_t b) -> uint32_t
@@ -41,7 +37,7 @@ calculate_slots(size_t count, Geometry const& geometry, AppearanceConfig const& 
         uint32_t height = safe_sub(screenHeight, 2 * padding + 2 * border);
         slots.push_back(
             { static_cast<int16_t>(baseX + padding + border),
-              static_cast<int16_t>(baseY + padding + border + barHeight),
+              static_cast<int16_t>(baseY + padding + border),
               static_cast<uint16_t>(width),
               static_cast<uint16_t>(height) }
         );
@@ -59,7 +55,7 @@ calculate_slots(size_t count, Geometry const& geometry, AppearanceConfig const& 
 
         uint32_t leftWidth = halfWidth;
         int32_t leftX = baseX + padding + border;
-        int32_t leftY = baseY + padding + border + barHeight;
+        int32_t leftY = baseY + padding + border;
         slots.push_back(
             { static_cast<int16_t>(leftX),
               static_cast<int16_t>(leftY),
@@ -89,7 +85,7 @@ calculate_slots(size_t count, Geometry const& geometry, AppearanceConfig const& 
         uint32_t masterWidth = halfWidth;
         uint32_t masterHeight = safe_sub(screenHeight, 2 * padding + 2 * border);
         int32_t masterX = baseX + padding + border;
-        int32_t masterY = baseY + padding + border + barHeight;
+        int32_t masterY = baseY + padding + border;
         slots.push_back(
             { static_cast<int16_t>(masterX),
               static_cast<int16_t>(masterY),
@@ -108,7 +104,7 @@ calculate_slots(size_t count, Geometry const& geometry, AppearanceConfig const& 
         uint32_t stackAvailHeight = safe_sub(screenHeight, totalVPadding + totalVBorders);
         uint32_t stackSlotHeight = stackAvailHeight / stackCount;
 
-        int32_t currentY = baseY + padding + border + barHeight;
+        int32_t currentY = baseY + padding + border;
         for (size_t i = 1; i < count; ++i)
         {
             slots.push_back(
@@ -128,12 +124,11 @@ size_t drop_target_index(
     size_t count,
     Geometry const& geometry,
     AppearanceConfig const& appearance,
-    bool has_internal_bar,
     int16_t x,
     int16_t y
 )
 {
-    auto slots = calculate_slots(count, geometry, appearance, has_internal_bar);
+    auto slots = calculate_slots(count, geometry, appearance);
     if (slots.empty())
         return 0;
 
@@ -182,9 +177,9 @@ Layout::Layout(Connection& conn, AppearanceConfig const& appearance)
     , appearance_(appearance)
 { }
 
-void Layout::arrange(std::vector<xcb_window_t> const& windows, Geometry const& geometry, bool has_internal_bar)
+void Layout::arrange(std::vector<xcb_window_t> const& windows, Geometry const& geometry)
 {
-    auto slots = calculate_slots(windows.size(), geometry, has_internal_bar);
+    auto slots = calculate_slots(windows.size(), geometry);
     if (slots.empty())
         return;
 
@@ -202,15 +197,15 @@ void Layout::arrange(std::vector<xcb_window_t> const& windows, Geometry const& g
     conn_.flush();
 }
 
-std::vector<Geometry> Layout::calculate_slots(size_t count, Geometry const& geometry, bool has_internal_bar) const
+std::vector<Geometry> Layout::calculate_slots(size_t count, Geometry const& geometry) const
 {
-    return layout_policy::calculate_slots(count, geometry, appearance_, has_internal_bar);
+    return layout_policy::calculate_slots(count, geometry, appearance_);
 }
 
 size_t
-Layout::drop_target_index(size_t count, Geometry const& geometry, bool has_internal_bar, int16_t x, int16_t y) const
+Layout::drop_target_index(size_t count, Geometry const& geometry, int16_t x, int16_t y) const
 {
-    return layout_policy::drop_target_index(count, geometry, appearance_, has_internal_bar, x, y);
+    return layout_policy::drop_target_index(count, geometry, appearance_, x, y);
 }
 
 void Layout::configure_window(xcb_window_t window, int32_t x, int32_t y, uint32_t width, uint32_t height)

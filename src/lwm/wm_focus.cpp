@@ -118,7 +118,6 @@ void WindowManager::focus_window(xcb_window_t window)
     // Update stacking order in EWMH after restacking transients
     update_ewmh_client_list();
 
-    update_all_bars();
     conn_.flush();
     LOG_TRACE("focus_window({:#x}): DONE", window);
 }
@@ -256,7 +255,6 @@ void WindowManager::focus_floating_window(xcb_window_t window)
     restack_transients(window);
 
     update_ewmh_client_list();
-    update_all_bars();
     conn_.flush();
 }
 
@@ -268,7 +266,6 @@ void WindowManager::clear_focus()
 
     clear_all_borders();
 
-    update_all_bars();
     conn_.flush();
 }
 

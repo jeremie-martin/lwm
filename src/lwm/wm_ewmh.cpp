@@ -142,19 +142,6 @@ void WindowManager::update_ewmh_workarea()
     for (auto const& monitor : monitors_)
     {
         Geometry area = monitor.working_area();
-        if (bar_)
-        {
-            uint32_t bar_height = config_.appearance.status_bar_height;
-            if (area.height > bar_height)
-            {
-                area.y = static_cast<int16_t>(area.y + bar_height);
-                area.height = static_cast<uint16_t>(area.height - bar_height);
-            }
-            else
-            {
-                area.height = 1;
-            }
-        }
         int32_t offset_x = static_cast<int32_t>(area.x) - desktop_origin_x_;
         int32_t offset_y = static_cast<int32_t>(area.y) - desktop_origin_y_;
         offset_x = std::clamp<int32_t>(offset_x, 0, std::numeric_limits<int16_t>::max());
@@ -262,8 +249,6 @@ void WindowManager::switch_to_ewmh_desktop(uint32_t desktop)
     update_floating_visibility(monitor_idx);
     LOG_TRACE("switch_to_ewmh_desktop: focus_or_fallback");
     focus_or_fallback(monitor);
-    LOG_TRACE("switch_to_ewmh_desktop: update_all_bars");
-    update_all_bars();
     conn_.flush();
     LOG_DEBUG("switch_to_ewmh_desktop: DONE, now on monitor {} ws {}", focused_monitor_, monitor.current_workspace);
 }

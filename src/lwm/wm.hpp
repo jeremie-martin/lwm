@@ -1,6 +1,5 @@
 #pragma once
 
-#include "lwm/bar/bar.hpp"
 #include "lwm/config/config.hpp"
 #include "lwm/core/connection.hpp"
 #include "lwm/core/ewmh.hpp"
@@ -56,20 +55,12 @@ private:
 
     // Note: FullscreenMonitors moved to types.hpp as part of unified Client refactor
 
-    struct ActiveWindowInfo
-    {
-        size_t monitor = 0;
-        size_t workspace = 0;
-        std::string title;
-    };
-
     Config config_;
     Connection conn_;
     Ewmh ewmh_;
     KeybindManager keybinds_;
     Layout layout_;
     WindowRules window_rules_;
-    std::optional<StatusBar> bar_;
 
     std::vector<Monitor> monitors_;
     std::vector<xcb_window_t> dock_windows_;
@@ -133,7 +124,6 @@ private:
     void init_mousebinds();
     void detect_monitors();
     void create_fallback_monitor();
-    void setup_monitor_bars();
     void init_monitor_workspaces(Monitor& monitor);
     void scan_existing_windows();
     void run_autostart();
@@ -239,8 +229,6 @@ private:
     void restack_transients(xcb_window_t parent);
     bool is_override_redirect_window(xcb_window_t window) const;
     bool is_workspace_visible(size_t monitor_idx, size_t workspace_idx) const;
-    std::optional<ActiveWindowInfo> get_active_window_info() const;
-    BarState build_bar_state(size_t monitor_idx, std::optional<ActiveWindowInfo> const& active_info) const;
     void update_floating_visibility(size_t monitor_idx);
     void update_floating_visibility_all();
     void update_floating_monitor_for_geometry(FloatingWindow& window);
@@ -265,7 +253,6 @@ private:
     std::pair<std::string, std::string> get_wm_class(xcb_window_t window);
     uint32_t get_user_time(xcb_window_t window);
     void update_window_title(xcb_window_t window);
-    void update_all_bars();
     void update_ewmh_workarea();
 
     // Dock/strut helpers

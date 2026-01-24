@@ -388,7 +388,6 @@ void WindowManager::unmanage_floating_window(xcb_window_t window)
         }
     }
 
-    update_all_bars();
     conn_.flush();
 }
 

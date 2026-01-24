@@ -896,7 +896,6 @@ void WindowManager::handle_client_message(xcb_client_message_event_t const& e)
             {
                 bool enable = compute_enable(is_client_demands_attention(e.window));
                 set_client_demands_attention(e.window, enable);
-                update_all_bars();
             }
         };
 
@@ -933,8 +932,7 @@ void WindowManager::handle_client_message(xcb_client_message_event_t const& e)
                 {
                     LOG_DEBUG("Focus stealing prevented, setting demands attention");
                     set_client_demands_attention(window, true);
-                    update_all_bars();
-                    return;
+                        return;
                 }
             }
         }
@@ -1043,7 +1041,6 @@ void WindowManager::handle_client_message(xcb_client_message_event_t const& e)
             {
                 focus_or_fallback(focused_monitor());
             }
-            update_all_bars();
             conn_.flush();
         }
         // Handle floating windows
@@ -1079,7 +1076,6 @@ void WindowManager::handle_client_message(xcb_client_message_event_t const& e)
             {
                 focus_or_fallback(focused_monitor());
             }
-            update_all_bars();
             conn_.flush();
         }
     }
@@ -1302,7 +1298,6 @@ void WindowManager::handle_configure_request(xcb_configure_request_event_t const
         {
             focused_monitor_ = client->monitor;
             update_ewmh_current_desktop();
-            update_all_bars();
         }
     }
 
@@ -1405,26 +1400,14 @@ void WindowManager::handle_property_notify(xcb_property_notify_event_t const& e)
     {
         update_struts();
         rearrange_all_monitors();
-        update_all_bars();
         conn_.flush();
     }
 }
 
 void WindowManager::handle_expose(xcb_expose_event_t const& e)
 {
-    if (!bar_ || e.count != 0)
-        return;
-
-    auto active_info = get_active_window_info();
-    for (size_t i = 0; i < monitors_.size(); ++i)
-    {
-        auto const& monitor = monitors_[i];
-        if (monitor.bar_window == e.window)
-        {
-            bar_->update(monitor, build_bar_state(i, active_info));
-            break;
-        }
-    }
+    // No internal bar to redraw
+    (void)e;
 }
 
 void WindowManager::handle_timeouts()
@@ -1521,23 +1504,7 @@ void WindowManager::handle_randr_screen_change()
     // Save focused monitor name for restoration
     std::string focused_monitor_name = monitors_.empty() ? "" : monitors_[focused_monitor_].name;
 
-    // Destroy old bar windows before detecting new monitors
-    if (bar_)
-    {
-        for (auto const& monitor : monitors_)
-        {
-            if (monitor.bar_window != XCB_NONE)
-            {
-                bar_->destroy(monitor.bar_window);
-            }
-        }
-    }
-
     detect_monitors();
-    if (bar_)
-    {
-        setup_monitor_bars();
-    }
     update_struts();
 
     if (!monitors_.empty())
@@ -1631,7 +1598,6 @@ void WindowManager::handle_randr_screen_change()
         focus_or_fallback(monitors_[focused_monitor_]);
     }
 
-    update_all_bars();
     conn_.flush();
 }
 

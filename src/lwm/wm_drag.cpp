@@ -152,8 +152,7 @@ void WindowManager::update_drag(int16_t root_x, int16_t root_y)
         if (auto* client = get_client(floating_window->id))
             focused_monitor_ = client->monitor;
         update_ewmh_current_desktop();
-        update_all_bars();
-    }
+        }
 
     conn_.flush();
 }
@@ -198,7 +197,6 @@ void WindowManager::end_drag()
                         target_index = layout_.drop_target_index(
                             layout_count,
                             monitors_[target_monitor_idx].working_area(),
-                            bar_.has_value(),
                             drag_state_.last_root_x,
                             drag_state_.last_root_y
                         );
@@ -237,8 +235,7 @@ void WindowManager::end_drag()
                     }
 
                     update_ewmh_client_list();
-                    update_all_bars();
-                    focus_window(window);
+                                    focus_window(window);
                 }
             }
         }

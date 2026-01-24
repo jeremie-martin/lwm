@@ -189,7 +189,6 @@ struct Monitor
     std::vector<Workspace> workspaces;
     size_t current_workspace = 0;
     size_t previous_workspace = 0;
-    xcb_window_t bar_window = XCB_NONE;
     Strut strut = {};
 
     Workspace& current() { return workspaces[current_workspace]; }

@@ -70,9 +70,6 @@ struct AppearanceConfig
     uint32_t padding = 10;
     uint32_t border_width = 2;
     uint32_t border_color = 0xFF0000;
-    uint32_t status_bar_height = 30;
-    uint32_t status_bar_color = 0x808080;
-    bool enable_internal_bar = false;
 };
 
 struct ProgramsConfig
