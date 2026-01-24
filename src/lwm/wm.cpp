@@ -1169,26 +1169,64 @@ void WindowManager::set_client_demands_attention(xcb_window_t window, bool enabl
 
 void WindowManager::apply_fullscreen_if_needed(xcb_window_t window)
 {
+    LOG_DEBUG("apply_fullscreen_if_needed({:#x}) called", window);
+
     if (!is_client_fullscreen(window))
+    {
+        LOG_DEBUG("apply_fullscreen_if_needed({:#x}): NOT fullscreen, returning early", window);
         return;
+    }
     if (is_client_iconic(window))
+    {
+        LOG_DEBUG("apply_fullscreen_if_needed({:#x}): is iconic, returning early", window);
         return;
+    }
 
     auto const* client = get_client(window);
     if (!client)
+    {
+        LOG_DEBUG("apply_fullscreen_if_needed({:#x}): no client, returning early", window);
         return;
+    }
 
     std::optional<size_t> monitor_idx = client->monitor;
     if (!monitor_idx || *monitor_idx >= monitors_.size())
+    {
+        LOG_DEBUG("apply_fullscreen_if_needed({:#x}): invalid monitor_idx, returning early", window);
         return;
+    }
     if (client->workspace != monitors_[*monitor_idx].current_workspace)
+    {
+        LOG_DEBUG("apply_fullscreen_if_needed({:#x}): workspace mismatch client->workspace={} vs monitor.current_workspace={}, returning early",
+                  window, client->workspace, monitors_[*monitor_idx].current_workspace);
         return;
+    }
+    LOG_DEBUG("apply_fullscreen_if_needed({:#x}): all checks passed, applying fullscreen geometry", window);
 
     Geometry area = fullscreen_geometry_for_window(window);
+
+    // Send sync request before configure (matches Layout::configure_window pattern)
+    send_sync_request(window, last_event_time_);
+
     uint32_t values[] = { static_cast<uint32_t>(area.x), static_cast<uint32_t>(area.y), area.width, area.height, 0 };
     uint16_t mask = XCB_CONFIG_WINDOW_X | XCB_CONFIG_WINDOW_Y | XCB_CONFIG_WINDOW_WIDTH | XCB_CONFIG_WINDOW_HEIGHT
         | XCB_CONFIG_WINDOW_BORDER_WIDTH;
     xcb_configure_window(conn_.get(), window, mask, values);
+
+    // Send synthetic ConfigureNotify so client knows its geometry immediately
+    // This is critical for Electron/Chrome apps that need to know their size when fullscreened
+    xcb_configure_notify_event_t ev = {};
+    ev.response_type = XCB_CONFIGURE_NOTIFY;
+    ev.event = window;
+    ev.window = window;
+    ev.x = area.x;
+    ev.y = area.y;
+    ev.width = static_cast<uint16_t>(area.width);
+    ev.height = static_cast<uint16_t>(area.height);
+    ev.border_width = 0;
+    ev.above_sibling = XCB_NONE;
+    ev.override_redirect = 0;
+    xcb_send_event(conn_.get(), 0, window, XCB_EVENT_MASK_STRUCTURE_NOTIFY, reinterpret_cast<char*>(&ev));
 
     uint32_t stack_mode = XCB_STACK_MODE_ABOVE;
     xcb_configure_window(conn_.get(), window, XCB_CONFIG_WINDOW_STACK_MODE, &stack_mode);
@@ -1486,17 +1524,33 @@ void WindowManager::rearrange_monitor(Monitor& monitor)
     LOG_DEBUG("rearrange_monitor({}): arranging {} visible windows ({} fullscreen) on ws {}",
               monitor_idx, visible_windows.size(), fullscreen_windows.size(), monitor.current_workspace);
 
+    for (size_t i = 0; i < visible_windows.size(); ++i)
+    {
+        LOG_DEBUG("rearrange_monitor: visible_windows[{}] = {:#x}", i, visible_windows[i]);
+    }
+    for (size_t i = 0; i < fullscreen_windows.size(); ++i)
+    {
+        LOG_DEBUG("rearrange_monitor: fullscreen_windows[{}] = {:#x}", i, fullscreen_windows[i]);
+    }
+
     layout_.arrange(visible_windows, monitor.working_area(), bar_.has_value());
 
     // Handle fullscreen windows separately - configure geometry THEN map
     // This prevents the race condition where windows render at wrong geometry
     for (xcb_window_t window : fullscreen_windows)
     {
+        LOG_DEBUG("rearrange_monitor: handling fullscreen window {:#x}", window);
         apply_fullscreen_if_needed(window);
+        LOG_DEBUG("rearrange_monitor: mapping fullscreen window {:#x}", window);
         xcb_map_window(conn_.get(), window);
+        // Always raise fullscreen windows to top, even if apply_fullscreen_if_needed returned early
+        uint32_t stack_mode = XCB_STACK_MODE_ABOVE;
+        xcb_configure_window(conn_.get(), window, XCB_CONFIG_WINDOW_STACK_MODE, &stack_mode);
+        LOG_DEBUG("rearrange_monitor: raised fullscreen window {:#x} to top", window);
     }
     if (!fullscreen_windows.empty())
     {
+        LOG_DEBUG("rearrange_monitor: flushing after fullscreen windows");
         conn_.flush();
     }
 

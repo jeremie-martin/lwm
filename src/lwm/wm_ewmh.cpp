@@ -212,7 +212,23 @@ void WindowManager::switch_to_ewmh_desktop(uint32_t desktop)
     LOG_DEBUG("switch_to_ewmh_desktop: switching from ws {} to ws {} on monitor {}",
               old_workspace, workspace_idx, monitor_idx);
 
-    // Unmap windows from OLD workspace before switching
+    // Unmap floating windows from old workspace FIRST
+    // This prevents visual glitches where old floating windows appear over new workspace content
+    for (auto& fw : floating_windows_)
+    {
+        auto const* client = get_client(fw.id);
+        if (!client || client->monitor != monitor_idx)
+            continue;
+        if (is_client_sticky(fw.id))
+            continue;
+        if (client->workspace == old_workspace)
+        {
+            LOG_TRACE("switch_to_ewmh_desktop: pre-unmapping floating {:#x}", fw.id);
+            wm_unmap_window(fw.id);
+        }
+    }
+
+    // Unmap tiled windows from OLD workspace before switching
     for (xcb_window_t window : monitor.current().windows)
     {
         if (is_client_sticky(window))
@@ -220,6 +236,8 @@ void WindowManager::switch_to_ewmh_desktop(uint32_t desktop)
         LOG_TRACE("switch_to_ewmh_desktop: unmapping window {:#x}", window);
         wm_unmap_window(window);
     }
+    // Flush unmaps before rearranging to ensure old windows are hidden
+    conn_.flush();
 
     // Switch to target monitor and workspace
     focused_monitor_ = monitor_idx;

@@ -18,16 +18,42 @@ void WindowManager::switch_workspace(int ws)
         return;
     }
 
-    LOG_TRACE("switch_workspace: policy approved, old_ws={} new_ws={}",
+    LOG_DEBUG("switch_workspace: policy approved, old_ws={} new_ws={}",
               switch_result->old_workspace, switch_result->new_workspace);
 
+    // Unmap floating windows from old workspace FIRST
+    // This prevents visual glitches where old floating windows appear over new workspace content
+    for (auto& fw : floating_windows_)
+    {
+        auto const* client = get_client(fw.id);
+        if (!client || client->monitor != focused_monitor_)
+            continue;
+        if (is_client_sticky(fw.id))
+            continue;
+        if (client->workspace == switch_result->old_workspace)
+        {
+            LOG_DEBUG("switch_workspace: pre-unmapping floating {:#x}", fw.id);
+            wm_unmap_window(fw.id);
+        }
+    }
+
+    // Now unmap tiled windows from old workspace
     auto& old_workspace = monitor.workspaces[switch_result->old_workspace];
+    LOG_DEBUG("switch_workspace: old_workspace has {} tiled windows", old_workspace.windows.size());
     for (xcb_window_t window : old_workspace.windows)
     {
+        LOG_DEBUG("switch_workspace: considering unmapping tiled {:#x}", window);
         if (is_client_sticky(window))
+        {
+            LOG_DEBUG("switch_workspace: {:#x} is sticky, skipping", window);
             continue;
+        }
+        LOG_DEBUG("switch_workspace: unmapping tiled {:#x}", window);
         wm_unmap_window(window);
     }
+    LOG_DEBUG("switch_workspace: done unmapping old workspace windows");
+    // Flush unmaps before rearranging to ensure old windows are hidden
+    conn_.flush();
 
     LOG_TRACE("switch_workspace: unmapped old windows, now updating EWMH");
     update_ewmh_current_desktop();
