@@ -129,6 +129,11 @@ struct Client {
     // Management tracking
     uint64_t order = 0;              // Unique monotonically increasing value
 };
+
+**WindowManager class members**:
+- `next_client_order_`: Counter for generating unique, monotonically increasing Client.order values
+  - Incremented when each new window is managed
+  - Used for consistent _NET_CLIENT_LIST ordering
 ```
 
 ### Workspace
@@ -206,6 +211,12 @@ struct FullscreenMonitors {
     uint32_t top, bottom, left, right;
 };
 ```
+
+**Strut Aggregation**:
+- Multiple dock windows can coexist on the same monitor
+- Struts are aggregated by taking the maximum value for each side
+- For example: If dock A has top=30 and dock B has top=50, the effective top strut is 50
+- This ensures all dock reservations are honored simultaneously
 
 ### Bounds Checking and Validation
 
@@ -372,12 +383,13 @@ MapRequest → classify_window()
 | true   | false  | true      | No                | Yes    | Fullscreen on non-visible workspace |
 | false  | false  | false     | Yes               | Yes    | Normal visible window |
 | false  | false  | true      | Yes               | Yes    | Visible fullscreen window |
-| false  | true   | any       | No                | **INVALID** | iconic implies hidden |
+| false  | true   | any       | No*               | **SPECIAL** | *Only for sticky windows: hide_window() returns early for sticky, so iconic sticky windows have hidden=false but are conceptually off-screen (iconify doesn't move sticky windows off-screen) |
 
 **Key State Rules:**
-- iconic=true ⇒ hidden=true (minimized windows always off-screen)
+- iconic=true ⇒ hidden=true for non-sticky windows (minimized windows always off-screen)
 - hidden=true does NOT imply iconic=true (can be hidden for other reasons)
-- hidden=false ⇒ iconic=false (on-screen windows cannot be minimized)
+- hidden=false ⇒ iconic=false for non-sticky windows (on-screen windows cannot be minimized)
+- **Exception**: Sticky iconic windows have iconic=true but hidden=false (hide_window() returns early for sticky windows)
 - fullscreen+iconic: Window remains fullscreen flag but is off-screen until deiconified
 
 **Visibility Model**: LWM uses off-screen visibility, not unmap/map cycles. Windows are always mapped (XCB_MAP_STATE_VIEWABLE). Visibility is controlled by:
@@ -755,10 +767,14 @@ _NET_ACTIVE_WINDOW source=1 (application)
 
 **User Time Window Indirection**:
 - `_NET_WM_USER_TIME` property may be on `Client.user_time_window` instead of main window
+- `get_user_time()` implementation:
+  - Checks if Client.user_time_window != XCB_NONE
+  - If set, queries property from user_time_window instead of main window
+  - Otherwise, queries from main window
 - PropertyNotify events are tracked on user_time_window during window management
 - When _NET_WM_USER_TIME changes on user_time_window:
-  - Finds parent Client that owns this user_time_window
-  - Updates parent Client.user_time with the new value
+   - Finds parent Client that owns this user_time_window
+   - Updates parent Client.user_time with the new value
 - If PropertyNotify arrives on user_time_window not associated with any client, update is silently ignored (no parent found)
 - Focus stealing prevention uses parent Client.user_time for comparison
 - Race condition: If window is unmanaged after finding match but before get_client(), update is silently dropped
@@ -821,6 +837,7 @@ switch_workspace(target_ws)
 │  └─ layout_.arrange() (applies on-screen geometry)
 ├─ update_floating_visibility(new workspace)
 ├─ focus_or_fallback(monitor)
+├─ conn_.flush()  ← Final sync point after all updates
 └─ Update bars
 ```
 
@@ -829,7 +846,11 @@ switch_workspace(target_ws)
 2. Flush X connection to ensure hide operations complete
 3. Show new workspace via rearrange_monitor and update_floating_visibility
 
-The flush prevents old floating windows from briefly appearing over new workspace content due to X11 async rendering.
+**Rationale for floating-first hiding**:
+- Floating windows are hidden BEFORE tiled windows to prevent visual glitches
+- If tiled windows were hidden first, old floating windows might briefly appear over new workspace content during workspace switch
+- The flush after hiding operations ensures all hide configurations are applied before new workspace content is rendered
+- This prevents "flash" artifacts during workspace transitions
 
 **Off-Screen Visibility**: Windows are hidden using hide_window(), NOT unmapped.
 
@@ -863,7 +884,7 @@ toggle_workspace()
 - Blocks KeyPress if same keysym && same timestamp as KeyRelease
 - Prevents rapid workspace toggling from key hold
 
-**Note**: toggle_workspace() does NOT update previous_workspace when switching back (it's the target of the toggle, so the next toggle switches to the other workspace).
+**Note**: toggle_workspace() updates previous_workspace on each switch via switch_workspace()'s call to workspace_policy::apply_workspace_switch(). The previous_workspace value reflects the workspace that was active before the switch.
 
 Example: User on workspace 0, previous_workspace = 1
 - toggle_workspace() switches to workspace 1
@@ -1356,9 +1377,31 @@ handle_timeouts()
 | WM_TRANSIENT_FOR | Transient relationship, inherit workspace, auto skip_*, stack above parent |
 | WM_PROTOCOLS | DELETE_WINDOW, TAKE_FOCUS, _NET_WM_PING, _NET_WM_SYNC_REQUEST |
 | _NET_WM_USER_TIME | User time for focus stealing prevention. May be on user_time_window (indirect) |
-| _NET_WM_STATE_HIDDEN | Initial iconic state check (takes precedence over WM_HINTS.initial_state) |
+ | _NET_WM_STATE_HIDDEN | Initial iconic state check (takes precedence over WM_HINTS.initial_state) |
 
- ### Properties Written
+### Synthetic ConfigureNotify Generation
+
+**Function**: `send_configure_notify(window)`
+
+**Purpose**: Inform clients of their geometry after WM-initiated changes
+
+**Implementation**:
+- Queries current window geometry from X server
+- Constructs synthetic ConfigureNotify event with:
+  - event_type = ConfigureNotify
+  - synthetic = true
+  - geometry from WM
+- Sends to client via xcb_send_event
+
+**When called**:
+- After layout_.arrange() to inform tiled windows of their geometry
+- After fullscreen transition to inform window of fullscreen geometry
+- After floating geometry changes to inform floating window of new geometry
+- After apply_fullscreen_if_needed() when restoring fullscreen geometry
+
+**Why synthetic**: Required by ICCCM and EWMH compliance; clients (especially Electron/Chrome apps) need to know their geometry immediately after WM changes it
+
+  ### Properties Written
 
 | Property | Timing |
 |----------|--------|
@@ -2057,6 +2100,17 @@ toggle_workspace()
 - Does NOT clear focus when entering root window
 - Enables seamless monitor crossing without focus disruption
 
+### Monitor Index Cycling
+
+**Function**: `wrap_monitor_index(int idx)`
+
+**Behavior**:
+- Wraps monitor indices to stay within valid range
+- For positive direction: if idx >= monitors_.size(), wraps to 0
+- For negative direction: if idx < 0, wraps to monitors_.size() - 1
+- Used by focus_monitor and move_to_monitor operations for seamless cycling
+- Returns clamped index that is always valid (or 0 if no monitors exist)
+
 ### Monitor Switching (focus_monitor_left/right)
 
 **Function**: Explicit monitor switch via keybind
@@ -2197,6 +2251,11 @@ toggle_workspace()
 - Staleness is corrected lazily: when `select_focus_candidate()` is called, it validates that the focused_window exists in workspace.windows before considering it
 - `workspace.focused_window` is a "best-effort" hint for focus restoration
 
+**Focused Window Updates on Removal**:
+- When a window is removed, `workspace.focused_window` is updated to **last non-iconic window** in the workspace
+- Iterates through windows in reverse order, filtering out iconic windows
+- If no non-iconic windows exist, focused_window is set to XCB_NONE (empty workspace)
+
 ### Empty Workspace Handling
 
 **Behavior**:
@@ -2220,7 +2279,7 @@ toggle_workspace()
 
 **Behavior**:
 - Size hints applied with minimum clamping to 1 pixel (apply_size_hints())
-- If size hints produce negative dimensions, cast to uint16_t results in large values (overflow)
+- **Risk**: If size hints produce negative dimensions, cast to uint16_t results in large values (overflow) - this is NOT checked or prevented by the code
 - Maximum dimension limits: No explicit upper bound enforced (uint16_t limits to 65535)
 - Floating windows can be resized to 0x0 after initial mapping (clamped to minimum 1 pixel)
 - Zero-sized windows at initial mapping fall back to 300x200 default
