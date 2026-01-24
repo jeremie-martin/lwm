@@ -1,7 +1,10 @@
 # Protocol Compliance Requirements
 
-This document defines the external protocol obligations LWM must satisfy for X11 window management.
-It is normative and testable. All items describe what the window manager MUST or SHOULD implement.
+> **Documentation Navigation**
+> - Previous: [BEHAVIOR.md](BEHAVIOR.md) (User-facing behavior) | [CLAUDE.md](CLAUDE.md) (Development guide)
+> - Related: [COMPLETE_STATE_MACHINE.md](COMPLETE_STATE_MACHINE.md) (Implementation reference) | [SPEC_CLARIFICATIONS.md](SPEC_CLARIFICATIONS.md) (Design decisions)
+
+This document defines the external protocol obligations LWM must satisfy for X11 window management. It is normative and testable; all items describe what the window manager MUST or SHOULD implement.
 
 ---
 
@@ -23,7 +26,7 @@ It is normative and testable. All items describe what the window manager MUST or
 
 ### 2. Client Window Properties (Read)
 
-The WM must read and honor these client-set properties:
+The WM must read and honor these client-set properties.
 
 #### WM_NAME / _NET_WM_NAME
 - Use `_NET_WM_NAME` (UTF-8) if present; fall back to `WM_NAME`.
@@ -40,17 +43,15 @@ The WM must read and honor these client-set properties:
 - Read for display purposes and session management.
 
 #### WM_NORMAL_HINTS (Size Hints)
-- `min_width`, `min_height`: enforce minimum dimensions.
-- `max_width`, `max_height`: **not enforced** (tiling WM controls sizing).
-- `base_width`, `base_height`: **not enforced** (increments are ignored for all windows).
-- `width_inc`, `height_inc`: **intentionally not enforced** for any windows (tiled or floating).
-  - Rationale: Resize increments (e.g., terminal character sizes) would block
-    pixel-granular resizing. LWM prioritizes smooth, consistent layout and
-    uniform gaps over character-cell alignment for every window type.
-- `min_aspect`, `max_aspect`: **not enforced** (could cause layout gaps).
-- `win_gravity`: **not implemented** (no plans to implement; tiled windows use WM-controlled positioning).
-- `PPosition`, `USPosition`: honor user-specified position for floating windows.
-- `PSize`, `USSize`: honor user-specified size for initial mapping.
+- `min_width`, `min_height`: enforce minimum dimensions
+- `max_width`, `max_height`: **not enforced** (tiling WM controls sizing)
+- `base_width`, `base_height`: **not enforced** (increments ignored for all windows)
+- `width_inc`, `height_inc`: **intentionally not enforced** for any windows (tiled or floating)
+  - Rationale: Resize increments (e.g., terminal character sizes) would block pixel-granular resizing. LWM prioritizes smooth, consistent layout and uniform gaps over character-cell alignment
+- `min_aspect`, `max_aspect`: **not enforced** (could cause layout gaps)
+- `win_gravity`: **not implemented** (no plans to implement; tiled windows use WM-controlled positioning)
+- `PPosition`, `USPosition`: honor user-specified position for floating windows
+- `PSize`, `USSize`: honor user-specified size for initial mapping
 
 #### WM_HINTS
 - `input`: if False, never call `SetInputFocus` on the window.
@@ -64,17 +65,22 @@ The WM must read and honor these client-set properties:
 - Transients inherit workspace from their parent.
 - Transients stack above their parent when both visible.
 - **Transients automatically get `_NET_WM_STATE_SKIP_TASKBAR` and `_NET_WM_STATE_SKIP_PAGER`**
-  set on manage (unless already set by the client). This ensures transient dialogs don't
-  clutter taskbars/pagers independently of their parent window.
+  set on manage (unless already set). This prevents transient dialogs from cluttering taskbars/pagers independently of their parent window.
+
+See [SPEC_CLARIFICATIONS.md](SPEC_CLARIFICATIONS.md#7-transient-windows-and-state-inheritance) for design rationale.
 
 #### WM_PROTOCOLS
 - Check which protocols the client supports.
-- Required protocols to handle:
-  - `WM_DELETE_WINDOW`: send instead of killing the client.
-  - `WM_TAKE_FOCUS`: send when focusing windows with `input=False`.
+- Required protocols:
+   - `WM_DELETE_WINDOW`: send instead of killing the client.
+   - `WM_TAKE_FOCUS`: send when focusing windows with `input=False`.
 - Optional protocols:
-  - `_NET_WM_PING`: liveness checking.
-  - `_NET_WM_SYNC_REQUEST`: synchronized resizing.
+   - `_NET_WM_PING`: liveness checking.
+   - `_NET_WM_SYNC_REQUEST`: synchronized resizing.
+
+### 6. WM_STATE and Workspace Visibility
+
+See [SPEC_CLARIFICATIONS.md](SPEC_CLARIFICATIONS.md#6-wm_state-and-workspace-visibility) for design decisions on WM_STATE semantics.
 
 #### WM_COLORMAP_WINDOWS
 - **Not implemented** (legacy feature; modern applications use TrueColor).
@@ -84,16 +90,14 @@ The WM must read and honor these client-set properties:
 The WM must set and maintain:
 
 #### WM_STATE
-- Set on all managed windows.
-- Values: `WithdrawnState` (0), `NormalState` (1), `IconicState` (3).
+- Set on all managed windows
+- Values: `WithdrawnState` (0), `NormalState` (1), `IconicState` (3)
 - State transitions:
-  - `NormalState`: Window is managed and logically visible (may be unmapped due to workspace).
-  - `IconicState`: Window is explicitly minimized/iconified by user action.
-  - `WithdrawnState`: Window is unmanaged (client withdrew or WM unmanaged it).
-- **Workspace visibility does NOT change WM_STATE**: A window on a non-visible workspace
-  remains in `NormalState` even though it is unmapped. Visibility across workspaces is
-  expressed via `_NET_WM_DESKTOP` and physical mapping state, not WM_STATE.
-- Remove or set to Withdrawn when unmanaging.
+    - `NormalState`: Window is managed and logically visible
+    - `IconicState`: Window is explicitly minimized/iconified by user action
+    - `WithdrawnState`: Window is unmanaged (client withdrew or WM unmanaged it)
+- **Workspace visibility does NOT change WM_STATE**: A window on a non-visible workspace remains in `NormalState`. Visibility across workspaces is expressed via `_NET_WM_DESKTOP` and physical position state (off-screen for hidden, on-screen for visible), not WM_STATE
+- Remove or set to Withdrawn when unmanaging
 
 ### 4. Client Messages (Handle)
 
@@ -120,22 +124,24 @@ The WM must set and maintain:
 
 ### 7. Unmap Handling
 
-ICCCM requires distinguishing WM-initiated unmaps from client-initiated unmaps:
+LWM uses off-screen visibility instead of unmap/map cycles for controlling window visibility.
 
-- **WM-initiated unmaps** (e.g., hiding windows during workspace switches):
-  - The WM tracks pending unmaps with a counter before calling `xcb_unmap_window()`.
-  - The counter is only incremented if the window is currently viewable (to avoid leaks).
-  - When `UnmapNotify` arrives, if counter > 0, decrement and ignore the event.
-  - Window remains managed; WM_STATE stays `NormalState`.
+For detailed rationale and implementation approach, see [SPEC_CLARIFICATIONS.md](SPEC_CLARIFICATIONS.md#8-window-visibility-off-screen-positioning).
 
-- **Client-initiated unmaps** (withdraw requests):
-  - `UnmapNotify` arrives with counter == 0 (no pending WM unmap).
-  - Unmanage the window and set `WM_STATE` to `WithdrawnState`.
-  - Remove from all internal structures.
+**Off-screen visibility**:
+- Windows are always mapped (`xcb_map_window()` called once on management).
+- Visibility is controlled by moving windows to `OFF_SCREEN_X = -20000`.
+- `client.hidden` flag tracks off-screen state: true = at OFF_SCREEN_X, false = at on-screen position.
+- With off-screen visibility, ALL `UnmapNotify` events are client-initiated withdraw requests.
+- No unmap counter tracking is needed (WM never calls `xcb_unmap_window()`).
 
-- **Event source**: We receive `UnmapNotify` events via root window's `SubstructureNotifyMask`.
-  We intentionally do NOT select `STRUCTURE_NOTIFY` on client windows to avoid receiving
-  duplicate `UnmapNotify` events (which would break the counting mechanism).
+**Unmap handling**:
+
+- When `UnmapNotify` arrives, treat it as a client-initiated withdraw request.
+- Unmanage window and set `WM_STATE` to `WithdrawnState`.
+- Remove from all internal structures.
+
+**Event source**: `UnmapNotify` events received via root window's `SubstructureNotifyMask`.
 
 ### 8. Destroy Handling
 
@@ -231,47 +237,44 @@ ICCCM requires distinguishing WM-initiated unmaps from client-initiated unmaps:
 ### 2. Per-Window Properties (Read)
 
 #### _NET_WM_WINDOW_TYPE
-Types to support (in priority order, first match wins):
-- `_NET_WM_WINDOW_TYPE_DESKTOP`: below all, no focus, spans workspaces.
-- `_NET_WM_WINDOW_TYPE_DOCK`: panel/bar, reserves strut space, no focus typically.
-- `_NET_WM_WINDOW_TYPE_TOOLBAR`: floating, no taskbar.
-- `_NET_WM_WINDOW_TYPE_MENU`: floating, no taskbar.
-- `_NET_WM_WINDOW_TYPE_UTILITY`: floating, no taskbar, above siblings.
-- `_NET_WM_WINDOW_TYPE_SPLASH`: floating, centered, no decorations, no taskbar.
-- `_NET_WM_WINDOW_TYPE_DIALOG`: floating, centered, transient-like.
-- `_NET_WM_WINDOW_TYPE_DROPDOWN_MENU`: popup, no decorations, no focus steal.
-- `_NET_WM_WINDOW_TYPE_POPUP_MENU`: popup, no decorations, no focus steal.
-- `_NET_WM_WINDOW_TYPE_TOOLTIP`: popup, no decorations, no focus, timeout.
-- `_NET_WM_WINDOW_TYPE_NOTIFICATION`: popup, no decorations, no focus.
-- `_NET_WM_WINDOW_TYPE_COMBO`: dropdown element, no decorations.
-- `_NET_WM_WINDOW_TYPE_DND`: drag-and-drop icon, no decorations.
-- `_NET_WM_WINDOW_TYPE_NORMAL`: default, managed normally (tiled or floating per policy).
+Types to support (priority order, first match wins):
+- `_NET_WM_WINDOW_TYPE_DESKTOP`: below all, no focus, spans workspaces
+- `_NET_WM_WINDOW_TYPE_DOCK`: panel/bar, reserves strut space, no focus typically
+- `_NET_WM_WINDOW_TYPE_TOOLBAR`: floating, no taskbar
+- `_NET_WM_WINDOW_TYPE_MENU`: floating, no taskbar
+- `_NET_WM_WINDOW_TYPE_UTILITY`: floating, no taskbar, above siblings
+- `_NET_WM_WINDOW_TYPE_SPLASH`: floating, centered, no decorations, no taskbar
+- `_NET_WM_WINDOW_TYPE_DIALOG`: floating, centered, transient-like
+- `_NET_WM_WINDOW_TYPE_DROPDOWN_MENU`: popup, no decorations, no focus steal
+- `_NET_WM_WINDOW_TYPE_POPUP_MENU`: popup, no decorations, no focus steal
+- `_NET_WM_WINDOW_TYPE_TOOLTIP`: popup, no decorations, no focus, timeout
+- `_NET_WM_WINDOW_TYPE_NOTIFICATION`: popup, no decorations, no focus
+- `_NET_WM_WINDOW_TYPE_COMBO`: dropdown element, no decorations
+- `_NET_WM_WINDOW_TYPE_DND`: drag-and-drop icon, no decorations
+- `_NET_WM_WINDOW_TYPE_NORMAL`: default, managed normally (tiled or floating per policy)
 
 #### _NET_WM_STATE (Initial)
-- Read on map to apply initial states.
+- Read on map to apply initial states
 - States to support:
-  - `_NET_WM_STATE_MODAL`: treat as modal dialog.
-  - `_NET_WM_STATE_STICKY`: visible on all workspaces of the owning monitor (see BEHAVIOR.md §1.5).
-  - `_NET_WM_STATE_MAXIMIZED_VERT`: maximize vertically (**floating windows only**; tiled windows
-    ignore this as they already fill the tiling area).
-  - `_NET_WM_STATE_MAXIMIZED_HORZ`: maximize horizontally (**floating windows only**).
-  - `_NET_WM_STATE_SHADED`: show only title bar (implemented as iconify due to no decorations).
-  - `_NET_WM_STATE_SKIP_TASKBAR`: exclude from taskbar.
-  - `_NET_WM_STATE_SKIP_PAGER`: exclude from pager.
-  - `_NET_WM_STATE_HIDDEN`: iconified/minimized.
-  - `_NET_WM_STATE_FULLSCREEN`: fullscreen mode (works for both tiled and floating).
-  - `_NET_WM_STATE_ABOVE`: always on top.
-  - `_NET_WM_STATE_BELOW`: always on bottom.
-  - `_NET_WM_STATE_DEMANDS_ATTENTION`: urgency indicator (also reflects ICCCM WM_HINTS urgency).
-  - `_NET_WM_STATE_FOCUSED`: has input focus (WM sets this).
+    - `_NET_WM_STATE_MODAL`: treat as modal dialog
+    - `_NET_WM_STATE_STICKY`: visible on all workspaces of owning monitor (see BEHAVIOR.md §1.5)
+    - `_NET_WM_STATE_MAXIMIZED_VERT`: maximize vertically (**floating windows only**; tiled windows ignore as they already fill tiling area)
+    - `_NET_WM_STATE_MAXIMIZED_HORZ`: maximize horizontally (**floating windows only**)
+    - `_NET_WM_STATE_SHADED`: show only title bar (implemented as iconify due to no decorations)
+    - `_NET_WM_STATE_SKIP_TASKBAR`: exclude from taskbar
+    - `_NET_WM_STATE_SKIP_PAGER`: exclude from pager
+    - `_NET_WM_STATE_HIDDEN`: iconified/minimized
+    - `_NET_WM_STATE_FULLSCREEN`: fullscreen mode (works for both tiled and floating)
+    - `_NET_WM_STATE_ABOVE`: always on top
+    - `_NET_WM_STATE_BELOW`: always on bottom
+    - `_NET_WM_STATE_DEMANDS_ATTENTION`: urgency indicator (also reflects ICCCM WM_HINTS urgency)
+    - `_NET_WM_STATE_FOCUSED`: has input focus (WM sets this)
 
 #### _NET_WM_STRUT / _NET_WM_STRUT_PARTIAL
-- Reserve screen edges for panels/docks.
-- Reduce workarea accordingly.
-- Apply to window placement and tiling.
-- **Limitation**: Partial strut ranges (start/end coordinates) are read but only the basic
-  extents (left/right/top/bottom) are used. Multi-monitor partial struts may not be
-  handled correctly if they span monitors.
+- Reserve screen edges for panels/docks
+- Reduce workarea accordingly
+- Apply to window placement and tiling
+- **Limitation**: Partial strut ranges (start/end coordinates) are read but only basic extents (left/right/top/bottom) are used. Multi-monitor partial struts may not be handled correctly if they span monitors
 
 #### _NET_WM_ICON
 - **Not implemented** (LWM has no icon display UI).
@@ -343,18 +346,16 @@ Types to support (in priority order, first match wins):
 - Initiate close (send `WM_DELETE_WINDOW` or destroy).
 
 #### _NET_MOVERESIZE_WINDOW
-- Apply gravity-adjusted move/resize.
-- Honor flags for which fields to apply.
-- Respect size hints (minimum dimensions enforced).
-- **Limitation**: Only supported for **floating windows**. Requests for tiled windows are ignored
-  (tiled window geometry is controlled by the tiling layout).
-- **Limitation**: Gravity parameter is currently ignored; position is applied directly.
+- Apply gravity-adjusted move/resize
+- Honor flags for which fields to apply
+- Respect size hints (minimum dimensions enforced)
+- **Limitation**: Only supported for **floating windows**. Requests for tiled windows are ignored (tiling geometry controlled by layout)
+- **Limitation**: Gravity parameter ignored; position is applied directly
 
 #### _NET_WM_MOVERESIZE
-- Initiate interactive move or resize based on direction.
-- Cancel ongoing operation if `_NET_WM_MOVERESIZE_CANCEL`.
-- **Limitation**: Only supported for **floating windows**. Tiled windows cannot be interactively
-  moved/resized via this mechanism (use keybindings or mouse drag with modifier).
+- Initiate interactive move or resize based on direction
+- Cancel ongoing operation if `_NET_WM_MOVERESIZE_CANCEL`
+- **Limitation**: Only supported for **floating windows**. Tiled windows cannot be interactively moved/resized via this mechanism (use keybindings or mouse drag with modifier)
 
 #### _NET_RESTACK_WINDOW
 - Restack window relative to sibling.
@@ -383,31 +384,29 @@ Types to support (in priority order, first match wins):
 
 ### 5. Focus Stealing Prevention
 
-- Track `_NET_WM_USER_TIME` for windows.
-- Support `_NET_WM_USER_TIME_WINDOW`: if set, read user time from the specified window.
+- Track `_NET_WM_USER_TIME` for windows
+- Support `_NET_WM_USER_TIME_WINDOW`: if set, read user time from the specified window
 - Compare timestamps when handling `_NET_ACTIVE_WINDOW`:
-  - Source indication 1 (application): apply prevention.
-  - Source indication 2 (pager/user): allow activation.
-- For prevented activations: set `_NET_WM_STATE_DEMANDS_ATTENTION`.
-- User time is also updated when windows receive focus.
+   - Source indication 1 (application): apply prevention
+   - Source indication 2 (pager/user): allow activation
+- For prevented activations: set `_NET_WM_STATE_DEMANDS_ATTENTION`
+- User time is also updated when windows receive focus
 
 ### 6. WM Protocols (EWMH Extensions)
 
 #### _NET_WM_PING
-- Send via `WM_PROTOCOLS` format to check client liveness.
-- Track response; consider hung if no reply within timeout.
-- Use `_NET_WM_PID` and `WM_CLIENT_MACHINE` to offer kill option.
+- Send via `WM_PROTOCOLS` format to check client liveness
+- Track response; consider hung if no reply within timeout
+- Use `_NET_WM_PID` and `WM_CLIENT_MACHINE` to offer kill option
 - **Kill behavior**: When closing a window:
-  1. Send `WM_DELETE_WINDOW` to request graceful close.
-  2. Send `_NET_WM_PING` to check if window is responsive.
-  3. If ping response received: Window is responsive, let it close naturally (cancel force kill).
-  4. If ping times out (5 seconds): Window is hung, force kill it.
+    1. Send `WM_DELETE_WINDOW` to request graceful close
+    2. Send `_NET_WM_PING` to check if window is responsive
+    3. If ping response received: Window is responsive, let it close naturally (cancel force kill)
+    4. If ping times out (5 seconds): Force kill
 
 #### _NET_WM_SYNC_REQUEST
-- Send before WM-initiated resizes.
-- **Note**: Sync requests are sent without blocking (fire-and-forget). We do not wait
-  for the client to update its counter, as blocking would impact event loop responsiveness.
-  This is consistent with how most tiling WMs handle sync requests.
+- Send before WM-initiated resizes
+- **Note**: Sync requests sent without blocking (fire-and-forget). We do not wait for client to update its counter, as blocking would impact event loop responsiveness. This is consistent with how most tiling WMs handle sync requests
 
 ### 7. Compositing Manager Interaction
 
@@ -419,10 +418,10 @@ Types to support (in priority order, first match wins):
 
 ## Startup Notification Protocol (Optional)
 
-- Monitor `_NET_STARTUP_ID` on new windows.
-- Match to pending startup sequences.
-- Complete sequences and remove visual feedback.
-- Apply workspace/focus from startup notification.
+- Monitor `_NET_STARTUP_ID` on new windows
+- Match to pending startup sequences
+- Complete sequences and remove visual feedback
+- Apply workspace/focus from startup notification
 
 ---
 
@@ -437,52 +436,49 @@ Types to support (in priority order, first match wins):
 ## System Tray Protocol (Optional)
 
 If implementing system tray support:
-- Claim `_NET_SYSTEM_TRAY_S{screen}` selection.
-- Handle `_NET_SYSTEM_TRAY_OPCODE` messages.
-- Embed tray icons via reparenting.
-- Support `_NET_SYSTEM_TRAY_ORIENTATION`.
+- Claim `_NET_SYSTEM_TRAY_S{screen}` selection
+- Handle `_NET_SYSTEM_TRAY_OPCODE` messages
+- Embed tray icons via reparenting
+- Support `_NET_SYSTEM_TRAY_ORIENTATION`
 
 ---
 
 ## Invariants and Consistency Requirements
 
-1. **_NET_SUPPORTED Accuracy**: Every atom in `_NET_SUPPORTED` must have working implementation.
+1. **_NET_SUPPORTED Accuracy**: Every atom in `_NET_SUPPORTED` must have working implementation
 
-2. **Window State Application Ordering**: Geometry-affecting states MUST be applied BEFORE
-   the window is mapped. This prevents "flash" artifacts where windows briefly render at
-   wrong geometry before jumping to correct position. While ICCCM and EWMH do not specify
-   this ordering, it is a design principle for visual correctness.
+2. **Window State Application Ordering**: Geometry-affecting states MUST be applied BEFORE the window is mapped. This prevents "flash" artifacts where windows briefly render at wrong geometry. While ICCCM and EWMH do not specify this ordering, it is a design principle for visual correctness.
 
-   Geometry-affecting states:
-   - `_NET_WM_STATE_FULLSCREEN` - Changes geometry to monitor bounds
-   - `_NET_WM_STATE_MAXIMIZED_HORZ/VERT` - Changes geometry to working area
-   - `_NET_WM_STATE_SHADED` - Affects height (implemented as iconify)
+    Geometry-affecting states:
+    - `_NET_WM_STATE_FULLSCREEN` - Changes geometry to monitor bounds
+    - `_NET_WM_STATE_MAXIMIZED_HORZ/VERT` - Changes geometry to working area
+    - `_NET_WM_STATE_SHADED` - Affects height (implemented as iconify)
 
-   The ordering contract:
-   1. Create Client record with all state flags read from window properties
-   2. Determine window type (tiled/floating/dock/etc.)
-   3. Apply geometry-affecting states that change placement calculation
-   4. Calculate and configure final geometry
-   5. Map the window
-   6. Apply non-geometry states (above, below, skip_taskbar, etc.)
+    Ordering contract:
+    1. Create Client record with all state flags read from window properties
+    2. Determine window type (tiled/floating/dock/etc.)
+    3. Apply geometry-affecting states that change placement calculation
+    4. Calculate and configure final geometry
+    5. Map the window
+    6. Apply non-geometry states (above, below, skip_taskbar, etc.)
 
 3. **State Consistency**:
-   - `WM_STATE=IconicState` ↔ `_NET_WM_STATE` contains `HIDDEN`.
-   - `_NET_ACTIVE_WINDOW` = None ↔ no window has input focus.
-   - `_NET_CLIENT_LIST` contains exactly all managed, non-override-redirect windows.
-   - `_NET_CLIENT_LIST_STACKING` has same windows as `_NET_CLIENT_LIST`.
+    - `WM_STATE=IconicState` ↔ `_NET_WM_STATE` contains `HIDDEN`
+    - `_NET_ACTIVE_WINDOW` = None ↔ no window has input focus
+    - `_NET_CLIENT_LIST` contains exactly all managed, non-override-redirect windows
+    - `_NET_CLIENT_LIST_STACKING` has same windows as `_NET_CLIENT_LIST`
 
 4. **Desktop Consistency**:
-   - `_NET_CURRENT_DESKTOP` < `_NET_NUMBER_OF_DESKTOPS`.
-   - All window `_NET_WM_DESKTOP` values are valid or 0xFFFFFFFF.
+    - `_NET_CURRENT_DESKTOP` < `_NET_NUMBER_OF_DESKTOPS`
+    - All window `_NET_WM_DESKTOP` values are valid or 0xFFFFFFFF
 
 5. **Workarea Accuracy**:
-   - `_NET_WORKAREA` reflects all active struts.
-   - Updated immediately when struts change.
+    - `_NET_WORKAREA` reflects all active struts
+    - Updated immediately when struts change
 
 6. **Frame Extents**:
-   - `_NET_FRAME_EXTENTS` set before and after mapping.
-   - Accurate for frame geometry calculations.
+    - `_NET_FRAME_EXTENTS` set before and after mapping
+    - Accurate for frame geometry calculations
 
 ---
 

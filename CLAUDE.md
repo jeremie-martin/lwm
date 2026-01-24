@@ -1,6 +1,28 @@
 # CLAUDE.md
 
+> **Documentation Navigation**
+> - Previous: [README.md](README.md) (Quick start) | [BEHAVIOR.md](BEHAVIOR.md) (User-facing behavior)
+> - Related: [COMPLIANCE.md](COMPLIANCE.md) (Protocol requirements)
+
 This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
+
+## Quick Reference
+
+**Core files** (~5996 lines total):
+- `wm.cpp` (~2450) - Main window management, workspace/monitor operations, EWMH updates
+- `wm_events.cpp` (~1638) - XCB event handlers (switch on response_type)
+- `wm_floating.cpp` (~557) - Floating window management
+- `wm_focus.cpp` (~490) - Focus handling logic
+- `wm_workspace.cpp` (~336) - Workspace switching, toggling, moving windows
+- `wm_ewmh.cpp` (~271) - EWMH protocol handling
+- `wm_drag.cpp` (~254) - Mouse drag state machine
+
+**Key types** (`src/lwm/core/types.hpp`):
+- `Client` - Authoritative state for all windows
+- `Workspace` - Tiled window list + focus tracking
+- `Monitor` - RANDR output with workspaces, struts
+
+---
 
 ## Quick Commands
 
@@ -37,11 +59,6 @@ find src -name '*.cpp' -o -name '*.hpp' | xargs clang-format -i
 make clean      # Remove build directory
 ```
 
-**Debug build:**
-```bash
-cmake -DCMAKE_BUILD_TYPE=Debug ..
-```
-
 ## Architecture
 
 LWM is a minimal tiling window manager for X11 written in C++23. It follows a centralized architecture with the WindowManager orchestrating all components.
@@ -58,14 +75,14 @@ LWM is a minimal tiling window manager for X11 written in C++23. It follows a ce
 └─────────────────────────────────────────────────────────────────┘
          ↓                    ↓                    ↓
   ┌────────────┐    ┌──────────┐    ┌──────────┐
-  │   Ewmh     │    │  Layout   │    │ StatusBar │
-  │  Protocol  │    │  Tiling   │    │ (opt)    │
+  │   Ewmh     │    │  Layout   │    │  Focus    │
+  │  Protocol  │    │  Tiling   │    │  utils    │
   └────────────┘    └──────────┘    └──────────┘
-         ↑                    ↑                ↑
-  ┌────────────┐    ┌──────────┐    ┌──────────┐
-  │ Connection │    │KeybindMgr│    │  Focus    │
-  │ XCB wrapper│    │          │    │  utils    │
-  └────────────┘    └──────────┘    └──────────┘
+         ↑                    ↑
+  ┌────────────┐    ┌──────────┐
+  │ Connection │    │KeybindMgr│
+  │ XCB wrapper│    │          │
+  └────────────┘    └──────────┘
          ↓
   ┌────────────┐
   │  Config    │
@@ -73,21 +90,18 @@ LWM is a minimal tiling window manager for X11 written in C++23. It follows a ce
   └────────────┘
 ```
 
-**Key source files:**
-- `wm.cpp`: Core logic (~3500 lines) - window management, workspace/monitor operations, EWMH updates
-- `wm_events.cpp`: Event handlers (~1300 lines) - all XCB event handlers in switch on response_type
-- `wm_drag.cpp`: Mouse drag state machine (~250 lines) - tiled reorder and floating move/resize
-
 **Key data structures** (in `core/types.hpp`):
 - `Client`: Authoritative source of truth for all window state (kind, monitor, workspace, state flags, geometry)
 - `Workspace`: Ordered list of tiled windows + focused window tracking
 - `Monitor`: RANDR output with geometry, workspaces, struts, bar window
 
+For detailed specifications of state machines, invariants, and event handling logic, see [COMPLETE_STATE_MACHINE.md](COMPLETE_STATE_MACHINE.md).
+
 ## Adding Features
 
 **New keybind action:**
 1. Handle action string in `wm_events.cpp` handle_key_press
-2. Parse in `config.cpp`
+2. Parse in `config/config.cpp`
 3. Document in `config.toml.example`
 
 **New window state:**
@@ -120,14 +134,18 @@ Debug builds enable:
 ## Testing
 
 Tests use Catch2. Test files in `tests/`:
+- `test_client_state_policy.cpp`, `test_window_rules.cpp`
 - `test_focus_policy.cpp`, `test_focus_restoration_policy.cpp`, `test_focus_visibility_policy.cpp`
+- `test_focus_cycling_policy.cpp`
 - `test_workspace.cpp`, `test_workspace_policy.cpp`
 - `test_floating_policy.cpp`, `test_layout_policy.cpp`
+- `test_multimonitor_policy.cpp`
 - `test_ewmh_classification.cpp`, `test_ewmh_policy.cpp`
 - `test_integration_focus.cpp` - X11 integration tests
 
 ## Related Documentation
 
 - **BEHAVIOR.md**: High-level behavior specification (focus policy, workspace model, drag semantics)
+- **COMPLETE_STATE_MACHINE.md**: Complete implementation specification (states, transitions, invariants)
 - **COMPLIANCE.md**: ICCCM/EWMH protocol compliance requirements
 - **SPEC_CLARIFICATIONS.md**: Design decisions on ambiguous spec points

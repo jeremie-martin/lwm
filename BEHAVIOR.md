@@ -1,7 +1,11 @@
 # LWM Behavior Specification
 
+> **Documentation Navigation**
+> - Previous: [README.md](README.md) (Quick start)
+> - Related: [CLAUDE.md](CLAUDE.md) (Development guide) | [COMPLIANCE.md](COMPLIANCE.md) (Protocol requirements)
+
 This document defines the **high-level, user-visible behavior** of LWM, independent of implementation.
-Protocol compliance obligations (ICCCM/EWMH, property/message semantics) are defined in COMPLIANCE.md
+Protocol compliance obligations (ICCCM/EWMH, property/message semantics) are defined in [COMPLIANCE.md](COMPLIANCE.md)
 and are not duplicated here.
 
 ---
@@ -14,21 +18,18 @@ and are not duplicated here.
 - Exactly one monitor is the **active monitor** at any time.
 
 ### 1.2 Workspaces
-- Each monitor has N workspaces (configurable; commonly 0–9).
+
+- Each monitor has N workspaces (configurable; commonly 0-9).
 - Exactly **one workspace per monitor is visible** at a time.
 - Each workspace maintains:
-  - an ordered list of **tiled** windows (the tiling layout order)
+  - an ordered list of **tiled** windows (tiling layout order)
   - a remembered "last-focused" tiled window (if any)
-- **Floating windows** are tracked separately at the window manager level:
-  - They are associated with a monitor and workspace but stored in a separate list.
-  - Workspace focus memory tracks only tiled windows; if the last-focused window was floating,
-    focus restoration may fall back to a tiled window or none.
-- **Implementation Note**: All window state (fullscreen, iconic, sticky, above, below, maximized,
-  shaded, modal) is stored in a unified `Client` record. The tiled/floating distinction affects
-  only layout participation and workspace storage, not state management.
+- **Floating windows** are tracked globally with explicit monitor/workspace association. Focus restoration searches floating windows in MRU order (workspace focus memory tracks only tiled windows).
+
+**Implementation Note**: All window state (fullscreen, iconic, sticky, above, below, maximized, shaded, modal) is stored in a unified `Client` record. The tiled/floating distinction affects only layout participation and workspace storage.
 
 ### 1.3 Window Classes (Behavioral)
-Once classified, windows behave as follows:
+
 - **Tiled**: participates in the workspace tiling layout.
 - **Floating**: positioned independently; does not affect the tiling layout.
 - **Panels/Docks** (`_NET_WM_WINDOW_TYPE_DOCK`):
@@ -37,36 +38,34 @@ Once classified, windows behave as follows:
   - Do not participate in workspace membership or normal focus.
   - Always visible across all workspaces (effectively sticky).
   - Stacked above normal windows but below fullscreen.
-  - See SPEC_CLARIFICATIONS.md for rationale.
 - **Desktop Windows** (`_NET_WM_WINDOW_TYPE_DESKTOP`):
   - Positioned below all other windows.
   - Not focus-eligible; do not participate in workspace membership.
-- **Ephemeral Popups** (menus/tooltips/notifications): may be displayed but do not behave like
-  normal managed windows (do not participate in tiling, workspace membership, or normal focus).
+- **Ephemeral Popups** (menus/tooltips/notifications): mapped directly without full management; do not participate in tiling, workspace membership, or normal focus.
 
-(Exact classification signals are defined in COMPLIANCE.md.)
+(Exact classification signals are defined in [COMPLIANCE.md](COMPLIANCE.md#_net_wm_window_type); see also [SPEC_CLARIFICATIONS.md](SPEC_CLARIFICATIONS.md#4-popephemeral-window-handling).)
 
 ### 1.4 Visibility
-- A window is **visible** iff it belongs to the monitor's currently visible workspace,
-  except for special visibility rules (see §1.5 Sticky Windows).
+- A window is **visible** iff it belongs to the monitor's currently visible workspace, except for special visibility rules (see §1.5 Sticky Windows).
 - Only visible windows may be focused.
 
 ### 1.5 Sticky Windows
+
 **Sticky windows** have special visibility rules:
-- A sticky window is **visible on all workspaces of its owning monitor** (not globally across all monitors).
-- Sticky windows are included in layout regardless of which workspace is currently active on their monitor.
-- **Focusing a sticky window does NOT switch workspaces**. The current workspace remains unchanged.
-- Sticky state is indicated by:
-  - `_NET_WM_STATE_STICKY` in the window's state atoms.
-  - `_NET_WM_DESKTOP = 0xFFFFFFFF` (per EWMH specification).
-- Sticky scope is per-monitor: a sticky window on monitor A is NOT visible on monitor B.
+- Visible on all workspaces of their owning monitor (not globally across monitors).
+- Included in layout regardless of which workspace is currently active.
+- **Focusing a sticky window does NOT switch workspaces** (current workspace remains unchanged).
+- Sticky state is indicated by `_NET_WM_STATE_STICKY` and `_NET_WM_DESKTOP = 0xFFFFFFFF` (per EWMH).
+
+See [SPEC_CLARIFICATIONS.md](SPEC_CLARIFICATIONS.md#3-sticky-window-scope) for design rationale on per-monitor scope.
 
 ### 1.6 EWMH Desktop Mapping (Per-Monitor Workspaces)
-LWM uses per-monitor workspaces and maps them into EWMH desktops as follows:
-- `_NET_NUMBER_OF_DESKTOPS = monitors * workspaces_per_monitor`.
-- Desktop index = `monitor_index * workspaces_per_monitor + workspace_index`.
-- `_NET_CURRENT_DESKTOP` reflects the **active monitor’s** current workspace only.
-- `_NET_DESKTOP_VIEWPORT` repeats each monitor’s origin per workspace slot.
+LWM uses per-monitor workspaces mapped to EWMH desktops:
+- `_NET_NUMBER_OF_DESKTOPS = monitors * workspaces_per_monitor`
+- Desktop index = `monitor_index * workspaces_per_monitor + workspace_index`
+- `_NET_CURRENT_DESKTOP` reflects the **active monitor's** current workspace only
+- `_NET_DESKTOP_VIEWPORT` repeats each monitor's origin per workspace slot
+
 This mapping is intentionally per-monitor; some pagers may assume global desktops.
 
 ---
@@ -79,29 +78,19 @@ This mapping is intentionally per-monitor; some pagers may assume global desktop
 
 ### 2.2 Focus-Follows-Mouse (FFM)
 - When the pointer enters a focus-eligible window, that window becomes focused.
-- **Motion within a window**: If the pointer moves within a focus-eligible window that is not
-  currently focused, that window gains focus. This handles the case where a new window took
-  focus (per §5.2), but the cursor remained in a different window.
-- **Click within a window**: Clicking within a focus-eligible window focuses it, even without
-  modifier keys.
+- **Motion within a window**: If the pointer moves within a focus-eligible window that is not currently focused, that window gains focus. This handles cases where a new window took focus (per §5.2) while the cursor remained in a different window.
+- **Click within a window**: Clicking a focus-eligible window focuses it.
+
+See [COMPLETE_STATE_MACHINE.md](COMPLETE_STATE_MACHINE.md#focus-policy) for implementation details on focus eligibility and event handling.
 
 ### 2.3 Empty Space Semantics (Key Multi-Monitor Behavior)
-LWM defines focus behavior for pointer movement over “gaps/background” as follows:
 
-1) **Empty space on the same monitor**
-- Moving the pointer onto empty space (background/gaps) on the **same monitor** does **not**
-  change focus.
-- The previously focused window remains focused.
+LWM defines focus behavior for pointer movement over empty space:
 
-2) **Crossing to a different monitor**
-- When the pointer crosses onto a **different monitor**, that monitor becomes the **active monitor**.
-
-3) **Empty space on a different monitor**
-- If the pointer is on empty space of the **other** monitor, global focus is **cleared**
-  (no window is focused).
-
-4) **Entering a window on the other monitor**
-- As soon as the pointer enters any focus-eligible window on that monitor, that window becomes focused.
+1. **Empty space on the same monitor**: Focus does not change; remains on the previously focused window.
+2. **Crossing to a different monitor**: The target monitor becomes the active monitor.
+3. **Empty space on a different monitor**: Global focus is cleared (no window is focused).
+4. **Entering a window on the other monitor**: The entered window becomes focused immediately.
 
 ### 2.4 Focus Restoration
 When the focused window disappears or becomes ineligible:
@@ -161,21 +150,19 @@ When a new window appears:
   - Tiled windows appear on the active monitor’s visible workspace.
 
 ### 5.2 Default Focus on New Windows
+
 - By default, a newly created window **receives focus** if it is focus-eligible and visible.
-- Exceptions are permitted when required by COMPLIANCE.md (e.g., initial iconic state, focus-ineligible
-  windows, or focus-stealing prevention constraints).
-- **Interaction with FFM**: When a new window takes focus, if the cursor is physically inside
-  another window, that other window regains focus as soon as the user moves or clicks within it
-  (see §2.2 Focus-Follows-Mouse).
+- Exceptions are permitted when required by COMPLIANCE.md (e.g., initial iconic state, focus-ineligible windows, or focus-stealing prevention constraints).
+- **Interaction with FFM**: When a new window takes focus, if the cursor is inside another window, that window regains focus on motion or click (see §2.2).
 
 ---
 
 ## 6. Floating Windows
 
 ### 6.1 Association and Visibility
-- Floating windows are associated with a monitor and workspace, and appear/disappear with that workspace.
-- Unlike tiled windows (stored per-workspace), floating windows are tracked in a separate global list
-  with explicit monitor/workspace association. This affects focus restoration (see §1.2).
+
+- Floating windows are associated with a monitor and workspace, appearing/disappearing with that workspace.
+- Unlike tiled windows (stored per-workspace), floating windows are tracked in a separate global list with explicit monitor/workspace association. This affects focus restoration (see §1.2).
 
 ### 6.2 Placement and Interaction
 - Floating windows appear in a sensible default position (e.g., centered on usable area or relative
@@ -229,13 +216,12 @@ How the drop position maps to an insertion index is layout-dependent.
 ## 9. Window Rules
 
 ### 9.1 Overview
-Window rules allow automatic configuration of windows based on their properties (class, instance, title, type).
-Rules are applied at map time (when the window first appears) and provide a way to customize
-window behavior beyond EWMH classification.
+Window rules configure windows automatically based on properties (class, instance, title, type).
+Rules are applied at map time (when the window first appears) to customize behavior beyond EWMH classification.
 
 ### 9.2 Rule Evaluation
 - Rules are defined in configuration as an ordered list.
-- **First-match-wins**: The first rule whose criteria match is applied; subsequent rules are ignored.
+- **First-match-wins**: The first matching rule is applied; subsequent rules are ignored.
 - An empty criteria set matches all windows.
 
 ### 9.3 Matching Criteria
@@ -266,10 +252,12 @@ When a rule matches, the following actions can be applied:
 - Rules can override the tiled/floating decision for normal windows.
 - EWMH state atoms are set according to rule actions (e.g., sticky, above, below).
 
+For detailed EWMH window type handling and precedence, see [COMPLIANCE.md](COMPLIANCE.md#_net_wm_window_type).
+
 ---
 
 ## 10. Non-Goals for This Document
 - Protocol-level property/message requirements (COMPLIANCE.md).
-- Internal data structures, event names, or flowcharts tied to X11 mechanics.
+- Internal data structures, event names, or X11-specific mechanics.
 - Exact keybinding tables (configuration-level documentation).
-- Hardcoded visuals (borders/colors), unless explicitly part of the product spec.
+- Hardcoded visuals (borders/colors), unless part of the product spec.
