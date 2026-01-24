@@ -13,11 +13,10 @@
 10. [Floating Windows](#floating-windows)
 11. [Drag Operations](#drag-operations)
 12. [Focus System](#focus-system)
-13. [Protocol Compliance](#protocol-compliance)
-   - [ICCCM Compliance](#icccm-compliance)
-   - [EWMH Protocol](#ewmh-protocol)
-   - [WM_TAKE_FOCUS Protocol](#wm_take_focus-protocol)
-14. [Auto-Repeat Detection](#auto-repeat-detection)
+    - [Auto-Repeat Detection](#auto-repeat-detection)
+    - [WM_TAKE_FOCUS Protocol](#wm_take_focus-protocol)
+13. [ICCCM Compliance](#icccm-compliance)
+14. [EWMH Protocol](#ewmh-protocol)
 15. [Configuration](#configuration)
 16. [Special Behaviors](#special-behaviors)
 
@@ -222,6 +221,25 @@ struct FullscreenMonitors {
 - Workspace vectors are derived (organization state)
 - All other structures reference `clients_`
 
+### Data Structure Relationships
+
+**Monitor → Workspace containment:**
+- Each Monitor contains a vector of Workspace objects
+- Monitors track current_workspace and previous_workspace indices
+- Workspaces belong to exactly one monitor
+
+**Window containment (one-to-many):**
+- Each window appears in exactly one container based on kind:
+  - Kind::Tiled → Appears in exactly one Workspace::windows vector
+  - Kind::Floating → Appears in exactly one floating_windows_ entry
+  - Kind::Dock → Appears in exactly one dock_windows_ entry
+  - Kind::Desktop → Appears in exactly one desktop_windows_ entry
+- All managed windows appear in clients_ registry (unified source of truth)
+
+**Cross-references:**
+- FloatingWindow.geometry ↔ Client.floating_geometry (synchronized via apply_floating_geometry())
+- Workspace.focused_window references a window ID (best-effort hint)
+
 ### State Synchronization Guarantees
 
 1. **Client ↔ EWMH**: Every state flag change updates EWMH property
@@ -238,13 +256,6 @@ struct FullscreenMonitors {
    - `client.monitor < monitors.size()`
    - `client.workspace < monitors[monitor].workspaces.size()`
 - Dock/Desktop kinds have monitor/workspace fields but they are meaningless
-
-**Each window appears in exactly one window-specific container based on kind:**
-- Kind::Tiled → Appears in exactly one Workspace::windows
-- Kind::Floating → Appears in exactly one floating_windows_ entry
-- Kind::Dock → Appears in exactly one dock_windows_ entry
-- Kind::Desktop → Appears in exactly one desktop_windows_ entry
-- All windows appear in clients_ registry (unified source of truth)
 
 **client.order values are unique and monotonically increasing:**
 - Assigned via next_client_order_++ on window management
@@ -299,7 +310,7 @@ struct FullscreenMonitors {
 - May reference an iconic or focus-ineligible window
 - select_focus_candidate() validates existence and eligibility before using it
 - If validation fails, falls back to reverse iteration (MRU order)
-- Updated using reverse iteration to skip iconic windows when selecting new focused window
+- When updating after window removal, set to `workspace.windows.back()` or XCB_NONE if empty
 
 **Window is visible IF:**
 - NOT client.hidden
@@ -417,14 +428,15 @@ Implementation details:
 - Sets client.hidden=false only
 - Does NOT send configure events or restore position
 - Caller must call:
-  - rearrange_monitor() for tiled windows
-  - apply_floating_geometry() for floating windows
-- Desktop windows are always on-screen, no restoration needed
+   - rearrange_monitor() for tiled windows
+   - apply_floating_geometry() for floating windows
+- Desktop windows: never call hide_window/show_window() on them, so hidden flag is never set; they are always positioned as background windows below all others
 
 Implementation details:
 - Only clears client->hidden flag
 - Does NOT configure geometry or call flush
 - Caller is responsible for geometry restoration
+- Desktop windows are handled by NOT calling hide/show on them (they are managed as background windows, not via visibility control)
 
 ---
 
@@ -782,7 +794,7 @@ If disabled:
     - hide_window() returns early for sticky windows (doesn't set hidden=true or move off-screen)
     - Window remains at on-screen positioned (hidden=false) but marked as minimized
     - Result: Iconic sticky windows have iconic=true but hidden=false (marked as minimized but remain at their on-screen position)
-    - **Note**: While iconic sticky windows are on-screen positioned, they are NOT focusable and do not receive input focus until deiconified (blocked by iconic focus barrier at is_client_iconic() check, not a structural is_focus_eligible() issue).
+    - **Note**: Iconic sticky windows are not focusable while iconic; focusing them will trigger deiconification first via focus_window().
 
 **Sticky Window Becoming Non-Sticky**:
 - If set_window_sticky(false) is called on an iconic window:
@@ -812,7 +824,7 @@ Set WM_STATE = Withdrawn
     ↓
 Erase from clients_, remove from workspace/floating
     ↓
-Update workspace.focused_window (reverse iteration to skip iconic windows)
+Update workspace.focused_window (set to workspace.windows.back() or XCB_NONE if empty)
     ↓
 If was active_window_:
     ├─ If removed window's workspace is the **current workspace** of its monitor AND that monitor is the currently focused monitor:
@@ -825,7 +837,7 @@ Update _NET_CLIENT_LIST, bars
 
 **Focus Restoration Policy**:
 - Two-tier focus restoration model:
-  1. **Workspace focus memory** (tiled windows only): Each Workspace.focused_window stores the last-focused tiled window. Only tiled windows are remembered per-workspace (by design). This is a **best-effort** value that may become stale (e.g., after window removal, when the focused window moves to a different workspace). Callers validate existence and eligibility before using it (e.g., select_focus_candidate() validates it before using it).
+  1. **Workspace focus memory** (tiled windows only): Each Workspace.focused_window stores the last-focused tiled window. Only tiled windows are remembered per-workspace (by design). When updating after window removal, it's set to `workspace.windows.back()` (most recent window) or XCB_NONE if empty. This is a **best-effort** value that may become stale (e.g., after window removal, when the focused window moves to a different workspace). Callers validate existence and eligibility before using it (e.g., select_focus_candidate() validates it before using it; if invalid, falls back to reverse iteration through workspace.windows).
   2. **Global floating window search** (MRU order): When workspace focus memory is not applicable, floating_windows_ is searched in reverse iteration (MRU) for fallback focus restoration.
 
 **Note**: The conditional logic ensures focus is only restored when the removed window was on the **current workspace** of its monitor AND that monitor is the currently focused monitor. If a window on a different workspace (even on the same monitor) or on a different monitor is removed, focus doesn't need to be restored on the currently viewed workspace.
@@ -894,7 +906,7 @@ run()
 | KeyPress | handle_key_press | Execute keybind actions |
 | KeyRelease | handle_key_release | Track for auto-repeat |
 | ClientMessage | handle_client_message | EWMH/ICCCM commands |
- | ConfigureRequest | handle_configure_request | Geometry requests. Tiled: send synthetic ConfigureNotify. Floating: apply within size hints. Fullscreen: apply fullscreen geometry. For hidden windows: Request applies but window remains off-screen (client receives ConfigureNotify confirming off-screen position). |
+ | ConfigureRequest | handle_configure_request | Geometry requests. Tiled: send synthetic ConfigureNotify. Floating: apply within size hints. Fullscreen: apply fullscreen geometry. For hidden windows: Request applies but window remains off-screen (client receives ConfigureNotify confirming off-screen position). Note: This is indirect behavior - handle_configure_request() doesn't check hidden; it just applies the geometry. Since hidden windows are at OFF_SCREEN_X, they remain off-screen unless the client specifically requests a new x coordinate. |
  | PropertyNotify | handle_property_notify | State changes, title, hints, sync counter, struts, user_time_window indirection for _NET_WM_USER_TIME |
 | Expose | handle_expose | Redraw status bars. Checks e.count != 0 to filter redundant events (only redraw on last one). Finds which monitor's bar window received the expose and calls bar_->update() with current window information. Only acts if bar_ is enabled. |
 | SelectionClear | (handled in run) | New WM taking over, exit |
@@ -1008,13 +1020,17 @@ is_focus_eligible(window) =
 The following conditions can prevent focus even for focus-eligible windows:
 1. **showing_desktop_ == true** - Blocks all focus except desktop mode exit
 2. **client.hidden == true** - Off-screen windows (filtered in event handlers)
-3. **is_client_iconic(window)** - Minimized windows
+3. **iconic windows** - For NON-STICKY windows: iconic ⇒ hidden, so they are blocked by hidden check. For sticky windows: iconic windows have hidden=false but are still blocked from receiving focus because they are filtered as iconic in focus operations.
 4. **Windows on non-visible workspaces** - Wrong workspace
+
+**Note**: The iconic barrier is NOT checked in is_focus_eligible(). Instead, iconic windows are blocked in two ways:
+- NON-STICKY iconic windows: iconic ⇒ hidden (via hide_window()), so they are filtered by the hidden check in event handlers
+- STICKY iconic windows: These have hidden=false (hide_window() returns early for sticky windows) but cannot receive focus because deiconification is required before focusing; focus operations explicitly check and handle iconic windows
 
 **Monitor Crossing**
 - Pointer moves to different monitor → Set `focused_monitor_` to new monitor (via update_focused_monitor_at_point())
-- `focused_monitor_` update does NOT automatically clear focus
-- Focus is cleared only when pointer enters root window (empty space) or unmanaged area
+- `focused_monitor_` update may clear focus: When pointer enters root window or an unmanaged area, `focus::pointer_move()` returns `clear_focus=true`, triggering `clear_focus()`
+- Focus is NOT cleared when pointer enters a managed window on the new monitor
 - If pointer lands directly on a window on new monitor → that window becomes focused
 - If pointer lands on empty space (root window) → Focus remains cleared until pointer enters a window
 
@@ -1025,7 +1041,7 @@ The following conditions can prevent focus even for focus-eligible windows:
 
 Two-tier focus restoration model:
 
-1. **Workspace focus memory** (tiled windows only): Each Workspace.focused_window stores the last-focused tiled window. Only tiled windows are remembered per-workspace (by design). This is a **best-effort** value that may become stale (e.g., after window removal, when the focused window moves to a different workspace). Callers validate existence and eligibility before using it (e.g., select_focus_candidate() validates it before using it).
+1. **Workspace focus memory** (tiled windows only): Each Workspace.focused_window stores the last-focused tiled window. Only tiled windows are remembered per-workspace (by design). When updating after window removal, it's set to `workspace.windows.back()` (most recent window) or XCB_NONE if empty. This is a **best-effort** value that may become stale (e.g., after window removal, when the focused window moves to a different workspace). Callers validate existence and eligibility before using it (e.g., select_focus_candidate() validates it before using it; if invalid, falls back to reverse iteration through workspace.windows).
 2. **Global floating window search** (MRU order): When workspace focus memory is not applicable, floating_windows_ is searched in reverse iteration (MRU) for fallback focus restoration.
 
 **See [Window State Machine → Window Removal](#window-removal) for detailed restoration logic.**
@@ -1121,6 +1137,68 @@ Update bars
 
 ---
 
+## Auto-Repeat Detection
+
+**Purpose**: Prevent toggle_workspace action from rapid-fire execution on key hold.
+
+**Mechanism**:
+- X11 auto-repeat sends: KeyRelease → KeyPress (identical timestamps)
+- LWM tracks: `last_toggle_keysym_` and `last_toggle_release_time_`
+
+```
+toggle_workspace()
+    ├─ On KeyPress:
+    │  ├─ If same_keysym && same_time → BLOCK (auto-repeat)
+    │  └─ Else proceed with workspace switch
+    └─ On KeyRelease:
+       └─ If same_key → Record last_toggle_release_time_
+```
+
+**Implementation Details**:
+- Block occurs if same keysym AND same timestamp as KeyRelease
+- State tracked via last_toggle_keysym_ and last_toggle_release_time_ (wm.hpp lines 124-125)
+- After allowing a new toggle, last_toggle_release_time_ is reset to 0
+- This ensures the next KeyRelease can't match until the next key release cycle
+- Prevents multiple workspace toggles from single key hold
+
+---
+
+## WM_TAKE_FOCUS Protocol
+
+**Purpose**: Support windows with `input=False` in WM_HINTS that cannot receive `SetInputFocus`.
+
+**When Sent**:
+- Always sent when focusing any managed window
+- Sent via `WM_PROTOCOLS` ClientMessage (not directly as TAKE_FOCUS)
+
+**Protocol Flow**:
+```
+focus_window() / focus_floating_window()
+    ↓
+send_wm_take_focus(window, timestamp)
+    ├─ Check WM_PROTOCOLS atom exists
+    ├─ Check window supports WM_TAKE_FOCUS
+    └─ Send ClientMessage with:
+        ├─ type = WM_PROTOCOLS
+        ├─ data[0] = WM_TAKE_FOCUS atom
+        └─ data[1] = timestamp (last_event_time_ or XCB_CURRENT_TIME)
+    ↓
+    └─ Client must call SetInputFocus in response (ICCCM requirement)
+```
+
+**Input Focus Logic**:
+```
+should_set_input_focus(window):
+    ├─ If WM_HINTS not specified → allow (default true)
+    ├─ If WM_HINTS.input == True → allow
+    └─ If WM_HINTS.input == False → disallow
+```
+
+- If allowed: Both WM_TAKE_FOCUS and SetInputFocus sent
+- If disallowed: Only WM_TAKE_FOCUS sent (client must focus itself)
+
+---
+
 ## Workspace Management
 
 ### Workspace Structure
@@ -1173,7 +1251,7 @@ switch_workspace(target_ws)
 ├─ rearrange_monitor(new workspace)
 │  ├─ For each visible window: show_window() (clears hidden flag)
 │  └─ layout_.arrange() (applies on-screen geometry)
-├─ update_floating_visibility(new workspace)
+├─ update_floating_visibility()  ← Show new workspace's floating windows, hide old ones
 ├─ focus_or_fallback(monitor)
 ├─ conn_.flush()  ← Final sync point after all updates
 └─ Update bars
@@ -2015,68 +2093,6 @@ handle_timeouts()
 - names < count → pad with numeric names
 - names > count → truncate
 - Minimum count = 1
-
----
-
-### WM_TAKE_FOCUS Protocol
-
-**Purpose**: Support windows with `input=False` in WM_HINTS that cannot receive `SetInputFocus`.
-
-**When Sent**:
-- Always sent when focusing any managed window
-- Sent via `WM_PROTOCOLS` ClientMessage (not directly as TAKE_FOCUS)
-
-**Protocol Flow**:
-```
-focus_window() / focus_floating_window()
-    ↓
-send_wm_take_focus(window, timestamp)
-    ├─ Check WM_PROTOCOLS atom exists
-    ├─ Check window supports WM_TAKE_FOCUS
-    └─ Send ClientMessage with:
-        ├─ type = WM_PROTOCOLS
-        ├─ data[0] = WM_TAKE_FOCUS atom
-        └─ data[1] = timestamp (last_event_time_ or XCB_CURRENT_TIME)
-    ↓
-    └─ Client must call SetInputFocus in response (ICCCM requirement)
-```
-
-**Input Focus Logic**:
-```
-should_set_input_focus(window):
-    ├─ If WM_HINTS not specified → allow (default true)
-    ├─ If WM_HINTS.input == True → allow
-    └─ If WM_HINTS.input == False → disallow
-```
-
-- If allowed: Both WM_TAKE_FOCUS and SetInputFocus sent
-- If disallowed: Only WM_TAKE_FOCUS sent (client must focus itself)
-
----
-
-## Auto-Repeat Detection
-
-**Purpose**: Prevent toggle_workspace action from rapid-fire execution on key hold.
-
-**Mechanism**:
-- X11 auto-repeat sends: KeyRelease → KeyPress (identical timestamps)
-- LWM tracks: `last_toggle_keysym_` and `last_toggle_release_time_`
-
-```
-toggle_workspace()
-    ├─ On KeyPress:
-    │  ├─ If same_keysym && same_time → BLOCK (auto-repeat)
-    │  └─ Else proceed with workspace switch
-    └─ On KeyRelease:
-       └─ If same_key → Record last_toggle_release_time_
-```
-
-**Implementation Details**:
-- Block occurs if same keysym AND same timestamp as KeyRelease
-- State tracked via last_toggle_keysym_ and last_toggle_release_time_ (wm.hpp lines 124-125)
-- After allowing a new toggle, last_toggle_release_time_ is reset to 0
-- This ensures the next KeyRelease can't match until the next key release cycle
-- Prevents multiple workspace toggles from single key hold
 
 ---
 
