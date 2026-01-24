@@ -17,7 +17,7 @@
 14. [EWMH Protocol](#ewmh-protocol)
 15. [ICCCM Compliance](#icccm-compliance)
 16. [Configuration](#configuration)
-17. [Special Behaviors](#special-behaviors)
+17. [Special Cases](#special-cases)
 
 ---
 
@@ -200,6 +200,20 @@ struct FullscreenMonitors {
 - Struts are aggregated by taking the maximum value for each side
 - For example: If dock A has top=30 and dock B has top=50, the effective top strut is 50
 - This ensures all dock reservations are honored simultaneously
+
+### Key Constants
+
+```cpp
+constexpr int16_t OFF_SCREEN_X = -20000;
+constexpr auto SYNC_WAIT_TIMEOUT = std::chrono::milliseconds(50);  // Sync request timeout
+constexpr auto PING_TIMEOUT = std::chrono::seconds(5);            // Ping response window
+constexpr auto KILL_TIMEOUT = std::chrono::seconds(5);             // Force-kill timeout
+
+// WM_STATE values
+constexpr uint32_t WM_STATE_WITHDRAWN = 0;
+constexpr uint32_t WM_STATE_NORMAL = 1;
+constexpr uint32_t WM_STATE_ICONIC = 3;
+```
 
 ---
 
@@ -537,7 +551,7 @@ MapRequest → classify_window()
 
 ### State Conflicts
 
-- **Modal and Above**: set_window_modal(enabled) calls set_window_above(enabled). set_window_modal(false) calls set_window_above(false). The coupling is one-way from modal to above: set_window_above() can be called independently without affecting modal state.
+- **Modal and Above**: Modal windows are automatically stacked above others (setting modal also sets above). However, the above flag can be set independently without making a window modal. This is one-way coupling: modal ⇒ above, but above ⇏ modal.
 - **Fullscreen and Maximized**: Fullscreen supersedes maximized. When fullscreen is enabled, maximized flags are cleared. Maximization changes are ignored while window is fullscreen.
 - **Above and Below**: Mutually exclusive - a window cannot be both above and below simultaneously.
 - **Fullscreen and Iconic**: Windows can be fullscreen while iconic (off-screen). Fullscreen geometry is applied when window becomes deiconified and on current workspace.
@@ -788,8 +802,8 @@ If disabled:
    - sticky flag is set
    - window remains off-screen (hidden=true, at OFF_SCREEN_X)
    - No call to show_window() occurs
-   - When deiconified, window becomes visible on current workspace, then behaves as sticky on subsequent workspace switches
-
+    - When deiconified, window becomes visible on current workspace, then behaves as sticky on subsequent workspace switches
+ 
 **Sticky Window Becoming Non-Sticky**:
 - If set_window_sticky(false) is called on an iconic window:
    - sticky flag is cleared
@@ -799,27 +813,11 @@ If disabled:
 
 **Fullscreen Window Becoming Sticky**:
 - If sticky is toggled on a fullscreen window:
-  - fullscreen flag remains set
-  - sticky flag is set/cleared
-  - If sticky on non-current workspace: window is off-screen (hidden) but fullscreen flag is set
-  - When switching to its workspace: apply_fullscreen_if_needed() applies fullscreen geometry
+   - fullscreen flag remains set
+   - sticky flag is set/cleared
+   - If sticky on non-current workspace: window is off-screen (hidden) but fullscreen flag is set
+   - When switching to its workspace: apply_fullscreen_if_needed() applies fullscreen geometry
 - Fullscreen windows respect sticky flag for workspace visibility (like normal windows)
-
----
-
-### Key Constants
-
-```cpp
-constexpr int16_t OFF_SCREEN_X = -20000;
-constexpr auto SYNC_WAIT_TIMEOUT = std::chrono::milliseconds(50);  // Sync request timeout
-constexpr auto PING_TIMEOUT = std::chrono::seconds(5);            // Ping response window
-constexpr auto KILL_TIMEOUT = std::chrono::seconds(5);             // Force-kill timeout
-
-// WM_STATE values
-constexpr uint32_t WM_STATE_WITHDRAWN = 0;
-constexpr uint32_t WM_STATE_NORMAL = 1;
-constexpr uint32_t WM_STATE_ICONIC = 3;
-```
 
 ---
 
@@ -2075,16 +2073,7 @@ handle_timeouts()
 
 ---
 
-## Special Behaviors
-
-### Desktop Window Visibility
-
-**Desktop windows (Kind::Desktop) are NEVER hidden by hide_window() and always remain visible:**
-- They are not added to any Workspace::windows list
-- They are stacked below all other windows (STACK_MODE_BELOW on creation)
-- They don't participate in workspace visibility or tiling
-- They remain visible across all workspace switches
-- Desktop windows are always on-screen, regardless of showing_desktop mode
+## Special Cases
 
 ### Focus Suppression During Initial Scan
 
