@@ -9,10 +9,10 @@
  * behavior. All functions are methods of WindowManager.
  */
 
-#include "wm.hpp"
 #include "lwm/core/floating.hpp"
 #include "lwm/core/log.hpp"
 #include "lwm/core/window_rules.hpp"
+#include "wm.hpp"
 #include <xcb/xcb_icccm.h>
 
 namespace lwm {
@@ -66,21 +66,8 @@ void WindowManager::handle_event(xcb_generic_event_t const& event)
         case XCB_UNMAP_NOTIFY:
         {
             auto const& e = reinterpret_cast<xcb_unmap_notify_event_t const&>(event);
-            // ICCCM requires distinguishing WM-initiated unmaps (hide for workspace switch)
-            // from client-initiated unmaps (withdraw request). We track WM-initiated unmaps
-            // and decrement the counter here. If counter reaches zero, the entry is removed.
-            // We receive exactly ONE UnmapNotify per unmap via root's SubstructureNotifyMask
-            // (we intentionally do NOT select STRUCTURE_NOTIFY on client windows).
-            if (auto it = wm_unmapped_windows_.find(e.window); it != wm_unmapped_windows_.end())
-            {
-                if (it->second > 0)
-                {
-                    if (--it->second == 0)
-                        wm_unmapped_windows_.erase(it);
-                    break;
-                }
-            }
-            // Client-initiated unmap - unmanage the window and set WM_STATE to Withdrawn
+            // With off-screen visibility, WM never unmaps windows.
+            // Any UnmapNotify is a client-initiated withdraw request - unmanage the window.
             handle_window_removal(e.window);
             break;
         }
@@ -88,7 +75,6 @@ void WindowManager::handle_event(xcb_generic_event_t const& event)
         {
             auto const& e = reinterpret_cast<xcb_destroy_notify_event_t const&>(event);
             handle_window_removal(e.window);
-            wm_unmapped_windows_.erase(e.window); // Clean up tracking
             break;
         }
         case XCB_ENTER_NOTIFY:
@@ -106,16 +92,24 @@ void WindowManager::handle_event(xcb_generic_event_t const& event)
         case XCB_KEY_PRESS:
         {
             auto const& e = reinterpret_cast<xcb_key_press_event_t const&>(event);
-            LOG_TRACE("EVENT: XCB_KEY_PRESS keycode={} time={} state={:#x}",
-                      static_cast<int>(e.detail), e.time, e.state);
+            LOG_TRACE(
+                "EVENT: XCB_KEY_PRESS keycode={} time={} state={:#x}",
+                static_cast<int>(e.detail),
+                e.time,
+                e.state
+            );
             handle_key_press(e);
             break;
         }
         case XCB_KEY_RELEASE:
         {
             auto const& e = reinterpret_cast<xcb_key_release_event_t const&>(event);
-            LOG_TRACE("EVENT: XCB_KEY_RELEASE keycode={} time={} state={:#x}",
-                      static_cast<int>(e.detail), e.time, e.state);
+            LOG_TRACE(
+                "EVENT: XCB_KEY_RELEASE keycode={} time={} state={:#x}",
+                static_cast<int>(e.detail),
+                e.time,
+                e.state
+            );
             handle_key_release(e);
             break;
         }
@@ -149,8 +143,7 @@ void WindowManager::handle_map_request(xcb_map_request_event_t const& e)
     // Case 1: Already managed window requesting map (deiconify)
     if (auto const* client = get_client(e.window))
     {
-        bool focus = client->monitor < monitors_.size()
-            && client->monitor == focused_monitor_
+        bool focus = client->monitor < monitors_.size() && client->monitor == focused_monitor_
             && client->workspace == monitors_[client->monitor].current_workspace;
         deiconify_window(e.window, focus);
         return;
@@ -169,13 +162,11 @@ void WindowManager::handle_map_request(xcb_map_request_event_t const& e)
     // Match window against user-defined rules
     auto [instance_name, class_name] = get_wm_class(e.window);
     std::string title = get_window_name(e.window);
-    WindowMatchInfo match_info{
-        .wm_class = class_name,
-        .wm_class_name = instance_name,
-        .title = title,
-        .ewmh_type = ewmh_.get_window_type_enum(e.window),
-        .is_transient = has_transient
-    };
+    WindowMatchInfo match_info{ .wm_class = class_name,
+                                .wm_class_name = instance_name,
+                                .title = title,
+                                .ewmh_type = ewmh_.get_window_type_enum(e.window),
+                                .is_transient = has_transient };
     auto rule_result = window_rules_.match(match_info, monitors_, config_.workspaces.names);
 
     // Override classification based on rules (respecting EWMH protocol priorities)
@@ -185,9 +176,8 @@ void WindowManager::handle_map_request(xcb_map_request_event_t const& e)
     {
         if (rule_result.floating.has_value())
         {
-            classification.kind = *rule_result.floating
-                ? WindowClassification::Kind::Floating
-                : WindowClassification::Kind::Tiled;
+            classification.kind =
+                *rule_result.floating ? WindowClassification::Kind::Floating : WindowClassification::Kind::Tiled;
         }
         if (rule_result.skip_taskbar.has_value())
             classification.skip_taskbar = *rule_result.skip_taskbar;
@@ -418,7 +408,7 @@ void WindowManager::handle_map_request(xcb_map_request_event_t const& e)
 
                             // Hide if moved to non-visible workspace
                             if (target_ws != monitors_[target_mon].current_workspace)
-                                wm_unmap_window(e.window);
+                                hide_window(e.window);
                         }
                     }
                 }
@@ -438,8 +428,7 @@ void WindowManager::handle_map_request(xcb_map_request_event_t const& e)
             {
                 if (auto const* client = get_client(e.window))
                 {
-                    if (client->monitor < monitors_.size()
-                        && client->monitor == focused_monitor_
+                    if (client->monitor < monitors_.size() && client->monitor == focused_monitor_
                         && client->workspace == monitors_[client->monitor].current_workspace)
                     {
                         focus_window(e.window);
@@ -461,8 +450,15 @@ void WindowManager::handle_window_removal(xcb_window_t window)
 
 void WindowManager::handle_enter_notify(xcb_enter_notify_event_t const& e)
 {
-    LOG_TRACE("EVENT: EnterNotify event={:#x} root_x={} root_y={} mode={} detail={} time={}",
-              e.event, e.root_x, e.root_y, static_cast<int>(e.mode), static_cast<int>(e.detail), e.time);
+    LOG_TRACE(
+        "EVENT: EnterNotify event={:#x} root_x={} root_y={} mode={} detail={} time={}",
+        e.event,
+        e.root_x,
+        e.root_y,
+        static_cast<int>(e.mode),
+        static_cast<int>(e.detail),
+        e.time
+    );
 
     if (drag_state_.active)
     {
@@ -478,7 +474,11 @@ void WindowManager::handle_enter_notify(xcb_enter_notify_event_t const& e)
     {
         if (e.mode != XCB_NOTIFY_MODE_NORMAL || e.detail == XCB_NOTIFY_DETAIL_INFERIOR)
         {
-            LOG_TRACE("EnterNotify: filtered (mode={} detail={})", static_cast<int>(e.mode), static_cast<int>(e.detail));
+            LOG_TRACE(
+                "EnterNotify: filtered (mode={} detail={})",
+                static_cast<int>(e.mode),
+                static_cast<int>(e.detail)
+            );
             return;
         }
     }
@@ -495,6 +495,13 @@ void WindowManager::handle_enter_notify(xcb_enter_notify_event_t const& e)
     // Case 1: Entering a managed window - focus-follows-mouse
     if (e.event != conn_.screen()->root)
     {
+        // Ignore enter events on hidden (off-screen) windows
+        if (auto const* client = get_client(e.event); client && client->hidden)
+        {
+            LOG_TRACE("EnterNotify: ignored (window is hidden)");
+            return;
+        }
+
         if (find_floating_window(e.event))
         {
             LOG_DEBUG("EnterNotify: focusing floating window {:#x}", e.event);
@@ -525,8 +532,7 @@ void WindowManager::handle_motion_notify(xcb_motion_notify_event_t const& e)
     // Determine which window the pointer is over.
     // Motion events come to root (which selects POINTER_MOTION), with e.child
     // indicating any managed window under the cursor.
-    xcb_window_t window_under_cursor = (e.event == conn_.screen()->root && e.child != XCB_NONE)
-        ? e.child : e.event;
+    xcb_window_t window_under_cursor = (e.event == conn_.screen()->root && e.child != XCB_NONE) ? e.child : e.event;
 
     // Focus-follows-mouse on motion: if motion occurs within a managed window
     // that is not currently focused, focus it. This handles the case where a
@@ -534,12 +540,19 @@ void WindowManager::handle_motion_notify(xcb_motion_notify_event_t const& e)
     // another window. Moving the mouse within that window re-establishes focus.
     if (window_under_cursor != conn_.screen()->root)
     {
+        // Ignore motion events on hidden (off-screen) windows
+        if (auto const* client = get_client(window_under_cursor); client && client->hidden)
+            return;
+
         if (find_floating_window(window_under_cursor))
         {
             if (window_under_cursor != active_window_)
             {
-                LOG_DEBUG("MotionNotify: focusing floating window {:#x} (was {:#x})",
-                          window_under_cursor, active_window_);
+                LOG_DEBUG(
+                    "MotionNotify: focusing floating window {:#x} (was {:#x})",
+                    window_under_cursor,
+                    active_window_
+                );
                 focus_floating_window(window_under_cursor);
             }
             return;
@@ -548,8 +561,7 @@ void WindowManager::handle_motion_notify(xcb_motion_notify_event_t const& e)
         {
             if (window_under_cursor != active_window_)
             {
-                LOG_DEBUG("MotionNotify: focusing tiled window {:#x} (was {:#x})",
-                          window_under_cursor, active_window_);
+                LOG_DEBUG("MotionNotify: focusing tiled window {:#x} (was {:#x})", window_under_cursor, active_window_);
                 focus_window(window_under_cursor);
             }
             return;
@@ -575,6 +587,10 @@ void WindowManager::handle_button_press(xcb_button_press_event_t const& e)
     xcb_window_t target = e.event;
     if (target == conn_.screen()->root && e.child != XCB_NONE)
         target = e.child;
+
+    // Ignore button press on hidden (off-screen) windows
+    if (auto const* client = get_client(target); client && client->hidden)
+        return;
 
     if (auto const* binding = resolve_mouse_binding(e.state, e.detail))
     {
@@ -668,12 +684,16 @@ void WindowManager::handle_key_press(xcb_key_press_event_t const& e)
         // Prevent key auto-repeat from triggering multiple toggles.
         // X11 auto-repeat sends KeyRelease-KeyPress pairs with identical timestamps.
         // If this KeyPress has the same timestamp as the last KeyRelease, it's auto-repeat.
-        LOG_TRACE("KeyPress: keysym={:#x} time={} last_keysym={:#x} last_release_time={}",
-                  keysym, e.time, last_toggle_keysym_, last_toggle_release_time_);
+        LOG_TRACE(
+            "KeyPress: keysym={:#x} time={} last_keysym={:#x} last_release_time={}",
+            keysym,
+            e.time,
+            last_toggle_keysym_,
+            last_toggle_release_time_
+        );
         bool same_key = (keysym == last_toggle_keysym_);
         bool same_time = (e.time == last_toggle_release_time_);
-        LOG_TRACE("check: same_key={} same_time={} would_block={}",
-                  same_key, same_time, (same_key && same_time));
+        LOG_TRACE("check: same_key={} same_time={} would_block={}", same_key, same_time, (same_key && same_time));
         if (same_key && same_time)
         {
             LOG_TRACE("BLOCKED (auto-repeat detected)");
@@ -681,7 +701,7 @@ void WindowManager::handle_key_press(xcb_key_press_event_t const& e)
         }
         LOG_TRACE("ALLOWED - calling toggle_workspace()");
         last_toggle_keysym_ = keysym;
-        last_toggle_release_time_ = 0;  // Reset on new toggle
+        last_toggle_release_time_ = 0; // Reset on new toggle
         toggle_workspace();
         LOG_TRACE("toggle_workspace() returned");
     }
@@ -730,8 +750,7 @@ void WindowManager::handle_key_release(xcb_key_release_event_t const& e)
 {
     xcb_keysym_t keysym = xcb_key_press_lookup_keysym(conn_.keysyms(), const_cast<xcb_key_release_event_t*>(&e), 0);
 
-    LOG_TRACE("KeyRelease: keysym={:#x} time={} last_toggle_keysym={:#x}",
-              keysym, e.time, last_toggle_keysym_);
+    LOG_TRACE("KeyRelease: keysym={:#x} time={} last_toggle_keysym={:#x}", keysym, e.time, last_toggle_keysym_);
 
     // Record timestamp for auto-repeat detection.
     // X11 auto-repeat sends KeyRelease-KeyPress pairs with identical timestamps.
@@ -1016,7 +1035,7 @@ void WindowManager::handle_client_message(xcb_client_message_event_t const& e)
             // Hide if moved to non-current workspace
             if (!target_visible(target_monitor, target_workspace))
             {
-                wm_unmap_window(e.window);
+                hide_window(e.window);
             }
 
             update_ewmh_client_list();
@@ -1101,8 +1120,8 @@ void WindowManager::handle_client_message(xcb_client_message_event_t const& e)
 
         update_floating_monitor_for_geometry(*fw);
         if (client && client->monitor < monitors_.size()
-            && client->workspace == monitors_[client->monitor].current_workspace
-            && !is_client_iconic(fw->id) && !is_client_fullscreen(fw->id))
+            && client->workspace == monitors_[client->monitor].current_workspace && !is_client_iconic(fw->id)
+            && !is_client_fullscreen(fw->id))
         {
             apply_floating_geometry(*fw);
         }
@@ -1154,7 +1173,7 @@ void WindowManager::handle_client_message(xcb_client_message_event_t const& e)
                 {
                     for (xcb_window_t window : monitor.current().windows)
                     {
-                        wm_unmap_window(window);
+                        hide_window(window);
                     }
                 }
                 for (auto const& fw : floating_windows_)
@@ -1162,7 +1181,7 @@ void WindowManager::handle_client_message(xcb_client_message_event_t const& e)
                     auto const* c = get_client(fw.id);
                     if (c && c->monitor < monitors_.size() && c->workspace == monitors_[c->monitor].current_workspace)
                     {
-                        wm_unmap_window(fw.id);
+                        hide_window(fw.id);
                     }
                 }
                 clear_focus();
@@ -1359,7 +1378,12 @@ void WindowManager::handle_property_notify(xcb_property_notify_event_t const& e)
         if (monitor_containing_window(e.window) || find_floating_window(e.window))
         {
             xcb_icccm_wm_hints_t hints;
-            if (xcb_icccm_get_wm_hints_reply(conn_.get(), xcb_icccm_get_wm_hints(conn_.get(), e.window), &hints, nullptr))
+            if (xcb_icccm_get_wm_hints_reply(
+                    conn_.get(),
+                    xcb_icccm_get_wm_hints(conn_.get(), e.window),
+                    &hints,
+                    nullptr
+                ))
             {
                 // XUrgencyHint is defined as (1L << 8) = 256
                 constexpr uint32_t XUrgencyHint = 256;
@@ -1484,10 +1508,13 @@ void WindowManager::handle_randr_screen_change()
     {
         if (auto* client = get_client(floating_window.id))
         {
-            std::string monitor_name = (client->monitor < monitors_.size())
-                ? monitors_[client->monitor].name
-                : "";
-            floating_locations.push_back({ floating_window, { floating_window.id, monitor_name, client->workspace } });
+            std::string monitor_name = (client->monitor < monitors_.size()) ? monitors_[client->monitor].name : "";
+            floating_locations.push_back(
+                {
+                    floating_window,
+                    { floating_window.id, monitor_name, client->workspace }
+            }
+            );
         }
     }
 

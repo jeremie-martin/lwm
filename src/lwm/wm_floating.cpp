@@ -1,7 +1,7 @@
-#include "wm.hpp"
 #include "lwm/core/floating.hpp"
 #include "lwm/core/focus.hpp"
 #include "lwm/core/log.hpp"
+#include "wm.hpp"
 #include <algorithm>
 #include <xcb/xcb_icccm.h>
 
@@ -143,7 +143,12 @@ void WindowManager::manage_floating_window(xcb_window_t window, bool start_iconi
 
         // Read and apply initial _NET_WM_STATE atoms (EWMH)
         xcb_ewmh_get_atoms_reply_t initial_state;
-        if (xcb_ewmh_get_wm_state_reply(ewmh_.get(), xcb_ewmh_get_wm_state(ewmh_.get(), window), &initial_state, nullptr))
+        if (xcb_ewmh_get_wm_state_reply(
+                ewmh_.get(),
+                xcb_ewmh_get_wm_state(ewmh_.get(), window),
+                &initial_state,
+                nullptr
+            ))
         {
             xcb_ewmh_connection_t* ewmh = ewmh_.get();
             for (uint32_t i = 0; i < initial_state.atoms_len; ++i)
@@ -218,8 +223,8 @@ void WindowManager::manage_floating_window(xcb_window_t window, bool start_iconi
     // We receive UnmapNotify/DestroyNotify via root's SubstructureNotifyMask.
     // Selecting STRUCTURE_NOTIFY on clients would cause duplicate UnmapNotify events,
     // leading to incorrect unmanagement of windows during workspace switches (ICCCM compliance).
-    uint32_t values[] = { XCB_EVENT_MASK_ENTER_WINDOW | XCB_EVENT_MASK_FOCUS_CHANGE
-                          | XCB_EVENT_MASK_PROPERTY_CHANGE | XCB_EVENT_MASK_BUTTON_PRESS };
+    uint32_t values[] = { XCB_EVENT_MASK_ENTER_WINDOW | XCB_EVENT_MASK_FOCUS_CHANGE | XCB_EVENT_MASK_PROPERTY_CHANGE
+                          | XCB_EVENT_MASK_BUTTON_PRESS };
     xcb_change_window_attributes(conn_.get(), window, XCB_CW_EVENT_MASK, values);
     xcb_configure_window(conn_.get(), window, XCB_CONFIG_WINDOW_BORDER_WIDTH, &config_.appearance.border_width);
 
@@ -246,12 +251,10 @@ void WindowManager::manage_floating_window(xcb_window_t window, bool start_iconi
     // Set allowed actions for floating windows (includes move/resize)
     xcb_ewmh_connection_t* ewmh = ewmh_.get();
     std::vector<xcb_atom_t> actions = {
-        ewmh->_NET_WM_ACTION_CLOSE,  ewmh->_NET_WM_ACTION_FULLSCREEN, ewmh->_NET_WM_ACTION_CHANGE_DESKTOP,
-        ewmh->_NET_WM_ACTION_ABOVE,  ewmh->_NET_WM_ACTION_BELOW,      ewmh->_NET_WM_ACTION_MINIMIZE,
-        ewmh->_NET_WM_ACTION_SHADE,  ewmh->_NET_WM_ACTION_STICK,       ewmh->_NET_WM_ACTION_MAXIMIZE_VERT,
-        ewmh->_NET_WM_ACTION_MAXIMIZE_HORZ,
-        ewmh->_NET_WM_ACTION_MOVE,
-        ewmh->_NET_WM_ACTION_RESIZE,
+        ewmh->_NET_WM_ACTION_CLOSE,         ewmh->_NET_WM_ACTION_FULLSCREEN, ewmh->_NET_WM_ACTION_CHANGE_DESKTOP,
+        ewmh->_NET_WM_ACTION_ABOVE,         ewmh->_NET_WM_ACTION_BELOW,      ewmh->_NET_WM_ACTION_MINIMIZE,
+        ewmh->_NET_WM_ACTION_SHADE,         ewmh->_NET_WM_ACTION_STICK,      ewmh->_NET_WM_ACTION_MAXIMIZE_VERT,
+        ewmh->_NET_WM_ACTION_MAXIMIZE_HORZ, ewmh->_NET_WM_ACTION_MOVE,       ewmh->_NET_WM_ACTION_RESIZE,
     };
     ewmh_.set_allowed_actions(window, actions);
 
@@ -278,12 +281,20 @@ void WindowManager::manage_floating_window(xcb_window_t window, bool start_iconi
         set_window_shaded(window, true);
     }
 
-    // NOW map the window (with correct geometry already applied)
+    // With off-screen visibility: map window once when managing
+    xcb_map_window(conn_.get(), window);
+
+    // Then update visibility (will hide or position correctly)
     if (!start_iconic)
     {
         update_floating_visibility(*monitor_idx);
         if (!suppress_focus_ && *monitor_idx == focused_monitor_ && is_workspace_visible(*monitor_idx, *workspace_idx))
             focus_floating_window(window);
+    }
+    else
+    {
+        // Iconic windows should be hidden
+        hide_window(window);
     }
 
     // AFTER mapping: Apply non-geometry states
@@ -357,10 +368,7 @@ void WindowManager::unmanage_floating_window(xcb_window_t window)
     // Remove from unified Client registry (handles all client state including order)
     clients_.erase(window);
 
-    auto it = std::ranges::find_if(
-        floating_windows_,
-        [window](FloatingWindow const& fw) { return fw.id == window; }
-    );
+    auto it = std::ranges::find_if(floating_windows_, [window](FloatingWindow const& fw) { return fw.id == window; });
     if (it == floating_windows_.end())
         return;
 
@@ -406,8 +414,11 @@ WindowManager::FloatingWindow const* WindowManager::find_floating_window(xcb_win
 
 void WindowManager::update_floating_visibility(size_t monitor_idx)
 {
-    LOG_TRACE("update_floating_visibility({}) called, current_ws={}",
-              monitor_idx, monitor_idx < monitors_.size() ? monitors_[monitor_idx].current_workspace : 0);
+    LOG_TRACE(
+        "update_floating_visibility({}) called, current_ws={}",
+        monitor_idx,
+        monitor_idx < monitors_.size() ? monitors_[monitor_idx].current_workspace : 0
+    );
 
     if (monitor_idx >= monitors_.size())
     {
@@ -425,7 +436,7 @@ void WindowManager::update_floating_visibility(size_t monitor_idx)
             if (client && client->monitor == monitor_idx)
             {
                 LOG_TRACE("update_floating_visibility: unmapping floating {:#x} (showing desktop)", fw.id);
-                wm_unmap_window(fw.id);
+                hide_window(fw.id);
             }
         }
         return;
@@ -438,22 +449,29 @@ void WindowManager::update_floating_visibility(size_t monitor_idx)
             continue;
 
         bool sticky = is_client_sticky(fw.id);
-        bool should_show = (sticky || client->workspace == monitor.current_workspace)
-            && !is_client_iconic(fw.id);
+        bool should_show = (sticky || client->workspace == monitor.current_workspace) && !is_client_iconic(fw.id);
 
-        LOG_TRACE("update_floating_visibility: window {:#x} ws={} current_ws={} sticky={} iconic={} -> show={}",
-                  fw.id, client->workspace, monitor.current_workspace, sticky,
-                  is_client_iconic(fw.id), should_show);
+        LOG_TRACE(
+            "update_floating_visibility: window {:#x} ws={} current_ws={} sticky={} iconic={} -> show={}",
+            fw.id,
+            client->workspace,
+            monitor.current_workspace,
+            sticky,
+            is_client_iconic(fw.id),
+            should_show
+        );
 
         if (should_show)
         {
-            // Configure BEFORE mapping so window appears at correct position
+            // Mark as visible and configure geometry
+            // With off-screen visibility, window is already mapped - just restore position
+            show_window(fw.id);
+
             if (is_client_fullscreen(fw.id))
             {
                 apply_fullscreen_if_needed(fw.id);
             }
-            else if (is_client_maximized_horz(fw.id)
-                || is_client_maximized_vert(fw.id))
+            else if (is_client_maximized_horz(fw.id) || is_client_maximized_vert(fw.id))
             {
                 apply_maximized_geometry(fw.id);
             }
@@ -461,8 +479,7 @@ void WindowManager::update_floating_visibility(size_t monitor_idx)
             {
                 apply_floating_geometry(fw);
             }
-            LOG_TRACE("update_floating_visibility: mapping floating {:#x}", fw.id);
-            xcb_map_window(conn_.get(), fw.id);
+            LOG_TRACE("update_floating_visibility: showing floating {:#x}", fw.id);
             if (client->transient_for != XCB_NONE)
             {
                 restack_transients(client->transient_for);
@@ -470,8 +487,8 @@ void WindowManager::update_floating_visibility(size_t monitor_idx)
         }
         else
         {
-            LOG_TRACE("update_floating_visibility: unmapping floating {:#x}", fw.id);
-            wm_unmap_window(fw.id);
+            LOG_TRACE("update_floating_visibility: hiding floating {:#x}", fw.id);
+            hide_window(fw.id);
         }
     }
     LOG_TRACE("update_floating_visibility: DONE");

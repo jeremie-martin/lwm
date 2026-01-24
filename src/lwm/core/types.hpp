@@ -11,6 +11,13 @@
 namespace lwm {
 
 // ─────────────────────────────────────────────────────────────────────────────
+// Constants
+// ─────────────────────────────────────────────────────────────────────────────
+
+/// Off-screen X coordinate for hidden windows (DWM-style visibility management)
+constexpr int16_t OFF_SCREEN_X = -20000;
+
+// ─────────────────────────────────────────────────────────────────────────────
 // Basic geometry types (must be defined before Client)
 // ─────────────────────────────────────────────────────────────────────────────
 
@@ -85,7 +92,13 @@ struct Client
      * - Dock: Panel/bar that reserves screen edges (struts)
      * - Desktop: Background/desktop window (_NET_WM_WINDOW_TYPE_DESKTOP)
      */
-    enum class Kind { Tiled, Floating, Dock, Desktop };
+    enum class Kind
+    {
+        Tiled,
+        Floating,
+        Dock,
+        Desktop
+    };
     Kind kind = Kind::Tiled;
 
     // ─────────────────────────────────────────────────────────────────────────
@@ -106,18 +119,18 @@ struct Client
     //
     // These flags are kept in sync with _NET_WM_STATE atoms on the window.
     // ─────────────────────────────────────────────────────────────────────────
-    bool mapped = false;           ///< WM's tracked map state
-    bool fullscreen = false;       ///< _NET_WM_STATE_FULLSCREEN
-    bool above = false;            ///< _NET_WM_STATE_ABOVE
-    bool below = false;            ///< _NET_WM_STATE_BELOW
-    bool iconic = false;           ///< _NET_WM_STATE_HIDDEN (minimized)
-    bool sticky = false;           ///< _NET_WM_STATE_STICKY
-    bool maximized_horz = false;   ///< _NET_WM_STATE_MAXIMIZED_HORZ
-    bool maximized_vert = false;   ///< _NET_WM_STATE_MAXIMIZED_VERT
-    bool shaded = false;           ///< _NET_WM_STATE_SHADED
-    bool modal = false;            ///< _NET_WM_STATE_MODAL
-    bool skip_taskbar = false;     ///< _NET_WM_STATE_SKIP_TASKBAR
-    bool skip_pager = false;       ///< _NET_WM_STATE_SKIP_PAGER
+    bool hidden = false;            ///< True when window is moved off-screen by WM
+    bool fullscreen = false;        ///< _NET_WM_STATE_FULLSCREEN
+    bool above = false;             ///< _NET_WM_STATE_ABOVE
+    bool below = false;             ///< _NET_WM_STATE_BELOW
+    bool iconic = false;            ///< _NET_WM_STATE_HIDDEN (minimized)
+    bool sticky = false;            ///< _NET_WM_STATE_STICKY
+    bool maximized_horz = false;    ///< _NET_WM_STATE_MAXIMIZED_HORZ
+    bool maximized_vert = false;    ///< _NET_WM_STATE_MAXIMIZED_VERT
+    bool shaded = false;            ///< _NET_WM_STATE_SHADED
+    bool modal = false;             ///< _NET_WM_STATE_MODAL
+    bool skip_taskbar = false;      ///< _NET_WM_STATE_SKIP_TASKBAR
+    bool skip_pager = false;        ///< _NET_WM_STATE_SKIP_PAGER
     bool demands_attention = false; ///< _NET_WM_STATE_DEMANDS_ATTENTION
 
     // ─────────────────────────────────────────────────────────────────────────
@@ -129,26 +142,26 @@ struct Client
     // ─────────────────────────────────────────────────────────────────────────
     // Geometry restore points
     // ─────────────────────────────────────────────────────────────────────────
-    std::optional<Geometry> fullscreen_restore;  ///< Geometry before fullscreen
-    std::optional<Geometry> maximize_restore;    ///< Geometry before maximize
+    std::optional<Geometry> fullscreen_restore;            ///< Geometry before fullscreen
+    std::optional<Geometry> maximize_restore;              ///< Geometry before maximize
     std::optional<FullscreenMonitors> fullscreen_monitors; ///< Multi-monitor fullscreen
 
     // ─────────────────────────────────────────────────────────────────────────
     // Sync protocol state (_NET_WM_SYNC_REQUEST)
     // ─────────────────────────────────────────────────────────────────────────
-    uint32_t sync_counter = 0;  ///< XSync counter ID (0 if none)
-    uint64_t sync_value = 0;    ///< Expected counter value
+    uint32_t sync_counter = 0; ///< XSync counter ID (0 if none)
+    uint64_t sync_value = 0;   ///< Expected counter value
 
     // ─────────────────────────────────────────────────────────────────────────
     // Focus stealing prevention (_NET_WM_USER_TIME)
     // ─────────────────────────────────────────────────────────────────────────
-    uint32_t user_time = 0;                       ///< Last user interaction time
-    xcb_window_t user_time_window = XCB_NONE;     ///< _NET_WM_USER_TIME_WINDOW
+    uint32_t user_time = 0;                   ///< Last user interaction time
+    xcb_window_t user_time_window = XCB_NONE; ///< _NET_WM_USER_TIME_WINDOW
 
     // ─────────────────────────────────────────────────────────────────────────
     // Management tracking
     // ─────────────────────────────────────────────────────────────────────────
-    uint64_t order = 0;  ///< Mapping order for _NET_CLIENT_LIST
+    uint64_t order = 0; ///< Mapping order for _NET_CLIENT_LIST
 };
 
 struct Workspace
@@ -156,15 +169,9 @@ struct Workspace
     std::vector<xcb_window_t> windows;
     xcb_window_t focused_window = XCB_NONE;
 
-    auto find_window(xcb_window_t id)
-    {
-        return std::ranges::find(windows, id);
-    }
+    auto find_window(xcb_window_t id) { return std::ranges::find(windows, id); }
 
-    auto find_window(xcb_window_t id) const
-    {
-        return std::ranges::find(windows, id);
-    }
+    auto find_window(xcb_window_t id) const { return std::ranges::find(windows, id); }
 };
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -193,8 +200,10 @@ struct Monitor
     Geometry working_area() const
     {
         // Clamp struts to prevent underflow
-        int32_t h_strut = std::min<int32_t>(static_cast<int32_t>(width), static_cast<int32_t>(strut.left + strut.right));
-        int32_t v_strut = std::min<int32_t>(static_cast<int32_t>(height), static_cast<int32_t>(strut.top + strut.bottom));
+        int32_t h_strut =
+            std::min<int32_t>(static_cast<int32_t>(width), static_cast<int32_t>(strut.left + strut.right));
+        int32_t v_strut =
+            std::min<int32_t>(static_cast<int32_t>(height), static_cast<int32_t>(strut.top + strut.bottom));
         int32_t area_x = static_cast<int32_t>(x) + static_cast<int32_t>(strut.left);
         int32_t area_y = static_cast<int32_t>(y) + static_cast<int32_t>(strut.top);
         int32_t area_w = std::max<int32_t>(1, static_cast<int32_t>(width) - h_strut);

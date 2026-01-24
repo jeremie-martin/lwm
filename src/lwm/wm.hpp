@@ -13,7 +13,6 @@
 #include <memory>
 #include <optional>
 #include <unordered_map>
-#include <unordered_set>
 #include <vector>
 #include <xcb/sync.h>
 
@@ -92,11 +91,10 @@ private:
     // ─────────────────────────────────────────────────────────────────────────
     // Per-window tracking state (separate from Client model)
     // ─────────────────────────────────────────────────────────────────────────
-    std::unordered_map<xcb_window_t, uint32_t> wm_unmapped_windows_;  // ICCCM unmap tracking
     bool showing_desktop_ = false;
     std::unordered_map<xcb_window_t, std::chrono::steady_clock::time_point> pending_kills_;
     std::unordered_map<xcb_window_t, std::chrono::steady_clock::time_point> pending_pings_;
-    uint64_t next_client_order_ = 0;  // Counter for Client.order field
+    uint64_t next_client_order_ = 0; // Counter for Client.order field
     int32_t desktop_origin_x_ = 0;
     int32_t desktop_origin_y_ = 0;
     xcb_window_t active_window_ = XCB_NONE;
@@ -123,7 +121,7 @@ private:
     xcb_atom_t net_wm_state_focused_ = XCB_NONE;
     bool suppress_focus_ = false;
     uint32_t last_event_time_ = XCB_CURRENT_TIME;
-    xcb_keysym_t last_toggle_keysym_ = XCB_NO_SYMBOL;   // Track toggle key to ignore auto-repeat
+    xcb_keysym_t last_toggle_keysym_ = XCB_NO_SYMBOL; // Track toggle key to ignore auto-repeat
     xcb_timestamp_t last_toggle_release_time_ = 0;    // Timestamp of last KeyRelease for auto-repeat detection
     DragState drag_state_;
     std::vector<MouseBinding> mousebinds_;
@@ -275,8 +273,9 @@ private:
     void unmanage_dock_window(xcb_window_t window);
     void unmanage_desktop_window(xcb_window_t window);
 
-    // WM-initiated unmap tracking
-    void wm_unmap_window(xcb_window_t window);
+    // Off-screen visibility management (DWM-style)
+    void hide_window(xcb_window_t window);
+    void show_window(xcb_window_t window);
 
     // EWMH helpers
     void setup_ewmh();

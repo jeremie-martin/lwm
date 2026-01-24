@@ -1,6 +1,6 @@
-#include "wm.hpp"
 #include "lwm/core/log.hpp"
 #include "lwm/core/policy.hpp"
+#include "wm.hpp"
 #include <algorithm>
 #include <limits>
 
@@ -126,8 +126,12 @@ void WindowManager::update_ewmh_current_desktop()
 {
     // Per-monitor workspaces: report the active monitor's current workspace only.
     uint32_t desktop = get_ewmh_desktop_index(focused_monitor_, focused_monitor().current_workspace);
-    LOG_TRACE("update_ewmh_current_desktop: focused_monitor_={} current_ws={} desktop={}",
-              focused_monitor_, focused_monitor().current_workspace, desktop);
+    LOG_TRACE(
+        "update_ewmh_current_desktop: focused_monitor_={} current_ws={} desktop={}",
+        focused_monitor_,
+        focused_monitor().current_workspace,
+        desktop
+    );
     ewmh_.set_current_desktop(desktop);
 }
 
@@ -209,8 +213,12 @@ void WindowManager::switch_to_ewmh_desktop(uint32_t desktop)
     }
 
     size_t old_workspace = monitor.current_workspace;
-    LOG_DEBUG("switch_to_ewmh_desktop: switching from ws {} to ws {} on monitor {}",
-              old_workspace, workspace_idx, monitor_idx);
+    LOG_DEBUG(
+        "switch_to_ewmh_desktop: switching from ws {} to ws {} on monitor {}",
+        old_workspace,
+        workspace_idx,
+        monitor_idx
+    );
 
     // Unmap floating windows from old workspace FIRST
     // This prevents visual glitches where old floating windows appear over new workspace content
@@ -224,7 +232,7 @@ void WindowManager::switch_to_ewmh_desktop(uint32_t desktop)
         if (client->workspace == old_workspace)
         {
             LOG_TRACE("switch_to_ewmh_desktop: pre-unmapping floating {:#x}", fw.id);
-            wm_unmap_window(fw.id);
+            hide_window(fw.id);
         }
     }
 
@@ -234,7 +242,7 @@ void WindowManager::switch_to_ewmh_desktop(uint32_t desktop)
         if (is_client_sticky(window))
             continue;
         LOG_TRACE("switch_to_ewmh_desktop: unmapping window {:#x}", window);
-        wm_unmap_window(window);
+        hide_window(window);
     }
     // Flush unmaps before rearranging to ensure old windows are hidden
     conn_.flush();

@@ -1,15 +1,19 @@
-#include "wm.hpp"
 #include "lwm/core/floating.hpp"
 #include "lwm/core/log.hpp"
 #include "lwm/core/policy.hpp"
+#include "wm.hpp"
 
 namespace lwm {
 
 void WindowManager::switch_workspace(int ws)
 {
     auto& monitor = focused_monitor();
-    LOG_TRACE("switch_workspace({}) called, current={} previous={}",
-              ws, monitor.current_workspace, monitor.previous_workspace);
+    LOG_TRACE(
+        "switch_workspace({}) called, current={} previous={}",
+        ws,
+        monitor.current_workspace,
+        monitor.previous_workspace
+    );
 
     auto switch_result = workspace_policy::apply_workspace_switch(monitor, ws);
     if (!switch_result)
@@ -18,8 +22,11 @@ void WindowManager::switch_workspace(int ws)
         return;
     }
 
-    LOG_DEBUG("switch_workspace: policy approved, old_ws={} new_ws={}",
-              switch_result->old_workspace, switch_result->new_workspace);
+    LOG_DEBUG(
+        "switch_workspace: policy approved, old_ws={} new_ws={}",
+        switch_result->old_workspace,
+        switch_result->new_workspace
+    );
 
     // Unmap floating windows from old workspace FIRST
     // This prevents visual glitches where old floating windows appear over new workspace content
@@ -33,7 +40,7 @@ void WindowManager::switch_workspace(int ws)
         if (client->workspace == switch_result->old_workspace)
         {
             LOG_DEBUG("switch_workspace: pre-unmapping floating {:#x}", fw.id);
-            wm_unmap_window(fw.id);
+            hide_window(fw.id);
         }
     }
 
@@ -49,7 +56,7 @@ void WindowManager::switch_workspace(int ws)
             continue;
         }
         LOG_DEBUG("switch_workspace: unmapping tiled {:#x}", window);
-        wm_unmap_window(window);
+        hide_window(window);
     }
     LOG_DEBUG("switch_workspace: done unmapping old workspace windows");
     // Flush unmaps before rearranging to ensure old windows are hidden
@@ -67,16 +74,23 @@ void WindowManager::switch_workspace(int ws)
     update_all_bars();
     LOG_TRACE("switch_workspace: flushing");
     conn_.flush();
-    LOG_TRACE("switch_workspace: DONE, now current={} previous={}",
-              monitor.current_workspace, monitor.previous_workspace);
+    LOG_TRACE(
+        "switch_workspace: DONE, now current={} previous={}",
+        monitor.current_workspace,
+        monitor.previous_workspace
+    );
 }
 
 void WindowManager::toggle_workspace()
 {
     auto& monitor = focused_monitor();
     size_t workspace_count = monitor.workspaces.size();
-    LOG_TRACE("toggle_workspace() called, workspace_count={} current={} previous={}",
-              workspace_count, monitor.current_workspace, monitor.previous_workspace);
+    LOG_TRACE(
+        "toggle_workspace() called, workspace_count={} current={} previous={}",
+        workspace_count,
+        monitor.current_workspace,
+        monitor.previous_workspace
+    );
 
     if (workspace_count <= 1)
     {
@@ -159,7 +173,7 @@ void WindowManager::move_window_to_workspace(int ws)
 
     if (!is_client_sticky(window_to_move))
     {
-        wm_unmap_window(window_to_move);
+        hide_window(window_to_move);
     }
     rearrange_monitor(monitor);
     focus_or_fallback(monitor);

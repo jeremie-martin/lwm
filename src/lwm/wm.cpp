@@ -228,12 +228,10 @@ void WindowManager::grab_buttons()
 
     for (auto const& binding : mousebinds_)
     {
-        uint16_t modifiers[] = {
-            binding.modifier,
-            static_cast<uint16_t>(binding.modifier | XCB_MOD_MASK_2),
-            static_cast<uint16_t>(binding.modifier | XCB_MOD_MASK_LOCK),
-            static_cast<uint16_t>(binding.modifier | XCB_MOD_MASK_2 | XCB_MOD_MASK_LOCK)
-        };
+        uint16_t modifiers[] = { binding.modifier,
+                                 static_cast<uint16_t>(binding.modifier | XCB_MOD_MASK_2),
+                                 static_cast<uint16_t>(binding.modifier | XCB_MOD_MASK_LOCK),
+                                 static_cast<uint16_t>(binding.modifier | XCB_MOD_MASK_2 | XCB_MOD_MASK_LOCK) };
 
         for (auto mod : modifiers)
         {
@@ -549,15 +547,13 @@ void WindowManager::run_autostart()
 // Window Management
 // ─────────────────────────────────────────────────────────────────────────────
 
-
 void WindowManager::manage_window(xcb_window_t window, bool start_iconic)
 {
     auto [instance_name, class_name] = get_wm_class(window);
     std::string window_name = get_window_name(window);
     auto target = resolve_window_desktop(window);
     size_t target_monitor_idx = target ? target->first : focused_monitor_;
-    size_t target_workspace_idx =
-        target ? target->second : monitors_[target_monitor_idx].current_workspace;
+    size_t target_workspace_idx = target ? target->second : monitors_[target_monitor_idx].current_workspace;
 
     monitors_[target_monitor_idx].workspaces[target_workspace_idx].windows.push_back(window);
 
@@ -576,7 +572,12 @@ void WindowManager::manage_window(xcb_window_t window, bool start_iconic)
 
         // Read and apply initial _NET_WM_STATE atoms (EWMH)
         xcb_ewmh_get_atoms_reply_t initial_state;
-        if (xcb_ewmh_get_wm_state_reply(ewmh_.get(), xcb_ewmh_get_wm_state(ewmh_.get(), window), &initial_state, nullptr))
+        if (xcb_ewmh_get_wm_state_reply(
+                ewmh_.get(),
+                xcb_ewmh_get_wm_state(ewmh_.get(), window),
+                &initial_state,
+                nullptr
+            ))
         {
             xcb_ewmh_connection_t* ewmh = ewmh_.get();
             for (uint32_t i = 0; i < initial_state.atoms_len; ++i)
@@ -647,8 +648,7 @@ void WindowManager::manage_window(xcb_window_t window, bool start_iconic)
     // We receive UnmapNotify/DestroyNotify via root's SubstructureNotifyMask.
     // Selecting STRUCTURE_NOTIFY on clients would cause duplicate UnmapNotify events,
     // leading to incorrect unmanagement of windows during workspace switches (ICCCM compliance).
-    uint32_t values[] = { XCB_EVENT_MASK_ENTER_WINDOW | XCB_EVENT_MASK_FOCUS_CHANGE
-                          | XCB_EVENT_MASK_PROPERTY_CHANGE };
+    uint32_t values[] = { XCB_EVENT_MASK_ENTER_WINDOW | XCB_EVENT_MASK_FOCUS_CHANGE | XCB_EVENT_MASK_PROPERTY_CHANGE };
     xcb_change_window_attributes(conn_.get(), window, XCB_CW_EVENT_MASK, values);
 
     // Set border width BEFORE layout so positions are calculated correctly
@@ -677,9 +677,9 @@ void WindowManager::manage_window(xcb_window_t window, bool start_iconic)
     // Set allowed actions for tiled windows (no move/resize via EWMH)
     xcb_ewmh_connection_t* ewmh = ewmh_.get();
     std::vector<xcb_atom_t> actions = {
-        ewmh->_NET_WM_ACTION_CLOSE, ewmh->_NET_WM_ACTION_FULLSCREEN, ewmh->_NET_WM_ACTION_CHANGE_DESKTOP,
-        ewmh->_NET_WM_ACTION_ABOVE, ewmh->_NET_WM_ACTION_BELOW, ewmh->_NET_WM_ACTION_MINIMIZE,
-        ewmh->_NET_WM_ACTION_SHADE, ewmh->_NET_WM_ACTION_STICK, ewmh->_NET_WM_ACTION_MAXIMIZE_VERT,
+        ewmh->_NET_WM_ACTION_CLOSE,         ewmh->_NET_WM_ACTION_FULLSCREEN, ewmh->_NET_WM_ACTION_CHANGE_DESKTOP,
+        ewmh->_NET_WM_ACTION_ABOVE,         ewmh->_NET_WM_ACTION_BELOW,      ewmh->_NET_WM_ACTION_MINIMIZE,
+        ewmh->_NET_WM_ACTION_SHADE,         ewmh->_NET_WM_ACTION_STICK,      ewmh->_NET_WM_ACTION_MAXIMIZE_VERT,
         ewmh->_NET_WM_ACTION_MAXIMIZE_HORZ,
     };
     ewmh_.set_allowed_actions(window, actions);
@@ -694,6 +694,10 @@ void WindowManager::manage_window(xcb_window_t window, bool start_iconic)
     }
 
     keybinds_.grab_keys(window);
+
+    // With off-screen visibility: map window once when managing, then hide if not on current workspace
+    xcb_map_window(conn_.get(), window);
+
     if (!start_iconic)
     {
         if (is_workspace_visible(target_monitor_idx, target_workspace_idx))
@@ -702,20 +706,14 @@ void WindowManager::manage_window(xcb_window_t window, bool start_iconic)
         }
         else
         {
-            auto attr_cookie = xcb_get_window_attributes(conn_.get(), window);
-            auto* attr_reply = xcb_get_window_attributes_reply(conn_.get(), attr_cookie, nullptr);
-            if (attr_reply)
-            {
-                bool viewable = attr_reply->map_state == XCB_MAP_STATE_VIEWABLE;
-                free(attr_reply);
-                if (viewable)
-                    wm_unmap_window(window);
-            }
-            else
-            {
-                wm_unmap_window(window);
-            }
+            // Window is on a non-current workspace - hide it (move off-screen)
+            hide_window(window);
         }
+    }
+    else
+    {
+        // Iconic windows should be hidden
+        hide_window(window);
     }
     update_all_bars();
 
@@ -825,12 +823,11 @@ void WindowManager::unmanage_window(xcb_window_t window)
     }
 }
 
-
 void WindowManager::set_fullscreen(xcb_window_t window, bool enabled)
 {
     auto* client = get_client(window);
     if (!client)
-        return;  // Only managed clients can be fullscreen
+        return; // Only managed clients can be fullscreen
 
     if (enabled)
     {
@@ -899,8 +896,7 @@ void WindowManager::set_fullscreen(xcb_window_t window, bool enabled)
                 floating_window->geometry = *client->fullscreen_restore;
                 // Sync Client.floating_geometry (authoritative)
                 client->floating_geometry = floating_window->geometry;
-                if (client->workspace == monitors_[client->monitor].current_workspace
-                    && !client->iconic)
+                if (client->workspace == monitors_[client->monitor].current_workspace && !client->iconic)
                 {
                     apply_floating_geometry(*floating_window);
                 }
@@ -927,7 +923,7 @@ void WindowManager::set_window_above(xcb_window_t window, bool enabled)
 {
     auto* client = get_client(window);
     if (!client)
-        return;  // Only managed clients can have above state
+        return; // Only managed clients can have above state
 
     if (enabled)
     {
@@ -954,7 +950,7 @@ void WindowManager::set_window_below(xcb_window_t window, bool enabled)
 {
     auto* client = get_client(window);
     if (!client)
-        return;  // Only managed clients can have below state
+        return; // Only managed clients can have below state
 
     if (enabled)
     {
@@ -981,7 +977,7 @@ void WindowManager::set_window_sticky(xcb_window_t window, bool enabled)
 {
     auto* client = get_client(window);
     if (!client)
-        return;  // Only managed clients can be sticky
+        return; // Only managed clients can be sticky
 
     if (enabled)
     {
@@ -1015,7 +1011,7 @@ void WindowManager::set_window_maximized(xcb_window_t window, bool horiz, bool v
 {
     auto* client = get_client(window);
     if (!client)
-        return;  // Only managed clients can be maximized
+        return; // Only managed clients can be maximized
 
     client->maximized_horz = horiz;
     client->maximized_vert = vert;
@@ -1034,8 +1030,7 @@ void WindowManager::set_window_maximized(xcb_window_t window, bool horiz, bool v
                     floating_window->geometry = *client->maximize_restore;
                     // Sync Client.floating_geometry (authoritative)
                     client->floating_geometry = floating_window->geometry;
-                    if (client->workspace == monitors_[client->monitor].current_workspace
-                        && !client->iconic)
+                    if (client->workspace == monitors_[client->monitor].current_workspace && !client->iconic)
                     {
                         apply_floating_geometry(*floating_window);
                     }
@@ -1091,8 +1086,7 @@ void WindowManager::apply_maximized_geometry(xcb_window_t window)
     floating_window->geometry = base;
     // Sync Client.floating_geometry (authoritative)
     client->floating_geometry = floating_window->geometry;
-    if (client->workspace == monitors_[client->monitor].current_workspace
-        && !client->iconic)
+    if (client->workspace == monitors_[client->monitor].current_workspace && !client->iconic)
     {
         apply_floating_geometry(*floating_window);
     }
@@ -1102,7 +1096,7 @@ void WindowManager::set_window_shaded(xcb_window_t window, bool enabled)
 {
     auto* client = get_client(window);
     if (!client)
-        return;  // Only managed clients can be shaded
+        return; // Only managed clients can be shaded
 
     if (enabled)
     {
@@ -1134,7 +1128,7 @@ void WindowManager::set_window_modal(xcb_window_t window, bool enabled)
 {
     auto* client = get_client(window);
     if (!client)
-        return;  // Only managed clients can be modal
+        return; // Only managed clients can be modal
 
     client->modal = enabled;
 
@@ -1151,19 +1145,22 @@ void WindowManager::set_window_modal(xcb_window_t window, bool enabled)
 
 void WindowManager::set_client_skip_taskbar(xcb_window_t window, bool enabled)
 {
-    if (auto* c = get_client(window)) c->skip_taskbar = enabled;
+    if (auto* c = get_client(window))
+        c->skip_taskbar = enabled;
     ewmh_.set_window_state(window, ewmh_.get()->_NET_WM_STATE_SKIP_TASKBAR, enabled);
 }
 
 void WindowManager::set_client_skip_pager(xcb_window_t window, bool enabled)
 {
-    if (auto* c = get_client(window)) c->skip_pager = enabled;
+    if (auto* c = get_client(window))
+        c->skip_pager = enabled;
     ewmh_.set_window_state(window, ewmh_.get()->_NET_WM_STATE_SKIP_PAGER, enabled);
 }
 
 void WindowManager::set_client_demands_attention(xcb_window_t window, bool enabled)
 {
-    if (auto* c = get_client(window)) c->demands_attention = enabled;
+    if (auto* c = get_client(window))
+        c->demands_attention = enabled;
     ewmh_.set_demands_attention(window, enabled);
 }
 
@@ -1197,8 +1194,13 @@ void WindowManager::apply_fullscreen_if_needed(xcb_window_t window)
     }
     if (client->workspace != monitors_[*monitor_idx].current_workspace)
     {
-        LOG_DEBUG("apply_fullscreen_if_needed({:#x}): workspace mismatch client->workspace={} vs monitor.current_workspace={}, returning early",
-                  window, client->workspace, monitors_[*monitor_idx].current_workspace);
+        LOG_DEBUG(
+            "apply_fullscreen_if_needed({:#x}): workspace mismatch client->workspace={} vs "
+            "monitor.current_workspace={}, returning early",
+            window,
+            client->workspace,
+            monitors_[*monitor_idx].current_workspace
+        );
         return;
     }
     LOG_DEBUG("apply_fullscreen_if_needed({:#x}): all checks passed, applying fullscreen geometry", window);
@@ -1317,7 +1319,7 @@ void WindowManager::iconify_window(xcb_window_t window)
 {
     auto* client = get_client(window);
     if (!client)
-        return;  // Only managed clients can be iconified
+        return; // Only managed clients can be iconified
 
     if (client->iconic)
         return;
@@ -1334,19 +1336,18 @@ void WindowManager::iconify_window(xcb_window_t window)
 
     if (find_floating_window(window))
     {
-        wm_unmap_window(window);
+        hide_window(window);
         update_floating_visibility(client->monitor);
     }
     else if (client->monitor < monitors_.size())
     {
-        wm_unmap_window(window);
+        hide_window(window);
         rearrange_monitor(monitors_[client->monitor]);
     }
 
     if (active_window_ == window)
     {
-        if (client->monitor == focused_monitor_
-            && client->workspace == monitors_[client->monitor].current_workspace)
+        if (client->monitor == focused_monitor_ && client->workspace == monitors_[client->monitor].current_workspace)
         {
             focus_or_fallback(monitors_[client->monitor]);
         }
@@ -1364,7 +1365,7 @@ void WindowManager::deiconify_window(xcb_window_t window, bool focus)
 {
     auto* client = get_client(window);
     if (!client)
-        return;  // Only managed clients can be deiconified
+        return; // Only managed clients can be deiconified
 
     client->iconic = false;
 
@@ -1451,15 +1452,19 @@ void WindowManager::rearrange_monitor(Monitor& monitor)
             break;
     }
 
-    LOG_TRACE("rearrange_monitor({}) called, current_ws={} windows_in_ws={}",
-              monitor_idx, monitor.current_workspace, monitor.current().windows.size());
+    LOG_TRACE(
+        "rearrange_monitor({}) called, current_ws={} windows_in_ws={}",
+        monitor_idx,
+        monitor.current_workspace,
+        monitor.current().windows.size()
+    );
 
     if (showing_desktop_)
     {
         LOG_TRACE("rearrange_monitor: showing_desktop_, unmapping all");
         for (xcb_window_t window : monitor.current().windows)
         {
-            wm_unmap_window(window);
+            hide_window(window);
         }
         return;
     }
@@ -1474,7 +1479,7 @@ void WindowManager::rearrange_monitor(Monitor& monitor)
         if (is_client_iconic(window))
         {
             LOG_TRACE("rearrange_monitor: unmapping iconic window {:#x}", window);
-            wm_unmap_window(window);
+            hide_window(window);
             continue;
         }
         // Fullscreen windows bypass tiling layout entirely
@@ -1498,7 +1503,7 @@ void WindowManager::rearrange_monitor(Monitor& monitor)
             if (is_client_iconic(window))
             {
                 LOG_TRACE("rearrange_monitor: unmapping iconic sticky window {:#x}", window);
-                wm_unmap_window(window);
+                hide_window(window);
                 continue;
             }
             // Sticky fullscreen windows also bypass tiling
@@ -1521,8 +1526,13 @@ void WindowManager::rearrange_monitor(Monitor& monitor)
         }
     }
 
-    LOG_DEBUG("rearrange_monitor({}): arranging {} visible windows ({} fullscreen) on ws {}",
-              monitor_idx, visible_windows.size(), fullscreen_windows.size(), monitor.current_workspace);
+    LOG_DEBUG(
+        "rearrange_monitor({}): arranging {} visible windows ({} fullscreen) on ws {}",
+        monitor_idx,
+        visible_windows.size(),
+        fullscreen_windows.size(),
+        monitor.current_workspace
+    );
 
     for (size_t i = 0; i < visible_windows.size(); ++i)
     {
@@ -1533,41 +1543,25 @@ void WindowManager::rearrange_monitor(Monitor& monitor)
         LOG_DEBUG("rearrange_monitor: fullscreen_windows[{}] = {:#x}", i, fullscreen_windows[i]);
     }
 
+    // Mark visible windows as shown before arranging (clears hidden flag)
+    for (xcb_window_t window : visible_windows)
+    {
+        show_window(window);
+    }
+
     layout_.arrange(visible_windows, monitor.working_area(), bar_.has_value());
 
     // Handle fullscreen windows separately
-    // For GPU-accelerated apps (Chromium, Electron), we use a "nudge resize" trick:
-    // Chromium's renderer doesn't redraw after unmap/remap cycles. But resizing
-    // the window "wakes" the renderer. So we:
-    // 1. Map the window
-    // 2. Configure to a slightly wrong size (triggers resize handling)
-    // 3. Flush and sync
-    // 4. Configure to correct fullscreen size (triggers actual redraw)
-    // 5. Send ConfigureNotify so client knows final geometry
+    // With off-screen visibility, windows stay mapped so no "nudge resize" trick is needed.
+    // The renderer never goes through unmap/remap cycles that cause redraw issues.
     for (xcb_window_t window : fullscreen_windows)
     {
         LOG_DEBUG("rearrange_monitor: handling fullscreen window {:#x}", window);
 
-        Geometry area = fullscreen_geometry_for_window(window);
+        // Mark as visible (window is already mapped, just restore from off-screen)
+        show_window(window);
 
-        // Map first
-        LOG_DEBUG("rearrange_monitor: mapping fullscreen window {:#x}", window);
-        xcb_map_window(conn_.get(), window);
-        conn_.flush();
-
-        // NUDGE RESIZE TRICK: Configure to slightly wrong size first
-        // This forces GPU-accelerated apps (Chromium, Electron) to wake up their renderer
-        uint32_t nudge_w = area.width > 2 ? static_cast<uint32_t>(area.width - 2) : area.width;
-        uint32_t nudge_h = area.height > 2 ? static_cast<uint32_t>(area.height - 2) : area.height;
-        LOG_DEBUG("rearrange_monitor: nudge resize {:#x} to {}x{}", window, nudge_w, nudge_h);
-        uint32_t nudge_values[] = { static_cast<uint32_t>(area.x), static_cast<uint32_t>(area.y), nudge_w, nudge_h, 0 };
-        uint16_t mask = XCB_CONFIG_WINDOW_X | XCB_CONFIG_WINDOW_Y | XCB_CONFIG_WINDOW_WIDTH
-            | XCB_CONFIG_WINDOW_HEIGHT | XCB_CONFIG_WINDOW_BORDER_WIDTH;
-        xcb_configure_window(conn_.get(), window, mask, nudge_values);
-        conn_.flush();
-
-        // Now configure to correct fullscreen size - this triggers the actual redraw
-        LOG_DEBUG("rearrange_monitor: final configure {:#x} to {}x{}", window, area.width, area.height);
+        // Configure to correct fullscreen geometry
         apply_fullscreen_if_needed(window);
 
         // Raise to top
@@ -1577,7 +1571,6 @@ void WindowManager::rearrange_monitor(Monitor& monitor)
     }
     if (!fullscreen_windows.empty())
     {
-        LOG_DEBUG("rearrange_monitor: flushing after fullscreen windows");
         conn_.flush();
     }
 
@@ -1639,10 +1632,12 @@ Client const* WindowManager::get_client(xcb_window_t window) const
 // State query helpers - returns false for unmanaged windows
 // ─────────────────────────────────────────────────────────────────────────────
 
-#define DEFINE_CLIENT_STATE_QUERY(method, field) \
-    bool WindowManager::method(xcb_window_t window) const { \
-        if (auto const* c = get_client(window)) return c->field; \
-        return false; \
+#define DEFINE_CLIENT_STATE_QUERY(method, field)          \
+    bool WindowManager::method(xcb_window_t window) const \
+    {                                                     \
+        if (auto const* c = get_client(window))           \
+            return c->field;                              \
+        return false;                                     \
     }
 
 DEFINE_CLIENT_STATE_QUERY(is_client_fullscreen, fullscreen)
@@ -1683,8 +1678,7 @@ std::optional<size_t> WindowManager::workspace_index_for_window(xcb_window_t win
 std::optional<uint32_t> WindowManager::get_raw_window_desktop(xcb_window_t window) const
 {
     uint32_t desktop = 0;
-    if (!xcb_ewmh_get_wm_desktop_reply(ewmh_.get(),
-            xcb_ewmh_get_wm_desktop(ewmh_.get(), window), &desktop, nullptr))
+    if (!xcb_ewmh_get_wm_desktop_reply(ewmh_.get(), xcb_ewmh_get_wm_desktop(ewmh_.get(), window), &desktop, nullptr))
         return std::nullopt;
     return desktop;
 }
@@ -1751,6 +1745,9 @@ bool WindowManager::is_window_visible(xcb_window_t window) const
 {
     auto const* client = get_client(window);
     if (!client)
+        return false;
+    // Off-screen windows are not visible regardless of workspace state
+    if (client->hidden)
         return false;
     return visibility_policy::is_window_visible(
         showing_desktop_,
@@ -1975,8 +1972,8 @@ bool WindowManager::wait_for_sync_counter(xcb_window_t window, uint64_t expected
         if (!reply)
             return false;
 
-        uint64_t current = (static_cast<uint64_t>(reply->counter_value.hi) << 32)
-            | static_cast<uint64_t>(reply->counter_value.lo);
+        uint64_t current =
+            (static_cast<uint64_t>(reply->counter_value.hi) << 32) | static_cast<uint64_t>(reply->counter_value.lo);
         free(reply);
 
         if (current >= expected_value)
@@ -2097,7 +2094,6 @@ void WindowManager::send_configure_notify(xcb_window_t window)
 
     free(geom_reply);
 }
-
 
 Monitor* WindowManager::monitor_at_point(int16_t x, int16_t y)
 {
@@ -2318,7 +2314,7 @@ void WindowManager::unmanage_dock_window(xcb_window_t window)
     if (it != dock_windows_.end())
     {
         dock_windows_.erase(it);
-        clients_.erase(window);  // Remove from unified Client registry
+        clients_.erase(window); // Remove from unified Client registry
         update_struts();
         rearrange_all_monitors();
         update_ewmh_client_list();
@@ -2331,55 +2327,88 @@ void WindowManager::unmanage_desktop_window(xcb_window_t window)
     if (it != desktop_windows_.end())
     {
         desktop_windows_.erase(it);
-        clients_.erase(window);  // Remove from unified Client registry
+        clients_.erase(window); // Remove from unified Client registry
         update_ewmh_client_list();
     }
 }
 
 /**
- * @brief Unmap a window with WM tracking to distinguish from client-initiated unmaps.
+ * @brief Hide a window by moving it off-screen (DWM-style visibility).
  *
- * ICCCM requires window managers to distinguish between WM-initiated unmaps
- * (e.g., hiding windows during workspace switches) and client-initiated unmaps
- * (withdraw requests). This function tracks WM-initiated unmaps by incrementing
- * a counter before calling xcb_unmap_window. The counter is decremented in
- * the UnmapNotify handler, and if the count is positive, the unmap is ignored.
+ * This replaces the previous unmap-based approach. Windows stay mapped at all times
+ * but are moved to x=-20000 when hidden. This resolves GPU-accelerated app redraw
+ * issues (Chromium, Qt, Electron) that occur after unmap/remap cycles.
  *
- * To avoid counter leaks (incrementing without a matching UnmapNotify), we only
- * increment if the window is currently mapped (XCB_MAP_STATE_VIEWABLE).
- * Unmapping an already-unmapped window produces no UnmapNotify event.
+ * Benefits:
+ * - No UnmapNotify/MapNotify events, simplifying ICCCM compliance
+ * - GPU-accelerated apps continue rendering and don't need reactivation
+ * - Faster workspace switching (no window recreation overhead)
+ *
+ * @param window The window to hide
  */
-void WindowManager::wm_unmap_window(xcb_window_t window)
+void WindowManager::hide_window(xcb_window_t window)
 {
-    LOG_TRACE("wm_unmap_window({:#x}) called", window);
+    LOG_TRACE("hide_window({:#x}) called", window);
 
-    // Only increment counter if window is currently viewable.
-    // Unmapping an already-unmapped window produces no UnmapNotify,
-    // which would leak the counter and cause future client unmaps to be ignored.
-    auto attr_cookie = xcb_get_window_attributes(conn_.get(), window);
-    auto* attr = xcb_get_window_attributes_reply(conn_.get(), attr_cookie, nullptr);
-    if (attr)
+    auto* client = get_client(window);
+    if (!client)
     {
-        bool viewable = attr->map_state == XCB_MAP_STATE_VIEWABLE;
-        free(attr);
-        if (viewable)
-        {
-            wm_unmapped_windows_[window] += 1;
-            LOG_TRACE("wm_unmap_window({:#x}): viewable, unmapping (counter={})",
-                      window, wm_unmapped_windows_[window]);
-            xcb_unmap_window(conn_.get(), window);
-        }
-        else
-        {
-            LOG_TRACE("wm_unmap_window({:#x}): already unmapped, skipping", window);
-        }
+        LOG_TRACE("hide_window({:#x}): no client, ignoring", window);
+        return;
     }
-    else
+
+    // Don't hide sticky windows (they're visible on all workspaces)
+    if (client->sticky)
     {
-        LOG_TRACE("wm_unmap_window({:#x}): no attributes, trying unmap anyway", window);
-        // Window might be destroyed - still try to unmap but don't track
-        xcb_unmap_window(conn_.get(), window);
+        LOG_TRACE("hide_window({:#x}): sticky window, ignoring", window);
+        return;
     }
+
+    if (client->hidden)
+    {
+        LOG_TRACE("hide_window({:#x}): already hidden, skipping", window);
+        return;
+    }
+
+    client->hidden = true;
+
+    // Move window off-screen (preserve y coordinate for restore)
+    uint32_t values[] = { static_cast<uint32_t>(OFF_SCREEN_X) };
+    xcb_configure_window(conn_.get(), window, XCB_CONFIG_WINDOW_X, values);
+
+    LOG_TRACE("hide_window({:#x}): moved to x={}", window, OFF_SCREEN_X);
+}
+
+/**
+ * @brief Show a previously hidden window by restoring its position.
+ *
+ * The window's geometry is restored via the normal layout/floating geometry
+ * management. This function just clears the hidden flag - the caller is
+ * responsible for configuring the correct geometry (via rearrange_monitor
+ * or apply_floating_geometry).
+ *
+ * @param window The window to show
+ */
+void WindowManager::show_window(xcb_window_t window)
+{
+    LOG_TRACE("show_window({:#x}) called", window);
+
+    auto* client = get_client(window);
+    if (!client)
+    {
+        LOG_TRACE("show_window({:#x}): no client, ignoring", window);
+        return;
+    }
+
+    if (!client->hidden)
+    {
+        LOG_TRACE("show_window({:#x}): not hidden, skipping", window);
+        return;
+    }
+
+    client->hidden = false;
+    LOG_TRACE("show_window({:#x}): marked as visible", window);
+    // Caller must configure actual geometry via rearrange_monitor or apply_floating_geometry
 }
 
 void WindowManager::clear_all_borders()

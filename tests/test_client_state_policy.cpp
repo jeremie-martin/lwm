@@ -47,7 +47,7 @@ TEST_CASE("Client has sensible defaults", "[client][state]")
     REQUIRE(c.workspace == 0);
 
     // All state flags should default to false
-    REQUIRE_FALSE(c.mapped);
+    REQUIRE_FALSE(c.hidden);
     REQUIRE_FALSE(c.fullscreen);
     REQUIRE_FALSE(c.above);
     REQUIRE_FALSE(c.below);

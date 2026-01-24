@@ -3,12 +3,8 @@
 
 namespace lwm::layout_policy {
 
-std::vector<Geometry> calculate_slots(
-    size_t count,
-    Geometry const& geometry,
-    AppearanceConfig const& appearance,
-    bool has_internal_bar
-)
+std::vector<Geometry>
+calculate_slots(size_t count, Geometry const& geometry, AppearanceConfig const& appearance, bool has_internal_bar)
 {
     std::vector<Geometry> slots;
     if (count == 0)
@@ -31,9 +27,8 @@ std::vector<Geometry> calculate_slots(
     uint32_t screenHeight = (geometry.height > barHeight) ? geometry.height - barHeight : MIN_DIM;
 
     // Helper to safely subtract with minimum bound
-    auto safe_sub = [MIN_DIM](uint32_t a, uint32_t b) -> uint32_t {
-        return (a > b) ? std::max(a - b, MIN_DIM) : MIN_DIM;
-    };
+    auto safe_sub = [MIN_DIM](uint32_t a, uint32_t b) -> uint32_t
+    { return (a > b) ? std::max(a - b, MIN_DIM) : MIN_DIM; };
 
     // In X11, window position is for client area, border is drawn outside.
     // To get uniform visual gaps, we must account for border width.
@@ -66,7 +61,9 @@ std::vector<Geometry> calculate_slots(
         int32_t leftX = baseX + padding + border;
         int32_t leftY = baseY + padding + border + barHeight;
         slots.push_back(
-            { static_cast<int16_t>(leftX), static_cast<int16_t>(leftY), static_cast<uint16_t>(leftWidth),
+            { static_cast<int16_t>(leftX),
+              static_cast<int16_t>(leftY),
+              static_cast<uint16_t>(leftWidth),
               static_cast<uint16_t>(winHeight) }
         );
 
@@ -74,7 +71,9 @@ std::vector<Geometry> calculate_slots(
         uint32_t rightWidth = safe_sub(availWidth, leftWidth);
         int32_t rightX = leftX + leftWidth + border + padding + border;
         slots.push_back(
-            { static_cast<int16_t>(rightX), static_cast<int16_t>(leftY), static_cast<uint16_t>(rightWidth),
+            { static_cast<int16_t>(rightX),
+              static_cast<int16_t>(leftY),
+              static_cast<uint16_t>(rightWidth),
               static_cast<uint16_t>(winHeight) }
         );
     }
@@ -92,7 +91,9 @@ std::vector<Geometry> calculate_slots(
         int32_t masterX = baseX + padding + border;
         int32_t masterY = baseY + padding + border + barHeight;
         slots.push_back(
-            { static_cast<int16_t>(masterX), static_cast<int16_t>(masterY), static_cast<uint16_t>(masterWidth),
+            { static_cast<int16_t>(masterX),
+              static_cast<int16_t>(masterY),
+              static_cast<uint16_t>(masterWidth),
               static_cast<uint16_t>(masterHeight) }
         );
 
@@ -111,7 +112,9 @@ std::vector<Geometry> calculate_slots(
         for (size_t i = 1; i < count; ++i)
         {
             slots.push_back(
-                { static_cast<int16_t>(stackX), static_cast<int16_t>(currentY), static_cast<uint16_t>(stackAvailWidth),
+                { static_cast<int16_t>(stackX),
+                  static_cast<int16_t>(currentY),
+                  static_cast<uint16_t>(stackAvailWidth),
                   static_cast<uint16_t>(stackSlotHeight) }
             );
             currentY += stackSlotHeight + border + padding + border;
@@ -193,11 +196,8 @@ void Layout::arrange(std::vector<xcb_window_t> const& windows, Geometry const& g
         configure_window(windows[i], slots[i].x, slots[i].y, width, height);
     }
 
-    // Map all windows AFTER configuring (ensures correct geometry on map)
-    for (xcb_window_t window : windows)
-    {
-        xcb_map_window(conn_.get(), window);
-    }
+    // With off-screen visibility, windows are always mapped.
+    // Layout::arrange just configures geometry - no mapping needed.
 
     conn_.flush();
 }
@@ -207,7 +207,8 @@ std::vector<Geometry> Layout::calculate_slots(size_t count, Geometry const& geom
     return layout_policy::calculate_slots(count, geometry, appearance_, has_internal_bar);
 }
 
-size_t Layout::drop_target_index(size_t count, Geometry const& geometry, bool has_internal_bar, int16_t x, int16_t y) const
+size_t
+Layout::drop_target_index(size_t count, Geometry const& geometry, bool has_internal_bar, int16_t x, int16_t y) const
 {
     return layout_policy::drop_target_index(count, geometry, appearance_, has_internal_bar, x, y);
 }
@@ -257,7 +258,7 @@ void Layout::apply_size_hints(xcb_window_t window, uint32_t& width, uint32_t& he
     //
     // Applications should handle being smaller than their preferred size gracefully.
     // Most modern toolkits (Qt, GTK) do this by scrolling, truncating, or adapting layout.
-    (void)window;  // Unused - kept for potential future per-window logic
+    (void)window; // Unused - kept for potential future per-window logic
 
     width = std::max<uint32_t>(1, width);
     height = std::max<uint32_t>(1, height);
