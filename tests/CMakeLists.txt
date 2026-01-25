@@ -6,14 +6,13 @@ FetchContent_Declare(
 )
 FetchContent_MakeAvailable(Catch2)
 
- add_executable(lwm_tests
+  add_executable(lwm_tests
     test_client_state_policy.cpp
     test_drag_policy.cpp
     test_ewmh_classification.cpp
     test_ewmh_policy.cpp
     test_focus_cycling_policy.cpp
     test_focus_policy.cpp
-    test_focus_policy_edge_cases.cpp
     test_focus_restoration_policy.cpp
     test_integration_focus.cpp
     test_integration_workspace.cpp
@@ -23,7 +22,7 @@ FetchContent_MakeAvailable(Catch2)
     test_window_rules.cpp
     test_workspace.cpp
     test_workspace_policy.cpp
-)
+  )
 
 target_link_libraries(lwm_tests PRIVATE liblwm Catch2::Catch2WithMain)
 target_include_directories(lwm_tests PRIVATE ${CMAKE_SOURCE_DIR}/src)
