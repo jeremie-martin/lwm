@@ -58,11 +58,11 @@ WindowManager (wm.cpp)
 
 ### Source File Organization
 
-| File | Purpose | Approx. Lines |
-|------|---------|---------------|
+| File | Purpose | Lines |
+|------|---------|-------|
 | wm.cpp | Main window management, initialization, core operations | ~2300 |
-| wm_events.cpp | XCB event handlers (switch on response_type) | ~1600 |
-| wm_floating.cpp | Floating window management | ~550 |
+| wm_events.cpp | XCB event handlers | ~1600 |
+| wm_floating.cpp | Floating window management | ~560 |
 | wm_focus.cpp | Focus handling logic | ~490 |
 | wm_workspace.cpp | Workspace switching, toggling, moving windows | ~330 |
 | wm_ewmh.cpp | EWMH protocol handling | ~260 |
@@ -127,9 +127,7 @@ struct Client {
 ```
 
 **WindowManager class members**:
-- `next_client_order_`: Counter for generating unique, monotonically increasing Client.order values
-  - Incremented when each new window is managed (src/lwm/wm.cpp:630)
-  - Used for consistent _NET_CLIENT_LIST ordering
+- `next_client_order_`: Counter for generating unique, monotonically increasing Client.order values (src/lwm/wm.cpp:630)
 
 ### Workspace (src/lwm/core/types.hpp:154-160)
 
@@ -204,10 +202,9 @@ struct FullscreenMonitors {
 ```
 
 **Strut Aggregation**:
-- Multiple dock windows can coexist on same monitor
-- Struts aggregated by taking maximum value for each side
-- Example: dock A with top=30 and dock B with top=50 → effective top strut is 50
-- Ensures all dock reservations honored simultaneously
+- Multiple dock windows can coexist on the same monitor.
+- Struts are aggregated by taking the maximum value for each side.
+- Example: dock A (top=30) and dock B (top=50) → effective top strut is 50.
 
 ### Key Constants (src/lwm/core/types.hpp:17; wm.cpp:21-24)
 
@@ -382,19 +379,11 @@ constexpr uint32_t WM_STATE_ICONIC = 3;
 
 LWM uses graceful error handling to prevent crashes and maintain stability:
 
-**Intentional no-ops**: Many operations return early without error logging for invalid state
-- Prevents cascading failures
-- Examples: focusing non-existent window, dragging fullscreen window, operations on unmanaged windows
+**Intentional no-ops**: Many operations return early without error logging for invalid state, preventing cascading failures (e.g., focusing non-existent window, dragging fullscreen window).
 
-**Bounds checking**: All array/vector access validated before use
-- Monitor indices checked against `monitors_.size()`
-- Workspace indices clamped to valid range
-- Client lookups validate existence before use
+**Bounds checking**: All array/vector access is validated before use (monitor indices checked against `monitors_.size()`, workspace indices clamped, client lookups validated).
 
-**Fallback behaviors**: When operations cannot proceed:
-- Return default values or early returns
-- Use fallback monitor/monitor 0 when indices are invalid
-- Preserve system state rather than crash
+**Fallback behaviors**: When operations cannot proceed, return default values or use fallback monitor/monitor 0 rather than crashing.
 
 ### Validation Strategy
 
@@ -416,12 +405,12 @@ LWM uses graceful error handling to prevent crashes and maintain stability:
 
 ### Overview
 
-LWM uses off-screen visibility instead of unmap/map cycles for controlling window visibility. This approach avoids GPU rendering issues with Chromium, Electron, Qt/PyQt with OpenGL applications.
+LWM uses off-screen visibility instead of unmap/map cycles for controlling window visibility. This avoids GPU rendering issues with Chromium, Electron, Qt/PyQt with OpenGL applications.
 
 **Mechanism**:
-- Windows always mapped (XCB_MAP_STATE_VIEWABLE) at all times
-- Visibility controlled by moving windows to off-screen position: `OFF_SCREEN_X = -20000` (src/lwm/core/types.hpp:18)
-- `client.hidden` flag tracks off-screen state: true = at OFF_SCREEN_X, false = at on-screen position
+- Windows are always mapped (XCB_MAP_STATE_VIEWABLE) at all times.
+- Visibility is controlled by moving windows to off-screen position: `OFF_SCREEN_X = -20000` (src/lwm/core/types.hpp:18).
+- `client.hidden` flag tracks off-screen state: true = at OFF_SCREEN_X, false = at on-screen position.
 
 ### Key Functions
 
@@ -449,9 +438,9 @@ LWM uses off-screen visibility instead of unmap/map cycles for controlling windo
 ### Interaction with ICCCM
 
 With off-screen visibility, ALL UnmapNotify events are client-initiated withdraw requests:
-- WM never unmaps windows (always uses off-screen positioning)
-- No counter tracking exists (unlike traditional unmap-based visibility)
-- Any UnmapNotify triggers `handle_window_removal()` (src/lwm/wm_events.cpp:66-73)
+- WM never unmaps windows (always uses off-screen positioning).
+- No counter tracking exists (unlike traditional unmap-based visibility).
+- Any UnmapNotify triggers `handle_window_removal()` (src/lwm/wm_events.cpp:66-73).
 
 ### Sticky Window Visibility
 
@@ -527,12 +516,12 @@ The following conditions can prevent focus even for focus-eligible windows:
 
 **focus_or_fallback(monitor)** - Smart focus selection:
 1. Build candidates (order of preference):
-    - `workspace.focused_window` if exists in workspace AND eligible (validated to exist)
-    - Current workspace tiled windows (reverse iteration = MRU)
-    - Sticky tiled windows from other workspaces (reverse iteration)
-    - Floating windows visible on monitor (reverse iteration = MRU)
-2. Call focus_policy::select_focus_candidate()
-3. Focus selected or clear focus
+    - `workspace.focused_window` if exists in workspace AND eligible (validated to exist).
+    - Current workspace tiled windows (reverse iteration = MRU).
+    - Sticky tiled windows from other workspaces (reverse iteration).
+    - Floating windows visible on monitor (reverse iteration = MRU).
+2. Call focus_policy::select_focus_candidate().
+3. Focus selected or clear focus.
 
 For complete focus system details, see [STATE_MACHINE.md §6](STATE_MACHINE.md#6-focus-system).
 
@@ -543,9 +532,9 @@ For complete focus system details, see [STATE_MACHINE.md §6](STATE_MACHINE.md#6
 ### Workspace Structure
 
 Each Monitor contains a vector of Workspace objects (src/lwm/core/types.hpp:162-175):
-- **current_workspace**: Currently visible workspace index
-- **previous_workspace**: Last visible workspace (for toggle functionality)
-- Each workspace maintains ordered list of tiled windows and focused_window hint
+- **current_workspace**: Currently visible workspace index.
+- **previous_workspace**: Last visible workspace (for toggle functionality).
+- Each workspace maintains ordered list of tiled windows and focused_window hint.
 
 ### Monitor Detection and Hotplug
 

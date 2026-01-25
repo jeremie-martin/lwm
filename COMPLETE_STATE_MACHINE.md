@@ -1,14 +1,18 @@
- # LWM Window Manager - Complete Logic Specification
+# LWM Window Manager - Complete Logic Specification
 
-> **⚠️ DOCUMENTATION REORGANIZATION**
-> This document has been **split into focused documents** for improved navigability. The following new documents supersede this one:
+> **⚠️⚠️ SUPERSEDED DOCUMENT - DO NOT USE FOR NEW WORK ⚠️⚠️**
 >
-> - **[DOCS_INDEX.md](DOCS_INDEX.md)** - Documentation roadmap
+> This document has been **replaced by focused documents** for improved navigability and maintainability.
+>
+> **Use these documents instead:**
+> - **[DOCS_INDEX.md](DOCS_INDEX.md)** - Complete documentation roadmap
 > - **[IMPLEMENTATION.md](IMPLEMENTATION.md)** - Architecture, data structures, invariants
-> - **[STATE_MACHINE.md](STATE_MACHINE.md)** - Window states and transitions
-> - **[EVENT_HANDLING.md](EVENT_HANDLING.md)** - Event handling specifications
+> - **[STATE_MACHINE.md](STATE_MACHINE.md)** - Window states, state transitions, lifecycle
+> - **[EVENT_HANDLING.md](EVENT_HANDLING.md)** - Event-by-event handling specifications
+> - **[BEHAVIOR.md](BEHAVIOR.md)** - User-facing behavior
+> - **[COMPLIANCE.md](COMPLIANCE.md)** - Protocol obligations
 >
-> **For new work, please reference the split documents instead.** This file is retained for reference during transition.
+> **Status:** Retained for historical reference during transition period. Content here may be outdated.
 
 > **Documentation Navigation**
 > - Previous: [BEHAVIOR.md](BEHAVIOR.md) (User-facing behavior) | [CLAUDE.md](CLAUDE.md) (Development guide)
@@ -2158,3 +2162,13 @@ handle_timeouts()
 
 
 
+
+
+---
+
+**⚠️ SUPERSEDED DOCUMENT**
+This document is historical reference only. For current documentation, see:
+- [DOCS_INDEX.md](DOCS_INDEX.md) - Complete documentation roadmap
+- [IMPLEMENTATION.md](IMPLEMENTATION.md) - Architecture and data structures
+- [STATE_MACHINE.md](STATE_MACHINE.md) - Window states and transitions
+- [EVENT_HANDLING.md](EVENT_HANDLING.md) - Event handling specifications

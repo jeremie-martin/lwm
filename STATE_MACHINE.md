@@ -118,15 +118,15 @@ Each Client maintains state flags (src/lwm/core/types.hpp:118-134):
 - **WITHDRAWN**: Withdrawn from WM (client-initiated)
 
 **State flag relationships**:
-- **`hidden`**: Physical state flag (positioned off-screen at OFF_SCREEN_X = -20000)
-- **`iconic`**: Logical state flag (minimized by user, WM_STATE Iconic)
-- **iconic ⇒ hidden for NON-STICKY windows**: Minimized windows off-screen; sticky windows exception
-- **hidden does NOT ⇒ iconic**: Workspace switches hide windows without iconifying
-- **hidden=false ⇒ iconic=false for NON-STICKY windows**: On-screen windows cannot be minimized
-- **Sticky window exception**: Iconic sticky windows have `iconic=true` but `hidden=false` (hide_window() returns early)
+- **`hidden`**: Physical state flag (positioned off-screen at OFF_SCREEN_X = -20000).
+- **`iconic`**: Logical state flag (minimized by user, WM_STATE Iconic).
+- **iconic ⇒ hidden for NON-STICKY windows**: Minimized windows off-screen; sticky windows exception.
+- **hidden does NOT ⇒ iconic**: Workspace switches hide windows without iconifying.
+- **hidden=false ⇒ iconic=false for NON-STICKY windows**: On-screen windows cannot be minimized.
+- **Sticky window exception**: Iconic sticky windows have `iconic=true` but `hidden=false` (hide_window() returns early).
 
-**State modifiers**: Apply to VISIBLE windows: fullscreen, above, below, sticky, maximized, shaded, modal
-- `fullscreen` combines with VISIBLE state; fullscreen windows excluded from tiling
+**State modifiers**: Apply to VISIBLE windows: fullscreen, above, below, sticky, maximized, shaded, modal.
+- `fullscreen` combines with VISIBLE state; fullscreen windows are excluded from tiling.
 
 ### State Truth Table
 
@@ -145,9 +145,9 @@ Each Client maintains state flags (src/lwm/core/types.hpp:118-134):
 ### State Conflicts
 
 - **Modal and Above**: Modal windows automatically stacked above others (setting modal also sets above). However, above flag can be set independently without making window modal. This is one-way coupling: modal ⇒ above, but above ⇏ modal.
-- **Fullscreen and Maximized**: Fullscreen supersedes maximized. When fullscreen enabled, maximized flags cleared. Maximization changes ignored while window is fullscreen.
+- **Fullscreen and Maximized**: Fullscreen supersedes maximized. When fullscreen enabled, maximized flags are cleared. Maximization changes are ignored while window is fullscreen.
 - **Above and Below**: Mutually exclusive - window cannot be both above and below simultaneously.
-- **Fullscreen and Iconic**: Windows can be fullscreen while iconic (off-screen). Fullscreen geometry applied when window becomes deiconified and on current workspace.
+- **Fullscreen and Iconic**: Windows can be fullscreen while iconic (off-screen). Fullscreen geometry is applied when window becomes deiconified and on current workspace.
 
 ---
 
@@ -454,13 +454,13 @@ If disabled:
 10. Update _NET_CLIENT_LIST
 
 **restack_transients()** - Restacks modal/transient windows above parent (src/lwm/wm.cpp:1730-1751):
-- Identifies transients via client.transient_for field
+- Identifies transients via client.transient_for field.
 - Only restacks transients that are:
-  - Visible (client.hidden == false)
-  - Not iconic
-  - On current workspace
-- Skips transients on other workspaces
-- Ensures modal windows stay above parent during focus changes
+    - Visible (client.hidden == false).
+    - Not iconic.
+    - On current workspace.
+- Skips transients on other workspaces.
+- Ensures modal windows stay above parent during focus changes.
 
 **focus_floating_window(window)** - Floating windows (src/lwm/wm_focus.cpp:125-259):
 1. Same checks as tiled (including NOT hidden)
@@ -470,12 +470,12 @@ If disabled:
 
 **focus_or_fallback(monitor)** - Smart focus selection (src/lwm/wm_focus.cpp:272-355):
 1. Build candidates (order of preference):
-    - `workspace.focused_window` if exists in workspace AND eligible (validated to exist)
-    - Current workspace tiled windows (reverse iteration = MRU)
-    - Sticky tiled windows from other workspaces (reverse iteration)
-    - Floating windows visible on monitor (reverse iteration = MRU)
-2. Call focus_policy::select_focus_candidate()
-3. Focus selected or clear focus
+    - `workspace.focused_window` if exists in workspace AND eligible (validated to exist).
+    - Current workspace tiled windows (reverse iteration = MRU).
+    - Sticky tiled windows from other workspaces (reverse iteration).
+    - Floating windows visible on monitor (reverse iteration = MRU).
+2. Call focus_policy::select_focus_candidate().
+3. Focus selected or clear focus.
 
 **Empty workspace behavior**: When switching to an empty workspace or when the last window on a workspace is removed, `focus_or_fallback()` finds no candidates and clears focus (sets `active_window_ = XCB_NONE`).
 

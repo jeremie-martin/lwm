@@ -24,9 +24,7 @@ and are not duplicated here.
 - Each workspace maintains:
   - An ordered list of **tiled** windows (tiling layout order)
   - A "last-focused" tiled window (if any)
-- **Floating windows** are tracked globally with explicit monitor/workspace association. Focus restoration searches floating windows in MRU order (workspace focus memory tracks only tiled windows).
-
-**Implementation Note**: All window state (fullscreen, iconic, sticky, above, below, maximized, shaded, modal) is stored in a unified `Client` record. The tiled/floating distinction affects only layout participation and workspace storage.
+- **Floating windows** are tracked globally with explicit monitor/workspace association. Focus restoration searches floating windows in MRU order.
 
 ### 1.3 Window Classes (Behavioral)
 
@@ -87,7 +85,7 @@ See [STATE_MACHINE.md](STATE_MACHINE.md#6-focus-system) for implementation detai
 
 LWM defines focus behavior for pointer movement over empty space:
 
-1. **Empty space on the same monitor**: Focus does not change; remains on the previously focused window.
+1. **Empty space on the same monitor**: Focus remains on the previously focused window.
 2. **Crossing to a different monitor**: The target monitor becomes the active monitor.
 3. **Empty space on a different monitor**: Global focus is cleared (no window is focused).
 4. **Entering a window on the other monitor**: The entered window becomes focused immediately.
@@ -126,10 +124,9 @@ When moving a window to another workspace:
 ### 4.1 Switching Active Monitor (Explicit)
 When explicitly switching the active monitor:
 - The target monitor becomes active.
-- Focus is restored on that monitor’s visible workspace according to Section 2.4.
+- Focus is restored on that monitor's visible workspace according to Section 2.4.
 
-Cursor warping is a configurable UI behavior; it is not required unless explicitly enabled.
-Configuration: `[focus].warp_cursor_on_monitor_change = true`.
+Cursor warping is optional; configure with `[focus].warp_cursor_on_monitor_change = true`.
 
 ### 4.2 Moving a Window to Another Monitor
 When moving a window to another monitor:
@@ -220,7 +217,7 @@ Rules are applied at map time (when the window first appears) to customize behav
 
 ### 9.2 Rule Evaluation
 - Rules are defined in configuration as an ordered list.
-- **First-match-wins**: First matching rule is applied; subsequent rules ignored.
+- **First-match-wins**: First matching rule is applied; subsequent rules are ignored.
 - Empty criteria set matches all windows.
 
 ### 9.3 Matching Criteria
@@ -256,7 +253,7 @@ For detailed EWMH window type handling and precedence, see [COMPLIANCE.md](COMPL
 ---
 
 ## 10. Non-Goals for This Document
-- Protocol-level property/message requirements (COMPLIANCE.md).
+- Protocol-level property/message requirements (see COMPLIANCE.md).
 - Internal data structures, event names, or X11-specific mechanics.
 - Exact keybinding tables (configuration-level documentation).
 - Hardcoded visuals (borders/colors), unless part of the product spec.

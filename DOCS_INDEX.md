@@ -27,8 +27,13 @@ If you're new to LWM:
 - **[STATE_MACHINE.md](STATE_MACHINE.md)** - Window state machine, state transitions, lifecycle
 - **[EVENT_HANDLING.md](EVENT_HANDLING.md)** - Event-by-event handling specifications
 
+**Note**: [COMPLETE_STATE_MACHINE.md](COMPLETE_STATE_MACHINE.md) is superseded by the documents above and retained only for reference.
+
 ### For Future Work
 - **[FEATURE_IDEAS.md](FEATURE_IDEAS.md)** - Feature backlog, design principles, implementation ideas
+
+### Legacy Documentation
+- **[COMPLETE_STATE_MACHINE.md](COMPLETE_STATE_MACHINE.md)** - **⚠️ SUPERSEDED** - Historical reference only. Replaced by IMPLEMENTATION.md, STATE_MACHINE.md, and EVENT_HANDLING.md. Retained for transition reference.
 
 ## Key Concepts by Topic
 

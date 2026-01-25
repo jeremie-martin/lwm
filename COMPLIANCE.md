@@ -43,15 +43,15 @@ The WM must read and honor these client-set properties.
 - Read for display purposes and session management.
 
 #### WM_NORMAL_HINTS (Size Hints)
-- `min_width`, `min_height`: enforce minimum dimensions
-- `max_width`, `max_height`: **not enforced** (tiling WM controls sizing)
-- `base_width`, `base_height`: **not enforced** (increments ignored for all windows)
-- `width_inc`, `height_inc`: **intentionally not enforced** for any windows (tiled or floating)
-  - Rationale: Resize increments (e.g., terminal character sizes) would block pixel-granular resizing. LWM prioritizes smooth, consistent layout and uniform gaps over character-cell alignment
-- `min_aspect`, `max_aspect`: **not enforced** (could cause layout gaps)
-- `win_gravity`: **not implemented** (no plans to implement; tiled windows use WM-controlled positioning)
-- `PPosition`, `USPosition`: honor user-specified position for floating windows
-- `PSize`, `USSize`: honor user-specified size for initial mapping
+- `min_width`, `min_height`: enforce minimum dimensions.
+- `max_width`, `max_height`: **not enforced** (tiling WM controls sizing).
+- `base_width`, `base_height`: **not enforced** (increments ignored for all windows).
+- `width_inc`, `height_inc`: **intentionally not enforced** for any windows (tiled or floating).
+  - Rationale: Resize increments (e.g., terminal character sizes) would block pixel-granular resizing. LWM prioritizes smooth, consistent layout and uniform gaps over character-cell alignment.
+- `min_aspect`, `max_aspect`: **not enforced** (could cause layout gaps).
+- `win_gravity`: **not implemented** (no plans to implement; tiled windows use WM-controlled positioning).
+- `PPosition`, `USPosition`: honor user-specified position for floating windows.
+- `PSize`, `USSize`: honor user-specified size for initial mapping.
 
 #### WM_HINTS
 - `input`: if False, never call `SetInputFocus` on the window.
@@ -444,7 +444,7 @@ If implementing system tray support:
 
 ## Invariants and Consistency Requirements
 
-1. **_NET_SUPPORTED Accuracy**: Every atom in `_NET_SUPPORTED` must have working implementation
+1. **_NET_SUPPORTED Accuracy**: Every atom in `_NET_SUPPORTED` must have working implementation.
 
 2. **Window State Application Ordering**: Geometry-affecting states MUST be applied BEFORE the window is mapped. This prevents "flash" artifacts where windows briefly render at wrong geometry. While ICCCM and EWMH do not specify this ordering, it is a design principle for visual correctness.
 
@@ -454,30 +454,30 @@ If implementing system tray support:
     - `_NET_WM_STATE_SHADED` - Affects height (implemented as iconify)
 
     Ordering contract:
-    1. Create Client record with all state flags read from window properties
-    2. Determine window type (tiled/floating/dock/etc.)
-    3. Apply geometry-affecting states that change placement calculation
-    4. Calculate and configure final geometry
-    5. Map the window
-    6. Apply non-geometry states (above, below, skip_taskbar, etc.)
+    1. Create Client record with all state flags read from window properties.
+    2. Determine window type (tiled/floating/dock/etc.).
+    3. Apply geometry-affecting states that change placement calculation.
+    4. Calculate and configure final geometry.
+    5. Map the window.
+    6. Apply non-geometry states (above, below, skip_taskbar, etc.).
 
 3. **State Consistency**:
-    - `WM_STATE=IconicState` ↔ `_NET_WM_STATE` contains `HIDDEN`
-    - `_NET_ACTIVE_WINDOW` = None ↔ no window has input focus
-    - `_NET_CLIENT_LIST` contains exactly all managed, non-override-redirect windows
-    - `_NET_CLIENT_LIST_STACKING` has same windows as `_NET_CLIENT_LIST`
+    - `WM_STATE=IconicState` ↔ `_NET_WM_STATE` contains `HIDDEN`.
+    - `_NET_ACTIVE_WINDOW` = None ↔ no window has input focus.
+    - `_NET_CLIENT_LIST` contains exactly all managed, non-override-redirect windows.
+    - `_NET_CLIENT_LIST_STACKING` has same windows as `_NET_CLIENT_LIST`.
 
 4. **Desktop Consistency**:
-    - `_NET_CURRENT_DESKTOP` < `_NET_NUMBER_OF_DESKTOPS`
-    - All window `_NET_WM_DESKTOP` values are valid or 0xFFFFFFFF
+    - `_NET_CURRENT_DESKTOP` < `_NET_NUMBER_OF_DESKTOPS`.
+    - All window `_NET_WM_DESKTOP` values are valid or 0xFFFFFFFF.
 
 5. **Workarea Accuracy**:
-    - `_NET_WORKAREA` reflects all active struts
-    - Updated immediately when struts change
+    - `_NET_WORKAREA` reflects all active struts.
+    - Updated immediately when struts change.
 
 6. **Frame Extents**:
-    - `_NET_FRAME_EXTENTS` set before and after mapping
-    - Accurate for frame geometry calculations
+    - `_NET_FRAME_EXTENTS` set before and after mapping.
+    - Accurate for frame geometry calculations.
 
 ---
 

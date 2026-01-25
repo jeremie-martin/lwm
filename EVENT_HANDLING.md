@@ -50,25 +50,25 @@ run()
 
 ### Event Handler Summary
 
-All event handlers are in src/lwm/wm_events.cpp and methods of WindowManager class.
+All event handlers are in src/lwm/wm_events.cpp.
 
 | Event | Handler | Effect | Source |
 |-------|---------|--------|---------|
-| MapRequest | handle_map_request | LWM classifies and manages window. Handles deiconify if already managed | wm_events.cpp |
-| UnmapNotify | handle_window_removal | With off-screen visibility, ALL unmaps are client-initiated withdraw requests. LWM calls handle_window_removal() to unmanage window | wm_events.cpp:66-73 |
-| DestroyNotify | handle_window_removal | LWM unmanages window | wm_events.cpp:74-79 |
-| EnterNotify | handle_enter_notify | LWM implements focus-follows-mouse. Ignores hidden windows. Updates focused_monitor on root window entry | wm_events.cpp:80-82 |
-| MotionNotify | handle_motion_notify | LWM re-establishes focus in window. Ignores hidden windows. Updates focused_monitor if crossing monitor | wm_events.cpp:83-84 |
-| ButtonPress | handle_button_press | LWM focuses window and begins drag. Ignores hidden windows. Updates focused_monitor | wm_events.cpp:85-87 |
-| ButtonRelease | handle_button_release | LWM ends drag | wm_events.cpp:88-89 |
-| KeyPress | handle_key_press | LWM executes keybind actions | wm_events.cpp:90-92 |
-| KeyRelease | handle_key_release | LWM tracks for auto-repeat detection | wm_events.cpp:93-94 |
-| ClientMessage | handle_client_message | LWM handles EWMH/ICCCM commands | wm_events.cpp:95-96 |
-| ConfigureRequest | handle_configure_request | LWM handles geometry requests. See below for detailed behavior | wm_events.cpp:97-98 |
-| PropertyNotify | handle_property_notify | LWM tracks state changes, title, hints, sync counter, struts, and user_time_window indirection for _NET_WM_USER_TIME | wm_events.cpp:99-100 |
+| MapRequest | handle_map_request | Classifies and manages window. Handles deiconify if already managed | wm_events.cpp |
+| UnmapNotify | handle_window_removal | With off-screen visibility, ALL unmaps are client-initiated withdraw requests | wm_events.cpp:66-73 |
+| DestroyNotify | handle_window_removal | Unmanages window | wm_events.cpp:74-79 |
+| EnterNotify | handle_enter_notify | Implements focus-follows-mouse. Ignores hidden windows. Updates focused_monitor on root window entry | wm_events.cpp:80-82 |
+| MotionNotify | handle_motion_notify | Re-establishes focus in window. Ignores hidden windows. Updates focused_monitor if crossing monitor | wm_events.cpp:83-84 |
+| ButtonPress | handle_button_press | Focuses window and begins drag. Ignores hidden windows. Updates focused_monitor | wm_events.cpp:85-87 |
+| ButtonRelease | handle_button_release | Ends drag | wm_events.cpp:88-89 |
+| KeyPress | handle_key_press | Executes keybind actions | wm_events.cpp:90-92 |
+| KeyRelease | handle_key_release | Tracks for auto-repeat detection | wm_events.cpp:93-94 |
+| ClientMessage | handle_client_message | Handles EWMH/ICCCM commands | wm_events.cpp:95-96 |
+| ConfigureRequest | handle_configure_request | Handles geometry requests | wm_events.cpp:97-98 |
+| PropertyNotify | handle_property_notify | Tracks state changes, title, hints, sync counter, struts, and user_time_window indirection for _NET_WM_USER_TIME | wm_events.cpp:99-100 |
 | Expose | handle_expose | No-op (internal bar removed). External bars are handled via struts. | wm_events.cpp:101-102 |
-| SelectionClear | (handled in run) | New WM taking over. LWM exits | wm.cpp:98-105 |
-| RANDR change | handle_randr_screen_change | LWM handles monitor hotplug | wm_events.cpp:55-59 |
+| SelectionClear | (handled in run) | New WM taking over. Exits | wm.cpp:98-105 |
+| RANDR change | handle_randr_screen_change | Handles monitor hotplug | wm_events.cpp:55-59 |
 
 ### Key Event Handlers
 
@@ -77,26 +77,22 @@ All event handlers are in src/lwm/wm_events.cpp and methods of WindowManager cla
 **Implementation**: src/lwm/wm_events.cpp:141-442
 
 **Behavior**:
-1. Check if window already managed → call deiconify_window()
-   - Focus is only set if window is on current workspace of focused monitor
-   - Otherwise just deiconifies
-2. If override-redirect → Ignore (menus, dropdowns)
-3. classify_window() → Kind (Tiled/Floating/Dock/Desktop/Popup)
-   - If Popup: Map directly, NOT MANAGED, return
-4. apply_window_rules()
-   - Can override EWMH states except Dock/Desktop/Popup types
-5. Create Client record (order = next_client_order_++)
-6. Read initial EWMH state (precedence: _NET_WM_STATE_HIDDEN > WM_HINTS.initial_state)
-7. If Floating: Create FloatingWindow, determine placement
-8. Add to workspace.windows (Tiled) or floating_windows_ (Floating)
-9. Set WM_STATE (Normal/Iconic)
-10. Apply geometry-affecting states (fullscreen, maximized)
-11. Configure geometry (apply rule geometry, fullscreen geometry, or placement logic)
-12. Send synthetic ConfigureNotify
-13. xcb_map_window() (always, even if will be hidden)
-14. If start_iconic or not visible: hide_window() (move off-screen)
-15. Apply non-geometry states (above, below, skip_*)
-16. Update _NET_CLIENT_LIST
+1. Check if window already managed → call deiconify_window() (focus is only set if window is on current workspace of focused monitor, otherwise just deiconifies).
+2. If override-redirect → Ignore (menus, dropdowns).
+3. classify_window() → Kind (Tiled/Floating/Dock/Desktop/Popup) (if Popup: Map directly, NOT MANAGED, return).
+4. apply_window_rules() (can override EWMH states except Dock/Desktop/Popup types).
+5. Create Client record (order = next_client_order_++).
+6. Read initial EWMH state (precedence: _NET_WM_STATE_HIDDEN > WM_HINTS.initial_state).
+7. If Floating: Create FloatingWindow, determine placement.
+8. Add to workspace.windows (Tiled) or floating_windows_ (Floating).
+9. Set WM_STATE (Normal/Iconic).
+10. Apply geometry-affecting states (fullscreen, maximized).
+11. Configure geometry (apply rule geometry, fullscreen geometry, or placement logic).
+12. Send synthetic ConfigureNotify.
+13. xcb_map_window() (always, even if will be hidden).
+14. If start_iconic or not visible: hide_window() (move off-screen).
+15. Apply non-geometry states (above, below, skip_*).
+16. Update _NET_CLIENT_LIST.
 
 #### UnmapNotify
 
@@ -108,29 +104,29 @@ All event handlers are in src/lwm/wm_events.cpp and methods of WindowManager cla
 - Calls handle_window_removal() to unmanage window
 
 **handle_window_removal() actions**:
-1. Set WM_STATE = Withdrawn
-2. Erase pending_kills_, pending_pings_
-3. Erase clients_[window]
-4. Remove from workspace.windows or floating_windows_
-5. Update workspace.focused_window (set to workspace.windows.back() or XCB_NONE if empty)
+1. Set WM_STATE = Withdrawn.
+2. Erase pending_kills_, pending_pings_.
+3. Erase clients_[window].
+4. Remove from workspace.windows or floating_windows_.
+5. Update workspace.focused_window (set to workspace.windows.back() or XCB_NONE if empty).
 6. If was active_window_:
-   - If removed window's workspace is the **current workspace** of its monitor AND that monitor is the currently focused monitor: focus_or_fallback(removed window's monitor)
-   - Else: clear_focus()
-7. Rearrange monitor, update _NET_CLIENT_LIST
+    - If removed window's workspace is the **current workspace** of its monitor AND that monitor is the currently focused monitor: focus_or_fallback(removed window's monitor).
+    - Else: clear_focus().
+7. Rearrange monitor, update _NET_CLIENT_LIST.
 
 #### EnterNotify
 
 **Implementation**: src/lwm/wm_events.cpp:451-523
 
 **Behavior**:
-1. Extract event timestamp (via extract_event_time())
-2. If mode != NORMAL: return
-3. If detail == INFERIOR: return (spurious event)
-4. If window has no client: return
-5. If client.hidden == true: return (off-screen windows don't receive focus)
-6. If not is_focus_eligible(window): return
-7. Update focused_monitor_ to monitor containing pointer
-8. Focus window (calls focus_window())
+1. Extract event timestamp (via extract_event_time()).
+2. If mode != NORMAL: return.
+3. If detail == INFERIOR: return (spurious event).
+4. If window has no client: return.
+5. If client.hidden == true: return (off-screen windows don't receive focus).
+6. If not is_focus_eligible(window): return.
+7. Update focused_monitor_ to monitor containing pointer.
+8. Focus window (calls focus_window()).
 
 **Note**: Iconic windows are filtered via hidden check for non-sticky windows (iconic ⇒ hidden).
 
@@ -139,14 +135,14 @@ All event handlers are in src/lwm/wm_events.cpp and methods of WindowManager cla
 **Implementation**: src/lwm/wm_events.cpp:524-572
 
 **Behavior**:
-1. Extract event timestamp
-2. If in DRAG mode: call update_drag() and return
-3. If window has no client: return
-4. If client.hidden == true: return
-5. If not is_focus_eligible(window): return
-6. If window == active_window_: return (already focused)
-7. Update focused_monitor_ to monitor containing pointer (if crossed boundary)
-8. Re-focus window (calls focus_window())
+1. Extract event timestamp.
+2. If in DRAG mode: call update_drag() and return.
+3. If window has no client: return.
+4. If client.hidden == true: return.
+5. If not is_focus_eligible(window): return.
+6. If window == active_window_: return (already focused).
+7. Update focused_monitor_ to monitor containing pointer (if crossed boundary).
+8. Re-focus window (calls focus_window()).
 
 **Purpose**: Re-establishes focus if lost (e.g., due to focus stealing prevention).
 
@@ -155,21 +151,21 @@ All event handlers are in src/lwm/wm_events.cpp and methods of WindowManager cla
 **Implementation**: src/lwm/wm_events.cpp:585-648
 
 **Behavior**:
-1. Extract event timestamp
-2. If in DRAG mode: call update_drag() and return
-3. Find matching mousebinding (modifier + button)
+1. Extract event timestamp.
+2. If in DRAG mode: call update_drag() and return.
+3. Find matching mousebinding (modifier + button).
 4. If window is root window:
-   - Clear focus (active_window_ = XCB_NONE)
-   - Execute mousebind action (if any)
-   - Return
-5. If window has no client: return
-6. If client.hidden == true: return
-7. Update focused_monitor_ to monitor containing pointer
-8. Focus window (calls focus_window())
+    - Clear focus (active_window_ = XCB_NONE).
+    - Execute mousebind action (if any).
+    - Return.
+5. If window has no client: return.
+6. If client.hidden == true: return.
+7. Update focused_monitor_ to monitor containing pointer.
+8. Focus window (calls focus_window()).
 9. If mousebind action is "drag_window":
-   - If tiled: begin_tiled_drag()
-   - If floating: begin_drag()
-10. Else: Execute mousebind action
+    - If tiled: begin_tiled_drag().
+    - If floating: begin_drag().
+10. Else: Execute mousebind action.
 
 #### ConfigureRequest
 
@@ -178,27 +174,27 @@ All event handlers are in src/lwm/wm_events.cpp and methods of WindowManager cla
 **Behavior**:
 
 **For tiled/managed windows**:
-- Acknowledge with synthetic ConfigureNotify reflecting WM-determined geometry
-- Apply size hint constraints
-- Do NOT actually change geometry (tiling layout controls it)
+- Acknowledge with synthetic ConfigureNotify reflecting WM-determined geometry.
+- Apply size hint constraints.
+- Do NOT actually change geometry (tiling layout controls it).
 
 **For floating windows**:
-- Apply requested changes within size hint constraints
-- Honor position requests if reasonable
-- Apply to FloatingWindow.geometry and call apply_floating_geometry()
+- Apply requested changes within size hint constraints.
+- Honor position requests if reasonable.
+- Apply to FloatingWindow.geometry and call apply_floating_geometry().
 
 **For fullscreen windows**:
-- Apply fullscreen geometry (ignores client request)
-- Ensures fullscreen state is maintained
+- Apply fullscreen geometry (ignores client request).
+- Ensures fullscreen state is maintained.
 
 **For hidden windows**:
-- Configure request is applied normally
-- If request changes x coordinate, window moves from OFF_SCREEN_X to the new position
-- Subsequent visibility updates (via rearrange_monitor, workspace switch, or other triggers) may re-hide the window if it should not be visible
-- This is intentional behavior: window briefly becomes visible at requested position, then visibility management reasserts correct state
+- Configure request is applied normally.
+- If request changes x coordinate, window moves from OFF_SCREEN_X to the new position.
+- Subsequent visibility updates (via rearrange_monitor, workspace switch, or other triggers) may re-hide the window if it should not be visible.
+- This is intentional behavior: window briefly becomes visible at requested position, then visibility management reasserts correct state.
 
 **For override-redirect windows**:
-- Ignore (not managed)
+- Ignore (not managed).
 
 #### PropertyNotify
 
@@ -216,10 +212,10 @@ All event handlers are in src/lwm/wm_events.cpp and methods of WindowManager cla
 
 **User time window indirection**:
 - If PropertyNotify arrives on user_time_window for _NET_WM_USER_TIME:
-  - Find parent Client via get_client()
-  - Update parent Client.user_time
-- If no parent found (window unmanaged): Silently ignore
-- Race condition: If window is unmanaged after finding match but before get_client(), drop update
+    - Find parent Client via get_client().
+    - Update parent Client.user_time.
+- If no parent found (window unmanaged): Silently ignore.
+- Race condition: If window is unmanaged after finding match but before get_client(), drop update.
 
 #### ClientMessage
 
@@ -290,37 +286,37 @@ Drag state active (drag_state_.active = true).
 - Both functions reject fullscreen windows and showing_desktop mode
 
 **Behavior**:
-- Ignores EnterNotify events (focus-follows-mouse disabled)
-- Ignores MotionNotify events (except for drag updates via update_drag())
-- ButtonRelease calls end_drag()
-- KeyPress events ARE processed: keybinds can execute during drag (e.g., toggle_fullscreen, kill_window)
+- Ignores EnterNotify events (focus-follows-mouse disabled).
+- Ignores MotionNotify events (except for drag updates via update_drag()).
+- ButtonRelease calls end_drag().
+- KeyPress events ARE processed: keybinds can execute during drag (e.g., toggle_fullscreen, kill_window).
 
 **Exit conditions**:
-- ButtonRelease → end_drag()
-- Window destroyed during drag → end_drag() returns early (monitors check fails)
-- All monitors disconnected → end_drag() returns early
+- ButtonRelease → end_drag().
+- Window destroyed during drag → end_drag() returns early (monitors check fails).
+- All monitors disconnected → end_drag() returns early.
 
 **Edge cases**:
-- If window is destroyed during drag: drag_state_ is reset but window geometry is not restored
-- If all monitors disconnected: pointer is ungrabbed but window remains at last position
-- No error logging for these cases (intentional no-op)
+- If window is destroyed during drag: drag_state_ is reset but window geometry is not restored.
+- If all monitors disconnected: pointer is ungrabbed but window remains at last position.
+- No error logging for these cases (intentional no-op).
 
 ### SHOWING_DESKTOP Mode
 
 Desktop mode enabled (showing_desktop_ = true).
 
 **Entry condition**:
-- _NET_SHOWING_DESKTOP ClientMessage with value=1
+- _NET_SHOWING_DESKTOP ClientMessage with value=1.
 
 **Behavior**:
-- LWM calls hide_window() for all non-sticky windows
-- hide_window() returns early for sticky windows, so they remain visible (physically on-screen but not focusable if iconic)
-- Clears focus (active_window_ = XCB_NONE)
-- rearrange_monitor() returns early (no layout calculations)
-- Cannot start tiled drag operations
+- LWM calls hide_window() for all non-sticky windows.
+- hide_window() returns early for sticky windows, so they remain visible (physically on-screen but not focusable if iconic).
+- Clears focus (active_window_ = XCB_NONE).
+- rearrange_monitor() returns early (no layout calculations).
+- Cannot start tiled drag operations.
 
 **Exit condition**:
-- _NET_SHOWING_DESKTOP ClientMessage with value=0
+- _NET_SHOWING_DESKTOP ClientMessage with value=0.
 
 **Iconic sticky windows during showing_desktop**: Iconic sticky windows (iconic=true, hidden=false) remain physically visible (on-screen position) during showing_desktop mode but cannot receive focus. They are not focusable because they are iconic, not because showing_desktop mode hides them.
 
@@ -359,9 +355,9 @@ switch_workspace(target_ws)
 3. Show new workspace via rearrange_monitor and update_floating_visibility
 
 **Rationale for floating-first hiding**:
-- Prevents visual glitches where old floating windows appear over new workspace content
-- Flush ensures hide configurations apply before rendering new workspace
-- Prevents "flash" artifacts during workspace transitions
+- Prevents visual glitches where old floating windows appear over new workspace content.
+- Flush ensures hide configurations apply before rendering new workspace.
+- Prevents "flash" artifacts during workspace transitions.
 
 **Off-Screen Visibility**: Windows are hidden using hide_window(), NOT unmapped.
 
@@ -379,16 +375,16 @@ toggle_workspace()
 ```
 
 **Early Return Conditions**:
-- Workspace count <= 1: No toggle possible with only one workspace
+- Workspace count <= 1: No toggle possible with only one workspace.
 - previous_workspace invalid: After monitor hotplug or workspace configuration changes, previous_workspace may be out-of-bounds. Returns without switching (same as 'same as current' case).
-- previous_workspace == current: Already on previous workspace, no action needed
+- previous_workspace == current: Already on previous workspace, no action needed.
 
 **Auto-Repeat Prevention**:
-- X11 auto-repeat sends KeyRelease → KeyPress (identical timestamps)
-- toggle_workspace() tracks last_toggle_keysym_ and last_toggle_release_time_
-- Blocks KeyPress if same keysym AND same timestamp as KeyRelease
-- After allowing new toggle, last_toggle_release_time_ is reset to 0
-- Prevents multiple workspace toggles from single key hold
+- X11 auto-repeat sends KeyRelease → KeyPress (identical timestamps).
+- toggle_workspace() tracks last_toggle_keysym_ and last_toggle_release_time_.
+- Blocks KeyPress if same keysym AND same timestamp as KeyRelease.
+- After allowing new toggle, last_toggle_release_time_ is reset to 0.
+- Prevents multiple workspace toggles from single key hold.
 
 ### Move Window to Workspace
 
@@ -410,11 +406,11 @@ move_window_to_workspace(target_ws)
 ```
 
 **Floating windows**:
-- Update Client.monitor, Client.workspace
-- Reposition to target monitor's working area
-- Update visibility on both monitors
-- Focus moved window if visible
-- Note: If floating window crosses monitor boundary via geometry update (not explicit move), `update_floating_monitor_for_geometry()` auto-assigns to new monitor without focus restoration
+- Update Client.monitor, Client.workspace.
+- Reposition to target monitor's working area.
+- Update visibility on both monitors.
+- Focus moved window if visible.
+- Note: If floating window crosses monitor boundary via geometry update (not explicit move), `update_floating_monitor_for_geometry()` auto-assigns to new monitor without focus restoration.
 
 ---
 
@@ -451,48 +447,48 @@ handle_randr_screen_change()
 ```
 
 **Edge Cases**:
-- All monitors disconnected: Creates fallback monitor with screen dimensions, name="default"
-- Monitor name not found: Windows silently fall back to monitor 0
-- Focused monitor not found: Defaults to monitor 0
+- All monitors disconnected: Creates fallback monitor with screen dimensions, name="default".
+- Monitor name not found: Windows silently fall back to monitor 0.
+- Focused monitor not found: Defaults to monitor 0.
 
 **Rationale**:
-- Saving by monitor NAME handles monitors being turned off/on (index changes but name persists)
-- Exiting fullscreen before reconfiguration prevents stale geometries
-- Clearing fullscreen_monitors prevents invalid monitor indices after hotplug
+- Saving by monitor NAME handles monitors being turned off/on (index changes but name persists).
+- Exiting fullscreen before reconfiguration prevents stale geometries.
+- Clearing fullscreen_monitors prevents invalid monitor indices after hotplug.
 
 ### Empty Monitor State
 
 **When monitors_.empty() == true**:
-- Occurs when all monitors are disconnected (no X11 outputs)
+- Occurs when all monitors are disconnected (no X11 outputs).
 - Several operations handle this case:
-  - `fullscreen_geometry_for_window()` returns empty geometry
-  - `end_drag()` aborts silently
-  - `begin_tiled_drag()` rejects
-  - `begin_drag()` on fullscreen windows rejects
-- Fallback behavior: Return default values or early returns without errors
-- No explicit user notification; WM continues operating with fallback monitor
+    - `fullscreen_geometry_for_window()` returns empty geometry.
+    - `end_drag()` aborts silently.
+    - `begin_tiled_drag()` rejects.
+    - `begin_drag()` on fullscreen windows rejects.
+- Fallback behavior: Return default values or early returns without errors.
+- No explicit user notification; WM continues operating with fallback monitor.
 
 ### Monitor Switching
 
 **Explicit monitor switch** (via keybind: focus_monitor_left/right):
-- Uses wrap_monitor_index() to cycle through monitors
-- Calls focus_or_fallback() on new monitor to restore appropriate focus
-- Updates focused_monitor_ to new monitor
-- Calls update_ewmh_current_desktop() to update EWMH state
-- Warps cursor to center of new monitor if warp_cursor_on_monitor_change configured
-- Early return if only 1 monitor exists
+- Uses wrap_monitor_index() to cycle through monitors.
+- Calls focus_or_fallback() on new monitor to restore appropriate focus.
+- Updates focused_monitor_ to new monitor.
+- Calls update_ewmh_current_desktop() to update EWMH state.
+- Warps cursor to center of new monitor if warp_cursor_on_monitor_change configured.
+- Early return if only 1 monitor exists.
 
 **Automatic monitor switch** (via focus or window movement):
-- Focusing window on different monitor: Implicitly changes focused_monitor_, window becomes focused
-- Moving focused window to different monitor: Updates focused_monitor_, window remains focused
-- Does NOT warp cursor (warping only for explicit switch)
-- Moving non-focused window to different monitor: Does NOT change focus or focused_monitor_
+- Focusing window on different monitor: Implicitly changes focused_monitor_, window becomes focused.
+- Moving focused window to different monitor: Updates focused_monitor_, window remains focused.
+- Does NOT warp cursor (warping only for explicit switch).
+- Moving non-focused window to different monitor: Does NOT change focus or focused_monitor_.
 
 **Monitor Index Cycling** (wrap_monitor_index):
-- Wraps monitor indices to stay within valid range
-- For positive direction: if idx >= monitors_.size(), wraps to 0
-- For negative direction: if idx < 0, wraps to monitors_.size() - 1
-- Returns clamped index that is always valid (or 0 if no monitors exist)
+- Wraps monitor indices to stay within valid range.
+- For positive direction: if idx >= monitors_.size(), wraps to 0.
+- For negative direction: if idx < 0, wraps to monitors_.size() - 1.
+- Returns clamped index that is always valid (or 0 if no monitors exist).
 
 **Monitor Switching via Pointer** (update_focused_monitor_at_point):
 - Updates focused_monitor_ to monitor containing pointer point
@@ -503,46 +499,46 @@ handle_randr_screen_change()
 ### Move Window to Monitor
 
 **For floating windows** (move_to_monitor_left/right):
-- Repositions to center of target monitor's working area using floating::place_floating()
-- Updates Client.monitor/workspace and FloatingWindow.geometry
-- Updates _NET_WM_DESKTOP property
-- Updates floating visibility on both source and target monitors
-- Moves focused_monitor_ to target and calls focus_floating_window()
-- Warps cursor if enabled
+- Repositions to center of target monitor's working area using floating::place_floating().
+- Updates Client.monitor/workspace and FloatingWindow.geometry.
+- Updates _NET_WM_DESKTOP property.
+- Updates floating visibility on both source and target monitors.
+- Moves focused_monitor_ to target and calls focus_floating_window().
+- Warps cursor if enabled.
 
 **For tiled windows**:
-- Removes from source workspace.windows
-- Updates source workspace.focused_window to last remaining window (or XCB_NONE if empty)
-- Adds to target monitor's current workspace.windows
-- Sets target workspace.focused_window to moved window
-- Rearranges both source and target monitors
-- Updates focused_monitor_ to target and calls focus_window()
-- Warps cursor if enabled
+- Removes from source workspace.windows.
+- Updates source workspace.focused_window to last remaining window (or XCB_NONE if empty).
+- Adds to target monitor's current workspace.windows.
+- Sets target workspace.focused_window to moved window.
+- Rearranges both source and target monitors.
+- Updates focused_monitor_ to target and calls focus_window().
+- Warps cursor if enabled.
 
 ### Floating Window Monitor Auto-Assignment
 
 **Function**: update_floating_monitor_for_geometry(window)
 
 **When called**:
-- After handle_configure_request() for floating windows
-- During drag operations (update_drag())
-- Any time floating window geometry changes
+- After handle_configure_request() for floating windows.
+- During drag operations (update_drag()).
+- Any time floating window geometry changes.
 
 **Behavior**:
-- Calculates window center point: (x + width/2, y + height/2)
-- Determines which monitor contains center (monitor_index_at_point())
+- Calculates window center point: (x + width/2, y + height/2).
+- Determines which monitor contains center (monitor_index_at_point()).
 - If center moved to different monitor:
-  - Updates Client.monitor to new monitor
-  - Updates Client.workspace to new monitor's current workspace
-  - Updates _NET_WM_DESKTOP property
-  - If window IS active window: Updates focused_monitor_, calls update_ewmh_current_desktop()
+    - Updates Client.monitor to new monitor.
+    - Updates Client.workspace to new monitor's current workspace.
+    - Updates _NET_WM_DESKTOP property.
+    - If window IS active window: Updates focused_monitor_, calls update_ewmh_current_desktop().
 - Does NOT:
-  - Call focus_or_fallback()
-  - Update focused_monitor_ (for non-active windows)
-  - Restack window
-  - Change focus state
-- If center not on any monitor (off all screens): No change to monitor assignment
-- This is intentional - window simply "belongs" to a different monitor after moving
+    - Call focus_or_fallback().
+    - Update focused_monitor_ (for non-active windows).
+    - Restack window.
+    - Change focus state.
+- If center not on any monitor (off all screens): No change to monitor assignment.
+- This is intentional - window simply "belongs" to a different monitor after moving.
 
 ---
 
