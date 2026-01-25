@@ -738,3 +738,151 @@ TEST_CASE("Duplicate monitor names resolve to first occurrence", "[rules][edge]"
     // Should resolve to first occurrence (index 0)
     REQUIRE(*result.target_monitor == 0);
 }
+
+TEST_CASE("Rule matching with empty monitor list", "[rules][edge]")
+{
+    WindowRuleConfig cfg;
+    cfg.class_pattern = "Test";
+    cfg.monitor = 0;
+
+    WindowRules rules;
+    rules.load_rules({ cfg });
+
+    std::vector<Monitor> monitors; // Empty list
+
+    WindowMatchInfo info{ .wm_class = "Test",
+                          .wm_class_name = "test",
+                          .title = "Test",
+                          .ewmh_type = WindowType::Normal,
+                          .is_transient = false };
+
+    auto result = rules.match(info, monitors, {});
+
+    REQUIRE(result.matched);
+    // Monitor index out of range should return nullopt
+    REQUIRE_FALSE(result.target_monitor.has_value());
+}
+
+TEST_CASE("Rule matching with empty workspace list", "[rules][edge]")
+{
+    WindowRuleConfig cfg;
+    cfg.class_pattern = "Test";
+    cfg.workspace = 0;
+
+    WindowRules rules;
+    rules.load_rules({ cfg });
+
+    std::vector<std::string> workspace_names; // Empty list
+
+    WindowMatchInfo info{ .wm_class = "Test",
+                          .wm_class_name = "test",
+                          .title = "Test",
+                          .ewmh_type = WindowType::Normal,
+                          .is_transient = false };
+
+    auto result = rules.match(info, {}, workspace_names);
+
+    REQUIRE(result.matched);
+    // Workspace index out of range should return nullopt
+    REQUIRE_FALSE(result.target_workspace.has_value());
+}
+
+TEST_CASE("Rule matching with negative workspace index", "[rules][edge]")
+{
+    WindowRuleConfig cfg;
+    cfg.class_pattern = "Test";
+    cfg.workspace = -1; // Negative index
+
+    WindowRules rules;
+    rules.load_rules({ cfg });
+
+    std::vector<std::string> workspace_names = { "1", "2", "3" };
+
+    WindowMatchInfo info{ .wm_class = "Test",
+                          .wm_class_name = "test",
+                          .title = "Test",
+                          .ewmh_type = WindowType::Normal,
+                          .is_transient = false };
+
+    auto result = rules.match(info, {}, workspace_names);
+
+    REQUIRE(result.matched);
+    // Negative index should be rejected (fails *index >= 0 check)
+    REQUIRE_FALSE(result.target_workspace.has_value());
+}
+
+TEST_CASE("Rule matching with negative monitor index", "[rules][edge]")
+{
+    WindowRuleConfig cfg;
+    cfg.class_pattern = "Test";
+    cfg.monitor = -5; // Negative index
+
+    WindowRules rules;
+    rules.load_rules({ cfg });
+
+    std::vector<Monitor> monitors = { make_monitor("DP-1"), make_monitor("HDMI-1") };
+
+    WindowMatchInfo info{ .wm_class = "Test",
+                          .wm_class_name = "test",
+                          .title = "Test",
+                          .ewmh_type = WindowType::Normal,
+                          .is_transient = false };
+
+    auto result = rules.match(info, monitors, {});
+
+    REQUIRE(result.matched);
+    // Negative index should be rejected (fails *index >= 0 check)
+    REQUIRE_FALSE(result.target_monitor.has_value());
+}
+
+TEST_CASE("Rule matching with pattern containing special regex characters", "[rules][edge]")
+{
+    WindowRuleConfig cfg;
+    cfg.class_pattern = "Firefox.*"; // Contains regex special chars
+    cfg.floating = true;
+
+    WindowRules rules;
+    rules.load_rules({ cfg });
+
+    // Should match Firefox followed by anything (valid regex)
+    WindowMatchInfo info{ .wm_class = "Firefox Developer Edition",
+                          .wm_class_name = "Navigator",
+                          .title = "Test",
+                          .ewmh_type = WindowType::Normal,
+                          .is_transient = false };
+
+    auto result = rules.match(info, {}, {});
+
+    REQUIRE(result.matched);
+    REQUIRE(*result.floating == true);
+}
+
+TEST_CASE("Rule geometry with missing optional fields", "[rules][edge]")
+{
+    WindowRuleConfig cfg;
+    cfg.class_pattern = "Test";
+
+    RuleGeometry geo;
+    geo.x = 100;
+    // y, width, height not set (nullopt)
+    cfg.geometry = geo;
+
+    WindowRules rules;
+    rules.load_rules({ cfg });
+
+    WindowMatchInfo info{ .wm_class = "Test",
+                          .wm_class_name = "test",
+                          .title = "Test",
+                          .ewmh_type = WindowType::Normal,
+                          .is_transient = false };
+
+    auto result = rules.match(info, {}, {});
+
+    REQUIRE(result.matched);
+    REQUIRE(result.geometry.has_value());
+    // Missing fields should use defaults (0, 800, 600 from implementation)
+    REQUIRE(result.geometry->x == 100);
+    REQUIRE(result.geometry->y == 0);        // default
+    REQUIRE(result.geometry->width == 800);  // default
+    REQUIRE(result.geometry->height == 600); // default
+}

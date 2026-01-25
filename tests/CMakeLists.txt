@@ -12,6 +12,7 @@ add_executable(lwm_tests
     test_ewmh_policy.cpp
     test_focus_cycling_policy.cpp
     test_focus_policy.cpp
+    test_focus_policy_edge_cases.cpp
     test_focus_restoration_policy.cpp
     test_integration_focus.cpp
     test_integration_workspace.cpp

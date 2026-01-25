@@ -207,3 +207,66 @@ TEST_CASE("Layout policy drop target with point inside slot", "[layout][policy][
     bool valid_edge = (idx_edge == 0) || (idx_edge == 1);
     REQUIRE(valid_edge);
 }
+
+TEST_CASE("Layout policy with very large window count", "[layout][policy][edge]")
+{
+    AppearanceConfig appearance = make_appearance(5, 1);
+    Geometry area{ 0, 0, 1920, 1080 };
+
+    // Very large stack count - ensure no crash or overflow
+    auto slots = layout_policy::calculate_slots(100, area, appearance);
+
+    REQUIRE(slots.size() == 100);
+    // Master window (index 0) should have valid dimensions
+    REQUIRE(slots[0].width >= 50);
+    REQUIRE(slots[0].height >= 50);
+    // Stack windows may have very small heights due to division
+    // This documents that stack slots are not individually bounded by MIN_DIM
+    for (size_t i = 1; i < slots.size(); ++i)
+    {
+        REQUIRE(slots[i].width >= 0);
+        REQUIRE(slots[i].height >= 0);
+    }
+}
+
+TEST_CASE("Layout policy with very large padding", "[layout][policy][edge]")
+{
+    AppearanceConfig appearance = make_appearance(10000, 5);
+    Geometry area{ 0, 0, 1920, 1080 };
+
+    // Very large padding - should still produce valid slots
+    auto slots = layout_policy::calculate_slots(2, area, appearance);
+
+    REQUIRE(slots.size() == 2);
+    // Slots should have valid dimensions (asymmetry may occur due to safe_sub behavior)
+    REQUIRE(slots[0].width >= 0);
+    REQUIRE(slots[0].height >= 50);
+    REQUIRE(slots[1].width >= 0);
+    REQUIRE(slots[1].height >= 50);
+}
+
+TEST_CASE("Layout policy with very large border width", "[layout][policy][edge]")
+{
+    AppearanceConfig appearance = make_appearance(10, 10000);
+    Geometry area{ 0, 0, 1920, 1080 };
+
+    // Very large border - should still produce valid slots
+    auto slots = layout_policy::calculate_slots(2, area, appearance);
+
+    REQUIRE(slots.size() == 2);
+    // Slots should have valid dimensions (asymmetry may occur due to safe_sub behavior)
+    REQUIRE(slots[0].width >= 0);
+    REQUIRE(slots[0].height >= 50);
+    REQUIRE(slots[1].width >= 0);
+    REQUIRE(slots[1].height >= 50);
+}
+
+TEST_CASE("Layout policy drop target with empty slots", "[layout][policy][edge]")
+{
+    AppearanceConfig appearance = make_appearance(10, 2);
+    Geometry area{ 0, 0, 200, 100 };
+
+    // Zero windows should return index 0 (no crash)
+    size_t idx = layout_policy::drop_target_index(0, area, appearance, 50, 50);
+    REQUIRE(idx == 0);
+}
