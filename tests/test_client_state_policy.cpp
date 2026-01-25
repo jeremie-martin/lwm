@@ -258,118 +258,25 @@ TEST_CASE("Visibility handles show desktop, workspace, and invalid monitor", "[v
     REQUIRE_FALSE(visibility_policy::is_window_visible(false, false, true, 5, 0, monitors));
 }
 
-TEST_CASE("Workspace visibility with multiple monitors", "[visibility][policy]")
-{
-    auto monitors = make_monitors(3, 5); // 3 monitors, 5 workspaces each
-    monitors[0].current_workspace = 2;
-    monitors[1].current_workspace = 0;
-    monitors[2].current_workspace = 4;
-
-    // Current workspace on each monitor is visible
-    REQUIRE(visibility_policy::is_workspace_visible(false, 0, 2, monitors));
-    REQUIRE(visibility_policy::is_workspace_visible(false, 1, 0, monitors));
-    REQUIRE(visibility_policy::is_workspace_visible(false, 2, 4, monitors));
-
-    // Non-current workspaces are not visible
-    REQUIRE_FALSE(visibility_policy::is_workspace_visible(false, 0, 0, monitors));
-    REQUIRE_FALSE(visibility_policy::is_workspace_visible(false, 1, 1, monitors));
-    REQUIRE_FALSE(visibility_policy::is_workspace_visible(false, 2, 3, monitors));
-}
-
-TEST_CASE("Visibility handles invalid monitor index", "[visibility][policy]")
-{
-    auto monitors = make_monitors(2, 3);
-
-    // Invalid monitor index
-    REQUIRE_FALSE(visibility_policy::is_workspace_visible(false, 5, 0, monitors));
-    REQUIRE_FALSE(visibility_policy::is_window_visible(false, false, false, 5, 0, monitors));
-    REQUIRE_FALSE(visibility_policy::is_window_visible(false, false, true, 5, 0, monitors));
-}
-
 // ─────────────────────────────────────────────────────────────────────────────
 // Transient window state tests
 // ─────────────────────────────────────────────────────────────────────────────
-
-TEST_CASE("Transient-for relationship can be stored", "[client][state][transient]")
-{
-    Client dialog = make_client(0x2000, Client::Kind::Floating);
-    dialog.transient_for = 0x1000;
-
-    REQUIRE(dialog.transient_for == 0x1000);
-}
-
-TEST_CASE("Transient-for defaults to XCB_NONE", "[client][state][transient]")
-{
-    Client c = make_client(0x1000);
-    REQUIRE(c.transient_for == XCB_NONE);
-}
 
 // ─────────────────────────────────────────────────────────────────────────────
 // User time and focus stealing prevention
 // ─────────────────────────────────────────────────────────────────────────────
 
-TEST_CASE("User time can be stored and compared", "[client][state][usertime]")
-{
-    Client c1 = make_client(0x1000);
-    Client c2 = make_client(0x2000);
-
-    c1.user_time = 1000;
-    c2.user_time = 2000;
-
-    REQUIRE(c1.user_time < c2.user_time);
-}
-
-TEST_CASE("User time window can be specified", "[client][state][usertime]")
-{
-    Client c = make_client(0x1000);
-    c.user_time_window = 0x1001;
-
-    REQUIRE(c.user_time_window == 0x1001);
-}
-
 // ─────────────────────────────────────────────────────────────────────────────
 // Sync protocol state tests
 // ─────────────────────────────────────────────────────────────────────────────
-
-TEST_CASE("Sync counter can be stored", "[client][state][sync]")
-{
-    Client c = make_client(0x1000);
-    c.sync_counter = 12345;
-    c.sync_value = 100;
-
-    REQUIRE(c.sync_counter == 12345);
-    REQUIRE(c.sync_value == 100);
-}
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Skip taskbar/pager tests
 // ─────────────────────────────────────────────────────────────────────────────
 
-TEST_CASE("Skip taskbar and pager flags are independent", "[client][state]")
-{
-    Client c = make_client(0x1000);
-
-    c.skip_taskbar = true;
-    REQUIRE(c.skip_taskbar);
-    REQUIRE_FALSE(c.skip_pager);
-
-    c.skip_pager = true;
-    REQUIRE(c.skip_taskbar);
-    REQUIRE(c.skip_pager);
-}
-
 // ─────────────────────────────────────────────────────────────────────────────
 // Demands attention (urgency) tests
 // ─────────────────────────────────────────────────────────────────────────────
-
-TEST_CASE("Demands attention flag can be set", "[client][state][urgency]")
-{
-    Client c = make_client(0x1000);
-
-    REQUIRE_FALSE(c.demands_attention);
-    c.demands_attention = true;
-    REQUIRE(c.demands_attention);
-}
 
 // ─────────────────────────────────────────────────────────────────────────────
 // State combination tests

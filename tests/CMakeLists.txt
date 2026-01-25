@@ -6,8 +6,9 @@ FetchContent_Declare(
 )
 FetchContent_MakeAvailable(Catch2)
 
-add_executable(lwm_tests
+ add_executable(lwm_tests
     test_client_state_policy.cpp
+    test_drag_policy.cpp
     test_ewmh_classification.cpp
     test_ewmh_policy.cpp
     test_focus_cycling_policy.cpp

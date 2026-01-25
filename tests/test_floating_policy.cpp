@@ -1,5 +1,5 @@
-#include <catch2/catch_test_macros.hpp>
 #include "lwm/core/floating.hpp"
+#include <catch2/catch_test_macros.hpp>
 
 using namespace lwm;
 
@@ -47,8 +47,8 @@ TEST_CASE("Floating placement respects non-zero area origin", "[floating]")
     auto placed = floating::place_floating(area, 200, 100, std::nullopt);
 
     // Should center within the area
-    REQUIRE(placed.x == 100 + (800 - 200) / 2);  // 400
-    REQUIRE(placed.y == 50 + (600 - 100) / 2);   // 300
+    REQUIRE(placed.x == 100 + (800 - 200) / 2); // 400
+    REQUIRE(placed.y == 50 + (600 - 100) / 2);  // 300
     REQUIRE(placed.width == 200);
     REQUIRE(placed.height == 100);
 }
@@ -59,8 +59,8 @@ TEST_CASE("Floating placement with strut-like offset", "[floating]")
     Geometry area{ 0, 30, 1920, 1050 };
     auto placed = floating::place_floating(area, 400, 300, std::nullopt);
 
-    REQUIRE(placed.x == (1920 - 400) / 2);       // 760
-    REQUIRE(placed.y == 30 + (1050 - 300) / 2);  // 405
+    REQUIRE(placed.x == (1920 - 400) / 2);      // 760
+    REQUIRE(placed.y == 30 + (1050 - 300) / 2); // 405
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -74,48 +74,45 @@ TEST_CASE("Floating placement centers over parent within bounds", "[floating]")
     auto placed = floating::place_floating(area, 200, 100, parent);
 
     // Center of parent is (700, 400), window should be centered there
-    REQUIRE(placed.x == 500 + (400 - 200) / 2);  // 600
-    REQUIRE(placed.y == 300 + (200 - 100) / 2);  // 350
+    REQUIRE(placed.x == 500 + (400 - 200) / 2); // 600
+    REQUIRE(placed.y == 300 + (200 - 100) / 2); // 350
 }
 
-TEST_CASE("Floating placement clamps to left edge when parent is near left", "[floating]")
+TEST_CASE("Floating placement clamps to area edges", "[floating]")
 {
     Geometry area{ 0, 0, 1920, 1080 };
-    Geometry parent{ 10, 500, 50, 50 };
-    auto placed = floating::place_floating(area, 200, 100, parent);
 
-    // Would want x = 10 + (50-200)/2 = -65, but clamped to 0
-    REQUIRE(placed.x == 0);
-}
+    // Clamp to left edge
+    {
+        Geometry parent{ 10, 500, 50, 50 };
+        auto placed = floating::place_floating(area, 200, 100, parent);
+        // Would want x = 10 + (50-200)/2 = -65, but clamped to 0
+        REQUIRE(placed.x == 0);
+    }
 
-TEST_CASE("Floating placement clamps to right edge when parent is near right", "[floating]")
-{
-    Geometry area{ 0, 0, 1920, 1080 };
-    Geometry parent{ 1850, 500, 50, 50 };
-    auto placed = floating::place_floating(area, 200, 100, parent);
+    // Clamp to right edge
+    {
+        Geometry parent{ 1850, 500, 50, 50 };
+        auto placed = floating::place_floating(area, 200, 100, parent);
+        // Would want x = 1850 + (50-200)/2 = 1775, max_x = 1920-200 = 1720
+        REQUIRE(placed.x == 1720);
+    }
 
-    // Would want x = 1850 + (50-200)/2 = 1775, max_x = 1920-200 = 1720
-    REQUIRE(placed.x == 1720);
-}
+    // Clamp to top edge
+    {
+        Geometry parent{ 500, 10, 50, 50 };
+        auto placed = floating::place_floating(area, 200, 100, parent);
+        // Would want y = 10 + (50-100)/2 = -15, but clamped to 0
+        REQUIRE(placed.y == 0);
+    }
 
-TEST_CASE("Floating placement clamps to top edge when parent is near top", "[floating]")
-{
-    Geometry area{ 0, 0, 1920, 1080 };
-    Geometry parent{ 500, 10, 50, 50 };
-    auto placed = floating::place_floating(area, 200, 100, parent);
-
-    // Would want y = 10 + (50-100)/2 = -15, but clamped to 0
-    REQUIRE(placed.y == 0);
-}
-
-TEST_CASE("Floating placement clamps to bottom edge when parent is near bottom", "[floating]")
-{
-    Geometry area{ 0, 0, 1920, 1080 };
-    Geometry parent{ 500, 1050, 50, 50 };
-    auto placed = floating::place_floating(area, 200, 100, parent);
-
-    // Would want y = 1050 + (50-100)/2 = 1025, max_y = 1080-100 = 980
-    REQUIRE(placed.y == 980);
+    // Clamp to bottom edge
+    {
+        Geometry parent{ 500, 1050, 50, 50 };
+        auto placed = floating::place_floating(area, 200, 100, parent);
+        // Would want y = 1050 + (50-100)/2 = 1025, max_y = 1080-100 = 980
+        REQUIRE(placed.y == 980);
+    }
 }
 
 TEST_CASE("Floating placement with parent larger than child", "[floating]")
@@ -125,8 +122,8 @@ TEST_CASE("Floating placement with parent larger than child", "[floating]")
     auto placed = floating::place_floating(area, 100, 50, parent);
 
     // Child centers on parent
-    REQUIRE(placed.x == 200 + (800 - 100) / 2);  // 550
-    REQUIRE(placed.y == 200 + (600 - 50) / 2);   // 475
+    REQUIRE(placed.x == 200 + (800 - 100) / 2); // 550
+    REQUIRE(placed.y == 200 + (600 - 50) / 2);  // 475
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -143,14 +140,25 @@ TEST_CASE("Floating placement with window same size as area", "[floating]")
     REQUIRE(placed.y == 100);
 }
 
-TEST_CASE("Floating placement with very small window", "[floating]")
+TEST_CASE("Floating placement handles edge cases (tiny window, tiny area)", "[floating]")
 {
-    Geometry area{ 0, 0, 1920, 1080 };
-    auto placed = floating::place_floating(area, 1, 1, std::nullopt);
+    // Tiny window centers in large area
+    {
+        Geometry area{ 0, 0, 1920, 1080 };
+        auto placed = floating::place_floating(area, 1, 1, std::nullopt);
+        REQUIRE(placed.x == (1920 - 1) / 2);
+        REQUIRE(placed.y == (1080 - 1) / 2);
+    }
 
-    // Should be near center
-    REQUIRE(placed.x == (1920 - 1) / 2);  // 959
-    REQUIRE(placed.y == (1080 - 1) / 2);  // 539
+    // Large window in tiny area clamps to origin
+    {
+        Geometry area{ 500, 500, 1, 1 };
+        auto placed = floating::place_floating(area, 100, 100, std::nullopt);
+        REQUIRE(placed.x == 500);
+        REQUIRE(placed.y == 500);
+        REQUIRE(placed.width == 100);
+        REQUIRE(placed.height == 100);
+    }
 }
 
 TEST_CASE("Floating placement with 1x1 area", "[floating]")
@@ -185,8 +193,8 @@ TEST_CASE("Floating placement on second monitor (right)", "[floating]")
     Geometry area{ 1920, 0, 1920, 1080 };
     auto placed = floating::place_floating(area, 400, 300, std::nullopt);
 
-    REQUIRE(placed.x == 1920 + (1920 - 400) / 2);  // 2680
-    REQUIRE(placed.y == (1080 - 300) / 2);         // 390
+    REQUIRE(placed.x == 1920 + (1920 - 400) / 2); // 2680
+    REQUIRE(placed.y == (1080 - 300) / 2);        // 390
 }
 
 TEST_CASE("Floating placement on monitor with negative x (left of primary)", "[floating]")
@@ -195,8 +203,8 @@ TEST_CASE("Floating placement on monitor with negative x (left of primary)", "[f
     Geometry area{ -1920, 0, 1920, 1080 };
     auto placed = floating::place_floating(area, 400, 300, std::nullopt);
 
-    REQUIRE(placed.x == -1920 + (1920 - 400) / 2);  // -1160
-    REQUIRE(placed.y == (1080 - 300) / 2);          // 390
+    REQUIRE(placed.x == -1920 + (1920 - 400) / 2); // -1160
+    REQUIRE(placed.y == (1080 - 300) / 2);         // 390
 }
 
 TEST_CASE("Floating placement on monitor above primary (negative y)", "[floating]")
@@ -205,6 +213,6 @@ TEST_CASE("Floating placement on monitor above primary (negative y)", "[floating
     Geometry area{ 0, -1080, 1920, 1080 };
     auto placed = floating::place_floating(area, 400, 300, std::nullopt);
 
-    REQUIRE(placed.x == (1920 - 400) / 2);           // 760
-    REQUIRE(placed.y == -1080 + (1080 - 300) / 2);   // -690
+    REQUIRE(placed.x == (1920 - 400) / 2);         // 760
+    REQUIRE(placed.y == -1080 + (1080 - 300) / 2); // -690
 }
