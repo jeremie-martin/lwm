@@ -2,7 +2,7 @@
 
 > **Documentation Navigation**
 > - Previous: [BEHAVIOR.md](BEHAVIOR.md) (User-facing behavior) | [CLAUDE.md](CLAUDE.md) (Development guide)
-> - Related: [COMPLETE_STATE_MACHINE.md](COMPLETE_STATE_MACHINE.md) (Implementation reference) | [SPEC_CLARIFICATIONS.md](SPEC_CLARIFICATIONS.md) (Design decisions)
+> - Related: [DOCS_INDEX.md](DOCS_INDEX.md) (Documentation roadmap) | [STATE_MACHINE.md](STATE_MACHINE.md) (Window states) | [EVENT_HANDLING.md](EVENT_HANDLING.md) (Event handling) | [SPEC_CLARIFICATIONS.md](SPEC_CLARIFICATIONS.md) (Design decisions)
 
 This document defines the external protocol obligations LWM must satisfy for X11 window management. It is normative and testable; all items describe what the window manager MUST or SHOULD implement.
 
@@ -36,8 +36,8 @@ The WM must read and honor these client-set properties.
 - Use for iconified/minimized representation if displayed.
 
 #### WM_CLASS
-- Read `WM_CLASS` (instance name, class name) for window identification.
-- Use for window matching rules and grouping.
+- Read `WM_CLASS` (instance name, class name) for window identification
+- Use for window matching rules and grouping
 
 #### WM_CLIENT_MACHINE
 - Read for display purposes and session management.
@@ -61,11 +61,10 @@ The WM must read and honor these client-set properties.
 - `urgency`: reflect via `_NET_WM_STATE_DEMANDS_ATTENTION`.
 
 #### WM_TRANSIENT_FOR
-- Identify transient relationships.
-- Transients inherit workspace from their parent.
-- Transients stack above their parent when both visible.
-- **Transients automatically get `_NET_WM_STATE_SKIP_TASKBAR` and `_NET_WM_STATE_SKIP_PAGER`**
-  set on manage (unless already set). This prevents transient dialogs from cluttering taskbars/pagers independently of their parent window.
+- Identify transient relationships
+- Transients inherit workspace from parent
+- Transients stack above parent when both visible
+- **Transients automatically get `_NET_WM_STATE_SKIP_TASKBAR` and `_NET_WM_STATE_SKIP_PAGER`** on manage (unless already set). This prevents transient dialogs from cluttering taskbars/pagers independently of parent.
 
 See [SPEC_CLARIFICATIONS.md](SPEC_CLARIFICATIONS.md#7-transient-windows-and-state-inheritance) for design rationale.
 
@@ -93,10 +92,10 @@ The WM must set and maintain:
 - Set on all managed windows
 - Values: `WithdrawnState` (0), `NormalState` (1), `IconicState` (3)
 - State transitions:
-    - `NormalState`: Window is managed and logically visible
-    - `IconicState`: Window is explicitly minimized/iconified by user action
-    - `WithdrawnState`: Window is unmanaged (client withdrew or WM unmanaged it)
-- **Workspace visibility does NOT change WM_STATE**: A window on a non-visible workspace remains in `NormalState`. Visibility across workspaces is expressed via `_NET_WM_DESKTOP` and physical position state (off-screen for hidden, on-screen for visible), not WM_STATE
+    - `NormalState`: Managed and logically visible
+    - `IconicState`: Explicitly minimized/iconified by user action
+    - `WithdrawnState`: Unmanaged (client withdrew or WM unmanaged)
+- **Workspace visibility does NOT change WM_STATE**: A window on a non-visible workspace remains in `NormalState`. Visibility across workspaces is expressed via `_NET_WM_DESKTOP` and physical position (off-screen for hidden, on-screen for visible), not WM_STATE
 - Remove or set to Withdrawn when unmanaging
 
 ### 4. Client Messages (Handle)

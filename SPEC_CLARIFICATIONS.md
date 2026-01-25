@@ -2,7 +2,7 @@
 
 > **Documentation Navigation**
 > - Previous: [COMPLIANCE.md](COMPLIANCE.md) (Protocol requirements)
-> - Related: [BEHAVIOR.md](BEHAVIOR.md) (User-facing behavior) | [COMPLETE_STATE_MACHINE.md](COMPLETE_STATE_MACHINE.md) (Implementation reference)
+> - Related: [DOCS_INDEX.md](DOCS_INDEX.md) (Documentation roadmap) | [BEHAVIOR.md](BEHAVIOR.md) (User-facing behavior) | [STATE_MACHINE.md](STATE_MACHINE.md) (Window states) | [IMPLEMENTATION.md](IMPLEMENTATION.md) (Architecture)
 
 This document records explicit design decisions where EWMH/ICCCM specifications allowed for interpretation, or where [BEHAVIOR.md](BEHAVIOR.md) and [COMPLIANCE.md](COMPLIANCE.md) needed clarification.
 
@@ -59,7 +59,7 @@ This document records explicit design decisions where EWMH/ICCCM specifications 
 - Per BEHAVIOR.md §1.5, sticky scope is per-monitor
 - Matches per-monitor workspace model (each monitor has independent workspaces)
 - Sticky window on monitor A does NOT appear on monitor B
-- `_NET_WM_DESKTOP = 0xFFFFFFFF` still indicates sticky per EWMH
+- `_NET_WM_DESKTOP = 0xFFFFFFFF` indicates sticky per EWMH
 
 **Implementation**:
 - `is_window_visible()` checks sticky flag for visibility within owning monitor

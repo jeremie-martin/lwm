@@ -13,7 +13,7 @@ A minimal tiling window manager for X11 written in modern C++23.
 - Keybinding and mouse binding support
 - Focus-follows-mouse with focus stealing prevention
 - Multi-monitor support with hotplug handling
-- Window states: fullscreen, maximize, sticky, above/below, shaded, modal
+- Window states: fullscreen, maximize, sticky, above/below, shaded, modal, iconified
 - Smart window classification (dock, desktop, dialog, popup types)
 - Window rules for automatic window configuration (floating, workspace, monitor, etc.)
 
@@ -199,12 +199,18 @@ DISPLAY=:100 <application>
 
 ## Project Documentation
 
+For complete documentation navigation, see **[DOCS_INDEX.md](DOCS_INDEX.md)** (Documentation roadmap)
+
 **User documentation:**
 - **[BEHAVIOR.md](BEHAVIOR.md)** - User-facing behavior: focus, workspaces, monitors, window rules
 
 **Contributor documentation:**
 - **[CLAUDE.md](CLAUDE.md)** - Development guide and code conventions
-- **[COMPLETE_STATE_MACHINE.md](COMPLETE_STATE_MACHINE.md)** - Implementation specification and reference
+- **[DOCS_INDEX.md](DOCS_INDEX.md)** - Documentation roadmap and quick reference
+- **[IMPLEMENTATION.md](IMPLEMENTATION.md)** - Architecture, data structures, invariants
+- **[STATE_MACHINE.md](STATE_MACHINE.md)** - Window states and state transitions
+- **[EVENT_HANDLING.md](EVENT_HANDLING.md)** - Event-by-event handling specifications
+- **[COMPLETE_STATE_MACHINE.md](COMPLETE_STATE_MACHINE.md)** - Legacy complete specification (superseded by split docs)
 - **[COMPLIANCE.md](COMPLIANCE.md)** - ICCCM/EWMH protocol requirements
 - **[SPEC_CLARIFICATIONS.md](SPEC_CLARIFICATIONS.md)** - Design decisions on ambiguous specs
 - **[FEATURE_IDEAS.md](FEATURE_IDEAS.md)** - Feature backlog and design principles

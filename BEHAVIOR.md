@@ -1,7 +1,7 @@
 # LWM Behavior Specification
 
 > **Documentation Navigation**
-> - Previous: [README.md](README.md) (Quick start)
+> - Previous: [README.md](README.md) (Quick start) | [DOCS_INDEX.md](DOCS_INDEX.md) (Documentation roadmap)
 > - Related: [CLAUDE.md](CLAUDE.md) (Development guide) | [COMPLIANCE.md](COMPLIANCE.md) (Protocol requirements)
 
 This document defines the **high-level, user-visible behavior** of LWM, independent of implementation.
@@ -22,8 +22,8 @@ and are not duplicated here.
 - Each monitor has N workspaces (configurable; commonly 0-9).
 - Exactly **one workspace per monitor is visible** at a time.
 - Each workspace maintains:
-  - an ordered list of **tiled** windows (tiling layout order)
-  - a remembered "last-focused" tiled window (if any)
+  - An ordered list of **tiled** windows (tiling layout order)
+  - A "last-focused" tiled window (if any)
 - **Floating windows** are tracked globally with explicit monitor/workspace association. Focus restoration searches floating windows in MRU order (workspace focus memory tracks only tiled windows).
 
 **Implementation Note**: All window state (fullscreen, iconic, sticky, above, below, maximized, shaded, modal) is stored in a unified `Client` record. The tiled/floating distinction affects only layout participation and workspace storage.
@@ -46,16 +46,16 @@ and are not duplicated here.
 (Exact classification signals are defined in [COMPLIANCE.md](COMPLIANCE.md#_net_wm_window_type); see also [SPEC_CLARIFICATIONS.md](SPEC_CLARIFICATIONS.md#4-popephemeral-window-handling).)
 
 ### 1.4 Visibility
-- A window is **visible** iff it belongs to the monitor's currently visible workspace, except for special visibility rules (see §1.5 Sticky Windows).
+- A window is **visible** iff it belongs to the monitor's currently visible workspace (except for sticky windows per §1.5).
 - Only visible windows may be focused.
 
 ### 1.5 Sticky Windows
 
-**Sticky windows** have special visibility rules:
-- Visible on all workspaces of their owning monitor (not globally across monitors).
-- Included in layout regardless of which workspace is currently active.
-- **Focusing a sticky window does NOT switch workspaces** (current workspace remains unchanged).
-- Sticky state is indicated by `_NET_WM_STATE_STICKY` and `_NET_WM_DESKTOP = 0xFFFFFFFF` (per EWMH).
+Sticky windows have special visibility rules:
+- Visible on all workspaces of their owning monitor (not globally).
+- Included in layout regardless of active workspace.
+- Focusing a sticky window does NOT switch workspaces.
+- Indicated by `_NET_WM_STATE_STICKY` and `_NET_WM_DESKTOP = 0xFFFFFFFF`.
 
 See [SPEC_CLARIFICATIONS.md](SPEC_CLARIFICATIONS.md#3-sticky-window-scope) for design rationale on per-monitor scope.
 
@@ -77,8 +77,8 @@ This mapping is intentionally per-monitor; some pagers may assume global desktop
 - Focus is only assigned to **visible, focus-eligible** windows (as constrained by COMPLIANCE.md).
 
 ### 2.2 Focus-Follows-Mouse (FFM)
-- When the pointer enters a focus-eligible window, that window becomes focused.
-- **Motion within a window**: If the pointer moves within a focus-eligible window that is not currently focused, that window gains focus. This handles cases where a new window took focus (per §5.2) while the cursor remained in a different window.
+- Focus-eligible windows gain focus when the pointer enters them.
+- **Motion within a window**: Re-focuses if pointer is in a focus-eligible window that lost focus (e.g., new window took focus per §5.2 while cursor remained elsewhere).
 - **Click within a window**: Clicking a focus-eligible window focuses it.
 
 See [COMPLETE_STATE_MACHINE.md](COMPLETE_STATE_MACHINE.md#focus-policy) for implementation details on focus eligibility and event handling.
@@ -109,9 +109,9 @@ When switching to a workspace:
 When switching the visible workspace on the active monitor:
 - The requested workspace becomes visible on that monitor.
 - The workspace is laid out (tiling + floating placement).
-- Focus is set according to Section 2.4.
+- Focus is set per Section 2.4.
 
-If the workspace is already visible, no change occurs.
+No change occurs if the workspace is already visible.
 
 ### 3.2 Moving a Window to Another Workspace
 When moving a window to another workspace:
@@ -221,8 +221,8 @@ Rules are applied at map time (when the window first appears) to customize behav
 
 ### 9.2 Rule Evaluation
 - Rules are defined in configuration as an ordered list.
-- **First-match-wins**: The first matching rule is applied; subsequent rules are ignored.
-- An empty criteria set matches all windows.
+- **First-match-wins**: First matching rule is applied; subsequent rules ignored.
+- Empty criteria set matches all windows.
 
 ### 9.3 Matching Criteria
 All specified criteria in a rule must match (AND logic). Available criteria:

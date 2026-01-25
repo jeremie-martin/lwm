@@ -2,7 +2,7 @@
 
 > **Documentation Navigation**
 > - Previous: [BEHAVIOR.md](BEHAVIOR.md) (User-facing behavior) | [CLAUDE.md](CLAUDE.md) (Development guide)
-> - Related: [COMPLETE_STATE_MACHINE.md](COMPLETE_STATE_MACHINE.md) (Implementation reference)
+> - Related: [DOCS_INDEX.md](DOCS_INDEX.md) (Documentation roadmap) | [IMPLEMENTATION.md](IMPLEMENTATION.md) (Architecture)
 
 This is a living ideas backlog for LWM. It grows from current behavior while keeping the system simple, consistent, and future-proof.
 

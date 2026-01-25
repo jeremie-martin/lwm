@@ -2,20 +2,20 @@
 
 > **Documentation Navigation**
 > - Previous: [README.md](README.md) (Quick start) | [BEHAVIOR.md](BEHAVIOR.md) (User-facing behavior)
-> - Related: [COMPLIANCE.md](COMPLIANCE.md) (Protocol requirements)
+> - Related: [DOCS_INDEX.md](DOCS_INDEX.md) (Documentation roadmap) | [COMPLIANCE.md](COMPLIANCE.md) (Protocol requirements)
 
 This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
 
 ## Quick Reference
 
-**Core files** (~5996 lines total):
-- `wm.cpp` (~2450) - Main window management, workspace/monitor operations, EWMH updates
-- `wm_events.cpp` (~1638) - XCB event handlers (switch on response_type)
-- `wm_floating.cpp` (~557) - Floating window management
-- `wm_focus.cpp` (~490) - Focus handling logic
-- `wm_workspace.cpp` (~336) - Workspace switching, toggling, moving windows
-- `wm_ewmh.cpp` (~271) - EWMH protocol handling
-- `wm_drag.cpp` (~254) - Mouse drag state machine
+**Core files** (~5792 lines total):
+- `wm.cpp` (~2309) - Main window management, workspace/monitor operations, EWMH updates
+- `wm_events.cpp` (~1604) - XCB event handlers (switch on response_type)
+- `wm_floating.cpp` (~556) - Floating window management
+- `wm_focus.cpp` (~487) - Focus handling logic
+- `wm_workspace.cpp` (~329) - Workspace switching, toggling, moving windows
+- `wm_ewmh.cpp` (~256) - EWMH protocol handling
+- `wm_drag.cpp` (~251) - Mouse drag state machine
 
 **Key types** (`src/lwm/core/types.hpp`):
 - `Client` - Authoritative state for all windows
@@ -95,7 +95,12 @@ LWM is a minimal tiling window manager for X11 written in C++23. It follows a ce
 - `Workspace`: Ordered list of tiled windows + focused window tracking
 - `Monitor`: RANDR output with geometry, workspaces, struts, bar window
 
-For detailed specifications of state machines, invariants, and event handling logic, see [COMPLETE_STATE_MACHINE.md](COMPLETE_STATE_MACHINE.md).
+For detailed specifications, see:
+- **[DOCS_INDEX.md](DOCS_INDEX.md)** - Documentation roadmap and quick reference
+- **[IMPLEMENTATION.md](IMPLEMENTATION.md)** - Architecture, data structures, invariants
+- **[STATE_MACHINE.md](STATE_MACHINE.md)** - Window states and transitions
+- **[EVENT_HANDLING.md](EVENT_HANDLING.md)** - Event-by-event handling specifications
+- **[COMPLETE_STATE_MACHINE.md](COMPLETE_STATE_MACHINE.md)** - Legacy complete specification (superseded by split docs)
 
 ## Adding Features
 

@@ -1,10 +1,20 @@
  # LWM Window Manager - Complete Logic Specification
 
+> **⚠️ DOCUMENTATION REORGANIZATION**
+> This document has been **split into focused documents** for improved navigability. The following new documents supersede this one:
+>
+> - **[DOCS_INDEX.md](DOCS_INDEX.md)** - Documentation roadmap
+> - **[IMPLEMENTATION.md](IMPLEMENTATION.md)** - Architecture, data structures, invariants
+> - **[STATE_MACHINE.md](STATE_MACHINE.md)** - Window states and transitions
+> - **[EVENT_HANDLING.md](EVENT_HANDLING.md)** - Event handling specifications
+>
+> **For new work, please reference the split documents instead.** This file is retained for reference during transition.
+
 > **Documentation Navigation**
 > - Previous: [BEHAVIOR.md](BEHAVIOR.md) (User-facing behavior) | [CLAUDE.md](CLAUDE.md) (Development guide)
 > - Related: [COMPLIANCE.md](COMPLIANCE.md) (Protocol requirements) | [SPEC_CLARIFICATIONS.md](SPEC_CLARIFICATIONS.md) (Design decisions)
 
-This document is the **authoritative implementation specification** for LWM. It defines the complete state machine, data structures, invariants, and event handling logic that the window manager implements.
+**Legacy Content Below** - This document is the **authoritative implementation specification** for LWM. It defines the complete state machine, data structures, invariants, and event handling logic that the window manager implements.
 
 **Scope**:
 - Exact implementation details not covered in higher-level docs
@@ -765,7 +775,7 @@ If was active_window_:
     ├─ If on focused_monitor_ AND on current_workspace → focus_or_fallback()
     └─ Else → clear_focus()
     ↓
-Update bars
+Flush connection
 ```
 
 **Iconic Fullscreen Windows**:
@@ -938,10 +948,10 @@ This is the formal definition of focus eligibility. Additional barriers can prev
 6. Set X input focus
 7. Update _NET_ACTIVE_WINDOW
 8. Apply fullscreen geometry, restack transients
-    - Restacks all visible, non-iconic transient windows (where client.transient_for == parent)
-    - Skips hidden, iconic, or transients on other workspaces
-    - Also occurs when showing floating windows via update_floating_visibility()
-9. Update bars
+     - Restacks all visible, non-iconic transient windows (where client.transient_for == parent)
+     - Skips hidden, iconic, or transients on other workspaces
+     - Also occurs when showing floating windows via update_floating_visibility()
+9. Update _NET_CLIENT_LIST (and _NET_CLIENT_LIST_STACKING via restack_transients)
 
 **restack_transients()** - Restacks modal/transient windows above parent:
 - Identifies transients via client.transient_for field
@@ -1111,11 +1121,9 @@ Apply fullscreen geometry if needed (calls apply_fullscreen_if_needed()):
   └─ Restacks window above all
     ↓
 Restack transients above parent (visible, non-iconic transients only):
-  └─ Skips hidden or iconic transients, transients on other workspaces
+  └─ Skips hidden, iconic, or transients on other workspaces
     ↓
-Update _NET_CLIENT_LIST_STACKING
-    ↓
-Update bars
+Update _NET_CLIENT_LIST (and _NET_CLIENT_LIST_STACKING via restack_transients)
 ```
 
 ### WM_TAKE_FOCUS Protocol
