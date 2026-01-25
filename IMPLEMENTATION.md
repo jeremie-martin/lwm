@@ -164,7 +164,7 @@ struct FloatingWindow {
 };
 ```
 
-### DragState (src/lwm/core/types.hpp:186-198)
+### DragState (src/lwm/wm.hpp:36-47)
 
 ```cpp
 struct DragState {
@@ -471,7 +471,7 @@ With off-screen visibility, ALL UnmapNotify events are client-initiated withdraw
 
 ### Focus Eligibility
 
-**is_focus_eligible(window)** formal definition (src/lwm/core/focus.hpp):
+**is_focus_eligible(window)** formal definition (src/lwm/core/policy.hpp:69-74):
 ```
 is_focus_eligible(window) =
     NOT (kind == Dock OR kind == Desktop)

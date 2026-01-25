@@ -51,30 +51,7 @@ cmake ..
 make -j$(nproc)
 ```
 
-The executable will be at `build/src/app/lwm`.
-
-**Development builds:**
-```bash
-cmake -DCMAKE_BUILD_TYPE=Debug ..
-make -j$(nproc)
-```
-
-Or using the Makefile:
-```bash
-make debug
-```
-
-**Tests:**
-```bash
-cmake -DBUILD_TESTS=ON ..
-make -j$(nproc)
-./tests/lwm_tests
-```
-
-Or using the Makefile:
-```bash
-make test
-```
+The executable will be at `build/src/app/lwm`. Use `-DCMAKE_BUILD_TYPE=Debug` for development builds.
 
 **Installation:**
 ```bash
@@ -136,9 +113,9 @@ LWM supports the following keybinding actions:
 
 ### Default Keybindings
 
-Common keybindings: Super+Return (terminal), Super+d (launcher), Super+q (close), Super+1..0 (switch workspace), Super+Shift+1..0 (move to workspace), Super+f (fullscreen), Super+j/k (focus next/prev).
+Super+Return (terminal), Super+d (launcher), Super+q (close), Super+1..0 (switch workspace), Super+Shift+1..0 (move to workspace), Super+f (fullscreen), Super+j/k (focus next/prev).
 
-See `config.toml.example` for complete default configuration including AZERTY support.
+See `config.toml.example` for complete configuration including AZERTY support.
 
 ### Modifier Keys
 
@@ -210,7 +187,6 @@ For complete documentation navigation, see **[DOCS_INDEX.md](DOCS_INDEX.md)** (D
 - **[IMPLEMENTATION.md](IMPLEMENTATION.md)** - Architecture, data structures, invariants
 - **[STATE_MACHINE.md](STATE_MACHINE.md)** - Window states and state transitions
 - **[EVENT_HANDLING.md](EVENT_HANDLING.md)** - Event-by-event handling specifications
-- **[COMPLETE_STATE_MACHINE.md](COMPLETE_STATE_MACHINE.md)** - Legacy complete specification (superseded by split docs)
 - **[COMPLIANCE.md](COMPLIANCE.md)** - ICCCM/EWMH protocol requirements
 - **[SPEC_CLARIFICATIONS.md](SPEC_CLARIFICATIONS.md)** - Design decisions on ambiguous specs
 - **[FEATURE_IDEAS.md](FEATURE_IDEAS.md)** - Feature backlog and design principles

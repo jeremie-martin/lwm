@@ -111,7 +111,7 @@ Each Client maintains state flags (src/lwm/core/types.hpp:118-134):
 **Top-level window states**: UNMANAGED, MANAGED (with VISIBLE/ICONIC substates), WITHDRAWN (ICCCM WM_STATE)
 
 **State definitions**:
-- **UNMANAGED**: Window not yet managed by WM
+- **UNMANAGED**: Window not yet managed
 - **MANAGED**: Window is managed (in clients_ registry)
   - **VISIBLE**: Logically visible (`!iconic && !hidden`)
   - **ICONIC**: Minimized by user action
@@ -255,7 +255,7 @@ handle_window_removal()
 
 ### Fullscreen Transition
 
-**Implementation**: src/lwm/wm.cpp:xxx
+**Implementation**: src/lwm/wm.cpp:799
 
 ```
 [Trigger: keybind or _NET_WM_STATE]
@@ -296,7 +296,7 @@ If any precondition fails, the function returns early without applying geometry.
 
 ### Maximized Transition
 
-**Implementation**: src/lwm/wm.cpp:xxx
+**Implementation**: src/lwm/wm.cpp:981
 
 ```
 [Trigger: keybind or _NET_WM_STATE]
@@ -325,7 +325,7 @@ If not fullscreen (maximize changes ignored when fullscreen):
 
 ### Iconify Transition
 
-**Implementation**: src/lwm/wm.cpp:1288-1331
+**Implementation**: src/lwm/wm.cpp:1288-1330
 
 ```
 [Trigger: keybind, _NET_WM_STATE, or WM_CHANGE_STATE]
@@ -361,7 +361,7 @@ Flush connection
 
 ### Deiconify Transition
 
-**Implementation**: src/lwm/wm.cpp:1333-1370
+**Implementation**: src/lwm/wm.cpp:1333-1367
 
 ```
 [Trigger: Focus request or explicit action]
@@ -389,7 +389,7 @@ Flush connection
 
 ### Sticky Toggle
 
-**Implementation**: src/lwm/wm.cpp:xxx
+**Implementation**: src/lwm/wm.cpp:948
 
 ```
 [Trigger: keybind or _NET_WM_STATE]
@@ -453,7 +453,7 @@ If disabled:
 9. Apply fullscreen geometry, restack transients
 10. Update _NET_CLIENT_LIST
 
-**restack_transients()** - Restacks modal/transient windows above parent (src/lwm/wm_focus.cpp:xxx):
+**restack_transients()** - Restacks modal/transient windows above parent (src/lwm/wm.cpp:1730-1751):
 - Identifies transients via client.transient_for field
 - Only restacks transients that are:
   - Visible (client.hidden == false)
@@ -462,13 +462,13 @@ If disabled:
 - Skips transients on other workspaces
 - Ensures modal windows stay above parent during focus changes
 
-**focus_floating_window(window)** - Floating windows:
+**focus_floating_window(window)** - Floating windows (src/lwm/wm_focus.cpp:125-259):
 1. Same checks as tiled (including NOT hidden)
 2. Promote to end of floating_windows_ (MRU ordering)
 3. Stack above (XCB_STACK_MODE_ABOVE)
 4. Switch workspace if needed
 
-**focus_or_fallback(monitor)** - Smart focus selection (src/lwm/wm_focus.cpp:xxx):
+**focus_or_fallback(monitor)** - Smart focus selection (src/lwm/wm_focus.cpp:272-355):
 1. Build candidates (order of preference):
     - `workspace.focused_window` if exists in workspace AND eligible (validated to exist)
     - Current workspace tiled windows (reverse iteration = MRU)
@@ -492,7 +492,7 @@ LWM uses a two-tier focus restoration model:
 **2. Global floating window search** (MRU order):
 - When workspace focus memory is not applicable or validation fails, LWM searches floating_windows_ in reverse iteration (MRU) for fallback focus restoration
 
-**Focus restoration on window removal** (src/lwm/wm_floating.cpp:364-392):
+**Focus restoration on window removal** (src/lwm/wm_events.cpp:443-449, src/lwm/wm.cpp:749-897):
 - LWM calls handle_window_removal() when UnmapNotify or DestroyNotify is received
 - handle_window_removal() sets WM_STATE = Withdrawn, erases from clients_, removes from workspace/floating, and updates workspace.focused_window
 - If the removed window was active_window_:

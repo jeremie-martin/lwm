@@ -64,7 +64,7 @@ If you're new to LWM:
 → See [SPEC_CLARIFICATIONS.md §3](SPEC_CLARIFICATIONS.md#3-sticky-window-scope) for design rationale
 
 **What EWMH atoms are supported?**
-→ See [COMPLIANCE.md §2.1](COMPLIANCE.md#1-root-window-properties-write-and-maintain)
+→ See [COMPLIANCE.md §1](COMPLIANCE.md#1-root-window-properties-write-and-maintain)
 
 **How do I add a feature?**
 → See [CLAUDE.md §Adding Features](CLAUDE.md#adding-features) for contribution guidelines

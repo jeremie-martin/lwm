@@ -57,24 +57,24 @@ All event handlers are in src/lwm/wm_events.cpp and methods of WindowManager cla
 | MapRequest | handle_map_request | LWM classifies and manages window. Handles deiconify if already managed | wm_events.cpp |
 | UnmapNotify | handle_window_removal | With off-screen visibility, ALL unmaps are client-initiated withdraw requests. LWM calls handle_window_removal() to unmanage window | wm_events.cpp:66-73 |
 | DestroyNotify | handle_window_removal | LWM unmanages window | wm_events.cpp:74-79 |
-| EnterNotify | handle_enter_notify | LWM implements focus-follows-mouse. Ignores hidden windows. Updates focused_monitor on root window entry | wm_events.cpp:80-xxx |
-| MotionNotify | handle_motion_notify | LWM re-establishes focus in window. Ignores hidden windows. Updates focused_monitor if crossing monitor | wm_events.cpp:83-xxx |
-| ButtonPress | handle_button_press | LWM focuses window and begins drag. Ignores hidden windows. Updates focused_monitor | wm_events.cpp:86-xxx |
-| ButtonRelease | handle_button_release | LWM ends drag | wm_events.cpp:89-xxx |
-| KeyPress | handle_key_press | LWM executes keybind actions | wm_events.cpp:92-xxx |
-| KeyRelease | handle_key_release | LWM tracks for auto-repeat detection | wm_events.cpp:xxx-xxx |
-| ClientMessage | handle_client_message | LWM handles EWMH/ICCCM commands | wm_events.cpp:xxx-xxx |
-| ConfigureRequest | handle_configure_request | LWM handles geometry requests. See below for detailed behavior | wm_events.cpp:xxx-xxx |
-| PropertyNotify | handle_property_notify | LWM tracks state changes, title, hints, sync counter, struts, and user_time_window indirection for _NET_WM_USER_TIME | wm_events.cpp:xxx-xxx |
-| Expose | handle_expose | No-op (internal bar removed). External bars are handled via struts. | wm_events.cpp:xxx-xxx |
-| SelectionClear | (handled in run) | New WM taking over. LWM exits | wm.cpp:xxx-xxx |
+| EnterNotify | handle_enter_notify | LWM implements focus-follows-mouse. Ignores hidden windows. Updates focused_monitor on root window entry | wm_events.cpp:80-82 |
+| MotionNotify | handle_motion_notify | LWM re-establishes focus in window. Ignores hidden windows. Updates focused_monitor if crossing monitor | wm_events.cpp:83-84 |
+| ButtonPress | handle_button_press | LWM focuses window and begins drag. Ignores hidden windows. Updates focused_monitor | wm_events.cpp:85-87 |
+| ButtonRelease | handle_button_release | LWM ends drag | wm_events.cpp:88-89 |
+| KeyPress | handle_key_press | LWM executes keybind actions | wm_events.cpp:90-92 |
+| KeyRelease | handle_key_release | LWM tracks for auto-repeat detection | wm_events.cpp:93-94 |
+| ClientMessage | handle_client_message | LWM handles EWMH/ICCCM commands | wm_events.cpp:95-96 |
+| ConfigureRequest | handle_configure_request | LWM handles geometry requests. See below for detailed behavior | wm_events.cpp:97-98 |
+| PropertyNotify | handle_property_notify | LWM tracks state changes, title, hints, sync counter, struts, and user_time_window indirection for _NET_WM_USER_TIME | wm_events.cpp:99-100 |
+| Expose | handle_expose | No-op (internal bar removed). External bars are handled via struts. | wm_events.cpp:101-102 |
+| SelectionClear | (handled in run) | New WM taking over. LWM exits | wm.cpp:98-105 |
 | RANDR change | handle_randr_screen_change | LWM handles monitor hotplug | wm_events.cpp:55-59 |
 
 ### Key Event Handlers
 
 #### MapRequest
 
-**Implementation**: src/lwm/wm_events.cpp:xxx
+**Implementation**: src/lwm/wm_events.cpp:141-442
 
 **Behavior**:
 1. Check if window already managed → call deiconify_window()
@@ -100,7 +100,7 @@ All event handlers are in src/lwm/wm_events.cpp and methods of WindowManager cla
 
 #### UnmapNotify
 
-**Implementation**: src/lwm/wm_events.cpp:66-73
+**Implementation**: src/lwm/wm_events.cpp:66-73 (case), 443-450 (function)
 
 **Behavior with off-screen visibility**:
 - ALL UnmapNotify events are client-initiated withdraw requests
@@ -120,7 +120,7 @@ All event handlers are in src/lwm/wm_events.cpp and methods of WindowManager cla
 
 #### EnterNotify
 
-**Implementation**: src/lwm/wm_events.cpp:80-xxx
+**Implementation**: src/lwm/wm_events.cpp:451-523
 
 **Behavior**:
 1. Extract event timestamp (via extract_event_time())
@@ -136,7 +136,7 @@ All event handlers are in src/lwm/wm_events.cpp and methods of WindowManager cla
 
 #### MotionNotify
 
-**Implementation**: src/lwm/wm_events.cpp:83-xxx
+**Implementation**: src/lwm/wm_events.cpp:524-572
 
 **Behavior**:
 1. Extract event timestamp
@@ -152,7 +152,7 @@ All event handlers are in src/lwm/wm_events.cpp and methods of WindowManager cla
 
 #### ButtonPress
 
-**Implementation**: src/lwm/wm_events.cpp:86-xxx
+**Implementation**: src/lwm/wm_events.cpp:585-648
 
 **Behavior**:
 1. Extract event timestamp
@@ -173,7 +173,7 @@ All event handlers are in src/lwm/wm_events.cpp and methods of WindowManager cla
 
 #### ConfigureRequest
 
-**Implementation**: src/lwm/wm_events.cpp:xxx-xxx
+**Implementation**: src/lwm/wm_events.cpp:1222-1306
 
 **Behavior**:
 
@@ -202,7 +202,7 @@ All event handlers are in src/lwm/wm_events.cpp and methods of WindowManager cla
 
 #### PropertyNotify
 
-**Implementation**: src/lwm/wm_events.cpp:xxx-xxx
+**Implementation**: src/lwm/wm_events.cpp:1307-1406
 
 **Behavior**: Tracks property changes for:
 
@@ -223,7 +223,7 @@ All event handlers are in src/lwm/wm_events.cpp and methods of WindowManager cla
 
 #### ClientMessage
 
-**Implementation**: src/lwm/wm_ewmh.cpp
+**Implementation**: src/lwm/wm_events.cpp:764-1221
 
 **Handled messages**:
 - _NET_ACTIVE_WINDOW (activate window, switch desktop if needed, apply focus stealing prevention)

@@ -13,8 +13,8 @@ and are not duplicated here.
 ## 1. Concepts and Model
 
 ### 1.1 Monitors
-- LWM manages one or more monitors (physical displays).
-- Each monitor has its own independent set of workspaces.
+- LWM manages one or more monitors.
+- Each monitor has independent workspaces.
 - Exactly one monitor is the **active monitor** at any time.
 
 ### 1.2 Workspaces
@@ -79,9 +79,9 @@ This mapping is intentionally per-monitor; some pagers may assume global desktop
 ### 2.2 Focus-Follows-Mouse (FFM)
 - Focus-eligible windows gain focus when the pointer enters them.
 - **Motion within a window**: Re-focuses if pointer is in a focus-eligible window that lost focus (e.g., new window took focus per §5.2 while cursor remained elsewhere).
-- **Click within a window**: Clicking a focus-eligible window focuses it.
+- **Click within a window**: Click a focus-eligible window to focus it.
 
-See [COMPLETE_STATE_MACHINE.md](COMPLETE_STATE_MACHINE.md#focus-policy) for implementation details on focus eligibility and event handling.
+See [STATE_MACHINE.md](STATE_MACHINE.md#6-focus-system) for implementation details on focus eligibility and event handling.
 
 ### 2.3 Empty Space Semantics (Key Multi-Monitor Behavior)
 
@@ -165,8 +165,7 @@ When a new window appears:
 - Unlike tiled windows (stored per-workspace), floating windows are tracked in a separate global list with explicit monitor/workspace association. This affects focus restoration (see §1.2).
 
 ### 6.2 Placement and Interaction
-- Floating windows appear in a sensible default position (e.g., centered on usable area or relative
-  to a parent).
+- Floating windows appear in a sensible default position (e.g., centered on usable area or relative to a parent).
 - User-driven move/resize is supported (mechanism/config is not specified here).
 
 ### 6.3 Focus

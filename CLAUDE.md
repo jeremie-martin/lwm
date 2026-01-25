@@ -100,7 +100,6 @@ For detailed specifications, see:
 - **[IMPLEMENTATION.md](IMPLEMENTATION.md)** - Architecture, data structures, invariants
 - **[STATE_MACHINE.md](STATE_MACHINE.md)** - Window states and transitions
 - **[EVENT_HANDLING.md](EVENT_HANDLING.md)** - Event-by-event handling specifications
-- **[COMPLETE_STATE_MACHINE.md](COMPLETE_STATE_MACHINE.md)** - Legacy complete specification (superseded by split docs)
 
 ## Adding Features
 
