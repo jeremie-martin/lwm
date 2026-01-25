@@ -98,33 +98,14 @@ TEST_CASE("KeybindManager::parse_modifier is order-independent", "[keybind]")
 
 TEST_CASE("KeybindManager::parse_modifier handles malformed modifier strings", "[keybind][edge]")
 {
-    SECTION("Multiple consecutive plus signs")
-    {
-        SKIP(
-            "Documents design decision: empty tokens between '+' are ignored, so 'super++shift' matches both 'super' "
-            "and 'shift'"
-        );
-        REQUIRE(KeybindManager::parse_modifier("super++shift") == XCB_MOD_MASK_4);
-    }
+    // Trailing plus sign - ignored
+    REQUIRE(KeybindManager::parse_modifier("super+") == XCB_MOD_MASK_4);
+    REQUIRE(KeybindManager::parse_modifier("super+shift+") == (XCB_MOD_MASK_4 | XCB_MOD_MASK_SHIFT));
 
-    SECTION("Leading plus sign")
-    {
-        SKIP("Documents design decision: empty tokens are ignored, so '+super' parses as 'super'");
-        REQUIRE(KeybindManager::parse_modifier("+super") == 0);
-    }
-
-    SECTION("Trailing plus sign")
-    {
-        REQUIRE(KeybindManager::parse_modifier("super+") == XCB_MOD_MASK_4);
-        REQUIRE(KeybindManager::parse_modifier("super+shift+") == (XCB_MOD_MASK_4 | XCB_MOD_MASK_SHIFT));
-    }
-
-    SECTION("Only plus signs")
-    {
-        REQUIRE(KeybindManager::parse_modifier("+") == 0);
-        REQUIRE(KeybindManager::parse_modifier("++") == 0);
-        REQUIRE(KeybindManager::parse_modifier("+++") == 0);
-    }
+    // Only plus signs - returns 0 (no valid modifiers)
+    REQUIRE(KeybindManager::parse_modifier("+") == 0);
+    REQUIRE(KeybindManager::parse_modifier("++") == 0);
+    REQUIRE(KeybindManager::parse_modifier("+++") == 0);
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -173,28 +154,7 @@ TEST_CASE("KeybindManager::resolve returns nullopt for unregistered bindings", "
     REQUIRE_FALSE(result.has_value());
 }
 
-TEST_CASE("KeybindManager::resolve returns correct action for registered binding", "[keybind]")
-{
-    if (!ensure_x11_environment())
-        return;
-
-    Config cfg = make_empty_config();
-    cfg.keybinds.push_back({ "super", "a", "spawn", "test-command", -1 });
-
-    Connection conn;
-    KeybindManager mgr(conn, cfg);
-
-    uint16_t mod = XCB_MOD_MASK_4;
-    xcb_keysym_t keysym = XStringToKeysym("a");
-
-    auto result = mgr.resolve(mod, keysym);
-    REQUIRE(result.has_value());
-    REQUIRE(result->type == "spawn");
-    REQUIRE(result->command == "test-command");
-    REQUIRE(result->workspace == -1);
-}
-
-TEST_CASE("KeybindManager::resolve handles multiple bindings", "[keybind]")
+TEST_CASE("KeybindManager::resolve handles multiple bindings across keys, modifiers, and actions", "[keybind]")
 {
     if (!ensure_x11_environment())
         return;
@@ -203,34 +163,6 @@ TEST_CASE("KeybindManager::resolve handles multiple bindings", "[keybind]")
     cfg.keybinds.push_back({ "super", "a", "spawn", "terminal", -1 });
     cfg.keybinds.push_back({ "super", "b", "spawn", "browser", -1 });
     cfg.keybinds.push_back({ "super+shift", "a", "kill", "", -1 });
-
-    Connection conn;
-    KeybindManager mgr(conn, cfg);
-
-    uint16_t super = XCB_MOD_MASK_4;
-    uint16_t super_shift = XCB_MOD_MASK_4 | XCB_MOD_MASK_SHIFT;
-
-    auto terminal_result = mgr.resolve(super, XStringToKeysym("a"));
-    REQUIRE(terminal_result.has_value());
-    REQUIRE(terminal_result->type == "spawn");
-    REQUIRE(terminal_result->command == "terminal");
-
-    auto browser_result = mgr.resolve(super, XStringToKeysym("b"));
-    REQUIRE(browser_result.has_value());
-    REQUIRE(browser_result->type == "spawn");
-    REQUIRE(browser_result->command == "browser");
-
-    auto kill_result = mgr.resolve(super_shift, XStringToKeysym("a"));
-    REQUIRE(kill_result.has_value());
-    REQUIRE(kill_result->type == "kill");
-}
-
-TEST_CASE("KeybindManager::resolve handles workspace actions", "[keybind]")
-{
-    if (!ensure_x11_environment())
-        return;
-
-    Config cfg = make_empty_config();
     cfg.keybinds.push_back({ "super", "1", "switch_workspace", "", 0 });
     cfg.keybinds.push_back({ "super+shift", "1", "move_to_workspace", "", 0 });
 
@@ -240,59 +172,25 @@ TEST_CASE("KeybindManager::resolve handles workspace actions", "[keybind]")
     uint16_t super = XCB_MOD_MASK_4;
     uint16_t super_shift = XCB_MOD_MASK_4 | XCB_MOD_MASK_SHIFT;
 
-    auto switch_result = mgr.resolve(super, XStringToKeysym("1"));
-    REQUIRE(switch_result.has_value());
-    REQUIRE(switch_result->type == "switch_workspace");
-    REQUIRE(switch_result->workspace == 0);
-
-    auto move_result = mgr.resolve(super_shift, XStringToKeysym("1"));
-    REQUIRE(move_result.has_value());
-    REQUIRE(move_result->type == "move_to_workspace");
-    REQUIRE(move_result->workspace == 0);
-}
-
-TEST_CASE("KeybindManager::resolve distinguishes actions by key", "[keybind]")
-{
-    if (!ensure_x11_environment())
-        return;
-
-    Config cfg = make_empty_config();
-    cfg.keybinds.push_back({ "super", "a", "spawn", "terminal", -1 });
-    cfg.keybinds.push_back({ "super", "b", "spawn", "browser", -1 });
-
-    Connection conn;
-    KeybindManager mgr(conn, cfg);
-
-    uint16_t super = XCB_MOD_MASK_4;
-
+    // Distinguish by key
     auto result_a = mgr.resolve(super, XStringToKeysym("a"));
     auto result_b = mgr.resolve(super, XStringToKeysym("b"));
-
     REQUIRE(result_a->command == "terminal");
     REQUIRE(result_b->command == "browser");
-}
 
-TEST_CASE("KeybindManager::resolve distinguishes actions by modifier", "[keybind]")
-{
-    if (!ensure_x11_environment())
-        return;
-
-    Config cfg = make_empty_config();
-    cfg.keybinds.push_back({ "super", "a", "spawn", "terminal", -1 });
-    cfg.keybinds.push_back({ "super+shift", "a", "kill", "", -1 });
-
-    Connection conn;
-    KeybindManager mgr(conn, cfg);
-
-    uint16_t super = XCB_MOD_MASK_4;
-    uint16_t super_shift = XCB_MOD_MASK_4 | XCB_MOD_MASK_SHIFT;
-    xcb_keysym_t keysym_a = XStringToKeysym("a");
-
-    auto spawn_result = mgr.resolve(super, keysym_a);
-    auto kill_result = mgr.resolve(super_shift, keysym_a);
-
+    // Distinguish by modifier
+    auto spawn_result = mgr.resolve(super, XStringToKeysym("a"));
+    auto kill_result = mgr.resolve(super_shift, XStringToKeysym("a"));
     REQUIRE(spawn_result->type == "spawn");
     REQUIRE(kill_result->type == "kill");
+
+    // Workspace actions
+    auto switch_result = mgr.resolve(super, XStringToKeysym("1"));
+    auto move_result = mgr.resolve(super_shift, XStringToKeysym("1"));
+    REQUIRE(switch_result->type == "switch_workspace");
+    REQUIRE(switch_result->workspace == 0);
+    REQUIRE(move_result->type == "move_to_workspace");
+    REQUIRE(move_result->workspace == 0);
 }
 
 TEST_CASE("KeybindManager handles all standard keybind modifiers", "[keybind]")

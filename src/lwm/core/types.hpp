@@ -198,15 +198,28 @@ struct Monitor
 
     Geometry working_area() const
     {
-        // Clamp struts to prevent underflow
-        int32_t h_strut =
-            std::min<int32_t>(static_cast<int32_t>(width), static_cast<int32_t>(strut.left + strut.right));
-        int32_t v_strut =
-            std::min<int32_t>(static_cast<int32_t>(height), static_cast<int32_t>(strut.top + strut.bottom));
-        int32_t area_x = static_cast<int32_t>(x) + static_cast<int32_t>(strut.left);
-        int32_t area_y = static_cast<int32_t>(y) + static_cast<int32_t>(strut.top);
-        int32_t area_w = std::max<int32_t>(1, static_cast<int32_t>(width) - h_strut);
-        int32_t area_h = std::max<int32_t>(1, static_cast<int32_t>(height) - v_strut);
+        int32_t w = static_cast<int32_t>(width);
+        int32_t h = static_cast<int32_t>(height);
+        int32_t left = static_cast<int32_t>(strut.left);
+        int32_t right = static_cast<int32_t>(strut.right);
+        int32_t top = static_cast<int32_t>(strut.top);
+        int32_t bottom = static_cast<int32_t>(strut.bottom);
+
+        // Clamp total struts to monitor dimensions
+        int32_t h_strut = std::min(w, left + right);
+        int32_t v_strut = std::min(h, top + bottom);
+
+        // Calculate working area dimensions (minimum 1)
+        int32_t area_w = std::max<int32_t>(1, w - h_strut);
+        int32_t area_h = std::max<int32_t>(1, h - v_strut);
+
+        // Clamp left/top offsets: if struts exceed dimension, use no offset
+        int32_t offset_x = (left + right >= w) ? 0 : left;
+        int32_t offset_y = (top + bottom >= h) ? 0 : top;
+
+        int32_t area_x = static_cast<int32_t>(x) + offset_x;
+        int32_t area_y = static_cast<int32_t>(y) + offset_y;
+
         return { static_cast<int16_t>(area_x),
                  static_cast<int16_t>(area_y),
                  static_cast<uint16_t>(area_w),

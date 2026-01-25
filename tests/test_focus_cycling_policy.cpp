@@ -255,7 +255,7 @@ TEST_CASE("Build candidates returns empty when all ineligible", "[focus][cycling
 // Integration-style tests combining build + cycle
 // ─────────────────────────────────────────────────────────────────────────────
 
-TEST_CASE("Full cycle through mixed tiled and floating", "[focus][cycling][integration]")
+TEST_CASE("Full cycle through mixed tiled and floating in both directions", "[focus][cycling][integration]")
 {
     std::vector<xcb_window_t> tiled = { 0x1000, 0x2000 };
     std::vector<focus_policy::FloatingCandidate> floating = {
@@ -263,53 +263,41 @@ TEST_CASE("Full cycle through mixed tiled and floating", "[focus][cycling][integ
     };
 
     auto is_eligible = [](xcb_window_t) { return true; };
-
     auto candidates = focus_policy::build_cycle_candidates(tiled, floating, 0, 0, is_eligible);
     REQUIRE(candidates.size() == 3);
 
-    // Start at first tiled
-    auto r1 = focus_policy::cycle_focus_next(candidates, 0x1000);
-    REQUIRE(r1);
-    REQUIRE(r1->id == 0x2000);
+    // Forward cycle: 0x1000 -> 0x2000 -> 0x3000 -> 0x1000
+    SECTION("Forward direction cycles correctly")
+    {
+        auto r1 = focus_policy::cycle_focus_next(candidates, 0x1000);
+        REQUIRE(r1);
+        REQUIRE(r1->id == 0x2000);
 
-    // Next is floating
-    auto r2 = focus_policy::cycle_focus_next(candidates, 0x2000);
-    REQUIRE(r2);
-    REQUIRE(r2->id == 0x3000);
-    REQUIRE(r2->is_floating);
+        auto r2 = focus_policy::cycle_focus_next(candidates, 0x2000);
+        REQUIRE(r2);
+        REQUIRE(r2->id == 0x3000);
+        REQUIRE(r2->is_floating);
 
-    // Wrap to first tiled
-    auto r3 = focus_policy::cycle_focus_next(candidates, 0x3000);
-    REQUIRE(r3);
-    REQUIRE(r3->id == 0x1000);
-    REQUIRE_FALSE(r3->is_floating);
-}
+        auto r3 = focus_policy::cycle_focus_next(candidates, 0x3000);
+        REQUIRE(r3);
+        REQUIRE(r3->id == 0x1000);
+        REQUIRE_FALSE(r3->is_floating);
+    }
 
-TEST_CASE("Full reverse cycle through mixed tiled and floating", "[focus][cycling][integration]")
-{
-    std::vector<xcb_window_t> tiled = { 0x1000, 0x2000 };
-    std::vector<focus_policy::FloatingCandidate> floating = {
-        { 0x3000, 0, 0, false },
-    };
+    // Backward cycle: 0x1000 -> 0x3000 -> 0x2000 -> 0x1000
+    SECTION("Backward direction cycles correctly")
+    {
+        auto r1 = focus_policy::cycle_focus_prev(candidates, 0x1000);
+        REQUIRE(r1);
+        REQUIRE(r1->id == 0x3000);
+        REQUIRE(r1->is_floating);
 
-    auto is_eligible = [](xcb_window_t) { return true; };
+        auto r2 = focus_policy::cycle_focus_prev(candidates, 0x3000);
+        REQUIRE(r2);
+        REQUIRE(r2->id == 0x2000);
 
-    auto candidates = focus_policy::build_cycle_candidates(tiled, floating, 0, 0, is_eligible);
-    REQUIRE(candidates.size() == 3);
-
-    // Start at first tiled, go back to floating (wrap)
-    auto r1 = focus_policy::cycle_focus_prev(candidates, 0x1000);
-    REQUIRE(r1);
-    REQUIRE(r1->id == 0x3000);
-    REQUIRE(r1->is_floating);
-
-    // Prev is second tiled
-    auto r2 = focus_policy::cycle_focus_prev(candidates, 0x3000);
-    REQUIRE(r2);
-    REQUIRE(r2->id == 0x2000);
-
-    // Prev is first tiled
-    auto r3 = focus_policy::cycle_focus_prev(candidates, 0x2000);
-    REQUIRE(r3);
-    REQUIRE(r3->id == 0x1000);
+        auto r3 = focus_policy::cycle_focus_prev(candidates, 0x2000);
+        REQUIRE(r3);
+        REQUIRE(r3->id == 0x1000);
+    }
 }

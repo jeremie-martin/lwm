@@ -7,18 +7,20 @@ using namespace lwm;
 // Desktop index encoding tests
 // ─────────────────────────────────────────────────────────────────────────────
 
-TEST_CASE("EWMH desktop index is linear", "[ewmh][policy]")
+TEST_CASE("EWMH desktop index encoding", "[ewmh][policy]")
 {
-    REQUIRE(ewmh_policy::desktop_index(2, 3, 10) == 23u);
-    REQUIRE(ewmh_policy::desktop_index(0, 0, 5) == 0u);
-}
+    SECTION("Basic linear encoding")
+    {
+        REQUIRE(ewmh_policy::desktop_index(2, 3, 10) == 23u);
+        REQUIRE(ewmh_policy::desktop_index(0, 0, 5) == 0u);
+    }
 
-TEST_CASE("EWMH desktop index with many workspaces", "[ewmh][policy]")
-{
-    // 100 workspaces per monitor
-    REQUIRE(ewmh_policy::desktop_index(0, 50, 100) == 50u);
-    REQUIRE(ewmh_policy::desktop_index(1, 0, 100) == 100u);
-    REQUIRE(ewmh_policy::desktop_index(2, 99, 100) == 299u);
+    SECTION("Many workspaces per monitor (100)")
+    {
+        REQUIRE(ewmh_policy::desktop_index(0, 50, 100) == 50u);
+        REQUIRE(ewmh_policy::desktop_index(1, 0, 100) == 100u);
+        REQUIRE(ewmh_policy::desktop_index(2, 99, 100) == 299u);
+    }
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -71,10 +73,6 @@ TEST_CASE("EWMH desktop index round-trip encode/decode", "[ewmh][policy]")
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// Large value tests
-// ─────────────────────────────────────────────────────────────────────────────
-
-// ─────────────────────────────────────────────────────────────────────────────
 // Overflow and boundary tests
 // ─────────────────────────────────────────────────────────────────────────────
 
@@ -83,17 +81,17 @@ TEST_CASE("EWMH desktop index overflow with large values", "[ewmh][policy][edge]
     // Test near uint32_t max (~4.3B)
     // monitor_idx * workspaces_per_monitor should not overflow
     size_t ws_per_mon = 10000;
-    size_t monitor_idx = 400000; // 400000 * 10000 = 4,000,000,000 (under uint32_t max)
-
+    size_t monitor_idx = 400000;
+    // 400000 * 10000 + 9999 = 4,000,000,000 + 9999 = 4,000,009,999 (under uint32_t max)
     uint32_t desktop = ewmh_policy::desktop_index(monitor_idx, 9999, ws_per_mon);
     REQUIRE(desktop == 4000009999u);
 
-    // This would overflow: 429497 * 10000 = 4,294,970,000 > UINT32_MAX
-    // Result truncates to uint32_t - this is documented behavior
+    // Overflow case: 429497 * 10000 = 4,294,970,000 > UINT32_MAX
+    // Result wraps around due to unsigned overflow - this is documented behavior
     size_t overflow_monitor = 429497;
     uint32_t overflow_desktop = ewmh_policy::desktop_index(overflow_monitor, 9999, ws_per_mon);
-    // Should wrap around due to overflow
-    REQUIRE(overflow_desktop < 1000000u); // Wrapped to small value
+    // After wrap: 4,294,970,000 - 4,294,967,296 = 2,704 + 9999 = 12,703
+    REQUIRE(overflow_desktop < 100000u); // Wrapped to small value
 }
 
 TEST_CASE("EWMH desktop_to_indices handles edge cases", "[ewmh][policy][edge]")

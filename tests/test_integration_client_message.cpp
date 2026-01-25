@@ -1,6 +1,7 @@
 #include "x11_test_harness.hpp"
 #include <catch2/catch_test_macros.hpp>
 #include <chrono>
+#include <optional>
 
 using namespace lwm::test;
 
@@ -8,16 +9,46 @@ namespace {
 
 constexpr auto kTimeout = std::chrono::seconds(2);
 
-bool ensure_environment()
+struct TestEnvironment
 {
-    auto& env = X11TestEnvironment::instance();
-    if (!env.available())
+    X11TestEnvironment& x11_env;
+    X11Connection conn;
+    LwmProcess wm;
+
+    bool ok() const { return conn.ok() && wm.running(); }
+
+    static std::optional<TestEnvironment> create()
     {
-        WARN("Xvfb not available; set LWM_TEST_ALLOW_EXISTING_DISPLAY=1 to use an existing DISPLAY.");
-        return false;
+        auto& env = X11TestEnvironment::instance();
+        if (!env.available())
+        {
+            WARN("Xvfb not available; set LWM_TEST_ALLOW_EXISTING_DISPLAY=1 to use an existing DISPLAY.");
+            return std::nullopt;
+        }
+
+        X11Connection conn;
+        if (!conn.ok())
+        {
+            WARN("Failed to connect to X server.");
+            return std::nullopt;
+        }
+
+        LwmProcess wm(env.display());
+        if (!wm.running())
+        {
+            WARN("Failed to start lwm.");
+            return std::nullopt;
+        }
+
+        if (!wait_for_wm_ready(conn, kTimeout))
+        {
+            WARN("Window manager not ready.");
+            return std::nullopt;
+        }
+
+        return TestEnvironment{ env, std::move(conn), std::move(wm) };
     }
-    return true;
-}
+};
 
 } // namespace
 
@@ -43,25 +74,13 @@ TEST_CASE(
     "[integration][client_message][workspace]"
 )
 {
-    if (!ensure_environment())
+    auto test_env = TestEnvironment::create();
+    if (!test_env)
         return;
 
-    auto& env = X11TestEnvironment::instance();
-    X11Connection conn;
-    if (!conn.ok())
-    {
-        WARN("Failed to connect to X server.");
-        return;
-    }
-
-    LwmProcess wm(env.display());
-    if (!wm.running())
-    {
-        WARN("Failed to start lwm.");
-        return;
-    }
-
-    REQUIRE(wait_for_wm_ready(conn, kTimeout));
+    auto& env = test_env->x11_env;
+    auto& conn = test_env->conn;
+    auto& wm = test_env->wm;
 
     // Create windows on workspace 0
     xcb_window_t w1 = create_window(conn, 10, 10, 200, 150);
@@ -127,25 +146,13 @@ TEST_CASE(
     "[integration][client_message][workspace][edge]"
 )
 {
-    if (!ensure_environment())
+    auto test_env = TestEnvironment::create();
+    if (!test_env)
         return;
 
-    auto& env = X11TestEnvironment::instance();
-    X11Connection conn;
-    if (!conn.ok())
-    {
-        WARN("Failed to connect to X server.");
-        return;
-    }
-
-    LwmProcess wm(env.display());
-    if (!wm.running())
-    {
-        WARN("Failed to start lwm.");
-        return;
-    }
-
-    REQUIRE(wait_for_wm_ready(conn, kTimeout));
+    auto& env = test_env->x11_env;
+    auto& conn = test_env->conn;
+    auto& wm = test_env->wm;
 
     xcb_window_t w1 = create_window(conn, 10, 10, 200, 150);
     map_window(conn, w1);
@@ -182,27 +189,15 @@ TEST_CASE(
     destroy_window(conn, w1);
 }
 
-TEST_CASE("Integration: move window to non-existent window is ignored", "[integration][client_message][edge]")
+TEST_CASE("Integration: client message to invalid window ID is ignored", "[integration][client_message][edge]")
 {
-    if (!ensure_environment())
+    auto test_env = TestEnvironment::create();
+    if (!test_env)
         return;
 
-    auto& env = X11TestEnvironment::instance();
-    X11Connection conn;
-    if (!conn.ok())
-    {
-        WARN("Failed to connect to X server.");
-        return;
-    }
-
-    LwmProcess wm(env.display());
-    if (!wm.running())
-    {
-        WARN("Failed to start lwm.");
-        return;
-    }
-
-    REQUIRE(wait_for_wm_ready(conn, kTimeout));
+    auto& env = test_env->x11_env;
+    auto& conn = test_env->conn;
+    auto& wm = test_env->wm;
 
     // Create a real window
     xcb_window_t w1 = create_window(conn, 10, 10, 200, 150);
@@ -211,10 +206,9 @@ TEST_CASE("Integration: move window to non-existent window is ignored", "[integr
 
     xcb_atom_t net_wm_desktop = intern_atom(conn.get(), "_NET_WM_DESKTOP");
 
-    // Try to move a non-existent window - should not crash
+    // Send client message to non-existent window - should be ignored without crash
     send_net_wm_desktop(conn, 0xDEADBEEF, 1);
 
-    // Wait a bit to ensure the message is processed
     std::this_thread::sleep_for(std::chrono::milliseconds(100));
 
     // Real window should still be active and unaffected
@@ -228,25 +222,13 @@ TEST_CASE(
     "[integration][client_message][workspace][focus]"
 )
 {
-    if (!ensure_environment())
+    auto test_env = TestEnvironment::create();
+    if (!test_env)
         return;
 
-    auto& env = X11TestEnvironment::instance();
-    X11Connection conn;
-    if (!conn.ok())
-    {
-        WARN("Failed to connect to X server.");
-        return;
-    }
-
-    LwmProcess wm(env.display());
-    if (!wm.running())
-    {
-        WARN("Failed to start lwm.");
-        return;
-    }
-
-    REQUIRE(wait_for_wm_ready(conn, kTimeout));
+    auto& env = test_env->x11_env;
+    auto& conn = test_env->conn;
+    auto& wm = test_env->wm;
 
     // Create two windows on workspace 0
     xcb_window_t w1 = create_window(conn, 10, 10, 200, 150);
@@ -287,25 +269,13 @@ TEST_CASE(
     "[integration][client_message][workspace][sticky]"
 )
 {
-    if (!ensure_environment())
+    auto test_env = TestEnvironment::create();
+    if (!test_env)
         return;
 
-    auto& env = X11TestEnvironment::instance();
-    X11Connection conn;
-    if (!conn.ok())
-    {
-        WARN("Failed to connect to X server.");
-        return;
-    }
-
-    LwmProcess wm(env.display());
-    if (!wm.running())
-    {
-        WARN("Failed to start lwm.");
-        return;
-    }
-
-    REQUIRE(wait_for_wm_ready(conn, kTimeout));
+    auto& env = test_env->x11_env;
+    auto& conn = test_env->conn;
+    auto& wm = test_env->wm;
 
     xcb_window_t w1 = create_window(conn, 10, 10, 200, 150);
     map_window(conn, w1);

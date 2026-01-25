@@ -31,120 +31,96 @@ std::vector<Monitor> make_dual_monitors()
 // monitor_index_at_point tests
 // ─────────────────────────────────────────────────────────────────────────────
 
-TEST_CASE("Monitor index at point finds correct monitor", "[focus][monitor]")
+TEST_CASE("Monitor index at point finds correct monitor and handles edge cases", "[focus][monitor]")
 {
-    auto monitors = make_dual_monitors();
+    SECTION("Finds monitor containing point")
+    {
+        auto monitors = make_dual_monitors();
 
-    // Point on first monitor
-    auto idx0 = focus::monitor_index_at_point(monitors, 500, 500);
-    REQUIRE(idx0);
-    REQUIRE(*idx0 == 0);
+        auto idx0 = focus::monitor_index_at_point(monitors, 500, 500);
+        REQUIRE(idx0);
+        REQUIRE(*idx0 == 0);
 
-    // Point on second monitor
-    auto idx1 = focus::monitor_index_at_point(monitors, 2500, 500);
-    REQUIRE(idx1);
-    REQUIRE(*idx1 == 1);
-}
+        auto idx1 = focus::monitor_index_at_point(monitors, 2500, 500);
+        REQUIRE(idx1);
+        REQUIRE(*idx1 == 1);
+    }
 
-TEST_CASE("Monitor index at point returns nullopt for out-of-bounds", "[focus][monitor]")
-{
-    auto monitors = make_dual_monitors();
+    SECTION("Returns nullopt for out-of-bounds or empty list")
+    {
+        auto monitors = make_dual_monitors();
 
-    // Point outside all monitors
-    auto idx = focus::monitor_index_at_point(monitors, 5000, 5000);
-    REQUIRE_FALSE(idx);
-}
+        auto out_of_bounds = focus::monitor_index_at_point(monitors, 5000, 5000);
+        REQUIRE_FALSE(out_of_bounds);
 
-TEST_CASE("Monitor index at point handles monitor boundary exactly", "[focus][monitor]")
-{
-    auto monitors = make_dual_monitors();
+        std::vector<Monitor> empty;
+        auto empty_result = focus::monitor_index_at_point(empty, 500, 500);
+        REQUIRE_FALSE(empty_result);
+    }
 
-    // Point exactly at boundary between monitors (x=1920)
-    // Should be on second monitor (first monitor is 0-1919)
-    auto idx = focus::monitor_index_at_point(monitors, 1920, 500);
-    REQUIRE(idx);
-    REQUIRE(*idx == 1);
+    SECTION("Handles monitor boundaries and negative coordinates")
+    {
+        auto monitors = make_dual_monitors();
 
-    // Point at last pixel of first monitor (x=1919)
-    auto idx2 = focus::monitor_index_at_point(monitors, 1919, 500);
-    REQUIRE(idx2);
-    REQUIRE(*idx2 == 0);
-}
+        auto boundary_right = focus::monitor_index_at_point(monitors, 1920, 500);
+        REQUIRE(boundary_right);
+        REQUIRE(*boundary_right == 1);
 
-TEST_CASE("Monitor index at point handles negative coordinates", "[focus][monitor]")
-{
-    std::vector<Monitor> monitors;
-    monitors.push_back(make_monitor(-1920, 0, 1920, 1080)); // Left of origin
-    monitors.push_back(make_monitor(0, 0, 1920, 1080));
+        auto boundary_left = focus::monitor_index_at_point(monitors, 1919, 500);
+        REQUIRE(boundary_left);
+        REQUIRE(*boundary_left == 0);
 
-    auto idx = focus::monitor_index_at_point(monitors, -500, 500);
-    REQUIRE(idx);
-    REQUIRE(*idx == 0);
-}
+        std::vector<Monitor> neg_monitors;
+        neg_monitors.push_back(make_monitor(-1920, 0, 1920, 1080));
+        neg_monitors.push_back(make_monitor(0, 0, 1920, 1080));
 
-TEST_CASE("Monitor index at point with empty monitor list", "[focus][monitor]")
-{
-    std::vector<Monitor> monitors;
-
-    auto idx = focus::monitor_index_at_point(monitors, 500, 500);
-    REQUIRE_FALSE(idx);
+        auto neg_idx = focus::monitor_index_at_point(neg_monitors, -500, 500);
+        REQUIRE(neg_idx);
+        REQUIRE(*neg_idx == 0);
+    }
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
 // pointer_move tests
 // ─────────────────────────────────────────────────────────────────────────────
 
-TEST_CASE("Pointer movement keeps focus on same monitor", "[focus][monitor]")
+TEST_CASE("Pointer movement handles monitor transitions, boundaries, and edge cases", "[focus][monitor]")
 {
     auto monitors = make_dual_monitors();
 
-    auto result = focus::pointer_move(monitors, 0, 100, 100);
-    REQUIRE_FALSE(result.active_monitor_changed);
-    REQUIRE_FALSE(result.clear_focus);
-}
+    SECTION("Keeps focus on same monitor and handles out-of-bounds")
+    {
+        auto same_monitor = focus::pointer_move(monitors, 0, 100, 100);
+        REQUIRE_FALSE(same_monitor.active_monitor_changed);
+        REQUIRE_FALSE(same_monitor.clear_focus);
 
-TEST_CASE("Pointer movement to another monitor clears focus", "[focus][monitor]")
-{
-    auto monitors = make_dual_monitors();
+        auto out_of_bounds = focus::pointer_move(monitors, 0, 10000, 10000);
+        REQUIRE_FALSE(out_of_bounds.active_monitor_changed);
+        REQUIRE_FALSE(out_of_bounds.clear_focus);
+    }
 
-    auto result = focus::pointer_move(monitors, 0, 2000, 200);
-    REQUIRE(result.active_monitor_changed);
-    REQUIRE(result.new_monitor == 1);
-    REQUIRE(result.clear_focus);
-}
+    SECTION("Moves to another monitor clears focus")
+    {
+        auto to_second = focus::pointer_move(monitors, 0, 2000, 200);
+        REQUIRE(to_second.active_monitor_changed);
+        REQUIRE(to_second.new_monitor == 1);
+        REQUIRE(to_second.clear_focus);
 
-TEST_CASE("Pointer movement at monitor edge", "[focus][monitor]")
-{
-    auto monitors = make_dual_monitors();
+        auto to_first = focus::pointer_move(monitors, 1, 500, 500);
+        REQUIRE(to_first.active_monitor_changed);
+        REQUIRE(to_first.new_monitor == 0);
+        REQUIRE(to_first.clear_focus);
+    }
 
-    // Just inside first monitor
-    auto r1 = focus::pointer_move(monitors, 0, 1919, 500);
-    REQUIRE_FALSE(r1.active_monitor_changed);
+    SECTION("Handles monitor edge boundary (1919 vs 1920)")
+    {
+        auto left_edge = focus::pointer_move(monitors, 0, 1919, 500);
+        REQUIRE_FALSE(left_edge.active_monitor_changed);
 
-    // Just inside second monitor (boundary)
-    auto r2 = focus::pointer_move(monitors, 0, 1920, 500);
-    REQUIRE(r2.active_monitor_changed);
-    REQUIRE(r2.new_monitor == 1);
-}
-
-TEST_CASE("Pointer movement outside all monitors stays on current", "[focus][monitor]")
-{
-    auto monitors = make_dual_monitors();
-
-    // Point way outside
-    auto result = focus::pointer_move(monitors, 0, 10000, 10000);
-    REQUIRE_FALSE(result.active_monitor_changed);
-    REQUIRE_FALSE(result.clear_focus);
-}
-
-TEST_CASE("Pointer movement from second to first monitor", "[focus][monitor]")
-{
-    auto monitors = make_dual_monitors();
-
-    auto result = focus::pointer_move(monitors, 1, 500, 500);
-    REQUIRE(result.active_monitor_changed);
-    REQUIRE(result.new_monitor == 0);
-    REQUIRE(result.clear_focus);
+        auto right_edge = focus::pointer_move(monitors, 0, 1920, 500);
+        REQUIRE(right_edge.active_monitor_changed);
+        REQUIRE(right_edge.new_monitor == 1);
+    }
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -175,7 +151,7 @@ TEST_CASE("Focusing a window updates active monitor and workspace", "[focus][win
 
 TEST_CASE("Focusing unknown or non-existent windows preserves state", "[focus][window]")
 {
-    // Unknown window in normal case
+    SECTION("Unknown window in normal case")
     {
         std::vector<Monitor> monitors;
         monitors.push_back(make_monitor(0, 0, 1920, 1080));
@@ -189,7 +165,7 @@ TEST_CASE("Focusing unknown or non-existent windows preserves state", "[focus][w
         REQUIRE(active_window == 0x1234);
     }
 
-    // Unknown window with empty monitors list
+    SECTION("Unknown window with empty monitors list")
     {
         std::vector<Monitor> monitors;
 

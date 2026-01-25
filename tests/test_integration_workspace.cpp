@@ -1,6 +1,7 @@
 #include "x11_test_harness.hpp"
 #include <catch2/catch_test_macros.hpp>
 #include <chrono>
+#include <optional>
 
 using namespace lwm::test;
 
@@ -8,40 +9,56 @@ namespace {
 
 constexpr auto kTimeout = std::chrono::seconds(2);
 
-bool ensure_environment()
+struct TestEnvironment
 {
-    auto& env = X11TestEnvironment::instance();
-    if (!env.available())
+    X11TestEnvironment& x11_env;
+    X11Connection conn;
+    LwmProcess wm;
+
+    bool ok() const { return conn.ok() && wm.running(); }
+
+    static std::optional<TestEnvironment> create()
     {
-        WARN("Xvfb not available; set LWM_TEST_ALLOW_EXISTING_DISPLAY=1 to use an existing DISPLAY.");
-        return false;
+        auto& env = X11TestEnvironment::instance();
+        if (!env.available())
+        {
+            WARN("Xvfb not available; set LWM_TEST_ALLOW_EXISTING_DISPLAY=1 to use an existing DISPLAY.");
+            return std::nullopt;
+        }
+
+        X11Connection conn;
+        if (!conn.ok())
+        {
+            WARN("Failed to connect to X server.");
+            return std::nullopt;
+        }
+
+        LwmProcess wm(env.display());
+        if (!wm.running())
+        {
+            WARN("Failed to start lwm.");
+            return std::nullopt;
+        }
+
+        if (!wait_for_wm_ready(conn, kTimeout))
+        {
+            WARN("Window manager not ready.");
+            return std::nullopt;
+        }
+
+        return TestEnvironment{ env, std::move(conn), std::move(wm) };
     }
-    return true;
-}
+};
 
 } // namespace
 
 TEST_CASE("Integration: workspace switch updates _NET_CURRENT_DESKTOP", "[integration][workspace]")
 {
-    if (!ensure_environment())
+    auto test_env = TestEnvironment::create();
+    if (!test_env)
         return;
 
-    auto& env = X11TestEnvironment::instance();
-    X11Connection conn;
-    if (!conn.ok())
-    {
-        WARN("Failed to connect to X server.");
-        return;
-    }
-
-    LwmProcess wm(env.display());
-    if (!wm.running())
-    {
-        WARN("Failed to start lwm.");
-        return;
-    }
-
-    REQUIRE(wait_for_wm_ready(conn, kTimeout));
+    auto& conn = test_env->conn;
 
     xcb_atom_t net_current_desktop = intern_atom(conn.get(), "_NET_CURRENT_DESKTOP");
     xcb_atom_t net_number_of_desktops = intern_atom(conn.get(), "_NET_NUMBER_OF_DESKTOPS");
@@ -64,25 +81,11 @@ TEST_CASE("Integration: workspace switch updates _NET_CURRENT_DESKTOP", "[integr
 
 TEST_CASE("Integration: workspace switch back and forth", "[integration][workspace]")
 {
-    if (!ensure_environment())
+    auto test_env = TestEnvironment::create();
+    if (!test_env)
         return;
 
-    auto& env = X11TestEnvironment::instance();
-    X11Connection conn;
-    if (!conn.ok())
-    {
-        WARN("Failed to connect to X server.");
-        return;
-    }
-
-    LwmProcess wm(env.display());
-    if (!wm.running())
-    {
-        WARN("Failed to start lwm.");
-        return;
-    }
-
-    REQUIRE(wait_for_wm_ready(conn, kTimeout));
+    auto& conn = test_env->conn;
 
     xcb_atom_t net_current_desktop = intern_atom(conn.get(), "_NET_CURRENT_DESKTOP");
     xcb_atom_t net_number_of_desktops = intern_atom(conn.get(), "_NET_NUMBER_OF_DESKTOPS");
@@ -104,25 +107,11 @@ TEST_CASE("Integration: workspace switch back and forth", "[integration][workspa
 
 TEST_CASE("Integration: windows persist across workspace switches", "[integration][workspace]")
 {
-    if (!ensure_environment())
+    auto test_env = TestEnvironment::create();
+    if (!test_env)
         return;
 
-    auto& env = X11TestEnvironment::instance();
-    X11Connection conn;
-    if (!conn.ok())
-    {
-        WARN("Failed to connect to X server.");
-        return;
-    }
-
-    LwmProcess wm(env.display());
-    if (!wm.running())
-    {
-        WARN("Failed to start lwm.");
-        return;
-    }
-
-    REQUIRE(wait_for_wm_ready(conn, kTimeout));
+    auto& conn = test_env->conn;
 
     xcb_atom_t net_current_desktop = intern_atom(conn.get(), "_NET_CURRENT_DESKTOP");
     xcb_atom_t net_wm_desktop = intern_atom(conn.get(), "_NET_WM_DESKTOP");
@@ -162,25 +151,11 @@ TEST_CASE(
     "[integration][workspace][fullscreen]"
 )
 {
-    if (!ensure_environment())
+    auto test_env = TestEnvironment::create();
+    if (!test_env)
         return;
 
-    auto& env = X11TestEnvironment::instance();
-    X11Connection conn;
-    if (!conn.ok())
-    {
-        WARN("Failed to connect to X server.");
-        return;
-    }
-
-    LwmProcess wm(env.display());
-    if (!wm.running())
-    {
-        WARN("Failed to start lwm.");
-        return;
-    }
-
-    REQUIRE(wait_for_wm_ready(conn, kTimeout));
+    auto& conn = test_env->conn;
 
     xcb_atom_t net_current_desktop = intern_atom(conn.get(), "_NET_CURRENT_DESKTOP");
     xcb_atom_t net_wm_desktop = intern_atom(conn.get(), "_NET_WM_DESKTOP");
