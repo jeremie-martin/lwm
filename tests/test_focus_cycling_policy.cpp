@@ -1,25 +1,19 @@
-#include <catch2/catch_test_macros.hpp>
 #include "lwm/core/policy.hpp"
+#include <catch2/catch_test_macros.hpp>
 #include <unordered_set>
 
 using namespace lwm;
 
 namespace {
 
-focus_policy::FocusCycleCandidate make_tiled(xcb_window_t id)
-{
-    return { id, false };
-}
+focus_policy::FocusCycleCandidate make_tiled(xcb_window_t id) { return { id, false }; }
 
-focus_policy::FocusCycleCandidate make_floating(xcb_window_t id)
-{
-    return { id, true };
-}
+focus_policy::FocusCycleCandidate make_floating(xcb_window_t id) { return { id, true }; }
 
 } // namespace
 
 // ─────────────────────────────────────────────────────────────────────────────
-// cycle_focus_next tests
+// cycle_focus tests (next and prev)
 // ─────────────────────────────────────────────────────────────────────────────
 
 TEST_CASE("Focus next cycles forward through windows", "[focus][cycling]")
@@ -30,87 +24,38 @@ TEST_CASE("Focus next cycles forward through windows", "[focus][cycling]")
         make_tiled(0x3000),
     };
 
-    auto result = focus_policy::cycle_focus_next(candidates, 0x1000);
-    REQUIRE(result);
-    REQUIRE(result->id == 0x2000);
-    REQUIRE_FALSE(result->is_floating);
+    // Basic forward cycling
+    auto result1 = focus_policy::cycle_focus_next(candidates, 0x1000);
+    REQUIRE(result1);
+    REQUIRE(result1->id == 0x2000);
+
+    // Wraps from last to first
+    auto result2 = focus_policy::cycle_focus_next(candidates, 0x3000);
+    REQUIRE(result2);
+    REQUIRE(result2->id == 0x1000);
+
+    // Single window returns same
+    {
+        std::vector<focus_policy::FocusCycleCandidate> single = { make_tiled(0x1000) };
+        auto result3 = focus_policy::cycle_focus_next(single, 0x1000);
+        REQUIRE(result3);
+        REQUIRE(result3->id == 0x1000);
+    }
+
+    // Empty returns nullopt
+    {
+        std::vector<focus_policy::FocusCycleCandidate> empty;
+        auto result4 = focus_policy::cycle_focus_next(empty, 0x1000);
+        REQUIRE_FALSE(result4);
+    }
+
+    // Unknown current starts from first
+    {
+        auto result5 = focus_policy::cycle_focus_next(candidates, 0x9999);
+        REQUIRE(result5);
+        REQUIRE(result5->id == 0x2000);
+    }
 }
-
-TEST_CASE("Focus next wraps from last to first", "[focus][cycling]")
-{
-    std::vector<focus_policy::FocusCycleCandidate> candidates = {
-        make_tiled(0x1000),
-        make_tiled(0x2000),
-        make_tiled(0x3000),
-    };
-
-    auto result = focus_policy::cycle_focus_next(candidates, 0x3000);
-    REQUIRE(result);
-    REQUIRE(result->id == 0x1000);
-}
-
-TEST_CASE("Focus next with single window returns same window", "[focus][cycling]")
-{
-    std::vector<focus_policy::FocusCycleCandidate> candidates = {
-        make_tiled(0x1000),
-    };
-
-    auto result = focus_policy::cycle_focus_next(candidates, 0x1000);
-    REQUIRE(result);
-    REQUIRE(result->id == 0x1000);
-}
-
-TEST_CASE("Focus next with empty candidates returns nullopt", "[focus][cycling]")
-{
-    std::vector<focus_policy::FocusCycleCandidate> candidates;
-
-    auto result = focus_policy::cycle_focus_next(candidates, 0x1000);
-    REQUIRE_FALSE(result);
-}
-
-TEST_CASE("Focus next with unknown current starts from first", "[focus][cycling]")
-{
-    std::vector<focus_policy::FocusCycleCandidate> candidates = {
-        make_tiled(0x1000),
-        make_tiled(0x2000),
-    };
-
-    // Current window 0x9999 not in list, so starts at index 0 and moves to next
-    auto result = focus_policy::cycle_focus_next(candidates, 0x9999);
-    REQUIRE(result);
-    REQUIRE(result->id == 0x2000);
-}
-
-TEST_CASE("Focus next includes floating windows after tiled", "[focus][cycling]")
-{
-    std::vector<focus_policy::FocusCycleCandidate> candidates = {
-        make_tiled(0x1000),
-        make_tiled(0x2000),
-        make_floating(0x3000),
-    };
-
-    auto result = focus_policy::cycle_focus_next(candidates, 0x2000);
-    REQUIRE(result);
-    REQUIRE(result->id == 0x3000);
-    REQUIRE(result->is_floating);
-}
-
-TEST_CASE("Focus next from floating wraps to tiled", "[focus][cycling]")
-{
-    std::vector<focus_policy::FocusCycleCandidate> candidates = {
-        make_tiled(0x1000),
-        make_floating(0x2000),
-    };
-
-    auto result = focus_policy::cycle_focus_next(candidates, 0x2000);
-    REQUIRE(result);
-    REQUIRE(result->id == 0x1000);
-    REQUIRE_FALSE(result->is_floating);
-}
-
-// ─────────────────────────────────────────────────────────────────────────────
-// cycle_focus_prev tests
-// ─────────────────────────────────────────────────────────────────────────────
 
 TEST_CASE("Focus prev cycles backward through windows", "[focus][cycling]")
 {
@@ -120,67 +65,71 @@ TEST_CASE("Focus prev cycles backward through windows", "[focus][cycling]")
         make_tiled(0x3000),
     };
 
-    auto result = focus_policy::cycle_focus_prev(candidates, 0x3000);
-    REQUIRE(result);
-    REQUIRE(result->id == 0x2000);
+    // Basic backward cycling
+    auto result1 = focus_policy::cycle_focus_prev(candidates, 0x3000);
+    REQUIRE(result1);
+    REQUIRE(result1->id == 0x2000);
+
+    // Wraps from first to last
+    auto result2 = focus_policy::cycle_focus_prev(candidates, 0x1000);
+    REQUIRE(result2);
+    REQUIRE(result2->id == 0x3000);
+
+    // Single window returns same
+    {
+        std::vector<focus_policy::FocusCycleCandidate> single = { make_tiled(0x1000) };
+        auto result3 = focus_policy::cycle_focus_prev(single, 0x1000);
+        REQUIRE(result3);
+        REQUIRE(result3->id == 0x1000);
+    }
+
+    // Empty returns nullopt
+    {
+        std::vector<focus_policy::FocusCycleCandidate> empty;
+        auto result4 = focus_policy::cycle_focus_prev(empty, 0x1000);
+        REQUIRE_FALSE(result4);
+    }
+
+    // Unknown current starts from first going back (wraps to last)
+    {
+        auto result5 = focus_policy::cycle_focus_prev(candidates, 0x9999);
+        REQUIRE(result5);
+        REQUIRE(result5->id == 0x3000);
+    }
 }
 
-TEST_CASE("Focus prev wraps from first to last", "[focus][cycling]")
+TEST_CASE("Focus cycling includes floating windows", "[focus][cycling]")
 {
-    std::vector<focus_policy::FocusCycleCandidate> candidates = {
-        make_tiled(0x1000),
-        make_tiled(0x2000),
-        make_tiled(0x3000),
-    };
+    // Next: tiled -> tiled -> floating
+    {
+        std::vector<focus_policy::FocusCycleCandidate> candidates = {
+            make_tiled(0x1000),
+            make_tiled(0x2000),
+            make_floating(0x3000),
+        };
+        auto next = focus_policy::cycle_focus_next(candidates, 0x2000);
+        REQUIRE(next);
+        REQUIRE(next->id == 0x3000);
+        REQUIRE(next->is_floating);
+    }
 
-    auto result = focus_policy::cycle_focus_prev(candidates, 0x1000);
-    REQUIRE(result);
-    REQUIRE(result->id == 0x3000);
-}
+    // Next: floating wraps to tiled
+    {
+        std::vector<focus_policy::FocusCycleCandidate> simple = {
+            make_tiled(0x1000),
+            make_floating(0x2000),
+        };
+        auto next_wrap = focus_policy::cycle_focus_next(simple, 0x2000);
+        REQUIRE(next_wrap);
+        REQUIRE(next_wrap->id == 0x1000);
+        REQUIRE_FALSE(next_wrap->is_floating);
 
-TEST_CASE("Focus prev with single window returns same window", "[focus][cycling]")
-{
-    std::vector<focus_policy::FocusCycleCandidate> candidates = {
-        make_tiled(0x1000),
-    };
-
-    auto result = focus_policy::cycle_focus_prev(candidates, 0x1000);
-    REQUIRE(result);
-    REQUIRE(result->id == 0x1000);
-}
-
-TEST_CASE("Focus prev with empty candidates returns nullopt", "[focus][cycling]")
-{
-    std::vector<focus_policy::FocusCycleCandidate> candidates;
-
-    auto result = focus_policy::cycle_focus_prev(candidates, 0x1000);
-    REQUIRE_FALSE(result);
-}
-
-TEST_CASE("Focus prev with unknown current starts from first going back", "[focus][cycling]")
-{
-    std::vector<focus_policy::FocusCycleCandidate> candidates = {
-        make_tiled(0x1000),
-        make_tiled(0x2000),
-    };
-
-    // Current window 0x9999 not in list, so starts at index 0 and goes to last
-    auto result = focus_policy::cycle_focus_prev(candidates, 0x9999);
-    REQUIRE(result);
-    REQUIRE(result->id == 0x2000);
-}
-
-TEST_CASE("Focus prev from tiled wraps to floating", "[focus][cycling]")
-{
-    std::vector<focus_policy::FocusCycleCandidate> candidates = {
-        make_tiled(0x1000),
-        make_floating(0x2000),
-    };
-
-    auto result = focus_policy::cycle_focus_prev(candidates, 0x1000);
-    REQUIRE(result);
-    REQUIRE(result->id == 0x2000);
-    REQUIRE(result->is_floating);
+        // Prev: tiled wraps to floating
+        auto prev = focus_policy::cycle_focus_prev(simple, 0x1000);
+        REQUIRE(prev);
+        REQUIRE(prev->id == 0x2000);
+        REQUIRE(prev->is_floating);
+    }
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -206,8 +155,8 @@ TEST_CASE("Build candidates includes floating on same workspace", "[focus][cycli
 {
     std::vector<xcb_window_t> tiled = { 0x1000 };
     std::vector<focus_policy::FloatingCandidate> floating = {
-        { 0x2000, 0, 0, false },  // Same monitor, same workspace
-        { 0x3000, 0, 1, false },  // Same monitor, different workspace
+        { 0x2000, 0, 0, false }, // Same monitor, same workspace
+        { 0x3000, 0, 1, false }, // Same monitor, different workspace
     };
 
     auto is_eligible = [](xcb_window_t) { return true; };
@@ -223,8 +172,8 @@ TEST_CASE("Build candidates excludes floating on different monitor", "[focus][cy
 {
     std::vector<xcb_window_t> tiled;
     std::vector<focus_policy::FloatingCandidate> floating = {
-        { 0x1000, 0, 0, false },  // Same monitor
-        { 0x2000, 1, 0, false },  // Different monitor
+        { 0x1000, 0, 0, false }, // Same monitor
+        { 0x2000, 1, 0, false }, // Different monitor
     };
 
     auto is_eligible = [](xcb_window_t) { return true; };
@@ -239,7 +188,7 @@ TEST_CASE("Build candidates includes sticky floating on different workspace", "[
 {
     std::vector<xcb_window_t> tiled;
     std::vector<focus_policy::FloatingCandidate> floating = {
-        { 0x1000, 0, 1, true },  // Sticky, different workspace
+        { 0x1000, 0, 1, true }, // Sticky, different workspace
     };
 
     auto is_eligible = [](xcb_window_t) { return true; };
@@ -255,7 +204,7 @@ TEST_CASE("Build candidates excludes sticky floating on different monitor", "[fo
 {
     std::vector<xcb_window_t> tiled;
     std::vector<focus_policy::FloatingCandidate> floating = {
-        { 0x1000, 1, 0, true },  // Sticky but different monitor
+        { 0x1000, 1, 0, true }, // Sticky but different monitor
     };
 
     auto is_eligible = [](xcb_window_t) { return true; };

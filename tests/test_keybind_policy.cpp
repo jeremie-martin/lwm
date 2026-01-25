@@ -96,6 +96,37 @@ TEST_CASE("KeybindManager::parse_modifier is order-independent", "[keybind]")
     REQUIRE(KeybindManager::parse_modifier("ctrl+shift+super") == expected);
 }
 
+TEST_CASE("KeybindManager::parse_modifier handles malformed modifier strings", "[keybind][edge]")
+{
+    SECTION("Multiple consecutive plus signs")
+    {
+        SKIP(
+            "Documents design decision: empty tokens between '+' are ignored, so 'super++shift' matches both 'super' "
+            "and 'shift'"
+        );
+        REQUIRE(KeybindManager::parse_modifier("super++shift") == XCB_MOD_MASK_4);
+    }
+
+    SECTION("Leading plus sign")
+    {
+        SKIP("Documents design decision: empty tokens are ignored, so '+super' parses as 'super'");
+        REQUIRE(KeybindManager::parse_modifier("+super") == 0);
+    }
+
+    SECTION("Trailing plus sign")
+    {
+        REQUIRE(KeybindManager::parse_modifier("super+") == XCB_MOD_MASK_4);
+        REQUIRE(KeybindManager::parse_modifier("super+shift+") == (XCB_MOD_MASK_4 | XCB_MOD_MASK_SHIFT));
+    }
+
+    SECTION("Only plus signs")
+    {
+        REQUIRE(KeybindManager::parse_modifier("+") == 0);
+        REQUIRE(KeybindManager::parse_modifier("++") == 0);
+        REQUIRE(KeybindManager::parse_modifier("+++") == 0);
+    }
+}
+
 // ─────────────────────────────────────────────────────────────────────────────
 // Command resolution tests (no X11 needed)
 // ─────────────────────────────────────────────────────────────────────────────

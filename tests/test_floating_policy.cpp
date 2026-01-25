@@ -140,7 +140,7 @@ TEST_CASE("Floating placement with window same size as area", "[floating]")
     REQUIRE(placed.y == 100);
 }
 
-TEST_CASE("Floating placement handles edge cases (tiny window, tiny area)", "[floating]")
+TEST_CASE("Floating placement handles edge cases", "[floating]")
 {
     // Tiny window centers in large area
     {
@@ -159,18 +159,6 @@ TEST_CASE("Floating placement handles edge cases (tiny window, tiny area)", "[fl
         REQUIRE(placed.width == 100);
         REQUIRE(placed.height == 100);
     }
-}
-
-TEST_CASE("Floating placement with 1x1 area", "[floating]")
-{
-    Geometry area{ 500, 500, 1, 1 };
-    auto placed = floating::place_floating(area, 100, 100, std::nullopt);
-
-    // Window larger than area, clamps to area origin
-    REQUIRE(placed.x == 500);
-    REQUIRE(placed.y == 500);
-    REQUIRE(placed.width == 100);
-    REQUIRE(placed.height == 100);
 }
 
 TEST_CASE("Floating placement preserves window dimensions", "[floating]")

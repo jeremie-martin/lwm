@@ -37,83 +37,61 @@ DragState make_test_drag_state()
 // Mode-specific behavior tests
 // ─────────────────────────────────────────────────────────────────────────────
 
-TEST_CASE("Floating move updates position only", "[drag][floating]")
+TEST_CASE("Drag updates position for move and dimensions for resize", "[drag]")
 {
     DragState state = make_test_drag_state();
-    state.tiled = false;
-    state.resizing = false;
 
-    int32_t dx = 50;
-    int32_t dy = 30;
+    // Move only
+    {
+        state.resizing = false;
+        int32_t dx = 50, dy = 30;
+        Geometry updated = state.start_geometry;
+        updated.x = static_cast<int16_t>(static_cast<int32_t>(state.start_geometry.x) + dx);
+        updated.y = static_cast<int16_t>(static_cast<int32_t>(state.start_geometry.y) + dy);
+        REQUIRE(updated.x == 100);
+        REQUIRE(updated.y == 80);
+        REQUIRE(updated.width == 200);
+        REQUIRE(updated.height == 150);
+    }
 
-    Geometry updated = state.start_geometry;
-    updated.x = static_cast<int16_t>(static_cast<int32_t>(state.start_geometry.x) + dx);
-    updated.y = static_cast<int16_t>(static_cast<int32_t>(state.start_geometry.y) + dy);
+    // Resize only
+    {
+        state.resizing = true;
+        int32_t dx = 50, dy = 30;
+        Geometry updated = state.start_geometry;
+        int32_t new_w = static_cast<int32_t>(state.start_geometry.width) + dx;
+        int32_t new_h = static_cast<int32_t>(state.start_geometry.height) + dy;
+        updated.width = static_cast<uint16_t>(std::max<int32_t>(1, new_w));
+        updated.height = static_cast<uint16_t>(std::max<int32_t>(1, new_h));
+        REQUIRE(updated.x == 50);
+        REQUIRE(updated.y == 50);
+        REQUIRE(updated.width == 250);
+        REQUIRE(updated.height == 180);
+    }
 
-    REQUIRE(updated.x == 100);
-    REQUIRE(updated.y == 80);
-    REQUIRE(updated.width == 200);
-    REQUIRE(updated.height == 150);
-}
+    // Resize enforces minimum dimensions
+    {
+        state.resizing = true;
+        int32_t dx = -300, dy = -200;
+        int32_t new_w = static_cast<int32_t>(state.start_geometry.width) + dx;
+        int32_t new_h = static_cast<int32_t>(state.start_geometry.height) + dy;
+        new_w = std::max<int32_t>(1, new_w);
+        new_h = std::max<int32_t>(1, new_h);
+        REQUIRE(new_w == 1);
+        REQUIRE(new_h == 1);
+    }
 
-TEST_CASE("Floating resize enforces minimum dimensions", "[drag][resize]")
-{
-    DragState state = make_test_drag_state();
-    state.resizing = true;
-
-    int32_t dx = -300;
-    int32_t dy = -200;
-
-    int32_t new_w = static_cast<int32_t>(state.start_geometry.width) + dx;
-    int32_t new_h = static_cast<int32_t>(state.start_geometry.height) + dy;
-
-    new_w = std::max<int32_t>(1, new_w);
-    new_h = std::max<int32_t>(1, new_h);
-
-    REQUIRE(new_w == 1);
-    REQUIRE(new_h == 1);
-}
-
-TEST_CASE("Floating resize updates dimensions only", "[drag][floating]")
-{
-    DragState state = make_test_drag_state();
-    state.tiled = false;
-    state.resizing = true;
-
-    int32_t dx = 50;
-    int32_t dy = 30;
-
-    Geometry updated = state.start_geometry;
-    int32_t new_w = static_cast<int32_t>(state.start_geometry.width) + dx;
-    int32_t new_h = static_cast<int32_t>(state.start_geometry.height) + dy;
-    updated.width = static_cast<uint16_t>(std::max<int32_t>(1, new_w));
-    updated.height = static_cast<uint16_t>(std::max<int32_t>(1, new_h));
-
-    REQUIRE(updated.x == 50);
-    REQUIRE(updated.y == 50);
-    REQUIRE(updated.width == 250);
-    REQUIRE(updated.height == 180);
-}
-
-TEST_CASE("Tiled drag updates position for visual feedback", "[drag][tiled]")
-{
-    DragState state;
-    state.active = true;
-    state.tiled = true;
-    state.resizing = false;
-    state.window = 0x4000;
-    state.start_root_x = 100;
-    state.start_root_y = 100;
-    state.start_geometry = { 0, 0, 400, 300 };
-
-    int32_t dx = 200;
-    int32_t dy = 150;
-
-    int32_t new_x = static_cast<int32_t>(state.start_geometry.x) + dx;
-    int32_t new_y = static_cast<int32_t>(state.start_geometry.y) + dy;
-
-    REQUIRE(new_x == 200);
-    REQUIRE(new_y == 150);
+    // Tiled drag for visual feedback
+    {
+        state.tiled = true;
+        state.resizing = false;
+        state.start_geometry = { 0, 0, 400, 300 };
+        int32_t dx = 200, dy = 150;
+        int32_t new_x = static_cast<int32_t>(state.start_geometry.x) + dx;
+        int32_t new_y = static_cast<int32_t>(state.start_geometry.y) + dy;
+        REQUIRE(new_x == 200);
+        REQUIRE(new_y == 150);
+    }
 }
 
 // ─────────────────────────────────────────────────────────────────────────────

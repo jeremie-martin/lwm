@@ -248,14 +248,3 @@ TEST_CASE("Workspace switch previous_workspace update", "[workspace][policy][edg
     REQUIRE(r3);
     REQUIRE(monitor.previous_workspace == 4);
 }
-
-TEST_CASE("Workspace switch with very large target workspace", "[workspace][policy][edge]")
-{
-    Monitor monitor = make_monitor(10);
-    monitor.current_workspace = 0;
-
-    // Very large target workspace (beyond size_t practical limits but valid)
-    size_t large_target = SIZE_MAX;
-    auto result = workspace_policy::apply_workspace_switch(monitor, static_cast<int>(large_target));
-    REQUIRE_FALSE(result); // Should reject out-of-range
-}

@@ -1,5 +1,5 @@
-#include <catch2/catch_test_macros.hpp>
 #include "lwm/core/focus.hpp"
+#include <catch2/catch_test_macros.hpp>
 
 using namespace lwm;
 
@@ -74,7 +74,7 @@ TEST_CASE("Monitor index at point handles monitor boundary exactly", "[focus][mo
 TEST_CASE("Monitor index at point handles negative coordinates", "[focus][monitor]")
 {
     std::vector<Monitor> monitors;
-    monitors.push_back(make_monitor(-1920, 0, 1920, 1080));  // Left of origin
+    monitors.push_back(make_monitor(-1920, 0, 1920, 1080)); // Left of origin
     monitors.push_back(make_monitor(0, 0, 1920, 1080));
 
     auto idx = focus::monitor_index_at_point(monitors, -500, 500);
@@ -173,18 +173,33 @@ TEST_CASE("Focusing a window updates active monitor and workspace", "[focus][win
     REQUIRE(monitors[1].current().focused_window == 0x2000);
 }
 
-TEST_CASE("Focusing an unknown window is a no-op", "[focus][window]")
+TEST_CASE("Focusing unknown or non-existent windows preserves state", "[focus][window]")
 {
-    std::vector<Monitor> monitors;
-    monitors.push_back(make_monitor(0, 0, 1920, 1080));
+    // Unknown window in normal case
+    {
+        std::vector<Monitor> monitors;
+        monitors.push_back(make_monitor(0, 0, 1920, 1080));
 
-    size_t active_monitor = 0;
-    xcb_window_t active_window = 0x1234;
+        size_t active_monitor = 0;
+        xcb_window_t active_window = 0x1234;
 
-    auto change = focus::focus_window_state(monitors, active_monitor, active_window, 0x9999);
-    REQUIRE_FALSE(change);
-    REQUIRE(active_monitor == 0);
-    REQUIRE(active_window == 0x1234);
+        auto change = focus::focus_window_state(monitors, active_monitor, active_window, 0x9999);
+        REQUIRE_FALSE(change);
+        REQUIRE(active_monitor == 0);
+        REQUIRE(active_window == 0x1234);
+    }
+
+    // Unknown window with empty monitors list
+    {
+        std::vector<Monitor> monitors;
+
+        size_t active_monitor = 0;
+        xcb_window_t active_window = 0x1234;
+
+        auto change = focus::focus_window_state(monitors, active_monitor, active_window, 0x1000);
+        REQUIRE_FALSE(change);
+        REQUIRE(active_window == 0x1234);
+    }
 }
 
 TEST_CASE("Focusing window on same workspace does not change workspace", "[focus][window]")
@@ -225,7 +240,7 @@ TEST_CASE("Focusing window changes workspace and updates previous_workspace", "[
     std::vector<Monitor> monitors;
     monitors.push_back(make_monitor(0, 0, 1920, 1080));
     monitors[0].current_workspace = 0;
-    monitors[0].previous_workspace = 5;  // Some previous value
+    monitors[0].previous_workspace = 5; // Some previous value
     monitors[0].workspaces[3].windows.push_back(0x3000);
 
     size_t active_monitor = 0;
@@ -236,7 +251,7 @@ TEST_CASE("Focusing window changes workspace and updates previous_workspace", "[
     REQUIRE(change->workspace_changed);
     REQUIRE(change->old_workspace == 0);
     REQUIRE(change->new_workspace == 3);
-    REQUIRE(monitors[0].previous_workspace == 0);  // Updated to old current
+    REQUIRE(monitors[0].previous_workspace == 0); // Updated to old current
     REQUIRE(monitors[0].current_workspace == 3);
 }
 
@@ -261,7 +276,7 @@ TEST_CASE("Focusing sticky window does not change workspace", "[focus][window][s
     REQUIRE(change->target_monitor == 0);
     // Workspace should NOT change for sticky windows
     REQUIRE_FALSE(change->workspace_changed);
-    REQUIRE(monitors[0].current_workspace == 0);  // Still on workspace 0
+    REQUIRE(monitors[0].current_workspace == 0); // Still on workspace 0
     REQUIRE(active_window == 0x1000);
 }
 
@@ -285,31 +300,6 @@ TEST_CASE("Focusing non-sticky window on different workspace does change workspa
 // ─────────────────────────────────────────────────────────────────────────────
 // Edge cases
 // ─────────────────────────────────────────────────────────────────────────────
-
-TEST_CASE("Focus window state with empty monitors list", "[focus][window]")
-{
-    std::vector<Monitor> monitors;
-
-    size_t active_monitor = 0;
-    xcb_window_t active_window = XCB_NONE;
-
-    auto change = focus::focus_window_state(monitors, active_monitor, active_window, 0x1000);
-    REQUIRE_FALSE(change);
-}
-
-TEST_CASE("Focus window state preserves active_window when no change", "[focus][window]")
-{
-    std::vector<Monitor> monitors;
-    monitors.push_back(make_monitor(0, 0, 1920, 1080));
-
-    size_t active_monitor = 0;
-    xcb_window_t active_window = 0x1234;
-
-    // Try to focus non-existent window
-    auto change = focus::focus_window_state(monitors, active_monitor, active_window, 0x9999);
-    REQUIRE_FALSE(change);
-    REQUIRE(active_window == 0x1234);  // Unchanged
-}
 
 TEST_CASE("Multiple windows on workspace can be focused in sequence", "[focus][window]")
 {

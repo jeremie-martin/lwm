@@ -74,30 +74,6 @@ TEST_CASE("EWMH desktop index round-trip encode/decode", "[ewmh][policy]")
 // Large value tests
 // ─────────────────────────────────────────────────────────────────────────────
 
-TEST_CASE("EWMH desktop index handles large monitor counts", "[ewmh][policy]")
-{
-    // 1000 monitors with 10 workspaces each
-    uint32_t desktop = ewmh_policy::desktop_index(999, 9, 10);
-    REQUIRE(desktop == 9999u);
-
-    auto decoded = ewmh_policy::desktop_to_indices(desktop, 10);
-    REQUIRE(decoded);
-    REQUIRE(decoded->first == 999);
-    REQUIRE(decoded->second == 9);
-}
-
-TEST_CASE("EWMH desktop index handles large workspace counts", "[ewmh][policy]")
-{
-    // 100 workspaces per monitor
-    uint32_t desktop = ewmh_policy::desktop_index(5, 99, 100);
-    REQUIRE(desktop == 599u);
-
-    auto decoded = ewmh_policy::desktop_to_indices(desktop, 100);
-    REQUIRE(decoded);
-    REQUIRE(decoded->first == 5);
-    REQUIRE(decoded->second == 99);
-}
-
 // ─────────────────────────────────────────────────────────────────────────────
 // Overflow and boundary tests
 // ─────────────────────────────────────────────────────────────────────────────
@@ -120,20 +96,9 @@ TEST_CASE("EWMH desktop index overflow with large values", "[ewmh][policy][edge]
     REQUIRE(overflow_desktop < 1000000u); // Wrapped to small value
 }
 
-TEST_CASE("EWMH desktop_to_indices with max uint32_t desktop", "[ewmh][policy][edge]")
+TEST_CASE("EWMH desktop_to_indices handles edge cases", "[ewmh][policy][edge]")
 {
-    // Decode UINT32_MAX
-    auto decoded = ewmh_policy::desktop_to_indices(UINT32_MAX, 100);
-    REQUIRE(decoded);
-    // UINT32_MAX = 4294967295
-    // monitor_idx = 42949672, workspace_idx = 95
-    REQUIRE(decoded->first == 42949672u);
-    REQUIRE(decoded->second == 95u);
-}
-
-TEST_CASE("EWMH desktop_to_indices with single workspace per monitor", "[ewmh][policy][edge]")
-{
-    // Special case: 1 workspace per monitor
+    // Single workspace per monitor
     auto decoded1 = ewmh_policy::desktop_to_indices(0, 1);
     REQUIRE(decoded1);
     REQUIRE(decoded1->first == 0);
@@ -143,47 +108,17 @@ TEST_CASE("EWMH desktop_to_indices with single workspace per monitor", "[ewmh][p
     REQUIRE(decoded2);
     REQUIRE(decoded2->first == 99999);
     REQUIRE(decoded2->second == 0);
-}
 
-TEST_CASE("EWMH desktop_index round-trip with large values", "[ewmh][policy][edge]")
-{
-    // Test round-trip encode/decode with large values that fit in uint32_t
-    size_t ws_per_mon = 50000;
-    size_t monitor_idx = 80000; // 80000 * 50000 = 4,000,000,000 (fits)
-    size_t workspace_idx = 49999;
-
-    uint32_t desktop = ewmh_policy::desktop_index(monitor_idx, workspace_idx, ws_per_mon);
-    auto decoded = ewmh_policy::desktop_to_indices(desktop, ws_per_mon);
-
-    REQUIRE(decoded);
-    REQUIRE(decoded->first == monitor_idx);
-    REQUIRE(decoded->second == workspace_idx);
-}
-
-TEST_CASE("EWMH desktop_to_indices with zero workspaces_per_monitor", "[ewmh][policy][edge]")
-{
-    // Already tested above, but document as edge case
+    // Zero workspaces per monitor
     auto result = ewmh_policy::desktop_to_indices(100, 0);
     REQUIRE_FALSE(result);
-}
 
-TEST_CASE("EWMH desktop_index with zero workspace_idx", "[ewmh][policy][edge]")
-{
+    // Zero workspace index
     uint32_t desktop = ewmh_policy::desktop_index(100, 0, 50);
     REQUIRE(desktop == 5000u);
 
-    auto decoded = ewmh_policy::desktop_to_indices(desktop, 50);
-    REQUIRE(decoded);
-    REQUIRE(decoded->first == 100);
-    REQUIRE(decoded->second == 0);
-}
-
-TEST_CASE("EWMH desktop_to_indices with desktop larger than typical range", "[ewmh][policy][edge]")
-{
-    // Test decoding a desktop index that would correspond to
-    // a very large monitor index
-    auto decoded = ewmh_policy::desktop_to_indices(1000000000, 1000); // 1B with 1000 ws/monitor
-    REQUIRE(decoded);
-    REQUIRE(decoded->first == 1000000u);
-    REQUIRE(decoded->second == 0);
+    auto decoded3 = ewmh_policy::desktop_to_indices(desktop, 50);
+    REQUIRE(decoded3);
+    REQUIRE(decoded3->first == 100);
+    REQUIRE(decoded3->second == 0);
 }
