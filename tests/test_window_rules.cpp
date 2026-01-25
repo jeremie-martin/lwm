@@ -570,3 +570,171 @@ TEST_CASE("No criteria matches all windows", "[rules]")
     REQUIRE(result.floating.has_value());
     REQUIRE(*result.floating == true);
 }
+
+TEST_CASE("Empty class pattern is treated as no filter", "[rules][edge]")
+{
+    WindowRuleConfig cfg;
+    cfg.class_pattern = "";
+    cfg.floating = true;
+
+    WindowRules rules;
+    rules.load_rules({ cfg });
+
+    WindowMatchInfo info{ .wm_class = "AnyClass",
+                          .wm_class_name = "any",
+                          .title = "Any Title",
+                          .ewmh_type = WindowType::Normal,
+                          .is_transient = false };
+
+    auto result = rules.match(info, {}, {});
+
+    REQUIRE(result.matched);
+}
+
+TEST_CASE("Empty title pattern is treated as no filter", "[rules][edge]")
+{
+    WindowRuleConfig cfg;
+    cfg.title_pattern = "";
+    cfg.floating = true;
+
+    WindowRules rules;
+    rules.load_rules({ cfg });
+
+    WindowMatchInfo info{ .wm_class = "AnyClass",
+                          .wm_class_name = "any",
+                          .title = "Any Title",
+                          .ewmh_type = WindowType::Normal,
+                          .is_transient = false };
+
+    auto result = rules.match(info, {}, {});
+
+    REQUIRE(result.matched);
+}
+
+TEST_CASE("Malformed regex pattern falls back to literal match", "[rules][edge]")
+{
+    WindowRuleConfig cfg;
+    cfg.class_pattern = "[invalid(regex"; // Invalid regex
+    cfg.floating = true;
+
+    WindowRules rules;
+    rules.load_rules({ cfg });
+
+    // Should match the literal string "[invalid(regex"
+    WindowMatchInfo info{ .wm_class = "[invalid(regex",
+                          .wm_class_name = "any",
+                          .title = "Any Title",
+                          .ewmh_type = WindowType::Normal,
+                          .is_transient = false };
+
+    auto result = rules.match(info, {}, {});
+
+    REQUIRE(result.matched);
+}
+
+TEST_CASE("Unknown window type string is treated as no filter", "[rules][edge]")
+{
+    WindowRuleConfig cfg;
+    cfg.type = "not_a_real_type"; // Invalid type string
+    cfg.floating = true;
+
+    WindowRules rules;
+    rules.load_rules({ cfg });
+
+    // Rule should load without crashing, and invalid type is treated as no constraint
+    REQUIRE(rules.rule_count() == 1);
+
+    WindowMatchInfo info{ .wm_class = "Test",
+                          .wm_class_name = "test",
+                          .title = "Test",
+                          .ewmh_type = WindowType::Normal,
+                          .is_transient = false };
+
+    auto result = rules.match(info, {}, {});
+
+    // Rule matches because invalid type doesn't act as a constraint
+    REQUIRE(result.matched);
+    REQUIRE(*result.floating == true);
+}
+
+TEST_CASE("Multiple rules with same class, first wins", "[rules][edge]")
+{
+    WindowRuleConfig rule1;
+    rule1.class_pattern = "TestApp";
+    rule1.floating = true;
+    rule1.workspace = 1;
+
+    WindowRuleConfig rule2;
+    rule2.class_pattern = "TestApp";
+    rule2.floating = false;
+    rule2.workspace = 2;
+
+    WindowRules rules;
+    rules.load_rules({ rule1, rule2 });
+
+    std::vector<std::string> workspace_names = { "1", "2", "3" };
+
+    WindowMatchInfo info{ .wm_class = "TestApp",
+                          .wm_class_name = "testapp",
+                          .title = "Test",
+                          .ewmh_type = WindowType::Normal,
+                          .is_transient = false };
+
+    auto result = rules.match(info, {}, workspace_names);
+
+    REQUIRE(result.matched);
+    REQUIRE(*result.floating == true);      // From first rule
+    REQUIRE(*result.target_workspace == 1); // From first rule
+}
+
+TEST_CASE("Duplicate workspace names resolve to first occurrence", "[rules][edge]")
+{
+    // This test documents behavior when workspace names are not unique
+    WindowRuleConfig cfg;
+    cfg.class_pattern = "Test";
+    cfg.workspace_name = "dev";
+
+    WindowRules rules;
+    rules.load_rules({ cfg });
+
+    std::vector<std::string> workspace_names = { "dev", "main", "dev" }; // "dev" appears twice
+
+    WindowMatchInfo info{ .wm_class = "Test",
+                          .wm_class_name = "test",
+                          .title = "Test",
+                          .ewmh_type = WindowType::Normal,
+                          .is_transient = false };
+
+    auto result = rules.match(info, {}, workspace_names);
+
+    REQUIRE(result.matched);
+    REQUIRE(result.target_workspace.has_value());
+    // Should resolve to first occurrence (index 0)
+    REQUIRE(*result.target_workspace == 0);
+}
+
+TEST_CASE("Duplicate monitor names resolve to first occurrence", "[rules][edge]")
+{
+    // This test documents behavior when monitor names are not unique
+    WindowRuleConfig cfg;
+    cfg.class_pattern = "Test";
+    cfg.monitor_name = "DP-1";
+
+    WindowRules rules;
+    rules.load_rules({ cfg });
+
+    std::vector<Monitor> monitors = { make_monitor("DP-1"), make_monitor("HDMI-1"), make_monitor("DP-1") };
+
+    WindowMatchInfo info{ .wm_class = "Test",
+                          .wm_class_name = "test",
+                          .title = "Test",
+                          .ewmh_type = WindowType::Normal,
+                          .is_transient = false };
+
+    auto result = rules.match(info, monitors, {});
+
+    REQUIRE(result.matched);
+    REQUIRE(result.target_monitor.has_value());
+    // Should resolve to first occurrence (index 0)
+    REQUIRE(*result.target_monitor == 0);
+}

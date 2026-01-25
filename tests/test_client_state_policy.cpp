@@ -1,6 +1,6 @@
-#include <catch2/catch_test_macros.hpp>
 #include "lwm/core/policy.hpp"
 #include "lwm/core/types.hpp"
+#include <catch2/catch_test_macros.hpp>
 
 using namespace lwm;
 
@@ -123,22 +123,12 @@ TEST_CASE("Fullscreen monitors can be specified", "[client][state][fullscreen]")
 // Iconic (minimized) state tests
 // ─────────────────────────────────────────────────────────────────────────────
 
-TEST_CASE("Iconic window affects visibility", "[client][state][iconic]")
+TEST_CASE("Iconic window is never visible regardless of workspace", "[client][state][iconic]")
 {
     auto monitors = make_monitors();
 
-    // Non-iconic window on current workspace is visible
     REQUIRE(visibility_policy::is_window_visible(false, false, false, 0, 0, monitors));
-
-    // Iconic window on current workspace is NOT visible
     REQUIRE_FALSE(visibility_policy::is_window_visible(false, true, false, 0, 0, monitors));
-}
-
-TEST_CASE("Iconic state is independent of workspace", "[client][state][iconic]")
-{
-    auto monitors = make_monitors();
-
-    // Even on a different workspace, iconic matters
     REQUIRE_FALSE(visibility_policy::is_window_visible(false, true, false, 0, 1, monitors));
     REQUIRE_FALSE(visibility_policy::is_window_visible(false, true, true, 0, 1, monitors));
 }
@@ -147,27 +137,14 @@ TEST_CASE("Iconic state is independent of workspace", "[client][state][iconic]")
 // Sticky state tests
 // ─────────────────────────────────────────────────────────────────────────────
 
-TEST_CASE("Sticky window is visible on any workspace", "[client][state][sticky]")
+TEST_CASE("Sticky window visible across workspaces but not monitors", "[client][state][sticky]")
 {
     auto monitors = make_monitors();
     monitors[0].current_workspace = 0;
 
-    // Non-sticky window on workspace 1 is NOT visible when current is 0
     REQUIRE_FALSE(visibility_policy::is_window_visible(false, false, false, 0, 1, monitors));
-
-    // Sticky window on workspace 1 IS visible when current is 0
     REQUIRE(visibility_policy::is_window_visible(false, false, true, 0, 1, monitors));
-}
-
-TEST_CASE("Sticky window respects monitor boundary", "[client][state][sticky]")
-{
-    auto monitors = make_monitors();
-
-    // Sticky on different monitor - still need to be on same monitor
-    // (sticky applies to workspace, not monitor)
     REQUIRE(visibility_policy::is_window_visible(false, false, true, 0, 2, monitors));
-
-    // Invalid monitor
     REQUIRE_FALSE(visibility_policy::is_window_visible(false, false, true, 5, 0, monitors));
 }
 
@@ -235,56 +212,55 @@ TEST_CASE("Above and below states are mutually exclusive by convention", "[clien
 // Focus eligibility with state combinations
 // ─────────────────────────────────────────────────────────────────────────────
 
-TEST_CASE("Focus eligibility by window kind", "[client][focus][policy]")
+TEST_CASE("Focus eligibility checks window kind and input hints", "[client][focus][policy]")
 {
-    // Tiled windows with input focus are eligible
+    // Tiled/floating windows need input focus or WM_TAKE_FOCUS
     REQUIRE(focus_policy::is_focus_eligible(Client::Kind::Tiled, true, false));
-
-    // Floating windows with input focus are eligible
     REQUIRE(focus_policy::is_focus_eligible(Client::Kind::Floating, true, false));
-
-    // Dock windows are never eligible
-    REQUIRE_FALSE(focus_policy::is_focus_eligible(Client::Kind::Dock, true, true));
-
-    // Desktop windows are never eligible
-    REQUIRE_FALSE(focus_policy::is_focus_eligible(Client::Kind::Desktop, true, true));
-}
-
-TEST_CASE("Focus eligibility requires input focus or WM_TAKE_FOCUS", "[client][focus][policy]")
-{
-    // Neither input focus nor take focus -> not eligible
+    REQUIRE(focus_policy::is_focus_eligible(Client::Kind::Tiled, false, true));
+    REQUIRE(focus_policy::is_focus_eligible(Client::Kind::Floating, false, true));
     REQUIRE_FALSE(focus_policy::is_focus_eligible(Client::Kind::Tiled, false, false));
     REQUIRE_FALSE(focus_policy::is_focus_eligible(Client::Kind::Floating, false, false));
 
-    // Only take focus -> eligible
-    REQUIRE(focus_policy::is_focus_eligible(Client::Kind::Tiled, false, true));
-    REQUIRE(focus_policy::is_focus_eligible(Client::Kind::Floating, false, true));
-
-    // Only input focus -> eligible
-    REQUIRE(focus_policy::is_focus_eligible(Client::Kind::Tiled, true, false));
-
-    // Both -> eligible
-    REQUIRE(focus_policy::is_focus_eligible(Client::Kind::Tiled, true, true));
+    // Dock and desktop windows are never eligible
+    REQUIRE_FALSE(focus_policy::is_focus_eligible(Client::Kind::Dock, true, true));
+    REQUIRE_FALSE(focus_policy::is_focus_eligible(Client::Kind::Desktop, true, true));
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Visibility policy comprehensive tests
 // ─────────────────────────────────────────────────────────────────────────────
 
-TEST_CASE("Show desktop mode hides all windows", "[visibility][policy]")
+TEST_CASE("Visibility handles show desktop, workspace, and invalid monitor", "[visibility][policy]")
 {
-    auto monitors = make_monitors();
+    auto monitors = make_monitors(3, 5);
+    monitors[0].current_workspace = 2;
+    monitors[1].current_workspace = 0;
+    monitors[2].current_workspace = 4;
 
-    // Normal window on current workspace
+    // Show desktop hides all windows
     REQUIRE_FALSE(visibility_policy::is_window_visible(true, false, false, 0, 0, monitors));
-
-    // Sticky window
     REQUIRE_FALSE(visibility_policy::is_window_visible(true, false, true, 0, 0, monitors));
+
+    // Current workspace on each monitor is visible
+    REQUIRE(visibility_policy::is_workspace_visible(false, 0, 2, monitors));
+    REQUIRE(visibility_policy::is_workspace_visible(false, 1, 0, monitors));
+    REQUIRE(visibility_policy::is_workspace_visible(false, 2, 4, monitors));
+
+    // Non-current workspaces are not visible
+    REQUIRE_FALSE(visibility_policy::is_workspace_visible(false, 0, 0, monitors));
+    REQUIRE_FALSE(visibility_policy::is_workspace_visible(false, 1, 1, monitors));
+    REQUIRE_FALSE(visibility_policy::is_workspace_visible(false, 2, 3, monitors));
+
+    // Invalid monitor index
+    REQUIRE_FALSE(visibility_policy::is_workspace_visible(false, 5, 0, monitors));
+    REQUIRE_FALSE(visibility_policy::is_window_visible(false, false, false, 5, 0, monitors));
+    REQUIRE_FALSE(visibility_policy::is_window_visible(false, false, true, 5, 0, monitors));
 }
 
 TEST_CASE("Workspace visibility with multiple monitors", "[visibility][policy]")
 {
-    auto monitors = make_monitors(3, 5);  // 3 monitors, 5 workspaces each
+    auto monitors = make_monitors(3, 5); // 3 monitors, 5 workspaces each
     monitors[0].current_workspace = 2;
     monitors[1].current_workspace = 0;
     monitors[2].current_workspace = 4;
@@ -503,7 +479,7 @@ TEST_CASE("Fullscreen should preserve modal state", "[client][state][fullscreen]
     c.fullscreen = true;
 
     REQUIRE(c.fullscreen);
-    REQUIRE(c.modal);  // Modal is intentionally preserved
+    REQUIRE(c.modal); // Modal is intentionally preserved
 }
 
 // ─────────────────────────────────────────────────────────────────────────────

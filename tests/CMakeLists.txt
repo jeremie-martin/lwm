@@ -13,8 +13,8 @@ add_executable(lwm_tests
     test_focus_cycling_policy.cpp
     test_focus_policy.cpp
     test_focus_restoration_policy.cpp
-    test_focus_visibility_policy.cpp
     test_integration_focus.cpp
+    test_integration_workspace.cpp
     test_floating_policy.cpp
     test_layout_policy.cpp
     test_multimonitor_policy.cpp

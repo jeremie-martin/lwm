@@ -148,7 +148,8 @@ private:
     bool wait_for_x_server(std::chrono::milliseconds timeout)
     {
         return wait_for_condition(
-            []() {
+            []()
+            {
                 xcb_connection_t* conn = xcb_connect(nullptr, nullptr);
                 bool ok = conn && !xcb_connection_has_error(conn);
                 if (conn)
@@ -166,9 +167,7 @@ private:
 
         kill(xvfb_pid_, SIGTERM);
         bool exited = wait_for_condition(
-            [this]() {
-                return waitpid(xvfb_pid_, nullptr, WNOHANG) > 0;
-            },
+            [this]() { return waitpid(xvfb_pid_, nullptr, WNOHANG) > 0; },
             std::chrono::milliseconds(1000)
         );
         if (!exited)
@@ -238,11 +237,8 @@ inline xcb_atom_t intern_atom(xcb_connection_t* conn, char const* name)
     return atom;
 }
 
-inline std::optional<xcb_window_t> get_window_property_window(
-    xcb_connection_t* conn,
-    xcb_window_t window,
-    xcb_atom_t atom
-)
+inline std::optional<xcb_window_t>
+get_window_property_window(xcb_connection_t* conn, xcb_window_t window, xcb_atom_t atom)
 {
     auto cookie = xcb_get_property(conn, 0, window, atom, XCB_ATOM_WINDOW, 0, 1);
     auto* reply = xcb_get_property_reply(conn, cookie, nullptr);
@@ -267,7 +263,8 @@ inline bool wait_for_property_window(
 )
 {
     return wait_for_condition(
-        [conn, window, atom, expected]() {
+        [conn, window, atom, expected]()
+        {
             auto value = get_window_property_window(conn, window, atom);
             return value && *value == expected;
         },
@@ -283,7 +280,8 @@ inline bool wait_for_property_window_nonzero(
 )
 {
     return wait_for_condition(
-        [conn, window, atom]() {
+        [conn, window, atom]()
+        {
             auto value = get_window_property_window(conn, window, atom);
             return value && *value != XCB_NONE;
         },
@@ -299,13 +297,7 @@ inline bool wait_for_wm_ready(X11Connection& conn, std::chrono::milliseconds tim
     return wait_for_property_window_nonzero(conn.get(), conn.root(), supporting, timeout);
 }
 
-inline xcb_window_t create_window(
-    X11Connection& conn,
-    int16_t x,
-    int16_t y,
-    uint16_t width,
-    uint16_t height
-)
+inline xcb_window_t create_window(X11Connection& conn, int16_t x, int16_t y, uint16_t width, uint16_t height)
 {
     xcb_window_t window = xcb_generate_id(conn.get());
     uint32_t mask = XCB_CW_EVENT_MASK;
@@ -348,6 +340,73 @@ inline void destroy_window(X11Connection& conn, xcb_window_t window)
     xcb_flush(conn.get());
 }
 
+inline std::optional<uint32_t>
+get_window_property_cardinal(xcb_connection_t* conn, xcb_window_t window, xcb_atom_t atom)
+{
+    auto cookie = xcb_get_property(conn, 0, window, atom, XCB_ATOM_CARDINAL, 0, 1);
+    auto* reply = xcb_get_property_reply(conn, cookie, nullptr);
+    if (!reply)
+        return std::nullopt;
+
+    std::optional<uint32_t> result;
+    if (xcb_get_property_value_length(reply) >= 4)
+    {
+        result = *static_cast<uint32_t*>(xcb_get_property_value(reply));
+    }
+    free(reply);
+    return result;
+}
+
+inline bool wait_for_property_cardinal(
+    xcb_connection_t* conn,
+    xcb_window_t window,
+    xcb_atom_t atom,
+    uint32_t expected,
+    std::chrono::milliseconds timeout
+)
+{
+    return wait_for_condition(
+        [conn, window, atom, expected]()
+        {
+            auto value = get_window_property_cardinal(conn, window, atom);
+            return value && *value == expected;
+        },
+        timeout
+    );
+}
+
+inline void send_client_message(
+    X11Connection& conn_wrapper,
+    xcb_window_t target,
+    xcb_atom_t type,
+    uint32_t d0,
+    uint32_t d1 = 0,
+    uint32_t d2 = 0,
+    uint32_t d3 = 0,
+    uint32_t d4 = 0
+)
+{
+    xcb_connection_t* conn = conn_wrapper.get();
+    xcb_client_message_event_t event{};
+    event.response_type = XCB_CLIENT_MESSAGE;
+    event.window = target;
+    event.type = type;
+    event.format = 32;
+    event.data.data32[0] = d0;
+    event.data.data32[1] = d1;
+    event.data.data32[2] = d2;
+    event.data.data32[3] = d3;
+    event.data.data32[4] = d4;
+    xcb_send_event(
+        conn,
+        0,
+        conn_wrapper.root(),
+        XCB_EVENT_MASK_SUBSTRUCTURE_REDIRECT | XCB_EVENT_MASK_SUBSTRUCTURE_NOTIFY,
+        reinterpret_cast<char*>(&event)
+    );
+    xcb_flush(conn);
+}
+
 inline bool wait_for_active_window(X11Connection& conn, xcb_window_t expected, std::chrono::milliseconds timeout)
 {
     xcb_atom_t active = intern_atom(conn.get(), "_NET_ACTIVE_WINDOW");
@@ -375,7 +434,7 @@ public:
         : display_(std::move(display))
         , config_home_(make_temp_dir())
     {
-        std::filesystem::path executable = std::filesystem::current_path() / "lwm";
+        std::filesystem::path executable = std::filesystem::current_path() / "src" / "app" / "lwm";
         if (!std::filesystem::exists(executable))
             return;
 
