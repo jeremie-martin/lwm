@@ -505,8 +505,6 @@ void WindowManager::run_autostart()
     }
 }
 
-// Drag operations are implemented in wm_drag.cpp
-
 void WindowManager::manage_window(xcb_window_t window, bool start_iconic)
 {
     auto [instance_name, class_name] = get_wm_class(window);
@@ -621,11 +619,11 @@ void WindowManager::manage_window(xcb_window_t window, bool start_iconic)
     update_sync_state(window);
     update_fullscreen_monitor_state(window);
 
-    ewmh_.set_frame_extents(window, 0, 0, 0, 0); // LWM doesn't add frames
+    ewmh_.set_frame_extents(window, 0, 0, 0, 0);
     uint32_t desktop = get_ewmh_desktop_index(target_monitor_idx, target_workspace_idx);
     ewmh_.set_window_desktop(window, desktop);
 
-    // Set allowed actions for tiled windows (no move/resize via EWMH)
+    // Set allowed actions for managed windows (no move/resize via EWMH - WM controls geometry)
     xcb_ewmh_connection_t* ewmh = ewmh_.get();
     std::vector<xcb_atom_t> actions = {
         ewmh->_NET_WM_ACTION_CLOSE,         ewmh->_NET_WM_ACTION_FULLSCREEN, ewmh->_NET_WM_ACTION_CHANGE_DESKTOP,
@@ -746,7 +744,6 @@ void WindowManager::unmanage_window(xcb_window_t window)
                 update_ewmh_client_list();
                 rearrange_monitor(monitor);
 
-                // If this was the active window, select a new focus or clear focus
                 if (was_active)
                 {
                     if (ws_idx == monitor.current_workspace && &monitor == &focused_monitor())
@@ -799,7 +796,6 @@ void WindowManager::set_fullscreen(xcb_window_t window, bool enabled)
 
         client->fullscreen = true;
 
-        // Fullscreen is incompatible with ABOVE/BELOW states - clear them
         if (client->above)
         {
             client->above = false;
@@ -836,7 +832,6 @@ void WindowManager::set_fullscreen(xcb_window_t window, bool enabled)
             if (client->fullscreen_restore)
             {
                 floating_window->geometry = *client->fullscreen_restore;
-                // Sync Client.floating_geometry (authoritative)
                 client->floating_geometry = floating_window->geometry;
                 if (client->workspace == monitors_[client->monitor].current_workspace && !client->iconic)
                 {
@@ -968,7 +963,6 @@ void WindowManager::set_window_maximized(xcb_window_t window, bool horiz, bool v
                 if (auto* floating_window = find_floating_window(window))
                 {
                     floating_window->geometry = *client->maximize_restore;
-                    // Sync Client.floating_geometry (authoritative)
                     client->floating_geometry = floating_window->geometry;
                     if (client->workspace == monitors_[client->monitor].current_workspace && !client->iconic)
                     {
@@ -1023,7 +1017,6 @@ void WindowManager::apply_maximized_geometry(xcb_window_t window)
     }
 
     floating_window->geometry = base;
-    // Sync Client.floating_geometry (authoritative)
     client->floating_geometry = floating_window->geometry;
     if (client->workspace == monitors_[client->monitor].current_workspace && !client->iconic)
     {
@@ -1175,7 +1168,6 @@ void WindowManager::apply_fullscreen_if_needed(xcb_window_t window)
 
 void WindowManager::set_fullscreen_monitors(xcb_window_t window, FullscreenMonitors const& monitors)
 {
-    // Fullscreen monitors are authoritative in Client
     if (auto* client = get_client(window))
         client->fullscreen_monitors = monitors;
 
@@ -1203,7 +1195,6 @@ Geometry WindowManager::fullscreen_geometry_for_window(xcb_window_t window) cons
     if (monitors_.empty())
         return {};
 
-    // Fullscreen monitors are authoritative in Client
     auto const* client = get_client(window);
     if (!client || !client->fullscreen_monitors)
     {
@@ -1258,7 +1249,7 @@ void WindowManager::iconify_window(xcb_window_t window)
 {
     auto* client = get_client(window);
     if (!client)
-        return; // Only managed clients can be iconified
+        return;
 
     if (client->iconic)
         return;
@@ -1354,7 +1345,6 @@ void WindowManager::kill_window(xcb_window_t window)
 {
     if (supports_protocol(window, wm_delete_window_))
     {
-        // Send WM_DELETE_WINDOW request
         xcb_client_message_event_t ev = {};
         ev.response_type = XCB_CLIENT_MESSAGE;
         ev.window = window;
@@ -1366,9 +1356,6 @@ void WindowManager::kill_window(xcb_window_t window)
         xcb_send_event(conn_.get(), 0, window, XCB_EVENT_MASK_NO_EVENT, reinterpret_cast<char*>(&ev));
         conn_.flush();
 
-        // Send ping to check if window is responsive.
-        // If ping response arrives, pending_kills_ entry is removed (window is responsive).
-        // If ping times out, force kill the hung window.
         send_wm_ping(window, last_event_time_);
         pending_kills_[window] = std::chrono::steady_clock::now() + KILL_TIMEOUT;
         return;
@@ -1381,7 +1368,6 @@ void WindowManager::kill_window(xcb_window_t window)
 
 void WindowManager::rearrange_monitor(Monitor& monitor)
 {
-    // Find monitor index for logging
     size_t monitor_idx = 0;
     for (; monitor_idx < monitors_.size(); ++monitor_idx)
     {
@@ -1406,7 +1392,6 @@ void WindowManager::rearrange_monitor(Monitor& monitor)
         return;
     }
 
-    // Only arrange current workspace - callers handle hiding old workspace
     std::vector<xcb_window_t> visible_windows;
     visible_windows.reserve(monitor.current().windows.size());
     std::vector<xcb_window_t> fullscreen_windows;
@@ -1443,7 +1428,6 @@ void WindowManager::rearrange_monitor(Monitor& monitor)
                 hide_window(window);
                 continue;
             }
-            // Sticky fullscreen windows also bypass tiling
             if (is_client_fullscreen(window))
             {
                 if (!seen.contains(window))
@@ -1488,17 +1472,12 @@ void WindowManager::rearrange_monitor(Monitor& monitor)
 
     layout_.arrange(visible_windows, monitor.working_area());
 
-    // Handle fullscreen windows separately
-    // With off-screen visibility, windows stay mapped so no "nudge resize" trick is needed.
-    // The renderer never goes through unmap/remap cycles that cause redraw issues.
     for (xcb_window_t window : fullscreen_windows)
     {
         LOG_DEBUG("rearrange_monitor: handling fullscreen window {:#x}", window);
 
-        // Mark as visible (window is already mapped, just restore from off-screen)
         show_window(window);
 
-        // Configure to correct fullscreen geometry
         apply_fullscreen_if_needed(window);
 
         uint32_t stack_mode = XCB_STACK_MODE_ABOVE;

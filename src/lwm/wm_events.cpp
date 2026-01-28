@@ -443,10 +443,6 @@ void WindowManager::handle_enter_notify(xcb_enter_notify_event_t const& e)
         return;
     }
 
-    // For non-root windows: only handle if mode=NORMAL and detail!=INFERIOR
-    // detail=INFERIOR means pointer entered because a child window closed,
-    // not because the mouse actually moved - ignore these spurious events.
-    // For root window: always handle (following DWM behavior)
     if (e.event != conn_.screen()->root)
     {
         if (e.mode != XCB_NOTIFY_MODE_NORMAL || e.detail == XCB_NOTIFY_DETAIL_INFERIOR)
@@ -458,10 +454,7 @@ void WindowManager::handle_enter_notify(xcb_enter_notify_event_t const& e)
             );
             return;
         }
-    }
-    else
-    {
-        // Root window: only require normal mode
+
         if (e.mode != XCB_NOTIFY_MODE_NORMAL)
         {
             LOG_TRACE("EnterNotify: filtered root (mode={})", static_cast<int>(e.mode));
@@ -469,10 +462,8 @@ void WindowManager::handle_enter_notify(xcb_enter_notify_event_t const& e)
         }
     }
 
-    // Case 1: Entering a managed window - focus-follows-mouse
     if (e.event != conn_.screen()->root)
     {
-        // Ignore enter events on hidden (off-screen) windows
         if (auto const* client = get_client(e.event); client && client->hidden)
         {
             LOG_TRACE("EnterNotify: ignored (window is hidden)");
@@ -517,7 +508,6 @@ void WindowManager::handle_motion_notify(xcb_motion_notify_event_t const& e)
     // another window. Moving the mouse within that window re-establishes focus.
     if (window_under_cursor != conn_.screen()->root)
     {
-        // Ignore motion events on hidden (off-screen) windows
         if (auto const* client = get_client(window_under_cursor); client && client->hidden)
             return;
 
@@ -597,12 +587,6 @@ void WindowManager::handle_button_press(xcb_button_press_event_t const& e)
         }
     }
 
-    // Click-to-focus: clicking on a managed window focuses it (even without modifiers).
-    // This complements motion-based FFM for cases where the user clicks in a window
-    // that lost focus to a newly created window.
-    //
-    // Note: For floating windows, e.event is the window itself (they select BUTTON_PRESS).
-    // For tiled windows, e.event is root and target was set to e.child above.
     if (target != conn_.screen()->root)
     {
         if (find_floating_window(target))
@@ -658,9 +642,6 @@ void WindowManager::handle_key_press(xcb_key_press_event_t const& e)
     }
     else if (action->type == "toggle_workspace")
     {
-        // Prevent key auto-repeat from triggering multiple toggles.
-        // X11 auto-repeat sends KeyRelease-KeyPress pairs with identical timestamps.
-        // If this KeyPress has the same timestamp as the last KeyRelease, it's auto-repeat.
         LOG_TRACE(
             "KeyPress: keysym={:#x} time={} last_keysym={:#x} last_release_time={}",
             keysym,
@@ -676,9 +657,8 @@ void WindowManager::handle_key_press(xcb_key_press_event_t const& e)
             LOG_TRACE("BLOCKED (auto-repeat detected)");
             return;
         }
-        LOG_TRACE("ALLOWED - calling toggle_workspace()");
         last_toggle_keysym_ = keysym;
-        last_toggle_release_time_ = 0; // Reset on new toggle
+        last_toggle_release_time_ = 0;
         toggle_workspace();
         LOG_TRACE("toggle_workspace() returned");
     }
@@ -744,16 +724,12 @@ void WindowManager::handle_client_message(xcb_client_message_event_t const& e)
 
     if (e.type == wm_protocols_ && e.data.data32[0] == net_wm_ping_)
     {
-        // Ping response received - window is responsive
         xcb_window_t window = static_cast<xcb_window_t>(e.data.data32[2]);
         if (window == XCB_NONE)
         {
             window = e.window;
         }
         pending_pings_.erase(window);
-        // Cancel pending kill since window proved responsive.
-        // The window will close itself in response to WM_DELETE_WINDOW.
-        // Force kill only happens if ping times out (window is hung).
         pending_kills_.erase(window);
         return;
     }
@@ -1293,7 +1269,6 @@ void WindowManager::handle_property_notify(xcb_property_notify_event_t const& e)
             layout_.apply_size_hints(floating_window->id, hinted_width, hinted_height);
             floating_window->geometry.width = static_cast<uint16_t>(std::max<uint32_t>(1, hinted_width));
             floating_window->geometry.height = static_cast<uint16_t>(std::max<uint32_t>(1, hinted_height));
-            // Sync Client.floating_geometry (authoritative)
             auto* client = get_client(e.window);
             if (client)
                 client->floating_geometry = floating_window->geometry;
@@ -1304,43 +1279,24 @@ void WindowManager::handle_property_notify(xcb_property_notify_event_t const& e)
                 apply_floating_geometry(*floating_window);
             }
         }
-        else if (auto const* client = get_client(e.window))
+    }
+    else if (auto const* client = get_client(e.window))
+    {
+        if (client->kind == Client::Kind::Tiled && client->monitor < monitors_.size())
+            rearrange_monitor(monitors_[client->monitor]);
+    }
+    xcb_window_t client_window = e.window;
+    for (auto& [id, client] : clients_)
+    {
+        if (client.user_time_window == id)
         {
-            if (client->kind == Client::Kind::Tiled && client->monitor < monitors_.size())
-                rearrange_monitor(monitors_[client->monitor]);
+            client.user_time = get_user_time(id);
         }
     }
-    if ((wm_protocols_ != XCB_NONE && e.atom == wm_protocols_)
-        || (net_wm_sync_request_counter_ != XCB_NONE && e.atom == net_wm_sync_request_counter_))
+    if (auto* c = get_client(client_window))
     {
-        update_sync_state(e.window);
+        c->user_time = get_user_time(client_window);
     }
-    if (net_wm_fullscreen_monitors_ != XCB_NONE && e.atom == net_wm_fullscreen_monitors_)
-    {
-        update_fullscreen_monitor_state(e.window);
-        if (is_client_fullscreen(e.window))
-        {
-            apply_fullscreen_if_needed(e.window);
-        }
-    }
-    if (net_wm_user_time_ != XCB_NONE && e.atom == net_wm_user_time_)
-    {
-        // Check if this PropertyNotify is from a user time window
-        // If so, find the client that owns it and update that client's user time
-        xcb_window_t client_window = e.window;
-        for (auto const& [id, client] : clients_)
-        {
-            if (client.user_time_window == e.window)
-            {
-                client_window = id;
-                break;
-            }
-        }
-        // User time is authoritative in Client
-        if (auto* c = get_client(client_window))
-            c->user_time = get_user_time(client_window);
-    }
-    // Handle WM_HINTS urgency flag changes (ICCCM → EWMH DEMANDS_ATTENTION)
     if (wm_hints_ != XCB_NONE && e.atom == wm_hints_)
     {
         // Only process for managed windows (tiled or floating)

@@ -8,10 +8,6 @@
 
 namespace lwm {
 
-// ─────────────────────────────────────────────────────────────────────────────
-// Window Rules Configuration
-// ─────────────────────────────────────────────────────────────────────────────
-
 struct RuleGeometry
 {
     std::optional<int32_t> x;
@@ -42,12 +38,8 @@ struct WindowRuleConfig
     std::optional<bool> skip_taskbar;          // Exclude from taskbar
     std::optional<bool> skip_pager;            // Exclude from pager
     std::optional<RuleGeometry> geometry;      // Floating geometry
-    std::optional<bool> center;                // Center on monitor (floating only)
+    std::optional<bool> center;
 };
-
-// ─────────────────────────────────────────────────────────────────────────────
-// Input Configuration
-// ─────────────────────────────────────────────────────────────────────────────
 
 struct KeybindConfig
 {

@@ -1,1 +1,0 @@
-// (See COMPLIANCE.md "Window State Application Ordering")
