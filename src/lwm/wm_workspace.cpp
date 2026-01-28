@@ -28,7 +28,7 @@ void WindowManager::switch_workspace(int ws)
         switch_result->new_workspace
     );
 
-    // Unmap floating windows from old workspace FIRST
+    // Hide floating windows from old workspace FIRST
     // This prevents visual glitches where old floating windows appear over new workspace content
     for (auto& fw : floating_windows_)
     {
@@ -44,7 +44,7 @@ void WindowManager::switch_workspace(int ws)
         }
     }
 
-    // Now unmap tiled windows from old workspace
+    // Now hide tiled windows from old workspace
     auto& old_workspace = monitor.workspaces[switch_result->old_workspace];
     LOG_DEBUG("switch_workspace: old_workspace has {} tiled windows", old_workspace.windows.size());
     for (xcb_window_t window : old_workspace.windows)
@@ -59,7 +59,7 @@ void WindowManager::switch_workspace(int ws)
         hide_window(window);
     }
     LOG_DEBUG("switch_workspace: done unmapping old workspace windows");
-    // Flush unmaps before rearranging to ensure old windows are hidden
+    // Flush before rearranging to ensure old windows are hidden
     conn_.flush();
 
     LOG_TRACE("switch_workspace: unmapped old windows, now updating EWMH");
@@ -143,7 +143,7 @@ void WindowManager::move_window_to_workspace(int ws)
 
         update_floating_visibility(monitor_idx);
         focus_or_fallback(monitors_[monitor_idx]);
-            conn_.flush();
+        conn_.flush();
         return;
     }
 
@@ -268,7 +268,7 @@ void WindowManager::move_window_to_monitor(int direction)
             warp_to_monitor(monitors_[target_idx]);
         }
 
-            conn_.flush();
+        conn_.flush();
         return;
     }
 

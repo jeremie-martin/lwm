@@ -548,8 +548,8 @@ Monitor detection via RANDR (src/lwm/wm.cpp: detect_monitors):
 
 **switch_workspace(int ws)** (src/lwm/wm_workspace.cpp:8-80):
 1. Policy validation (workspace_policy::apply_workspace_switch)
-2. Pre-unmap floating windows from old workspace
-3. Unmap tiled windows from old workspace
+2. Hide floating windows from old workspace
+3. Hide tiled windows from old workspace
 4. Update EWMH _NET_CURRENT_DESKTOP
 5. Rearrange monitor for new workspace
 6. Update floating visibility

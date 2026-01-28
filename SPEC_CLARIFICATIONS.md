@@ -36,16 +36,17 @@ This document records explicit design decisions where EWMH/ICCCM specifications 
 **Decision**: **Update `_NET_CLIENT_LIST` on manage/unmanage, NOT on visibility changes.**
 
 **Rationale**:
-- EWMH defines `_NET_CLIENT_LIST` as the list of managed windows
+- EWMH defines `_NET_CLIENT_LIST` as list of managed windows
 - Window hidden on another workspace is still managed
-- Workspace switching uses `wm_unmap_window()` which tracks WM-initiated unmaps
+- Workspace switching uses `hide_window()` which moves windows off-screen
 - Only client-initiated unmaps (withdraw requests) trigger unmanagement
+- With off-screen visibility, ALL `UnmapNotify` events are client-initiated withdraw requests
 - Prevents unnecessary churn of `_NET_CLIENT_LIST` on workspace switches
 
 **Implementation**:
 - `update_ewmh_client_list()` called from `manage_window()`, `unmanage_window()`, `manage_floating_window()`, `unmanage_floating_window()`
 - NOT called from `switch_workspace()` or visibility toggle operations
-- ICCCM unmap tracking (`wm_unmapped_windows_`) distinguishes WM vs client unmaps
+- No unmap counter tracking needed (WM never calls `xcb_unmap_window()`)
 
 ---
 
@@ -121,7 +122,7 @@ This document records explicit design decisions where EWMH/ICCCM specifications 
 - Workspace visibility expressed via `_NET_WM_DESKTOP` and physical mapping state
 
 **Implementation**:
-- `wm_unmap_window()` unmaps without changing `WM_STATE`
+- `hide_window()` moves window off-screen without changing `WM_STATE`
 - Only `iconify_window()` sets `WM_STATE=IconicState`
 - `unmanage_window()` sets `WM_STATE=WithdrawnState`
 
