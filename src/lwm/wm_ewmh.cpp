@@ -70,7 +70,6 @@ void WindowManager::update_ewmh_desktops()
 
 void WindowManager::update_ewmh_client_list()
 {
-    // Build client list sorted by mapping order using Client registry
     std::vector<std::pair<uint64_t, xcb_window_t>> ordered;
     ordered.reserve(clients_.size());
     for (auto const& [window, client] : clients_)
@@ -87,7 +86,6 @@ void WindowManager::update_ewmh_client_list()
     }
     ewmh_.update_client_list(windows);
 
-    // Build stacking order from X server
     std::vector<xcb_window_t> stacking;
     stacking.reserve(windows.size());
     std::unordered_set<xcb_window_t> managed(windows.begin(), windows.end());
@@ -253,4 +251,4 @@ void WindowManager::switch_to_ewmh_desktop(uint32_t desktop)
     LOG_DEBUG("switch_to_ewmh_desktop: DONE, now on monitor {} ws {}", focused_monitor_, monitor.current_workspace);
 }
 
-} // namespace lwm
+}

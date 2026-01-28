@@ -16,7 +16,7 @@ bool is_known_window_type(xcb_ewmh_connection_t const* ewmh, xcb_atom_t type)
         || type == ewmh->_NET_WM_WINDOW_TYPE_DND || type == ewmh->_NET_WM_WINDOW_TYPE_NORMAL;
 }
 
-} // namespace
+}
 
 Ewmh::Ewmh(Connection& conn)
     : conn_(conn)
@@ -490,4 +490,4 @@ Strut Ewmh::get_window_strut(xcb_window_t window) const
     return strut;
 }
 
-} // namespace lwm
+}

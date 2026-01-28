@@ -255,4 +255,4 @@ private:
     xcb_atom_t intern_atom(char const* name) const;
 };
 
-} // namespace lwm
+}

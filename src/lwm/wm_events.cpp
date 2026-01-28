@@ -43,7 +43,7 @@ uint32_t extract_event_time(uint8_t response_type, xcb_generic_event_t const& ev
     }
 }
 
-} // namespace
+}
 
 void WindowManager::handle_event(xcb_generic_event_t const& event)
 {
@@ -140,7 +140,6 @@ void WindowManager::handle_event(xcb_generic_event_t const& event)
 
 void WindowManager::handle_map_request(xcb_map_request_event_t const& e)
 {
-    // Case 1: Already managed window requesting map (deiconify)
     if (auto const* client = get_client(e.window))
     {
         bool focus = client->monitor < monitors_.size() && client->monitor == focused_monitor_
@@ -149,13 +148,11 @@ void WindowManager::handle_map_request(xcb_map_request_event_t const& e)
         return;
     }
 
-    // Case 2: Override redirect windows are not managed
     if (is_override_redirect_window(e.window))
     {
         return;
     }
 
-    // Classify the window using centralized EWMH type classification
     bool has_transient = transient_for_window(e.window).has_value();
     auto classification = ewmh_.classify_window(e.window, has_transient);
 
@@ -168,7 +165,6 @@ void WindowManager::handle_map_request(xcb_map_request_event_t const& e)
                                 .is_transient = has_transient };
     auto rule_result = window_rules_.match(match_info, monitors_, config_.workspaces.names);
 
-    // Apply rule overrides respecting EWMH priority
     if (rule_result.matched && classification.kind != WindowClassification::Kind::Dock
         && classification.kind != WindowClassification::Kind::Desktop
         && classification.kind != WindowClassification::Kind::Popup)
@@ -184,7 +180,6 @@ void WindowManager::handle_map_request(xcb_map_request_event_t const& e)
             classification.skip_pager = *rule_result.skip_pager;
     }
 
-    // Read WM_HINTS for initial_state and urgency (ICCCM)
     bool start_iconic = false;
     bool urgent = false;
     constexpr uint32_t XUrgencyHint = 256; // 1L << 8
@@ -206,7 +201,6 @@ void WindowManager::handle_map_request(xcb_map_request_event_t const& e)
         start_iconic = true;
     }
 
-    // Handle based on classification
     switch (classification.kind)
     {
         case WindowClassification::Kind::Desktop:
@@ -258,7 +252,6 @@ void WindowManager::handle_map_request(xcb_map_request_event_t const& e)
 
         case WindowClassification::Kind::Popup:
         {
-            // Popup windows (menus, tooltips, notifications) are just mapped, not managed
             xcb_map_window(conn_.get(), e.window);
             conn_.flush();
             return;

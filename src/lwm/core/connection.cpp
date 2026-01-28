@@ -51,4 +51,4 @@ void Connection::init_randr()
     free(ext_reply);
 }
 
-} // namespace lwm
+}

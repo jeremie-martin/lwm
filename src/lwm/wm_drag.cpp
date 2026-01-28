@@ -12,8 +12,8 @@
  * drag-related behavior. All functions are methods of WindowManager.
  */
 
-#include "wm.hpp"
 #include "lwm/core/focus.hpp"
+#include "wm.hpp"
 
 namespace lwm {
 
@@ -139,7 +139,7 @@ void WindowManager::update_drag(int16_t root_x, int16_t root_y)
     }
 
     floating_window->geometry = updated;
-    // Sync Client.floating_geometry (authoritative)
+
     if (auto* client = get_client(drag_state_.window))
         client->floating_geometry = floating_window->geometry;
 
@@ -148,11 +148,10 @@ void WindowManager::update_drag(int16_t root_x, int16_t root_y)
 
     if (active_window_ == floating_window->id)
     {
-        // Use Client (authoritative) for monitor
         if (auto* client = get_client(floating_window->id))
             focused_monitor_ = client->monitor;
         update_ewmh_current_desktop();
-        }
+    }
 
     conn_.flush();
 }
@@ -175,8 +174,8 @@ void WindowManager::end_drag()
             if (target_monitor_idx < monitors_.size())
             {
                 size_t target_workspace_idx = monitors_[target_monitor_idx].current_workspace;
-                bool same_workspace = *source_monitor_idx == target_monitor_idx
-                    && *source_workspace_idx == target_workspace_idx;
+                bool same_workspace =
+                    *source_monitor_idx == target_monitor_idx && *source_workspace_idx == target_workspace_idx;
 
                 auto& source_ws = monitors_[*source_monitor_idx].workspaces[*source_workspace_idx];
                 auto source_it = source_ws.find_window(window);
@@ -208,13 +207,11 @@ void WindowManager::end_drag()
 
                     if (!same_workspace && source_ws.focused_window == window)
                     {
-                        source_ws.focused_window =
-                            source_ws.windows.empty() ? XCB_NONE : source_ws.windows.back();
+                        source_ws.focused_window = source_ws.windows.empty() ? XCB_NONE : source_ws.windows.back();
                     }
 
                     if (!same_workspace)
                     {
-                        // Sync Client for O(1) lookup
                         if (auto* client = get_client(window))
                         {
                             client->monitor = target_monitor_idx;
@@ -235,7 +232,7 @@ void WindowManager::end_drag()
                     }
 
                     update_ewmh_client_list();
-                                    focus_window(window);
+                    focus_window(window);
                 }
             }
         }
@@ -248,4 +245,4 @@ void WindowManager::end_drag()
     conn_.flush();
 }
 
-} // namespace lwm
+}

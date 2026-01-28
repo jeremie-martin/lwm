@@ -132,7 +132,6 @@ void WindowManager::move_window_to_workspace(int ws)
 
         size_t monitor_idx = client->monitor;
 
-        // Update Client workspace (authoritative)
         client->workspace = target_ws;
 
         uint32_t desktop = get_ewmh_desktop_index(monitor_idx, target_ws);
@@ -157,11 +156,9 @@ void WindowManager::move_window_to_workspace(int ws)
         return;
     }
 
-    // Update Client workspace for O(1) lookup
     if (auto* client = get_client(window_to_move))
         client->workspace = target_ws;
 
-    // Update EWMH desktop for moved window
     uint32_t desktop = get_ewmh_desktop_index(focused_monitor_, target_ws);
     if (is_client_sticky(window_to_move))
         ewmh_.set_window_desktop(window_to_move, 0xFFFFFFFF);
@@ -246,7 +243,6 @@ void WindowManager::move_window_to_monitor(int direction)
             std::nullopt
         );
 
-        // Update Client (authoritative for monitor, workspace, geometry)
         client->monitor = target_idx;
         client->workspace = target_workspace;
         client->floating_geometry = floating_window->geometry;
@@ -284,7 +280,6 @@ void WindowManager::move_window_to_monitor(int direction)
     xcb_window_t moved_window = *it;
     source_ws.windows.erase(it);
 
-    // Update source workspace's focused_window to another window if any remain
     if (!source_ws.windows.empty())
     {
         source_ws.focused_window = source_ws.windows.back();
@@ -298,14 +293,12 @@ void WindowManager::move_window_to_monitor(int direction)
     target_monitor.current().windows.push_back(moved_window);
     target_monitor.current().focused_window = window_to_move;
 
-    // Update Client for O(1) lookup
     if (auto* client = get_client(window_to_move))
     {
         client->monitor = target_idx;
         client->workspace = target_monitor.current_workspace;
     }
 
-    // Update EWMH desktop for moved window
     uint32_t desktop = get_ewmh_desktop_index(target_idx, target_monitor.current_workspace);
     if (is_client_sticky(window_to_move))
         ewmh_.set_window_desktop(window_to_move, 0xFFFFFFFF);
@@ -326,4 +319,4 @@ void WindowManager::move_window_to_monitor(int direction)
     conn_.flush();
 }
 
-} // namespace lwm
+}

@@ -28,11 +28,7 @@ constexpr auto KILL_TIMEOUT = std::chrono::seconds(5);
 // architectural changes. Most clients respond quickly; this timeout is a compromise.
 constexpr auto SYNC_WAIT_TIMEOUT = std::chrono::milliseconds(50);
 
-void sigchld_handler(int /*sig*/)
-{
-    // Reap all zombie children
-    while (waitpid(-1, nullptr, WNOHANG) > 0);
-}
+void sigchld_handler(int /*sig*/) { while (waitpid(-1, nullptr, WNOHANG) > 0); }
 
 void setup_signal_handlers()
 {
@@ -42,7 +38,7 @@ void setup_signal_handlers()
     sigaction(SIGCHLD, &sa, nullptr);
 }
 
-} // namespace
+}
 
 WindowManager::WindowManager(Config config)
     : config_(std::move(config))
@@ -412,7 +408,6 @@ void WindowManager::scan_existing_windows()
         if (!is_viewable || override_redirect)
             continue;
 
-        // Use centralized classification
         bool has_transient = transient_for_window(window).has_value();
         auto classification = ewmh_.classify_window(window, has_transient);
 
@@ -534,7 +529,6 @@ void WindowManager::manage_window(xcb_window_t window, bool start_iconic)
         client.order = next_client_order_++;
         client.iconic = start_iconic;
 
-        // Read and apply initial _NET_WM_STATE atoms (EWMH)
         xcb_ewmh_get_atoms_reply_t initial_state;
         if (xcb_ewmh_get_wm_state_reply(
                 ewmh_.get(),
@@ -575,7 +569,6 @@ void WindowManager::manage_window(xcb_window_t window, bool start_iconic)
             xcb_ewmh_get_atoms_reply_wipe(&initial_state);
         }
 
-        // Read transient_for relationship
         client.transient_for = transient_for_window(window).value_or(XCB_NONE);
 
         clients_[window] = std::move(client);
@@ -593,10 +586,8 @@ void WindowManager::manage_window(xcb_window_t window, bool start_iconic)
                     xcb_window_t time_window = *static_cast<xcb_window_t*>(xcb_get_property_value(reply));
                     if (time_window != XCB_NONE)
                     {
-                        // User time window is authoritative in Client
                         if (auto* client = get_client(window))
                             client->user_time_window = time_window;
-                        // Select PropertyNotify on the user time window to track changes
                         uint32_t mask = XCB_EVENT_MASK_PROPERTY_CHANGE;
                         xcb_change_window_attributes(conn_.get(), time_window, XCB_CW_EVENT_MASK, &mask);
                     }
@@ -614,7 +605,6 @@ void WindowManager::manage_window(xcb_window_t window, bool start_iconic)
     uint32_t values[] = { XCB_EVENT_MASK_ENTER_WINDOW | XCB_EVENT_MASK_FOCUS_CHANGE | XCB_EVENT_MASK_PROPERTY_CHANGE };
     xcb_change_window_attributes(conn_.get(), window, XCB_CW_EVENT_MASK, values);
 
-    // Set border width BEFORE layout so positions are calculated correctly
     xcb_configure_window(conn_.get(), window, XCB_CONFIG_WINDOW_BORDER_WIDTH, &config_.appearance.border_width);
 
     if (wm_state_ != XCB_NONE)
@@ -675,7 +665,6 @@ void WindowManager::manage_window(xcb_window_t window, bool start_iconic)
         hide_window(window);
     }
 
-    // Honor existing _NET_WM_STATE flags
     if (ewmh_.has_window_state(window, ewmh_.get()->_NET_WM_STATE_SKIP_TASKBAR))
     {
         set_client_skip_taskbar(window, true);

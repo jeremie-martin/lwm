@@ -24,8 +24,7 @@ std::string escape_regex(std::string const& str)
     return result;
 }
 
-} // namespace
-
+}
 std::optional<std::regex> WindowRules::compile_pattern(std::optional<std::string> const& pattern)
 {
     if (!pattern.has_value() || pattern->empty())
@@ -283,4 +282,4 @@ WindowRuleResult WindowRules::match(
     return result;
 }
 
-} // namespace lwm
+}
