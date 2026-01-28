@@ -35,7 +35,6 @@ void WindowManager::focus_window(xcb_window_t window)
 
     xcb_window_t previous_active = active_window_;
 
-    // Sticky windows are visible on all workspaces - focusing them should NOT switch workspaces.
     bool is_sticky = is_client_sticky(window);
     LOG_TRACE("focus_window: calling focus_window_state, is_sticky={}", is_sticky);
     auto change = focus::focus_window_state(monitors_, focused_monitor_, active_window_, window, is_sticky);
@@ -80,7 +79,6 @@ void WindowManager::focus_window(xcb_window_t window)
     LOG_TRACE("focus_window: updating EWMH current desktop");
     update_ewmh_current_desktop();
 
-    // Clear borders on all windows across all monitors
     clear_all_borders();
 
     xcb_change_window_attributes(conn_.get(), window, XCB_CW_BORDER_PIXEL, &config_.appearance.border_color);
@@ -106,7 +104,7 @@ void WindowManager::focus_window(xcb_window_t window)
         }
         ewmh_.set_window_state(window, net_wm_state_focused_, true);
     }
-    // User time is authoritative in Client
+
     if (auto* client = get_client(window))
         client->user_time = last_event_time_;
 
@@ -167,7 +165,6 @@ void WindowManager::focus_floating_window(xcb_window_t window)
 
     xcb_window_t previous_active = active_window_;
 
-    // Sticky windows are visible on all workspaces - focusing them should NOT switch workspaces.
     bool is_sticky = is_client_sticky(window);
 
     LOG_TRACE(
@@ -241,7 +238,7 @@ void WindowManager::focus_floating_window(xcb_window_t window)
         }
         ewmh_.set_window_state(window, net_wm_state_focused_, true);
     }
-    // User time is authoritative in Client
+
     if (auto* client = get_client(window))
         client->user_time = last_event_time_;
 
@@ -350,7 +347,6 @@ void WindowManager::focus_or_fallback(Monitor& monitor)
 
 bool WindowManager::is_focus_eligible(xcb_window_t window) const
 {
-    // Dock and desktop windows are never focus-eligible (per BEHAVIOR.md)
     Client::Kind kind = Client::Kind::Tiled;
     if (auto* client = get_client(window))
     {
@@ -359,8 +355,6 @@ bool WindowManager::is_focus_eligible(xcb_window_t window) const
             return false;
     }
 
-    // Window is focus-eligible if it accepts direct input focus
-    // OR supports WM_TAKE_FOCUS protocol
     bool accepts_input_focus = should_set_input_focus(window);
     bool supports_take_focus = false;
     if (!accepts_input_focus)
@@ -414,7 +408,6 @@ void WindowManager::focus_next()
 
     auto eligible = [this](xcb_window_t window) { return !is_client_iconic(window) && is_focus_eligible(window); };
 
-    // Build floating candidates
     std::vector<focus_policy::FloatingCandidate> floating_candidates;
     for (auto const& fw : floating_windows_)
     {
@@ -451,7 +444,6 @@ void WindowManager::focus_prev()
 
     auto eligible = [this](xcb_window_t window) { return !is_client_iconic(window) && is_focus_eligible(window); };
 
-    // Build floating candidates
     std::vector<focus_policy::FloatingCandidate> floating_candidates;
     for (auto const& fw : floating_windows_)
     {

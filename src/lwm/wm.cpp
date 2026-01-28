@@ -512,15 +512,7 @@ void WindowManager::run_autostart()
     }
 }
 
-// Event handlers are implemented in wm_events.cpp
 // Drag operations are implemented in wm_drag.cpp
-
-// NOTE: All handle_* functions have been moved to wm_events.cpp
-// NOTE: begin_drag, begin_tiled_drag, update_drag, end_drag have been moved to wm_drag.cpp
-
-// ─────────────────────────────────────────────────────────────────────────────
-// Window Management
-// ─────────────────────────────────────────────────────────────────────────────
 
 void WindowManager::manage_window(xcb_window_t window, bool start_iconic)
 {
@@ -1579,10 +1571,6 @@ Monitor* WindowManager::monitor_containing_window(xcb_window_t window)
     }
     return nullptr;
 }
-
-// ─────────────────────────────────────────────────────────────────────────────
-// Client registry helpers
-// ─────────────────────────────────────────────────────────────────────────────
 
 Client* WindowManager::get_client(xcb_window_t window)
 {

@@ -125,7 +125,8 @@ void WindowManager::manage_floating_window(xcb_window_t window, bool start_iconi
     floating_window.geometry = placement;
     floating_windows_.push_back(floating_window);
 
-    // Populate unified Client registry (authoritative for all non-geometry state)
+    
+
     {
         auto [instance_name, class_name] = get_wm_class(window);
         Client client;
@@ -141,7 +142,8 @@ void WindowManager::manage_floating_window(xcb_window_t window, bool start_iconi
         client.order = next_client_order_++;
         client.iconic = start_iconic;
 
-        // Read and apply initial _NET_WM_STATE atoms (EWMH)
+        
+
         xcb_ewmh_get_atoms_reply_t initial_state;
         if (xcb_ewmh_get_wm_state_reply(
                 ewmh_.get(),
@@ -185,7 +187,8 @@ void WindowManager::manage_floating_window(xcb_window_t window, bool start_iconi
         clients_[window] = std::move(client);
     }
 
-    // Read _NET_WM_USER_TIME_WINDOW if present (EWMH focus stealing prevention)
+    
+
     if (net_wm_user_time_window_ != XCB_NONE)
     {
         auto cookie = xcb_get_property(conn_.get(), 0, window, net_wm_user_time_window_, XCB_ATOM_WINDOW, 0, 1);
@@ -197,10 +200,12 @@ void WindowManager::manage_floating_window(xcb_window_t window, bool start_iconi
                 xcb_window_t time_window = *static_cast<xcb_window_t*>(xcb_get_property_value(reply));
                 if (time_window != XCB_NONE)
                 {
-                    // User time window is authoritative in Client
+                    
+
                     if (auto* client = get_client(window))
                         client->user_time_window = time_window;
-                    // Select PropertyNotify on the user time window to track changes
+                    
+
                     uint32_t mask = XCB_EVENT_MASK_PROPERTY_CHANGE;
                     xcb_change_window_attributes(conn_.get(), time_window, XCB_CW_EVENT_MASK, &mask);
                 }
@@ -208,7 +213,8 @@ void WindowManager::manage_floating_window(xcb_window_t window, bool start_iconi
             free(reply);
         }
     }
-    // User time is authoritative in Client
+    
+
     if (auto* client = get_client(window))
         client->user_time = get_user_time(window);
 
@@ -225,14 +231,16 @@ void WindowManager::manage_floating_window(xcb_window_t window, bool start_iconi
 
     if (start_iconic)
     {
-        // client->iconic is already set in the Client initialization above
+        
+
         ewmh_.set_window_state(window, ewmh_.get()->_NET_WM_STATE_HIDDEN, true);
     }
 
     update_sync_state(window);
     update_fullscreen_monitor_state(window);
 
-    // Set EWMH properties
+    
+
     ewmh_.set_frame_extents(window, 0, 0, 0, 0); // LWM doesn't add frames
     uint32_t desktop = get_ewmh_desktop_index(*monitor_idx, *workspace_idx);
     ewmh_.set_window_desktop(window, desktop);
