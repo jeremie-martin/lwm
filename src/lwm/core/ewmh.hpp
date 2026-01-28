@@ -16,12 +16,19 @@ namespace lwm {
  */
 struct WindowClassification
 {
-    enum class Kind { Tiled, Floating, Dock, Desktop, Popup };
+    enum class Kind
+    {
+        Tiled,
+        Floating,
+        Dock,
+        Desktop,
+        Popup
+    };
 
     Kind kind = Kind::Tiled;
     bool skip_taskbar = false;
     bool skip_pager = false;
-    bool above = false;  // For UTILITY windows
+    bool above = false; // For UTILITY windows
     bool is_transient = false;
 };
 

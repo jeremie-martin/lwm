@@ -789,7 +789,7 @@ void WindowManager::unmanage_window(xcb_window_t window)
                     }
                 }
 
-                            conn_.flush();
+                conn_.flush();
                 return;
             }
         }
@@ -1566,7 +1566,7 @@ void WindowManager::launch_program(std::string const& command)
 
 Monitor* WindowManager::monitor_containing_window(xcb_window_t window)
 {
-    // Search ALL workspaces on ALL monitors, not just current workspace
+    // Search ALL tiled workspaces on ALL monitors (for tiled windows only)
     for (auto& monitor : monitors_)
     {
         for (auto& workspace : monitor.workspaces)

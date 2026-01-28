@@ -27,9 +27,9 @@ namespace lwm::invariants {
 
 #ifdef NDEBUG
 // Release build: no-op
-#define LWM_ASSERT_INVARIANTS(...)
-#define LWM_ASSERT_CLIENT_STATE(...)
-#define LWM_ASSERT_FOCUS_CONSISTENCY(...)
+#    define LWM_ASSERT_INVARIANTS(...)
+#    define LWM_ASSERT_CLIENT_STATE(...)
+#    define LWM_ASSERT_FOCUS_CONSISTENCY(...)
 #else
 
 /**
@@ -57,13 +57,11 @@ inline void assert_client_managed(
     {
         if (client.monitor >= monitors.size())
         {
-            LOG_ERROR("INVARIANT VIOLATION: Window {:#x} has invalid monitor index {}",
-                      window, client.monitor);
+            LOG_ERROR("INVARIANT VIOLATION: Window {:#x} has invalid monitor index {}", window, client.monitor);
         }
         if (client.monitor < monitors.size() && client.workspace >= monitors[client.monitor].workspaces.size())
         {
-            LOG_ERROR("INVARIANT VIOLATION: Window {:#x} has invalid workspace index {}",
-                      window, client.workspace);
+            LOG_ERROR("INVARIANT VIOLATION: Window {:#x} has invalid workspace index {}", window, client.workspace);
         }
     }
 }
@@ -75,10 +73,8 @@ inline void assert_client_managed(
  * - If active_window_ != XCB_NONE, it must be in clients_
  * - The active window must be visible and focus-eligible
  */
-inline void assert_focus_consistency(
-    std::unordered_map<xcb_window_t, Client> const& clients,
-    xcb_window_t active_window
-)
+inline void
+assert_focus_consistency(std::unordered_map<xcb_window_t, Client> const& clients, xcb_window_t active_window)
 {
     if (active_window == XCB_NONE)
         return;
@@ -122,11 +118,7 @@ inline void assert_client_state_consistency(Client const& client)
  * Verifies:
  * - Desktop index is valid OR 0xFFFFFFFF (sticky)
  */
-inline void assert_valid_desktop(
-    uint32_t desktop,
-    size_t num_monitors,
-    size_t workspaces_per_monitor
-)
+inline void assert_valid_desktop(uint32_t desktop, size_t num_monitors, size_t workspaces_per_monitor)
 {
     if (desktop == 0xFFFFFFFF)
         return; // Sticky is valid
@@ -134,8 +126,7 @@ inline void assert_valid_desktop(
     uint32_t max_desktop = static_cast<uint32_t>(num_monitors * workspaces_per_monitor);
     if (desktop >= max_desktop)
     {
-        LOG_ERROR("INVARIANT VIOLATION: Desktop index {} exceeds maximum {}",
-                  desktop, (max_desktop - 1));
+        LOG_ERROR("INVARIANT VIOLATION: Desktop index {} exceeds maximum {}", desktop, (max_desktop - 1));
     }
 }
 
@@ -188,14 +179,12 @@ inline void assert_workspace_consistency(
     }
 }
 
-#define LWM_ASSERT_INVARIANTS(clients, monitors) \
-    lwm::invariants::assert_workspace_consistency(clients, monitors)
+#    define LWM_ASSERT_INVARIANTS(clients, monitors) lwm::invariants::assert_workspace_consistency(clients, monitors)
 
-#define LWM_ASSERT_CLIENT_STATE(client) \
-    lwm::invariants::assert_client_state_consistency(client)
+#    define LWM_ASSERT_CLIENT_STATE(client) lwm::invariants::assert_client_state_consistency(client)
 
-#define LWM_ASSERT_FOCUS_CONSISTENCY(clients, active_window) \
-    lwm::invariants::assert_focus_consistency(clients, active_window)
+#    define LWM_ASSERT_FOCUS_CONSISTENCY(clients, active_window) \
+        lwm::invariants::assert_focus_consistency(clients, active_window)
 
 #endif // NDEBUG
 
