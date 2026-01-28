@@ -9,25 +9,12 @@ namespace fs = std::filesystem;
 
 std::string get_config_path(int argc, char* argv[])
 {
-    // Command line argument takes priority
     if (argc > 1)
-    {
         return argv[1];
-    }
-
-    // Try XDG_CONFIG_HOME
     if (char const* xdg = std::getenv("XDG_CONFIG_HOME"))
     {
         return std::string(xdg) + "/lwm/config.toml";
     }
-
-    // Fall back to ~/.config
-    if (char const* home = std::getenv("HOME"))
-    {
-        return std::string(home) + "/.config/lwm/config.toml";
-    }
-
-    return "";
 }
 
 int main(int argc, char* argv[])
