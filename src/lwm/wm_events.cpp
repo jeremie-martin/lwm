@@ -932,7 +932,7 @@ void WindowManager::handle_client_message(xcb_client_message_event_t const& e)
                 {
                     LOG_DEBUG("Focus stealing prevented, setting demands attention");
                     set_client_demands_attention(window, true);
-                        return;
+                    return;
                 }
             }
         }
@@ -1082,7 +1082,6 @@ void WindowManager::handle_client_message(xcb_client_message_event_t const& e)
     // Handle _NET_REQUEST_FRAME_EXTENTS (apps query this before mapping)
     else if (e.type == ewmh->_NET_REQUEST_FRAME_EXTENTS)
     {
-        // LWM doesn't add frames, so extents are all zeros
         ewmh_.set_frame_extents(e.window, 0, 0, 0, 0);
         conn_.flush();
     }

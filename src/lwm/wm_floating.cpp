@@ -182,13 +182,6 @@ void WindowManager::manage_floating_window(xcb_window_t window, bool start_iconi
             xcb_ewmh_get_atoms_reply_wipe(&initial_state);
         }
 
-        // Transients automatically get skip_taskbar/skip_pager (per COMPLIANCE.md)
-        if (transient)
-        {
-            client.skip_taskbar = true;
-            client.skip_pager = true;
-        }
-
         clients_[window] = std::move(client);
     }
 
@@ -219,10 +212,6 @@ void WindowManager::manage_floating_window(xcb_window_t window, bool start_iconi
     if (auto* client = get_client(window))
         client->user_time = get_user_time(window);
 
-    // Note: We intentionally do NOT select STRUCTURE_NOTIFY on client windows.
-    // We receive UnmapNotify/DestroyNotify via root's SubstructureNotifyMask.
-    // Selecting STRUCTURE_NOTIFY on clients would cause duplicate UnmapNotify events,
-    // leading to incorrect unmanagement of windows during workspace switches (ICCCM compliance).
     uint32_t values[] = { XCB_EVENT_MASK_ENTER_WINDOW | XCB_EVENT_MASK_FOCUS_CHANGE | XCB_EVENT_MASK_PROPERTY_CHANGE
                           | XCB_EVENT_MASK_BUTTON_PRESS };
     xcb_change_window_attributes(conn_.get(), window, XCB_CW_EVENT_MASK, values);
@@ -262,7 +251,7 @@ void WindowManager::manage_floating_window(xcb_window_t window, bool start_iconi
 
     keybinds_.grab_keys(window);
 
-    // BEFORE mapping: Apply geometry-affecting states so window appears at correct position
+    // Before mapping: Apply geometry-affecting states so window appears at correct position
     // (See COMPLIANCE.md "Window State Application Ordering")
     if (ewmh_.has_window_state(window, ewmh_.get()->_NET_WM_STATE_FULLSCREEN))
     {
