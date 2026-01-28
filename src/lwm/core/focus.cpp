@@ -43,8 +43,13 @@ std::optional<FocusWindowChange> focus_window_state(
     bool is_sticky
 )
 {
-    LOG_TRACE("focus_window_state: window={:#x} active_monitor={} active_window={:#x} is_sticky={}",
-              window, active_monitor, active_window, is_sticky);
+    LOG_TRACE(
+        "focus_window_state: window={:#x} active_monitor={} active_window={:#x} is_sticky={}",
+        window,
+        active_monitor,
+        active_window,
+        is_sticky
+    );
 
     for (size_t m = 0; m < monitors.size(); ++m)
     {
@@ -56,16 +61,22 @@ std::optional<FocusWindowChange> focus_window_state(
                 size_t old_workspace = target_monitor.current_workspace;
                 size_t new_workspace = w;
 
-                LOG_TRACE("focus_window_state: found window on monitor {} workspace {} (current={})",
-                          m, w, old_workspace);
+                LOG_TRACE(
+                    "focus_window_state: found window on monitor {} workspace {} (current={})",
+                    m,
+                    w,
+                    old_workspace
+                );
 
-                // Sticky windows are visible on all workspaces, so focusing them
-                // should NOT switch workspaces. Only update workspace if not sticky.
                 bool actually_changed = false;
                 if (!is_sticky && old_workspace != new_workspace)
                 {
-                    LOG_DEBUG("focus_window_state: WORKSPACE WILL CHANGE from {} to {} on monitor {}",
-                              old_workspace, new_workspace, m);
+                    LOG_DEBUG(
+                        "focus_window_state: WORKSPACE WILL CHANGE from {} to {} on monitor {}",
+                        old_workspace,
+                        new_workspace,
+                        m
+                    );
                     target_monitor.previous_workspace = old_workspace;
                     target_monitor.current_workspace = new_workspace;
                     actually_changed = true;
@@ -81,8 +92,13 @@ std::optional<FocusWindowChange> focus_window_state(
                 change.new_workspace = is_sticky ? old_workspace : new_workspace;
                 change.workspace_changed = actually_changed;
 
-                LOG_TRACE("focus_window_state: returning change target_monitor={} old_ws={} new_ws={} changed={}",
-                          change.target_monitor, change.old_workspace, change.new_workspace, change.workspace_changed);
+                LOG_TRACE(
+                    "focus_window_state: returning change target_monitor={} old_ws={} new_ws={} changed={}",
+                    change.target_monitor,
+                    change.old_workspace,
+                    change.new_workspace,
+                    change.workspace_changed
+                );
                 return change;
             }
         }

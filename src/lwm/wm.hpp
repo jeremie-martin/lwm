@@ -89,7 +89,7 @@ private:
     int32_t desktop_origin_x_ = 0;
     int32_t desktop_origin_y_ = 0;
     xcb_window_t active_window_ = XCB_NONE;
-    size_t focused_monitor_ = 0; // Active monitor index (window focus tracked separately).
+    size_t focused_monitor_ = 0;
     xcb_window_t wm_window_ = XCB_NONE;
     xcb_atom_t wm_s0_ = XCB_NONE;
     bool running_ = true;
@@ -112,8 +112,8 @@ private:
     xcb_atom_t net_wm_state_focused_ = XCB_NONE;
     bool suppress_focus_ = false;
     uint32_t last_event_time_ = XCB_CURRENT_TIME;
-    xcb_keysym_t last_toggle_keysym_ = XCB_NO_SYMBOL; // Track toggle key to ignore auto-repeat
-    xcb_timestamp_t last_toggle_release_time_ = 0;    // Timestamp of last KeyRelease for auto-repeat detection
+    xcb_keysym_t last_toggle_keysym_ = XCB_NO_SYMBOL;
+    xcb_timestamp_t last_toggle_release_time_ = 0;
     DragState drag_state_;
     std::vector<MouseBinding> mousebinds_;
 

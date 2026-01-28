@@ -451,8 +451,6 @@ void WindowManager::update_floating_visibility(size_t monitor_idx)
 
         if (should_show)
         {
-            // Mark as visible and configure geometry
-            // With off-screen visibility, window is already mapped - just restore position
             show_window(fw.id);
 
             if (is_client_fullscreen(fw.id))

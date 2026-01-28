@@ -85,8 +85,6 @@ void WindowManager::focus_window(xcb_window_t window)
 
     xcb_change_window_attributes(conn_.get(), window, XCB_CW_BORDER_PIXEL, &config_.appearance.border_color);
     xcb_configure_window(conn_.get(), window, XCB_CONFIG_WINDOW_BORDER_WIDTH, &config_.appearance.border_width);
-    // Use event timestamp for SetInputFocus to ensure proper focus ordering.
-    // Using CurrentTime can cause focus to be ignored or reordered incorrectly.
     xcb_timestamp_t focus_time = last_event_time_ ? last_event_time_ : XCB_CURRENT_TIME;
     send_wm_take_focus(window, last_event_time_);
     if (should_set_input_focus(window))
@@ -98,7 +96,6 @@ void WindowManager::focus_window(xcb_window_t window)
         xcb_set_input_focus(conn_.get(), XCB_INPUT_FOCUS_POINTER_ROOT, conn_.screen()->root, focus_time);
     }
 
-    // Clear urgent hint when window receives focus
     set_client_demands_attention(window, false);
     ewmh_.set_active_window(window);
     if (net_wm_state_focused_ != XCB_NONE)
@@ -115,7 +112,6 @@ void WindowManager::focus_window(xcb_window_t window)
 
     apply_fullscreen_if_needed(window);
     restack_transients(window);
-    // Update stacking order in EWMH after restacking transients
     update_ewmh_client_list();
 
     conn_.flush();
@@ -212,7 +208,6 @@ void WindowManager::focus_floating_window(xcb_window_t window)
     LOG_TRACE("focus_floating_window: updating EWMH current desktop");
     update_ewmh_current_desktop();
 
-    // Keep most-recently-focused floating window at the end.
     if (focus_policy::promote_mru(floating_windows_, window, [](FloatingWindow const& fw) { return fw.id; }))
     {
         floating_window = &floating_windows_.back();
@@ -222,7 +217,6 @@ void WindowManager::focus_floating_window(xcb_window_t window)
     clear_all_borders();
     xcb_change_window_attributes(conn_.get(), window, XCB_CW_BORDER_PIXEL, &config_.appearance.border_color);
     xcb_configure_window(conn_.get(), window, XCB_CONFIG_WINDOW_BORDER_WIDTH, &config_.appearance.border_width);
-    // Use event timestamp for SetInputFocus to ensure proper focus ordering.
     xcb_timestamp_t focus_time = last_event_time_ ? last_event_time_ : XCB_CURRENT_TIME;
     send_wm_take_focus(window, last_event_time_);
     if (should_set_input_focus(window))

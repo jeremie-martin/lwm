@@ -1,7 +1,7 @@
 #pragma once
 
-#include <algorithm>
 #include "lwm/core/types.hpp"
+#include <algorithm>
 #include <functional>
 #include <optional>
 #include <span>
@@ -28,12 +28,8 @@ inline std::optional<std::pair<size_t, size_t>> desktop_to_indices(uint32_t desk
 
 namespace lwm::visibility_policy {
 
-inline bool is_workspace_visible(
-    bool showing_desktop,
-    size_t monitor_idx,
-    size_t workspace_idx,
-    std::span<Monitor const> monitors
-)
+inline bool
+is_workspace_visible(bool showing_desktop, size_t monitor_idx, size_t workspace_idx, std::span<Monitor const> monitors)
 {
     if (showing_desktop)
         return false;
@@ -96,9 +92,7 @@ inline std::optional<FocusSelection> select_focus_candidate(
     std::function<bool(xcb_window_t)> const& is_eligible
 )
 {
-    auto eligible = [&](xcb_window_t window) {
-        return window != XCB_NONE && is_eligible(window);
-    };
+    auto eligible = [&](xcb_window_t window) { return window != XCB_NONE && is_eligible(window); };
 
     if (workspace.focused_window != XCB_NONE
         && workspace.find_window(workspace.focused_window) != workspace.windows.end()
@@ -165,14 +159,12 @@ inline std::vector<FocusCycleCandidate> build_cycle_candidates(
 {
     std::vector<FocusCycleCandidate> candidates;
 
-    // Add eligible tiled windows
     for (xcb_window_t w : tiled_windows)
     {
         if (is_eligible(w))
             candidates.push_back({ w, false });
     }
 
-    // Add eligible floating windows on this monitor/workspace
     for (auto const& fw : floating_windows)
     {
         if (fw.monitor != monitor_idx)
@@ -188,10 +180,8 @@ inline std::vector<FocusCycleCandidate> build_cycle_candidates(
 
 /// Find the next window in focus cycle order.
 /// Returns nullopt if no candidates or cycling not possible.
-inline std::optional<FocusCycleCandidate> cycle_focus_next(
-    std::span<FocusCycleCandidate const> candidates,
-    xcb_window_t current_window
-)
+inline std::optional<FocusCycleCandidate>
+cycle_focus_next(std::span<FocusCycleCandidate const> candidates, xcb_window_t current_window)
 {
     if (candidates.empty())
         return std::nullopt;
@@ -214,10 +204,8 @@ inline std::optional<FocusCycleCandidate> cycle_focus_next(
 
 /// Find the previous window in focus cycle order.
 /// Returns nullopt if no candidates or cycling not possible.
-inline std::optional<FocusCycleCandidate> cycle_focus_prev(
-    std::span<FocusCycleCandidate const> candidates,
-    xcb_window_t current_window
-)
+inline std::optional<FocusCycleCandidate>
+cycle_focus_prev(std::span<FocusCycleCandidate const> candidates, xcb_window_t current_window)
 {
     if (candidates.empty())
         return std::nullopt;

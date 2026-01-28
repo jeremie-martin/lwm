@@ -43,10 +43,7 @@ void Ewmh::init_atoms()
     set_supported_atoms();
 }
 
-void Ewmh::set_extra_supported_atoms(std::vector<xcb_atom_t> atoms)
-{
-    extra_supported_atoms_ = std::move(atoms);
-}
+void Ewmh::set_extra_supported_atoms(std::vector<xcb_atom_t> atoms) { extra_supported_atoms_ = std::move(atoms); }
 
 void Ewmh::create_supporting_window()
 {
@@ -67,7 +64,6 @@ void Ewmh::create_supporting_window()
         nullptr
     );
 
-    // Set _NET_SUPPORTING_WM_CHECK on both root and supporting window
     xcb_ewmh_set_supporting_wm_check(&ewmh_, conn_.screen()->root, supporting_window_);
     xcb_ewmh_set_supporting_wm_check(&ewmh_, supporting_window_, supporting_window_);
 }
@@ -377,44 +373,44 @@ WindowClassification classify_window_type(WindowType type, bool is_transient)
 
     switch (type)
     {
-    case WindowType::Desktop:
-        result.kind = WindowClassification::Kind::Desktop;
-        result.skip_taskbar = true;
-        result.skip_pager = true;
-        return result;
-    case WindowType::Dock:
-        result.kind = WindowClassification::Kind::Dock;
-        result.skip_taskbar = true;
-        result.skip_pager = true;
-        return result;
-    case WindowType::Toolbar:
-    case WindowType::Menu:
-    case WindowType::Splash:
-        result.kind = WindowClassification::Kind::Floating;
-        result.skip_taskbar = true;
-        result.skip_pager = true;
-        return result;
-    case WindowType::Utility:
-        result.kind = WindowClassification::Kind::Floating;
-        result.skip_taskbar = true;
-        result.skip_pager = true;
-        result.above = true;
-        return result;
-    case WindowType::Dialog:
-        result.kind = WindowClassification::Kind::Floating;
-        return result;
-    case WindowType::DropdownMenu:
-    case WindowType::PopupMenu:
-    case WindowType::Tooltip:
-    case WindowType::Notification:
-    case WindowType::Combo:
-    case WindowType::Dnd:
-        result.kind = WindowClassification::Kind::Popup;
-        result.skip_taskbar = true;
-        result.skip_pager = true;
-        return result;
-    case WindowType::Normal:
-        break;
+        case WindowType::Desktop:
+            result.kind = WindowClassification::Kind::Desktop;
+            result.skip_taskbar = true;
+            result.skip_pager = true;
+            return result;
+        case WindowType::Dock:
+            result.kind = WindowClassification::Kind::Dock;
+            result.skip_taskbar = true;
+            result.skip_pager = true;
+            return result;
+        case WindowType::Toolbar:
+        case WindowType::Menu:
+        case WindowType::Splash:
+            result.kind = WindowClassification::Kind::Floating;
+            result.skip_taskbar = true;
+            result.skip_pager = true;
+            return result;
+        case WindowType::Utility:
+            result.kind = WindowClassification::Kind::Floating;
+            result.skip_taskbar = true;
+            result.skip_pager = true;
+            result.above = true;
+            return result;
+        case WindowType::Dialog:
+            result.kind = WindowClassification::Kind::Floating;
+            return result;
+        case WindowType::DropdownMenu:
+        case WindowType::PopupMenu:
+        case WindowType::Tooltip:
+        case WindowType::Notification:
+        case WindowType::Combo:
+        case WindowType::Dnd:
+            result.kind = WindowClassification::Kind::Popup;
+            result.skip_taskbar = true;
+            result.skip_pager = true;
+            return result;
+        case WindowType::Normal:
+            break;
     }
 
     if (is_transient)
@@ -472,7 +468,6 @@ Strut Ewmh::get_window_strut(xcb_window_t window) const
 {
     Strut strut;
 
-    // Try _NET_WM_STRUT_PARTIAL first (more detailed)
     xcb_ewmh_wm_strut_partial_t partial;
     if (xcb_ewmh_get_wm_strut_partial_reply(&ewmh_, xcb_ewmh_get_wm_strut_partial(&ewmh_, window), &partial, nullptr))
     {
@@ -483,7 +478,6 @@ Strut Ewmh::get_window_strut(xcb_window_t window) const
         return strut;
     }
 
-    // Fall back to _NET_WM_STRUT
     xcb_ewmh_get_extents_reply_t extents;
     if (xcb_ewmh_get_wm_strut_reply(&ewmh_, xcb_ewmh_get_wm_strut(&ewmh_, window), &extents, nullptr))
     {

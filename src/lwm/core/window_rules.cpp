@@ -105,16 +105,13 @@ void WindowRules::load_rules(std::vector<WindowRuleConfig> const& configs)
     {
         CompiledWindowRule rule;
 
-        // Compile regex patterns
         rule.class_regex = compile_pattern(cfg.class_pattern);
         rule.instance_regex = compile_pattern(cfg.instance_pattern);
         rule.title_regex = compile_pattern(cfg.title_pattern);
 
-        // Parse window type
         rule.type = parse_window_type(cfg.type);
         rule.transient = cfg.transient;
 
-        // Copy actions
         rule.floating = cfg.floating;
         rule.workspace = cfg.workspace;
         rule.workspace_name = cfg.workspace_name;
@@ -135,9 +132,6 @@ void WindowRules::load_rules(std::vector<WindowRuleConfig> const& configs)
 
 bool WindowRules::matches_rule(CompiledWindowRule const& rule, WindowMatchInfo const& info) const
 {
-    // All specified criteria must match (AND logic)
-
-    // Check class pattern
     if (rule.class_regex.has_value())
     {
         if (!std::regex_search(info.wm_class, *rule.class_regex))
@@ -146,7 +140,6 @@ bool WindowRules::matches_rule(CompiledWindowRule const& rule, WindowMatchInfo c
         }
     }
 
-    // Check instance pattern
     if (rule.instance_regex.has_value())
     {
         if (!std::regex_search(info.wm_class_name, *rule.instance_regex))
@@ -155,7 +148,6 @@ bool WindowRules::matches_rule(CompiledWindowRule const& rule, WindowMatchInfo c
         }
     }
 
-    // Check title pattern
     if (rule.title_regex.has_value())
     {
         if (!std::regex_search(info.title, *rule.title_regex))
@@ -164,7 +156,6 @@ bool WindowRules::matches_rule(CompiledWindowRule const& rule, WindowMatchInfo c
         }
     }
 
-    // Check window type
     if (rule.type.has_value())
     {
         if (info.ewmh_type != *rule.type)
@@ -173,7 +164,6 @@ bool WindowRules::matches_rule(CompiledWindowRule const& rule, WindowMatchInfo c
         }
     }
 
-    // Check transient flag
     if (rule.transient.has_value())
     {
         if (info.is_transient != *rule.transient)
@@ -191,7 +181,6 @@ std::optional<size_t> WindowRules::resolve_monitor(
     std::span<Monitor const> monitors
 )
 {
-    // Index takes priority
     if (index.has_value())
     {
         if (*index >= 0 && static_cast<size_t>(*index) < monitors.size())
@@ -222,7 +211,6 @@ std::optional<size_t> WindowRules::resolve_workspace(
     std::span<std::string const> workspace_names
 )
 {
-    // Index takes priority
     if (index.has_value())
     {
         if (*index >= 0 && static_cast<size_t>(*index) < workspace_names.size())
@@ -265,14 +253,11 @@ WindowRuleResult WindowRules::match(
 
         result.matched = true;
 
-        // Classification override
         result.floating = rule.floating;
 
-        // Resolve target locations
         result.target_monitor = resolve_monitor(rule.monitor, rule.monitor_name, monitors);
         result.target_workspace = resolve_workspace(rule.workspace, rule.workspace_name, workspace_names);
 
-        // State flags
         result.fullscreen = rule.fullscreen;
         result.above = rule.above;
         result.below = rule.below;
@@ -280,7 +265,6 @@ WindowRuleResult WindowRules::match(
         result.skip_taskbar = rule.skip_taskbar;
         result.skip_pager = rule.skip_pager;
 
-        // Geometry (convert RuleGeometry to Geometry if specified)
         if (rule.geometry.has_value())
         {
             Geometry geo;
@@ -293,7 +277,6 @@ WindowRuleResult WindowRules::match(
 
         result.center = rule.center.value_or(false);
 
-        // First match wins - stop here
         break;
     }
 
