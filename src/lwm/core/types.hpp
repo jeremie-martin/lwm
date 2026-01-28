@@ -10,16 +10,8 @@
 
 namespace lwm {
 
-// ─────────────────────────────────────────────────────────────────────────────
-// Constants
-// ─────────────────────────────────────────────────────────────────────────────
-
 /// Off-screen X coordinate for hidden windows (DWM-style visibility management)
 constexpr int16_t OFF_SCREEN_X = -20000;
-
-// ─────────────────────────────────────────────────────────────────────────────
-// Basic geometry types (must be defined before Client)
-// ─────────────────────────────────────────────────────────────────────────────
 
 struct Geometry
 {
@@ -50,10 +42,6 @@ struct FullscreenMonitors
     uint32_t right = 0;
 };
 
-// ─────────────────────────────────────────────────────────────────────────────
-// Unified Client record
-// ─────────────────────────────────────────────────────────────────────────────
-
 /**
  * @brief Unified client record representing any managed window.
  *
@@ -71,7 +59,7 @@ struct FullscreenMonitors
  * State flags managed here:
  * - fullscreen, iconic, sticky, above, below
  * - maximized_horz, maximized_vert, shaded, modal
- * - skip_taskbar, skip_pager
+ * - skip_taskbar
  *
  * Restore geometries:
  * - fullscreen_restore: geometry before entering fullscreen
@@ -101,24 +89,13 @@ struct Client
     };
     Kind kind = Kind::Tiled;
 
-    // ─────────────────────────────────────────────────────────────────────────
-    // Location (meaningful for Tiled/Floating kinds)
-    // ─────────────────────────────────────────────────────────────────────────
     size_t monitor = 0;
     size_t workspace = 0;
 
-    // ─────────────────────────────────────────────────────────────────────────
-    // Identification (from WM_NAME, WM_CLASS)
-    // ─────────────────────────────────────────────────────────────────────────
     std::string name;
     std::string wm_class;
     std::string wm_class_name;
 
-    // ─────────────────────────────────────────────────────────────────────────
-    // Window state flags (replaces scattered unordered_set<xcb_window_t>)
-    //
-    // These flags are kept in sync with _NET_WM_STATE atoms on the window.
-    // ─────────────────────────────────────────────────────────────────────────
     bool hidden = false;            ///< True when window is moved off-screen by WM
     bool fullscreen = false;        ///< _NET_WM_STATE_FULLSCREEN
     bool above = false;             ///< _NET_WM_STATE_ABOVE
@@ -133,34 +110,19 @@ struct Client
     bool skip_pager = false;        ///< _NET_WM_STATE_SKIP_PAGER
     bool demands_attention = false; ///< _NET_WM_STATE_DEMANDS_ATTENTION
 
-    // ─────────────────────────────────────────────────────────────────────────
-    // Floating-specific data (only used when kind == Floating)
-    // ─────────────────────────────────────────────────────────────────────────
     Geometry floating_geometry;
     xcb_window_t transient_for = XCB_NONE;
 
-    // ─────────────────────────────────────────────────────────────────────────
-    // Geometry restore points
-    // ─────────────────────────────────────────────────────────────────────────
     std::optional<Geometry> fullscreen_restore;            ///< Geometry before fullscreen
     std::optional<Geometry> maximize_restore;              ///< Geometry before maximize
     std::optional<FullscreenMonitors> fullscreen_monitors; ///< Multi-monitor fullscreen
 
-    // ─────────────────────────────────────────────────────────────────────────
-    // Sync protocol state (_NET_WM_SYNC_REQUEST)
-    // ─────────────────────────────────────────────────────────────────────────
     uint32_t sync_counter = 0; ///< XSync counter ID (0 if none)
     uint64_t sync_value = 0;   ///< Expected counter value
 
-    // ─────────────────────────────────────────────────────────────────────────
-    // Focus stealing prevention (_NET_WM_USER_TIME)
-    // ─────────────────────────────────────────────────────────────────────────
     uint32_t user_time = 0;                   ///< Last user interaction time
     xcb_window_t user_time_window = XCB_NONE; ///< _NET_WM_USER_TIME_WINDOW
 
-    // ─────────────────────────────────────────────────────────────────────────
-    // Management tracking
-    // ─────────────────────────────────────────────────────────────────────────
     uint64_t order = 0; ///< Mapping order for _NET_CLIENT_LIST
 };
 
@@ -173,10 +135,6 @@ struct Workspace
 
     auto find_window(xcb_window_t id) const { return std::ranges::find(windows, id); }
 };
-
-// ─────────────────────────────────────────────────────────────────────────────
-// Monitor and workspace types
-// ─────────────────────────────────────────────────────────────────────────────
 
 struct Monitor
 {
@@ -226,10 +184,6 @@ struct Monitor
                  static_cast<uint16_t>(area_h) };
     }
 };
-
-// ─────────────────────────────────────────────────────────────────────────────
-// Keybinding types
-// ─────────────────────────────────────────────────────────────────────────────
 
 struct KeyBinding
 {

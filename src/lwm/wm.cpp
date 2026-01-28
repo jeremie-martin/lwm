@@ -74,7 +74,6 @@ WindowManager::WindowManager(Config config)
     net_wm_user_time_ = ewmh_.get()->_NET_WM_USER_TIME;
     net_wm_user_time_window_ = intern_atom("_NET_WM_USER_TIME_WINDOW");
     net_wm_state_focused_ = intern_atom("_NET_WM_STATE_FOCUSED");
-    // Add extra supported atoms not in xcb_ewmh library
     {
         std::vector<xcb_atom_t> extra;
         if (net_wm_user_time_window_ != XCB_NONE)
@@ -460,7 +459,6 @@ void WindowManager::scan_existing_windows()
             }
 
             case WindowClassification::Kind::Popup:
-                // Popup windows (already mapped) are not managed
                 break;
 
             case WindowClassification::Kind::Floating:
@@ -524,7 +522,6 @@ void WindowManager::manage_window(xcb_window_t window, bool start_iconic)
 
     monitors_[target_monitor_idx].workspaces[target_workspace_idx].windows.push_back(window);
 
-    // Populate unified Client registry
     {
         Client client;
         client.id = window;
@@ -584,30 +581,29 @@ void WindowManager::manage_window(xcb_window_t window, bool start_iconic)
         clients_[window] = std::move(client);
     }
 
-    // Read _NET_WM_USER_TIME_WINDOW if present (EWMH focus stealing prevention)
     if (net_wm_user_time_window_ != XCB_NONE)
-    {
-        auto cookie = xcb_get_property(conn_.get(), 0, window, net_wm_user_time_window_, XCB_ATOM_WINDOW, 0, 1);
-        auto* reply = xcb_get_property_reply(conn_.get(), cookie, nullptr);
-        if (reply)
+        if (net_wm_user_time_window_ != XCB_NONE)
         {
-            if (xcb_get_property_value_length(reply) >= 4)
+            auto cookie = xcb_get_property(conn_.get(), 0, window, net_wm_user_time_window_, XCB_ATOM_WINDOW, 0, 1);
+            auto* reply = xcb_get_property_reply(conn_.get(), cookie, nullptr);
+            if (reply)
             {
-                xcb_window_t time_window = *static_cast<xcb_window_t*>(xcb_get_property_value(reply));
-                if (time_window != XCB_NONE)
+                if (xcb_get_property_value_length(reply) >= 4)
                 {
-                    // User time window is authoritative in Client
-                    if (auto* client = get_client(window))
-                        client->user_time_window = time_window;
-                    // Select PropertyNotify on the user time window to track changes
-                    uint32_t mask = XCB_EVENT_MASK_PROPERTY_CHANGE;
-                    xcb_change_window_attributes(conn_.get(), time_window, XCB_CW_EVENT_MASK, &mask);
+                    xcb_window_t time_window = *static_cast<xcb_window_t*>(xcb_get_property_value(reply));
+                    if (time_window != XCB_NONE)
+                    {
+                        // User time window is authoritative in Client
+                        if (auto* client = get_client(window))
+                            client->user_time_window = time_window;
+                        // Select PropertyNotify on the user time window to track changes
+                        uint32_t mask = XCB_EVENT_MASK_PROPERTY_CHANGE;
+                        xcb_change_window_attributes(conn_.get(), time_window, XCB_CW_EVENT_MASK, &mask);
+                    }
                 }
+                free(reply);
             }
-            free(reply);
         }
-    }
-    // User time is authoritative in Client
     if (auto* client = get_client(window))
         client->user_time = get_user_time(window);
 
@@ -629,14 +625,12 @@ void WindowManager::manage_window(xcb_window_t window, bool start_iconic)
 
     if (start_iconic)
     {
-        // client->iconic is already set in the Client initialization above
         ewmh_.set_window_state(window, ewmh_.get()->_NET_WM_STATE_HIDDEN, true);
     }
 
     update_sync_state(window);
     update_fullscreen_monitor_state(window);
 
-    // Set EWMH properties
     ewmh_.set_frame_extents(window, 0, 0, 0, 0); // LWM doesn't add frames
     uint32_t desktop = get_ewmh_desktop_index(target_monitor_idx, target_workspace_idx);
     ewmh_.set_window_desktop(window, desktop);
@@ -673,13 +667,11 @@ void WindowManager::manage_window(xcb_window_t window, bool start_iconic)
         }
         else
         {
-            // Window is on a non-current workspace - hide it (move off-screen)
             hide_window(window);
         }
     }
     else
     {
-        // Iconic windows should be hidden
         hide_window(window);
     }
 
@@ -730,8 +722,6 @@ void WindowManager::manage_window(xcb_window_t window, bool start_iconic)
     {
         set_window_below(window, true);
     }
-
-    // Note: fullscreen is handled BEFORE rearrange_monitor to ensure correct geometry on map
 }
 
 void WindowManager::unmanage_window(xcb_window_t window)
@@ -747,7 +737,6 @@ void WindowManager::unmanage_window(xcb_window_t window)
     pending_kills_.erase(window);
     pending_pings_.erase(window);
 
-    // Remove from unified Client registry (handles all client state including order)
     clients_.erase(window);
 
     for (auto& monitor : monitors_)
@@ -798,7 +787,6 @@ void WindowManager::set_fullscreen(xcb_window_t window, bool enabled)
     {
         if (!client->fullscreen)
         {
-            // Save restore geometry before going fullscreen
             if (auto* floating_window = find_floating_window(window))
             {
                 client->fullscreen_restore = floating_window->geometry;
@@ -887,7 +875,7 @@ void WindowManager::set_window_above(xcb_window_t window, bool enabled)
 {
     auto* client = get_client(window);
     if (!client)
-        return; // Only managed clients can have above state
+        return;
 
     if (enabled)
     {
@@ -914,7 +902,7 @@ void WindowManager::set_window_below(xcb_window_t window, bool enabled)
 {
     auto* client = get_client(window);
     if (!client)
-        return; // Only managed clients can have below state
+        return;
 
     if (enabled)
     {
@@ -941,7 +929,7 @@ void WindowManager::set_window_sticky(xcb_window_t window, bool enabled)
 {
     auto* client = get_client(window);
     if (!client)
-        return; // Only managed clients can be sticky
+        return;
 
     if (enabled)
     {
@@ -974,7 +962,7 @@ void WindowManager::set_window_maximized(xcb_window_t window, bool horiz, bool v
 {
     auto* client = get_client(window);
     if (!client)
-        return; // Only managed clients can be maximized
+        return;
 
     client->maximized_horz = horiz;
     client->maximized_vert = vert;
@@ -1058,7 +1046,7 @@ void WindowManager::set_window_shaded(xcb_window_t window, bool enabled)
 {
     auto* client = get_client(window);
     if (!client)
-        return; // Only managed clients can be shaded
+        return;
 
     if (enabled)
     {
@@ -1090,7 +1078,7 @@ void WindowManager::set_window_modal(xcb_window_t window, bool enabled)
 {
     auto* client = get_client(window);
     if (!client)
-        return; // Only managed clients can be modal
+        return;
 
     client->modal = enabled;
 
@@ -1524,7 +1512,6 @@ void WindowManager::rearrange_monitor(Monitor& monitor)
         // Configure to correct fullscreen geometry
         apply_fullscreen_if_needed(window);
 
-        // Raise to top
         uint32_t stack_mode = XCB_STACK_MODE_ABOVE;
         xcb_configure_window(conn_.get(), window, XCB_CONFIG_WINDOW_STACK_MODE, &stack_mode);
         LOG_DEBUG("rearrange_monitor: raised fullscreen window {:#x} to top", window);
@@ -1583,10 +1570,6 @@ Client const* WindowManager::get_client(xcb_window_t window) const
     auto it = clients_.find(window);
     return it != clients_.end() ? &it->second : nullptr;
 }
-
-// ─────────────────────────────────────────────────────────────────────────────
-// State query helpers - returns false for unmanaged windows
-// ─────────────────────────────────────────────────────────────────────────────
 
 #define DEFINE_CLIENT_STATE_QUERY(method, field)          \
     bool WindowManager::method(xcb_window_t window) const \
@@ -2085,7 +2068,6 @@ uint32_t WindowManager::get_user_time(xcb_window_t window)
     if (net_wm_user_time_ == XCB_NONE)
         return 0;
 
-    // Check if this window has a separate user time window (from Client.user_time_window)
     xcb_window_t time_window = window;
     if (auto const* client = get_client(window))
     {
@@ -2112,39 +2094,33 @@ void WindowManager::update_window_title(xcb_window_t window)
 {
     std::string name = get_window_name(window);
 
-    // Sync Client.name (authoritative)
     if (auto* client = get_client(window))
         client->name = name;
 }
 
 void WindowManager::update_struts()
 {
-    // Reset all monitor struts
     for (auto& monitor : monitors_)
     {
         monitor.strut = {};
     }
 
-    // Query struts from all dock windows and apply to appropriate monitor
     for (xcb_window_t dock : dock_windows_)
     {
         Strut strut = ewmh_.get_window_strut(dock);
         if (strut.left == 0 && strut.right == 0 && strut.top == 0 && strut.bottom == 0)
             continue;
 
-        // Get dock window geometry to determine which monitor it's on
         auto geom_cookie = xcb_get_geometry(conn_.get(), dock);
         auto* geom = xcb_get_geometry_reply(conn_.get(), geom_cookie, nullptr);
         if (!geom)
             continue;
 
-        // Find the monitor containing this dock
         Monitor* target = monitor_at_point(geom->x, geom->y);
         free(geom);
 
         if (target)
         {
-            // Aggregate struts (take maximum for each side)
             target->strut.left = std::max(target->strut.left, strut.left);
             target->strut.right = std::max(target->strut.right, strut.right);
             target->strut.top = std::max(target->strut.top, strut.top);
@@ -2161,7 +2137,7 @@ void WindowManager::unmanage_dock_window(xcb_window_t window)
     if (it != dock_windows_.end())
     {
         dock_windows_.erase(it);
-        clients_.erase(window); // Remove from unified Client registry
+        clients_.erase(window);
         update_struts();
         rearrange_all_monitors();
         update_ewmh_client_list();
@@ -2174,7 +2150,7 @@ void WindowManager::unmanage_desktop_window(xcb_window_t window)
     if (it != desktop_windows_.end())
     {
         desktop_windows_.erase(it);
-        clients_.erase(window); // Remove from unified Client registry
+        clients_.erase(window);
         update_ewmh_client_list();
     }
 }
@@ -2255,7 +2231,6 @@ void WindowManager::show_window(xcb_window_t window)
 
     client->hidden = false;
     LOG_TRACE("show_window({:#x}): marked as visible", window);
-    // Caller must configure actual geometry via rearrange_monitor or apply_floating_geometry
 }
 
 void WindowManager::clear_all_borders()

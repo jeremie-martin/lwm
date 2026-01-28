@@ -159,7 +159,6 @@ void WindowManager::handle_map_request(xcb_map_request_event_t const& e)
     bool has_transient = transient_for_window(e.window).has_value();
     auto classification = ewmh_.classify_window(e.window, has_transient);
 
-    // Match window against user-defined rules
     auto [instance_name, class_name] = get_wm_class(e.window);
     std::string title = get_window_name(e.window);
     WindowMatchInfo match_info{ .wm_class = class_name,
@@ -169,7 +168,7 @@ void WindowManager::handle_map_request(xcb_map_request_event_t const& e)
                                 .is_transient = has_transient };
     auto rule_result = window_rules_.match(match_info, monitors_, config_.workspaces.names);
 
-    // Override classification based on rules (respecting EWMH protocol priorities)
+    // Apply rule overrides respecting EWMH priority
     if (rule_result.matched && classification.kind != WindowClassification::Kind::Dock
         && classification.kind != WindowClassification::Kind::Desktop
         && classification.kind != WindowClassification::Kind::Popup)
@@ -188,7 +187,7 @@ void WindowManager::handle_map_request(xcb_map_request_event_t const& e)
     // Read WM_HINTS for initial_state and urgency (ICCCM)
     bool start_iconic = false;
     bool urgent = false;
-    constexpr uint32_t XUrgencyHint = 256; // (1L << 8)
+    constexpr uint32_t XUrgencyHint = 256; // 1L << 8
     xcb_icccm_wm_hints_t hints;
     if (xcb_icccm_get_wm_hints_reply(conn_.get(), xcb_icccm_get_wm_hints(conn_.get(), e.window), &hints, nullptr))
     {
@@ -269,7 +268,6 @@ void WindowManager::handle_map_request(xcb_map_request_event_t const& e)
         {
             manage_floating_window(e.window, start_iconic);
 
-            // Apply classification flags
             if (classification.skip_taskbar)
                 set_client_skip_taskbar(e.window, true);
             if (classification.skip_pager)
@@ -281,13 +279,11 @@ void WindowManager::handle_map_request(xcb_map_request_event_t const& e)
             if (is_sticky_desktop(e.window) && !is_client_sticky(e.window))
                 set_window_sticky(e.window, true);
 
-            // Apply window rule actions
             if (rule_result.matched)
             {
                 auto* client = get_client(e.window);
                 auto* fw = find_floating_window(e.window);
 
-                // Apply target monitor and workspace
                 if (client && (rule_result.target_monitor.has_value() || rule_result.target_workspace.has_value()))
                 {
                     size_t target_mon = rule_result.target_monitor.value_or(client->monitor);
@@ -301,7 +297,6 @@ void WindowManager::handle_map_request(xcb_map_request_event_t const& e)
                         uint32_t desktop = get_ewmh_desktop_index(target_mon, target_ws);
                         ewmh_.set_window_desktop(e.window, desktop);
 
-                        // Reposition floating window to target monitor
                         if (fw)
                         {
                             fw->geometry = floating::place_floating(
@@ -315,14 +310,12 @@ void WindowManager::handle_map_request(xcb_map_request_event_t const& e)
                     }
                 }
 
-                // Apply geometry from rules
                 if (client && fw && rule_result.geometry.has_value())
                 {
                     fw->geometry = *rule_result.geometry;
                     client->floating_geometry = fw->geometry;
                 }
 
-                // Center on monitor
                 if (client && fw && rule_result.center)
                 {
                     size_t mon = client->monitor;
@@ -335,7 +328,6 @@ void WindowManager::handle_map_request(xcb_map_request_event_t const& e)
                     }
                 }
 
-                // Apply state flags
                 if (rule_result.above.has_value() && *rule_result.above)
                     set_window_above(e.window, true);
                 if (rule_result.below.has_value() && *rule_result.below)
@@ -361,59 +353,51 @@ void WindowManager::handle_map_request(xcb_map_request_event_t const& e)
             if (is_sticky_desktop(e.window) && !is_client_sticky(e.window))
                 set_window_sticky(e.window, true);
 
-            // Apply window rule actions
             if (rule_result.matched)
             {
                 auto* client = get_client(e.window);
 
-                // Apply target monitor and workspace (move tiled window)
                 if (client && (rule_result.target_monitor.has_value() || rule_result.target_workspace.has_value()))
-                {
-                    size_t source_mon = client->monitor;
-                    size_t source_ws = client->workspace;
-                    size_t target_mon = rule_result.target_monitor.value_or(source_mon);
-                    size_t target_ws = rule_result.target_workspace.value_or(source_ws);
-
-                    if (target_mon < monitors_.size())
+                    if (client && (rule_result.target_monitor.has_value() || rule_result.target_workspace.has_value()))
                     {
-                        target_ws = std::min(target_ws, monitors_[target_mon].workspaces.size() - 1);
+                        size_t source_mon = client->monitor;
+                        size_t source_ws = client->workspace;
+                        size_t target_mon = rule_result.target_monitor.value_or(source_mon);
+                        size_t target_ws = rule_result.target_workspace.value_or(source_ws);
 
-                        // Only move if different location
-                        if (target_mon != source_mon || target_ws != source_ws)
+                        if (target_mon < monitors_.size())
                         {
-                            // Remove from source workspace
-                            auto& source_workspace = monitors_[source_mon].workspaces[source_ws];
-                            auto it = source_workspace.find_window(e.window);
-                            if (it != source_workspace.windows.end())
+                            target_ws = std::min(target_ws, monitors_[target_mon].workspaces.size() - 1);
+
+                            if (target_mon != source_mon || target_ws != source_ws)
                             {
-                                source_workspace.windows.erase(it);
-                                if (source_workspace.focused_window == e.window)
-                                    source_workspace.focused_window = XCB_NONE;
+                                auto& source_workspace = monitors_[source_mon].workspaces[source_ws];
+                                auto it = source_workspace.find_window(e.window);
+                                if (it != source_workspace.windows.end())
+                                {
+                                    source_workspace.windows.erase(it);
+                                    if (source_workspace.focused_window == e.window)
+                                        source_workspace.focused_window = XCB_NONE;
+                                }
+
+                                auto& target_workspace = monitors_[target_mon].workspaces[target_ws];
+                                target_workspace.windows.push_back(e.window);
+
+                                client->monitor = target_mon;
+                                client->workspace = target_ws;
+                                uint32_t desktop = get_ewmh_desktop_index(target_mon, target_ws);
+                                ewmh_.set_window_desktop(e.window, desktop);
+
+                                rearrange_monitor(monitors_[source_mon]);
+                                if (target_mon != source_mon)
+                                    rearrange_monitor(monitors_[target_mon]);
+
+                                if (target_ws != monitors_[target_mon].current_workspace)
+                                    hide_window(e.window);
                             }
-
-                            // Add to target workspace
-                            auto& target_workspace = monitors_[target_mon].workspaces[target_ws];
-                            target_workspace.windows.push_back(e.window);
-
-                            // Update client
-                            client->monitor = target_mon;
-                            client->workspace = target_ws;
-                            uint32_t desktop = get_ewmh_desktop_index(target_mon, target_ws);
-                            ewmh_.set_window_desktop(e.window, desktop);
-
-                            // Rearrange affected monitors
-                            rearrange_monitor(monitors_[source_mon]);
-                            if (target_mon != source_mon)
-                                rearrange_monitor(monitors_[target_mon]);
-
-                            // Hide if moved to non-visible workspace
-                            if (target_ws != monitors_[target_mon].current_workspace)
-                                hide_window(e.window);
                         }
                     }
-                }
 
-                // Apply state flags
                 if (rule_result.above.has_value() && *rule_result.above)
                     set_window_above(e.window, true);
                 if (rule_result.below.has_value() && *rule_result.below)
@@ -890,6 +874,7 @@ void WindowManager::handle_client_message(xcb_client_message_event_t const& e)
             }
             else if (net_wm_state_focused_ != XCB_NONE && state == net_wm_state_focused_)
             {
+                // _NET_WM_STATE_FOCUSED is read-only, don't set it
                 return;
             }
             else if (state == ewmh->_NET_WM_STATE_DEMANDS_ATTENTION)
@@ -1043,7 +1028,6 @@ void WindowManager::handle_client_message(xcb_client_message_event_t const& e)
             }
             conn_.flush();
         }
-        // Handle floating windows
         else if (auto* fw = find_floating_window(e.window))
         {
             auto* client = get_client(e.window);
@@ -1093,7 +1077,7 @@ void WindowManager::handle_client_message(xcb_client_message_event_t const& e)
             return; // Only floating windows support this
 
         uint32_t flags = e.data.data32[0];
-        // flags: bits 8-11 = gravity, bit 12 = x, bit 13 = y, bit 14 = width, bit 15 = height
+        // Flags: bits 8-11 indicate which fields are present (8=x, 9=y, 10=width, 11=height)
         bool has_x = flags & (1 << 8);
         bool has_y = flags & (1 << 9);
         bool has_width = flags & (1 << 10);
@@ -1163,7 +1147,6 @@ void WindowManager::handle_client_message(xcb_client_message_event_t const& e)
 
             if (showing_desktop_)
             {
-                // Hide all windows
                 for (auto const& monitor : monitors_)
                 {
                     for (xcb_window_t window : monitor.current().windows)
@@ -1183,7 +1166,6 @@ void WindowManager::handle_client_message(xcb_client_message_event_t const& e)
             }
             else
             {
-                // Show windows again
                 rearrange_all_monitors();
                 update_floating_visibility_all();
                 if (!monitors_.empty())

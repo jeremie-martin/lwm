@@ -53,8 +53,6 @@ private:
         std::string action;
     };
 
-    // Note: FullscreenMonitors moved to types.hpp as part of unified Client refactor
-
     Config config_;
     Connection conn_;
     Ewmh ewmh_;
@@ -67,25 +65,17 @@ private:
     std::vector<xcb_window_t> desktop_windows_;
     std::vector<FloatingWindow> floating_windows_;
 
-    // ─────────────────────────────────────────────────────────────────────────
-    // ─────────────────────────────────────────────────────────────────────────
     // Unified Client registry
-    //
     // This is the authoritative source of truth for all managed window state.
     // All state flags (fullscreen, iconic, sticky, above, below, maximized,
     // shaded, modal) are stored in Client records, not in separate sets.
-    //
     // See types.hpp Client struct for full documentation.
-    // ─────────────────────────────────────────────────────────────────────────
     std::unordered_map<xcb_window_t, Client> clients_;
 
-    // ─────────────────────────────────────────────────────────────────────────
-    // Per-window tracking state (separate from Client model)
-    // ─────────────────────────────────────────────────────────────────────────
     bool showing_desktop_ = false;
     std::unordered_map<xcb_window_t, std::chrono::steady_clock::time_point> pending_kills_;
     std::unordered_map<xcb_window_t, std::chrono::steady_clock::time_point> pending_pings_;
-    uint64_t next_client_order_ = 0; // Counter for Client.order field
+    uint64_t next_client_order_ = 0;
     int32_t desktop_origin_x_ = 0;
     int32_t desktop_origin_y_ = 0;
     xcb_window_t active_window_ = XCB_NONE;
@@ -171,25 +161,19 @@ private:
     void rearrange_monitor(Monitor& monitor);
     void rearrange_all_monitors();
 
-    // Workspace operations (on focused monitor)
     void switch_workspace(int ws);
     void toggle_workspace();
     void move_window_to_workspace(int ws);
 
-    // Monitor operations
     void focus_monitor(int direction); // -1 = left, +1 = right
     void move_window_to_monitor(int direction);
 
     void launch_program(std::string const& path);
 
-    // ─────────────────────────────────────────────────────────────────────────
-    // Client registry helpers
-    // ─────────────────────────────────────────────────────────────────────────
     Client* get_client(xcb_window_t window);
     Client const* get_client(xcb_window_t window) const;
     bool is_managed(xcb_window_t window) const { return clients_.contains(window); }
 
-    // State query helpers (use Client registry)
     bool is_client_fullscreen(xcb_window_t window) const;
     bool is_client_iconic(xcb_window_t window) const;
     bool is_client_sticky(xcb_window_t window) const;
@@ -203,12 +187,10 @@ private:
     bool is_client_skip_pager(xcb_window_t window) const;
     bool is_client_demands_attention(xcb_window_t window) const;
 
-    // State setters (update Client and EWMH)
     void set_client_skip_taskbar(xcb_window_t window, bool enabled);
     void set_client_skip_pager(xcb_window_t window, bool enabled);
     void set_client_demands_attention(xcb_window_t window, bool enabled);
 
-    // Helpers
     Monitor& focused_monitor() { return monitors_[focused_monitor_]; }
     Monitor const& focused_monitor() const { return monitors_[focused_monitor_]; }
     size_t wrap_monitor_index(int idx) const;
@@ -255,7 +237,6 @@ private:
     void update_window_title(xcb_window_t window);
     void update_ewmh_workarea();
 
-    // Dock/strut helpers
     void update_struts();
     void unmanage_dock_window(xcb_window_t window);
     void unmanage_desktop_window(xcb_window_t window);
@@ -264,7 +245,6 @@ private:
     void hide_window(xcb_window_t window);
     void show_window(xcb_window_t window);
 
-    // EWMH helpers
     void setup_ewmh();
     void update_ewmh_desktops();
     void update_ewmh_client_list();
