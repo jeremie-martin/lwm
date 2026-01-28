@@ -1326,7 +1326,7 @@ void WindowManager::deiconify_window(xcb_window_t window, bool focus)
 {
     auto* client = get_client(window);
     if (!client)
-        return; // Only managed clients can be deiconified
+        return;
 
     client->iconic = false;
 
