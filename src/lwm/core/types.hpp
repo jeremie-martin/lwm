@@ -71,7 +71,7 @@ struct FullscreenMonitors
  * State flags managed here:
  * - fullscreen, iconic, sticky, above, below
  * - maximized_horz, maximized_vert, shaded, modal
- * - skip_taskbar, skip_pager (pending migration)
+ * - skip_taskbar, skip_pager
  *
  * Restore geometries:
  * - fullscreen_restore: geometry before entering fullscreen
@@ -89,7 +89,7 @@ struct Client
      *
      * - Tiled: Participates in workspace tiling layout
      * - Floating: Positioned independently, does not affect tiling
-     * - Dock: Panel/bar that reserves screen edges (struts)
+     * - Dock: Panel/bar that reserves screen edges (strut)
      * - Desktop: Background/desktop window (_NET_WM_WINDOW_TYPE_DESKTOP)
      */
     enum class Kind
