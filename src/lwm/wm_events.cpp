@@ -195,7 +195,6 @@ void WindowManager::handle_map_request(xcb_map_request_event_t const& e)
             urgent = true;
         }
     }
-    // Also check _NET_WM_STATE_HIDDEN
     if (ewmh_.has_window_state(e.window, ewmh_.get()->_NET_WM_STATE_HIDDEN))
     {
         start_iconic = true;
