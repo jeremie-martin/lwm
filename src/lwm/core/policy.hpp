@@ -84,6 +84,8 @@ inline bool is_focus_eligible(Client::Kind kind, bool accepts_input_focus, bool 
     return accepts_input_focus || supports_take_focus;
 }
 
+inline bool should_apply_focus_border(bool is_fullscreen) { return !is_fullscreen; }
+
 struct FloatingCandidate
 {
     xcb_window_t id = XCB_NONE;

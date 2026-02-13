@@ -124,3 +124,152 @@ TEST_CASE("Integration: floating window grabs focus and yields on destroy", "[in
 
     destroy_window(conn, tiled);
 }
+
+TEST_CASE(
+    "Integration: fullscreen window keeps zero border width when focus leaves and returns",
+    "[integration][focus][fullscreen]"
+)
+{
+    auto test_env = TestEnvironment::create();
+    if (!test_env)
+        return;
+
+    auto& conn = test_env->conn;
+
+    xcb_atom_t net_wm_state = intern_atom(conn.get(), "_NET_WM_STATE");
+    xcb_atom_t net_wm_state_fullscreen = intern_atom(conn.get(), "_NET_WM_STATE_FULLSCREEN");
+    xcb_atom_t net_active_window = intern_atom(conn.get(), "_NET_ACTIVE_WINDOW");
+    if (net_wm_state == XCB_NONE || net_wm_state_fullscreen == XCB_NONE || net_active_window == XCB_NONE)
+    {
+        WARN("Failed to intern EWMH atoms.");
+        return;
+    }
+
+    xcb_window_t w1 = create_window(conn, 10, 10, 640, 360);
+    map_window(conn, w1);
+    REQUIRE(wait_for_active_window(conn, w1, kTimeout));
+
+    // Add fullscreen state.
+    send_client_message(conn, w1, net_wm_state, 1, net_wm_state_fullscreen, 0, 0, 0);
+
+    auto has_fullscreen_state = [&]()
+    {
+        auto cookie = xcb_get_property(conn.get(), 0, w1, net_wm_state, XCB_ATOM_ATOM, 0, 10);
+        auto* reply = xcb_get_property_reply(conn.get(), cookie, nullptr);
+        if (!reply)
+            return false;
+        bool has_fullscreen = false;
+        auto* atoms = static_cast<xcb_atom_t*>(xcb_get_property_value(reply));
+        int len = xcb_get_property_value_length(reply) / 4;
+        for (int i = 0; i < len; ++i)
+        {
+            if (atoms[i] == net_wm_state_fullscreen)
+            {
+                has_fullscreen = true;
+                break;
+            }
+        }
+        free(reply);
+        return has_fullscreen;
+    };
+
+    auto border_width_is_zero = [&]()
+    {
+        auto cookie = xcb_get_geometry(conn.get(), w1);
+        auto* reply = xcb_get_geometry_reply(conn.get(), cookie, nullptr);
+        if (!reply)
+            return false;
+        bool zero = (reply->border_width == 0);
+        free(reply);
+        return zero;
+    };
+
+    REQUIRE(wait_for_condition(has_fullscreen_state, kTimeout));
+    REQUIRE(wait_for_condition(border_width_is_zero, kTimeout));
+
+    // Move focus away.
+    xcb_window_t w2 = create_window(conn, 60, 60, 320, 180);
+    map_window(conn, w2);
+    REQUIRE(wait_for_active_window(conn, w2, kTimeout));
+
+    // Request focus back to fullscreen window.
+    send_client_message(conn, w1, net_active_window, 2, XCB_CURRENT_TIME, 0, 0, 0);
+    REQUIRE(wait_for_active_window(conn, w1, kTimeout));
+
+    // Fullscreen and zero-border constraints should still hold after focus return.
+    REQUIRE(wait_for_condition(has_fullscreen_state, kTimeout));
+    REQUIRE(wait_for_condition(border_width_is_zero, kTimeout));
+
+    destroy_window(conn, w2);
+    destroy_window(conn, w1);
+}
+
+TEST_CASE("Integration: clear_focus clears _NET_WM_STATE_FOCUSED from previous window", "[integration][focus][ewmh]")
+{
+    auto test_env = TestEnvironment::create();
+    if (!test_env)
+        return;
+
+    auto& conn = test_env->conn;
+
+    xcb_atom_t net_wm_state = intern_atom(conn.get(), "_NET_WM_STATE");
+    xcb_atom_t net_wm_state_focused = intern_atom(conn.get(), "_NET_WM_STATE_FOCUSED");
+    xcb_atom_t net_showing_desktop = intern_atom(conn.get(), "_NET_SHOWING_DESKTOP");
+    xcb_atom_t net_active_window = intern_atom(conn.get(), "_NET_ACTIVE_WINDOW");
+    if (net_wm_state == XCB_NONE || net_wm_state_focused == XCB_NONE || net_showing_desktop == XCB_NONE
+        || net_active_window == XCB_NONE)
+    {
+        WARN("Failed to intern EWMH atoms.");
+        return;
+    }
+
+    auto has_state = [&](xcb_window_t window, xcb_atom_t state)
+    {
+        auto cookie = xcb_get_property(conn.get(), 0, window, net_wm_state, XCB_ATOM_ATOM, 0, 16);
+        auto* reply = xcb_get_property_reply(conn.get(), cookie, nullptr);
+        if (!reply)
+            return false;
+        bool present = false;
+        auto* atoms = static_cast<xcb_atom_t*>(xcb_get_property_value(reply));
+        int len = xcb_get_property_value_length(reply) / 4;
+        for (int i = 0; i < len; ++i)
+        {
+            if (atoms[i] == state)
+            {
+                present = true;
+                break;
+            }
+        }
+        free(reply);
+        return present;
+    };
+
+    xcb_window_t w1 = create_window(conn, 20, 20, 320, 200);
+    map_window(conn, w1);
+    REQUIRE(wait_for_active_window(conn, w1, kTimeout));
+    REQUIRE(wait_for_condition([&]() { return has_state(w1, net_wm_state_focused); }, kTimeout));
+
+    // Trigger clear_focus() via showing desktop mode.
+    send_client_message(conn, conn.root(), net_showing_desktop, 1);
+    REQUIRE(wait_for_condition(
+        [&]()
+        {
+            auto value = get_window_property_window(conn.get(), conn.root(), net_active_window);
+            return value && *value == XCB_NONE;
+        },
+        kTimeout
+    ));
+
+    // Exit showing desktop and focus another window.
+    send_client_message(conn, conn.root(), net_showing_desktop, 0);
+
+    xcb_window_t w2 = create_window(conn, 80, 80, 320, 200);
+    map_window(conn, w2);
+    REQUIRE(wait_for_active_window(conn, w2, kTimeout));
+
+    REQUIRE(wait_for_condition([&]() { return !has_state(w1, net_wm_state_focused); }, kTimeout));
+    REQUIRE(wait_for_condition([&]() { return has_state(w2, net_wm_state_focused); }, kTimeout));
+
+    destroy_window(conn, w2);
+    destroy_window(conn, w1);
+}

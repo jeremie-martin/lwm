@@ -73,6 +73,7 @@ This mapping is intentionally per-monitor; some pagers may assume global desktop
 ### 2.1 Global Focus Invariant
 - At most one window is focused globally at any time (or none).
 - Focus is only assigned to **visible, focus-eligible** windows (as constrained by COMPLIANCE.md).
+- Focusing a fullscreen window must not reapply fullscreen geometry or reintroduce a border; fullscreen windows keep zero border width across focus handoffs.
 
 ### 2.2 Focus-Follows-Mouse (FFM)
 - Focus-eligible windows gain focus when the pointer enters them.

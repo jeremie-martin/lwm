@@ -81,8 +81,17 @@ void WindowManager::focus_window(xcb_window_t window)
 
     clear_all_borders();
 
-    xcb_change_window_attributes(conn_.get(), window, XCB_CW_BORDER_PIXEL, &config_.appearance.border_color);
-    xcb_configure_window(conn_.get(), window, XCB_CONFIG_WINDOW_BORDER_WIDTH, &config_.appearance.border_width);
+    bool is_fullscreen = is_client_fullscreen(window);
+    if (focus_policy::should_apply_focus_border(is_fullscreen))
+    {
+        xcb_change_window_attributes(conn_.get(), window, XCB_CW_BORDER_PIXEL, &config_.appearance.border_color);
+        xcb_configure_window(conn_.get(), window, XCB_CONFIG_WINDOW_BORDER_WIDTH, &config_.appearance.border_width);
+        LOG_TRACE("focus_window: applied focus border visuals");
+    }
+    else
+    {
+        LOG_TRACE("focus_window: skipped focus border visuals (fullscreen)");
+    }
     xcb_timestamp_t focus_time = last_event_time_ ? last_event_time_ : XCB_CURRENT_TIME;
     send_wm_take_focus(window, last_event_time_);
     if (should_set_input_focus(window))
@@ -211,8 +220,17 @@ void WindowManager::focus_floating_window(xcb_window_t window)
 
     active_window_ = window;
     clear_all_borders();
-    xcb_change_window_attributes(conn_.get(), window, XCB_CW_BORDER_PIXEL, &config_.appearance.border_color);
-    xcb_configure_window(conn_.get(), window, XCB_CONFIG_WINDOW_BORDER_WIDTH, &config_.appearance.border_width);
+    bool is_fullscreen = is_client_fullscreen(window);
+    if (focus_policy::should_apply_focus_border(is_fullscreen))
+    {
+        xcb_change_window_attributes(conn_.get(), window, XCB_CW_BORDER_PIXEL, &config_.appearance.border_color);
+        xcb_configure_window(conn_.get(), window, XCB_CONFIG_WINDOW_BORDER_WIDTH, &config_.appearance.border_width);
+        LOG_TRACE("focus_floating_window: applied focus border visuals");
+    }
+    else
+    {
+        LOG_TRACE("focus_floating_window: skipped focus border visuals (fullscreen)");
+    }
     xcb_timestamp_t focus_time = last_event_time_ ? last_event_time_ : XCB_CURRENT_TIME;
     send_wm_take_focus(window, last_event_time_);
     if (should_set_input_focus(window))
@@ -249,9 +267,16 @@ void WindowManager::focus_floating_window(xcb_window_t window)
 
 void WindowManager::clear_focus()
 {
+    xcb_window_t previous_active = active_window_;
     active_window_ = XCB_NONE;
     ewmh_.set_active_window(XCB_NONE);
     xcb_set_input_focus(conn_.get(), XCB_INPUT_FOCUS_POINTER_ROOT, conn_.screen()->root, XCB_CURRENT_TIME);
+
+    // Keep _NET_WM_STATE_FOCUSED in sync when focus is explicitly cleared.
+    if (net_wm_state_focused_ != XCB_NONE && previous_active != XCB_NONE)
+    {
+        ewmh_.set_window_state(previous_active, net_wm_state_focused_, false);
+    }
 
     clear_all_borders();
 

@@ -323,3 +323,107 @@ TEST_CASE(
 
     destroy_window(conn, w1);
 }
+
+TEST_CASE(
+    "Integration: _NET_ACTIVE_WINDOW honors _NET_WM_USER_TIME_WINDOW updates",
+    "[integration][client_message][focus][user_time]"
+)
+{
+    auto test_env = TestEnvironment::create();
+    if (!test_env)
+        return;
+
+    auto& conn = test_env->conn;
+
+    xcb_atom_t net_active_window = intern_atom(conn.get(), "_NET_ACTIVE_WINDOW");
+    xcb_atom_t net_wm_user_time = intern_atom(conn.get(), "_NET_WM_USER_TIME");
+    xcb_atom_t net_wm_user_time_window = intern_atom(conn.get(), "_NET_WM_USER_TIME_WINDOW");
+    xcb_atom_t net_wm_state = intern_atom(conn.get(), "_NET_WM_STATE");
+    xcb_atom_t net_wm_state_demands_attention = intern_atom(conn.get(), "_NET_WM_STATE_DEMANDS_ATTENTION");
+    if (net_active_window == XCB_NONE || net_wm_user_time == XCB_NONE || net_wm_user_time_window == XCB_NONE
+        || net_wm_state == XCB_NONE || net_wm_state_demands_attention == XCB_NONE)
+    {
+        WARN("Failed to intern EWMH atoms.");
+        return;
+    }
+
+    auto has_state = [&](xcb_window_t window, xcb_atom_t state)
+    {
+        auto cookie = xcb_get_property(conn.get(), 0, window, net_wm_state, XCB_ATOM_ATOM, 0, 16);
+        auto* reply = xcb_get_property_reply(conn.get(), cookie, nullptr);
+        if (!reply)
+            return false;
+        bool present = false;
+        auto* atoms = static_cast<xcb_atom_t*>(xcb_get_property_value(reply));
+        int len = xcb_get_property_value_length(reply) / 4;
+        for (int i = 0; i < len; ++i)
+        {
+            if (atoms[i] == state)
+            {
+                present = true;
+                break;
+            }
+        }
+        free(reply);
+        return present;
+    };
+
+    xcb_window_t w1 = create_window(conn, 10, 10, 220, 160);
+    map_window(conn, w1);
+    REQUIRE(wait_for_active_window(conn, w1, kTimeout));
+
+    // Unmapped helper window for _NET_WM_USER_TIME updates.
+    xcb_window_t user_time_window = create_window(conn, -1000, -1000, 1, 1);
+
+    xcb_window_t w2 = create_window(conn, 60, 60, 220, 160);
+    xcb_change_property(
+        conn.get(),
+        XCB_PROP_MODE_REPLACE,
+        w2,
+        net_wm_user_time_window,
+        XCB_ATOM_WINDOW,
+        32,
+        1,
+        &user_time_window
+    );
+    uint32_t initial_user_time = 100;
+    xcb_change_property(
+        conn.get(),
+        XCB_PROP_MODE_REPLACE,
+        user_time_window,
+        net_wm_user_time,
+        XCB_ATOM_CARDINAL,
+        32,
+        1,
+        &initial_user_time
+    );
+    xcb_flush(conn.get());
+
+    map_window(conn, w2);
+    REQUIRE(wait_for_active_window(conn, w2, kTimeout));
+
+    // Update user time after manage; WM should consume PropertyNotify from user_time_window.
+    uint32_t updated_user_time = 2000;
+    xcb_change_property(
+        conn.get(),
+        XCB_PROP_MODE_REPLACE,
+        user_time_window,
+        net_wm_user_time,
+        XCB_ATOM_CARDINAL,
+        32,
+        1,
+        &updated_user_time
+    );
+    xcb_flush(conn.get());
+    std::this_thread::sleep_for(std::chrono::milliseconds(100));
+
+    // Application request with stale timestamp should be denied.
+    send_client_message(conn, w1, net_active_window, 1, 1500, 0, 0, 0);
+
+    REQUIRE(wait_for_active_window(conn, w2, kTimeout));
+    REQUIRE(wait_for_condition([&]() { return has_state(w1, net_wm_state_demands_attention); }, kTimeout));
+
+    destroy_window(conn, w2);
+    destroy_window(conn, w1);
+    destroy_window(conn, user_time_window);
+}

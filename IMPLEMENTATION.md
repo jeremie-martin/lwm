@@ -496,23 +496,29 @@ The following conditions can prevent focus even for focus-eligible windows:
 
 ### Focus Assignment Functions
 
-**focus_window(window)** (src/lwm/wm_focus.cpp:9-110) - Tiled windows:
+**focus_window(window)** (src/lwm/wm_focus.cpp:9-125) - Tiled windows:
 1. Check not showing_desktop
 2. If iconic: deiconify first (clears iconic flag)
 3. Check is_focus_eligible
 4. Call focus_window_state() - may switch workspace
-5. Clear all borders, set active border color on focused window
-6. Send WM_TAKE_FOCUS if supported
-7. Set X input focus
-8. Update _NET_ACTIVE_WINDOW
-9. Apply fullscreen geometry, restack transients
-10. Update _NET_CLIENT_LIST
+5. Clear all borders
+6. Apply focused border visuals only when target window is not fullscreen
+7. Send WM_TAKE_FOCUS if supported
+8. Set X input focus
+9. Update _NET_ACTIVE_WINDOW
+10. Restack transients
+11. Update _NET_CLIENT_LIST
 
 **focus_floating_window(window)** - Floating windows:
 1. Same checks as tiled (including NOT hidden)
 2. Promote to end of floating_windows_ (MRU ordering)
 3. Stack above (XCB_STACK_MODE_ABOVE)
 4. Switch workspace if needed
+5. Apply focused border visuals only when target window is not fullscreen
+
+**Fullscreen focus invariant**:
+- Focus transitions do not reapply fullscreen geometry (`fullscreen_policy::ApplyContext::FocusTransition` is excluded).
+- Fullscreen windows keep zero border width when focus leaves and returns.
 
 **focus_or_fallback(monitor)** - Smart focus selection:
 1. Build candidates (order of preference):

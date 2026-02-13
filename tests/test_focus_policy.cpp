@@ -140,6 +140,12 @@ TEST_CASE("Fullscreen reapply policy excludes focus-only transitions", "[fullscr
     REQUIRE(fullscreen_policy::should_reapply(ApplyContext::ConfigureTransition));
 }
 
+TEST_CASE("Focus border policy skips fullscreen windows", "[focus][policy]")
+{
+    REQUIRE(focus_policy::should_apply_focus_border(false));
+    REQUIRE_FALSE(focus_policy::should_apply_focus_border(true));
+}
+
 // ─────────────────────────────────────────────────────────────────────────────
 // focus_window_state tests
 // ─────────────────────────────────────────────────────────────────────────────

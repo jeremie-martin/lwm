@@ -1287,7 +1287,7 @@ void WindowManager::handle_property_notify(xcb_property_notify_event_t const& e)
     xcb_window_t client_window = e.window;
     for (auto& [id, client] : clients_)
     {
-        if (client.user_time_window == id)
+        if (client.user_time_window == e.window)
         {
             client.user_time = get_user_time(id);
         }

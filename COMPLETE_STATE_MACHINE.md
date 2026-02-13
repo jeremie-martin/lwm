@@ -947,15 +947,16 @@ This is the formal definition of focus eligibility. Additional barriers can prev
 2. If iconic: deiconify first (clears iconic flag)
 3. Check is_focus_eligible
 4. Call focus_window_state() - may switch workspace
-4. Clear all borders (set all windows to black pixel), set active border color on focused window
-5. Send WM_TAKE_FOCUS if supported
-6. Set X input focus
-7. Update _NET_ACTIVE_WINDOW
-8. Apply fullscreen geometry, restack transients
-     - Restacks all visible, non-iconic transient windows (where client.transient_for == parent)
-     - Skips hidden, iconic, or transients on other workspaces
-     - Also occurs when showing floating windows via update_floating_visibility()
-9. Update _NET_CLIENT_LIST (and _NET_CLIENT_LIST_STACKING via restack_transients)
+5. Clear all borders (set all windows to black pixel)
+6. Apply focused border visuals only when target window is not fullscreen
+7. Send WM_TAKE_FOCUS if supported
+8. Set X input focus
+9. Update _NET_ACTIVE_WINDOW
+10. Restack transients
+      - Restacks all visible, non-iconic transient windows (where client.transient_for == parent)
+      - Skips hidden, iconic, or transients on other workspaces
+      - Also occurs when showing floating windows via update_floating_visibility()
+11. Update _NET_CLIENT_LIST (and _NET_CLIENT_LIST_STACKING via restack_transients)
 
 **restack_transients()** - Restacks modal/transient windows above parent:
 - Identifies transients via client.transient_for field
@@ -971,6 +972,7 @@ This is the formal definition of focus eligibility. Additional barriers can prev
 2. Promote to end of floating_windows_ (MRU ordering)
 3. Stack above (XCB_STACK_MODE_ABOVE)
 4. Switch workspace if needed
+5. Apply focused border visuals only when target window is not fullscreen
 
 **focus_or_fallback(monitor)** - Smart focus selection
 1. Build candidates (order of preference):
@@ -1103,7 +1105,10 @@ If workspace_changed:
     ├─ Rearrange monitor
     └─ Update floating visibility
     ↓
-Clear all borders, set active border color
+Clear all borders
+    ↓
+If focused window is not fullscreen:
+    └─ Apply focused border visuals
     ↓
 Send WM_TAKE_FOCUS (if supported)
     ↓
@@ -1117,12 +1122,7 @@ Set _NET_WM_STATE_FOCUSED
     ↓
 Update client.user_time
     ↓
-Apply fullscreen geometry if needed (calls apply_fullscreen_if_needed()):
-  ├─ Verifies window is fullscreen AND not iconic AND on current workspace
-  ├─ Sends sync request
-  ├─ Configures window to fullscreen geometry
-  ├─ Sends synthetic ConfigureNotify
-  └─ Restacks window above all
+Focus transition does NOT reapply fullscreen geometry
     ↓
 Restack transients above parent (visible, non-iconic transients only):
   └─ Skips hidden, iconic, or transients on other workspaces
