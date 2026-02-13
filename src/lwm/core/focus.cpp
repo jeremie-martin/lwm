@@ -28,9 +28,8 @@ PointerFocusResult pointer_move(std::span<Monitor const> monitors, size_t active
     if (*new_monitor == active_monitor)
         return result;
 
-    result.active_monitor_changed = true;
+    result.transition = PointerTransition::MonitorChangedClearFocus;
     result.new_monitor = *new_monitor;
-    result.clear_focus = true;
     LOG_TRACE("pointer_move: monitor changed from {} to {}", active_monitor, *new_monitor);
     return result;
 }

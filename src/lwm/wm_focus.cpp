@@ -108,7 +108,6 @@ void WindowManager::focus_window(xcb_window_t window)
     if (auto* client = get_client(window))
         client->user_time = last_event_time_;
 
-    apply_fullscreen_if_needed(window);
     restack_transients(window);
     update_ewmh_client_list();
 
@@ -242,7 +241,6 @@ void WindowManager::focus_floating_window(xcb_window_t window)
     if (auto* client = get_client(window))
         client->user_time = last_event_time_;
 
-    apply_fullscreen_if_needed(window);
     restack_transients(window);
 
     update_ewmh_client_list();

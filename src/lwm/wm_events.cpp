@@ -1178,7 +1178,7 @@ void WindowManager::handle_configure_request(xcb_configure_request_event_t const
 
     if (is_client_fullscreen(e.window))
     {
-        apply_fullscreen_if_needed(e.window);
+        apply_fullscreen_if_needed(e.window, fullscreen_policy::ApplyContext::ConfigureTransition);
         send_configure_notify(e.window);
         return;
     }

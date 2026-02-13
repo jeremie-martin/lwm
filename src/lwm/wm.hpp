@@ -4,6 +4,7 @@
 #include "lwm/core/connection.hpp"
 #include "lwm/core/ewmh.hpp"
 #include "lwm/core/invariants.hpp"
+#include "lwm/core/policy.hpp"
 #include "lwm/core/types.hpp"
 #include "lwm/core/window_rules.hpp"
 #include "lwm/keybind/keybind.hpp"
@@ -150,7 +151,10 @@ private:
     void apply_maximized_geometry(xcb_window_t window);
     void set_window_shaded(xcb_window_t window, bool enabled);
     void set_window_modal(xcb_window_t window, bool enabled);
-    void apply_fullscreen_if_needed(xcb_window_t window);
+    void apply_fullscreen_if_needed(
+        xcb_window_t window,
+        fullscreen_policy::ApplyContext context = fullscreen_policy::ApplyContext::StateTransition
+    );
     void set_fullscreen_monitors(xcb_window_t window, FullscreenMonitors const& monitors);
     Geometry fullscreen_geometry_for_window(xcb_window_t window) const;
     void iconify_window(xcb_window_t window);

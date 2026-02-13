@@ -7,11 +7,19 @@
 
 namespace lwm::focus {
 
+enum class PointerTransition
+{
+    None,
+    MonitorChangedClearFocus,
+};
+
 struct PointerFocusResult
 {
-    bool active_monitor_changed = false;
+    PointerTransition transition = PointerTransition::None;
     size_t new_monitor = 0;
-    bool clear_focus = false;
+
+    bool monitor_changed() const { return transition != PointerTransition::None; }
+    bool clears_focus() const { return transition == PointerTransition::MonitorChangedClearFocus; }
 };
 
 std::optional<size_t> monitor_index_at_point(std::span<Monitor const> monitors, int16_t x, int16_t y);

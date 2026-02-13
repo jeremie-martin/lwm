@@ -493,8 +493,8 @@ handle_randr_screen_change()
 **Monitor Switching via Pointer** (update_focused_monitor_at_point):
 - Updates focused_monitor_ to monitor containing pointer point
 - Called on: EnterNotify on root window, MotionNotify crossing monitor boundary, ButtonPress on any window
-- Does NOT clear focus when entering root window
-- Enables seamless monitor crossing without focus disruption
+- Clears focus when pointer crosses to a different monitor via root/empty-space traversal
+- Preserves strict no-focus semantics for cross-monitor empty-space behavior
 
 ### Move Window to Monitor
 

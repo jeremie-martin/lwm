@@ -817,7 +817,7 @@ void WindowManager::set_fullscreen(xcb_window_t window, bool enabled)
         }
 
         ewmh_.set_window_state(window, ewmh_.get()->_NET_WM_STATE_FULLSCREEN, true);
-        apply_fullscreen_if_needed(window);
+        apply_fullscreen_if_needed(window, fullscreen_policy::ApplyContext::StateTransition);
     }
     else
     {
@@ -1096,9 +1096,15 @@ void WindowManager::set_client_demands_attention(xcb_window_t window, bool enabl
     ewmh_.set_demands_attention(window, enabled);
 }
 
-void WindowManager::apply_fullscreen_if_needed(xcb_window_t window)
+void WindowManager::apply_fullscreen_if_needed(xcb_window_t window, fullscreen_policy::ApplyContext context)
 {
-    LOG_DEBUG("apply_fullscreen_if_needed({:#x}) called", window);
+    LOG_DEBUG("apply_fullscreen_if_needed({:#x}) called with context={}", window, static_cast<int>(context));
+
+    if (!fullscreen_policy::should_reapply(context))
+    {
+        LOG_TRACE("apply_fullscreen_if_needed({:#x}): skipped by context policy", window);
+        return;
+    }
 
     if (!is_client_fullscreen(window))
     {
@@ -1185,7 +1191,7 @@ void WindowManager::set_fullscreen_monitors(xcb_window_t window, FullscreenMonit
 
     if (is_client_fullscreen(window))
     {
-        apply_fullscreen_if_needed(window);
+        apply_fullscreen_if_needed(window, fullscreen_policy::ApplyContext::StateTransition);
         conn_.flush();
     }
 }
@@ -1325,7 +1331,7 @@ void WindowManager::deiconify_window(xcb_window_t window, bool focus)
         }
     }
 
-    apply_fullscreen_if_needed(window);
+    apply_fullscreen_if_needed(window, fullscreen_policy::ApplyContext::VisibilityTransition);
     conn_.flush();
 }
 
@@ -1478,7 +1484,7 @@ void WindowManager::rearrange_monitor(Monitor& monitor)
 
         show_window(window);
 
-        apply_fullscreen_if_needed(window);
+        apply_fullscreen_if_needed(window, fullscreen_policy::ApplyContext::LayoutTransition);
 
         uint32_t stack_mode = XCB_STACK_MODE_ABOVE;
         xcb_configure_window(conn_.get(), window, XCB_CONFIG_WINDOW_STACK_MODE, &stack_mode);
@@ -1955,13 +1961,13 @@ Monitor* WindowManager::monitor_at_point(int16_t x, int16_t y)
 void WindowManager::update_focused_monitor_at_point(int16_t x, int16_t y)
 {
     auto result = focus::pointer_move(monitors_, focused_monitor_, x, y);
-    if (!result.active_monitor_changed)
+    if (!result.monitor_changed())
         return;
 
     // We crossed monitors - update active monitor and clear focus
     focused_monitor_ = result.new_monitor;
     update_ewmh_current_desktop();
-    if (result.clear_focus)
+    if (result.clears_focus())
         clear_focus();
 
     conn_.flush();

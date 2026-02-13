@@ -1,4 +1,5 @@
 #include "lwm/core/focus.hpp"
+#include "lwm/core/policy.hpp"
 #include <catch2/catch_test_macros.hpp>
 
 using namespace lwm;
@@ -91,36 +92,52 @@ TEST_CASE("Pointer movement handles monitor transitions, boundaries, and edge ca
     SECTION("Keeps focus on same monitor and handles out-of-bounds")
     {
         auto same_monitor = focus::pointer_move(monitors, 0, 100, 100);
-        REQUIRE_FALSE(same_monitor.active_monitor_changed);
-        REQUIRE_FALSE(same_monitor.clear_focus);
+        REQUIRE_FALSE(same_monitor.monitor_changed());
+        REQUIRE_FALSE(same_monitor.clears_focus());
+        REQUIRE(same_monitor.transition == focus::PointerTransition::None);
 
         auto out_of_bounds = focus::pointer_move(monitors, 0, 10000, 10000);
-        REQUIRE_FALSE(out_of_bounds.active_monitor_changed);
-        REQUIRE_FALSE(out_of_bounds.clear_focus);
+        REQUIRE_FALSE(out_of_bounds.monitor_changed());
+        REQUIRE_FALSE(out_of_bounds.clears_focus());
+        REQUIRE(out_of_bounds.transition == focus::PointerTransition::None);
     }
 
     SECTION("Moves to another monitor clears focus")
     {
         auto to_second = focus::pointer_move(monitors, 0, 2000, 200);
-        REQUIRE(to_second.active_monitor_changed);
+        REQUIRE(to_second.monitor_changed());
+        REQUIRE(to_second.transition == focus::PointerTransition::MonitorChangedClearFocus);
         REQUIRE(to_second.new_monitor == 1);
-        REQUIRE(to_second.clear_focus);
+        REQUIRE(to_second.clears_focus());
 
         auto to_first = focus::pointer_move(monitors, 1, 500, 500);
-        REQUIRE(to_first.active_monitor_changed);
+        REQUIRE(to_first.monitor_changed());
+        REQUIRE(to_first.transition == focus::PointerTransition::MonitorChangedClearFocus);
         REQUIRE(to_first.new_monitor == 0);
-        REQUIRE(to_first.clear_focus);
+        REQUIRE(to_first.clears_focus());
     }
 
     SECTION("Handles monitor edge boundary (1919 vs 1920)")
     {
         auto left_edge = focus::pointer_move(monitors, 0, 1919, 500);
-        REQUIRE_FALSE(left_edge.active_monitor_changed);
+        REQUIRE_FALSE(left_edge.monitor_changed());
 
         auto right_edge = focus::pointer_move(monitors, 0, 1920, 500);
-        REQUIRE(right_edge.active_monitor_changed);
+        REQUIRE(right_edge.monitor_changed());
+        REQUIRE(right_edge.transition == focus::PointerTransition::MonitorChangedClearFocus);
         REQUIRE(right_edge.new_monitor == 1);
     }
+}
+
+TEST_CASE("Fullscreen reapply policy excludes focus-only transitions", "[fullscreen][policy]")
+{
+    using fullscreen_policy::ApplyContext;
+
+    REQUIRE_FALSE(fullscreen_policy::should_reapply(ApplyContext::FocusTransition));
+    REQUIRE(fullscreen_policy::should_reapply(ApplyContext::StateTransition));
+    REQUIRE(fullscreen_policy::should_reapply(ApplyContext::VisibilityTransition));
+    REQUIRE(fullscreen_policy::should_reapply(ApplyContext::LayoutTransition));
+    REQUIRE(fullscreen_policy::should_reapply(ApplyContext::ConfigureTransition));
 }
 
 // ─────────────────────────────────────────────────────────────────────────────

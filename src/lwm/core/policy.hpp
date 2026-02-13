@@ -60,6 +60,21 @@ inline bool is_window_visible(
 
 } // namespace lwm::visibility_policy
 
+namespace lwm::fullscreen_policy {
+
+enum class ApplyContext
+{
+    StateTransition,
+    VisibilityTransition,
+    LayoutTransition,
+    ConfigureTransition,
+    FocusTransition,
+};
+
+inline bool should_reapply(ApplyContext context) { return context != ApplyContext::FocusTransition; }
+
+} // namespace lwm::fullscreen_policy
+
 namespace lwm::focus_policy {
 
 inline bool is_focus_eligible(Client::Kind kind, bool accepts_input_focus, bool supports_take_focus)
