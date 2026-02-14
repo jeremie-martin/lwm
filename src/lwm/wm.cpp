@@ -21,7 +21,6 @@ namespace {
 constexpr uint32_t WM_STATE_WITHDRAWN = 0;
 constexpr uint32_t WM_STATE_NORMAL = 1;
 constexpr uint32_t WM_STATE_ICONIC = 3;
-constexpr auto PING_TIMEOUT = std::chrono::seconds(5);
 constexpr auto KILL_TIMEOUT = std::chrono::seconds(5);
 // Sync wait timeout is intentionally short to minimize blocking during layout.
 // A fully non-blocking async implementation would be ideal but requires significant
@@ -104,11 +103,6 @@ void WindowManager::run()
         std::optional<std::chrono::steady_clock::time_point> next_deadline;
 
         for (auto const& [window, deadline] : pending_kills_)
-        {
-            if (!next_deadline || deadline < *next_deadline)
-                next_deadline = deadline;
-        }
-        for (auto const& [window, deadline] : pending_pings_)
         {
             if (!next_deadline || deadline < *next_deadline)
                 next_deadline = deadline;
@@ -519,20 +513,15 @@ void WindowManager::parse_initial_ewmh_state(Client& client)
         for (uint32_t i = 0; i < initial_state.atoms_len; ++i)
         {
             xcb_atom_t state = initial_state.atoms[i];
-            if (state == ewmh->_NET_WM_STATE_FULLSCREEN)
-                client.fullscreen = true;
-            else if (state == ewmh->_NET_WM_STATE_ABOVE)
+            // Geometry-affecting states (fullscreen, maximized, shaded, iconic) are NOT set here.
+            // They are applied through proper transition functions in the manage paths,
+            // which correctly save restore geometry before setting the flag.
+            if (state == ewmh->_NET_WM_STATE_ABOVE)
                 client.above = true;
             else if (state == ewmh->_NET_WM_STATE_BELOW)
                 client.below = true;
             else if (state == ewmh->_NET_WM_STATE_STICKY)
                 client.sticky = true;
-            else if (state == ewmh->_NET_WM_STATE_MAXIMIZED_HORZ)
-                client.maximized_horz = true;
-            else if (state == ewmh->_NET_WM_STATE_MAXIMIZED_VERT)
-                client.maximized_vert = true;
-            else if (state == ewmh->_NET_WM_STATE_SHADED)
-                client.shaded = true;
             else if (state == ewmh->_NET_WM_STATE_MODAL)
                 client.modal = true;
             else if (state == ewmh->_NET_WM_STATE_SKIP_TASKBAR)
@@ -541,8 +530,6 @@ void WindowManager::parse_initial_ewmh_state(Client& client)
                 client.skip_pager = true;
             else if (state == ewmh->_NET_WM_STATE_DEMANDS_ATTENTION)
                 client.demands_attention = true;
-            else if (state == ewmh->_NET_WM_STATE_HIDDEN)
-                client.iconic = true;
         }
         xcb_ewmh_get_atoms_reply_wipe(&initial_state);
     }
@@ -629,8 +616,6 @@ void WindowManager::manage_window(xcb_window_t window, bool start_iconic)
     size_t target_monitor_idx = target ? target->first : focused_monitor_;
     size_t target_workspace_idx = target ? target->second : monitors_[target_monitor_idx].current_workspace;
 
-    monitors_[target_monitor_idx].workspaces[target_workspace_idx].windows.push_back(window);
-
     {
         Client client;
         client.id = window;
@@ -647,6 +632,8 @@ void WindowManager::manage_window(xcb_window_t window, bool start_iconic)
 
         clients_[window] = std::move(client);
     }
+
+    monitors_[target_monitor_idx].workspaces[target_workspace_idx].windows.push_back(window);
 
     init_user_time(window);
 
@@ -745,7 +732,6 @@ void WindowManager::unmanage_window(xcb_window_t window)
 
     // Tracking state that remains outside Client
     pending_kills_.erase(window);
-    pending_pings_.erase(window);
 
     auto is_iconic = [this](xcb_window_t w) { return is_client_iconic(w); };
 
@@ -852,7 +838,8 @@ void WindowManager::set_fullscreen(xcb_window_t window, bool enabled)
             if (client->fullscreen_restore)
             {
                 client->floating_geometry = *client->fullscreen_restore;
-                if (client->workspace == monitors_[client->monitor].current_workspace && !client->iconic)
+                if ((client->sticky || client->workspace == monitors_[client->monitor].current_workspace)
+                    && !client->iconic)
                 {
                     apply_floating_geometry(window);
                 }
@@ -860,7 +847,7 @@ void WindowManager::set_fullscreen(xcb_window_t window, bool enabled)
         }
         else if (client->monitor < monitors_.size())
         {
-            if (client->workspace == monitors_[client->monitor].current_workspace)
+            if (client->sticky || client->workspace == monitors_[client->monitor].current_workspace)
             {
                 rearrange_monitor(monitors_[client->monitor]);
             }
@@ -948,13 +935,11 @@ void WindowManager::set_window_sticky(xcb_window_t window, bool enabled)
         ewmh_.set_window_desktop(window, desktop);
     }
 
-    if (is_floating_window(window))
+    if (client->monitor < monitors_.size())
     {
-        update_floating_visibility(client->monitor);
-    }
-    else if (auto* monitor = monitor_containing_window(window))
-    {
-        rearrange_monitor(*monitor);
+        if (client->kind == Client::Kind::Tiled)
+            rearrange_monitor(monitors_[client->monitor]);
+        sync_visibility_for_monitor(client->monitor);
     }
 
     update_ewmh_client_list();
@@ -1146,7 +1131,7 @@ void WindowManager::apply_fullscreen_if_needed(xcb_window_t window, fullscreen_p
         LOG_DEBUG("apply_fullscreen_if_needed({:#x}): invalid monitor_idx, returning early", window);
         return;
     }
-    if (client->workspace != monitors_[*monitor_idx].current_workspace)
+    if (!client->sticky && client->workspace != monitors_[*monitor_idx].current_workspace)
     {
         LOG_DEBUG(
             "apply_fullscreen_if_needed({:#x}): workspace mismatch client->workspace={} vs "
@@ -1286,15 +1271,11 @@ void WindowManager::iconify_window(xcb_window_t window)
 
     ewmh_.set_window_state(window, ewmh_.get()->_NET_WM_STATE_HIDDEN, true);
 
-    if (is_floating_window(window))
+    if (client->monitor < monitors_.size())
     {
-        hide_window(window);
-        update_floating_visibility(client->monitor);
-    }
-    else if (client->monitor < monitors_.size())
-    {
-        hide_window(window);
-        rearrange_monitor(monitors_[client->monitor]);
+        if (client->kind == Client::Kind::Tiled)
+            rearrange_monitor(monitors_[client->monitor]);
+        sync_visibility_for_monitor(client->monitor);
     }
 
     if (active_window_ == window)
@@ -1328,13 +1309,11 @@ void WindowManager::deiconify_window(xcb_window_t window, bool focus)
 
     ewmh_.set_window_state(window, ewmh_.get()->_NET_WM_STATE_HIDDEN, false);
 
-    if (is_floating_window(window))
+    if (client->monitor < monitors_.size())
     {
-        update_floating_visibility(client->monitor);
-    }
-    else if (client->monitor < monitors_.size())
-    {
-        rearrange_monitor(monitors_[client->monitor]);
+        if (client->kind == Client::Kind::Tiled)
+            rearrange_monitor(monitors_[client->monitor]);
+        sync_visibility_for_monitor(client->monitor);
     }
 
     if (focus && client->monitor == focused_monitor_
@@ -1386,12 +1365,7 @@ void WindowManager::kill_window(xcb_window_t window)
 
 void WindowManager::rearrange_monitor(Monitor& monitor)
 {
-    size_t monitor_idx = 0;
-    for (; monitor_idx < monitors_.size(); ++monitor_idx)
-    {
-        if (&monitors_[monitor_idx] == &monitor)
-            break;
-    }
+    size_t monitor_idx = monitor_index(monitor);
 
     LOG_TRACE(
         "rearrange_monitor({}) called, current_ws={} windows_in_ws={}",
@@ -1516,7 +1490,7 @@ void WindowManager::rearrange_all_monitors()
     {
         rearrange_monitor(monitor);
     }
-    update_floating_visibility_all();
+    sync_visibility_all();
 }
 
 void WindowManager::launch_program(std::string const& command)
@@ -1771,7 +1745,6 @@ void WindowManager::send_wm_ping(xcb_window_t window, uint32_t timestamp)
     ev.data.data32[2] = window;
 
     xcb_send_event(conn_.get(), 0, window, XCB_EVENT_MASK_NO_EVENT, reinterpret_cast<char*>(&ev));
-    pending_pings_[window] = std::chrono::steady_clock::now() + PING_TIMEOUT;
 }
 
 /**
@@ -2141,6 +2114,24 @@ void WindowManager::unmanage_desktop_window(xcb_window_t window)
     }
 }
 
+void WindowManager::add_tiled_to_workspace(xcb_window_t window, size_t monitor_idx, size_t workspace_idx)
+{
+    monitors_[monitor_idx].workspaces[workspace_idx].windows.push_back(window);
+    if (auto* client = get_client(window))
+    {
+        client->monitor = monitor_idx;
+        client->workspace = workspace_idx;
+    }
+    uint32_t desktop = get_ewmh_desktop_index(monitor_idx, workspace_idx);
+    ewmh_.set_window_desktop(window, desktop);
+}
+
+void WindowManager::remove_tiled_from_workspace(xcb_window_t window, size_t monitor_idx, size_t workspace_idx)
+{
+    auto is_iconic = [this](xcb_window_t w) { return is_client_iconic(w); };
+    workspace_policy::remove_tiled_window(monitors_[monitor_idx].workspaces[workspace_idx], window, is_iconic);
+}
+
 /**
  * @brief Hide a window by moving it off-screen (DWM-style visibility).
  *
@@ -2163,13 +2154,6 @@ void WindowManager::hide_window(xcb_window_t window)
     if (!client)
     {
         LOG_TRACE("hide_window({:#x}): no client, ignoring", window);
-        return;
-    }
-
-    // Don't hide sticky windows (they're visible on all workspaces)
-    if (client->sticky)
-    {
-        LOG_TRACE("hide_window({:#x}): sticky window, ignoring", window);
         return;
     }
 
@@ -2217,6 +2201,52 @@ void WindowManager::show_window(xcb_window_t window)
 
     client->hidden = false;
     LOG_TRACE("show_window({:#x}): marked as visible", window);
+}
+
+void WindowManager::sync_visibility_for_monitor(size_t monitor_idx)
+{
+    if (monitor_idx >= monitors_.size())
+        return;
+
+    for (auto& [id, client] : clients_)
+    {
+        if (client.kind != Client::Kind::Tiled && client.kind != Client::Kind::Floating)
+            continue;
+        if (client.monitor != monitor_idx)
+            continue;
+
+        bool should_be_visible = visibility_policy::is_window_visible(
+            showing_desktop_, client.iconic, client.sticky, client.monitor, client.workspace, monitors_
+        );
+
+        if (should_be_visible && client.hidden)
+        {
+            show_window(id);
+            if (client.kind == Client::Kind::Floating)
+            {
+                if (client.fullscreen)
+                    apply_fullscreen_if_needed(id, fullscreen_policy::ApplyContext::VisibilityTransition);
+                else if (client.maximized_horz || client.maximized_vert)
+                    apply_maximized_geometry(id);
+                else
+                    apply_floating_geometry(id);
+
+                if (client.transient_for != XCB_NONE)
+                    restack_transients(client.transient_for);
+            }
+            // Tiled geometry is handled by rearrange_monitor / layout_.arrange
+        }
+        else if (!should_be_visible && !client.hidden)
+        {
+            hide_window(id);
+        }
+    }
+}
+
+void WindowManager::sync_visibility_all()
+{
+    for (size_t i = 0; i < monitors_.size(); ++i)
+        sync_visibility_for_monitor(i);
 }
 
 void WindowManager::clear_all_borders()

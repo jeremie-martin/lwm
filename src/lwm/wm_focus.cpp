@@ -201,12 +201,7 @@ void WindowManager::focus_or_fallback(Monitor& monitor)
 {
     auto& ws = monitor.current();
 
-    size_t monitor_idx = 0;
-    for (; monitor_idx < monitors_.size(); ++monitor_idx)
-    {
-        if (&monitors_[monitor_idx] == &monitor)
-            break;
-    }
+    size_t monitor_idx = monitor_index(monitor);
 
     LOG_DEBUG(
         "focus_or_fallback: monitor_idx={} current_ws={} ws.focused_window={:#x} "

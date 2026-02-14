@@ -204,15 +204,20 @@ cycle_focus_next(std::span<FocusCycleCandidate const> candidates, xcb_window_t c
         return std::nullopt;
 
     // Find current position
+    bool found = false;
     size_t current = 0;
     for (size_t i = 0; i < candidates.size(); ++i)
     {
         if (candidates[i].id == current_window)
         {
             current = i;
+            found = true;
             break;
         }
     }
+
+    if (!found)
+        return candidates[0];
 
     // Move to next with wrap
     size_t next = (current + 1) % candidates.size();
@@ -228,15 +233,20 @@ cycle_focus_prev(std::span<FocusCycleCandidate const> candidates, xcb_window_t c
         return std::nullopt;
 
     // Find current position
+    bool found = false;
     size_t current = 0;
     for (size_t i = 0; i < candidates.size(); ++i)
     {
         if (candidates[i].id == current_window)
         {
             current = i;
+            found = true;
             break;
         }
     }
+
+    if (!found)
+        return candidates.back();
 
     // Move to prev with wrap
     size_t prev = (current + candidates.size() - 1) % candidates.size();

@@ -1,6 +1,5 @@
 #include "lwm/core/floating.hpp"
 #include "lwm/core/focus.hpp"
-#include "lwm/core/log.hpp"
 #include "wm.hpp"
 #include <algorithm>
 #include <xcb/xcb_icccm.h>
@@ -206,7 +205,7 @@ void WindowManager::manage_floating_window(xcb_window_t window, bool start_iconi
     // Then update visibility (will hide or position correctly)
     if (!start_iconic)
     {
-        update_floating_visibility(*monitor_idx);
+        sync_visibility_for_monitor(*monitor_idx);
         if (!suppress_focus_ && *monitor_idx == focused_monitor_ && is_workspace_visible(*monitor_idx, *workspace_idx))
             focus_any_window(window);
     }
@@ -231,7 +230,6 @@ void WindowManager::unmanage_floating_window(xcb_window_t window)
 
     // Tracking state that remains outside Client
     pending_kills_.erase(window);
-    pending_pings_.erase(window);
 
     // Get monitor/workspace from Client before erasing
     size_t monitor_idx = 0;
@@ -270,94 +268,6 @@ bool WindowManager::is_floating_window(xcb_window_t window) const
 {
     auto const* client = get_client(window);
     return client && client->kind == Client::Kind::Floating;
-}
-
-void WindowManager::update_floating_visibility(size_t monitor_idx)
-{
-    LOG_TRACE(
-        "update_floating_visibility({}) called, current_ws={}",
-        monitor_idx,
-        monitor_idx < monitors_.size() ? monitors_[monitor_idx].current_workspace : 0
-    );
-
-    if (monitor_idx >= monitors_.size())
-    {
-        LOG_TRACE("update_floating_visibility: invalid monitor index");
-        return;
-    }
-
-    auto& monitor = monitors_[monitor_idx];
-    if (showing_desktop_)
-    {
-        LOG_TRACE("update_floating_visibility: showing desktop, hiding all floating");
-        for (xcb_window_t fw : floating_windows_)
-        {
-            auto const* client = get_client(fw);
-            if (client && client->monitor == monitor_idx)
-            {
-                LOG_TRACE("update_floating_visibility: unmapping floating {:#x} (showing desktop)", fw);
-                hide_window(fw);
-            }
-        }
-        return;
-    }
-
-    for (xcb_window_t fw : floating_windows_)
-    {
-        auto const* client = get_client(fw);
-        if (!client || client->monitor != monitor_idx)
-            continue;
-
-        bool sticky = is_client_sticky(fw);
-        bool should_show = (sticky || client->workspace == monitor.current_workspace) && !is_client_iconic(fw);
-
-        LOG_TRACE(
-            "update_floating_visibility: window {:#x} ws={} current_ws={} sticky={} iconic={} -> show={}",
-            fw,
-            client->workspace,
-            monitor.current_workspace,
-            sticky,
-            is_client_iconic(fw),
-            should_show
-        );
-
-        if (should_show)
-        {
-            show_window(fw);
-
-            if (is_client_fullscreen(fw))
-            {
-                apply_fullscreen_if_needed(fw, fullscreen_policy::ApplyContext::VisibilityTransition);
-            }
-            else if (is_client_maximized_horz(fw) || is_client_maximized_vert(fw))
-            {
-                apply_maximized_geometry(fw);
-            }
-            else
-            {
-                apply_floating_geometry(fw);
-            }
-            LOG_TRACE("update_floating_visibility: showing floating {:#x}", fw);
-            if (client->transient_for != XCB_NONE)
-            {
-                restack_transients(client->transient_for);
-            }
-        }
-        else
-        {
-            LOG_TRACE("update_floating_visibility: hiding floating {:#x}", fw);
-            hide_window(fw);
-        }
-    }
-    LOG_TRACE("update_floating_visibility: DONE");
-}
-
-void WindowManager::update_floating_visibility_all()
-{
-    for (size_t i = 0; i < monitors_.size(); ++i)
-    {
-        update_floating_visibility(i);
-    }
 }
 
 void WindowManager::update_floating_monitor_for_geometry(xcb_window_t window)

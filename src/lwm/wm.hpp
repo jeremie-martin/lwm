@@ -9,6 +9,7 @@
 #include "lwm/core/window_rules.hpp"
 #include "lwm/keybind/keybind.hpp"
 #include "lwm/layout/layout.hpp"
+#include <cassert>
 #include <chrono>
 #include <memory>
 #include <optional>
@@ -67,7 +68,6 @@ private:
 
     bool showing_desktop_ = false;
     std::unordered_map<xcb_window_t, std::chrono::steady_clock::time_point> pending_kills_;
-    std::unordered_map<xcb_window_t, std::chrono::steady_clock::time_point> pending_pings_;
     uint64_t next_client_order_ = 0;
     int32_t desktop_origin_x_ = 0;
     int32_t desktop_origin_y_ = 0;
@@ -204,6 +204,12 @@ private:
 
     Monitor& focused_monitor() { return monitors_[focused_monitor_]; }
     Monitor const& focused_monitor() const { return monitors_[focused_monitor_]; }
+    size_t monitor_index(Monitor const& m) const
+    {
+        auto idx = static_cast<size_t>(&m - monitors_.data());
+        assert(idx < monitors_.size());
+        return idx;
+    }
     size_t wrap_monitor_index(int idx) const;
     void warp_to_monitor(Monitor const& monitor);
     void focus_or_fallback(Monitor& monitor);
@@ -221,8 +227,6 @@ private:
     void restack_transients(xcb_window_t parent);
     bool is_override_redirect_window(xcb_window_t window) const;
     bool is_workspace_visible(size_t monitor_idx, size_t workspace_idx) const;
-    void update_floating_visibility(size_t monitor_idx);
-    void update_floating_visibility_all();
     void update_floating_monitor_for_geometry(xcb_window_t window);
     void apply_floating_geometry(xcb_window_t window);
     void send_configure_notify(xcb_window_t window);
@@ -251,9 +255,17 @@ private:
     void unmanage_dock_window(xcb_window_t window);
     void unmanage_desktop_window(xcb_window_t window);
 
+    // Tiled window membership helpers (atomically update workspace list + client fields + EWMH)
+    void add_tiled_to_workspace(xcb_window_t window, size_t monitor_idx, size_t workspace_idx);
+    void remove_tiled_from_workspace(xcb_window_t window, size_t monitor_idx, size_t workspace_idx);
+
     // Off-screen visibility management (DWM-style)
     void hide_window(xcb_window_t window);
     void show_window(xcb_window_t window);
+
+    // Derived visibility: sync physical visibility to match policy state
+    void sync_visibility_for_monitor(size_t monitor_idx);
+    void sync_visibility_all();
 
     void setup_ewmh();
     void update_ewmh_desktops();

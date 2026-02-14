@@ -15,41 +15,17 @@ void WindowManager::perform_workspace_switch(WorkspaceSwitchContext const& ctx)
         ctx.new_workspace
     );
 
-    // Apply the workspace mutation here — callers no longer pre-mutate.
+    // Apply the workspace mutation, then sync visibility to match new state.
     monitor.previous_workspace = ctx.old_workspace;
     monitor.current_workspace = ctx.new_workspace;
 
-    // Hide floating windows from old workspace FIRST
-    // This prevents visual glitches where old floating windows appear over new workspace content
-    for (xcb_window_t fw : floating_windows_)
-    {
-        auto const* client = get_client(fw);
-        if (!client || client->monitor != ctx.monitor_idx)
-            continue;
-        if (is_client_sticky(fw))
-            continue;
-        if (client->workspace == ctx.old_workspace)
-        {
-            LOG_TRACE("perform_workspace_switch: hiding floating {:#x}", fw);
-            hide_window(fw);
-        }
-    }
-
-    // Hide tiled windows from old workspace
-    for (xcb_window_t window : monitor.workspaces[ctx.old_workspace].windows)
-    {
-        if (is_client_sticky(window))
-            continue;
-        LOG_TRACE("perform_workspace_switch: hiding tiled {:#x}", window);
-        hide_window(window);
-    }
-
-    // Flush before rearranging to ensure old windows are hidden
-    conn_.flush();
-
     update_ewmh_current_desktop();
+    // sync hides old-workspace windows and shows new-workspace windows
+    sync_visibility_for_monitor(ctx.monitor_idx);
+    // rearrange computes tiling layout geometry for the now-visible tiled windows
     rearrange_monitor(monitor);
-    update_floating_visibility(ctx.monitor_idx);
+    // sync floating separately since rearrange only handles tiled layout
+    // (floating geometry is applied by sync_visibility_for_monitor above)
 
     LWM_ASSERT_INVARIANTS(clients_, monitors_, floating_windows_, dock_windows_, desktop_windows_);
     LOG_TRACE("perform_workspace_switch: DONE");
@@ -150,7 +126,7 @@ void WindowManager::move_window_to_workspace(int ws)
         else
             ewmh_.set_window_desktop(window_to_move, desktop);
 
-        update_floating_visibility(monitor_idx);
+        sync_visibility_for_monitor(monitor_idx);
         focus_or_fallback(monitors_[monitor_idx]);
         conn_.flush();
         return;
@@ -263,8 +239,8 @@ void WindowManager::move_window_to_monitor(int direction)
         else
             ewmh_.set_window_desktop(window_to_move, desktop);
 
-        update_floating_visibility(source_idx);
-        update_floating_visibility(target_idx);
+        sync_visibility_for_monitor(source_idx);
+        sync_visibility_for_monitor(target_idx);
 
         focused_monitor_ = target_idx;
         update_ewmh_current_desktop();
@@ -288,20 +264,11 @@ void WindowManager::move_window_to_monitor(int direction)
         return;
 
     auto& target_monitor = monitors_[target_idx];
-    target_monitor.current().windows.push_back(window_to_move);
+    add_tiled_to_workspace(window_to_move, target_idx, target_monitor.current_workspace);
     target_monitor.current().focused_window = window_to_move;
 
-    if (auto* client = get_client(window_to_move))
-    {
-        client->monitor = target_idx;
-        client->workspace = target_monitor.current_workspace;
-    }
-
-    uint32_t desktop = get_ewmh_desktop_index(target_idx, target_monitor.current_workspace);
     if (is_client_sticky(window_to_move))
         ewmh_.set_window_desktop(window_to_move, 0xFFFFFFFF);
-    else
-        ewmh_.set_window_desktop(window_to_move, desktop);
 
     rearrange_monitor(focused_monitor());
     rearrange_monitor(target_monitor);

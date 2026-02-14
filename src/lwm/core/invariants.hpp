@@ -316,6 +316,59 @@ inline void assert_container_consistency(
     }
 }
 
+/**
+ * @brief Assert that client.hidden matches visibility policy expectations.
+ *
+ * For each tiled/floating client, verifies that:
+ * - If policy says visible and client is hidden: mismatch
+ * - If policy says not visible and client is not hidden: mismatch
+ */
+inline void assert_visibility_consistency(
+    std::unordered_map<xcb_window_t, Client> const& clients,
+    std::vector<Monitor> const& monitors,
+    bool showing_desktop
+)
+{
+    for (auto const& [id, client] : clients)
+    {
+        if (client.kind != Client::Kind::Tiled && client.kind != Client::Kind::Floating)
+            continue;
+        if (client.monitor >= monitors.size())
+            continue;
+
+        bool should_be_visible = !showing_desktop && !client.iconic;
+        if (should_be_visible && !client.sticky)
+            should_be_visible = (client.workspace == monitors[client.monitor].current_workspace);
+
+        if (should_be_visible && client.hidden)
+        {
+            LOG_ERROR(
+                "VISIBILITY INVARIANT: Window {:#x} should be visible but is hidden "
+                "(sticky={} iconic={} ws={} current_ws={} showing_desktop={})",
+                id,
+                client.sticky,
+                client.iconic,
+                client.workspace,
+                monitors[client.monitor].current_workspace,
+                showing_desktop
+            );
+        }
+        else if (!should_be_visible && !client.hidden)
+        {
+            LOG_ERROR(
+                "VISIBILITY INVARIANT: Window {:#x} should be hidden but is visible "
+                "(sticky={} iconic={} ws={} current_ws={} showing_desktop={})",
+                id,
+                client.sticky,
+                client.iconic,
+                client.workspace,
+                monitors[client.monitor].current_workspace,
+                showing_desktop
+            );
+        }
+    }
+}
+
 #    define LWM_ASSERT_INVARIANTS(clients, monitors, floating, docks, desktops)      \
         do                                                                           \
         {                                                                            \

@@ -53,7 +53,7 @@ TEST_CASE("Focus next cycles forward through windows", "[focus][cycling]")
     {
         auto result5 = focus_policy::cycle_focus_next(candidates, 0x9999);
         REQUIRE(result5);
-        REQUIRE(result5->id == 0x2000);
+        REQUIRE(result5->id == 0x1000);
     }
 }
 
