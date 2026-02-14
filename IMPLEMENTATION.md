@@ -488,10 +488,10 @@ The following conditions can prevent focus even for focus-eligible windows:
 2. Check is_focus_eligible
 3. Look up Client, determine tiled vs floating via `Client::kind`
 4. If iconic: deiconify first (clears iconic flag)
-5. **Tiled path**: Call `focus_window_state()` - may switch workspace
-6. **Floating path**: Manual workspace switch + MRU promotion + set `active_window_`
+5. **Tiled path**: Call `focus_window_state()` (pure decision function) — apply result, call `perform_workspace_switch()` if workspace changed
+6. **Floating path**: Update workspace tracking + call `perform_workspace_switch()` if needed + MRU promotion + set `active_window_`
 7. Update EWMH current desktop
-8. Clear all borders
+8. Clear previous window's border (targeted, not all borders)
 9. Apply focused border visuals only when target window is not fullscreen
 10. Send WM_TAKE_FOCUS if supported
 11. Set X input focus
@@ -535,14 +535,24 @@ Monitor detection via RANDR (src/lwm/wm.cpp: detect_monitors):
 
 ### Workspace Switching
 
-**switch_workspace(int ws)** (src/lwm/wm_workspace.cpp:8-80):
+All workspace switching flows converge on `perform_workspace_switch(WorkspaceSwitchContext)` (src/lwm/wm_workspace.cpp), which performs the mechanical switch: hide floating (old ws), hide tiled (old ws), flush, update EWMH, rearrange, update floating visibility. Callers must set `monitor.previous/current_workspace` before calling.
+
+**switch_workspace(int ws)** (src/lwm/wm_workspace.cpp):
 1. Policy validation (workspace_policy::apply_workspace_switch)
-2. Hide floating windows from old workspace
-3. Hide tiled windows from old workspace
-4. Update EWMH _NET_CURRENT_DESKTOP
-5. Rearrange monitor for new workspace
-6. Update floating visibility
-7. Focus restoration (focus_or_fallback)
+2. `perform_workspace_switch()`
+3. Focus restoration (focus_or_fallback)
+
+**switch_to_ewmh_desktop(desktop)** (src/lwm/wm_ewmh.cpp):
+1. Convert desktop index to monitor + workspace, validate bounds
+2. Update focused_monitor_ and workspace tracking
+3. `perform_workspace_switch()` (skipped if only monitor changed)
+4. Focus restoration (focus_or_fallback)
+
+**focus_any_window()** workspace switch (src/lwm/wm_focus.cpp):
+1. Determine if workspace changed (via focus_window_state for tiled, inline for floating)
+2. Update workspace tracking
+3. `perform_workspace_switch()`
+4. Continue with focus assignment (no fallback — target window is known)
 
 ### Window Movement Between Workspaces
 

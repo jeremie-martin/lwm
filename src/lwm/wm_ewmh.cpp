@@ -205,47 +205,18 @@ void WindowManager::switch_to_ewmh_desktop(uint32_t desktop)
         monitor_idx
     );
 
-    // Hide floating windows from old workspace FIRST
-    // This prevents visual glitches where old floating windows appear over new workspace content
-    for (xcb_window_t fw : floating_windows_)
-    {
-        auto const* client = get_client(fw);
-        if (!client || client->monitor != monitor_idx)
-            continue;
-        if (is_client_sticky(fw))
-            continue;
-        if (client->workspace == old_workspace)
-        {
-            LOG_TRACE("switch_to_ewmh_desktop: pre-unmapping floating {:#x}", fw);
-            hide_window(fw);
-        }
-    }
-
-    // Hide tiled windows from OLD workspace before switching
-    for (xcb_window_t window : monitor.current().windows)
-    {
-        if (is_client_sticky(window))
-            continue;
-        LOG_TRACE("switch_to_ewmh_desktop: unmapping window {:#x}", window);
-        hide_window(window);
-    }
-    // Flush before rearranging to ensure old windows are hidden
-    conn_.flush();
-
-    // Switch to target monitor and workspace
     focused_monitor_ = monitor_idx;
     if (workspace_idx != old_workspace)
     {
         monitor.previous_workspace = old_workspace;
+        monitor.current_workspace = workspace_idx;
+        perform_workspace_switch({ monitor_idx, old_workspace, workspace_idx });
     }
-    monitor.current_workspace = workspace_idx;
-    LOG_TRACE("switch_to_ewmh_desktop: updating EWMH current desktop");
-    update_ewmh_current_desktop();
-    LOG_TRACE("switch_to_ewmh_desktop: rearranging monitor");
-    rearrange_monitor(monitor);
-    LOG_TRACE("switch_to_ewmh_desktop: updating floating visibility");
-    update_floating_visibility(monitor_idx);
-    LOG_TRACE("switch_to_ewmh_desktop: focus_or_fallback");
+    else
+    {
+        // Only monitor changed, no workspace switch needed
+        update_ewmh_current_desktop();
+    }
     focus_or_fallback(monitor);
     conn_.flush();
     LOG_DEBUG("switch_to_ewmh_desktop: DONE, now on monitor {} ws {}", focused_monitor_, monitor.current_workspace);

@@ -5,6 +5,54 @@
 
 namespace lwm {
 
+void WindowManager::perform_workspace_switch(WorkspaceSwitchContext const& ctx)
+{
+    auto& monitor = monitors_[ctx.monitor_idx];
+    LOG_DEBUG(
+        "perform_workspace_switch: monitor={} old_ws={} new_ws={}",
+        ctx.monitor_idx,
+        ctx.old_workspace,
+        ctx.new_workspace
+    );
+
+    // Caller must have already updated monitor.previous_workspace and
+    // monitor.current_workspace before calling this function.
+
+    // Hide floating windows from old workspace FIRST
+    // This prevents visual glitches where old floating windows appear over new workspace content
+    for (xcb_window_t fw : floating_windows_)
+    {
+        auto const* client = get_client(fw);
+        if (!client || client->monitor != ctx.monitor_idx)
+            continue;
+        if (is_client_sticky(fw))
+            continue;
+        if (client->workspace == ctx.old_workspace)
+        {
+            LOG_TRACE("perform_workspace_switch: hiding floating {:#x}", fw);
+            hide_window(fw);
+        }
+    }
+
+    // Hide tiled windows from old workspace
+    for (xcb_window_t window : monitor.workspaces[ctx.old_workspace].windows)
+    {
+        if (is_client_sticky(window))
+            continue;
+        LOG_TRACE("perform_workspace_switch: hiding tiled {:#x}", window);
+        hide_window(window);
+    }
+
+    // Flush before rearranging to ensure old windows are hidden
+    conn_.flush();
+
+    update_ewmh_current_desktop();
+    rearrange_monitor(monitor);
+    update_floating_visibility(ctx.monitor_idx);
+
+    LOG_TRACE("perform_workspace_switch: DONE");
+}
+
 void WindowManager::switch_workspace(int ws)
 {
     auto& monitor = focused_monitor();
@@ -15,6 +63,7 @@ void WindowManager::switch_workspace(int ws)
         monitor.previous_workspace
     );
 
+    // Validate via policy (also updates monitor.previous/current_workspace)
     auto switch_result = workspace_policy::apply_workspace_switch(monitor, ws);
     if (!switch_result)
     {
@@ -28,50 +77,11 @@ void WindowManager::switch_workspace(int ws)
         switch_result->new_workspace
     );
 
-    // Hide floating windows from old workspace FIRST
-    // This prevents visual glitches where old floating windows appear over new workspace content
-    for (xcb_window_t fw : floating_windows_)
-    {
-        auto const* client = get_client(fw);
-        if (!client || client->monitor != focused_monitor_)
-            continue;
-        if (is_client_sticky(fw))
-            continue;
-        if (client->workspace == switch_result->old_workspace)
-        {
-            LOG_DEBUG("switch_workspace: pre-unmapping floating {:#x}", fw);
-            hide_window(fw);
-        }
-    }
-
-    // Now hide tiled windows from old workspace
-    auto& old_workspace = monitor.workspaces[switch_result->old_workspace];
-    LOG_DEBUG("switch_workspace: old_workspace has {} tiled windows", old_workspace.windows.size());
-    for (xcb_window_t window : old_workspace.windows)
-    {
-        LOG_DEBUG("switch_workspace: considering unmapping tiled {:#x}", window);
-        if (is_client_sticky(window))
-        {
-            LOG_DEBUG("switch_workspace: {:#x} is sticky, skipping", window);
-            continue;
-        }
-        LOG_DEBUG("switch_workspace: unmapping tiled {:#x}", window);
-        hide_window(window);
-    }
-    LOG_DEBUG("switch_workspace: done unmapping old workspace windows");
-    // Flush before rearranging to ensure old windows are hidden
-    conn_.flush();
-
-    LOG_TRACE("switch_workspace: unmapped old windows, now updating EWMH");
-    update_ewmh_current_desktop();
-    LOG_TRACE("switch_workspace: rearranging monitor");
-    rearrange_monitor(monitor);
-    LOG_TRACE("switch_workspace: updating floating visibility");
-    update_floating_visibility(focused_monitor_);
-    LOG_TRACE("switch_workspace: focus_or_fallback");
+    // Policy already updated monitor.previous/current_workspace.
+    perform_workspace_switch({ focused_monitor_, switch_result->old_workspace, switch_result->new_workspace });
     focus_or_fallback(monitor);
-    LOG_TRACE("switch_workspace: flushing");
     conn_.flush();
+
     LOG_TRACE(
         "switch_workspace: DONE, now current={} previous={}",
         monitor.current_workspace,

@@ -53,7 +53,7 @@ void WindowManager::focus_any_window(xcb_window_t window)
 
     if (is_floating)
     {
-        // Floating path: manual workspace switch + MRU promotion
+        // Floating path: workspace switch + MRU promotion
         LOG_TRACE(
             "focus_any_window: floating path, client->monitor={} client->workspace={} "
             "current_workspace={} is_sticky={}",
@@ -67,26 +67,17 @@ void WindowManager::focus_any_window(xcb_window_t window)
         auto& monitor = monitors_[client->monitor];
         if (!is_sticky && monitor.current_workspace != client->workspace)
         {
+            size_t old_ws = monitor.current_workspace;
             LOG_DEBUG(
                 "focus_any_window({:#x}): WORKSPACE SWITCH TRIGGERED by focus! "
                 "old_ws={} new_ws={}",
                 window,
-                monitor.current_workspace,
+                old_ws,
                 client->workspace
             );
-            for (xcb_window_t w : monitor.current().windows)
-            {
-                if (is_client_sticky(w))
-                    continue;
-                LOG_TRACE("focus_any_window: unmapping window {:#x} from old workspace", w);
-                hide_window(w);
-            }
-            monitor.previous_workspace = monitor.current_workspace;
+            monitor.previous_workspace = old_ws;
             monitor.current_workspace = client->workspace;
-            LOG_TRACE("focus_any_window: rearranging monitor after workspace switch");
-            rearrange_monitor(monitor);
-            LOG_TRACE("focus_any_window: updating floating visibility after workspace switch");
-            update_floating_visibility(client->monitor);
+            perform_workspace_switch({ client->monitor, old_ws, client->workspace });
         }
 
         focus_policy::promote_mru(floating_windows_, window, [](xcb_window_t id) { return id; });
@@ -96,7 +87,7 @@ void WindowManager::focus_any_window(xcb_window_t window)
     {
         // Tiled path: use focus_window_state for workspace switching
         LOG_TRACE("focus_any_window: tiled path, calling focus_window_state, is_sticky={}", is_sticky);
-        auto change = focus::focus_window_state(monitors_, focused_monitor_, active_window_, window, is_sticky);
+        auto change = focus::focus_window_state(monitors_, focused_monitor_, window, is_sticky);
         if (!change)
         {
             LOG_TRACE("focus_any_window: focus_window_state returned nullopt, returning");
@@ -114,7 +105,11 @@ void WindowManager::focus_any_window(xcb_window_t window)
             previous_active
         );
 
-        auto& target_monitor = monitors_[change->target_monitor];
+        // Apply the decision: focus_window_state is now pure, so we apply state here
+        focused_monitor_ = change->target_monitor;
+        monitors_[change->target_monitor].workspaces[change->new_workspace].focused_window = window;
+        active_window_ = window;
+
         if (change->workspace_changed)
         {
             LOG_DEBUG(
@@ -122,24 +117,20 @@ void WindowManager::focus_any_window(xcb_window_t window)
                 change->old_workspace,
                 change->new_workspace
             );
-            for (xcb_window_t w : target_monitor.workspaces[change->old_workspace].windows)
-            {
-                if (is_client_sticky(w))
-                    continue;
-                LOG_TRACE("focus_any_window: unmapping window {:#x} from old workspace", w);
-                hide_window(w);
-            }
-            LOG_TRACE("focus_any_window: rearranging monitor after workspace switch");
-            rearrange_monitor(target_monitor);
-            LOG_TRACE("focus_any_window: updating floating visibility after workspace switch");
-            update_floating_visibility(change->target_monitor);
+            auto& target_monitor = monitors_[change->target_monitor];
+            target_monitor.previous_workspace = change->old_workspace;
+            target_monitor.current_workspace = change->new_workspace;
+            perform_workspace_switch({ change->target_monitor, change->old_workspace, change->new_workspace });
         }
     }
 
     LOG_TRACE("focus_any_window: updating EWMH current desktop");
     update_ewmh_current_desktop();
 
-    clear_all_borders();
+    if (previous_active != XCB_NONE && previous_active != window && is_managed(previous_active))
+    {
+        xcb_change_window_attributes(conn_.get(), previous_active, XCB_CW_BORDER_PIXEL, &conn_.screen()->black_pixel);
+    }
 
     bool is_fullscreen = is_client_fullscreen(window);
     if (focus_policy::should_apply_focus_border(is_fullscreen))
@@ -174,7 +165,7 @@ void WindowManager::focus_any_window(xcb_window_t window)
     ewmh_.set_active_window(window);
     if (net_wm_state_focused_ != XCB_NONE)
     {
-        if (previous_active != XCB_NONE && previous_active != window)
+        if (previous_active != XCB_NONE && previous_active != window && is_managed(previous_active))
         {
             ewmh_.set_window_state(previous_active, net_wm_state_focused_, false);
         }
@@ -203,7 +194,10 @@ void WindowManager::clear_focus()
         ewmh_.set_window_state(previous_active, net_wm_state_focused_, false);
     }
 
-    clear_all_borders();
+    if (previous_active != XCB_NONE && is_managed(previous_active))
+    {
+        xcb_change_window_attributes(conn_.get(), previous_active, XCB_CW_BORDER_PIXEL, &conn_.screen()->black_pixel);
+    }
 
     conn_.flush();
 }

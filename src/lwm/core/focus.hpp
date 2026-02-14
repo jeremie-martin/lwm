@@ -3,7 +3,6 @@
 #include "lwm/core/types.hpp"
 #include <optional>
 #include <span>
-#include <vector>
 
 namespace lwm::focus {
 
@@ -35,19 +34,21 @@ struct FocusWindowChange
 };
 
 /**
- * @brief Update internal state when focusing a tiled window.
+ * @brief Determine the focus change needed when focusing a tiled window.
  *
- * @param monitors The list of monitors.
- * @param active_monitor The currently active monitor index (updated).
- * @param active_window The currently active window (updated).
+ * Pure decision function: does NOT mutate any state. The caller is responsible
+ * for applying the returned FocusWindowChange (updating monitor workspace,
+ * active_monitor, active_window, focused_window, etc.).
+ *
+ * @param monitors The list of monitors (read-only).
+ * @param active_monitor The currently active monitor index.
  * @param window The window to focus.
  * @param is_sticky If true, do NOT switch workspaces (sticky windows are visible on all workspaces).
  * @return The focus change details, or nullopt if window not found.
  */
 std::optional<FocusWindowChange> focus_window_state(
-    std::vector<Monitor>& monitors,
-    size_t& active_monitor,
-    xcb_window_t& active_window,
+    std::span<Monitor const> monitors,
+    size_t active_monitor,
     xcb_window_t window,
     bool is_sticky = false
 );

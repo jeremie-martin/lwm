@@ -35,18 +35,16 @@ PointerFocusResult pointer_move(std::span<Monitor const> monitors, size_t active
 }
 
 std::optional<FocusWindowChange> focus_window_state(
-    std::vector<Monitor>& monitors,
-    size_t& active_monitor,
-    xcb_window_t& active_window,
+    std::span<Monitor const> monitors,
+    size_t active_monitor,
     xcb_window_t window,
     bool is_sticky
 )
 {
     LOG_TRACE(
-        "focus_window_state: window={:#x} active_monitor={} active_window={:#x} is_sticky={}",
+        "focus_window_state: window={:#x} active_monitor={} is_sticky={}",
         window,
         active_monitor,
-        active_window,
         is_sticky
     );
 
@@ -56,8 +54,7 @@ std::optional<FocusWindowChange> focus_window_state(
         {
             if (monitors[m].workspaces[w].find_window(window) != monitors[m].workspaces[w].windows.end())
             {
-                auto& target_monitor = monitors[m];
-                size_t old_workspace = target_monitor.current_workspace;
+                size_t old_workspace = monitors[m].current_workspace;
                 size_t new_workspace = w;
 
                 LOG_TRACE(
@@ -67,8 +64,8 @@ std::optional<FocusWindowChange> focus_window_state(
                     old_workspace
                 );
 
-                bool actually_changed = false;
-                if (!is_sticky && old_workspace != new_workspace)
+                bool actually_changed = !is_sticky && old_workspace != new_workspace;
+                if (actually_changed)
                 {
                     LOG_DEBUG(
                         "focus_window_state: WORKSPACE WILL CHANGE from {} to {} on monitor {}",
@@ -76,14 +73,7 @@ std::optional<FocusWindowChange> focus_window_state(
                         new_workspace,
                         m
                     );
-                    target_monitor.previous_workspace = old_workspace;
-                    target_monitor.current_workspace = new_workspace;
-                    actually_changed = true;
                 }
-
-                target_monitor.current().focused_window = window;
-                active_monitor = m;
-                active_window = window;
 
                 FocusWindowChange change;
                 change.target_monitor = m;

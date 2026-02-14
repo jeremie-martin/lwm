@@ -326,28 +326,29 @@ Desktop mode enabled (showing_desktop_ = true).
 
 ### Workspace Switch
 
-**Implementation**: src/lwm/wm_workspace.cpp:8-80
+**Implementation**: src/lwm/wm_workspace.cpp
 
 ```
 switch_workspace(target_ws)
-├─ Validate workspace index
 ├─ workspace_policy::apply_workspace_switch()
 │  ├─ Validate workspace index (returns nullopt if invalid - out of bounds, negative, or same as current)
 │  ├─ Update previous_workspace = current
 │  ├─ Update current_workspace = target
 │  └─ Return WorkspaceSwitchResult{ old, target }
-├─ hide_window() for floating windows (iterates global floating_windows_, filters by: on focused_monitor, non-sticky, on old_workspace)
-├─ hide_window() for tiled windows (iterates old_workspace.windows directly, filters by: non-sticky)
-├─ conn_.flush()  ← Critical sync point!
-├─ update_ewmh_current_desktop()
-├─ rearrange_monitor(new workspace)
-│  ├─ For each visible window: show_window() (clears hidden flag)
-│  └─ layout_.arrange() (applies on-screen geometry)
-├─ update_floating_visibility()  ← Show new workspace's floating windows, hide old ones
+├─ perform_workspace_switch({ monitor, old_ws, new_ws })
+│  ├─ hide_window() for floating windows (iterates global floating_windows_, filters by: on monitor, non-sticky, on old_workspace)
+│  ├─ hide_window() for tiled windows (iterates old_workspace.windows directly, filters by: non-sticky)
+│  ├─ conn_.flush()  ← Critical sync point!
+│  ├─ update_ewmh_current_desktop()
+│  ├─ rearrange_monitor(new workspace)
+│  │  ├─ For each visible window: show_window() (clears hidden flag)
+│  │  └─ layout_.arrange() (applies on-screen geometry)
+│  └─ update_floating_visibility()  ← Show new workspace's floating windows, hide old ones
 ├─ focus_or_fallback(monitor)
-├─ conn_.flush()  ← Final sync point after all updates
-└─ Update bars
+└─ conn_.flush()  ← Final sync point after all updates
 ```
+
+Note: `perform_workspace_switch()` is the unified core operation shared by `switch_workspace()`, `switch_to_ewmh_desktop()`, and `focus_any_window()` (when focusing triggers a workspace change).
 
 **Critical Ordering**:
 1. Hide old workspace windows (floating first, then tiled)

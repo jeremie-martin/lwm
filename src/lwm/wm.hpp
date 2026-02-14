@@ -162,6 +162,14 @@ private:
     void rearrange_monitor(Monitor& monitor);
     void rearrange_all_monitors();
 
+    struct WorkspaceSwitchContext
+    {
+        size_t monitor_idx;
+        size_t old_workspace;
+        size_t new_workspace;
+    };
+
+    void perform_workspace_switch(WorkspaceSwitchContext const& ctx);
     void switch_workspace(int ws);
     void toggle_workspace();
     void move_window_to_workspace(int ws);

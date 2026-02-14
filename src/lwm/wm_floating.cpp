@@ -387,7 +387,8 @@ void WindowManager::unmanage_floating_window(xcb_window_t window)
 
 bool WindowManager::is_floating_window(xcb_window_t window) const
 {
-    return std::ranges::find(floating_windows_, window) != floating_windows_.end();
+    auto const* client = get_client(window);
+    return client && client->kind == Client::Kind::Floating;
 }
 
 void WindowManager::update_floating_visibility(size_t monitor_idx)

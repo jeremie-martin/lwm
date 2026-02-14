@@ -446,10 +446,10 @@ If disabled:
 2. Check is_focus_eligible
 3. Look up Client, determine tiled vs floating via `Client::kind`
 4. If iconic: deiconify first (clears iconic flag)
-5. **Tiled path**: Call `focus_window_state()` - may switch workspace
-6. **Floating path**: Manual workspace switch + MRU promotion + set `active_window_`
+5. **Tiled path**: Call `focus_window_state()` (pure decision function) — apply result, call `perform_workspace_switch()` if workspace changed
+6. **Floating path**: Update workspace tracking + call `perform_workspace_switch()` if needed + MRU promotion + set `active_window_`
 7. Update EWMH current desktop
-8. Clear all borders
+8. Clear previous window's border (targeted, not all borders)
 9. Apply focused border visuals only when target window is not fullscreen
 10. Send WM_TAKE_FOCUS if supported
 11. Set X input focus
