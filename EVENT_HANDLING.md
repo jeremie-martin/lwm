@@ -81,8 +81,8 @@ All event handlers are in src/lwm/wm_events.cpp.
 2. If override-redirect → Ignore (menus, dropdowns).
 3. classify_window() → Kind (Tiled/Floating/Dock/Desktop/Popup) (if Popup: Map directly, NOT MANAGED, return).
 4. apply_window_rules() (can override EWMH states except Dock/Desktop/Popup types).
-5. Create Client record (order = next_client_order_++).
-6. Read initial EWMH state (precedence: _NET_WM_STATE_HIDDEN > WM_HINTS.initial_state).
+5. Create Client record (order = next_client_order_++), call parse_initial_ewmh_state(client).
+6. Read iconic state (precedence: _NET_WM_STATE_HIDDEN > WM_HINTS.initial_state).
 7. If Floating: Determine placement, store in Client.floating_geometry.
 8. Add to workspace.windows (Tiled) or floating_windows_ (Floating).
 9. Set WM_STATE (Normal/Iconic).
@@ -91,8 +91,9 @@ All event handlers are in src/lwm/wm_events.cpp.
 12. Send synthetic ConfigureNotify.
 13. xcb_map_window() (always, even if will be hidden).
 14. If start_iconic or not visible: hide_window() (move off-screen).
-15. Apply non-geometry states (above, below, skip_*).
-16. Update _NET_CLIENT_LIST.
+15. apply_post_manage_states() — applies non-geometry states (sticky, above, below, modal, skip_*).
+16. Apply maximized/shaded (tiled: post-map; floating: pre-map).
+17. Update _NET_CLIENT_LIST.
 
 #### UnmapNotify
 
@@ -104,15 +105,16 @@ All event handlers are in src/lwm/wm_events.cpp.
 - Calls handle_window_removal() to unmanage window
 
 **handle_window_removal() actions**:
-1. Set WM_STATE = Withdrawn.
-2. Erase pending_kills_, pending_pings_.
-3. Erase clients_[window].
-4. Remove from workspace.windows or floating_windows_.
-5. Update workspace.focused_window (set to workspace.windows.back() or XCB_NONE if empty).
-6. If was active_window_:
+1. Look up client->kind; dispatch to the appropriate unmanage function (Tiled/Floating/Dock/Desktop).
+2. Set WM_STATE = Withdrawn.
+3. Erase pending_kills_, pending_pings_.
+4. Erase clients_[window].
+5. Remove from workspace.windows or floating_windows_.
+6. Update workspace.focused_window via `fixup_workspace_focus()` (selects last non-iconic window, or XCB_NONE if empty).
+7. If was active_window_:
     - If removed window's workspace is the **current workspace** of its monitor AND that monitor is the currently focused monitor: focus_or_fallback(removed window's monitor).
     - Else: clear_focus().
-7. Rearrange monitor, update _NET_CLIENT_LIST.
+8. Rearrange monitor, update _NET_CLIENT_LIST.
 
 #### EnterNotify
 

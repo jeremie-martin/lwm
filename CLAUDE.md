@@ -133,7 +133,7 @@ Uses `.clang-format` (WebKit-based). Key settings:
 Debug builds enable:
 - `LWM_DEBUG(msg)` - logs to stderr with file:line
 - `LWM_DEBUG_KEY(msg)` - keybinding debugging
-- `LWM_ASSERT_INVARIANTS()` - validates state consistency (see `core/invariants.hpp`)
+- `LWM_ASSERT_INVARIANTS(clients, monitors, floating, docks, desktops)` - validates state consistency across all containers (see `core/invariants.hpp`)
 
 ## Testing
 

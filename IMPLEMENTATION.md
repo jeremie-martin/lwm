@@ -317,7 +317,7 @@ constexpr uint32_t WM_STATE_ICONIC = 3;
 - Sticky windows appear in exactly one workspace.windows vector (visible on all via hide_window skip, overlay on other workspaces)
 
 **workspace.focused_window is a best-effort hint:**
-- Normally updated correctly on window removal (set to workspace.windows.back() or XCB_NONE)
+- Updated on window removal via `fixup_workspace_focus()` (selects last non-iconic window, or XCB_NONE if empty)
 - May become stale in edge cases:
    - After explicit window move between workspaces (if source workspace's focused_window isn't updated)
    - After unusual state transitions that bypass normal update paths
@@ -349,6 +349,18 @@ constexpr uint32_t WM_STATE_ICONIC = 3;
 **Each xcb_window_t appears at most once in floating_windows_:**
 - No duplicate windows in vector
 - MRU promotion validates uniqueness before moving
+
+### Container Consistency Invariants
+
+**Every container entry matches its Client kind (and vice versa):**
+- Every entry in `floating_windows_` exists in `clients_` with `Kind::Floating`
+- Every `Kind::Floating` client appears in `floating_windows_`
+- Every entry in `dock_windows_` exists in `clients_` with `Kind::Dock`
+- Every `Kind::Dock` client appears in `dock_windows_`
+- Every entry in `desktop_windows_` exists in `clients_` with `Kind::Desktop`
+- Every `Kind::Desktop` client appears in `desktop_windows_`
+
+Enforced by `assert_floating_consistency()` and `assert_container_consistency()` in debug builds.
 
 ### Fullscreen Invariants
 

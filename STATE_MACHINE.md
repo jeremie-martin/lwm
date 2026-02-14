@@ -175,7 +175,7 @@ Each Client maintains state flags (src/lwm/core/types.hpp:118-134):
 | SHOWING_DESKTOP | VISIBLE | _NET_SHOWING_DESKTOP false | Show hidden windows, rearrange, focus_or_fallback() |
 | FOCUS | NO_FOCUS | Last window removed, empty workspace, pointer on root | active_window_=XCB_NONE, clear_focus() |
 | NO_FOCUS | FOCUS | Focus request, EnterNotify, ButtonPress | Set active_window_, focus window |
-| FOCUS | FOCUS | focus_next/prev | Cycle to next/previous eligible window |
+| FOCUS | FOCUS | cycle_focus(forward) | Cycle to next/previous eligible window |
 
 ---
 
@@ -203,7 +203,9 @@ apply_window_rules()
     ↓
 Create Client record (order = next_client_order_++)
     ↓
-Read initial EWMH state (precedence: _NET_WM_STATE_HIDDEN > WM_HINTS.initial_state)
+parse_initial_ewmh_state(client) — reads _NET_WM_STATE atoms into Client flags
+    ↓
+Read iconic state (precedence: _NET_WM_STATE_HIDDEN > WM_HINTS.initial_state)
     ├─ Check _NET_WM_STATE_HIDDEN → start_iconic
     └─ If not set, check WM_HINTS.initial_state → start_iconic
     ↓
@@ -225,7 +227,9 @@ xcb_map_window() (always, even if will be hidden) (src/lwm/wm.cpp:674)
     ↓
 If start_iconic or not visible: hide_window() (move off-screen)
     ↓
-Apply non-geometry states (above, below, skip_*)
+apply_post_manage_states() — applies non-geometry states (sticky, above, below, modal, skip_*)
+    ↓
+Apply maximized/shaded (tiled: post-map; floating: pre-map)
     ↓
 Update _NET_CLIENT_LIST
     ↓
@@ -234,11 +238,12 @@ Update _NET_CLIENT_LIST
 UnmapNotify / DestroyNotify
     ↓
 handle_window_removal()
+    ├─ Dispatch by client->kind (Tiled/Floating/Dock/Desktop)
     ├─ Set WM_STATE = Withdrawn
     ├─ Erase pending_kills_, pending_pings_
     ├─ Erase clients_[window]
     ├─ Remove from workspace.windows or floating_windows_
-    ├─ Update workspace.focused_window (set to workspace.windows.back() or XCB_NONE if empty)
+    ├─ Update workspace.focused_window via fixup_workspace_focus()
     ├─ If was active_window_:
     │  ├─ If removed window's workspace is the **current workspace** of its monitor AND that monitor is the currently focused monitor:
     │  │  └─ focus_or_fallback(removed window's monitor)
@@ -496,7 +501,7 @@ LWM uses a two-tier focus restoration model:
 
 **Focus restoration on window removal** (src/lwm/wm_events.cpp:443-449, src/lwm/wm.cpp:749-897):
 - LWM calls handle_window_removal() when UnmapNotify or DestroyNotify is received
-- handle_window_removal() sets WM_STATE = Withdrawn, erases from clients_, removes from workspace/floating, and updates workspace.focused_window
+- handle_window_removal() dispatches by client->kind, sets WM_STATE = Withdrawn, erases from clients_, removes from container, and updates workspace.focused_window via fixup_workspace_focus()
 - If the removed window was active_window_:
   - If removed window's workspace is the **current workspace** of its monitor AND that monitor is the currently focused monitor: LWM calls focus_or_fallback(removed window's monitor) to restore focus
   - Otherwise: LWM calls clear_focus() (different monitor/workspace)
