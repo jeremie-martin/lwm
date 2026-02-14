@@ -12,7 +12,7 @@ This document is normative for protocol behavior.
 
 LWM MUST:
 
-- Acquire `WM_S0` (or `WM_Sn`) selection.
+- Acquire `WM_S0` selection.
 - Select `SubstructureRedirectMask` on the root window.
 - Refuse startup if another WM already owns the role.
 - Broadcast `MANAGER` after ownership is acquired.
@@ -24,15 +24,15 @@ LWM reads and uses:
 - `WM_NAME` / `_NET_WM_NAME`
 - `WM_CLASS`
 - `WM_HINTS` (`input`, `initial_state`, urgency)
-- `WM_NORMAL_HINTS` (minimum size, initial user size/position where relevant)
+- `WM_NORMAL_HINTS` (initial user size/position for floating windows)
 - `WM_TRANSIENT_FOR`
 - `WM_PROTOCOLS` (`WM_DELETE_WINDOW`, `WM_TAKE_FOCUS`, `_NET_WM_PING`, `_NET_WM_SYNC_REQUEST` when present)
 
 Intentional behavior:
 
-- `WM_NORMAL_HINTS.min_width` / `min_height` are enforced.
+- `WM_NORMAL_HINTS.min_width` / `min_height` are intentionally not enforced.
 - `WM_NORMAL_HINTS.width_inc` / `height_inc` are intentionally not enforced.
-- `WM_NORMAL_HINTS` aspect/gravity hints are intentionally not enforced for tiled behavior.
+- `WM_NORMAL_HINTS` aspect/gravity hints are intentionally not enforced by layout policy.
 - Transients are treated as floating and inherit parent context where possible.
 
 ### 1.3 WM_STATE Semantics
@@ -81,7 +81,7 @@ LWM classifies windows primarily by `_NET_WM_WINDOW_TYPE`:
 
 - `DESKTOP`: managed, bottom layer, no focus
 - `DOCK`: managed, strut-reserving, no normal focus
-- `DIALOG/UTILITY/TOOLBAR/SPLASH`: managed floating
+- `DIALOG/UTILITY/TOOLBAR/MENU/SPLASH`: managed floating
 - popup/ephemeral types (`TOOLTIP`, `NOTIFICATION`, `POPUP_MENU`, `DROPDOWN_MENU`, `COMBO`, `DND`): mapped but not fully managed
 - `NORMAL`: managed tiled by default
 

@@ -1,5 +1,5 @@
 # LWM Configuration File
-# Copy to ~/.config/lwm/config.toml
+# Autoload path: $XDG_CONFIG_HOME/lwm/config.toml (when XDG_CONFIG_HOME is set)
 
 [appearance]
 padding = 10

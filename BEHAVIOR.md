@@ -75,8 +75,9 @@ When focus becomes invalid (window closes/hides/workspace change), LWM tries, in
 
 1. Workspace remembered focus (if still valid)
 2. Another eligible tiled window on that workspace
-3. Eligible floating window (MRU order)
-4. No focus
+3. Eligible sticky tiled window from another workspace on the same monitor
+4. Eligible floating window (MRU order)
+5. No focus
 
 ## 5. Workspace and Monitor Operations
 
@@ -111,7 +112,7 @@ No-op if requesting the already active workspace.
 
 ## 6. New Window Policy
 
-- New tiled windows open on the active monitor's current workspace.
+- New tiled windows default to the active monitor's current workspace; `_NET_WM_DESKTOP` can request a specific desktop.
 - Floating/transient windows prefer parent window context when available.
 - Focus is granted if window is visible and eligible, except where protocol rules block it.
 

@@ -5,11 +5,12 @@ This file is for maintainers. It records non-obvious architecture and behavior c
 ## 1. Source Map
 
 - `src/lwm/wm.cpp`: main state transitions, window management, layout triggers
-- `src/lwm/wm_events.cpp`: X11 event dispatch and handler entry points
+- `src/lwm/wm_events.cpp`: X11 event dispatch, key/mouse handling, client-message routing
 - `src/lwm/wm_focus.cpp`: focus policy execution and fallback logic
 - `src/lwm/wm_workspace.cpp`: workspace switching and cross-workspace moves
 - `src/lwm/wm_floating.cpp`: floating geometry, visibility, monitor reassignment
-- `src/lwm/wm_ewmh.cpp`: EWMH client-message handling and property updates
+- `src/lwm/wm_drag.cpp`: drag state machine for floating move/resize and tiled reorder
+- `src/lwm/wm_ewmh.cpp`: EWMH desktop/workarea/client-list updates and desktop index translation
 - `src/lwm/core/types.hpp`: `Client`, `Workspace`, `Monitor` data model
 
 ## 2. Core Data Model
@@ -98,7 +99,8 @@ Unmanage path (Unmap/Destroy):
 Key rules:
 
 - no focus assignment during showing-desktop mode
-- no focus for hidden/ineligible windows
+- no focus for ineligible windows
+- hidden/off-workspace targets are shown before final focus assignment
 - deiconify before final focus assignment
 - workspace switch may occur as part of focus target resolution
 - fullscreen focus transitions must not reapply fullscreen geometry or reintroduce borders
@@ -107,8 +109,9 @@ Fallback sequence (`focus_or_fallback()`):
 
 1. workspace remembered focus
 2. other eligible tiled windows (MRU order)
-3. eligible floating windows (MRU)
-4. clear focus
+3. eligible sticky tiled windows from other workspaces on the same monitor
+4. eligible floating windows (MRU)
+5. clear focus
 
 ## 7. Workspace Switch Contract
 
@@ -122,7 +125,7 @@ Required order:
 4. update `_NET_CURRENT_DESKTOP`
 5. rearrange/show target workspace
 6. refresh floating visibility
-7. restore focus
+7. restore focus in caller (`focus_or_fallback()` or explicit target focus)
 
 The flush between hide and show is intentional to avoid visual artifacts and stale geometry timing.
 

@@ -30,7 +30,8 @@ Xephyr sandbox:
 - `src/lwm/wm_focus.cpp`: focus policy
 - `src/lwm/wm_workspace.cpp`: workspace operations
 - `src/lwm/wm_floating.cpp`: floating behavior
-- `src/lwm/wm_ewmh.cpp`: EWMH message handling
+- `src/lwm/wm_drag.cpp`: drag/reorder state machine
+- `src/lwm/wm_ewmh.cpp`: EWMH desktop/workarea/client-list updates
 - `src/lwm/core/types.hpp`: core data model
 - `config.toml.example`: user-facing config and bindings
 
@@ -42,14 +43,14 @@ Xephyr sandbox:
 
 ### Common Change Recipes
 
-- New keybind action: update parsing in `src/lwm/config/config.cpp`, handling in `src/lwm/wm_events.cpp`, and `config.toml.example`.
-- New window state: add `Client` flag in `src/lwm/core/types.hpp`, apply transitions in `src/lwm/wm.cpp`, and wire client-message handling in `src/lwm/wm_ewmh.cpp`.
+- New keybind action: add handling in `src/lwm/wm_events.cpp` and update defaults/docs in `src/lwm/config/config.cpp` and `config.toml.example`.
+- New window state: add `Client` flag in `src/lwm/core/types.hpp`, apply transitions in `src/lwm/wm.cpp`, and wire client-message handling in `src/lwm/wm_events.cpp`.
 - New EWMH atom support: add atom wiring in `src/lwm/core/ewmh.hpp` / `src/lwm/core/ewmh.cpp`, then update compliance notes in `COMPLIANCE.md`.
 
 ## Debugging Hooks
 
-- `LWM_DEBUG(...)`
-- `LWM_DEBUG_KEY(...)`
+- `LOG_TRACE(...)` / `LOG_DEBUG(...)`
+- `LOG_KEY(...)`
 - `LWM_ASSERT_INVARIANTS(...)` (debug builds)
 
 Use these before introducing larger structural changes.

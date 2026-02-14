@@ -16,7 +16,7 @@ LWM is a minimal tiling window manager for X11 written in C++23.
 ### Dependencies
 
 - `cmake` 3.20+
-- C++23 compiler (GCC 13+ or Clang 17+)
+- C++23 compiler
 - X11/XCB libs: `xcb`, `xcb-keysyms`, `xcb-randr`, `xcb-ewmh`, `xcb-icccm`, `xcb-sync`, `x11`
 
 Arch Linux:
@@ -60,10 +60,12 @@ Default install path: `/usr/local/bin/lwm`
 ## Configure
 
 ```bash
-mkdir -p ~/.config/lwm
-cp config.toml.example ~/.config/lwm/config.toml
+export XDG_CONFIG_HOME="${XDG_CONFIG_HOME:-$HOME/.config}"
+mkdir -p "$XDG_CONFIG_HOME/lwm"
+cp config.toml.example "$XDG_CONFIG_HOME/lwm/config.toml"
 ```
 
+LWM auto-loads config only from `$XDG_CONFIG_HOME/lwm/config.toml`.
 Run with explicit config path if needed:
 
 ```bash
