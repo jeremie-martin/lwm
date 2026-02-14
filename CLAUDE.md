@@ -70,7 +70,7 @@ LWM is a minimal tiling window manager for X11 written in C++23. It follows a ce
 │  Core State:                                                     │
 │  • clients_: unordered_map<window, Client>                     │
 │  • monitors_: vector<Monitor>                                   │
-│  • floating_windows_: vector<FloatingWindow>                     │
+│  • floating_windows_: vector<xcb_window_t>  (MRU order)          │
 │  • dock_windows_, desktop_windows_                              │
 └─────────────────────────────────────────────────────────────────┘
          ↓                    ↓                    ↓

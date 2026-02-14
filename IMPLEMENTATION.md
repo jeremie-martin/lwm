@@ -29,7 +29,7 @@ This document provides the implementation-level architecture, data structures, a
 WindowManager (wm.cpp)
 ├── clients_ (unordered_map<window, Client>)  ← Authoritative state
 ├── monitors_ (vector<Monitor>)
-├── floating_windows_ (vector<FloatingWindow>)
+├── floating_windows_ (vector<xcb_window_t>)  ← MRU order
 ├── dock_windows_ (vector<window>)
 ├── desktop_windows_ (vector<window>)
 └── Ewmh, KeybindManager, Layout
@@ -153,16 +153,7 @@ struct Monitor {
 };
 ```
 
-### FloatingWindow (src/lwm/core/types.hpp:177-184)
-
-```cpp
-struct FloatingWindow {
-    xcb_window_t id = XCB_NONE;
-    Geometry geometry;  // Runtime geometry only
-};
-```
-
-### DragState (src/lwm/wm.hpp:36-47)
+### DragState (src/lwm/wm.hpp:29-40)
 
 ```cpp
 struct DragState {
@@ -239,7 +230,7 @@ constexpr uint32_t WM_STATE_ICONIC = 3;
 ### Single Source of Truth
 
 **Client struct is authoritative for all window state.**
-- FloatingWindow.geometry is transient (runtime state)
+- `Client.floating_geometry` is the single source of truth for floating window geometry
 - Workspace vectors are derived (organization state)
 - All other structures reference `clients_`
 
@@ -259,16 +250,14 @@ constexpr uint32_t WM_STATE_ICONIC = 3;
 - All managed windows appear in clients_ registry (unified source of truth)
 
 **Cross-references:**
-- FloatingWindow.geometry ↔ Client.floating_geometry (synchronized via apply_floating_geometry())
 - Workspace.focused_window references a window ID (best-effort hint)
 
 ### State Synchronization Guarantees
 
 1. **Client ↔ EWMH**: Every state flag change updates EWMH property
 2. **Client ↔ ICCCM**: WM_STATE property tracks iconic state
-3. **FloatingWindow ↔ Client**: Geometry synced on all operations
-4. **Workspace ↔ Focus**: `workspace.focused_window` tracks last-focused (best-effort)
-5. **Global State**: All visible state has EWMH root property
+3. **Workspace ↔ Focus**: `workspace.focused_window` tracks last-focused (best-effort)
+4. **Global State**: All visible state has EWMH root property
 
 ### Client Management Invariants
 
@@ -353,11 +342,9 @@ constexpr uint32_t WM_STATE_ICONIC = 3;
 
 ### Floating Window Invariants
 
-**FloatingWindow.geometry must equal Client.floating_geometry after apply_floating_geometry():**
-- Client.floating_geometry is authoritative (persistent state)
-- FloatingWindow.geometry is transient (runtime state)
-- Both always updated together via apply_floating_geometry()
-- Violation causes geometry mismatch between state and actual window
+**Client.floating_geometry is the single source of truth for floating window geometry.**
+- `apply_floating_geometry(window)` reads from `Client.floating_geometry` and configures the X window
+- `floating_windows_` is a plain `vector<xcb_window_t>` maintaining MRU order only
 
 **Each xcb_window_t appears at most once in floating_windows_:**
 - No duplicate windows in vector
@@ -391,12 +378,12 @@ LWM uses graceful error handling to prevent crashes and maintain stability:
 
 | Function | Bounds Check | Fallback Behavior |
 |----------|-------------|-------------------|
-| update_floating_visibility (wm_floating.cpp:414) | monitor_idx < monitors_.size() | Return early (LOG_TRACE) |
+| update_floating_visibility (wm_floating.cpp) | monitor_idx < monitors_.size() | Return early (LOG_TRACE) |
 | switch_to_ewmh_desktop | monitor_idx < monitors_.size(), ws_idx < workspaces.size() | Return early (LOG_TRACE) |
-| focus_floating_window | client->monitor < monitors_.size() | Return early (LOG_TRACE) |
+| focus_any_window | client->monitor < monitors_.size() (floating path) | Return early (LOG_TRACE) |
 | apply_maximized_geometry | client->monitor < monitors_.size() | Return early |
 | Rule application | target_mon < monitors_.size() | Skip entire rule |
-| apply_floating_geometry | Fallback to workspace 0 if invalid monitor index | Use default workspace |
+| apply_floating_geometry | Returns early if no Client record | No-op |
 | workspace_index_for_window | Returns std::nullopt for unmanaged windows | Caller handles null |
 
 ---
@@ -496,25 +483,21 @@ The following conditions can prevent focus even for focus-eligible windows:
 
 ### Focus Assignment Functions
 
-**focus_window(window)** (src/lwm/wm_focus.cpp:9-125) - Tiled windows:
+**focus_any_window(window)** (src/lwm/wm_focus.cpp) - Unified entry point for all window types:
 1. Check not showing_desktop
-2. If iconic: deiconify first (clears iconic flag)
-3. Check is_focus_eligible
-4. Call focus_window_state() - may switch workspace
-5. Clear all borders
-6. Apply focused border visuals only when target window is not fullscreen
-7. Send WM_TAKE_FOCUS if supported
-8. Set X input focus
-9. Update _NET_ACTIVE_WINDOW
-10. Restack transients
-11. Update _NET_CLIENT_LIST
-
-**focus_floating_window(window)** - Floating windows:
-1. Same checks as tiled (including NOT hidden)
-2. Promote to end of floating_windows_ (MRU ordering)
-3. Stack above (XCB_STACK_MODE_ABOVE)
-4. Switch workspace if needed
-5. Apply focused border visuals only when target window is not fullscreen
+2. Check is_focus_eligible
+3. Look up Client, determine tiled vs floating via `Client::kind`
+4. If iconic: deiconify first (clears iconic flag)
+5. **Tiled path**: Call `focus_window_state()` - may switch workspace
+6. **Floating path**: Manual workspace switch + MRU promotion + set `active_window_`
+7. Update EWMH current desktop
+8. Clear all borders
+9. Apply focused border visuals only when target window is not fullscreen
+10. Send WM_TAKE_FOCUS if supported
+11. Set X input focus
+12. If floating: stack above (XCB_STACK_MODE_ABOVE)
+13. Update _NET_ACTIVE_WINDOW, _NET_WM_STATE_FOCUSED
+14. Update user_time, restack transients, update _NET_CLIENT_LIST
 
 **Fullscreen focus invariant**:
 - Focus transitions do not reapply fullscreen geometry (`fullscreen_policy::ApplyContext::FocusTransition` is excluded).

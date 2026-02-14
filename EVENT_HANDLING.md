@@ -83,7 +83,7 @@ All event handlers are in src/lwm/wm_events.cpp.
 4. apply_window_rules() (can override EWMH states except Dock/Desktop/Popup types).
 5. Create Client record (order = next_client_order_++).
 6. Read initial EWMH state (precedence: _NET_WM_STATE_HIDDEN > WM_HINTS.initial_state).
-7. If Floating: Create FloatingWindow, determine placement.
+7. If Floating: Determine placement, store in Client.floating_geometry.
 8. Add to workspace.windows (Tiled) or floating_windows_ (Floating).
 9. Set WM_STATE (Normal/Iconic).
 10. Apply geometry-affecting states (fullscreen, maximized).
@@ -126,13 +126,13 @@ All event handlers are in src/lwm/wm_events.cpp.
 5. If client.hidden == true: return (off-screen windows don't receive focus).
 6. If not is_focus_eligible(window): return.
 7. Update focused_monitor_ to monitor containing pointer.
-8. Focus window (calls focus_window()).
+8. Focus window (calls focus_any_window()).
 
 **Note**: Iconic windows are filtered via hidden check for non-sticky windows (iconic ⇒ hidden).
 
 #### MotionNotify
 
-**Implementation**: src/lwm/wm_events.cpp:524-572
+**Implementation**: src/lwm/wm_events.cpp
 
 **Behavior**:
 1. Extract event timestamp.
@@ -142,13 +142,13 @@ All event handlers are in src/lwm/wm_events.cpp.
 5. If not is_focus_eligible(window): return.
 6. If window == active_window_: return (already focused).
 7. Update focused_monitor_ to monitor containing pointer (if crossed boundary).
-8. Re-focus window (calls focus_window()).
+8. Re-focus window (calls focus_any_window()).
 
 **Purpose**: Re-establishes focus if lost (e.g., due to focus stealing prevention).
 
 #### ButtonPress
 
-**Implementation**: src/lwm/wm_events.cpp:585-648
+**Implementation**: src/lwm/wm_events.cpp
 
 **Behavior**:
 1. Extract event timestamp.
@@ -161,7 +161,7 @@ All event handlers are in src/lwm/wm_events.cpp.
 5. If window has no client: return.
 6. If client.hidden == true: return.
 7. Update focused_monitor_ to monitor containing pointer.
-8. Focus window (calls focus_window()).
+8. Focus window (calls focus_any_window()).
 9. If mousebind action is "drag_window":
     - If tiled: begin_tiled_drag().
     - If floating: begin_drag().
@@ -181,7 +181,7 @@ All event handlers are in src/lwm/wm_events.cpp.
 **For floating windows**:
 - Apply requested changes within size hint constraints.
 - Honor position requests if reasonable.
-- Apply to FloatingWindow.geometry and call apply_floating_geometry().
+- Apply to Client.floating_geometry and call apply_floating_geometry().
 
 **For fullscreen windows**:
 - Apply fullscreen geometry (ignores client request).
@@ -219,7 +219,7 @@ All event handlers are in src/lwm/wm_events.cpp.
 
 #### ClientMessage
 
-**Implementation**: src/lwm/wm_events.cpp:764-1221
+**Implementation**: src/lwm/wm_events.cpp (dispatcher + sub-handlers: handle_wm_state_change, handle_active_window_request, handle_desktop_change, handle_moveresize_window, handle_wm_moveresize, handle_showing_desktop)
 
 **Handled messages**:
 - _NET_ACTIVE_WINDOW (activate window, switch desktop if needed, apply focus stealing prevention)
@@ -500,10 +500,10 @@ handle_randr_screen_change()
 
 **For floating windows** (move_to_monitor_left/right):
 - Repositions to center of target monitor's working area using floating::place_floating().
-- Updates Client.monitor/workspace and FloatingWindow.geometry.
+- Updates Client.monitor/workspace and Client.floating_geometry.
 - Updates _NET_WM_DESKTOP property.
 - Updates floating visibility on both source and target monitors.
-- Moves focused_monitor_ to target and calls focus_floating_window().
+- Moves focused_monitor_ to target and calls focus_any_window().
 - Warps cursor if enabled.
 
 **For tiled windows**:
@@ -512,7 +512,7 @@ handle_randr_screen_change()
 - Adds to target monitor's current workspace.windows.
 - Sets target workspace.focused_window to moved window.
 - Rearranges both source and target monitors.
-- Updates focused_monitor_ to target and calls focus_window().
+- Updates focused_monitor_ to target and calls focus_any_window().
 - Warps cursor if enabled.
 
 ### Floating Window Monitor Auto-Assignment

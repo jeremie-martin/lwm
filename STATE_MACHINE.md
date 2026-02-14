@@ -207,7 +207,7 @@ Read initial EWMH state (precedence: _NET_WM_STATE_HIDDEN > WM_HINTS.initial_sta
     ├─ Check _NET_WM_STATE_HIDDEN → start_iconic
     └─ If not set, check WM_HINTS.initial_state → start_iconic
     ↓
-If Floating: Create FloatingWindow, determine placement
+If Floating: Determine placement, store in Client.floating_geometry
     ↓
 Add to workspace.windows (Tiled) or floating_windows_ (Floating)
     ↓
@@ -375,12 +375,12 @@ Set WM_STATE = NormalState
 Clear _NET_WM_STATE_HIDDEN
     ↓
 If floating:
-    ├─ update_floating_visibility(client->monitor)
-    └─ If focus && on current workspace: focus_floating_window()
+    └─ update_floating_visibility(client->monitor)
     ↓
 If tiled:
-    ├─ rearrange_monitor(monitors_[client->monitor])
-    └─ If focus && on current workspace: focus_window()
+    └─ rearrange_monitor(monitors_[client->monitor])
+    ↓
+If focus && on current workspace: focus_any_window()
     ↓
 apply_fullscreen_if_needed(window)
     ↓
@@ -441,20 +441,23 @@ If disabled:
 
 ### Focus Assignment
 
-**focus_window(window)** - Tiled windows (src/lwm/wm_focus.cpp:9-125):
+**focus_any_window(window)** - Unified entry point (src/lwm/wm_focus.cpp):
 1. Check not showing_desktop
-2. If iconic: deiconify first (clears iconic flag)
-3. Check is_focus_eligible
-4. Call focus_window_state() - may switch workspace
-5. Clear all borders
-6. Apply focused border visuals only when target window is not fullscreen
-7. Send WM_TAKE_FOCUS if supported
-8. Set X input focus
-9. Update _NET_ACTIVE_WINDOW
-10. Restack transients
-11. Update _NET_CLIENT_LIST
+2. Check is_focus_eligible
+3. Look up Client, determine tiled vs floating via `Client::kind`
+4. If iconic: deiconify first (clears iconic flag)
+5. **Tiled path**: Call `focus_window_state()` - may switch workspace
+6. **Floating path**: Manual workspace switch + MRU promotion + set `active_window_`
+7. Update EWMH current desktop
+8. Clear all borders
+9. Apply focused border visuals only when target window is not fullscreen
+10. Send WM_TAKE_FOCUS if supported
+11. Set X input focus
+12. If floating: stack above (XCB_STACK_MODE_ABOVE)
+13. Update _NET_ACTIVE_WINDOW, _NET_WM_STATE_FOCUSED
+14. Update user_time, restack transients, update _NET_CLIENT_LIST
 
-**restack_transients()** - Restacks modal/transient windows above parent (src/lwm/wm.cpp:1730-1751):
+**restack_transients()** - Restacks modal/transient windows above parent (src/lwm/wm.cpp):
 - Identifies transients via client.transient_for field.
 - Only restacks transients that are:
     - Visible (client.hidden == false).
@@ -463,18 +466,11 @@ If disabled:
 - Skips transients on other workspaces.
 - Ensures modal windows stay above parent during focus changes.
 
-**focus_floating_window(window)** - Floating windows (src/lwm/wm_focus.cpp:127-266):
-1. Same checks as tiled (including NOT hidden)
-2. Promote to end of floating_windows_ (MRU ordering)
-3. Stack above (XCB_STACK_MODE_ABOVE)
-4. Switch workspace if needed
-5. Apply focused border visuals only when target window is not fullscreen
-
 **Fullscreen focus invariant**:
 - Focus transitions do not reapply fullscreen geometry (`fullscreen_policy::ApplyContext::FocusTransition` is excluded).
 - Fullscreen windows keep zero border width when focus leaves and returns.
 
-**focus_or_fallback(monitor)** - Smart focus selection (src/lwm/wm_focus.cpp:272-355):
+**focus_or_fallback(monitor)** - Smart focus selection (src/lwm/wm_focus.cpp):
 1. Build candidates (order of preference):
     - `workspace.focused_window` if exists in workspace AND eligible (validated to exist).
     - Current workspace tiled windows (reverse iteration = MRU).
