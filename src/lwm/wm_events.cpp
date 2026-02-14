@@ -11,6 +11,7 @@
 
 #include "lwm/core/floating.hpp"
 #include "lwm/core/log.hpp"
+#include "lwm/core/policy.hpp"
 #include "lwm/core/window_rules.hpp"
 #include "wm.hpp"
 #include <xcb/xcb_icccm.h>
@@ -951,27 +952,14 @@ void WindowManager::handle_desktop_change(xcb_client_message_event_t const& e)
             return;
 
         auto& source_ws = source_monitor->workspaces[*source_idx];
-        auto it = source_ws.find_window(e.window);
-        if (it == source_ws.windows.end())
+        if (source_ws.find_window(e.window) == source_ws.windows.end())
             return;
 
-        xcb_window_t win = *it;
-        source_ws.windows.erase(it);
-        if (source_ws.focused_window == e.window)
-        {
-            source_ws.focused_window = XCB_NONE;
-            for (auto rit = source_ws.windows.rbegin(); rit != source_ws.windows.rend(); ++rit)
-            {
-                if (!is_client_iconic(*rit))
-                {
-                    source_ws.focused_window = *rit;
-                    break;
-                }
-            }
-        }
+        auto is_iconic = [this](xcb_window_t w) { return is_client_iconic(w); };
+        workspace_policy::remove_tiled_window(source_ws, e.window, is_iconic);
 
         auto& target_ws = monitors_[target_monitor].workspaces[target_workspace];
-        target_ws.windows.push_back(win);
+        target_ws.windows.push_back(e.window);
         if (!target_visible(target_monitor, target_workspace) || was_active)
         {
             target_ws.focused_window = e.window;

@@ -208,3 +208,81 @@ TEST_CASE("Workspace policy handles edge cases", "[workspace][policy][edge]")
         REQUIRE(monitor.workspaces[1].focused_window == 0x2000);
     }
 }
+
+// ─────────────────────────────────────────────────────────────────────────────
+// remove_tiled_window tests
+// ─────────────────────────────────────────────────────────────────────────────
+
+TEST_CASE("remove_tiled_window skips iconic windows when updating focus", "[workspace][policy]")
+{
+    Workspace ws;
+    ws.windows = { 0x1000, 0x2000, 0x3000 };
+    ws.focused_window = 0x3000;
+
+    std::unordered_set<xcb_window_t> iconic = { 0x2000 };
+    auto is_iconic = [&](xcb_window_t window) { return iconic.contains(window); };
+
+    bool removed = workspace_policy::remove_tiled_window(ws, 0x3000, is_iconic);
+
+    REQUIRE(removed);
+    REQUIRE(ws.windows == std::vector<xcb_window_t>{ 0x1000, 0x2000 });
+    REQUIRE(ws.focused_window == 0x1000);
+}
+
+TEST_CASE("remove_tiled_window clears focus when all remaining are iconic", "[workspace][policy]")
+{
+    Workspace ws;
+    ws.windows = { 0x1000, 0x2000, 0x3000 };
+    ws.focused_window = 0x3000;
+
+    std::unordered_set<xcb_window_t> iconic = { 0x1000, 0x2000 };
+    auto is_iconic = [&](xcb_window_t window) { return iconic.contains(window); };
+
+    bool removed = workspace_policy::remove_tiled_window(ws, 0x3000, is_iconic);
+
+    REQUIRE(removed);
+    REQUIRE(ws.windows == std::vector<xcb_window_t>{ 0x1000, 0x2000 });
+    REQUIRE(ws.focused_window == XCB_NONE);
+}
+
+TEST_CASE("remove_tiled_window preserves focus when non-focused window removed", "[workspace][policy]")
+{
+    Workspace ws;
+    ws.windows = { 0x1000, 0x2000, 0x3000 };
+    ws.focused_window = 0x3000;
+
+    auto is_iconic = [](xcb_window_t) { return false; };
+
+    bool removed = workspace_policy::remove_tiled_window(ws, 0x1000, is_iconic);
+
+    REQUIRE(removed);
+    REQUIRE(ws.windows == std::vector<xcb_window_t>{ 0x2000, 0x3000 });
+    REQUIRE(ws.focused_window == 0x3000);
+}
+
+TEST_CASE("remove_tiled_window returns false for missing window", "[workspace][policy]")
+{
+    Workspace ws;
+    ws.windows = { 0x1000 };
+    ws.focused_window = 0x1000;
+
+    auto is_iconic = [](xcb_window_t) { return false; };
+
+    bool removed = workspace_policy::remove_tiled_window(ws, 0x9999, is_iconic);
+
+    REQUIRE_FALSE(removed);
+    REQUIRE(ws.windows == std::vector<xcb_window_t>{ 0x1000 });
+    REQUIRE(ws.focused_window == 0x1000);
+}
+
+TEST_CASE("remove_tiled_window from empty workspace returns false", "[workspace][policy]")
+{
+    Workspace ws;
+    auto is_iconic = [](xcb_window_t) { return false; };
+
+    bool removed = workspace_policy::remove_tiled_window(ws, 0x1000, is_iconic);
+
+    REQUIRE_FALSE(removed);
+    REQUIRE(ws.windows.empty());
+    REQUIRE(ws.focused_window == XCB_NONE);
+}

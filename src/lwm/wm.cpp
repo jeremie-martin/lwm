@@ -723,23 +723,17 @@ void WindowManager::unmanage_window(xcb_window_t window)
     pending_kills_.erase(window);
     pending_pings_.erase(window);
 
-    clients_.erase(window);
+    auto is_iconic = [this](xcb_window_t w) { return is_client_iconic(w); };
 
     for (auto& monitor : monitors_)
     {
         for (size_t ws_idx = 0; ws_idx < monitor.workspaces.size(); ++ws_idx)
         {
             auto& workspace = monitor.workspaces[ws_idx];
-            auto it = workspace.find_window(window);
-            if (it != workspace.windows.end())
+            if (workspace_policy::remove_tiled_window(workspace, window, is_iconic))
             {
-                workspace.windows.erase(it);
                 bool was_active = (active_window_ == window);
-                bool was_workspace_focus = (workspace.focused_window == window);
-                if (was_workspace_focus)
-                {
-                    workspace.focused_window = workspace.windows.empty() ? XCB_NONE : workspace.windows.back();
-                }
+                clients_.erase(window);
                 update_ewmh_client_list();
                 rearrange_monitor(monitor);
 
@@ -760,6 +754,8 @@ void WindowManager::unmanage_window(xcb_window_t window)
             }
         }
     }
+
+    clients_.erase(window);
 }
 
 void WindowManager::set_fullscreen(xcb_window_t window, bool enabled)

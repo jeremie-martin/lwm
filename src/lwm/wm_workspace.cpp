@@ -282,24 +282,12 @@ void WindowManager::move_window_to_monitor(int direction)
     if (target_idx == focused_monitor_)
         return;
 
-    auto it = source_ws.find_window(window_to_move);
-    if (it == source_ws.windows.end())
+    auto is_iconic = [this](xcb_window_t w) { return is_client_iconic(w); };
+    if (!workspace_policy::remove_tiled_window(source_ws, window_to_move, is_iconic))
         return;
 
-    xcb_window_t moved_window = *it;
-    source_ws.windows.erase(it);
-
-    if (!source_ws.windows.empty())
-    {
-        source_ws.focused_window = source_ws.windows.back();
-    }
-    else
-    {
-        source_ws.focused_window = XCB_NONE;
-    }
-
     auto& target_monitor = monitors_[target_idx];
-    target_monitor.current().windows.push_back(moved_window);
+    target_monitor.current().windows.push_back(window_to_move);
     target_monitor.current().focused_window = window_to_move;
 
     if (auto* client = get_client(window_to_move))

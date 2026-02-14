@@ -273,6 +273,31 @@ inline std::optional<WorkspaceSwitchResult> apply_workspace_switch(Monitor& moni
     return WorkspaceSwitchResult{ old, target };
 }
 
+inline bool remove_tiled_window(
+    Workspace& workspace,
+    xcb_window_t window,
+    std::function<bool(xcb_window_t)> const& is_iconic
+)
+{
+    auto it = workspace.find_window(window);
+    if (it == workspace.windows.end())
+        return false;
+    workspace.windows.erase(it);
+    if (workspace.focused_window == window)
+    {
+        workspace.focused_window = XCB_NONE;
+        for (auto rit = workspace.windows.rbegin(); rit != workspace.windows.rend(); ++rit)
+        {
+            if (!is_iconic(*rit))
+            {
+                workspace.focused_window = *rit;
+                break;
+            }
+        }
+    }
+    return true;
+}
+
 inline bool move_tiled_window(
     Monitor& monitor,
     xcb_window_t window,
@@ -288,24 +313,8 @@ inline bool move_tiled_window(
     if (target_ws == monitor.current_workspace)
         return false;
 
-    auto& source_ws = monitor.current();
-    auto it = source_ws.find_window(window);
-    if (it == source_ws.windows.end())
+    if (!remove_tiled_window(monitor.current(), window, is_iconic))
         return false;
-
-    source_ws.windows.erase(it);
-    if (source_ws.focused_window == window)
-    {
-        source_ws.focused_window = XCB_NONE;
-        for (auto rit = source_ws.windows.rbegin(); rit != source_ws.windows.rend(); ++rit)
-        {
-            if (!is_iconic(*rit))
-            {
-                source_ws.focused_window = *rit;
-                break;
-            }
-        }
-    }
 
     auto& target = monitor.workspaces[target_ws];
     target.windows.push_back(window);
