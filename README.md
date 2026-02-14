@@ -65,7 +65,7 @@ mkdir -p "$XDG_CONFIG_HOME/lwm"
 cp config.toml.example "$XDG_CONFIG_HOME/lwm/config.toml"
 ```
 
-LWM auto-loads config only from `$XDG_CONFIG_HOME/lwm/config.toml`.
+LWM checks `$XDG_CONFIG_HOME/lwm/config.toml` when `XDG_CONFIG_HOME` is set.
 Run with explicit config path if needed:
 
 ```bash

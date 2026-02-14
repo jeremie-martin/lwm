@@ -179,7 +179,7 @@ These are deliberate scope cuts for a minimal WM.
 - [ ] `_NET_SUPPORTED` matches actual implemented atoms.
 - [ ] `_NET_CLIENT_LIST` and `_NET_CLIENT_LIST_STACKING` are accurate.
 - [ ] `_NET_ACTIVE_WINDOW` tracks focus changes.
-- [ ] `_NET_CURRENT_DESKTOP` tracks active monitor workspace mapping.
+- [ ] `_NET_CURRENT_DESKTOP` tracks focused monitor workspace mapping.
 - [ ] `_NET_WORKAREA` updates with strut changes.
 - [ ] `_NET_WM_STATE` client messages add/remove/toggle correctly.
 - [ ] focus-stealing prevention honors source indication and user time.

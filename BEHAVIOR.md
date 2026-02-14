@@ -7,7 +7,7 @@ This file defines user-visible behavior. If implementation changes but behavior 
 - LWM manages one or more monitors.
 - Each monitor has its own workspace set.
 - Exactly one workspace per monitor is visible at a time.
-- Exactly one monitor is the command target (`active monitor`) at any moment.
+- Exactly one monitor is the command target (`focused monitor`) at any moment.
 
 ### EWMH Desktop Mapping
 
@@ -18,7 +18,7 @@ LWM maps per-monitor workspaces to EWMH desktop indices:
 Consequences:
 
 - `_NET_NUMBER_OF_DESKTOPS = monitors * workspaces_per_monitor`
-- `_NET_CURRENT_DESKTOP` reflects the active monitor's workspace
+- `_NET_CURRENT_DESKTOP` reflects the focused monitor's workspace
 
 ## 2. Window Classes
 
@@ -53,9 +53,10 @@ Global focus invariant:
 
 A window may receive focus only if it is:
 
-- Visible
 - Not Dock/Desktop class
 - Able to accept focus (`WM_HINTS` / `WM_TAKE_FOCUS` respected)
+
+If the target is hidden, iconic, or on another workspace, LWM makes it visible before final focus assignment.
 
 ### Focus-Follows-Mouse
 
@@ -66,7 +67,7 @@ A window may receive focus only if it is:
 ### Empty-Space Semantics
 
 - Pointer over empty space on the same monitor: keep current focus.
-- Pointer crosses into a different monitor's empty space: switch active monitor and clear focused window.
+- Pointer crosses into a different monitor's empty space: switch focused monitor and clear focused window.
 - Entering a window on that monitor restores focus normally.
 
 ### Focus Restoration
@@ -83,7 +84,7 @@ When focus becomes invalid (window closes/hides/workspace change), LWM tries, in
 
 ### Switching Workspace
 
-On the active monitor:
+On the focused monitor:
 
 - Update current workspace
 - Hide old workspace windows
@@ -112,7 +113,7 @@ No-op if requesting the already active workspace.
 
 ## 6. New Window Policy
 
-- New tiled windows default to the active monitor's current workspace; `_NET_WM_DESKTOP` can request a specific desktop.
+- New tiled windows default to the focused monitor's current workspace; `_NET_WM_DESKTOP` can request a specific desktop.
 - Floating/transient windows prefer parent window context when available.
 - Focus is granted if window is visible and eligible, except where protocol rules block it.
 
