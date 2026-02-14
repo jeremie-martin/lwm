@@ -30,17 +30,17 @@ void WindowManager::switch_workspace(int ws)
 
     // Hide floating windows from old workspace FIRST
     // This prevents visual glitches where old floating windows appear over new workspace content
-    for (auto& fw : floating_windows_)
+    for (xcb_window_t fw : floating_windows_)
     {
-        auto const* client = get_client(fw.id);
+        auto const* client = get_client(fw);
         if (!client || client->monitor != focused_monitor_)
             continue;
-        if (is_client_sticky(fw.id))
+        if (is_client_sticky(fw))
             continue;
         if (client->workspace == switch_result->old_workspace)
         {
-            LOG_DEBUG("switch_workspace: pre-unmapping floating {:#x}", fw.id);
-            hide_window(fw.id);
+            LOG_DEBUG("switch_workspace: pre-unmapping floating {:#x}", fw);
+            hide_window(fw);
         }
     }
 
@@ -124,7 +124,7 @@ void WindowManager::move_window_to_workspace(int ws)
     xcb_window_t window_to_move = active_window_;
     size_t target_ws = static_cast<size_t>(ws);
 
-    if (find_floating_window(window_to_move))
+    if (is_floating_window(window_to_move))
     {
         auto* client = get_client(window_to_move);
         if (!client)
@@ -224,7 +224,7 @@ void WindowManager::move_window_to_monitor(int direction)
 
     xcb_window_t window_to_move = active_window_;
 
-    if (auto* floating_window = find_floating_window(window_to_move))
+    if (is_floating_window(window_to_move))
     {
         auto* client = get_client(window_to_move);
         if (!client)
@@ -236,16 +236,15 @@ void WindowManager::move_window_to_monitor(int direction)
             return;
 
         size_t target_workspace = monitors_[target_idx].current_workspace;
-        floating_window->geometry = floating::place_floating(
+        client->floating_geometry = floating::place_floating(
             monitors_[target_idx].working_area(),
-            floating_window->geometry.width,
-            floating_window->geometry.height,
+            client->floating_geometry.width,
+            client->floating_geometry.height,
             std::nullopt
         );
 
         client->monitor = target_idx;
         client->workspace = target_workspace;
-        client->floating_geometry = floating_window->geometry;
 
         uint32_t desktop = get_ewmh_desktop_index(target_idx, target_workspace);
         if (is_client_sticky(window_to_move))
@@ -258,7 +257,7 @@ void WindowManager::move_window_to_monitor(int direction)
 
         focused_monitor_ = target_idx;
         update_ewmh_current_desktop();
-        focus_floating_window(window_to_move);
+        focus_any_window(window_to_move);
         if (config_.focus.warp_cursor_on_monitor_change)
         {
             warp_to_monitor(monitors_[target_idx]);
@@ -310,7 +309,7 @@ void WindowManager::move_window_to_monitor(int direction)
 
     focused_monitor_ = target_idx;
     update_ewmh_current_desktop();
-    focus_window(window_to_move);
+    focus_any_window(window_to_move);
     if (config_.focus.warp_cursor_on_monitor_change)
     {
         warp_to_monitor(target_monitor);

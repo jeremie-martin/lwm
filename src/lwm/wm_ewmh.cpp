@@ -207,17 +207,17 @@ void WindowManager::switch_to_ewmh_desktop(uint32_t desktop)
 
     // Hide floating windows from old workspace FIRST
     // This prevents visual glitches where old floating windows appear over new workspace content
-    for (auto& fw : floating_windows_)
+    for (xcb_window_t fw : floating_windows_)
     {
-        auto const* client = get_client(fw.id);
+        auto const* client = get_client(fw);
         if (!client || client->monitor != monitor_idx)
             continue;
-        if (is_client_sticky(fw.id))
+        if (is_client_sticky(fw))
             continue;
         if (client->workspace == old_workspace)
         {
-            LOG_TRACE("switch_to_ewmh_desktop: pre-unmapping floating {:#x}", fw.id);
-            hide_window(fw.id);
+            LOG_TRACE("switch_to_ewmh_desktop: pre-unmapping floating {:#x}", fw);
+            hide_window(fw);
         }
     }
 

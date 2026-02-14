@@ -274,7 +274,6 @@ void WindowManager::handle_map_request(xcb_map_request_event_t const& e)
             if (rule_result.matched)
             {
                 auto* client = get_client(e.window);
-                auto* fw = find_floating_window(e.window);
 
                 if (client && (rule_result.target_monitor.has_value() || rule_result.target_workspace.has_value()))
                 {
@@ -289,34 +288,30 @@ void WindowManager::handle_map_request(xcb_map_request_event_t const& e)
                         uint32_t desktop = get_ewmh_desktop_index(target_mon, target_ws);
                         ewmh_.set_window_desktop(e.window, desktop);
 
-                        if (fw)
-                        {
-                            fw->geometry = floating::place_floating(
-                                monitors_[target_mon].working_area(),
-                                fw->geometry.width,
-                                fw->geometry.height,
-                                std::nullopt
-                            );
-                            client->floating_geometry = fw->geometry;
-                        }
+                        client->floating_geometry = floating::place_floating(
+                            monitors_[target_mon].working_area(),
+                            client->floating_geometry.width,
+                            client->floating_geometry.height,
+                            std::nullopt
+                        );
                     }
                 }
 
-                if (client && fw && rule_result.geometry.has_value())
+                if (client && rule_result.geometry.has_value())
                 {
-                    fw->geometry = *rule_result.geometry;
-                    client->floating_geometry = fw->geometry;
+                    client->floating_geometry = *rule_result.geometry;
                 }
 
-                if (client && fw && rule_result.center)
+                if (client && rule_result.center)
                 {
                     size_t mon = client->monitor;
                     if (mon < monitors_.size())
                     {
                         auto area = monitors_[mon].working_area();
-                        fw->geometry.x = area.x + static_cast<int16_t>((area.width - fw->geometry.width) / 2);
-                        fw->geometry.y = area.y + static_cast<int16_t>((area.height - fw->geometry.height) / 2);
-                        client->floating_geometry = fw->geometry;
+                        client->floating_geometry.x =
+                            area.x + static_cast<int16_t>((area.width - client->floating_geometry.width) / 2);
+                        client->floating_geometry.y =
+                            area.y + static_cast<int16_t>((area.height - client->floating_geometry.height) / 2);
                     }
                 }
 
@@ -407,7 +402,7 @@ void WindowManager::handle_map_request(xcb_map_request_event_t const& e)
                     if (client->monitor < monitors_.size() && client->monitor == focused_monitor_
                         && client->workspace == monitors_[client->monitor].current_workspace)
                     {
-                        focus_window(e.window);
+                        focus_any_window(e.window);
                     }
                 }
             }
@@ -469,16 +464,10 @@ void WindowManager::handle_enter_notify(xcb_enter_notify_event_t const& e)
             return;
         }
 
-        if (find_floating_window(e.event))
+        if (is_floating_window(e.event) || monitor_containing_window(e.event))
         {
-            LOG_DEBUG("EnterNotify: focusing floating window {:#x}", e.event);
-            focus_floating_window(e.event);
-            return;
-        }
-        if (monitor_containing_window(e.event))
-        {
-            LOG_DEBUG("EnterNotify: focusing tiled window {:#x}", e.event);
-            focus_window(e.event);
+            LOG_DEBUG("EnterNotify: focusing window {:#x}", e.event);
+            focus_any_window(e.event);
             return;
         }
     }
@@ -510,25 +499,12 @@ void WindowManager::handle_motion_notify(xcb_motion_notify_event_t const& e)
         if (auto const* client = get_client(window_under_cursor); client && client->hidden)
             return;
 
-        if (find_floating_window(window_under_cursor))
+        if (is_floating_window(window_under_cursor) || monitor_containing_window(window_under_cursor))
         {
             if (window_under_cursor != active_window_)
             {
-                LOG_DEBUG(
-                    "MotionNotify: focusing floating window {:#x} (was {:#x})",
-                    window_under_cursor,
-                    active_window_
-                );
-                focus_floating_window(window_under_cursor);
-            }
-            return;
-        }
-        if (monitor_containing_window(window_under_cursor))
-        {
-            if (window_under_cursor != active_window_)
-            {
-                LOG_DEBUG("MotionNotify: focusing tiled window {:#x} (was {:#x})", window_under_cursor, active_window_);
-                focus_window(window_under_cursor);
+                LOG_DEBUG("MotionNotify: focusing window {:#x} (was {:#x})", window_under_cursor, active_window_);
+                focus_any_window(window_under_cursor);
             }
             return;
         }
@@ -562,24 +538,24 @@ void WindowManager::handle_button_press(xcb_button_press_event_t const& e)
     {
         if (binding->action == "drag_window")
         {
-            if (find_floating_window(target))
+            if (is_floating_window(target))
             {
-                focus_floating_window(target);
+                focus_any_window(target);
                 begin_drag(target, false, e.root_x, e.root_y);
                 return;
             }
             if (monitor_containing_window(target))
             {
-                focus_window(target);
+                focus_any_window(target);
                 begin_tiled_drag(target, e.root_x, e.root_y);
                 return;
             }
         }
         else if (binding->action == "resize_floating")
         {
-            if (find_floating_window(target))
+            if (is_floating_window(target))
             {
-                focus_floating_window(target);
+                focus_any_window(target);
                 begin_drag(target, true, e.root_x, e.root_y);
                 return;
             }
@@ -588,16 +564,10 @@ void WindowManager::handle_button_press(xcb_button_press_event_t const& e)
 
     if (target != conn_.screen()->root)
     {
-        if (find_floating_window(target))
+        if (is_floating_window(target) || monitor_containing_window(target))
         {
             if (target != active_window_)
-                focus_floating_window(target);
-            return;
-        }
-        if (monitor_containing_window(target))
-        {
-            if (target != active_window_)
-                focus_window(target);
+                focus_any_window(target);
             return;
         }
     }
@@ -725,9 +695,7 @@ void WindowManager::handle_client_message(xcb_client_message_event_t const& e)
     {
         xcb_window_t window = static_cast<xcb_window_t>(e.data.data32[2]);
         if (window == XCB_NONE)
-        {
             window = e.window;
-        }
         pending_pings_.erase(window);
         pending_kills_.erase(window);
         return;
@@ -753,406 +721,69 @@ void WindowManager::handle_client_message(xcb_client_message_event_t const& e)
     if (e.type == wm_change_state_)
     {
         if (e.data.data32[0] == WM_STATE_ICONIC)
-        {
             iconify_window(e.window);
-        }
         return;
     }
 
     if (e.type == ewmh->_NET_WM_STATE)
     {
-        uint32_t action = e.data.data32[0];
-        xcb_atom_t first = static_cast<xcb_atom_t>(e.data.data32[1]);
-        xcb_atom_t second = static_cast<xcb_atom_t>(e.data.data32[2]);
-
-        auto handle_state = [&](xcb_atom_t state)
-        {
-            if (state == XCB_ATOM_NONE)
-                return;
-
-            // Helper to compute enable state based on action
-            auto compute_enable = [action](bool currently_set)
-            {
-                if (action == 0)
-                    return false; // Remove
-                if (action == 1)
-                    return true;       // Add
-                return !currently_set; // Toggle
-            };
-
-            if (state == ewmh->_NET_WM_STATE_FULLSCREEN)
-            {
-                bool enable = compute_enable(is_client_fullscreen(e.window));
-                set_fullscreen(e.window, enable);
-            }
-            else if (state == ewmh->_NET_WM_STATE_ABOVE)
-            {
-                bool enable = compute_enable(is_client_above(e.window));
-                set_window_above(e.window, enable);
-            }
-            else if (state == ewmh->_NET_WM_STATE_BELOW)
-            {
-                bool enable = compute_enable(is_client_below(e.window));
-                set_window_below(e.window, enable);
-            }
-            else if (state == ewmh->_NET_WM_STATE_SKIP_TASKBAR)
-            {
-                bool enable = compute_enable(is_client_skip_taskbar(e.window));
-                set_client_skip_taskbar(e.window, enable);
-            }
-            else if (state == ewmh->_NET_WM_STATE_SKIP_PAGER)
-            {
-                bool enable = compute_enable(is_client_skip_pager(e.window));
-                set_client_skip_pager(e.window, enable);
-            }
-            else if (state == ewmh->_NET_WM_STATE_HIDDEN)
-            {
-                bool enable = compute_enable(is_client_iconic(e.window));
-                if (enable)
-                    iconify_window(e.window);
-                else
-                    deiconify_window(e.window, false);
-            }
-            else if (state == ewmh->_NET_WM_STATE_STICKY)
-            {
-                bool enable = compute_enable(is_client_sticky(e.window));
-                set_window_sticky(e.window, enable);
-            }
-            else if (state == ewmh->_NET_WM_STATE_MAXIMIZED_HORZ)
-            {
-                bool enable = compute_enable(is_client_maximized_horz(e.window));
-                bool vert = is_client_maximized_vert(e.window);
-                set_window_maximized(e.window, enable, vert);
-            }
-            else if (state == ewmh->_NET_WM_STATE_MAXIMIZED_VERT)
-            {
-                bool enable = compute_enable(is_client_maximized_vert(e.window));
-                bool horiz = is_client_maximized_horz(e.window);
-                set_window_maximized(e.window, horiz, enable);
-            }
-            else if (state == ewmh->_NET_WM_STATE_SHADED)
-            {
-                bool enable = compute_enable(is_client_shaded(e.window));
-                set_window_shaded(e.window, enable);
-            }
-            else if (state == ewmh->_NET_WM_STATE_MODAL)
-            {
-                bool enable = compute_enable(is_client_modal(e.window));
-                set_window_modal(e.window, enable);
-            }
-            else if (net_wm_state_focused_ != XCB_NONE && state == net_wm_state_focused_)
-            {
-                // _NET_WM_STATE_FOCUSED is read-only, don't set it
-                return;
-            }
-            else if (state == ewmh->_NET_WM_STATE_DEMANDS_ATTENTION)
-            {
-                bool enable = compute_enable(is_client_demands_attention(e.window));
-                set_client_demands_attention(e.window, enable);
-            }
-        };
-
-        handle_state(first);
-        handle_state(second);
+        handle_wm_state_change(e);
         return;
     }
 
-    // Handle _NET_CURRENT_DESKTOP requests (e.g., from Polybar clicks)
     if (e.type == ewmh->_NET_CURRENT_DESKTOP)
     {
         uint32_t desktop = e.data.data32[0];
         LOG_DEBUG("_NET_CURRENT_DESKTOP request: desktop={}", desktop);
         switch_to_ewmh_desktop(desktop);
+        return;
     }
-    // Handle _NET_ACTIVE_WINDOW requests
-    else if (e.type == ewmh->_NET_ACTIVE_WINDOW)
+
+    if (e.type == ewmh->_NET_ACTIVE_WINDOW)
     {
-        xcb_window_t window = e.window;
-        uint32_t source = e.data.data32[0]; // 1 = application, 2 = pager
-        uint32_t timestamp = e.data.data32[1];
-        LOG_DEBUG("_NET_ACTIVE_WINDOW request: window={:#x} source={}", window, source);
-
-        // Focus stealing prevention: for application-initiated requests (source=1),
-        // check if the request timestamp is newer than the current active window's user time
-        if (source == 1 && active_window_ != XCB_NONE && timestamp != 0)
-        {
-            auto* active_client = get_client(active_window_);
-            if (active_client && active_client->user_time != 0)
-            {
-                // If the requesting window's timestamp is older than the active window's last
-                // user interaction, set demands attention instead of stealing focus
-                if (timestamp < active_client->user_time)
-                {
-                    LOG_DEBUG("Focus stealing prevented, setting demands attention");
-                    set_client_demands_attention(window, true);
-                    return;
-                }
-            }
-        }
-
-        if (is_client_iconic(window))
-        {
-            deiconify_window(window, false);
-        }
-        if (monitor_containing_window(window))
-        {
-            focus_window(window);
-        }
-        else if (find_floating_window(window))
-        {
-            focus_floating_window(window);
-        }
+        handle_active_window_request(e);
+        return;
     }
-    // Handle _NET_WM_DESKTOP requests (move window to another desktop)
-    else if (e.type == ewmh->_NET_WM_DESKTOP)
+
+    if (e.type == ewmh->_NET_WM_DESKTOP)
     {
-        uint32_t desktop = e.data.data32[0];
-        LOG_DEBUG("_NET_WM_DESKTOP request: window={:#x} desktop={}", e.window, desktop);
-
-        // 0xFFFFFFFF means sticky (visible on all desktops)
-        if (desktop == 0xFFFFFFFF)
-        {
-            set_window_sticky(e.window, true);
-            return;
-        }
-        if (is_client_sticky(e.window))
-        {
-            set_window_sticky(e.window, false);
-        }
-
-        // Calculate target monitor and workspace from desktop index
-        size_t workspaces_per_monitor = config_.workspaces.count;
-        size_t target_monitor = desktop / workspaces_per_monitor;
-        size_t target_workspace = desktop % workspaces_per_monitor;
-
-        if (target_monitor >= monitors_.size())
-            return;
-
-        bool was_active = (active_window_ == e.window);
-        auto target_visible = [&](size_t monitor_idx, size_t workspace_idx)
-        {
-            if (showing_desktop_)
-                return false;
-            return monitor_idx < monitors_.size() && workspace_idx == monitors_[monitor_idx].current_workspace;
-        };
-
-        // Handle tiled windows
-        if (auto* source_monitor = monitor_containing_window(e.window))
-        {
-            auto source_idx = workspace_index_for_window(e.window);
-            if (!source_idx)
-                return;
-
-            auto& source_ws = source_monitor->workspaces[*source_idx];
-            auto it = source_ws.find_window(e.window);
-            if (it == source_ws.windows.end())
-                return;
-
-            xcb_window_t win = *it;
-            source_ws.windows.erase(it);
-            if (source_ws.focused_window == e.window)
-            {
-                source_ws.focused_window = XCB_NONE;
-                for (auto rit = source_ws.windows.rbegin(); rit != source_ws.windows.rend(); ++rit)
-                {
-                    if (!is_client_iconic(*rit))
-                    {
-                        source_ws.focused_window = *rit;
-                        break;
-                    }
-                }
-            }
-
-            auto& target_ws = monitors_[target_monitor].workspaces[target_workspace];
-            target_ws.windows.push_back(win);
-            if (!target_visible(target_monitor, target_workspace) || was_active)
-            {
-                target_ws.focused_window = e.window;
-            }
-            // Sync Client for O(1) lookup
-            if (auto* client = get_client(e.window))
-            {
-                client->monitor = target_monitor;
-                client->workspace = target_workspace;
-            }
-            ewmh_.set_window_desktop(e.window, desktop);
-
-            rearrange_monitor(*source_monitor);
-            if (source_monitor != &monitors_[target_monitor])
-            {
-                rearrange_monitor(monitors_[target_monitor]);
-            }
-
-            // Hide if moved to non-current workspace
-            if (!target_visible(target_monitor, target_workspace))
-            {
-                hide_window(e.window);
-            }
-
-            update_ewmh_client_list();
-            if (was_active && !target_visible(target_monitor, target_workspace))
-            {
-                focus_or_fallback(focused_monitor());
-            }
-            conn_.flush();
-        }
-        else if (auto* fw = find_floating_window(e.window))
-        {
-            auto* client = get_client(e.window);
-            if (!client)
-                return;
-
-            size_t source_monitor = client->monitor;
-            if (source_monitor != target_monitor)
-            {
-                fw->geometry = floating::place_floating(
-                    monitors_[target_monitor].working_area(),
-                    fw->geometry.width,
-                    fw->geometry.height,
-                    std::nullopt
-                );
-            }
-            // Update Client (authoritative for monitor, workspace, geometry)
-            client->monitor = target_monitor;
-            client->workspace = target_workspace;
-            client->floating_geometry = fw->geometry;
-            ewmh_.set_window_desktop(e.window, desktop);
-
-            if (source_monitor != target_monitor)
-            {
-                update_floating_visibility(source_monitor);
-            }
-            update_floating_visibility(target_monitor);
-            update_ewmh_client_list();
-            if (was_active && !target_visible(target_monitor, target_workspace))
-            {
-                focus_or_fallback(focused_monitor());
-            }
-            conn_.flush();
-        }
+        handle_desktop_change(e);
+        return;
     }
-    // Handle _NET_REQUEST_FRAME_EXTENTS (apps query this before mapping)
-    else if (e.type == ewmh->_NET_REQUEST_FRAME_EXTENTS)
+
+    if (e.type == ewmh->_NET_REQUEST_FRAME_EXTENTS)
     {
         ewmh_.set_frame_extents(e.window, 0, 0, 0, 0);
         conn_.flush();
+        return;
     }
-    // Handle _NET_MOVERESIZE_WINDOW (programmatic move/resize for floating windows)
-    else if (e.type == ewmh->_NET_MOVERESIZE_WINDOW)
+
+    if (e.type == ewmh->_NET_MOVERESIZE_WINDOW)
     {
-        auto* fw = find_floating_window(e.window);
-        if (!fw)
-            return; // Only floating windows support this
-
-        uint32_t flags = e.data.data32[0];
-        // Flags: bits 8-11 indicate which fields are present (8=x, 9=y, 10=width, 11=height)
-        bool has_x = flags & (1 << 8);
-        bool has_y = flags & (1 << 9);
-        bool has_width = flags & (1 << 10);
-        bool has_height = flags & (1 << 11);
-
-        if (has_x)
-            fw->geometry.x = static_cast<int16_t>(e.data.data32[1]);
-        if (has_y)
-            fw->geometry.y = static_cast<int16_t>(e.data.data32[2]);
-        if (has_width)
-            fw->geometry.width = static_cast<uint16_t>(std::max<int32_t>(1, e.data.data32[3]));
-        if (has_height)
-            fw->geometry.height = static_cast<uint16_t>(std::max<int32_t>(1, e.data.data32[4]));
-
-        // Sync Client.floating_geometry (authoritative)
-        auto* client = get_client(e.window);
-        if (client)
-            client->floating_geometry = fw->geometry;
-
-        update_floating_monitor_for_geometry(*fw);
-        if (client && client->monitor < monitors_.size()
-            && client->workspace == monitors_[client->monitor].current_workspace && !is_client_iconic(fw->id)
-            && !is_client_fullscreen(fw->id))
-        {
-            apply_floating_geometry(*fw);
-        }
-        conn_.flush();
+        handle_moveresize_window(e);
+        return;
     }
-    // Handle _NET_WM_MOVERESIZE (interactive move/resize initiated by application)
-    else if (e.type == ewmh->_NET_WM_MOVERESIZE)
+
+    if (e.type == ewmh->_NET_WM_MOVERESIZE)
     {
-        auto* fw = find_floating_window(e.window);
-        if (!fw)
-            return; // Only floating windows support this
-
-        int16_t x_root = static_cast<int16_t>(e.data.data32[0]);
-        int16_t y_root = static_cast<int16_t>(e.data.data32[1]);
-        uint32_t direction = e.data.data32[2];
-
-        // Direction: 8 = move, 11 = cancel, 0-7 = resize edges
-        if (direction == 11)
-        {
-            // Cancel
-            end_drag();
-        }
-        else if (direction == 8)
-        {
-            // Move
-            focus_floating_window(e.window);
-            begin_drag(e.window, false, x_root, y_root);
-        }
-        else if (direction <= 7)
-        {
-            // Resize (direction indicates edge/corner)
-            focus_floating_window(e.window);
-            begin_drag(e.window, true, x_root, y_root);
-        }
+        handle_wm_moveresize(e);
+        return;
     }
-    // Handle _NET_SHOWING_DESKTOP (show desktop mode toggle)
-    else if (e.type == ewmh->_NET_SHOWING_DESKTOP)
+
+    if (e.type == ewmh->_NET_SHOWING_DESKTOP)
     {
-        bool show = e.data.data32[0] != 0;
-        if (show != showing_desktop_)
-        {
-            showing_desktop_ = show;
-            ewmh_.set_showing_desktop(showing_desktop_);
-
-            if (showing_desktop_)
-            {
-                for (auto const& monitor : monitors_)
-                {
-                    for (xcb_window_t window : monitor.current().windows)
-                    {
-                        hide_window(window);
-                    }
-                }
-                for (auto const& fw : floating_windows_)
-                {
-                    auto const* c = get_client(fw.id);
-                    if (c && c->monitor < monitors_.size() && c->workspace == monitors_[c->monitor].current_workspace)
-                    {
-                        hide_window(fw.id);
-                    }
-                }
-                clear_focus();
-            }
-            else
-            {
-                rearrange_all_monitors();
-                update_floating_visibility_all();
-                if (!monitors_.empty())
-                {
-                    focus_or_fallback(focused_monitor());
-                }
-            }
-            conn_.flush();
-        }
+        handle_showing_desktop(e);
+        return;
     }
-    // Handle _NET_RESTACK_WINDOW (restack window relative to sibling)
-    else if (e.type == ewmh->_NET_RESTACK_WINDOW)
+
+    if (e.type == ewmh->_NET_RESTACK_WINDOW)
     {
         xcb_window_t sibling = static_cast<xcb_window_t>(e.data.data32[1]);
         uint32_t detail = e.data.data32[2];
 
         uint32_t values[2];
         uint16_t mask = XCB_CONFIG_WINDOW_STACK_MODE;
-        values[0] = detail; // Stack mode
+        values[0] = detail;
 
         if (sibling != XCB_NONE)
         {
@@ -1162,10 +793,345 @@ void WindowManager::handle_client_message(xcb_client_message_event_t const& e)
         }
 
         xcb_configure_window(conn_.get(), e.window, mask, values);
-        // Update _NET_CLIENT_LIST_STACKING to reflect the new stacking order
         update_ewmh_client_list();
         conn_.flush();
     }
+}
+
+void WindowManager::handle_wm_state_change(xcb_client_message_event_t const& e)
+{
+    xcb_ewmh_connection_t* ewmh = ewmh_.get();
+    uint32_t action = e.data.data32[0];
+    xcb_atom_t first = static_cast<xcb_atom_t>(e.data.data32[1]);
+    xcb_atom_t second = static_cast<xcb_atom_t>(e.data.data32[2]);
+
+    auto handle_state = [&](xcb_atom_t state)
+    {
+        if (state == XCB_ATOM_NONE)
+            return;
+
+        auto compute_enable = [action](bool currently_set)
+        {
+            if (action == 0)
+                return false;
+            if (action == 1)
+                return true;
+            return !currently_set;
+        };
+
+        if (state == ewmh->_NET_WM_STATE_FULLSCREEN)
+        {
+            set_fullscreen(e.window, compute_enable(is_client_fullscreen(e.window)));
+        }
+        else if (state == ewmh->_NET_WM_STATE_ABOVE)
+        {
+            set_window_above(e.window, compute_enable(is_client_above(e.window)));
+        }
+        else if (state == ewmh->_NET_WM_STATE_BELOW)
+        {
+            set_window_below(e.window, compute_enable(is_client_below(e.window)));
+        }
+        else if (state == ewmh->_NET_WM_STATE_SKIP_TASKBAR)
+        {
+            set_client_skip_taskbar(e.window, compute_enable(is_client_skip_taskbar(e.window)));
+        }
+        else if (state == ewmh->_NET_WM_STATE_SKIP_PAGER)
+        {
+            set_client_skip_pager(e.window, compute_enable(is_client_skip_pager(e.window)));
+        }
+        else if (state == ewmh->_NET_WM_STATE_HIDDEN)
+        {
+            bool enable = compute_enable(is_client_iconic(e.window));
+            if (enable)
+                iconify_window(e.window);
+            else
+                deiconify_window(e.window, false);
+        }
+        else if (state == ewmh->_NET_WM_STATE_STICKY)
+        {
+            set_window_sticky(e.window, compute_enable(is_client_sticky(e.window)));
+        }
+        else if (state == ewmh->_NET_WM_STATE_MAXIMIZED_HORZ)
+        {
+            bool enable = compute_enable(is_client_maximized_horz(e.window));
+            set_window_maximized(e.window, enable, is_client_maximized_vert(e.window));
+        }
+        else if (state == ewmh->_NET_WM_STATE_MAXIMIZED_VERT)
+        {
+            bool enable = compute_enable(is_client_maximized_vert(e.window));
+            set_window_maximized(e.window, is_client_maximized_horz(e.window), enable);
+        }
+        else if (state == ewmh->_NET_WM_STATE_SHADED)
+        {
+            set_window_shaded(e.window, compute_enable(is_client_shaded(e.window)));
+        }
+        else if (state == ewmh->_NET_WM_STATE_MODAL)
+        {
+            set_window_modal(e.window, compute_enable(is_client_modal(e.window)));
+        }
+        else if (net_wm_state_focused_ != XCB_NONE && state == net_wm_state_focused_)
+        {
+            return;
+        }
+        else if (state == ewmh->_NET_WM_STATE_DEMANDS_ATTENTION)
+        {
+            set_client_demands_attention(e.window, compute_enable(is_client_demands_attention(e.window)));
+        }
+    };
+
+    handle_state(first);
+    handle_state(second);
+}
+
+void WindowManager::handle_active_window_request(xcb_client_message_event_t const& e)
+{
+    xcb_window_t window = e.window;
+    uint32_t source = e.data.data32[0];
+    uint32_t timestamp = e.data.data32[1];
+    LOG_DEBUG("_NET_ACTIVE_WINDOW request: window={:#x} source={}", window, source);
+
+    if (source == 1 && active_window_ != XCB_NONE && timestamp != 0)
+    {
+        auto* active_client = get_client(active_window_);
+        if (active_client && active_client->user_time != 0)
+        {
+            if (timestamp < active_client->user_time)
+            {
+                LOG_DEBUG("Focus stealing prevented, setting demands attention");
+                set_client_demands_attention(window, true);
+                return;
+            }
+        }
+    }
+
+    if (is_client_iconic(window))
+    {
+        deiconify_window(window, false);
+    }
+    if (monitor_containing_window(window) || is_floating_window(window))
+    {
+        focus_any_window(window);
+    }
+}
+
+void WindowManager::handle_desktop_change(xcb_client_message_event_t const& e)
+{
+    uint32_t desktop = e.data.data32[0];
+    LOG_DEBUG("_NET_WM_DESKTOP request: window={:#x} desktop={}", e.window, desktop);
+
+    if (desktop == 0xFFFFFFFF)
+    {
+        set_window_sticky(e.window, true);
+        return;
+    }
+    if (is_client_sticky(e.window))
+    {
+        set_window_sticky(e.window, false);
+    }
+
+    size_t workspaces_per_monitor = config_.workspaces.count;
+    size_t target_monitor = desktop / workspaces_per_monitor;
+    size_t target_workspace = desktop % workspaces_per_monitor;
+
+    if (target_monitor >= monitors_.size())
+        return;
+
+    bool was_active = (active_window_ == e.window);
+    auto target_visible = [&](size_t monitor_idx, size_t workspace_idx)
+    {
+        if (showing_desktop_)
+            return false;
+        return monitor_idx < monitors_.size() && workspace_idx == monitors_[monitor_idx].current_workspace;
+    };
+
+    if (auto* source_monitor = monitor_containing_window(e.window))
+    {
+        auto source_idx = workspace_index_for_window(e.window);
+        if (!source_idx)
+            return;
+
+        auto& source_ws = source_monitor->workspaces[*source_idx];
+        auto it = source_ws.find_window(e.window);
+        if (it == source_ws.windows.end())
+            return;
+
+        xcb_window_t win = *it;
+        source_ws.windows.erase(it);
+        if (source_ws.focused_window == e.window)
+        {
+            source_ws.focused_window = XCB_NONE;
+            for (auto rit = source_ws.windows.rbegin(); rit != source_ws.windows.rend(); ++rit)
+            {
+                if (!is_client_iconic(*rit))
+                {
+                    source_ws.focused_window = *rit;
+                    break;
+                }
+            }
+        }
+
+        auto& target_ws = monitors_[target_monitor].workspaces[target_workspace];
+        target_ws.windows.push_back(win);
+        if (!target_visible(target_monitor, target_workspace) || was_active)
+        {
+            target_ws.focused_window = e.window;
+        }
+        if (auto* client = get_client(e.window))
+        {
+            client->monitor = target_monitor;
+            client->workspace = target_workspace;
+        }
+        ewmh_.set_window_desktop(e.window, desktop);
+
+        rearrange_monitor(*source_monitor);
+        if (source_monitor != &monitors_[target_monitor])
+        {
+            rearrange_monitor(monitors_[target_monitor]);
+        }
+
+        if (!target_visible(target_monitor, target_workspace))
+        {
+            hide_window(e.window);
+        }
+
+        update_ewmh_client_list();
+        if (was_active && !target_visible(target_monitor, target_workspace))
+        {
+            focus_or_fallback(focused_monitor());
+        }
+        conn_.flush();
+    }
+    else if (is_floating_window(e.window))
+    {
+        auto* client = get_client(e.window);
+        if (!client)
+            return;
+
+        size_t source_monitor = client->monitor;
+        if (source_monitor != target_monitor)
+        {
+            client->floating_geometry = floating::place_floating(
+                monitors_[target_monitor].working_area(),
+                client->floating_geometry.width,
+                client->floating_geometry.height,
+                std::nullopt
+            );
+        }
+        client->monitor = target_monitor;
+        client->workspace = target_workspace;
+        ewmh_.set_window_desktop(e.window, desktop);
+
+        if (source_monitor != target_monitor)
+        {
+            update_floating_visibility(source_monitor);
+        }
+        update_floating_visibility(target_monitor);
+        update_ewmh_client_list();
+        if (was_active && !target_visible(target_monitor, target_workspace))
+        {
+            focus_or_fallback(focused_monitor());
+        }
+        conn_.flush();
+    }
+}
+
+void WindowManager::handle_moveresize_window(xcb_client_message_event_t const& e)
+{
+    if (!is_floating_window(e.window))
+        return;
+
+    auto* client = get_client(e.window);
+    if (!client)
+        return;
+
+    uint32_t flags = e.data.data32[0];
+    bool has_x = flags & (1 << 8);
+    bool has_y = flags & (1 << 9);
+    bool has_width = flags & (1 << 10);
+    bool has_height = flags & (1 << 11);
+
+    if (has_x)
+        client->floating_geometry.x = static_cast<int16_t>(e.data.data32[1]);
+    if (has_y)
+        client->floating_geometry.y = static_cast<int16_t>(e.data.data32[2]);
+    if (has_width)
+        client->floating_geometry.width = static_cast<uint16_t>(std::max<int32_t>(1, e.data.data32[3]));
+    if (has_height)
+        client->floating_geometry.height = static_cast<uint16_t>(std::max<int32_t>(1, e.data.data32[4]));
+
+    update_floating_monitor_for_geometry(e.window);
+    if (client->monitor < monitors_.size()
+        && client->workspace == monitors_[client->monitor].current_workspace && !is_client_iconic(e.window)
+        && !is_client_fullscreen(e.window))
+    {
+        apply_floating_geometry(e.window);
+    }
+    conn_.flush();
+}
+
+void WindowManager::handle_wm_moveresize(xcb_client_message_event_t const& e)
+{
+    if (!is_floating_window(e.window))
+        return;
+
+    int16_t x_root = static_cast<int16_t>(e.data.data32[0]);
+    int16_t y_root = static_cast<int16_t>(e.data.data32[1]);
+    uint32_t direction = e.data.data32[2];
+
+    if (direction == 11)
+    {
+        end_drag();
+    }
+    else if (direction == 8)
+    {
+        focus_any_window(e.window);
+        begin_drag(e.window, false, x_root, y_root);
+    }
+    else if (direction <= 7)
+    {
+        focus_any_window(e.window);
+        begin_drag(e.window, true, x_root, y_root);
+    }
+}
+
+void WindowManager::handle_showing_desktop(xcb_client_message_event_t const& e)
+{
+    bool show = e.data.data32[0] != 0;
+    if (show == showing_desktop_)
+        return;
+
+    showing_desktop_ = show;
+    ewmh_.set_showing_desktop(showing_desktop_);
+
+    if (showing_desktop_)
+    {
+        for (auto const& monitor : monitors_)
+        {
+            for (xcb_window_t window : monitor.current().windows)
+            {
+                hide_window(window);
+            }
+        }
+        for (xcb_window_t fw : floating_windows_)
+        {
+            auto const* c = get_client(fw);
+            if (c && c->monitor < monitors_.size() && c->workspace == monitors_[c->monitor].current_workspace)
+            {
+                hide_window(fw);
+            }
+        }
+        clear_focus();
+    }
+    else
+    {
+        rearrange_all_monitors();
+        update_floating_visibility_all();
+        if (!monitors_.empty())
+        {
+            focus_or_fallback(focused_monitor());
+        }
+    }
+    conn_.flush();
 }
 
 void WindowManager::handle_configure_request(xcb_configure_request_event_t const& e)
@@ -1183,9 +1149,9 @@ void WindowManager::handle_configure_request(xcb_configure_request_event_t const
         return;
     }
 
-    auto* floating_window = find_floating_window(e.window);
+    bool is_floating = is_floating_window(e.window);
     uint16_t mask = e.value_mask;
-    if (floating_window)
+    if (is_floating)
     {
         mask &= ~XCB_CONFIG_WINDOW_BORDER_WIDTH;
     }
@@ -1213,37 +1179,37 @@ void WindowManager::handle_configure_request(xcb_configure_request_event_t const
 
     xcb_configure_window(conn_.get(), e.window, mask, values);
 
-    if (floating_window)
+    if (is_floating)
     {
-        if (mask & XCB_CONFIG_WINDOW_X)
-            floating_window->geometry.x = e.x;
-        if (mask & XCB_CONFIG_WINDOW_Y)
-            floating_window->geometry.y = e.y;
-        if (mask & XCB_CONFIG_WINDOW_WIDTH)
-            floating_window->geometry.width = std::max<uint16_t>(1, e.width);
-        if (mask & XCB_CONFIG_WINDOW_HEIGHT)
-            floating_window->geometry.height = std::max<uint16_t>(1, e.height);
+        auto* client = get_client(e.window);
+        if (!client)
+            return;
 
-        uint16_t requested_width = floating_window->geometry.width;
-        uint16_t requested_height = floating_window->geometry.height;
+        if (mask & XCB_CONFIG_WINDOW_X)
+            client->floating_geometry.x = e.x;
+        if (mask & XCB_CONFIG_WINDOW_Y)
+            client->floating_geometry.y = e.y;
+        if (mask & XCB_CONFIG_WINDOW_WIDTH)
+            client->floating_geometry.width = std::max<uint16_t>(1, e.width);
+        if (mask & XCB_CONFIG_WINDOW_HEIGHT)
+            client->floating_geometry.height = std::max<uint16_t>(1, e.height);
+
+        uint16_t requested_width = client->floating_geometry.width;
+        uint16_t requested_height = client->floating_geometry.height;
         uint32_t hinted_width = requested_width;
         uint32_t hinted_height = requested_height;
-        layout_.apply_size_hints(floating_window->id, hinted_width, hinted_height);
-        floating_window->geometry.width = static_cast<uint16_t>(std::max<uint32_t>(1, hinted_width));
-        floating_window->geometry.height = static_cast<uint16_t>(std::max<uint32_t>(1, hinted_height));
+        layout_.apply_size_hints(e.window, hinted_width, hinted_height);
+        client->floating_geometry.width = static_cast<uint16_t>(std::max<uint32_t>(1, hinted_width));
+        client->floating_geometry.height = static_cast<uint16_t>(std::max<uint32_t>(1, hinted_height));
 
-        // Sync Client.floating_geometry (authoritative)
-        auto* client = get_client(e.window);
-        if (client)
-            client->floating_geometry = floating_window->geometry;
-
-        if (requested_width != floating_window->geometry.width || requested_height != floating_window->geometry.height)
+        if (requested_width != client->floating_geometry.width
+            || requested_height != client->floating_geometry.height)
         {
-            apply_floating_geometry(*floating_window);
+            apply_floating_geometry(e.window);
         }
 
-        update_floating_monitor_for_geometry(*floating_window);
-        if (client && active_window_ == floating_window->id)
+        update_floating_monitor_for_geometry(e.window);
+        if (active_window_ == e.window)
         {
             focused_monitor_ = client->monitor;
             update_ewmh_current_desktop();
@@ -1261,21 +1227,22 @@ void WindowManager::handle_property_notify(xcb_property_notify_event_t const& e)
     }
     if (wm_normal_hints_ != XCB_NONE && e.atom == wm_normal_hints_)
     {
-        if (auto* floating_window = find_floating_window(e.window))
+        if (is_floating_window(e.window))
         {
-            uint32_t hinted_width = floating_window->geometry.width;
-            uint32_t hinted_height = floating_window->geometry.height;
-            layout_.apply_size_hints(floating_window->id, hinted_width, hinted_height);
-            floating_window->geometry.width = static_cast<uint16_t>(std::max<uint32_t>(1, hinted_width));
-            floating_window->geometry.height = static_cast<uint16_t>(std::max<uint32_t>(1, hinted_height));
             auto* client = get_client(e.window);
             if (client)
-                client->floating_geometry = floating_window->geometry;
-            if (client && client->monitor < monitors_.size()
-                && client->workspace == monitors_[client->monitor].current_workspace
-                && !is_client_iconic(floating_window->id) && !is_client_fullscreen(floating_window->id))
             {
-                apply_floating_geometry(*floating_window);
+                uint32_t hinted_width = client->floating_geometry.width;
+                uint32_t hinted_height = client->floating_geometry.height;
+                layout_.apply_size_hints(e.window, hinted_width, hinted_height);
+                client->floating_geometry.width = static_cast<uint16_t>(std::max<uint32_t>(1, hinted_width));
+                client->floating_geometry.height = static_cast<uint16_t>(std::max<uint32_t>(1, hinted_height));
+                if (client->monitor < monitors_.size()
+                    && client->workspace == monitors_[client->monitor].current_workspace
+                    && !is_client_iconic(e.window) && !is_client_fullscreen(e.window))
+                {
+                    apply_floating_geometry(e.window);
+                }
             }
         }
     }
@@ -1299,7 +1266,7 @@ void WindowManager::handle_property_notify(xcb_property_notify_event_t const& e)
     if (wm_hints_ != XCB_NONE && e.atom == wm_hints_)
     {
         // Only process for managed windows (tiled or floating)
-        if (monitor_containing_window(e.window) || find_floating_window(e.window))
+        if (monitor_containing_window(e.window) || is_floating_window(e.window))
         {
             xcb_icccm_wm_hints_t hints;
             if (xcb_icccm_get_wm_hints_reply(
@@ -1394,7 +1361,7 @@ void WindowManager::handle_randr_screen_change()
         size_t workspace;
     };
     std::vector<WindowLocation> tiled_locations;
-    std::vector<std::pair<FloatingWindow, WindowLocation>> floating_locations;
+    std::vector<std::pair<xcb_window_t, WindowLocation>> floating_locations;
 
     // Clear fullscreen_monitors from all clients since monitor indices may have changed
     for (auto& [id, client] : clients_)
@@ -1415,18 +1382,13 @@ void WindowManager::handle_randr_screen_change()
         }
     }
 
-    // Save floating window locations
-    for (auto const& floating_window : floating_windows_)
+    // Save floating window locations (geometry persists in Client)
+    for (xcb_window_t fw : floating_windows_)
     {
-        if (auto* client = get_client(floating_window.id))
+        if (auto* client = get_client(fw))
         {
             std::string monitor_name = (client->monitor < monitors_.size()) ? monitors_[client->monitor].name : "";
-            floating_locations.push_back(
-                {
-                    floating_window,
-                    { floating_window.id, monitor_name, client->workspace }
-            }
-            );
+            floating_locations.push_back({ fw, { fw, monitor_name, client->workspace } });
         }
     }
 
@@ -1496,14 +1458,14 @@ void WindowManager::handle_randr_screen_change()
 
             uint32_t desktop = get_ewmh_desktop_index(target_monitor, target_workspace);
 
-            if (auto* client = get_client(floating_window.id))
+            if (auto* client = get_client(floating_window))
             {
                 client->monitor = target_monitor;
                 client->workspace = target_workspace;
                 // Keep original geometry - don't reposition
             }
             floating_windows_.push_back(floating_window);
-            ewmh_.set_window_desktop(floating_window.id, desktop);
+            ewmh_.set_window_desktop(floating_window, desktop);
         }
 
         // Restore focused monitor by name, or fall back to 0

@@ -22,8 +22,11 @@ void WindowManager::begin_drag(xcb_window_t window, bool resize, int16_t root_x,
     if (is_client_fullscreen(window))
         return;
 
-    auto* floating_window = find_floating_window(window);
-    if (!floating_window)
+    if (!is_floating_window(window))
+        return;
+
+    auto* client = get_client(window);
+    if (!client)
         return;
 
     drag_state_.active = true;
@@ -34,7 +37,7 @@ void WindowManager::begin_drag(xcb_window_t window, bool resize, int16_t root_x,
     drag_state_.start_root_y = root_y;
     drag_state_.last_root_x = root_x;
     drag_state_.last_root_y = root_y;
-    drag_state_.start_geometry = floating_window->geometry;
+    drag_state_.start_geometry = client->floating_geometry;
 
     xcb_grab_pointer(
         conn_.get(),
@@ -56,7 +59,7 @@ void WindowManager::begin_tiled_drag(xcb_window_t window, int16_t root_x, int16_
         return;
     if (is_client_fullscreen(window))
         return;
-    if (find_floating_window(window))
+    if (is_floating_window(window))
         return;
     if (!monitor_containing_window(window))
         return;
@@ -111,8 +114,8 @@ void WindowManager::update_drag(int16_t root_x, int16_t root_y)
         return;
     }
 
-    auto* floating_window = find_floating_window(drag_state_.window);
-    if (!floating_window)
+    auto* client = get_client(drag_state_.window);
+    if (!client || !is_floating_window(drag_state_.window))
         return;
 
     int32_t dx = static_cast<int32_t>(root_x) - static_cast<int32_t>(drag_state_.start_root_x);
@@ -128,7 +131,7 @@ void WindowManager::update_drag(int16_t root_x, int16_t root_y)
 
         uint32_t hinted_width = updated.width;
         uint32_t hinted_height = updated.height;
-        layout_.apply_size_hints(floating_window->id, hinted_width, hinted_height);
+        layout_.apply_size_hints(drag_state_.window, hinted_width, hinted_height);
         updated.width = static_cast<uint16_t>(std::max<uint32_t>(1, hinted_width));
         updated.height = static_cast<uint16_t>(std::max<uint32_t>(1, hinted_height));
     }
@@ -138,18 +141,14 @@ void WindowManager::update_drag(int16_t root_x, int16_t root_y)
         updated.y = static_cast<int16_t>(static_cast<int32_t>(drag_state_.start_geometry.y) + dy);
     }
 
-    floating_window->geometry = updated;
+    client->floating_geometry = updated;
 
-    if (auto* client = get_client(drag_state_.window))
-        client->floating_geometry = floating_window->geometry;
+    apply_floating_geometry(drag_state_.window);
+    update_floating_monitor_for_geometry(drag_state_.window);
 
-    apply_floating_geometry(*floating_window);
-    update_floating_monitor_for_geometry(*floating_window);
-
-    if (active_window_ == floating_window->id)
+    if (active_window_ == drag_state_.window)
     {
-        if (auto* client = get_client(floating_window->id))
-            focused_monitor_ = client->monitor;
+        focused_monitor_ = client->monitor;
         update_ewmh_current_desktop();
     }
 
@@ -232,7 +231,7 @@ void WindowManager::end_drag()
                     }
 
                     update_ewmh_client_list();
-                    focus_window(window);
+                    focus_any_window(window);
                 }
             }
         }

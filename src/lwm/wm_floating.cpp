@@ -120,10 +120,7 @@ void WindowManager::manage_floating_window(xcb_window_t window, bool start_iconi
         );
     }
 
-    FloatingWindow floating_window;
-    floating_window.id = window;
-    floating_window.geometry = placement;
-    floating_windows_.push_back(floating_window);
+    floating_windows_.push_back(window);
 
     
 
@@ -286,7 +283,7 @@ void WindowManager::manage_floating_window(xcb_window_t window, bool start_iconi
     {
         update_floating_visibility(*monitor_idx);
         if (!suppress_focus_ && *monitor_idx == focused_monitor_ && is_workspace_visible(*monitor_idx, *workspace_idx))
-            focus_floating_window(window);
+            focus_any_window(window);
     }
     else
     {
@@ -365,7 +362,7 @@ void WindowManager::unmanage_floating_window(xcb_window_t window)
     // Remove from unified Client registry (handles all client state including order)
     clients_.erase(window);
 
-    auto it = std::ranges::find_if(floating_windows_, [window](FloatingWindow const& fw) { return fw.id == window; });
+    auto it = std::ranges::find(floating_windows_, window);
     if (it == floating_windows_.end())
         return;
 
@@ -388,24 +385,9 @@ void WindowManager::unmanage_floating_window(xcb_window_t window)
     conn_.flush();
 }
 
-WindowManager::FloatingWindow* WindowManager::find_floating_window(xcb_window_t window)
+bool WindowManager::is_floating_window(xcb_window_t window) const
 {
-    auto it = std::find_if(
-        floating_windows_.begin(),
-        floating_windows_.end(),
-        [window](FloatingWindow const& floating_window) { return floating_window.id == window; }
-    );
-    return it == floating_windows_.end() ? nullptr : &(*it);
-}
-
-WindowManager::FloatingWindow const* WindowManager::find_floating_window(xcb_window_t window) const
-{
-    auto it = std::find_if(
-        floating_windows_.begin(),
-        floating_windows_.end(),
-        [window](FloatingWindow const& floating_window) { return floating_window.id == window; }
-    );
-    return it == floating_windows_.end() ? nullptr : &(*it);
+    return std::ranges::find(floating_windows_, window) != floating_windows_.end();
 }
 
 void WindowManager::update_floating_visibility(size_t monitor_idx)
@@ -426,54 +408,54 @@ void WindowManager::update_floating_visibility(size_t monitor_idx)
     if (showing_desktop_)
     {
         LOG_TRACE("update_floating_visibility: showing desktop, hiding all floating");
-        for (auto& fw : floating_windows_)
+        for (xcb_window_t fw : floating_windows_)
         {
-            auto const* client = get_client(fw.id);
+            auto const* client = get_client(fw);
             if (client && client->monitor == monitor_idx)
             {
-                LOG_TRACE("update_floating_visibility: unmapping floating {:#x} (showing desktop)", fw.id);
-                hide_window(fw.id);
+                LOG_TRACE("update_floating_visibility: unmapping floating {:#x} (showing desktop)", fw);
+                hide_window(fw);
             }
         }
         return;
     }
 
-    for (auto& fw : floating_windows_)
+    for (xcb_window_t fw : floating_windows_)
     {
-        auto const* client = get_client(fw.id);
+        auto const* client = get_client(fw);
         if (!client || client->monitor != monitor_idx)
             continue;
 
-        bool sticky = is_client_sticky(fw.id);
-        bool should_show = (sticky || client->workspace == monitor.current_workspace) && !is_client_iconic(fw.id);
+        bool sticky = is_client_sticky(fw);
+        bool should_show = (sticky || client->workspace == monitor.current_workspace) && !is_client_iconic(fw);
 
         LOG_TRACE(
             "update_floating_visibility: window {:#x} ws={} current_ws={} sticky={} iconic={} -> show={}",
-            fw.id,
+            fw,
             client->workspace,
             monitor.current_workspace,
             sticky,
-            is_client_iconic(fw.id),
+            is_client_iconic(fw),
             should_show
         );
 
         if (should_show)
         {
-            show_window(fw.id);
+            show_window(fw);
 
-            if (is_client_fullscreen(fw.id))
+            if (is_client_fullscreen(fw))
             {
-                apply_fullscreen_if_needed(fw.id, fullscreen_policy::ApplyContext::VisibilityTransition);
+                apply_fullscreen_if_needed(fw, fullscreen_policy::ApplyContext::VisibilityTransition);
             }
-            else if (is_client_maximized_horz(fw.id) || is_client_maximized_vert(fw.id))
+            else if (is_client_maximized_horz(fw) || is_client_maximized_vert(fw))
             {
-                apply_maximized_geometry(fw.id);
+                apply_maximized_geometry(fw);
             }
             else
             {
                 apply_floating_geometry(fw);
             }
-            LOG_TRACE("update_floating_visibility: showing floating {:#x}", fw.id);
+            LOG_TRACE("update_floating_visibility: showing floating {:#x}", fw);
             if (client->transient_for != XCB_NONE)
             {
                 restack_transients(client->transient_for);
@@ -481,8 +463,8 @@ void WindowManager::update_floating_visibility(size_t monitor_idx)
         }
         else
         {
-            LOG_TRACE("update_floating_visibility: hiding floating {:#x}", fw.id);
-            hide_window(fw.id);
+            LOG_TRACE("update_floating_visibility: hiding floating {:#x}", fw);
+            hide_window(fw);
         }
     }
     LOG_TRACE("update_floating_visibility: DONE");
@@ -496,47 +478,51 @@ void WindowManager::update_floating_visibility_all()
     }
 }
 
-void WindowManager::update_floating_monitor_for_geometry(FloatingWindow& window)
+void WindowManager::update_floating_monitor_for_geometry(xcb_window_t window)
 {
-    auto* client = get_client(window.id);
+    auto* client = get_client(window);
     if (!client)
         return;
 
-    int32_t center_x = static_cast<int32_t>(window.geometry.x) + static_cast<int32_t>(window.geometry.width) / 2;
-    int32_t center_y = static_cast<int32_t>(window.geometry.y) + static_cast<int32_t>(window.geometry.height) / 2;
+    auto const& geom = client->floating_geometry;
+    int32_t center_x = static_cast<int32_t>(geom.x) + static_cast<int32_t>(geom.width) / 2;
+    int32_t center_y = static_cast<int32_t>(geom.y) + static_cast<int32_t>(geom.height) / 2;
     auto new_monitor =
         focus::monitor_index_at_point(monitors_, static_cast<int16_t>(center_x), static_cast<int16_t>(center_y));
     if (!new_monitor || *new_monitor == client->monitor)
         return;
 
-    // Update Client (authoritative for monitor/workspace)
     client->monitor = *new_monitor;
     client->workspace = monitors_[client->monitor].current_workspace;
 
     uint32_t desktop = get_ewmh_desktop_index(client->monitor, client->workspace);
-    ewmh_.set_window_desktop(window.id, desktop);
+    ewmh_.set_window_desktop(window, desktop);
 }
 
-void WindowManager::apply_floating_geometry(FloatingWindow const& window)
+void WindowManager::apply_floating_geometry(xcb_window_t window)
 {
-    uint32_t width = window.geometry.width;
-    uint32_t height = window.geometry.height;
-    layout_.apply_size_hints(window.id, width, height);
+    auto const* client = get_client(window);
+    if (!client)
+        return;
 
-    send_sync_request(window.id, last_event_time_);
+    auto const& geom = client->floating_geometry;
+    uint32_t width = geom.width;
+    uint32_t height = geom.height;
+    layout_.apply_size_hints(window, width, height);
 
-    int32_t x = static_cast<int32_t>(window.geometry.x);
-    int32_t y = static_cast<int32_t>(window.geometry.y);
+    send_sync_request(window, last_event_time_);
+
+    int32_t x = static_cast<int32_t>(geom.x);
+    int32_t y = static_cast<int32_t>(geom.y);
 
     uint32_t values[] = { static_cast<uint32_t>(x), static_cast<uint32_t>(y), width, height };
     uint16_t mask = XCB_CONFIG_WINDOW_X | XCB_CONFIG_WINDOW_Y | XCB_CONFIG_WINDOW_WIDTH | XCB_CONFIG_WINDOW_HEIGHT;
-    xcb_configure_window(conn_.get(), window.id, mask, values);
+    xcb_configure_window(conn_.get(), window, mask, values);
 
-    // Send synthetic ConfigureNotify so client knows its geometry immediately
     xcb_configure_notify_event_t ev = {};
     ev.response_type = XCB_CONFIGURE_NOTIFY;
-    ev.event = window.id;
-    ev.window = window.id;
+    ev.event = window;
+    ev.window = window;
     ev.x = static_cast<int16_t>(x);
     ev.y = static_cast<int16_t>(y);
     ev.width = static_cast<uint16_t>(width);
@@ -545,7 +531,7 @@ void WindowManager::apply_floating_geometry(FloatingWindow const& window)
     ev.above_sibling = XCB_NONE;
     ev.override_redirect = 0;
 
-    xcb_send_event(conn_.get(), 0, window.id, XCB_EVENT_MASK_STRUCTURE_NOTIFY, reinterpret_cast<char*>(&ev));
+    xcb_send_event(conn_.get(), 0, window, XCB_EVENT_MASK_STRUCTURE_NOTIFY, reinterpret_cast<char*>(&ev));
 }
 
 } // namespace lwm

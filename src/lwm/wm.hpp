@@ -26,14 +26,6 @@ public:
     void run();
 
 private:
-    // FloatingWindow tracks only runtime geometry state.
-    // All other fields (monitor, workspace, name, transient_for) are in Client.
-    struct FloatingWindow
-    {
-        xcb_window_t id = XCB_NONE;
-        Geometry geometry;
-    };
-
     struct DragState
     {
         bool active = false;
@@ -64,7 +56,7 @@ private:
     std::vector<Monitor> monitors_;
     std::vector<xcb_window_t> dock_windows_;
     std::vector<xcb_window_t> desktop_windows_;
-    std::vector<FloatingWindow> floating_windows_;
+    std::vector<xcb_window_t> floating_windows_;
 
     // Unified Client registry
     // This is the authoritative source of truth for all managed window state.
@@ -129,6 +121,12 @@ private:
     void handle_key_press(xcb_key_press_event_t const& e);
     void handle_key_release(xcb_key_release_event_t const& e);
     void handle_client_message(xcb_client_message_event_t const& e);
+    void handle_wm_state_change(xcb_client_message_event_t const& e);
+    void handle_active_window_request(xcb_client_message_event_t const& e);
+    void handle_desktop_change(xcb_client_message_event_t const& e);
+    void handle_moveresize_window(xcb_client_message_event_t const& e);
+    void handle_wm_moveresize(xcb_client_message_event_t const& e);
+    void handle_showing_desktop(xcb_client_message_event_t const& e);
     void handle_configure_request(xcb_configure_request_event_t const& e);
     void handle_property_notify(xcb_property_notify_event_t const& e);
     void handle_expose(xcb_expose_event_t const& e);
@@ -139,8 +137,7 @@ private:
     void manage_floating_window(xcb_window_t window, bool start_iconic = false);
     void unmanage_window(xcb_window_t window);
     void unmanage_floating_window(xcb_window_t window);
-    void focus_window(xcb_window_t window);
-    void focus_floating_window(xcb_window_t window);
+    void focus_any_window(xcb_window_t window);
     void focus_next();
     void focus_prev();
     void set_fullscreen(xcb_window_t window, bool enabled);
@@ -202,8 +199,7 @@ private:
     void focus_or_fallback(Monitor& monitor);
     Monitor* monitor_containing_window(xcb_window_t window);
     Monitor* monitor_at_point(int16_t x, int16_t y);
-    FloatingWindow* find_floating_window(xcb_window_t window);
-    FloatingWindow const* find_floating_window(xcb_window_t window) const;
+    bool is_floating_window(xcb_window_t window) const;
     std::optional<size_t> monitor_index_for_window(xcb_window_t window) const;
     std::optional<size_t> workspace_index_for_window(xcb_window_t window) const;
     std::optional<uint32_t> get_raw_window_desktop(xcb_window_t window) const;
@@ -217,8 +213,8 @@ private:
     bool is_workspace_visible(size_t monitor_idx, size_t workspace_idx) const;
     void update_floating_visibility(size_t monitor_idx);
     void update_floating_visibility_all();
-    void update_floating_monitor_for_geometry(FloatingWindow& window);
-    void apply_floating_geometry(FloatingWindow const& window);
+    void update_floating_monitor_for_geometry(xcb_window_t window);
+    void apply_floating_geometry(xcb_window_t window);
     void send_configure_notify(xcb_window_t window);
     void begin_drag(xcb_window_t window, bool resize, int16_t root_x, int16_t root_y);
     void begin_tiled_drag(xcb_window_t window, int16_t root_x, int16_t root_y);

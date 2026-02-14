@@ -573,8 +573,7 @@ void WindowManager::manage_window(xcb_window_t window, bool start_iconic)
     }
 
     if (net_wm_user_time_window_ != XCB_NONE)
-        if (net_wm_user_time_window_ != XCB_NONE)
-        {
+    {
             auto cookie = xcb_get_property(conn_.get(), 0, window, net_wm_user_time_window_, XCB_ATOM_WINDOW, 0, 1);
             auto* reply = xcb_get_property_reply(conn_.get(), cookie, nullptr);
             if (reply)
@@ -773,9 +772,9 @@ void WindowManager::set_fullscreen(xcb_window_t window, bool enabled)
     {
         if (!client->fullscreen)
         {
-            if (auto* floating_window = find_floating_window(window))
+            if (is_floating_window(window))
             {
-                client->fullscreen_restore = floating_window->geometry;
+                client->fullscreen_restore = client->floating_geometry;
             }
             else
             {
@@ -827,15 +826,14 @@ void WindowManager::set_fullscreen(xcb_window_t window, bool enabled)
         client->fullscreen = false;
         ewmh_.set_window_state(window, ewmh_.get()->_NET_WM_STATE_FULLSCREEN, false);
 
-        if (auto* floating_window = find_floating_window(window))
+        if (is_floating_window(window))
         {
             if (client->fullscreen_restore)
             {
-                floating_window->geometry = *client->fullscreen_restore;
-                client->floating_geometry = floating_window->geometry;
+                client->floating_geometry = *client->fullscreen_restore;
                 if (client->workspace == monitors_[client->monitor].current_workspace && !client->iconic)
                 {
-                    apply_floating_geometry(*floating_window);
+                    apply_floating_geometry(window);
                 }
             }
         }
@@ -929,7 +927,7 @@ void WindowManager::set_window_sticky(xcb_window_t window, bool enabled)
         ewmh_.set_window_desktop(window, desktop);
     }
 
-    if (find_floating_window(window))
+    if (is_floating_window(window))
     {
         update_floating_visibility(client->monitor);
     }
@@ -960,23 +958,22 @@ void WindowManager::set_window_maximized(xcb_window_t window, bool horiz, bool v
         {
             if (client->maximize_restore)
             {
-                if (auto* floating_window = find_floating_window(window))
+                if (is_floating_window(window))
                 {
-                    floating_window->geometry = *client->maximize_restore;
-                    client->floating_geometry = floating_window->geometry;
+                    client->floating_geometry = *client->maximize_restore;
                     if (client->workspace == monitors_[client->monitor].current_workspace && !client->iconic)
                     {
-                        apply_floating_geometry(*floating_window);
+                        apply_floating_geometry(window);
                     }
                 }
                 client->maximize_restore = std::nullopt;
             }
         }
-        else if (auto* floating_window = find_floating_window(window))
+        else if (is_floating_window(window))
         {
             if (!client->maximize_restore)
             {
-                client->maximize_restore = floating_window->geometry;
+                client->maximize_restore = client->floating_geometry;
             }
             apply_maximized_geometry(window);
         }
@@ -992,13 +989,12 @@ void WindowManager::apply_maximized_geometry(xcb_window_t window)
     if (!client)
         return;
 
-    auto* floating_window = find_floating_window(window);
-    if (!floating_window)
+    if (!is_floating_window(window))
         return;
     if (client->monitor >= monitors_.size())
         return;
 
-    Geometry base = floating_window->geometry;
+    Geometry base = client->floating_geometry;
     if (client->maximize_restore)
     {
         base = *client->maximize_restore;
@@ -1016,11 +1012,10 @@ void WindowManager::apply_maximized_geometry(xcb_window_t window)
         base.height = area.height;
     }
 
-    floating_window->geometry = base;
-    client->floating_geometry = floating_window->geometry;
+    client->floating_geometry = base;
     if (client->workspace == monitors_[client->monitor].current_workspace && !client->iconic)
     {
-        apply_floating_geometry(*floating_window);
+        apply_floating_geometry(window);
     }
 }
 
@@ -1270,7 +1265,7 @@ void WindowManager::iconify_window(xcb_window_t window)
 
     ewmh_.set_window_state(window, ewmh_.get()->_NET_WM_STATE_HIDDEN, true);
 
-    if (find_floating_window(window))
+    if (is_floating_window(window))
     {
         hide_window(window);
         update_floating_visibility(client->monitor);
@@ -1312,23 +1307,19 @@ void WindowManager::deiconify_window(xcb_window_t window, bool focus)
 
     ewmh_.set_window_state(window, ewmh_.get()->_NET_WM_STATE_HIDDEN, false);
 
-    if (find_floating_window(window))
+    if (is_floating_window(window))
     {
         update_floating_visibility(client->monitor);
-        if (focus && client->monitor == focused_monitor_
-            && client->workspace == monitors_[client->monitor].current_workspace)
-        {
-            focus_floating_window(window);
-        }
     }
     else if (client->monitor < monitors_.size())
     {
         rearrange_monitor(monitors_[client->monitor]);
-        if (focus && client->monitor == focused_monitor_
-            && client->workspace == monitors_[client->monitor].current_workspace)
-        {
-            focus_window(window);
-        }
+    }
+
+    if (focus && client->monitor == focused_monitor_
+        && client->workspace == monitors_[client->monitor].current_workspace)
+    {
+        focus_any_window(window);
     }
 
     apply_fullscreen_if_needed(window, fullscreen_policy::ApplyContext::VisibilityTransition);
@@ -1679,19 +1670,19 @@ void WindowManager::restack_transients(xcb_window_t parent)
     if (!is_window_visible(parent))
         return;
 
-    for (auto const& fw : floating_windows_)
+    for (xcb_window_t fw : floating_windows_)
     {
-        auto const* client = get_client(fw.id);
+        auto const* client = get_client(fw);
         if (!client || client->transient_for != parent)
             continue;
-        if (!is_window_visible(fw.id))
+        if (!is_window_visible(fw))
             continue;
 
         uint32_t values[2];
         values[0] = parent;
         values[1] = XCB_STACK_MODE_ABOVE;
         uint16_t mask = XCB_CONFIG_WINDOW_SIBLING | XCB_CONFIG_WINDOW_STACK_MODE;
-        xcb_configure_window(conn_.get(), fw.id, mask, values);
+        xcb_configure_window(conn_.get(), fw, mask, values);
     }
 }
 
@@ -2219,11 +2210,11 @@ void WindowManager::clear_all_borders()
             }
         }
     }
-    for (auto const& floating_window : floating_windows_)
+    for (xcb_window_t floating_window : floating_windows_)
     {
         xcb_change_window_attributes(
             conn_.get(),
-            floating_window.id,
+            floating_window,
             XCB_CW_BORDER_PIXEL,
             &conn_.screen()->black_pixel
         );

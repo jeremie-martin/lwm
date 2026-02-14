@@ -6,10 +6,10 @@
 
 namespace lwm {
 
-void WindowManager::focus_window(xcb_window_t window)
+void WindowManager::focus_any_window(xcb_window_t window)
 {
     LOG_TRACE(
-        "focus_window({:#x}) called, active_window_={:#x}, showing_desktop_={}",
+        "focus_any_window({:#x}) called, active_window_={:#x}, showing_desktop_={}",
         window,
         active_window_,
         showing_desktop_
@@ -17,220 +17,142 @@ void WindowManager::focus_window(xcb_window_t window)
 
     if (showing_desktop_)
     {
-        LOG_TRACE("focus_window: rejected (showing_desktop_)");
+        LOG_TRACE("focus_any_window: rejected (showing_desktop_)");
         return;
     }
 
     if (!is_focus_eligible(window))
     {
-        LOG_TRACE("focus_window: rejected (not focus eligible)");
-        return;
-    }
-
-    if (is_client_iconic(window))
-    {
-        LOG_DEBUG("focus_window: deiconifying window {:#x}", window);
-        deiconify_window(window, false);
-    }
-
-    xcb_window_t previous_active = active_window_;
-
-    bool is_sticky = is_client_sticky(window);
-    LOG_TRACE("focus_window: calling focus_window_state, is_sticky={}", is_sticky);
-    auto change = focus::focus_window_state(monitors_, focused_monitor_, active_window_, window, is_sticky);
-    if (!change)
-    {
-        LOG_TRACE("focus_window: focus_window_state returned nullopt, returning");
-        return;
-    }
-
-    LOG_DEBUG(
-        "focus_window({:#x}): target_monitor={} workspace_changed={} "
-        "old_ws={} new_ws={} prev_active={:#x}",
-        window,
-        change->target_monitor,
-        change->workspace_changed,
-        change->old_workspace,
-        change->new_workspace,
-        previous_active
-    );
-
-    auto& target_monitor = monitors_[change->target_monitor];
-    if (change->workspace_changed)
-    {
-        LOG_DEBUG(
-            "focus_window: WORKSPACE SWITCH TRIGGERED by focus! old_ws={} new_ws={}",
-            change->old_workspace,
-            change->new_workspace
-        );
-        for (xcb_window_t w : target_monitor.workspaces[change->old_workspace].windows)
-        {
-            if (is_client_sticky(w))
-                continue;
-            LOG_TRACE("focus_window: unmapping window {:#x} from old workspace", w);
-            hide_window(w);
-        }
-        LOG_TRACE("focus_window: rearranging monitor after workspace switch");
-        rearrange_monitor(target_monitor);
-        LOG_TRACE("focus_window: updating floating visibility after workspace switch");
-        update_floating_visibility(change->target_monitor);
-    }
-
-    LOG_TRACE("focus_window: updating EWMH current desktop");
-    update_ewmh_current_desktop();
-
-    clear_all_borders();
-
-    bool is_fullscreen = is_client_fullscreen(window);
-    if (focus_policy::should_apply_focus_border(is_fullscreen))
-    {
-        xcb_change_window_attributes(conn_.get(), window, XCB_CW_BORDER_PIXEL, &config_.appearance.border_color);
-        xcb_configure_window(conn_.get(), window, XCB_CONFIG_WINDOW_BORDER_WIDTH, &config_.appearance.border_width);
-        LOG_TRACE("focus_window: applied focus border visuals");
-    }
-    else
-    {
-        LOG_TRACE("focus_window: skipped focus border visuals (fullscreen)");
-    }
-    xcb_timestamp_t focus_time = last_event_time_ ? last_event_time_ : XCB_CURRENT_TIME;
-    send_wm_take_focus(window, last_event_time_);
-    if (should_set_input_focus(window))
-    {
-        xcb_set_input_focus(conn_.get(), XCB_INPUT_FOCUS_POINTER_ROOT, window, focus_time);
-    }
-    else
-    {
-        xcb_set_input_focus(conn_.get(), XCB_INPUT_FOCUS_POINTER_ROOT, conn_.screen()->root, focus_time);
-    }
-
-    set_client_demands_attention(window, false);
-    ewmh_.set_active_window(window);
-    if (net_wm_state_focused_ != XCB_NONE)
-    {
-        if (previous_active != XCB_NONE && previous_active != window)
-        {
-            ewmh_.set_window_state(previous_active, net_wm_state_focused_, false);
-        }
-        ewmh_.set_window_state(window, net_wm_state_focused_, true);
-    }
-
-    if (auto* client = get_client(window))
-        client->user_time = last_event_time_;
-
-    restack_transients(window);
-    update_ewmh_client_list();
-
-    conn_.flush();
-    LOG_TRACE("focus_window({:#x}): DONE", window);
-}
-
-void WindowManager::focus_floating_window(xcb_window_t window)
-{
-    LOG_TRACE(
-        "focus_floating_window({:#x}) called, active_window_={:#x}, showing_desktop_={}",
-        window,
-        active_window_,
-        showing_desktop_
-    );
-
-    if (showing_desktop_)
-    {
-        LOG_TRACE("focus_floating_window: rejected (showing_desktop_)");
-        return;
-    }
-
-    auto* floating_window = find_floating_window(window);
-    if (!floating_window)
-    {
-        LOG_TRACE("focus_floating_window: rejected (not a floating window)");
+        LOG_TRACE("focus_any_window: rejected (not focus eligible)");
         return;
     }
 
     auto* client = get_client(window);
     if (!client)
     {
-        LOG_TRACE("focus_floating_window: rejected (no client)");
+        LOG_TRACE("focus_any_window: rejected (no client)");
         return;
     }
 
-    if (!is_focus_eligible(window))
+    bool is_floating = (client->kind == Client::Kind::Floating);
+
+    if (is_floating && client->monitor >= monitors_.size())
     {
-        LOG_TRACE("focus_floating_window: rejected (not focus eligible)");
+        LOG_TRACE("focus_any_window: rejected (invalid monitor index)");
         return;
     }
 
     if (is_client_iconic(window))
     {
-        LOG_DEBUG("focus_floating_window: deiconifying window {:#x}", window);
+        LOG_DEBUG("focus_any_window: deiconifying window {:#x}", window);
         deiconify_window(window, false);
     }
 
-    if (client->monitor >= monitors_.size())
-    {
-        LOG_TRACE("focus_floating_window: rejected (invalid monitor index)");
-        return;
-    }
-
     xcb_window_t previous_active = active_window_;
-
     bool is_sticky = is_client_sticky(window);
 
-    LOG_TRACE(
-        "focus_floating_window: client->monitor={} client->workspace={} "
-        "current_workspace={} is_sticky={}",
-        client->monitor,
-        client->workspace,
-        monitors_[client->monitor].current_workspace,
-        is_sticky
-    );
-
-    focused_monitor_ = client->monitor;
-    auto& monitor = monitors_[client->monitor];
-    if (!is_sticky && monitor.current_workspace != client->workspace)
+    if (is_floating)
     {
-        LOG_DEBUG(
-            "focus_floating_window({:#x}): WORKSPACE SWITCH TRIGGERED by focus! "
-            "old_ws={} new_ws={}",
-            window,
-            monitor.current_workspace,
-            client->workspace
+        // Floating path: manual workspace switch + MRU promotion
+        LOG_TRACE(
+            "focus_any_window: floating path, client->monitor={} client->workspace={} "
+            "current_workspace={} is_sticky={}",
+            client->monitor,
+            client->workspace,
+            monitors_[client->monitor].current_workspace,
+            is_sticky
         );
-        for (xcb_window_t w : monitor.current().windows)
+
+        focused_monitor_ = client->monitor;
+        auto& monitor = monitors_[client->monitor];
+        if (!is_sticky && monitor.current_workspace != client->workspace)
         {
-            if (is_client_sticky(w))
-                continue;
-            LOG_TRACE("focus_floating_window: unmapping window {:#x} from old workspace", w);
-            hide_window(w);
+            LOG_DEBUG(
+                "focus_any_window({:#x}): WORKSPACE SWITCH TRIGGERED by focus! "
+                "old_ws={} new_ws={}",
+                window,
+                monitor.current_workspace,
+                client->workspace
+            );
+            for (xcb_window_t w : monitor.current().windows)
+            {
+                if (is_client_sticky(w))
+                    continue;
+                LOG_TRACE("focus_any_window: unmapping window {:#x} from old workspace", w);
+                hide_window(w);
+            }
+            monitor.previous_workspace = monitor.current_workspace;
+            monitor.current_workspace = client->workspace;
+            LOG_TRACE("focus_any_window: rearranging monitor after workspace switch");
+            rearrange_monitor(monitor);
+            LOG_TRACE("focus_any_window: updating floating visibility after workspace switch");
+            update_floating_visibility(client->monitor);
         }
-        monitor.previous_workspace = monitor.current_workspace;
-        monitor.current_workspace = client->workspace;
-        LOG_TRACE("focus_floating_window: rearranging monitor after workspace switch");
-        rearrange_monitor(monitor);
-        LOG_TRACE("focus_floating_window: updating floating visibility after workspace switch");
-        update_floating_visibility(client->monitor);
+
+        focus_policy::promote_mru(floating_windows_, window, [](xcb_window_t id) { return id; });
+        active_window_ = window;
+    }
+    else
+    {
+        // Tiled path: use focus_window_state for workspace switching
+        LOG_TRACE("focus_any_window: tiled path, calling focus_window_state, is_sticky={}", is_sticky);
+        auto change = focus::focus_window_state(monitors_, focused_monitor_, active_window_, window, is_sticky);
+        if (!change)
+        {
+            LOG_TRACE("focus_any_window: focus_window_state returned nullopt, returning");
+            return;
+        }
+
+        LOG_DEBUG(
+            "focus_any_window({:#x}): target_monitor={} workspace_changed={} "
+            "old_ws={} new_ws={} prev_active={:#x}",
+            window,
+            change->target_monitor,
+            change->workspace_changed,
+            change->old_workspace,
+            change->new_workspace,
+            previous_active
+        );
+
+        auto& target_monitor = monitors_[change->target_monitor];
+        if (change->workspace_changed)
+        {
+            LOG_DEBUG(
+                "focus_any_window: WORKSPACE SWITCH TRIGGERED by focus! old_ws={} new_ws={}",
+                change->old_workspace,
+                change->new_workspace
+            );
+            for (xcb_window_t w : target_monitor.workspaces[change->old_workspace].windows)
+            {
+                if (is_client_sticky(w))
+                    continue;
+                LOG_TRACE("focus_any_window: unmapping window {:#x} from old workspace", w);
+                hide_window(w);
+            }
+            LOG_TRACE("focus_any_window: rearranging monitor after workspace switch");
+            rearrange_monitor(target_monitor);
+            LOG_TRACE("focus_any_window: updating floating visibility after workspace switch");
+            update_floating_visibility(change->target_monitor);
+        }
     }
 
-    LOG_TRACE("focus_floating_window: updating EWMH current desktop");
+    LOG_TRACE("focus_any_window: updating EWMH current desktop");
     update_ewmh_current_desktop();
 
-    if (focus_policy::promote_mru(floating_windows_, window, [](FloatingWindow const& fw) { return fw.id; }))
-    {
-        floating_window = &floating_windows_.back();
-    }
-
-    active_window_ = window;
     clear_all_borders();
+
     bool is_fullscreen = is_client_fullscreen(window);
     if (focus_policy::should_apply_focus_border(is_fullscreen))
     {
         xcb_change_window_attributes(conn_.get(), window, XCB_CW_BORDER_PIXEL, &config_.appearance.border_color);
         xcb_configure_window(conn_.get(), window, XCB_CONFIG_WINDOW_BORDER_WIDTH, &config_.appearance.border_width);
-        LOG_TRACE("focus_floating_window: applied focus border visuals");
+        LOG_TRACE("focus_any_window: applied focus border visuals");
     }
     else
     {
-        LOG_TRACE("focus_floating_window: skipped focus border visuals (fullscreen)");
+        LOG_TRACE("focus_any_window: skipped focus border visuals (fullscreen)");
     }
+
     xcb_timestamp_t focus_time = last_event_time_ ? last_event_time_ : XCB_CURRENT_TIME;
     send_wm_take_focus(window, last_event_time_);
     if (should_set_input_focus(window))
@@ -242,8 +164,11 @@ void WindowManager::focus_floating_window(xcb_window_t window)
         xcb_set_input_focus(conn_.get(), XCB_INPUT_FOCUS_POINTER_ROOT, conn_.screen()->root, focus_time);
     }
 
-    uint32_t stack_mode = XCB_STACK_MODE_ABOVE;
-    xcb_configure_window(conn_.get(), window, XCB_CONFIG_WINDOW_STACK_MODE, &stack_mode);
+    if (is_floating)
+    {
+        uint32_t stack_mode = XCB_STACK_MODE_ABOVE;
+        xcb_configure_window(conn_.get(), window, XCB_CONFIG_WINDOW_STACK_MODE, &stack_mode);
+    }
 
     set_client_demands_attention(window, false);
     ewmh_.set_active_window(window);
@@ -256,13 +181,13 @@ void WindowManager::focus_floating_window(xcb_window_t window)
         ewmh_.set_window_state(window, net_wm_state_focused_, true);
     }
 
-    if (auto* client = get_client(window))
-        client->user_time = last_event_time_;
+    client->user_time = last_event_time_;
 
     restack_transients(window);
-
     update_ewmh_client_list();
+
     conn_.flush();
+    LOG_TRACE("focus_any_window({:#x}): DONE", window);
 }
 
 void WindowManager::clear_focus()
@@ -315,12 +240,12 @@ void WindowManager::focus_or_fallback(Monitor& monitor)
 
     std::vector<focus_policy::FloatingCandidate> floating_candidates;
     floating_candidates.reserve(floating_windows_.size());
-    for (auto const& fw : floating_windows_)
+    for (xcb_window_t fw : floating_windows_)
     {
-        auto const* c = get_client(fw.id);
+        auto const* c = get_client(fw);
         if (!c)
             continue;
-        floating_candidates.push_back({ fw.id, c->monitor, c->workspace, c->sticky });
+        floating_candidates.push_back({ fw, c->monitor, c->workspace, c->sticky });
     }
 
     std::vector<xcb_window_t> sticky_tiled_candidates;
@@ -360,10 +285,7 @@ void WindowManager::focus_or_fallback(Monitor& monitor)
 
     LOG_DEBUG("focus_or_fallback: selected window={:#x} is_floating={}", selection->window, selection->is_floating);
 
-    if (selection->is_floating)
-        focus_floating_window(selection->window);
-    else
-        focus_window(selection->window);
+    focus_any_window(selection->window);
 
     LOG_TRACE("focus_or_fallback: DONE");
 }
@@ -432,11 +354,11 @@ void WindowManager::focus_next()
     auto eligible = [this](xcb_window_t window) { return !is_client_iconic(window) && is_focus_eligible(window); };
 
     std::vector<focus_policy::FloatingCandidate> floating_candidates;
-    for (auto const& fw : floating_windows_)
+    for (xcb_window_t fw : floating_windows_)
     {
-        auto const* c = get_client(fw.id);
+        auto const* c = get_client(fw);
         if (c)
-            floating_candidates.push_back({ fw.id, c->monitor, c->workspace, c->sticky });
+            floating_candidates.push_back({ fw, c->monitor, c->workspace, c->sticky });
     }
 
     auto candidates = focus_policy::build_cycle_candidates(
@@ -451,10 +373,7 @@ void WindowManager::focus_next()
     if (!target)
         return;
 
-    if (target->is_floating)
-        focus_floating_window(target->id);
-    else
-        focus_window(target->id);
+    focus_any_window(target->id);
 }
 
 void WindowManager::focus_prev()
@@ -468,11 +387,11 @@ void WindowManager::focus_prev()
     auto eligible = [this](xcb_window_t window) { return !is_client_iconic(window) && is_focus_eligible(window); };
 
     std::vector<focus_policy::FloatingCandidate> floating_candidates;
-    for (auto const& fw : floating_windows_)
+    for (xcb_window_t fw : floating_windows_)
     {
-        auto const* c = get_client(fw.id);
+        auto const* c = get_client(fw);
         if (c)
-            floating_candidates.push_back({ fw.id, c->monitor, c->workspace, c->sticky });
+            floating_candidates.push_back({ fw, c->monitor, c->workspace, c->sticky });
     }
 
     auto candidates = focus_policy::build_cycle_candidates(
@@ -487,10 +406,7 @@ void WindowManager::focus_prev()
     if (!target)
         return;
 
-    if (target->is_floating)
-        focus_floating_window(target->id);
-    else
-        focus_window(target->id);
+    focus_any_window(target->id);
 }
 
 } // namespace lwm
