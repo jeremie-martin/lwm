@@ -535,10 +535,10 @@ Monitor detection via RANDR (src/lwm/wm.cpp: detect_monitors):
 
 ### Workspace Switching
 
-All workspace switching flows converge on `perform_workspace_switch(WorkspaceSwitchContext)` (src/lwm/wm_workspace.cpp), which performs the mechanical switch: hide floating (old ws), hide tiled (old ws), flush, update EWMH, rearrange, update floating visibility. Callers must set `monitor.previous/current_workspace` before calling.
+All workspace switching flows converge on `perform_workspace_switch(WorkspaceSwitchContext)` (src/lwm/wm_workspace.cpp), which performs the mechanical switch: set `monitor.previous/current_workspace`, hide floating (old ws), hide tiled (old ws), flush, update EWMH, rearrange, update floating visibility.
 
 **switch_workspace(int ws)** (src/lwm/wm_workspace.cpp):
-1. Policy validation (workspace_policy::apply_workspace_switch)
+1. Policy validation (workspace_policy::validate_workspace_switch)
 2. `perform_workspace_switch()`
 3. Focus restoration (focus_or_fallback)
 

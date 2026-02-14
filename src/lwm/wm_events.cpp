@@ -360,12 +360,9 @@ void WindowManager::handle_map_request(xcb_map_request_event_t const& e)
                             if (target_mon != source_mon || target_ws != source_ws)
                             {
                                 auto& source_workspace = monitors_[source_mon].workspaces[source_ws];
-                                auto it = source_workspace.find_window(e.window);
-                                if (it != source_workspace.windows.end())
                                 {
-                                    source_workspace.windows.erase(it);
-                                    if (source_workspace.focused_window == e.window)
-                                        source_workspace.focused_window = XCB_NONE;
+                                    auto is_iconic = [this](xcb_window_t w) { return is_client_iconic(w); };
+                                    workspace_policy::remove_tiled_window(source_workspace, e.window, is_iconic);
                                 }
 
                                 auto& target_workspace = monitors_[target_mon].workspaces[target_ws];

@@ -330,12 +330,11 @@ Desktop mode enabled (showing_desktop_ = true).
 
 ```
 switch_workspace(target_ws)
-├─ workspace_policy::apply_workspace_switch()
+├─ workspace_policy::validate_workspace_switch()
 │  ├─ Validate workspace index (returns nullopt if invalid - out of bounds, negative, or same as current)
-│  ├─ Update previous_workspace = current
-│  ├─ Update current_workspace = target
-│  └─ Return WorkspaceSwitchResult{ old, target }
+│  └─ Return WorkspaceSwitchResult{ old, target } (pure — does not mutate monitor)
 ├─ perform_workspace_switch({ monitor, old_ws, new_ws })
+│  ├─ Update previous_workspace = old, current_workspace = new
 │  ├─ hide_window() for floating windows (iterates global floating_windows_, filters by: on monitor, non-sticky, on old_workspace)
 │  ├─ hide_window() for tiled windows (iterates old_workspace.windows directly, filters by: non-sticky)
 │  ├─ conn_.flush()  ← Critical sync point!
