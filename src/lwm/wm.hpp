@@ -135,11 +135,13 @@ private:
 
     void manage_window(xcb_window_t window, bool start_iconic = false);
     void manage_floating_window(xcb_window_t window, bool start_iconic = false);
+    void parse_initial_ewmh_state(Client& client);
+    void init_user_time(xcb_window_t window);
+    void apply_post_manage_states(xcb_window_t window, bool has_transient);
     void unmanage_window(xcb_window_t window);
     void unmanage_floating_window(xcb_window_t window);
     void focus_any_window(xcb_window_t window);
-    void focus_next();
-    void focus_prev();
+    void cycle_focus(bool forward);
     void set_fullscreen(xcb_window_t window, bool enabled);
     void set_window_above(xcb_window_t window, bool enabled);
     void set_window_below(xcb_window_t window, bool enabled);

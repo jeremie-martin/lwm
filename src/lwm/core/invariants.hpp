@@ -17,6 +17,7 @@
 
 #include "log.hpp"
 #include "types.hpp"
+#include <algorithm>
 #include <unordered_map>
 #include <unordered_set>
 #include <vector>
@@ -27,7 +28,7 @@ namespace lwm::invariants {
 
 #ifdef NDEBUG
 // Release build: no-op
-#    define LWM_ASSERT_INVARIANTS(...)
+#    define LWM_ASSERT_INVARIANTS(clients, monitors, floating, docks, desktops)
 #    define LWM_ASSERT_CLIENT_STATE(...)
 #    define LWM_ASSERT_FOCUS_CONSISTENCY(...)
 #else
@@ -223,11 +224,105 @@ inline void assert_workspace_focus_valid(
     }
 }
 
-#    define LWM_ASSERT_INVARIANTS(clients, monitors)                 \
-        do                                                           \
-        {                                                            \
-            lwm::invariants::assert_workspace_consistency(clients, monitors); \
-            lwm::invariants::assert_workspace_focus_valid(clients, monitors); \
+/**
+ * @brief Assert floating container consistency
+ *
+ * Verifies:
+ * - Every entry in floating_windows exists in clients with Kind::Floating
+ * - Every Kind::Floating client is in floating_windows
+ */
+inline void assert_floating_consistency(
+    std::unordered_map<xcb_window_t, Client> const& clients,
+    std::vector<xcb_window_t> const& floating_windows
+)
+{
+    for (xcb_window_t fw : floating_windows)
+    {
+        auto it = clients.find(fw);
+        if (it == clients.end())
+        {
+            LOG_ERROR("INVARIANT VIOLATION: floating window {:#x} not in clients", fw);
+        }
+        else if (it->second.kind != Client::Kind::Floating)
+        {
+            LOG_ERROR("INVARIANT VIOLATION: floating window {:#x} has kind {}", fw, static_cast<int>(it->second.kind));
+        }
+    }
+
+    for (auto const& [id, client] : clients)
+    {
+        if (client.kind == Client::Kind::Floating && std::ranges::find(floating_windows, id) == floating_windows.end())
+        {
+            LOG_ERROR("INVARIANT VIOLATION: Floating client {:#x} not in floating_windows", id);
+        }
+    }
+}
+
+/**
+ * @brief Assert dock/desktop container consistency
+ *
+ * Verifies:
+ * - Every entry in dock_windows exists in clients with Kind::Dock
+ * - Every Kind::Dock client is in dock_windows
+ * - Every entry in desktop_windows exists in clients with Kind::Desktop
+ * - Every Kind::Desktop client is in desktop_windows
+ */
+inline void assert_container_consistency(
+    std::unordered_map<xcb_window_t, Client> const& clients,
+    std::vector<xcb_window_t> const& dock_windows,
+    std::vector<xcb_window_t> const& desktop_windows
+)
+{
+    for (xcb_window_t dw : dock_windows)
+    {
+        auto it = clients.find(dw);
+        if (it == clients.end())
+        {
+            LOG_ERROR("INVARIANT VIOLATION: dock window {:#x} not in clients", dw);
+        }
+        else if (it->second.kind != Client::Kind::Dock)
+        {
+            LOG_ERROR("INVARIANT VIOLATION: dock window {:#x} has kind {}", dw, static_cast<int>(it->second.kind));
+        }
+    }
+
+    for (auto const& [id, client] : clients)
+    {
+        if (client.kind == Client::Kind::Dock && std::ranges::find(dock_windows, id) == dock_windows.end())
+        {
+            LOG_ERROR("INVARIANT VIOLATION: Dock client {:#x} not in dock_windows", id);
+        }
+    }
+
+    for (xcb_window_t dw : desktop_windows)
+    {
+        auto it = clients.find(dw);
+        if (it == clients.end())
+        {
+            LOG_ERROR("INVARIANT VIOLATION: desktop window {:#x} not in clients", dw);
+        }
+        else if (it->second.kind != Client::Kind::Desktop)
+        {
+            LOG_ERROR("INVARIANT VIOLATION: desktop window {:#x} has kind {}", dw, static_cast<int>(it->second.kind));
+        }
+    }
+
+    for (auto const& [id, client] : clients)
+    {
+        if (client.kind == Client::Kind::Desktop && std::ranges::find(desktop_windows, id) == desktop_windows.end())
+        {
+            LOG_ERROR("INVARIANT VIOLATION: Desktop client {:#x} not in desktop_windows", id);
+        }
+    }
+}
+
+#    define LWM_ASSERT_INVARIANTS(clients, monitors, floating, docks, desktops)      \
+        do                                                                           \
+        {                                                                            \
+            lwm::invariants::assert_workspace_consistency(clients, monitors);        \
+            lwm::invariants::assert_workspace_focus_valid(clients, monitors);        \
+            lwm::invariants::assert_floating_consistency(clients, floating);         \
+            lwm::invariants::assert_container_consistency(clients, docks, desktops); \
         } while (0)
 
 #    define LWM_ASSERT_CLIENT_STATE(client) lwm::invariants::assert_client_state_consistency(client)

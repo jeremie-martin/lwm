@@ -122,8 +122,6 @@ void WindowManager::manage_floating_window(xcb_window_t window, bool start_iconi
 
     floating_windows_.push_back(window);
 
-    
-
     {
         auto [instance_name, class_name] = get_wm_class(window);
         Client client;
@@ -138,82 +136,12 @@ void WindowManager::manage_floating_window(xcb_window_t window, bool start_iconi
         client.transient_for = transient.value_or(XCB_NONE);
         client.order = next_client_order_++;
         client.iconic = start_iconic;
-
-        
-
-        xcb_ewmh_get_atoms_reply_t initial_state;
-        if (xcb_ewmh_get_wm_state_reply(
-                ewmh_.get(),
-                xcb_ewmh_get_wm_state(ewmh_.get(), window),
-                &initial_state,
-                nullptr
-            ))
-        {
-            xcb_ewmh_connection_t* ewmh = ewmh_.get();
-            for (uint32_t i = 0; i < initial_state.atoms_len; ++i)
-            {
-                xcb_atom_t state = initial_state.atoms[i];
-                if (state == ewmh->_NET_WM_STATE_FULLSCREEN)
-                    client.fullscreen = true;
-                else if (state == ewmh->_NET_WM_STATE_ABOVE)
-                    client.above = true;
-                else if (state == ewmh->_NET_WM_STATE_BELOW)
-                    client.below = true;
-                else if (state == ewmh->_NET_WM_STATE_STICKY)
-                    client.sticky = true;
-                else if (state == ewmh->_NET_WM_STATE_MAXIMIZED_HORZ)
-                    client.maximized_horz = true;
-                else if (state == ewmh->_NET_WM_STATE_MAXIMIZED_VERT)
-                    client.maximized_vert = true;
-                else if (state == ewmh->_NET_WM_STATE_SHADED)
-                    client.shaded = true;
-                else if (state == ewmh->_NET_WM_STATE_MODAL)
-                    client.modal = true;
-                else if (state == ewmh->_NET_WM_STATE_SKIP_TASKBAR)
-                    client.skip_taskbar = true;
-                else if (state == ewmh->_NET_WM_STATE_SKIP_PAGER)
-                    client.skip_pager = true;
-                else if (state == ewmh->_NET_WM_STATE_DEMANDS_ATTENTION)
-                    client.demands_attention = true;
-                else if (state == ewmh->_NET_WM_STATE_HIDDEN)
-                    client.iconic = true;
-            }
-            xcb_ewmh_get_atoms_reply_wipe(&initial_state);
-        }
+        parse_initial_ewmh_state(client);
 
         clients_[window] = std::move(client);
     }
 
-    
-
-    if (net_wm_user_time_window_ != XCB_NONE)
-    {
-        auto cookie = xcb_get_property(conn_.get(), 0, window, net_wm_user_time_window_, XCB_ATOM_WINDOW, 0, 1);
-        auto* reply = xcb_get_property_reply(conn_.get(), cookie, nullptr);
-        if (reply)
-        {
-            if (xcb_get_property_value_length(reply) >= 4)
-            {
-                xcb_window_t time_window = *static_cast<xcb_window_t*>(xcb_get_property_value(reply));
-                if (time_window != XCB_NONE)
-                {
-                    
-
-                    if (auto* client = get_client(window))
-                        client->user_time_window = time_window;
-                    
-
-                    uint32_t mask = XCB_EVENT_MASK_PROPERTY_CHANGE;
-                    xcb_change_window_attributes(conn_.get(), time_window, XCB_CW_EVENT_MASK, &mask);
-                }
-            }
-            free(reply);
-        }
-    }
-    
-
-    if (auto* client = get_client(window))
-        client->user_time = get_user_time(window);
+    init_user_time(window);
 
     uint32_t values[] = { XCB_EVENT_MASK_ENTER_WINDOW | XCB_EVENT_MASK_FOCUS_CHANGE | XCB_EVENT_MASK_PROPERTY_CHANGE
                           | XCB_EVENT_MASK_BUTTON_PRESS };
@@ -228,15 +156,12 @@ void WindowManager::manage_floating_window(xcb_window_t window, bool start_iconi
 
     if (start_iconic)
     {
-        
 
         ewmh_.set_window_state(window, ewmh_.get()->_NET_WM_STATE_HIDDEN, true);
     }
 
     update_sync_state(window);
     update_fullscreen_monitor_state(window);
-
-    
 
     ewmh_.set_frame_extents(window, 0, 0, 0, 0); // LWM doesn't add frames
     uint32_t desktop = get_ewmh_desktop_index(*monitor_idx, *workspace_idx);
@@ -292,51 +217,7 @@ void WindowManager::manage_floating_window(xcb_window_t window, bool start_iconi
     }
 
     // AFTER mapping: Apply non-geometry states
-    // Transient windows should not appear in taskbars/pagers (ICCCM/EWMH convention)
-    // Set SKIP_TASKBAR and SKIP_PAGER unless the window explicitly overrides this
-    if (transient && !ewmh_.has_window_state(window, ewmh_.get()->_NET_WM_STATE_SKIP_TASKBAR))
-    {
-        set_client_skip_taskbar(window, true);
-    }
-    if (transient && !ewmh_.has_window_state(window, ewmh_.get()->_NET_WM_STATE_SKIP_PAGER))
-    {
-        set_client_skip_pager(window, true);
-    }
-    // Also honor explicit client requests
-    if (ewmh_.has_window_state(window, ewmh_.get()->_NET_WM_STATE_SKIP_TASKBAR))
-    {
-        set_client_skip_taskbar(window, true);
-    }
-    if (ewmh_.has_window_state(window, ewmh_.get()->_NET_WM_STATE_SKIP_PAGER))
-    {
-        set_client_skip_pager(window, true);
-    }
-
-    // Honor _NET_WM_DESKTOP = 0xFFFFFFFF as sticky at manage time
-    if (is_sticky_desktop(window))
-    {
-        set_window_sticky(window, true);
-    }
-    else if (ewmh_.has_window_state(window, ewmh_.get()->_NET_WM_STATE_STICKY))
-    {
-        set_window_sticky(window, true);
-    }
-
-    if (ewmh_.has_window_state(window, ewmh_.get()->_NET_WM_STATE_MODAL))
-    {
-        set_window_modal(window, true);
-    }
-
-    bool wants_above = ewmh_.has_window_state(window, ewmh_.get()->_NET_WM_STATE_ABOVE);
-    bool wants_below = ewmh_.has_window_state(window, ewmh_.get()->_NET_WM_STATE_BELOW);
-    if (wants_above)
-    {
-        set_window_above(window, true);
-    }
-    else if (wants_below)
-    {
-        set_window_below(window, true);
-    }
+    apply_post_manage_states(window, transient.has_value());
 }
 
 void WindowManager::unmanage_floating_window(xcb_window_t window)

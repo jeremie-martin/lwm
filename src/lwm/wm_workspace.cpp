@@ -51,7 +51,7 @@ void WindowManager::perform_workspace_switch(WorkspaceSwitchContext const& ctx)
     rearrange_monitor(monitor);
     update_floating_visibility(ctx.monitor_idx);
 
-    LWM_ASSERT_INVARIANTS(clients_, monitors_);
+    LWM_ASSERT_INVARIANTS(clients_, monitors_, floating_windows_, dock_windows_, desktop_windows_);
     LOG_TRACE("perform_workspace_switch: DONE");
 }
 
@@ -180,7 +180,7 @@ void WindowManager::move_window_to_workspace(int ws)
         hide_window(window_to_move);
     }
     rearrange_monitor(monitor);
-    LWM_ASSERT_INVARIANTS(clients_, monitors_);
+    LWM_ASSERT_INVARIANTS(clients_, monitors_, floating_windows_, dock_windows_, desktop_windows_);
     focus_or_fallback(monitor);
 
     conn_.flush();
@@ -305,7 +305,7 @@ void WindowManager::move_window_to_monitor(int direction)
 
     rearrange_monitor(focused_monitor());
     rearrange_monitor(target_monitor);
-    LWM_ASSERT_INVARIANTS(clients_, monitors_);
+    LWM_ASSERT_INVARIANTS(clients_, monitors_, floating_windows_, dock_windows_, desktop_windows_);
 
     focused_monitor_ = target_idx;
     update_ewmh_current_desktop();

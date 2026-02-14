@@ -411,10 +411,25 @@ void WindowManager::handle_map_request(xcb_map_request_event_t const& e)
 
 void WindowManager::handle_window_removal(xcb_window_t window)
 {
-    unmanage_dock_window(window);
-    unmanage_desktop_window(window);
-    unmanage_floating_window(window);
-    unmanage_window(window);
+    auto const* client = get_client(window);
+    if (!client)
+        return;
+
+    switch (client->kind)
+    {
+        case Client::Kind::Tiled:
+            unmanage_window(window);
+            break;
+        case Client::Kind::Floating:
+            unmanage_floating_window(window);
+            break;
+        case Client::Kind::Dock:
+            unmanage_dock_window(window);
+            break;
+        case Client::Kind::Desktop:
+            unmanage_desktop_window(window);
+            break;
+    }
 }
 
 void WindowManager::handle_enter_notify(xcb_enter_notify_event_t const& e)
@@ -662,11 +677,11 @@ void WindowManager::handle_key_press(xcb_key_press_event_t const& e)
     }
     else if (action->type == "focus_next")
     {
-        focus_next();
+        cycle_focus(true);
     }
     else if (action->type == "focus_prev")
     {
-        focus_prev();
+        cycle_focus(false);
     }
 }
 
@@ -967,7 +982,7 @@ void WindowManager::handle_desktop_change(xcb_client_message_event_t const& e)
             client->workspace = target_workspace;
         }
         ewmh_.set_window_desktop(e.window, desktop);
-        LWM_ASSERT_INVARIANTS(clients_, monitors_);
+        LWM_ASSERT_INVARIANTS(clients_, monitors_, floating_windows_, dock_windows_, desktop_windows_);
 
         rearrange_monitor(*source_monitor);
         if (source_monitor != &monitors_[target_monitor])
@@ -1046,9 +1061,8 @@ void WindowManager::handle_moveresize_window(xcb_client_message_event_t const& e
         client->floating_geometry.height = static_cast<uint16_t>(std::max<int32_t>(1, e.data.data32[4]));
 
     update_floating_monitor_for_geometry(e.window);
-    if (client->monitor < monitors_.size()
-        && client->workspace == monitors_[client->monitor].current_workspace && !is_client_iconic(e.window)
-        && !is_client_fullscreen(e.window))
+    if (client->monitor < monitors_.size() && client->workspace == monitors_[client->monitor].current_workspace
+        && !is_client_iconic(e.window) && !is_client_fullscreen(e.window))
     {
         apply_floating_geometry(e.window);
     }
@@ -1188,8 +1202,7 @@ void WindowManager::handle_configure_request(xcb_configure_request_event_t const
         client->floating_geometry.width = static_cast<uint16_t>(std::max<uint32_t>(1, hinted_width));
         client->floating_geometry.height = static_cast<uint16_t>(std::max<uint32_t>(1, hinted_height));
 
-        if (requested_width != client->floating_geometry.width
-            || requested_height != client->floating_geometry.height)
+        if (requested_width != client->floating_geometry.width || requested_height != client->floating_geometry.height)
         {
             apply_floating_geometry(e.window);
         }
@@ -1224,8 +1237,8 @@ void WindowManager::handle_property_notify(xcb_property_notify_event_t const& e)
                 client->floating_geometry.width = static_cast<uint16_t>(std::max<uint32_t>(1, hinted_width));
                 client->floating_geometry.height = static_cast<uint16_t>(std::max<uint32_t>(1, hinted_height));
                 if (client->monitor < monitors_.size()
-                    && client->workspace == monitors_[client->monitor].current_workspace
-                    && !is_client_iconic(e.window) && !is_client_fullscreen(e.window))
+                    && client->workspace == monitors_[client->monitor].current_workspace && !is_client_iconic(e.window)
+                    && !is_client_fullscreen(e.window))
                 {
                     apply_floating_geometry(e.window);
                 }
@@ -1374,7 +1387,12 @@ void WindowManager::handle_randr_screen_change()
         if (auto* client = get_client(fw))
         {
             std::string monitor_name = (client->monitor < monitors_.size()) ? monitors_[client->monitor].name : "";
-            floating_locations.push_back({ fw, { fw, monitor_name, client->workspace } });
+            floating_locations.push_back(
+                {
+                    fw,
+                    { fw, monitor_name, client->workspace }
+            }
+            );
         }
     }
 

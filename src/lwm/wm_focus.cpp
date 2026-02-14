@@ -332,7 +332,7 @@ void WindowManager::send_wm_take_focus(xcb_window_t window, uint32_t timestamp)
     xcb_send_event(conn_.get(), 0, window, XCB_EVENT_MASK_NO_EVENT, reinterpret_cast<char*>(&ev));
 }
 
-void WindowManager::focus_next()
+void WindowManager::cycle_focus(bool forward)
 {
     if (monitors_.empty())
         return;
@@ -358,40 +358,8 @@ void WindowManager::focus_next()
         eligible
     );
 
-    auto target = focus_policy::cycle_focus_next(candidates, active_window_);
-    if (!target)
-        return;
-
-    focus_any_window(target->id);
-}
-
-void WindowManager::focus_prev()
-{
-    if (monitors_.empty())
-        return;
-
-    auto& monitor = focused_monitor();
-    auto& ws = monitor.current();
-
-    auto eligible = [this](xcb_window_t window) { return !is_client_iconic(window) && is_focus_eligible(window); };
-
-    std::vector<focus_policy::FloatingCandidate> floating_candidates;
-    for (xcb_window_t fw : floating_windows_)
-    {
-        auto const* c = get_client(fw);
-        if (c)
-            floating_candidates.push_back({ fw, c->monitor, c->workspace, c->sticky });
-    }
-
-    auto candidates = focus_policy::build_cycle_candidates(
-        ws.windows,
-        floating_candidates,
-        focused_monitor_,
-        monitor.current_workspace,
-        eligible
-    );
-
-    auto target = focus_policy::cycle_focus_prev(candidates, active_window_);
+    auto target = forward ? focus_policy::cycle_focus_next(candidates, active_window_)
+                          : focus_policy::cycle_focus_prev(candidates, active_window_);
     if (!target)
         return;
 

@@ -270,28 +270,32 @@ inline std::optional<WorkspaceSwitchResult> validate_workspace_switch(Monitor co
     return WorkspaceSwitchResult{ monitor.current_workspace, target };
 }
 
-inline bool remove_tiled_window(
-    Workspace& workspace,
-    xcb_window_t window,
-    std::function<bool(xcb_window_t)> const& is_iconic
-)
+/// Fix up workspace.focused_window after a window has been removed from the window list.
+/// If the removed window was focused, selects the last non-iconic window as the new focus.
+inline void
+fixup_workspace_focus(Workspace& ws, xcb_window_t removed_window, std::function<bool(xcb_window_t)> const& is_iconic)
+{
+    if (ws.focused_window != removed_window)
+        return;
+    ws.focused_window = XCB_NONE;
+    for (auto rit = ws.windows.rbegin(); rit != ws.windows.rend(); ++rit)
+    {
+        if (!is_iconic(*rit))
+        {
+            ws.focused_window = *rit;
+            break;
+        }
+    }
+}
+
+inline bool
+remove_tiled_window(Workspace& workspace, xcb_window_t window, std::function<bool(xcb_window_t)> const& is_iconic)
 {
     auto it = workspace.find_window(window);
     if (it == workspace.windows.end())
         return false;
     workspace.windows.erase(it);
-    if (workspace.focused_window == window)
-    {
-        workspace.focused_window = XCB_NONE;
-        for (auto rit = workspace.windows.rbegin(); rit != workspace.windows.rend(); ++rit)
-        {
-            if (!is_iconic(*rit))
-            {
-                workspace.focused_window = *rit;
-                break;
-            }
-        }
-    }
+    fixup_workspace_focus(workspace, window, is_iconic);
     return true;
 }
 

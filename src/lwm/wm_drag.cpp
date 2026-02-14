@@ -204,17 +204,10 @@ void WindowManager::end_drag()
                     target_ws.windows.insert(target_ws.windows.begin() + insert_index, moved_window);
                     target_ws.focused_window = window;
 
-                    if (!same_workspace && source_ws.focused_window == window)
+                    if (!same_workspace)
                     {
-                        source_ws.focused_window = XCB_NONE;
-                        for (auto rit = source_ws.windows.rbegin(); rit != source_ws.windows.rend(); ++rit)
-                        {
-                            if (!is_client_iconic(*rit))
-                            {
-                                source_ws.focused_window = *rit;
-                                break;
-                            }
-                        }
+                        auto is_iconic = [this](xcb_window_t w) { return is_client_iconic(w); };
+                        workspace_policy::fixup_workspace_focus(source_ws, window, is_iconic);
                     }
 
                     if (!same_workspace)
@@ -238,7 +231,7 @@ void WindowManager::end_drag()
                         rearrange_monitor(monitors_[target_monitor_idx]);
                     }
 
-                    LWM_ASSERT_INVARIANTS(clients_, monitors_);
+                    LWM_ASSERT_INVARIANTS(clients_, monitors_, floating_windows_, dock_windows_, desktop_windows_);
                     update_ewmh_client_list();
                     focus_any_window(window);
                 }
