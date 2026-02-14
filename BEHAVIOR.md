@@ -1,247 +1,151 @@
-# LWM Behavior Specification
+# LWM Behavior
 
-High-level, user-visible behavior independent of implementation. Protocol obligations are in [COMPLIANCE.md](COMPLIANCE.md).
+This file defines user-visible behavior. If implementation changes but behavior stays the same, this file should not change.
 
----
+## 1. Model
 
-## 1. Concepts and Model
-
-### 1.1 Monitors
 - LWM manages one or more monitors.
-- Each monitor has independent workspaces.
-- Exactly one monitor is the **active monitor** at any time.
+- Each monitor has its own workspace set.
+- Exactly one workspace per monitor is visible at a time.
+- Exactly one monitor is the command target (`active monitor`) at any moment.
 
-### 1.2 Workspaces
+### EWMH Desktop Mapping
 
-- Each monitor has N workspaces (configurable; commonly 0-9).
-- Exactly **one workspace per monitor is visible** at a time.
-- Each workspace maintains:
-  - An ordered list of **tiled** windows (tiling layout order)
-  - A "last-focused" tiled window (if any)
-- **Floating windows** are tracked globally with explicit monitor/workspace association. Focus restoration searches floating windows in MRU order.
+LWM maps per-monitor workspaces to EWMH desktop indices:
 
-### 1.3 Window Classes (Behavioral)
+`desktop = monitor_index * workspaces_per_monitor + workspace_index`
 
-- **Tiled**: participates in the workspace tiling layout.
-- **Floating**: positioned independently; does not affect the tiling layout.
-- **Panels/Docks** (`_NET_WM_WINDOW_TYPE_DOCK`):
-  - Reserve screen edges via struts (reduce usable area for tiling).
-  - Included in `_NET_CLIENT_LIST` per EWMH (with `_NET_WM_STATE_SKIP_TASKBAR/PAGER`).
-  - Do not participate in workspace membership or normal focus.
-  - Always visible across all workspaces (effectively sticky).
-  - Stacked above normal windows but below fullscreen.
-- **Desktop Windows** (`_NET_WM_WINDOW_TYPE_DESKTOP`):
-  - Positioned below all other windows.
-  - Not focus-eligible; do not participate in workspace membership.
-- **Ephemeral Popups** (menus/tooltips/notifications): mapped directly without full management; do not participate in tiling, workspace membership, or normal focus.
+Consequences:
 
-(Exact classification signals are defined in [COMPLIANCE.md](COMPLIANCE.md#_net_wm_window_type); see also [SPEC_CLARIFICATIONS.md](SPEC_CLARIFICATIONS.md#4-popephemeral-window-handling).)
-
-### 1.4 Visibility
-- A window is **visible** iff it belongs to the monitor's currently visible workspace (except for sticky windows per §1.5).
-- Only visible windows may be focused.
-
-### 1.5 Sticky Windows
-
-Sticky windows have special visibility rules:
-- Visible on all workspaces of their owning monitor (not globally).
-- Included in layout regardless of active workspace.
-- Focusing a sticky window does NOT switch workspaces.
-- Indicated by `_NET_WM_STATE_STICKY` and `_NET_WM_DESKTOP = 0xFFFFFFFF`.
-
-See [SPEC_CLARIFICATIONS.md](SPEC_CLARIFICATIONS.md#3-sticky-window-scope) for design rationale on per-monitor scope.
-
-### 1.6 EWMH Desktop Mapping (Per-Monitor Workspaces)
-LWM uses per-monitor workspaces mapped to EWMH desktops:
 - `_NET_NUMBER_OF_DESKTOPS = monitors * workspaces_per_monitor`
-- Desktop index = `monitor_index * workspaces_per_monitor + workspace_index`
-- `_NET_CURRENT_DESKTOP` reflects the **active monitor's** current workspace only
-- `_NET_DESKTOP_VIEWPORT` repeats each monitor's origin per workspace slot
+- `_NET_CURRENT_DESKTOP` reflects the active monitor's workspace
 
-This mapping is intentionally per-monitor; some pagers may assume global desktops.
+## 2. Window Classes
 
----
+- `Tiled`: participates in workspace layout.
+- `Floating`: independent geometry, still tied to monitor/workspace.
+- `Dock`: managed, reserves struts, always visible, not focus-eligible.
+- `Desktop`: managed, stacked below others, not focus-eligible.
+- `Popup/Ephemeral`: mapped directly, not fully managed (no workspace/layout membership).
 
-## 2. Focus and Active Monitor Policy
+## 3. Visibility Rules
 
-### 2.1 Global Focus Invariant
-- At most one window is focused globally at any time (or none).
-- Focus is only assigned to **visible, focus-eligible** windows (as constrained by COMPLIANCE.md).
-- Focusing a fullscreen window must not reapply fullscreen geometry or reintroduce a border; fullscreen windows keep zero border width across focus handoffs.
+A managed window is visible when all are true:
 
-### 2.2 Focus-Follows-Mouse (FFM)
-- Focus-eligible windows gain focus when the pointer enters them.
-- **Motion within a window**: Re-focuses if pointer is in a focus-eligible window that lost focus (e.g., new window took focus per §5.2 while cursor remained elsewhere).
-- **Click within a window**: Click a focus-eligible window to focus it.
+- Not hidden
+- Not iconified
+- Not blocked by "show desktop" mode
+- On the monitor's current workspace, unless sticky
 
-See [STATE_MACHINE.md](STATE_MACHINE.md#focus-system) for implementation details on focus eligibility and event handling.
+Sticky behavior:
 
-### 2.3 Empty Space Semantics (Key Multi-Monitor Behavior)
+- Sticky windows appear on all workspaces of their owning monitor.
+- Sticky is not global across monitors.
 
-LWM defines focus behavior for pointer movement over empty space:
+## 4. Focus Rules
 
-1. **Empty space on the same monitor**: Focus remains on the previously focused window.
-2. **Crossing to a different monitor**: The target monitor becomes the active monitor.
-3. **Empty space on a different monitor**: Global focus is cleared (no window is focused).
-4. **Entering a window on the other monitor**: The entered window becomes focused immediately.
+Global focus invariant:
 
-### 2.4 Focus Restoration
-When the focused window disappears or becomes ineligible:
-- Focus moves to the workspace’s remembered last-focused window if still visible/eligible,
-  otherwise to another eligible window in that workspace, otherwise to none.
+- At most one managed window is focused at a time.
+- Focusing/unfocusing a fullscreen window must not reapply geometry or reintroduce borders.
 
-When switching to a workspace:
-- LWM attempts to focus that workspace’s remembered last-focused window (if eligible),
-  otherwise another eligible window, otherwise none.
+### Focus Eligibility
 
----
+A window may receive focus only if it is:
 
-## 3. Workspace Behavior
+- Visible
+- Not Dock/Desktop class
+- Able to accept focus (`WM_HINTS` / `WM_TAKE_FOCUS` respected)
 
-### 3.1 Switching Workspaces
-When switching the visible workspace on the active monitor:
-- The requested workspace becomes visible on that monitor.
-- The workspace is laid out (tiling + floating placement).
-- Focus is set per Section 2.4.
+### Focus-Follows-Mouse
 
-No change occurs if the workspace is already visible.
+- Entering a focus-eligible window focuses it.
+- Motion events can re-establish focus if another action stole focus.
+- Clicking a window focuses it before processing drag/mouse actions.
 
-### 3.2 Moving a Window to Another Workspace
-When moving a window to another workspace:
-- The window is removed from the source workspace and inserted into the destination workspace.
-- If the destination workspace is not visible, the window becomes non-visible.
-- Focus in the source workspace is restored according to Section 2.4.
+### Empty-Space Semantics
 
----
+- Pointer over empty space on the same monitor: keep current focus.
+- Pointer crosses into a different monitor's empty space: switch active monitor and clear focused window.
+- Entering a window on that monitor restores focus normally.
 
-## 4. Monitor Behavior
+### Focus Restoration
 
-### 4.1 Switching Active Monitor (Explicit)
-When explicitly switching the active monitor:
-- The target monitor becomes active.
-- Focus is restored on that monitor's visible workspace according to Section 2.4.
+When focus becomes invalid (window closes/hides/workspace change), LWM tries, in order:
 
-Cursor warping is optional; configure with `[focus].warp_cursor_on_monitor_change = true`.
+1. Workspace remembered focus (if still valid)
+2. Another eligible tiled window on that workspace
+3. Eligible floating window (MRU order)
+4. No focus
 
-### 4.2 Moving a Window to Another Monitor
-When moving a window to another monitor:
-- The window is reassigned to the destination monitor’s currently visible workspace (default policy).
-- Layout is recomputed on both involved monitors/workspaces.
-- The destination monitor becomes active and the moved window is focused.
+## 5. Workspace and Monitor Operations
 
----
+### Switching Workspace
 
-## 5. New Windows and Placement
+On the active monitor:
 
-### 5.1 Default Placement
-When a new window appears:
-- It is classified (tiled/floating/dock/popup).
-- Default placement target:
-  - Transient/floating windows preferentially appear with their parent (same monitor/workspace),
-    otherwise on the active monitor’s visible workspace.
-  - Tiled windows appear on the active monitor’s visible workspace.
+- Update current workspace
+- Hide old workspace windows
+- Show/rearrange new workspace windows
+- Restore focus using policy above
 
-### 5.2 Default Focus on New Windows
+No-op if requesting the already active workspace.
 
-- By default, a newly created window **receives focus** if it is focus-eligible and visible.
-- Exceptions are permitted when required by COMPLIANCE.md (e.g., initial iconic state, focus-ineligible windows, or focus-stealing prevention constraints).
-- **Interaction with FFM**: When a new window takes focus, if the cursor is inside another window, that window regains focus on motion or click (see §2.2).
+### Moving a Window to Another Workspace
 
----
+- Reassign window workspace
+- Recompute affected layouts/visibility
+- Restore focus at source workspace if needed
 
-## 6. Floating Windows
+### Switching Active Monitor
 
-### 6.1 Association and Visibility
+- Change command target monitor
+- Restore focus on that monitor's current workspace
+- Optional cursor warp (configurable)
 
-- Floating windows are associated with a monitor and workspace, appearing/disappearing with that workspace.
-- Unlike tiled windows (stored per-workspace), floating windows are tracked in a separate global list with explicit monitor/workspace association. This affects focus restoration (see §1.2).
+### Moving a Window to Another Monitor
 
-### 6.2 Placement and Interaction
-- Floating windows appear in a sensible default position (e.g., centered on usable area or relative to a parent).
-- User-driven move/resize is supported (mechanism/config is not specified here).
+- Reassign window to destination monitor's current workspace
+- Recompute source and destination layouts
+- Focus moved window if visible
 
-### 6.3 Focus
-- Floating windows participate in focus-follows-mouse if focus-eligible.
-- Closing a floating window restores focus according to Section 2.4.
-- **Note**: Per-workspace "last-focused" memory only tracks tiled windows; if focus should be restored
-  to a floating window, the WM searches floating windows on that workspace in most-recently-used order.
+## 6. New Window Policy
 
----
+- New tiled windows open on the active monitor's current workspace.
+- Floating/transient windows prefer parent window context when available.
+- Focus is granted if window is visible and eligible, except where protocol rules block it.
 
-## 7. Tiling Layout
+## 7. Tiling Layout + Drag Reorder
 
-### 7.1 Default Layout Behavior (Master/Stack)
-- 1 window: occupies the usable area.
-- 2 windows: split the usable area into two regions.
-- 3+ windows: master + stack arrangement (one primary region plus a stack region shared by others).
+Default tiling behavior:
 
-Exact ratios/gaps are configuration concerns.
+- 1 tiled window: fills the usable monitor area.
+- 2 tiled windows: split usable area into two regions.
+- 3+ tiled windows: master + stack arrangement.
+- Usable area excludes reserved struts.
 
-### 7.2 Usable Area
-Tiling uses the monitor’s usable area excluding space reserved by panels/docks.
+Drag reorder:
 
----
+- Dragging a tiled window enters reorder mode.
+- During drag, the window follows pointer visually.
+- Drop chooses target monitor/workspace by pointer position.
+- On drop, window is inserted into target layout and remains focused if eligible.
 
-## 8. Tiled Window Drag-Reorder (Current Behavior)
+## 8. Window Rules
 
-LWM supports mouse-based reordering/moving of **tiled** windows without converting them to floating.
+Rules are evaluated in order; first match wins.
 
-### 8.1 Interaction Model
-- A drag gesture on a tiled window enters “reorder mode”.
-- During drag:
-  - the window follows the pointer with temporary geometry (visual feedback),
-  - the tiling layout is not finalized until drop,
-  - focus remains on the dragged window.
+Typical match keys:
 
-### 8.2 Drop Semantics
-On drop:
-- The target monitor is determined by pointer position (default: monitor under pointer).
-- The window is inserted into the target monitor’s **currently visible workspace**.
-- The tiling layout is recomputed.
-- The dragged window remains focused (if focus-eligible and visible).
+- class / instance / title (regex)
+- type
+- transient
 
-How the drop position maps to an insertion index is layout-dependent.
+Typical actions:
 
----
+- force tiled/floating
+- assign workspace or monitor
+- set sticky/fullscreen/above/below
+- set floating geometry or center placement
 
-## 9. Window Rules
-
-### 9.1 Overview
-Window rules configure windows automatically based on properties (class, instance, title, type).
-Rules are applied at map time (when the window first appears) to customize behavior beyond EWMH classification.
-
-### 9.2 Rule Evaluation
-- Rules are defined in configuration as an ordered list.
-- **First-match-wins**: First matching rule is applied; subsequent rules are ignored.
-- Empty criteria set matches all windows.
-
-### 9.3 Matching Criteria
-All specified criteria in a rule must match (AND logic). Available criteria:
-- **class**: WM_CLASS class name (regex pattern)
-- **instance**: WM_CLASS instance name (regex pattern)
-- **title**: Window title (regex pattern)
-- **type**: EWMH window type (normal, dialog, utility, toolbar, splash, menu)
-- **transient**: Match only transient (child) windows
-
-If a criterion is not specified, it matches any value.
-
-### 9.4 Rule Actions
-When a rule matches, the following actions can be applied:
-- **floating**: Force floating (true) or tiled (false) mode
-- **workspace/workspace_name**: Assign to a specific workspace
-- **monitor/monitor_name**: Assign to a specific monitor
-- **fullscreen**: Start in fullscreen state
-- **above/below**: Set stacking order
-- **sticky**: Make visible on all workspaces
-- **skip_taskbar/skip_pager**: Exclude from taskbar/pager
-- **geometry**: Set position/size for floating windows
-- **center**: Center on monitor (floating windows only)
-
-### 9.5 Relationship to EWMH Classification
-- Window rules are applied **after** EWMH classification.
-- Rules cannot override fundamental window type behavior (dock, desktop, popup windows).
-- Rules can override the tiled/floating decision for normal windows.
-- EWMH state atoms are set according to rule actions (e.g., sticky, above, below).
-
-For detailed EWMH window type handling and precedence, see [COMPLIANCE.md](COMPLIANCE.md#_net_wm_window_type).
-
+Rules cannot override core class behavior for Dock/Desktop/Popup windows.

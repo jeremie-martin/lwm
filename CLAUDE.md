@@ -1,142 +1,63 @@
 # CLAUDE.md
 
-Development guide for Claude Code (claude.ai/code).
+Contributor quick reference for this repository.
 
-## Quick Reference
+## Fast Commands
 
-**Core files** (~5792 lines total):
-- `wm.cpp` (~2309) - Main window management, workspace/monitor operations, EWMH updates
-- `wm_events.cpp` (~1604) - XCB event handlers (switch on response_type)
-- `wm_floating.cpp` (~556) - Floating window management
-- `wm_focus.cpp` (~487) - Focus handling logic
-- `wm_workspace.cpp` (~329) - Workspace switching, toggling, moving windows
-- `wm_ewmh.cpp` (~256) - EWMH protocol handling
-- `wm_drag.cpp` (~251) - Mouse drag state machine
-
-**Key types** (`src/lwm/core/types.hpp`):
-- `Client` - Authoritative state for all windows
-- `Workspace` - Tiled window list + focus tracking
-- `Monitor` - RANDR output with workspaces, struts
-
----
-
-## Quick Commands
-
-**Build:**
 ```bash
-make            # Release build
-make debug      # Debug build
+make          # release build
+make debug    # debug build
+make test     # run all tests
+make clean
 ```
 
-**Install:**
+Single test pattern:
+
 ```bash
-sudo make install    # Install to /usr/local/bin
-sudo make uninstall  # Remove from /usr/local/bin
+./build/tests/lwm_tests "focus"
 ```
 
-**Test:**
-```bash
-make test                              # Build and run all tests
-./build/tests/lwm_tests "pattern"      # Run single test
-```
+Xephyr sandbox:
 
-**Test with Xephyr:**
 ```bash
 ./scripts/preview.sh
 ```
 
-**Format code:**
-```bash
-find src -name '*.cpp' -o -name '*.hpp' | xargs clang-format -i
-```
+## Primary Code Areas
 
-**Clean:**
-```bash
-make clean      # Remove build directory
-```
+- `src/lwm/wm.cpp`: core window/state transitions
+- `src/lwm/wm_events.cpp`: X event handling
+- `src/lwm/wm_focus.cpp`: focus policy
+- `src/lwm/wm_workspace.cpp`: workspace operations
+- `src/lwm/wm_floating.cpp`: floating behavior
+- `src/lwm/wm_ewmh.cpp`: EWMH message handling
+- `src/lwm/core/types.hpp`: core data model
+- `config.toml.example`: user-facing config and bindings
 
-## Architecture
+## If You Add/Change Behavior
 
-LWM is a minimal tiling window manager for X11 written in C++23. It follows a centralized architecture with the WindowManager orchestrating all components.
+1. Update tests in `tests/`.
+2. Update config docs/examples if keybinds or options changed.
+3. Update markdown docs where behavior contracts changed.
 
-```
-┌─────────────────────────────────────────────────────────────────┐
-│                     WindowManager (wm.cpp)                      │
-│                                                                  │
-│  Core State:                                                     │
-│  • clients_: unordered_map<window, Client>                     │
-│  • monitors_: vector<Monitor>                                   │
-│  • floating_windows_: vector<xcb_window_t>  (MRU order)          │
-│  • dock_windows_, desktop_windows_                              │
-└─────────────────────────────────────────────────────────────────┘
-         ↓                    ↓                    ↓
-  ┌────────────┐    ┌──────────┐    ┌──────────┐
-  │   Ewmh     │    │  Layout   │    │  Focus    │
-  │  Protocol  │    │  Tiling   │    │  utils    │
-  └────────────┘    └──────────┘    └──────────┘
-         ↑                    ↑
-  ┌────────────┐    ┌──────────┐
-  │ Connection │    │KeybindMgr│
-  │ XCB wrapper│    │          │
-  └────────────┘    └──────────┘
-         ↓
-  ┌────────────┐
-  │  Config    │
-  │ (TOML)     │
-  └────────────┘
-```
+### Common Change Recipes
 
-## Adding Features
+- New keybind action: update parsing in `src/lwm/config/config.cpp`, handling in `src/lwm/wm_events.cpp`, and `config.toml.example`.
+- New window state: add `Client` flag in `src/lwm/core/types.hpp`, apply transitions in `src/lwm/wm.cpp`, and wire client-message handling in `src/lwm/wm_ewmh.cpp`.
+- New EWMH atom support: add atom wiring in `src/lwm/core/ewmh.hpp` / `src/lwm/core/ewmh.cpp`, then update compliance notes in `COMPLIANCE.md`.
 
-**New keybind action:**
-1. Handle action string in `wm_events.cpp` handle_key_press
-2. Parse in `config/config.cpp`
-3. Document in `config.toml.example`
+## Debugging Hooks
 
-**New window state:**
-1. Add flag to Client struct
-2. Implement set_* function in wm.cpp
-3. Update EWMH _NET_WM_STATE
-4. Handle in wm_events.cpp ClientMessage
+- `LWM_DEBUG(...)`
+- `LWM_DEBUG_KEY(...)`
+- `LWM_ASSERT_INVARIANTS(...)` (debug builds)
 
-**New EWMH property:**
-1. Add atom to Ewmh class
-2. Set on startup in wm.cpp
-3. Update when state changes
-4. Document in COMPLIANCE.md
+Use these before introducing larger structural changes.
 
-## Code Style
+## Documentation Ownership
 
-Uses `.clang-format` (WebKit-based). Key settings:
-- 4-space indent, 120 column limit
-- Allman braces (opening brace on new line)
-- `snake_case` for functions/variables, `PascalCase` for types, trailing underscore for private members
-- Prefer `std::ranges` algorithms
-
-## Debugging
-
-Debug builds enable:
-- `LWM_DEBUG(msg)` - logs to stderr with file:line
-- `LWM_DEBUG_KEY(msg)` - keybinding debugging
-- `LWM_ASSERT_INVARIANTS(clients, monitors, floating, docks, desktops)` - validates state consistency across all containers (see `core/invariants.hpp`)
-
-## Testing
-
-Tests use Catch2. Test files in `tests/`:
-- `test_client_state_policy.cpp`, `test_window_rules.cpp`
-- `test_focus_policy.cpp`, `test_focus_restoration_policy.cpp`, `test_focus_visibility_policy.cpp`
-- `test_focus_cycling_policy.cpp`
-- `test_workspace.cpp`, `test_workspace_policy.cpp`
-- `test_floating_policy.cpp`, `test_layout_policy.cpp`
-- `test_multimonitor_policy.cpp`
-- `test_ewmh_classification.cpp`, `test_ewmh_policy.cpp`
-- `test_integration_focus.cpp` - X11 integration tests
-
-## Documentation
-
-- **[IMPLEMENTATION.md](IMPLEMENTATION.md)** - Architecture, invariants
-- **[STATE_MACHINE.md](STATE_MACHINE.md)** - Window states and transitions
-- **[EVENT_HANDLING.md](EVENT_HANDLING.md)** - Event handling specifications
-- **[BEHAVIOR.md](BEHAVIOR.md)** - User-facing behavior spec
-- **[COMPLIANCE.md](COMPLIANCE.md)** - ICCCM/EWMH requirements
-- **[SPEC_CLARIFICATIONS.md](SPEC_CLARIFICATIONS.md)** - Ambiguous spec design decisions
+- [`README.md`](README.md): setup, run, high-level behavior
+- [`BEHAVIOR.md`](BEHAVIOR.md): user-visible behavior contract
+- [`IMPLEMENTATION.md`](IMPLEMENTATION.md): internal flow/invariants/pitfalls
+- [`COMPLIANCE.md`](COMPLIANCE.md): protocol support and limits
+- [`FEATURE_IDEAS.md`](FEATURE_IDEAS.md): backlog only

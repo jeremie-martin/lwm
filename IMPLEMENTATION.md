@@ -1,160 +1,161 @@
-# LWM Implementation Overview
+# LWM Implementation Notes
 
-This document covers architecture, data structures, and invariants. For window states and transitions, see [STATE_MACHINE.md](STATE_MACHINE.md). For event handling, see [EVENT_HANDLING.md](EVENT_HANDLING.md).
+This file is for maintainers. It records non-obvious architecture and behavior constraints that are easy to violate.
 
----
+## 1. Source Map
 
-## Table of Contents
-1. [Initialization Sequence](#initialization-sequence)
-2. [Data Structures](#data-structures)
-3. [Terminology](#terminology)
-4. [Invariants](#invariants)
-5. [Visibility and Off-Screen Positioning](#visibility-and-off-screen-positioning)
-6. [Workspace Switching](#workspace-switching)
+- `src/lwm/wm.cpp`: main state transitions, window management, layout triggers
+- `src/lwm/wm_events.cpp`: X11 event dispatch and handler entry points
+- `src/lwm/wm_focus.cpp`: focus policy execution and fallback logic
+- `src/lwm/wm_workspace.cpp`: workspace switching and cross-workspace moves
+- `src/lwm/wm_floating.cpp`: floating geometry, visibility, monitor reassignment
+- `src/lwm/wm_ewmh.cpp`: EWMH client-message handling and property updates
+- `src/lwm/core/types.hpp`: `Client`, `Workspace`, `Monitor` data model
 
----
-
-## Initialization Sequence
-
-**main()** → WindowManager construction → run() → Main event loop
-
-Steps (src/lwm/wm.cpp):
-1. setup_signal_handlers()
-2. init_mousebinds()
-3. create_wm_window()
-4. setup_root() (SubstructureRedirect)
-5. grab_buttons()
-6. claim_wm_ownership() (WM_S0 selection)
-7. intern_atoms()
-8. window_rules_.load_rules()
-9. layout_.set_sync_request_callback()
-10. detect_monitors()
-11. setup_ewmh()
-12. scan_existing_windows()
-13. run_autostart()
-14. keybinds_.grab_keys()
-15. update_ewmh_client_list()
-
----
-
-## Data Structures
-
-All types defined in `src/lwm/core/types.hpp`.
+## 2. Core Data Model
 
 ### Client
 
-Authoritative source of truth for all window state. Key design notes:
-- `Kind` (Tiled/Floating/Dock/Desktop) determines container membership and dispatch
-- `hidden` is physical position state (off-screen at -20000); `iconic` is logical minimization
-- `floating_geometry` is the single source of truth for floating window position/size
-- `order` is unique, monotonically increasing — used for `_NET_CLIENT_LIST` ordering
-- State flags are synced bidirectionally with `_NET_WM_STATE` atoms
-- `modal ⇒ above` (one-way coupling): `set_window_modal()` calls `set_window_above()`, but `set_window_above()` can be called independently without affecting modal
+`Client` is the authoritative per-window state. Treat cached X11 properties as inputs, not truth.
 
-### Strut Aggregation
+Important fields:
 
-Multiple dock windows' struts are aggregated by taking the maximum value per side (e.g., dock A top=30, dock B top=50 → effective top=50).
+- `kind`: tiled/floating/dock/desktop behavior branch
+- `monitor`, `workspace`: location for tiled/floating windows
+- `hidden`: physical off-screen state
+- `iconic`: logical minimized state
+- `floating_geometry`: persistent floating placement
+- ordering/state flags mirrored to EWMH where applicable
 
-### Key Constants
+### Containers
 
-```cpp
-constexpr int16_t OFF_SCREEN_X = -20000;       // Hidden window x-coordinate
-constexpr auto PING_TIMEOUT = std::chrono::seconds(5);
-constexpr auto KILL_TIMEOUT = std::chrono::seconds(5);
-```
+Managed windows live in exactly one class container plus `clients_`:
 
----
+- tiled -> one `Workspace::windows`
+- floating -> `floating_windows_`
+- dock -> `dock_windows_`
+- desktop -> `desktop_windows_`
 
-## Terminology
+## 3. Invariants That Matter
 
-- **Synthetic event**: ConfigureNotify sent by WM to inform client of geometry, not natural X11 event
-- **Intentional no-op**: Graceful early return for invalid state (no error logging)
-- **MRU**: Reverse iteration through vectors (newest at end) for focus restoration and floating stacking
+- `hidden` and `iconic` are different concepts. Workspace switches set `hidden` without iconifying.
+- `iconic` implies off-screen for non-sticky windows.
+- fullscreen windows are excluded from normal tiling layout.
+- `above` and `below` are mutually exclusive.
+- modal implies above (one-way coupling).
+- `_NET_CLIENT_LIST` tracks managed windows, not currently visible windows.
 
----
+## 4. Event Flow (High Level)
 
-## Invariants
+`run()` loop:
 
-### Window Containment
+1. poll for X events / timeout
+2. dispatch via `handle_event()`
+3. process ping/kill timeouts
+4. check connection health
 
-Each window appears in exactly one container based on kind:
-- Kind::Tiled → exactly one `Workspace::windows` vector
-- Kind::Floating → `floating_windows_`
-- Kind::Dock → `dock_windows_`
-- Kind::Desktop → `desktop_windows_`
+Main handlers live in `wm_events.cpp`:
 
-All managed windows also appear in `clients_` (unified source of truth). Container ↔ Client kind consistency is enforced by `assert_floating_consistency()` and `assert_container_consistency()` in debug builds.
+- `MapRequest`: classify, manage, map, apply initial state
+- `UnmapNotify` / `DestroyNotify`: unmanage path
+- `EnterNotify` / `MotionNotify` / `ButtonPress`: focus + drag interactions
+- `ClientMessage`: EWMH/ICCCM control path
+- `ConfigureRequest`: tiled ack vs floating apply
+- `PropertyNotify`: title/hints/struts/state/user-time updates
+- RANDR screen change: hotplug reconciliation
 
-### State Synchronization
+Input nuance:
 
-1. **Client ↔ EWMH**: Every state flag change updates the corresponding EWMH property
-2. **Client ↔ ICCCM**: `WM_STATE` tracks iconic state
-3. **Workspace ↔ Focus**: `workspace.focused_window` tracks last-focused (best-effort hint)
+- `toggle_workspace` has explicit auto-repeat protection (`KeyRelease`/`KeyPress` same timestamp).
 
-### Client Management
+## 5. Window Lifecycle
 
-- If kind is Tiled/Floating: `client.monitor < monitors.size()` and `client.workspace < monitors[monitor].workspaces.size()`
-- Dock/Desktop monitor/workspace fields are meaningless
-- `client.order` values are unique and monotonically increasing (assigned via `next_client_order_++`)
+Nominal path:
 
-### Focus Consistency
+1. map request arrives
+2. ignore override-redirect
+3. classify (popup types bypass full management)
+4. apply rules
+5. create `Client`
+6. read initial state (`_NET_WM_STATE`, `WM_HINTS.initial_state`)
+7. compute geometry
+8. `xcb_map_window()`
+9. if not currently visible/iconic, move off-screen
+10. apply post-map non-geometry states
+11. update EWMH lists
 
-If `active_window_ != XCB_NONE`:
-- Window exists in `clients_`
-- Window is NOT iconic, NOT hidden, NOT on a hidden workspace
+Unmanage path (Unmap/Destroy):
 
-Focus eligibility: `kind != Dock && kind != Desktop && (accepts_input_focus || supports_take_focus)`
+- set `WM_STATE=Withdrawn`
+- remove from containers and `clients_`
+- reconcile focus
+- update EWMH lists
 
-### Client State Consistency
+## 6. Focus Pipeline
 
-- NOT (above AND below) — mutually exclusive
-- iconic ⇒ hidden for NON-STICKY windows (sticky exception: `hide_window()` returns early)
-- hidden does NOT ⇒ iconic (workspace switches hide without iconifying)
-- hidden = true ⇒ window at `OFF_SCREEN_X`; hidden = false ⇒ on-screen
+`focus_any_window()` is the single entry point.
 
-### Workspace Consistency
+Key rules:
 
-- Each tiled window appears in exactly one workspace (no duplicates)
-- Sticky windows appear in one `workspace.windows` vector (visible on all via `hide_window()` skip)
-- `workspace.focused_window` is a best-effort hint, updated via `fixup_workspace_focus()` on removal (selects last non-iconic window, or `XCB_NONE`)
-- `select_focus_candidate()` validates existence and eligibility before using; falls back to MRU
+- no focus assignment during showing-desktop mode
+- no focus for hidden/ineligible windows
+- deiconify before final focus assignment
+- workspace switch may occur as part of focus target resolution
+- fullscreen focus transitions must not reapply fullscreen geometry or reintroduce borders
 
-### Desktop Index Validity
+Fallback sequence (`focus_or_fallback()`):
 
-Desktop index < monitors × workspaces_per_monitor, OR 0xFFFFFFFF (sticky).
+1. workspace remembered focus
+2. other eligible tiled windows (MRU order)
+3. eligible floating windows (MRU)
+4. clear focus
 
-### Fullscreen
+## 7. Workspace Switch Contract
 
-Fullscreen windows are excluded from tiling layout (`rearrange_monitor()` filters them before layout). Focus transitions do not reapply fullscreen geometry.
+All switch flows should converge through `perform_workspace_switch(...)`.
 
-### Visibility
+Required order:
 
-Window is visible iff: NOT hidden, NOT showing_desktop, NOT iconic, AND (sticky OR workspace == current).
+1. update monitor current/previous workspace
+2. hide old workspace windows
+3. flush X connection
+4. update `_NET_CURRENT_DESKTOP`
+5. rearrange/show target workspace
+6. refresh floating visibility
+7. restore focus
 
----
+The flush between hide and show is intentional to avoid visual artifacts and stale geometry timing.
 
-## Visibility and Off-Screen Positioning
+## 8. Visibility Model (Intentional)
 
-LWM uses off-screen positioning (`OFF_SCREEN_X = -20000`) instead of unmap/map cycles. This avoids GPU rendering issues with Chromium, Electron, and Qt/OpenGL applications. See [SPEC_CLARIFICATIONS.md §8](SPEC_CLARIFICATIONS.md#8-window-visibility-off-screen-positioning) for rationale and comparison.
+LWM hides managed windows by moving them off-screen (`OFF_SCREEN_X`), not by unmapping them.
 
-**Key consequence**: WM never calls `xcb_unmap_window()`, so ALL `UnmapNotify` events are client-initiated withdraw requests.
+Why:
 
-**hide_window()**: Returns early for sticky windows (never hidden). Sets `client.hidden=true`, moves to `OFF_SCREEN_X`.
+- avoids redraw bugs seen with some GPU-heavy apps on unmap/remap
+- keeps workspace switching immediate
 
-**show_window()**: Sets `client.hidden=false` only. Caller must restore geometry via `rearrange_monitor()` (tiled) or `apply_floating_geometry()` (floating).
+Consequences:
 
----
+- WM-initiated unmaps are not part of visibility control
+- treat received `UnmapNotify` as client-initiated withdraw/unmanage
+- hidden windows can still emit some events; handlers must gate on `client.hidden`
 
-## Workspace Switching
+## 9. Hotplug Contract
 
-All workspace switching flows converge on `perform_workspace_switch(WorkspaceSwitchContext)` (src/lwm/wm_workspace.cpp):
+RANDR changes:
 
-1. Set `monitor.previous/current_workspace`
-2. Hide floating windows (old ws, non-sticky)
-3. Hide tiled windows (old ws, non-sticky)
-4. **Flush X connection** (critical: ensures hides apply before shows)
-5. Update EWMH current desktop
-6. `rearrange_monitor()` (shows + lays out new workspace)
-7. `update_floating_visibility()`
+- exit fullscreen on managed windows before monitor graph rebuild (prevents stale fullscreen geometry)
+- remap windows to monitors by monitor name, not old monitor index
+- fallback to monitor 0 when old name disappears
+- recompute struts/workareas
+- restore focus target and rearrange all monitors
 
-Three callers: `switch_workspace()`, `switch_to_ewmh_desktop()`, and `focus_any_window()` (when focus triggers workspace change). Each adds its own focus restoration after the switch.
+Using names avoids index-churn regressions during unplug/replug.
+
+## 10. Common Regression Traps
+
+- Updating `_NET_CLIENT_LIST` on workspace switch (wrong: update on manage/unmanage).
+- Treating sticky as global across all monitors (LWM sticky is per-monitor).
+- Applying ConfigureRequest geometry to tiled windows (should send synthetic configure only).
+- Reintroducing WM-driven unmap/map for normal workspace visibility.
