@@ -253,7 +253,7 @@ struct WorkspaceSwitchResult
     size_t new_workspace = 0;
 };
 
-inline std::optional<WorkspaceSwitchResult> apply_workspace_switch(Monitor& monitor, int target_ws)
+inline std::optional<WorkspaceSwitchResult> validate_workspace_switch(Monitor const& monitor, int target_ws)
 {
     size_t workspace_count = monitor.workspaces.size();
     if (workspace_count == 0)
@@ -267,10 +267,7 @@ inline std::optional<WorkspaceSwitchResult> apply_workspace_switch(Monitor& moni
     if (target == monitor.current_workspace)
         return std::nullopt;
 
-    size_t old = monitor.current_workspace;
-    monitor.previous_workspace = old;
-    monitor.current_workspace = target;
-    return WorkspaceSwitchResult{ old, target };
+    return WorkspaceSwitchResult{ monitor.current_workspace, target };
 }
 
 inline bool remove_tiled_window(

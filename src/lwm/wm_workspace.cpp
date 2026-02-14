@@ -15,8 +15,9 @@ void WindowManager::perform_workspace_switch(WorkspaceSwitchContext const& ctx)
         ctx.new_workspace
     );
 
-    // Caller must have already updated monitor.previous_workspace and
-    // monitor.current_workspace before calling this function.
+    // Apply the workspace mutation here — callers no longer pre-mutate.
+    monitor.previous_workspace = ctx.old_workspace;
+    monitor.current_workspace = ctx.new_workspace;
 
     // Hide floating windows from old workspace FIRST
     // This prevents visual glitches where old floating windows appear over new workspace content
@@ -63,8 +64,7 @@ void WindowManager::switch_workspace(int ws)
         monitor.previous_workspace
     );
 
-    // Validate via policy (also updates monitor.previous/current_workspace)
-    auto switch_result = workspace_policy::apply_workspace_switch(monitor, ws);
+    auto switch_result = workspace_policy::validate_workspace_switch(monitor, ws);
     if (!switch_result)
     {
         LOG_TRACE("switch_workspace: policy rejected switch");
@@ -77,7 +77,6 @@ void WindowManager::switch_workspace(int ws)
         switch_result->new_workspace
     );
 
-    // Policy already updated monitor.previous/current_workspace.
     perform_workspace_switch({ focused_monitor_, switch_result->old_workspace, switch_result->new_workspace });
     focus_or_fallback(monitor);
     conn_.flush();

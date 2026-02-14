@@ -208,8 +208,6 @@ void WindowManager::switch_to_ewmh_desktop(uint32_t desktop)
     focused_monitor_ = monitor_idx;
     if (workspace_idx != old_workspace)
     {
-        monitor.previous_workspace = old_workspace;
-        monitor.current_workspace = workspace_idx;
         perform_workspace_switch({ monitor_idx, old_workspace, workspace_idx });
     }
     else

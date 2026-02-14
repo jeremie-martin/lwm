@@ -75,8 +75,6 @@ void WindowManager::focus_any_window(xcb_window_t window)
                 old_ws,
                 client->workspace
             );
-            monitor.previous_workspace = old_ws;
-            monitor.current_workspace = client->workspace;
             perform_workspace_switch({ client->monitor, old_ws, client->workspace });
         }
 
@@ -117,9 +115,6 @@ void WindowManager::focus_any_window(xcb_window_t window)
                 change->old_workspace,
                 change->new_workspace
             );
-            auto& target_monitor = monitors_[change->target_monitor];
-            target_monitor.previous_workspace = change->old_workspace;
-            target_monitor.current_workspace = change->new_workspace;
             perform_workspace_switch({ change->target_monitor, change->old_workspace, change->new_workspace });
         }
     }

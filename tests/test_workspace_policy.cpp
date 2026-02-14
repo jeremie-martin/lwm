@@ -17,30 +17,26 @@ Monitor make_monitor(size_t workspaces)
 
 } // namespace
 
-TEST_CASE("Workspace switch updates state and rejects invalid targets", "[workspace][policy]")
+TEST_CASE("validate_workspace_switch returns decision without mutating monitor", "[workspace][policy]")
 {
     Monitor monitor = make_monitor(3);
     monitor.current_workspace = 1;
     monitor.previous_workspace = 0;
 
-    SECTION("Valid switch updates current and previous")
+    SECTION("Valid switch returns old and new workspace")
     {
-        auto result = workspace_policy::apply_workspace_switch(monitor, 2);
+        auto result = workspace_policy::validate_workspace_switch(monitor, 2);
         REQUIRE(result);
         REQUIRE(result->old_workspace == 1);
         REQUIRE(result->new_workspace == 2);
-        REQUIRE(monitor.previous_workspace == 1);
-        REQUIRE(monitor.current_workspace == 2);
-
-        auto r2 = workspace_policy::apply_workspace_switch(monitor, 0);
-        REQUIRE(r2);
-        REQUIRE(monitor.previous_workspace == 2);
-        REQUIRE(monitor.current_workspace == 0);
+        // Monitor is NOT mutated — pure validation
+        REQUIRE(monitor.current_workspace == 1);
+        REQUIRE(monitor.previous_workspace == 0);
     }
 
     SECTION("Same workspace switch rejected")
     {
-        auto same = workspace_policy::apply_workspace_switch(monitor, 1);
+        auto same = workspace_policy::validate_workspace_switch(monitor, 1);
         REQUIRE_FALSE(same);
         REQUIRE(monitor.current_workspace == 1);
         REQUIRE(monitor.previous_workspace == 0);
@@ -48,12 +44,12 @@ TEST_CASE("Workspace switch updates state and rejects invalid targets", "[worksp
 
     SECTION("Out of range switch rejected")
     {
-        auto out_of_range = workspace_policy::apply_workspace_switch(monitor, 5);
+        auto out_of_range = workspace_policy::validate_workspace_switch(monitor, 5);
         REQUIRE_FALSE(out_of_range);
         REQUIRE(monitor.current_workspace == 1);
         REQUIRE(monitor.previous_workspace == 0);
 
-        auto negative = workspace_policy::apply_workspace_switch(monitor, -1);
+        auto negative = workspace_policy::validate_workspace_switch(monitor, -1);
         REQUIRE_FALSE(negative);
         REQUIRE(monitor.current_workspace == 1);
         REQUIRE(monitor.previous_workspace == 0);
@@ -143,7 +139,7 @@ TEST_CASE("Workspace policy handles edge cases", "[workspace][policy][edge]")
     {
         Monitor monitor = make_monitor(0);
         monitor.current_workspace = 0;
-        auto result = workspace_policy::apply_workspace_switch(monitor, 0);
+        auto result = workspace_policy::validate_workspace_switch(monitor, 0);
         REQUIRE_FALSE(result);
         REQUIRE(monitor.current_workspace == 0);
 
@@ -173,7 +169,7 @@ TEST_CASE("Workspace policy handles edge cases", "[workspace][policy][edge]")
     {
         Monitor large_monitor = make_monitor(10000);
         large_monitor.current_workspace = 5000;
-        auto result = workspace_policy::apply_workspace_switch(large_monitor, 9999);
+        auto result = workspace_policy::validate_workspace_switch(large_monitor, 9999);
         REQUIRE(result);
         REQUIRE(result->old_workspace == 5000);
         REQUIRE(result->new_workspace == 9999);
@@ -181,11 +177,11 @@ TEST_CASE("Workspace policy handles edge cases", "[workspace][policy][edge]")
         Monitor boundary_monitor = make_monitor(100);
         boundary_monitor.current_workspace = 50;
 
-        auto r1 = workspace_policy::apply_workspace_switch(boundary_monitor, 0);
+        auto r1 = workspace_policy::validate_workspace_switch(boundary_monitor, 0);
         REQUIRE(r1);
         REQUIRE(r1->new_workspace == 0);
 
-        auto r2 = workspace_policy::apply_workspace_switch(boundary_monitor, 99);
+        auto r2 = workspace_policy::validate_workspace_switch(boundary_monitor, 99);
         REQUIRE(r2);
         REQUIRE(r2->new_workspace == 99);
     }
