@@ -179,7 +179,56 @@ inline void assert_workspace_consistency(
     }
 }
 
-#    define LWM_ASSERT_INVARIANTS(clients, monitors) lwm::invariants::assert_workspace_consistency(clients, monitors)
+/**
+ * @brief Assert workspace focused_window validity
+ *
+ * Verifies for each workspace:
+ * - focused_window is either XCB_NONE or present in workspace.windows
+ * - focused_window is not iconic
+ */
+inline void assert_workspace_focus_valid(
+    std::unordered_map<xcb_window_t, Client> const& clients,
+    std::vector<Monitor> const& monitors
+)
+{
+    for (size_t m = 0; m < monitors.size(); ++m)
+    {
+        for (size_t w = 0; w < monitors[m].workspaces.size(); ++w)
+        {
+            auto const& ws = monitors[m].workspaces[w];
+            if (ws.focused_window == XCB_NONE)
+                continue;
+
+            if (ws.find_window(ws.focused_window) == ws.windows.end())
+            {
+                LOG_ERROR(
+                    "INVARIANT VIOLATION: Workspace [{}][{}] focused_window {:#x} not in windows list",
+                    m,
+                    w,
+                    ws.focused_window
+                );
+            }
+
+            auto it = clients.find(ws.focused_window);
+            if (it != clients.end() && it->second.iconic)
+            {
+                LOG_ERROR(
+                    "INVARIANT VIOLATION: Workspace [{}][{}] focused_window {:#x} is iconic",
+                    m,
+                    w,
+                    ws.focused_window
+                );
+            }
+        }
+    }
+}
+
+#    define LWM_ASSERT_INVARIANTS(clients, monitors)                 \
+        do                                                           \
+        {                                                            \
+            lwm::invariants::assert_workspace_consistency(clients, monitors); \
+            lwm::invariants::assert_workspace_focus_valid(clients, monitors); \
+        } while (0)
 
 #    define LWM_ASSERT_CLIENT_STATE(client) lwm::invariants::assert_client_state_consistency(client)
 

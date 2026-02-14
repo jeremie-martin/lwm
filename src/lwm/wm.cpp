@@ -734,6 +734,7 @@ void WindowManager::unmanage_window(xcb_window_t window)
             {
                 bool was_active = (active_window_ == window);
                 clients_.erase(window);
+                LWM_ASSERT_INVARIANTS(clients_, monitors_);
                 update_ewmh_client_list();
                 rearrange_monitor(monitor);
 

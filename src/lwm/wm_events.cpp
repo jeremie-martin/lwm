@@ -970,6 +970,7 @@ void WindowManager::handle_desktop_change(xcb_client_message_event_t const& e)
             client->workspace = target_workspace;
         }
         ewmh_.set_window_desktop(e.window, desktop);
+        LWM_ASSERT_INVARIANTS(clients_, monitors_);
 
         rearrange_monitor(*source_monitor);
         if (source_monitor != &monitors_[target_monitor])
