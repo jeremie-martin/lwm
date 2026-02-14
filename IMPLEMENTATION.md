@@ -52,7 +52,7 @@ Managed windows live in exactly one class container plus `clients_`:
 
 1. poll for X events / timeout
 2. dispatch via `handle_event()`
-3. process ping/kill timeouts
+3. process kill timeouts
 4. check connection health
 
 Main handlers live in `wm_events.cpp`:
@@ -120,14 +120,10 @@ All switch flows should converge through `perform_workspace_switch(...)`.
 Required order:
 
 1. update monitor current/previous workspace
-2. hide old workspace windows
-3. flush X connection
-4. update `_NET_CURRENT_DESKTOP`
-5. rearrange/show target workspace
-6. refresh floating visibility
-7. restore focus in caller (`focus_or_fallback()` or explicit target focus)
-
-The flush between hide and show is intentional to avoid visual artifacts and stale geometry timing.
+2. update `_NET_CURRENT_DESKTOP`
+3. sync visibility for monitor (hides old-workspace windows, shows new-workspace windows including floating)
+4. rearrange monitor (computes tiling layout for now-visible tiled windows)
+5. restore focus in caller (`focus_or_fallback()` or explicit target focus)
 
 ## 8. Visibility Model (Intentional)
 
