@@ -1,10 +1,6 @@
 # Spec Clarifications
 
-> **Documentation Navigation**
-> - Previous: [COMPLIANCE.md](COMPLIANCE.md) (Protocol requirements)
-> - Related: [DOCS_INDEX.md](DOCS_INDEX.md) (Documentation roadmap) | [BEHAVIOR.md](BEHAVIOR.md) (User-facing behavior) | [STATE_MACHINE.md](STATE_MACHINE.md) (Window states) | [IMPLEMENTATION.md](IMPLEMENTATION.md) (Architecture)
-
-This document records explicit design decisions where EWMH/ICCCM specifications allowed for interpretation, or where [BEHAVIOR.md](BEHAVIOR.md) and [COMPLIANCE.md](COMPLIANCE.md) needed clarification.
+Design decisions where EWMH/ICCCM specs allowed interpretation, or where [BEHAVIOR.md](BEHAVIOR.md) and [COMPLIANCE.md](COMPLIANCE.md) needed clarification.
 
 ---
 

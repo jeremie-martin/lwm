@@ -1,12 +1,6 @@
 # LWM Behavior Specification
 
-> **Documentation Navigation**
-> - Previous: [README.md](README.md) (Quick start) | [DOCS_INDEX.md](DOCS_INDEX.md) (Documentation roadmap)
-> - Related: [CLAUDE.md](CLAUDE.md) (Development guide) | [COMPLIANCE.md](COMPLIANCE.md) (Protocol requirements)
-
-This document defines the **high-level, user-visible behavior** of LWM, independent of implementation.
-Protocol compliance obligations (ICCCM/EWMH, property/message semantics) are defined in [COMPLIANCE.md](COMPLIANCE.md)
-and are not duplicated here.
+High-level, user-visible behavior independent of implementation. Protocol obligations are in [COMPLIANCE.md](COMPLIANCE.md).
 
 ---
 
@@ -80,7 +74,7 @@ This mapping is intentionally per-monitor; some pagers may assume global desktop
 - **Motion within a window**: Re-focuses if pointer is in a focus-eligible window that lost focus (e.g., new window took focus per §5.2 while cursor remained elsewhere).
 - **Click within a window**: Click a focus-eligible window to focus it.
 
-See [STATE_MACHINE.md](STATE_MACHINE.md#6-focus-system) for implementation details on focus eligibility and event handling.
+See [STATE_MACHINE.md](STATE_MACHINE.md#focus-system) for implementation details on focus eligibility and event handling.
 
 ### 2.3 Empty Space Semantics (Key Multi-Monitor Behavior)
 
@@ -251,10 +245,3 @@ When a rule matches, the following actions can be applied:
 
 For detailed EWMH window type handling and precedence, see [COMPLIANCE.md](COMPLIANCE.md#_net_wm_window_type).
 
----
-
-## 10. Non-Goals for This Document
-- Protocol-level property/message requirements (see COMPLIANCE.md).
-- Internal data structures, event names, or X11-specific mechanics.
-- Exact keybinding tables (configuration-level documentation).
-- Hardcoded visuals (borders/colors), unless part of the product spec.

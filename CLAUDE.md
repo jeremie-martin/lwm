@@ -1,10 +1,6 @@
 # CLAUDE.md
 
-> **Documentation Navigation**
-> - Previous: [README.md](README.md) (Quick start) | [BEHAVIOR.md](BEHAVIOR.md) (User-facing behavior)
-> - Related: [DOCS_INDEX.md](DOCS_INDEX.md) (Documentation roadmap) | [COMPLIANCE.md](COMPLIANCE.md) (Protocol requirements)
-
-This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
+Development guide for Claude Code (claude.ai/code).
 
 ## Quick Reference
 
@@ -90,17 +86,6 @@ LWM is a minimal tiling window manager for X11 written in C++23. It follows a ce
   └────────────┘
 ```
 
-**Key data structures** (in `core/types.hpp`):
-- `Client`: Authoritative source of truth for all window state (kind, monitor, workspace, state flags, geometry)
-- `Workspace`: Ordered list of tiled windows + focused window tracking
-- `Monitor`: RANDR output with geometry, workspaces, struts, bar window
-
-For detailed specifications, see:
-- **[DOCS_INDEX.md](DOCS_INDEX.md)** - Documentation roadmap and quick reference
-- **[IMPLEMENTATION.md](IMPLEMENTATION.md)** - Architecture, data structures, invariants
-- **[STATE_MACHINE.md](STATE_MACHINE.md)** - Window states and transitions
-- **[EVENT_HANDLING.md](EVENT_HANDLING.md)** - Event-by-event handling specifications
-
 ## Adding Features
 
 **New keybind action:**
@@ -147,9 +132,11 @@ Tests use Catch2. Test files in `tests/`:
 - `test_ewmh_classification.cpp`, `test_ewmh_policy.cpp`
 - `test_integration_focus.cpp` - X11 integration tests
 
-## Related Documentation
+## Documentation
 
-- **BEHAVIOR.md**: High-level behavior specification (focus policy, workspace model, drag semantics)
-- **COMPLETE_STATE_MACHINE.md**: Complete implementation specification (states, transitions, invariants)
-- **COMPLIANCE.md**: ICCCM/EWMH protocol compliance requirements
-- **SPEC_CLARIFICATIONS.md**: Design decisions on ambiguous spec points
+- **[IMPLEMENTATION.md](IMPLEMENTATION.md)** - Architecture, invariants
+- **[STATE_MACHINE.md](STATE_MACHINE.md)** - Window states and transitions
+- **[EVENT_HANDLING.md](EVENT_HANDLING.md)** - Event handling specifications
+- **[BEHAVIOR.md](BEHAVIOR.md)** - User-facing behavior spec
+- **[COMPLIANCE.md](COMPLIANCE.md)** - ICCCM/EWMH requirements
+- **[SPEC_CLARIFICATIONS.md](SPEC_CLARIFICATIONS.md)** - Ambiguous spec design decisions

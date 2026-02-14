@@ -1,10 +1,6 @@
 # LWM Window State Machine
 
-> **Documentation Navigation**
-> - Previous: [IMPLEMENTATION.md](IMPLEMENTATION.md) (Architecture overview)
-> - Related: [EVENT_HANDLING.md](EVENT_HANDLING.md) (Event handling) | [BEHAVIOR.md](BEHAVIOR.md) (User-facing behavior)
-
-This document defines the complete window state machine, state transitions, and lifecycle management for LWM. For architecture details, see [IMPLEMENTATION.md](IMPLEMENTATION.md). For event handling specifications, see [EVENT_HANDLING.md](EVENT_HANDLING.md).
+Window states, transitions, and lifecycle. For architecture and invariants, see [IMPLEMENTATION.md](IMPLEMENTATION.md). For event handling, see [EVENT_HANDLING.md](EVENT_HANDLING.md).
 
 ---
 
@@ -252,8 +248,6 @@ handle_window_removal()
     └─ Rearrange monitor, update _NET_CLIENT_LIST
 ```
 
-**Focus restoration note**: LWM restores focus only when the removed window was on the **current workspace** of its monitor AND that monitor is the currently focused monitor. The workspace.focused_window update sets it to `workspace.windows.back()` or XCB_NONE if empty.
-
 ---
 
 ## Specific State Transitions
@@ -414,7 +408,7 @@ If disabled:
     └─ Update visibility (show only on current workspace)
 ```
 
-**Sticky window behavior**: See [IMPLEMENTATION.md §6](IMPLEMENTATION.md#6-visibility-and-off-screen-positioning)
+**Sticky window behavior**: See [IMPLEMENTATION.md](IMPLEMENTATION.md#visibility-and-off-screen-positioning)
 
 **Edge cases for sticky toggle**:
 
@@ -536,12 +530,3 @@ The following conditions can prevent focus even for focus-eligible windows:
 **_NET_ACTIVE_WINDOW source=2 (pager)**:
 - LWM always allows pager focus requests (no timestamp check)
 
----
-
-## Related Documents
-
-- **[IMPLEMENTATION.md](IMPLEMENTATION.md)** - Architecture, data structures, invariants
-- **[EVENT_HANDLING.md](EVENT_HANDLING.md)** - Event-by-event handling specifications
-- **[BEHAVIOR.md](BEHAVIOR.md)** - User-facing behavior (focus, workspaces, monitors)
-- **[COMPLIANCE.md](COMPLIANCE.md)** - Protocol obligations (ICCCM/EWMH)
-- **[SPEC_CLARIFICATIONS.md](SPEC_CLARIFICATIONS.md)** - Design decisions on spec ambiguities

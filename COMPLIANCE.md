@@ -1,10 +1,6 @@
 # Protocol Compliance Requirements
 
-> **Documentation Navigation**
-> - Previous: [BEHAVIOR.md](BEHAVIOR.md) (User-facing behavior) | [CLAUDE.md](CLAUDE.md) (Development guide)
-> - Related: [DOCS_INDEX.md](DOCS_INDEX.md) (Documentation roadmap) | [STATE_MACHINE.md](STATE_MACHINE.md) (Window states) | [EVENT_HANDLING.md](EVENT_HANDLING.md) (Event handling) | [SPEC_CLARIFICATIONS.md](SPEC_CLARIFICATIONS.md) (Design decisions)
-
-This document defines the external protocol obligations LWM must satisfy for X11 window management. It is normative and testable; all items describe what the window manager MUST or SHOULD implement.
+Normative, testable protocol obligations for X11 window management. All items describe what LWM MUST or SHOULD implement.
 
 ---
 

@@ -174,22 +174,15 @@ Run applications in the nested X server:
 DISPLAY=:100 <application>
 ```
 
-## Project Documentation
+## Documentation
 
-For complete documentation navigation, see **[DOCS_INDEX.md](DOCS_INDEX.md)** (Documentation roadmap)
-
-**User documentation:**
-- **[BEHAVIOR.md](BEHAVIOR.md)** - User-facing behavior: focus, workspaces, monitors, window rules
-
-**Contributor documentation:**
-- **[CLAUDE.md](CLAUDE.md)** - Development guide and code conventions
-- **[DOCS_INDEX.md](DOCS_INDEX.md)** - Documentation roadmap and quick reference
-- **[IMPLEMENTATION.md](IMPLEMENTATION.md)** - Architecture, data structures, invariants
-- **[STATE_MACHINE.md](STATE_MACHINE.md)** - Window states and state transitions
-- **[EVENT_HANDLING.md](EVENT_HANDLING.md)** - Event-by-event handling specifications
-- **[COMPLIANCE.md](COMPLIANCE.md)** - ICCCM/EWMH protocol requirements
-- **[SPEC_CLARIFICATIONS.md](SPEC_CLARIFICATIONS.md)** - Design decisions on ambiguous specs
-- **[FEATURE_IDEAS.md](FEATURE_IDEAS.md)** - Feature backlog and design principles
+- **[BEHAVIOR.md](BEHAVIOR.md)** - User-facing behavior spec
+- **[CLAUDE.md](CLAUDE.md)** - Development guide
+- **[IMPLEMENTATION.md](IMPLEMENTATION.md)** - Architecture, invariants
+- **[STATE_MACHINE.md](STATE_MACHINE.md)** - Window states and transitions
+- **[EVENT_HANDLING.md](EVENT_HANDLING.md)** - Event handling
+- **[COMPLIANCE.md](COMPLIANCE.md)** - ICCCM/EWMH requirements
+- **[SPEC_CLARIFICATIONS.md](SPEC_CLARIFICATIONS.md)** - Ambiguous spec decisions
 
 ## License
 
