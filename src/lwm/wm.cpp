@@ -1,15 +1,28 @@
 #include "wm.hpp"
+#include "lwm/core/floating.hpp"
 #include "lwm/core/focus.hpp"
+#include "lwm/core/ipc.hpp"
 #include "lwm/core/log.hpp"
 #include "lwm/core/policy.hpp"
+#include <array>
 #include <algorithm>
+#include <cstddef>
+#include <cerrno>
+#include <cctype>
 #include <chrono>
 #include <csignal>
 #include <cstdlib>
 #include <cstring>
+#include <fcntl.h>
+#include <filesystem>
 #include <limits>
 #include <memory>
 #include <poll.h>
+#include <string_view>
+#include <sys/socket.h>
+#include <sys/stat.h>
+#include <sys/time.h>
+#include <sys/un.h>
 #include <sys/wait.h>
 #include <unistd.h>
 #include <xcb/xcb_icccm.h>
@@ -26,6 +39,87 @@ constexpr auto KILL_TIMEOUT = std::chrono::seconds(5);
 // A fully non-blocking async implementation would be ideal but requires significant
 // architectural changes. Most clients respond quickly; this timeout is a compromise.
 constexpr auto SYNC_WAIT_TIMEOUT = std::chrono::milliseconds(50);
+constexpr size_t IPC_MAX_REQUEST_SIZE = 4096;
+constexpr auto IPC_CLIENT_IO_TIMEOUT = std::chrono::milliseconds(50);
+
+std::string trim_ascii(std::string_view value)
+{
+    size_t start = 0;
+    while (start < value.size() && std::isspace(static_cast<unsigned char>(value[start])))
+        ++start;
+
+    size_t end = value.size();
+    while (end > start && std::isspace(static_cast<unsigned char>(value[end - 1])))
+        --end;
+
+    return std::string(value.substr(start, end - start));
+}
+
+std::string ok_reply(std::string const& message)
+{
+    if (message.empty())
+        return "ok";
+    return "ok " + message;
+}
+
+std::string error_reply(std::string const& message) { return "error " + message; }
+
+void close_fd(int& fd)
+{
+    if (fd >= 0)
+    {
+        close(fd);
+        fd = -1;
+    }
+}
+
+bool wait_for_fd_ready(int fd, short events, std::chrono::steady_clock::time_point deadline)
+{
+    while (true)
+    {
+        auto now = std::chrono::steady_clock::now();
+        if (now >= deadline)
+            return false;
+
+        auto remaining = std::chrono::duration_cast<std::chrono::milliseconds>(deadline - now);
+        int timeout_ms = static_cast<int>(std::max<int64_t>(1, remaining.count()));
+
+        pollfd pfd = { .fd = fd, .events = events, .revents = 0 };
+        int poll_result = poll(&pfd, 1, timeout_ms);
+        if (poll_result > 0)
+            return (pfd.revents & events) != 0;
+        if (poll_result == 0)
+            return false;
+        if (errno == EINTR)
+            continue;
+        return false;
+    }
+}
+
+bool send_all(int fd, std::string_view data, std::chrono::steady_clock::time_point deadline)
+{
+    size_t sent = 0;
+    while (sent < data.size())
+    {
+        ssize_t written = send(fd, data.data() + sent, data.size() - sent, MSG_NOSIGNAL);
+        if (written > 0)
+        {
+            sent += static_cast<size_t>(written);
+            continue;
+        }
+        if (written < 0 && errno == EINTR)
+            continue;
+        if (written < 0 && (errno == EAGAIN || errno == EWOULDBLOCK))
+        {
+            if (!wait_for_fd_ready(fd, POLLOUT, deadline))
+                return false;
+            continue;
+        }
+        return false;
+    }
+
+    return true;
+}
 
 void sigchld_handler(int /*sig*/) { while (waitpid(-1, nullptr, WNOHANG) > 0); }
 
@@ -39,12 +133,13 @@ void setup_signal_handlers()
 
 }
 
-WindowManager::WindowManager(Config config)
+WindowManager::WindowManager(Config config, std::string config_path)
     : config_(std::move(config))
     , conn_()
     , ewmh_(conn_)
     , keybinds_(conn_, config_)
     , layout_(conn_, config_.appearance)
+    , config_path_(std::move(config_path))
 {
     setup_signal_handlers();
     init_mousebinds();
@@ -69,6 +164,7 @@ WindowManager::WindowManager(Config config)
     net_wm_user_time_ = ewmh_.get()->_NET_WM_USER_TIME;
     net_wm_user_time_window_ = intern_atom("_NET_WM_USER_TIME_WINDOW");
     net_wm_state_focused_ = intern_atom("_NET_WM_STATE_FOCUSED");
+    lwm_ipc_socket_ = intern_atom("_LWM_IPC_SOCKET");
     {
         std::vector<xcb_atom_t> extra;
         if (net_wm_user_time_window_ != XCB_NONE)
@@ -82,6 +178,7 @@ WindowManager::WindowManager(Config config)
     window_rules_.load_rules(config_.rules);
     detect_monitors();
     setup_ewmh();
+    setup_ipc();
     scan_existing_windows();
     run_autostart();
     keybinds_.grab_keys(conn_.screen()->root);
@@ -89,12 +186,14 @@ WindowManager::WindowManager(Config config)
     conn_.flush();
 }
 
+WindowManager::~WindowManager()
+{
+    cleanup_ipc();
+}
+
 void WindowManager::run()
 {
-    int fd = xcb_get_file_descriptor(conn_.get());
-    pollfd pfd = {};
-    pfd.fd = fd;
-    pfd.events = POLLIN;
+    int xfd = xcb_get_file_descriptor(conn_.get());
 
     while (running_)
     {
@@ -121,9 +220,20 @@ void WindowManager::run()
             }
         }
 
-        int poll_result = poll(&pfd, 1, timeout_ms);
+        std::array<pollfd, 2> poll_fds = {
+            pollfd{ .fd = xfd, .events = POLLIN, .revents = 0 },
+            pollfd{ .fd = ipc_listener_fd_, .events = POLLIN, .revents = 0 },
+        };
+        nfds_t nfds = ipc_listener_fd_ >= 0 ? poll_fds.size() : 1;
+
+        int poll_result = poll(poll_fds.data(), nfds, timeout_ms);
         if (poll_result > 0)
         {
+            if (ipc_listener_fd_ >= 0 && (poll_fds[1].revents & POLLIN))
+            {
+                handle_ipc();
+            }
+
             while (auto event = xcb_poll_for_event(conn_.get()))
             {
                 std::unique_ptr<xcb_generic_event_t, decltype(&free)> eventPtr(event, free);
@@ -138,6 +248,550 @@ void WindowManager::run()
             LOG_ERROR("X connection error, shutting down");
             break;
         }
+    }
+}
+
+void WindowManager::setup_ipc()
+{
+    namespace fs = std::filesystem;
+
+    fs::path socket_path = ipc::default_socket_path();
+    fs::create_directories(socket_path.parent_path());
+
+    ipc_socket_path_ = socket_path.string();
+    if (ipc_socket_path_.size() >= sizeof(sockaddr_un::sun_path))
+        throw std::runtime_error("IPC socket path is too long: " + ipc_socket_path_);
+
+    unlink(ipc_socket_path_.c_str());
+
+    int fd = socket(AF_UNIX, SOCK_STREAM | SOCK_CLOEXEC | SOCK_NONBLOCK, 0);
+    if (fd < 0)
+        throw std::runtime_error("Failed to create IPC socket");
+
+    sockaddr_un addr = {};
+    addr.sun_family = AF_UNIX;
+    std::strncpy(addr.sun_path, ipc_socket_path_.c_str(), sizeof(addr.sun_path) - 1);
+
+    socklen_t addr_len = static_cast<socklen_t>(offsetof(sockaddr_un, sun_path) + ipc_socket_path_.size() + 1);
+    if (bind(fd, reinterpret_cast<sockaddr*>(&addr), addr_len) < 0)
+    {
+        int saved_errno = errno;
+        close(fd);
+        throw std::runtime_error("Failed to bind IPC socket '" + ipc_socket_path_ + "': " + std::strerror(saved_errno));
+    }
+
+    if (listen(fd, 16) < 0)
+    {
+        int saved_errno = errno;
+        close(fd);
+        unlink(ipc_socket_path_.c_str());
+        throw std::runtime_error("Failed to listen on IPC socket '" + ipc_socket_path_ + "': " + std::strerror(saved_errno));
+    }
+
+    ipc_listener_fd_ = fd;
+    chmod(ipc_socket_path_.c_str(), 0600);
+
+    if (lwm_ipc_socket_ != XCB_NONE)
+    {
+        ipc::set_root_text_property(
+            conn_.get(),
+            conn_.screen()->root,
+            lwm_ipc_socket_,
+            utf8_string_,
+            ipc_socket_path_
+        );
+        conn_.flush();
+    }
+}
+
+void WindowManager::cleanup_ipc()
+{
+    close_fd(ipc_listener_fd_);
+
+    if (!ipc_socket_path_.empty())
+        unlink(ipc_socket_path_.c_str());
+
+    if (lwm_ipc_socket_ != XCB_NONE && conn_.get() && !xcb_connection_has_error(conn_.get()))
+    {
+        ipc::delete_root_property(conn_.get(), conn_.screen()->root, lwm_ipc_socket_);
+        conn_.flush();
+    }
+}
+
+void WindowManager::handle_ipc()
+{
+    while (true)
+    {
+        int client_fd = accept4(ipc_listener_fd_, nullptr, nullptr, SOCK_CLOEXEC | SOCK_NONBLOCK);
+        if (client_fd < 0)
+        {
+            if (errno == EAGAIN || errno == EWOULDBLOCK)
+                return;
+            if (errno == EINTR)
+                continue;
+            LOG_WARN("IPC accept failed: {}", std::strerror(errno));
+            return;
+        }
+
+        std::string request;
+        request.reserve(128);
+        char buffer[512];
+        bool complete = false;
+        bool read_error = false;
+        bool read_timed_out = false;
+        auto io_deadline = std::chrono::steady_clock::now() + IPC_CLIENT_IO_TIMEOUT;
+
+        while (request.size() < IPC_MAX_REQUEST_SIZE)
+        {
+            ssize_t received = recv(client_fd, buffer, sizeof(buffer), 0);
+            if (received == 0)
+                break;
+            if (received < 0)
+            {
+                if (errno == EINTR)
+                    continue;
+                if (errno == EAGAIN || errno == EWOULDBLOCK)
+                {
+                    if (!wait_for_fd_ready(client_fd, POLLIN, io_deadline))
+                    {
+                        read_timed_out = true;
+                        break;
+                    }
+                    continue;
+                }
+                read_error = true;
+                break;
+            }
+
+            request.append(buffer, static_cast<size_t>(received));
+            if (request.find('\n') != std::string::npos)
+            {
+                complete = true;
+                break;
+            }
+        }
+
+        std::string reply;
+        if (read_error)
+        {
+            reply = error_reply("failed to read request");
+        }
+        else if (read_timed_out && request.empty())
+        {
+            reply = error_reply("request timeout");
+        }
+        else if (request.size() >= IPC_MAX_REQUEST_SIZE && !complete)
+        {
+            reply = error_reply("request too large");
+        }
+        else
+        {
+            size_t line_end = request.find('\n');
+            if (line_end != std::string::npos)
+                request.resize(line_end);
+            reply = run_ipc_command(request);
+        }
+
+        reply.push_back('\n');
+        auto send_deadline = std::chrono::steady_clock::now() + IPC_CLIENT_IO_TIMEOUT;
+        if (!send_all(client_fd, reply, send_deadline))
+            LOG_WARN("IPC send failed");
+        close(client_fd);
+    }
+}
+
+std::string WindowManager::run_ipc_command(std::string const& command)
+{
+    std::string trimmed = trim_ascii(command);
+    if (trimmed.empty())
+        return error_reply("empty command");
+
+    if (trimmed == "ping")
+        return ok_reply("pong");
+
+    if (trimmed == "version")
+        return ok_reply(LWM_VERSION);
+
+    if (trimmed == "reload-config")
+    {
+        auto result = reload_config();
+        if (!result)
+            return error_reply(result.error());
+        return ok_reply("reloaded");
+    }
+
+    return error_reply("unknown command");
+}
+
+std::expected<void, std::string> WindowManager::reload_config()
+{
+    if (config_path_.empty())
+        return std::unexpected("no config path is configured");
+
+    if (!std::filesystem::exists(config_path_))
+        return std::unexpected("config file does not exist: " + config_path_);
+
+    auto loaded = load_config_result(config_path_);
+    if (!loaded)
+        return std::unexpected(loaded.error());
+
+    return apply_config_reload(*loaded);
+}
+
+std::expected<void, std::string> WindowManager::validate_reload(Config const& config) const
+{
+    if (config.workspaces.count != config_.workspaces.count)
+    {
+        return std::unexpected("live reload of [workspaces].count is unsupported; restart required");
+    }
+
+    return {};
+}
+
+std::expected<void, std::string> WindowManager::apply_config_reload(Config config)
+{
+    if (auto validation = validate_reload(config); !validation)
+        return std::unexpected(validation.error());
+
+    WindowRules reloaded_rules;
+    reloaded_rules.load_rules(config.rules);
+
+    config_ = std::move(config);
+    window_rules_ = std::move(reloaded_rules);
+
+    keybinds_.reload(config_);
+    init_mousebinds();
+    grab_buttons();
+    regrab_all_keys();
+    update_ewmh_desktops();
+    reapply_rules_to_existing_windows();
+    rearrange_all_monitors();
+
+    if (!monitors_.empty())
+    {
+        if (auto* active = get_client(active_window_); active && active->monitor < monitors_.size()
+            && is_focus_eligible(active_window_) && is_window_visible(active_window_))
+        {
+            focused_monitor_ = active->monitor;
+            if (active->kind == Client::Kind::Tiled && active->workspace < monitors_[active->monitor].workspaces.size())
+            {
+                monitors_[active->monitor].workspaces[active->workspace].focused_window = active_window_;
+            }
+            update_ewmh_current_desktop();
+        }
+        else
+        {
+            if (focused_monitor_ >= monitors_.size())
+                focused_monitor_ = 0;
+            focus_or_fallback(monitors_[focused_monitor_]);
+        }
+    }
+    else
+    {
+        clear_focus();
+    }
+
+    apply_appearance_reload();
+    update_ewmh_client_list();
+    conn_.flush();
+    return {};
+}
+
+void WindowManager::regrab_all_keys()
+{
+    keybinds_.grab_keys(conn_.screen()->root);
+
+    std::vector<std::pair<uint64_t, xcb_window_t>> ordered;
+    ordered.reserve(clients_.size());
+    for (auto const& [window, client] : clients_)
+    {
+        if (client.kind == Client::Kind::Tiled || client.kind == Client::Kind::Floating)
+            ordered.push_back({ client.order, window });
+    }
+
+    std::sort(ordered.begin(), ordered.end(), [](auto const& a, auto const& b) { return a.first < b.first; });
+    for (auto const& [order, window] : ordered)
+    {
+        (void)order;
+        keybinds_.grab_keys(window);
+    }
+}
+
+void WindowManager::apply_appearance_reload()
+{
+    uint32_t inactive_border = conn_.screen()->black_pixel;
+
+    for (auto const& [window, client] : clients_)
+    {
+        if (client.kind != Client::Kind::Tiled && client.kind != Client::Kind::Floating)
+            continue;
+
+        uint32_t border_color = inactive_border;
+        uint32_t border_width = client.fullscreen ? 0U : config_.appearance.border_width;
+
+        if (window == active_window_ && !client.fullscreen)
+            border_color = config_.appearance.border_color;
+
+        xcb_change_window_attributes(conn_.get(), window, XCB_CW_BORDER_PIXEL, &border_color);
+        xcb_configure_window(conn_.get(), window, XCB_CONFIG_WINDOW_BORDER_WIDTH, &border_width);
+    }
+}
+
+void WindowManager::update_allowed_actions(xcb_window_t window)
+{
+    auto const* client = get_client(window);
+    if (!client)
+        return;
+
+    xcb_ewmh_connection_t* ewmh = ewmh_.get();
+    std::vector<xcb_atom_t> actions = {
+        ewmh->_NET_WM_ACTION_CLOSE,         ewmh->_NET_WM_ACTION_FULLSCREEN, ewmh->_NET_WM_ACTION_CHANGE_DESKTOP,
+        ewmh->_NET_WM_ACTION_ABOVE,         ewmh->_NET_WM_ACTION_BELOW,      ewmh->_NET_WM_ACTION_MINIMIZE,
+        ewmh->_NET_WM_ACTION_SHADE,         ewmh->_NET_WM_ACTION_STICK,      ewmh->_NET_WM_ACTION_MAXIMIZE_VERT,
+        ewmh->_NET_WM_ACTION_MAXIMIZE_HORZ,
+    };
+
+    if (client->kind == Client::Kind::Floating)
+    {
+        actions.push_back(ewmh->_NET_WM_ACTION_MOVE);
+        actions.push_back(ewmh->_NET_WM_ACTION_RESIZE);
+    }
+
+    ewmh_.set_allowed_actions(window, actions);
+}
+
+Geometry WindowManager::current_window_geometry(xcb_window_t window) const
+{
+    Geometry fallback = { 0, 0, 300, 200 };
+    if (auto const* client = get_client(window); client && client->kind == Client::Kind::Floating)
+        fallback = client->floating_geometry;
+
+    auto geom_cookie = xcb_get_geometry(conn_.get(), window);
+    auto* geom_reply = xcb_get_geometry_reply(conn_.get(), geom_cookie, nullptr);
+    if (!geom_reply)
+        return fallback;
+
+    Geometry geometry = {
+        .x = geom_reply->x,
+        .y = geom_reply->y,
+        .width = static_cast<uint16_t>(std::max<uint16_t>(1, geom_reply->width)),
+        .height = static_cast<uint16_t>(std::max<uint16_t>(1, geom_reply->height)),
+    };
+    free(geom_reply);
+    return geometry;
+}
+
+void WindowManager::convert_window_to_floating(xcb_window_t window)
+{
+    auto* client = get_client(window);
+    if (!client || client->kind != Client::Kind::Tiled || client->monitor >= monitors_.size())
+        return;
+
+    size_t monitor_idx = client->monitor;
+    size_t workspace_idx = client->workspace;
+    remove_tiled_from_workspace(window, monitor_idx, workspace_idx);
+
+    client->kind = Client::Kind::Floating;
+    if (std::ranges::find(floating_windows_, window) == floating_windows_.end())
+        floating_windows_.push_back(window);
+
+    Geometry geometry = current_window_geometry(window);
+    if (client->hidden || geometry.x <= OFF_SCREEN_X / 2)
+    {
+        geometry = floating::place_floating(
+            monitors_[monitor_idx].working_area(),
+            geometry.width,
+            geometry.height,
+            std::nullopt
+        );
+    }
+    client->floating_geometry = geometry;
+
+    uint32_t values[] = { XCB_EVENT_MASK_ENTER_WINDOW | XCB_EVENT_MASK_FOCUS_CHANGE | XCB_EVENT_MASK_PROPERTY_CHANGE
+                          | XCB_EVENT_MASK_BUTTON_PRESS };
+    xcb_change_window_attributes(conn_.get(), window, XCB_CW_EVENT_MASK, values);
+    update_allowed_actions(window);
+}
+
+void WindowManager::convert_window_to_tiled(xcb_window_t window)
+{
+    auto* client = get_client(window);
+    if (!client || client->kind != Client::Kind::Floating || client->monitor >= monitors_.size())
+        return;
+
+    auto it = std::ranges::find(floating_windows_, window);
+    if (it != floating_windows_.end())
+        floating_windows_.erase(it);
+
+    client->kind = Client::Kind::Tiled;
+    size_t workspace_idx = std::min(client->workspace, monitors_[client->monitor].workspaces.size() - 1);
+    add_tiled_to_workspace(window, client->monitor, workspace_idx);
+
+    uint32_t values[] = { XCB_EVENT_MASK_ENTER_WINDOW | XCB_EVENT_MASK_FOCUS_CHANGE | XCB_EVENT_MASK_PROPERTY_CHANGE };
+    xcb_change_window_attributes(conn_.get(), window, XCB_CW_EVENT_MASK, values);
+    update_allowed_actions(window);
+}
+
+void WindowManager::apply_rule_result_to_window(xcb_window_t window, WindowRuleResult const& rule_result)
+{
+    if (rule_result.fullscreen.has_value() && !*rule_result.fullscreen)
+        set_fullscreen(window, false);
+
+    auto* client = get_client(window);
+    if (!client)
+        return;
+
+    if (rule_result.floating.has_value())
+    {
+        if (*rule_result.floating)
+            convert_window_to_floating(window);
+        else
+            convert_window_to_tiled(window);
+        client = get_client(window);
+        if (!client)
+            return;
+    }
+
+    auto move_window = [this](xcb_window_t id, size_t target_monitor, size_t target_workspace)
+    {
+        auto* movable = get_client(id);
+        if (!movable || target_monitor >= monitors_.size())
+            return;
+
+        target_workspace = std::min(target_workspace, monitors_[target_monitor].workspaces.size() - 1);
+        if (movable->kind == Client::Kind::Floating)
+        {
+            bool monitor_changed = movable->monitor != target_monitor;
+            movable->monitor = target_monitor;
+            movable->workspace = target_workspace;
+            if (monitor_changed)
+            {
+                movable->floating_geometry = floating::place_floating(
+                    monitors_[target_monitor].working_area(),
+                    movable->floating_geometry.width,
+                    movable->floating_geometry.height,
+                    std::nullopt
+                );
+            }
+
+            if (movable->sticky)
+                ewmh_.set_window_desktop(id, 0xFFFFFFFF);
+            else
+                ewmh_.set_window_desktop(id, get_ewmh_desktop_index(target_monitor, target_workspace));
+            return;
+        }
+
+        if (movable->monitor == target_monitor && movable->workspace == target_workspace)
+            return;
+
+        size_t source_monitor = movable->monitor;
+        size_t source_workspace = movable->workspace;
+        remove_tiled_from_workspace(id, source_monitor, source_workspace);
+        add_tiled_to_workspace(id, target_monitor, target_workspace);
+        if (id == active_window_)
+            monitors_[target_monitor].workspaces[target_workspace].focused_window = id;
+    };
+
+    size_t target_monitor = client->monitor;
+    size_t target_workspace = client->workspace;
+    if (rule_result.target_monitor.has_value())
+        target_monitor = *rule_result.target_monitor;
+    if (rule_result.target_workspace.has_value())
+        target_workspace = *rule_result.target_workspace;
+    if (rule_result.target_monitor.has_value() || rule_result.target_workspace.has_value())
+    {
+        move_window(window, target_monitor, target_workspace);
+        client = get_client(window);
+        if (!client)
+            return;
+    }
+
+    if (client->kind == Client::Kind::Floating && client->monitor < monitors_.size())
+    {
+        if (rule_result.geometry.has_value())
+            client->floating_geometry = *rule_result.geometry;
+
+        if (rule_result.center)
+        {
+            Geometry area = monitors_[client->monitor].working_area();
+            client->floating_geometry.x =
+                area.x + static_cast<int16_t>((area.width - client->floating_geometry.width) / 2);
+            client->floating_geometry.y =
+                area.y + static_cast<int16_t>((area.height - client->floating_geometry.height) / 2);
+        }
+    }
+
+    if (rule_result.skip_taskbar.has_value())
+        set_client_skip_taskbar(window, *rule_result.skip_taskbar);
+    if (rule_result.skip_pager.has_value())
+        set_client_skip_pager(window, *rule_result.skip_pager);
+    if (rule_result.sticky.has_value())
+        set_window_sticky(window, *rule_result.sticky);
+    if (rule_result.above.has_value())
+        set_window_above(window, *rule_result.above);
+    if (rule_result.below.has_value())
+        set_window_below(window, *rule_result.below);
+    if (rule_result.fullscreen.has_value() && *rule_result.fullscreen)
+        set_fullscreen(window, true);
+
+    client = get_client(window);
+    if (!client || client->kind != Client::Kind::Floating || client->hidden)
+        return;
+
+    bool visible = visibility_policy::is_window_visible(
+        showing_desktop_,
+        client->iconic,
+        client->sticky,
+        client->monitor,
+        client->workspace,
+        monitors_
+    );
+    if (!visible)
+        return;
+
+    if (client->fullscreen)
+        apply_fullscreen_if_needed(window, fullscreen_policy::ApplyContext::VisibilityTransition);
+    else if (client->maximized_horz || client->maximized_vert)
+        apply_maximized_geometry(window);
+    else
+        apply_floating_geometry(window);
+}
+
+void WindowManager::reapply_rules_to_existing_windows()
+{
+    std::vector<std::pair<uint64_t, xcb_window_t>> ordered;
+    ordered.reserve(clients_.size());
+
+    for (auto const& [window, client] : clients_)
+    {
+        if (client.kind == Client::Kind::Tiled || client.kind == Client::Kind::Floating)
+            ordered.push_back({ client.order, window });
+    }
+
+    std::sort(ordered.begin(), ordered.end(), [](auto const& a, auto const& b) { return a.first < b.first; });
+
+    for (auto const& [order, window] : ordered)
+    {
+        (void)order;
+
+        auto const* client = get_client(window);
+        if (!client)
+            continue;
+
+        WindowMatchInfo match_info{
+            .wm_class = client->wm_class,
+            .wm_class_name = client->wm_class_name,
+            .title = get_window_name(window),
+            .ewmh_type = ewmh_.get_window_type_enum(window),
+            .is_transient = client->transient_for != XCB_NONE || transient_for_window(window).has_value(),
+        };
+
+        if (match_info.title.empty())
+            match_info.title = client->name;
+
+        auto rule_result = window_rules_.match(match_info, monitors_, config_.workspaces.names);
+        if (rule_result.matched)
+            apply_rule_result_to_window(window, rule_result);
     }
 }
 
@@ -262,7 +916,6 @@ void WindowManager::claim_wm_ownership()
     }
     free(owner_reply);
 
-    // Broadcast MANAGER client message to notify clients that a new WM has started (ICCCM)
     xcb_atom_t manager_atom = intern_atom("MANAGER");
     if (manager_atom != XCB_NONE)
     {
@@ -513,9 +1166,6 @@ void WindowManager::parse_initial_ewmh_state(Client& client)
         for (uint32_t i = 0; i < initial_state.atoms_len; ++i)
         {
             xcb_atom_t state = initial_state.atoms[i];
-            // Geometry-affecting states (fullscreen, maximized, shaded, iconic) are NOT set here.
-            // They are applied through proper transition functions in the manage paths,
-            // which correctly save restore geometry before setting the flag.
             if (state == ewmh->_NET_WM_STATE_ABOVE)
                 client.above = true;
             else if (state == ewmh->_NET_WM_STATE_BELOW)
@@ -563,7 +1213,6 @@ void WindowManager::init_user_time(xcb_window_t window)
 
 void WindowManager::apply_post_manage_states(xcb_window_t window, bool has_transient)
 {
-    // skip_taskbar / skip_pager: transient windows default to skipping unless overridden
     if (has_transient && !ewmh_.has_window_state(window, ewmh_.get()->_NET_WM_STATE_SKIP_TASKBAR))
     {
         set_client_skip_taskbar(window, true);
@@ -581,7 +1230,6 @@ void WindowManager::apply_post_manage_states(xcb_window_t window, bool has_trans
         set_client_skip_pager(window, true);
     }
 
-    // Sticky: from _NET_WM_DESKTOP or _NET_WM_STATE
     if (is_sticky_desktop(window))
     {
         set_window_sticky(window, true);

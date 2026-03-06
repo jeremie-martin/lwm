@@ -14,6 +14,7 @@ public:
     KeybindManager(Connection& conn, Config const& config);
 
     void grab_keys(xcb_window_t window);
+    void reload(Config const& config);
     std::optional<Action> resolve(uint16_t state, xcb_keysym_t keysym) const;
 
     std::string resolve_command(std::string const& command, Config const& config) const;
@@ -24,6 +25,7 @@ private:
     Connection& conn_;
     std::map<KeyBinding, Action> bindings_;
 
+    void load_bindings(Config const& config);
     static xcb_keysym_t parse_keysym(std::string const& key);
 };
 

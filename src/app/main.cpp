@@ -15,6 +15,7 @@ std::string get_config_path(int argc, char* argv[])
     {
         return std::string(xdg) + "/lwm/config.toml";
     }
+    return "";
 }
 
 int main(int argc, char* argv[])
@@ -31,14 +32,14 @@ int main(int argc, char* argv[])
         if (!config_path.empty() && fs::exists(config_path))
         {
             LOG_INFO("Loading config from: {}", config_path);
-            auto loaded = lwm::load_config(config_path);
+            auto loaded = lwm::load_config_result(config_path);
             if (loaded)
             {
                 config = *loaded;
             }
             else
             {
-                LOG_WARN("Failed to load config, using defaults");
+                LOG_WARN("{}; using defaults", loaded.error());
                 config = lwm::default_config();
             }
         }
@@ -48,7 +49,7 @@ int main(int argc, char* argv[])
             config = lwm::default_config();
         }
 
-        lwm::WindowManager wm(std::move(config));
+        lwm::WindowManager wm(std::move(config), config_path);
         wm.run();
     }
     catch (std::exception const& e)

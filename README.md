@@ -8,6 +8,7 @@ LWM is a minimal tiling window manager for X11 written in C++23.
 - Per-monitor workspaces (each monitor keeps its own current workspace).
 - Focus-follows-mouse with explicit focus-stealing checks.
 - EWMH/ICCCM support for normal desktop tooling (`wmctrl`, panels, pagers).
+- Explicit IPC control via `lwmctl` over a Unix-domain socket.
 - RANDR hotplug handling.
 - TOML configuration for keybinds, mousebinds, programs, and workspace names.
 
@@ -79,6 +80,7 @@ The config file is the source of truth for bindings and behavior toggles. Keep `
 Available actions include:
 
 - `spawn`, `kill`
+- `reload_config`
 - `switch_workspace`, `toggle_workspace`, `move_to_workspace`
 - `focus_monitor_left`, `focus_monitor_right`
 - `move_to_monitor_left`, `move_to_monitor_right`
@@ -86,6 +88,20 @@ Available actions include:
 - `focus_next`, `focus_prev`
 
 See `config.toml.example` for exact syntax and default bindings.
+
+## Runtime Control
+
+LWM exposes a small local control socket and ships `lwmctl` for explicit runtime commands:
+
+```bash
+lwmctl ping
+lwmctl version
+lwmctl reload-config
+```
+
+`lwmctl` discovers the socket via `--socket`, `LWM_SOCKET`, the root-window `_LWM_IPC_SOCKET` property, then the default runtime path.
+
+Config reload is explicit by design. LWM does not watch the config file automatically.
 
 ## Run and Test in Xephyr
 

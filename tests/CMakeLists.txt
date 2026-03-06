@@ -10,6 +10,7 @@ FetchContent_MakeAvailable(Catch2)
     test_client_state_policy.cpp
     test_ewmh_classification.cpp
     test_ewmh_policy.cpp
+    test_integration_config_reload.cpp
     test_focus_cycling_policy.cpp
     test_focus_policy.cpp
     test_focus_restoration_policy.cpp

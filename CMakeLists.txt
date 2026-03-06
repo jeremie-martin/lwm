@@ -38,8 +38,8 @@ FetchContent_MakeAvailable(tomlplusplus spdlog)
 
 add_subdirectory(src)
 
-# Install binary to /usr/local/bin
-install(TARGETS lwm DESTINATION bin)
+# Install binaries to /usr/local/bin
+install(TARGETS lwm lwmctl DESTINATION bin)
 
 # Optional tests
 option(BUILD_TESTS "Build unit tests" OFF)

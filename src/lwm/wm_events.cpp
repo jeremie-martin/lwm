@@ -673,6 +673,13 @@ void WindowManager::handle_key_press(xcb_key_press_event_t const& e)
     {
         cycle_focus(false);
     }
+    else if (action->type == "reload_config")
+    {
+        if (auto result = reload_config(); !result)
+        {
+            LOG_WARN("Config reload failed: {}", result.error());
+        }
+    }
 }
 
 void WindowManager::handle_key_release(xcb_key_release_event_t const& e)

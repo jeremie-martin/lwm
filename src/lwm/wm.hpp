@@ -11,8 +11,10 @@
 #include "lwm/layout/layout.hpp"
 #include <cassert>
 #include <chrono>
+#include <expected>
 #include <memory>
 #include <optional>
+#include <string>
 #include <unordered_map>
 #include <vector>
 #include <xcb/sync.h>
@@ -22,7 +24,8 @@ namespace lwm {
 class WindowManager
 {
 public:
-    explicit WindowManager(Config config);
+    WindowManager(Config config, std::string config_path);
+    ~WindowManager();
 
     void run();
 
@@ -76,10 +79,14 @@ private:
     xcb_window_t wm_window_ = XCB_NONE;
     xcb_atom_t wm_s0_ = XCB_NONE;
     bool running_ = true;
+    std::string config_path_;
+    std::string ipc_socket_path_;
+    int ipc_listener_fd_ = -1;
     xcb_atom_t wm_transient_for_ = XCB_NONE;
     xcb_atom_t wm_state_ = XCB_NONE;
     xcb_atom_t wm_change_state_ = XCB_NONE;
     xcb_atom_t utf8_string_ = XCB_NONE;
+    xcb_atom_t lwm_ipc_socket_ = XCB_NONE;
     xcb_atom_t wm_protocols_ = XCB_NONE;
     xcb_atom_t wm_delete_window_ = XCB_NONE;
     xcb_atom_t wm_take_focus_ = XCB_NONE;
@@ -110,6 +117,9 @@ private:
     void init_monitor_workspaces(Monitor& monitor);
     void scan_existing_windows();
     void run_autostart();
+    void setup_ipc();
+    void cleanup_ipc();
+    void handle_ipc();
 
     void handle_event(xcb_generic_event_t const& event);
     void handle_map_request(xcb_map_request_event_t const& e);
@@ -132,6 +142,18 @@ private:
     void handle_expose(xcb_expose_event_t const& e);
     void handle_randr_screen_change();
     void handle_timeouts();
+    std::string run_ipc_command(std::string const& command);
+    std::expected<void, std::string> reload_config();
+    std::expected<void, std::string> apply_config_reload(Config config);
+    std::expected<void, std::string> validate_reload(Config const& config) const;
+    void regrab_all_keys();
+    void apply_appearance_reload();
+    void update_allowed_actions(xcb_window_t window);
+    void reapply_rules_to_existing_windows();
+    void apply_rule_result_to_window(xcb_window_t window, WindowRuleResult const& rule_result);
+    void convert_window_to_floating(xcb_window_t window);
+    void convert_window_to_tiled(xcb_window_t window);
+    Geometry current_window_geometry(xcb_window_t window) const;
 
     void manage_window(xcb_window_t window, bool start_iconic = false);
     void manage_floating_window(xcb_window_t window, bool start_iconic = false);

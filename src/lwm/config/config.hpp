@@ -2,6 +2,7 @@
 
 #include <cstddef>
 #include <cstdint>
+#include <expected>
 #include <optional>
 #include <string>
 #include <vector>
@@ -99,6 +100,9 @@ struct Config
     std::vector<WindowRuleConfig> rules;
 };
 
+using ConfigLoadResult = std::expected<Config, std::string>;
+
+ConfigLoadResult load_config_result(std::string const& path);
 std::optional<Config> load_config(std::string const& path);
 Config default_config();
 

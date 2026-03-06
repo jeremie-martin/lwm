@@ -1,5 +1,4 @@
 #include "config.hpp"
-#include <iostream>
 #include <toml++/toml.hpp>
 
 namespace lwm {
@@ -125,7 +124,7 @@ Config default_config()
     return cfg;
 }
 
-std::optional<Config> load_config(std::string const& path)
+ConfigLoadResult load_config_result(std::string const& path)
 {
     try
     {
@@ -310,14 +309,22 @@ std::optional<Config> load_config(std::string const& path)
     }
     catch (toml::parse_error const& err)
     {
-        std::cerr << "Config parse error: " << err.description() << std::endl;
-        return std::nullopt;
+        return std::unexpected(
+            "Config parse error in '" + path + "': " + std::string(err.description())
+        );
     }
     catch (std::exception const& e)
     {
-        std::cerr << "Config error: " << e.what() << std::endl;
-        return std::nullopt;
+        return std::unexpected("Config error in '" + path + "': " + std::string(e.what()));
     }
+}
+
+std::optional<Config> load_config(std::string const& path)
+{
+    auto result = load_config_result(path);
+    if (!result)
+        return std::nullopt;
+    return *result;
 }
 
 } // namespace lwm

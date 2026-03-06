@@ -7,6 +7,18 @@ namespace lwm {
 KeybindManager::KeybindManager(Connection& conn, Config const& config)
     : conn_(conn)
 {
+    load_bindings(config);
+}
+
+void KeybindManager::reload(Config const& config)
+{
+    load_bindings(config);
+}
+
+void KeybindManager::load_bindings(Config const& config)
+{
+    bindings_.clear();
+
     for (auto const& kb : config.keybinds)
     {
         uint16_t mod = parse_modifier(kb.mod);
