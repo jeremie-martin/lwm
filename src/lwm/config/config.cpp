@@ -282,6 +282,10 @@ ConfigLoadResult load_config_result(std::string const& path)
                         rule_cfg.skip_taskbar = *v;
                     if (auto v = (*rule)["skip_pager"].value<bool>())
                         rule_cfg.skip_pager = *v;
+                    if (auto v = (*rule)["layer"].value<std::string>())
+                        rule_cfg.layer = *v;
+                    if (auto v = (*rule)["borderless"].value<bool>())
+                        rule_cfg.borderless = *v;
                     if (auto v = (*rule)["center"].value<bool>())
                         rule_cfg.center = *v;
 

@@ -145,7 +145,11 @@ void WindowManager::manage_floating_window(xcb_window_t window, bool start_iconi
     uint32_t values[] = { XCB_EVENT_MASK_ENTER_WINDOW | XCB_EVENT_MASK_FOCUS_CHANGE | XCB_EVENT_MASK_PROPERTY_CHANGE
                           | XCB_EVENT_MASK_BUTTON_PRESS };
     xcb_change_window_attributes(conn_.get(), window, XCB_CW_EVENT_MASK, values);
-    xcb_configure_window(conn_.get(), window, XCB_CONFIG_WINDOW_BORDER_WIDTH, &config_.appearance.border_width);
+    if (auto const* client = get_client(window))
+    {
+        uint32_t border_width = border_width_for_client(*client);
+        xcb_configure_window(conn_.get(), window, XCB_CONFIG_WINDOW_BORDER_WIDTH, &border_width);
+    }
 
     if (wm_state_ != XCB_NONE)
     {
@@ -275,6 +279,8 @@ void WindowManager::update_floating_monitor_for_geometry(xcb_window_t window)
     auto* client = get_client(window);
     if (!client)
         return;
+    if (client->layer == WindowLayer::Overlay)
+        return;
 
     auto const& geom = client->floating_geometry;
     int32_t center_x = static_cast<int32_t>(geom.x) + static_cast<int32_t>(geom.width) / 2;
@@ -293,22 +299,31 @@ void WindowManager::update_floating_monitor_for_geometry(xcb_window_t window)
 
 void WindowManager::apply_floating_geometry(xcb_window_t window)
 {
-    auto const* client = get_client(window);
+    auto* client = get_client(window);
     if (!client)
         return;
 
-    auto const& geom = client->floating_geometry;
+    Geometry geom = client->floating_geometry;
+    if (client->layer == WindowLayer::Overlay)
+    {
+        geom = overlay_geometry_for_window(window);
+        client->floating_geometry = geom;
+    }
+
     uint32_t width = geom.width;
     uint32_t height = geom.height;
-    layout_.apply_size_hints(window, width, height);
+    if (client->layer != WindowLayer::Overlay)
+        layout_.apply_size_hints(window, width, height);
 
     send_sync_request(window, last_event_time_);
 
     int32_t x = static_cast<int32_t>(geom.x);
     int32_t y = static_cast<int32_t>(geom.y);
 
-    uint32_t values[] = { static_cast<uint32_t>(x), static_cast<uint32_t>(y), width, height };
-    uint16_t mask = XCB_CONFIG_WINDOW_X | XCB_CONFIG_WINDOW_Y | XCB_CONFIG_WINDOW_WIDTH | XCB_CONFIG_WINDOW_HEIGHT;
+    uint32_t border_width = border_width_for_client(*client);
+    uint32_t values[] = { static_cast<uint32_t>(x), static_cast<uint32_t>(y), width, height, border_width };
+    uint16_t mask = XCB_CONFIG_WINDOW_X | XCB_CONFIG_WINDOW_Y | XCB_CONFIG_WINDOW_WIDTH | XCB_CONFIG_WINDOW_HEIGHT
+        | XCB_CONFIG_WINDOW_BORDER_WIDTH;
     xcb_configure_window(conn_.get(), window, mask, values);
 
     xcb_configure_notify_event_t ev = {};
@@ -319,7 +334,7 @@ void WindowManager::apply_floating_geometry(xcb_window_t window)
     ev.y = static_cast<int16_t>(y);
     ev.width = static_cast<uint16_t>(width);
     ev.height = static_cast<uint16_t>(height);
-    ev.border_width = static_cast<uint16_t>(config_.appearance.border_width);
+    ev.border_width = static_cast<uint16_t>(border_width);
     ev.above_sibling = XCB_NONE;
     ev.override_redirect = 0;
 

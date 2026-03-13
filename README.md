@@ -5,6 +5,7 @@ LWM is a minimal tiling window manager for X11 written in C++23.
 ## What You Get
 
 - Master/stack tiling with floating windows.
+- Managed overlay layer for monitor-sized special surfaces above fullscreen windows.
 - Per-monitor workspaces (each monitor keeps its own current workspace).
 - Focus-follows-mouse with explicit focus-stealing checks.
 - EWMH/ICCCM support for normal desktop tooling (`wmctrl`, panels, pagers).
@@ -120,6 +121,7 @@ DISPLAY=:100 xterm
 - Workspace switching is per monitor, not global.
 - Hidden windows are moved off-screen, not unmapped. This avoids redraw issues in some GPU apps.
 - Sticky windows are sticky within their owning monitor (not across all monitors).
+- Overlay-layer windows are managed, borderless, monitor-sized surfaces that stay above fullscreen windows.
 - Popups/tooltips/notifications are mapped but not fully managed.
 
 ## Documentation

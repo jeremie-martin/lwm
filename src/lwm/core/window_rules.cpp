@@ -95,6 +95,20 @@ std::optional<WindowType> WindowRules::parse_window_type(std::optional<std::stri
     return std::nullopt;
 }
 
+std::optional<WindowLayer> WindowRules::parse_window_layer(std::optional<std::string> const& layer_str)
+{
+    if (!layer_str.has_value())
+        return std::nullopt;
+
+    std::string layer = *layer_str;
+    std::ranges::transform(layer, layer.begin(), [](unsigned char c) { return std::tolower(c); });
+
+    if (layer == "overlay")
+        return WindowLayer::Overlay;
+
+    return std::nullopt;
+}
+
 void WindowRules::load_rules(std::vector<WindowRuleConfig> const& configs)
 {
     rules_.clear();
@@ -122,6 +136,8 @@ void WindowRules::load_rules(std::vector<WindowRuleConfig> const& configs)
         rule.sticky = cfg.sticky;
         rule.skip_taskbar = cfg.skip_taskbar;
         rule.skip_pager = cfg.skip_pager;
+        rule.layer = parse_window_layer(cfg.layer);
+        rule.borderless = cfg.borderless;
         rule.geometry = cfg.geometry;
         rule.center = cfg.center;
 
@@ -263,6 +279,8 @@ WindowRuleResult WindowRules::match(
         result.sticky = rule.sticky;
         result.skip_taskbar = rule.skip_taskbar;
         result.skip_pager = rule.skip_pager;
+        result.layer = rule.layer;
+        result.borderless = rule.borderless;
 
         if (rule.geometry.has_value())
         {
@@ -275,6 +293,15 @@ WindowRuleResult WindowRules::match(
         }
 
         result.center = rule.center.value_or(false);
+
+        if (result.layer == WindowLayer::Overlay)
+        {
+            result.floating = true;
+            result.skip_taskbar = true;
+            result.skip_pager = true;
+            result.borderless = true;
+            result.fullscreen = false;
+        }
 
         break;
     }

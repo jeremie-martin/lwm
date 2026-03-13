@@ -269,6 +269,8 @@ action = "focus_prev"
 #   sticky      = true                # Visible on all workspaces
 #   skip_taskbar = true               # Exclude from taskbar
 #   skip_pager  = true                # Exclude from pager
+#   layer       = "overlay"           # Managed top layer above fullscreen (floating only)
+#   borderless  = true                # Zero border for floating windows
 #   geometry    = { x = 100, y = 100, width = 800, height = 600 }  # Floating only
 #   center      = true                # Center on monitor (floating only)
 #
@@ -303,3 +305,8 @@ action = "focus_prev"
 # floating = true
 # above = true
 # sticky = true
+
+# Example: Put a utility window in the managed overlay layer
+# [[rules]]
+# type = "utility"
+# layer = "overlay"

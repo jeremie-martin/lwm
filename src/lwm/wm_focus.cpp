@@ -127,16 +127,19 @@ void WindowManager::focus_any_window(xcb_window_t window)
         xcb_change_window_attributes(conn_.get(), previous_active, XCB_CW_BORDER_PIXEL, &conn_.screen()->black_pixel);
     }
 
-    bool is_fullscreen = is_client_fullscreen(window);
-    if (focus_policy::should_apply_focus_border(is_fullscreen))
+    if (should_apply_focus_border(window))
     {
         xcb_change_window_attributes(conn_.get(), window, XCB_CW_BORDER_PIXEL, &config_.appearance.border_color);
-        xcb_configure_window(conn_.get(), window, XCB_CONFIG_WINDOW_BORDER_WIDTH, &config_.appearance.border_width);
+        if (auto const* focused = get_client(window))
+        {
+            uint32_t border_width = border_width_for_client(*focused);
+            xcb_configure_window(conn_.get(), window, XCB_CONFIG_WINDOW_BORDER_WIDTH, &border_width);
+        }
         LOG_TRACE("focus_any_window: applied focus border visuals");
     }
     else
     {
-        LOG_TRACE("focus_any_window: skipped focus border visuals (fullscreen)");
+        LOG_TRACE("focus_any_window: skipped focus border visuals (fullscreen/borderless)");
     }
 
     xcb_timestamp_t focus_time = last_event_time_ ? last_event_time_ : XCB_CURRENT_TIME;
@@ -150,11 +153,8 @@ void WindowManager::focus_any_window(xcb_window_t window)
         xcb_set_input_focus(conn_.get(), XCB_INPUT_FOCUS_POINTER_ROOT, conn_.screen()->root, focus_time);
     }
 
-    if (is_floating)
-    {
-        uint32_t stack_mode = XCB_STACK_MODE_ABOVE;
-        xcb_configure_window(conn_.get(), window, XCB_CONFIG_WINDOW_STACK_MODE, &stack_mode);
-    }
+    if (is_floating && client->monitor < monitors_.size())
+        restack_monitor_layers(client->monitor);
 
     set_client_demands_attention(window, false);
     ewmh_.set_active_window(window);

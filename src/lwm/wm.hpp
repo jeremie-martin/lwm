@@ -165,6 +165,8 @@ private:
     void focus_any_window(xcb_window_t window);
     void cycle_focus(bool forward);
     void set_fullscreen(xcb_window_t window, bool enabled);
+    void set_window_layer(xcb_window_t window, WindowLayer layer);
+    void set_window_borderless(xcb_window_t window, bool enabled);
     void set_window_above(xcb_window_t window, bool enabled);
     void set_window_below(xcb_window_t window, bool enabled);
     void set_window_sticky(xcb_window_t window, bool enabled);
@@ -208,6 +210,7 @@ private:
     bool is_managed(xcb_window_t window) const { return clients_.contains(window); }
 
     bool is_client_fullscreen(xcb_window_t window) const;
+    bool is_client_overlay(xcb_window_t window) const;
     bool is_client_iconic(xcb_window_t window) const;
     bool is_client_sticky(xcb_window_t window) const;
     bool is_client_above(xcb_window_t window) const;
@@ -247,10 +250,14 @@ private:
     std::optional<xcb_window_t> transient_for_window(xcb_window_t window) const;
     bool is_window_visible(xcb_window_t window) const;
     void restack_transients(xcb_window_t parent);
+    void restack_monitor_layers(size_t monitor_idx);
     bool is_override_redirect_window(xcb_window_t window) const;
     bool is_workspace_visible(size_t monitor_idx, size_t workspace_idx) const;
     void update_floating_monitor_for_geometry(xcb_window_t window);
     void apply_floating_geometry(xcb_window_t window);
+    Geometry overlay_geometry_for_window(xcb_window_t window) const;
+    uint32_t border_width_for_client(Client const& client) const;
+    bool should_apply_focus_border(xcb_window_t window) const;
     void send_configure_notify(xcb_window_t window);
     void begin_drag(xcb_window_t window, bool resize, int16_t root_x, int16_t root_y);
     void begin_tiled_drag(xcb_window_t window, int16_t root_x, int16_t root_y);

@@ -179,6 +179,12 @@ void WindowManager::handle_map_request(xcb_map_request_event_t const& e)
             classification.skip_taskbar = *rule_result.skip_taskbar;
         if (rule_result.skip_pager.has_value())
             classification.skip_pager = *rule_result.skip_pager;
+        if (rule_result.layer == WindowLayer::Overlay)
+        {
+            classification.kind = WindowClassification::Kind::Floating;
+            classification.skip_taskbar = true;
+            classification.skip_pager = true;
+        }
     }
 
     bool start_iconic = false;
@@ -1122,6 +1128,13 @@ void WindowManager::handle_configure_request(xcb_configure_request_event_t const
     if (is_client_fullscreen(e.window))
     {
         apply_fullscreen_if_needed(e.window, fullscreen_policy::ApplyContext::ConfigureTransition);
+        send_configure_notify(e.window);
+        return;
+    }
+
+    if (is_client_overlay(e.window))
+    {
+        apply_floating_geometry(e.window);
         send_configure_notify(e.window);
         return;
     }

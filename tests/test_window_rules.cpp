@@ -515,6 +515,41 @@ TEST_CASE("State flags are preserved", "[rules]")
     REQUIRE(*result.skip_taskbar == true);
 }
 
+TEST_CASE("Overlay layer forces floating, borderless, and non-fullscreen behavior", "[rules][layer]")
+{
+    WindowRuleConfig cfg;
+    cfg.type = "utility";
+    cfg.layer = "overlay";
+    cfg.fullscreen = true;
+    cfg.borderless = false;
+    cfg.skip_taskbar = false;
+    cfg.skip_pager = false;
+
+    WindowRules rules;
+    rules.load_rules({ cfg });
+
+    WindowMatchInfo info{ .wm_class = "AbilityOverlay",
+                          .wm_class_name = "ability-overlay",
+                          .title = "Overlay",
+                          .ewmh_type = WindowType::Utility,
+                          .is_transient = false };
+
+    auto result = rules.match(info, {}, {});
+
+    REQUIRE(result.matched);
+    REQUIRE(result.floating.has_value());
+    REQUIRE(*result.floating == true);
+    REQUIRE(result.layer == WindowLayer::Overlay);
+    REQUIRE(result.borderless.has_value());
+    REQUIRE(*result.borderless == true);
+    REQUIRE(result.skip_taskbar.has_value());
+    REQUIRE(*result.skip_taskbar == true);
+    REQUIRE(result.skip_pager.has_value());
+    REQUIRE(*result.skip_pager == true);
+    REQUIRE(result.fullscreen.has_value());
+    REQUIRE(*result.fullscreen == false);
+}
+
 TEST_CASE("Geometry preservation", "[rules]")
 {
     WindowRuleConfig cfg;

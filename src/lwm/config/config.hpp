@@ -38,6 +38,8 @@ struct WindowRuleConfig
     std::optional<bool> sticky;                // Visible on all workspaces
     std::optional<bool> skip_taskbar;          // Exclude from taskbar
     std::optional<bool> skip_pager;            // Exclude from pager
+    std::optional<std::string> layer;          // "overlay"
+    std::optional<bool> borderless;            // Zero border for managed floating windows
     std::optional<RuleGeometry> geometry;      // Floating geometry
     std::optional<bool> center;
 };

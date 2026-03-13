@@ -42,6 +42,12 @@ struct FullscreenMonitors
     uint32_t right = 0;
 };
 
+enum class WindowLayer
+{
+    Normal,
+    Overlay
+};
+
 /**
  * @brief Unified client record representing any managed window.
  *
@@ -109,6 +115,8 @@ struct Client
     bool skip_taskbar = false;      ///< _NET_WM_STATE_SKIP_TASKBAR
     bool skip_pager = false;        ///< _NET_WM_STATE_SKIP_PAGER
     bool demands_attention = false; ///< _NET_WM_STATE_DEMANDS_ATTENTION
+    bool borderless = false;        ///< WM-managed zero-border window
+    WindowLayer layer = WindowLayer::Normal;
 
     Geometry floating_geometry;
     xcb_window_t transient_for = XCB_NONE;

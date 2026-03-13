@@ -19,6 +19,7 @@
 #include <memory>
 #include <poll.h>
 #include <string_view>
+#include <tuple>
 #include <sys/socket.h>
 #include <sys/stat.h>
 #include <sys/time.h>
@@ -41,6 +42,15 @@ constexpr auto KILL_TIMEOUT = std::chrono::seconds(5);
 constexpr auto SYNC_WAIT_TIMEOUT = std::chrono::milliseconds(50);
 constexpr size_t IPC_MAX_REQUEST_SIZE = 4096;
 constexpr auto IPC_CLIENT_IO_TIMEOUT = std::chrono::milliseconds(50);
+
+enum class StackLayer
+{
+    Below = 0,
+    Normal = 1,
+    Above = 2,
+    Fullscreen = 3,
+    Overlay = 4
+};
 
 std::string trim_ascii(std::string_view value)
 {
@@ -517,6 +527,23 @@ void WindowManager::regrab_all_keys()
     }
 }
 
+uint32_t WindowManager::border_width_for_client(Client const& client) const
+{
+    if (client.fullscreen || client.borderless || client.layer == WindowLayer::Overlay)
+        return 0U;
+    return config_.appearance.border_width;
+}
+
+bool WindowManager::should_apply_focus_border(xcb_window_t window) const
+{
+    auto const* client = get_client(window);
+    if (!client)
+        return false;
+    if (!focus_policy::should_apply_focus_border(client->fullscreen))
+        return false;
+    return border_width_for_client(*client) > 0;
+}
+
 void WindowManager::apply_appearance_reload()
 {
     uint32_t inactive_border = conn_.screen()->black_pixel;
@@ -527,9 +554,9 @@ void WindowManager::apply_appearance_reload()
             continue;
 
         uint32_t border_color = inactive_border;
-        uint32_t border_width = client.fullscreen ? 0U : config_.appearance.border_width;
+        uint32_t border_width = border_width_for_client(client);
 
-        if (window == active_window_ && !client.fullscreen)
+        if (window == active_window_ && border_width > 0)
             border_color = config_.appearance.border_color;
 
         xcb_change_window_attributes(conn_.get(), window, XCB_CW_BORDER_PIXEL, &border_color);
@@ -545,13 +572,23 @@ void WindowManager::update_allowed_actions(xcb_window_t window)
 
     xcb_ewmh_connection_t* ewmh = ewmh_.get();
     std::vector<xcb_atom_t> actions = {
-        ewmh->_NET_WM_ACTION_CLOSE,         ewmh->_NET_WM_ACTION_FULLSCREEN, ewmh->_NET_WM_ACTION_CHANGE_DESKTOP,
-        ewmh->_NET_WM_ACTION_ABOVE,         ewmh->_NET_WM_ACTION_BELOW,      ewmh->_NET_WM_ACTION_MINIMIZE,
-        ewmh->_NET_WM_ACTION_SHADE,         ewmh->_NET_WM_ACTION_STICK,      ewmh->_NET_WM_ACTION_MAXIMIZE_VERT,
-        ewmh->_NET_WM_ACTION_MAXIMIZE_HORZ,
+        ewmh->_NET_WM_ACTION_CLOSE,
+        ewmh->_NET_WM_ACTION_CHANGE_DESKTOP,
+        ewmh->_NET_WM_ACTION_MINIMIZE,
+        ewmh->_NET_WM_ACTION_SHADE,
+        ewmh->_NET_WM_ACTION_STICK,
     };
 
-    if (client->kind == Client::Kind::Floating)
+    if (client->layer != WindowLayer::Overlay)
+    {
+        actions.push_back(ewmh->_NET_WM_ACTION_FULLSCREEN);
+        actions.push_back(ewmh->_NET_WM_ACTION_ABOVE);
+        actions.push_back(ewmh->_NET_WM_ACTION_BELOW);
+        actions.push_back(ewmh->_NET_WM_ACTION_MAXIMIZE_VERT);
+        actions.push_back(ewmh->_NET_WM_ACTION_MAXIMIZE_HORZ);
+    }
+
+    if (client->kind == Client::Kind::Floating && client->layer != WindowLayer::Overlay)
     {
         actions.push_back(ewmh->_NET_WM_ACTION_MOVE);
         actions.push_back(ewmh->_NET_WM_ACTION_RESIZE);
@@ -641,9 +678,10 @@ void WindowManager::apply_rule_result_to_window(xcb_window_t window, WindowRuleR
     if (!client)
         return;
 
-    if (rule_result.floating.has_value())
+    bool wants_overlay = rule_result.layer == WindowLayer::Overlay;
+    if (wants_overlay || rule_result.floating.has_value())
     {
-        if (*rule_result.floating)
+        if (wants_overlay || *rule_result.floating)
             convert_window_to_floating(window);
         else
             convert_window_to_tiled(window);
@@ -706,7 +744,8 @@ void WindowManager::apply_rule_result_to_window(xcb_window_t window, WindowRuleR
             return;
     }
 
-    if (client->kind == Client::Kind::Floating && client->monitor < monitors_.size())
+    if (client->kind == Client::Kind::Floating && client->monitor < monitors_.size()
+        && rule_result.layer != WindowLayer::Overlay)
     {
         if (rule_result.geometry.has_value())
             client->floating_geometry = *rule_result.geometry;
@@ -725,6 +764,10 @@ void WindowManager::apply_rule_result_to_window(xcb_window_t window, WindowRuleR
         set_client_skip_taskbar(window, *rule_result.skip_taskbar);
     if (rule_result.skip_pager.has_value())
         set_client_skip_pager(window, *rule_result.skip_pager);
+    if (rule_result.borderless.has_value())
+        set_window_borderless(window, *rule_result.borderless);
+    if (rule_result.layer.has_value())
+        set_window_layer(window, *rule_result.layer);
     if (rule_result.sticky.has_value())
         set_window_sticky(window, *rule_result.sticky);
     if (rule_result.above.has_value())
@@ -1292,7 +1335,11 @@ void WindowManager::manage_window(xcb_window_t window, bool start_iconic)
     uint32_t values[] = { XCB_EVENT_MASK_ENTER_WINDOW | XCB_EVENT_MASK_FOCUS_CHANGE | XCB_EVENT_MASK_PROPERTY_CHANGE };
     xcb_change_window_attributes(conn_.get(), window, XCB_CW_EVENT_MASK, values);
 
-    xcb_configure_window(conn_.get(), window, XCB_CONFIG_WINDOW_BORDER_WIDTH, &config_.appearance.border_width);
+    if (auto const* client = get_client(window))
+    {
+        uint32_t border_width = border_width_for_client(*client);
+        xcb_configure_window(conn_.get(), window, XCB_CONFIG_WINDOW_BORDER_WIDTH, &border_width);
+    }
 
     if (wm_state_ != XCB_NONE)
     {
@@ -1423,6 +1470,13 @@ void WindowManager::set_fullscreen(xcb_window_t window, bool enabled)
     if (!client)
         return; // Only managed clients can be fullscreen
 
+    if (enabled && client->layer == WindowLayer::Overlay)
+    {
+        ewmh_.set_window_state(window, ewmh_.get()->_NET_WM_STATE_FULLSCREEN, false);
+        conn_.flush();
+        return;
+    }
+
     if (enabled)
     {
         if (!client->fullscreen)
@@ -1524,10 +1578,75 @@ void WindowManager::set_fullscreen(xcb_window_t window, bool enabled)
         }
 
         client->fullscreen_restore = std::nullopt;
-        xcb_configure_window(conn_.get(), window, XCB_CONFIG_WINDOW_BORDER_WIDTH, &config_.appearance.border_width);
+        uint32_t border_width = border_width_for_client(*client);
+        xcb_configure_window(conn_.get(), window, XCB_CONFIG_WINDOW_BORDER_WIDTH, &border_width);
     }
 
     update_ewmh_client_list();
+    if (client->monitor < monitors_.size())
+        restack_monitor_layers(client->monitor);
+    conn_.flush();
+}
+
+void WindowManager::set_window_layer(xcb_window_t window, WindowLayer layer)
+{
+    auto* client = get_client(window);
+    if (!client)
+        return;
+
+    if (layer == WindowLayer::Overlay && client->kind != Client::Kind::Floating)
+    {
+        convert_window_to_floating(window);
+        client = get_client(window);
+        if (!client)
+            return;
+    }
+
+    client->layer = layer;
+
+    if (layer == WindowLayer::Overlay)
+    {
+        if (client->fullscreen)
+            set_fullscreen(window, false);
+
+        client->maximized_horz = false;
+        client->maximized_vert = false;
+        client->maximize_restore = std::nullopt;
+        ewmh_.set_window_state(window, ewmh_.get()->_NET_WM_STATE_MAXIMIZED_HORZ, false);
+        ewmh_.set_window_state(window, ewmh_.get()->_NET_WM_STATE_MAXIMIZED_VERT, false);
+        client->above = false;
+        client->below = false;
+        ewmh_.set_window_state(window, ewmh_.get()->_NET_WM_STATE_ABOVE, false);
+        ewmh_.set_window_state(window, ewmh_.get()->_NET_WM_STATE_BELOW, false);
+        set_client_skip_taskbar(window, true);
+        set_client_skip_pager(window, true);
+        set_window_borderless(window, true);
+    }
+
+    update_allowed_actions(window);
+
+    if (client->kind == Client::Kind::Floating && !client->hidden)
+        apply_floating_geometry(window);
+    if (client->monitor < monitors_.size())
+        restack_monitor_layers(client->monitor);
+    conn_.flush();
+}
+
+void WindowManager::set_window_borderless(xcb_window_t window, bool enabled)
+{
+    auto* client = get_client(window);
+    if (!client)
+        return;
+
+    client->borderless = enabled;
+    uint32_t border_width = border_width_for_client(*client);
+    xcb_configure_window(conn_.get(), window, XCB_CONFIG_WINDOW_BORDER_WIDTH, &border_width);
+    if (window == active_window_)
+    {
+        uint32_t border_color = (border_width > 0) ? config_.appearance.border_color : conn_.screen()->black_pixel;
+        xcb_change_window_attributes(conn_.get(), window, XCB_CW_BORDER_PIXEL, &border_color);
+    }
+    update_allowed_actions(window);
     conn_.flush();
 }
 
@@ -1536,6 +1655,14 @@ void WindowManager::set_window_above(xcb_window_t window, bool enabled)
     auto* client = get_client(window);
     if (!client)
         return;
+
+    if (client->layer == WindowLayer::Overlay)
+    {
+        client->above = false;
+        ewmh_.set_window_state(window, ewmh_.get()->_NET_WM_STATE_ABOVE, false);
+        conn_.flush();
+        return;
+    }
 
     if (enabled)
     {
@@ -1555,6 +1682,8 @@ void WindowManager::set_window_above(xcb_window_t window, bool enabled)
 
     ewmh_.set_window_state(window, ewmh_.get()->_NET_WM_STATE_ABOVE, enabled);
     update_ewmh_client_list();
+    if (client->monitor < monitors_.size())
+        restack_monitor_layers(client->monitor);
     conn_.flush();
 }
 
@@ -1563,6 +1692,14 @@ void WindowManager::set_window_below(xcb_window_t window, bool enabled)
     auto* client = get_client(window);
     if (!client)
         return;
+
+    if (client->layer == WindowLayer::Overlay)
+    {
+        client->below = false;
+        ewmh_.set_window_state(window, ewmh_.get()->_NET_WM_STATE_BELOW, false);
+        conn_.flush();
+        return;
+    }
 
     if (enabled)
     {
@@ -1582,6 +1719,8 @@ void WindowManager::set_window_below(xcb_window_t window, bool enabled)
 
     ewmh_.set_window_state(window, ewmh_.get()->_NET_WM_STATE_BELOW, enabled);
     update_ewmh_client_list();
+    if (client->monitor < monitors_.size())
+        restack_monitor_layers(client->monitor);
     conn_.flush();
 }
 
@@ -2141,15 +2280,10 @@ void WindowManager::rearrange_monitor(Monitor& monitor)
         show_window(window);
 
         apply_fullscreen_if_needed(window, fullscreen_policy::ApplyContext::LayoutTransition);
+    }
 
-        uint32_t stack_mode = XCB_STACK_MODE_ABOVE;
-        xcb_configure_window(conn_.get(), window, XCB_CONFIG_WINDOW_STACK_MODE, &stack_mode);
-        LOG_DEBUG("rearrange_monitor: raised fullscreen window {:#x} to top", window);
-    }
-    if (!fullscreen_windows.empty())
-    {
-        conn_.flush();
-    }
+    restack_monitor_layers(monitor_idx);
+    conn_.flush();
 
     LOG_TRACE("rearrange_monitor: DONE");
 }
@@ -2210,6 +2344,11 @@ Client const* WindowManager::get_client(xcb_window_t window) const
     }
 
 DEFINE_CLIENT_STATE_QUERY(is_client_fullscreen, fullscreen)
+bool WindowManager::is_client_overlay(xcb_window_t window) const
+{
+    auto const* client = get_client(window);
+    return client && client->layer == WindowLayer::Overlay;
+}
 DEFINE_CLIENT_STATE_QUERY(is_client_iconic, iconic)
 DEFINE_CLIENT_STATE_QUERY(is_client_sticky, sticky)
 DEFINE_CLIENT_STATE_QUERY(is_client_above, above)
@@ -2328,6 +2467,21 @@ bool WindowManager::is_window_visible(xcb_window_t window) const
     );
 }
 
+Geometry WindowManager::overlay_geometry_for_window(xcb_window_t window) const
+{
+    if (monitors_.empty())
+        return {};
+
+    auto const* client = get_client(window);
+    if (client && client->monitor < monitors_.size())
+        return monitors_[client->monitor].geometry();
+
+    if (auto monitor_idx = monitor_index_for_window(window))
+        return monitors_[*monitor_idx].geometry();
+
+    return monitors_[0].geometry();
+}
+
 void WindowManager::restack_transients(xcb_window_t parent)
 {
     if (parent == XCB_NONE)
@@ -2348,6 +2502,75 @@ void WindowManager::restack_transients(xcb_window_t parent)
         values[1] = XCB_STACK_MODE_ABOVE;
         uint16_t mask = XCB_CONFIG_WINDOW_SIBLING | XCB_CONFIG_WINDOW_STACK_MODE;
         xcb_configure_window(conn_.get(), fw, mask, values);
+    }
+}
+
+void WindowManager::restack_monitor_layers(size_t monitor_idx)
+{
+    if (monitor_idx >= monitors_.size())
+        return;
+
+    std::vector<xcb_window_t> visible_windows;
+    visible_windows.reserve(clients_.size());
+    for (auto const& [window, client] : clients_)
+    {
+        if (client.monitor != monitor_idx)
+            continue;
+        if (client.kind != Client::Kind::Tiled && client.kind != Client::Kind::Floating)
+            continue;
+        if (!is_window_visible(window))
+            continue;
+        visible_windows.push_back(window);
+    }
+
+    auto layer_for = [](Client const& client)
+    {
+        if (client.layer == WindowLayer::Overlay)
+            return StackLayer::Overlay;
+        if (client.fullscreen)
+            return StackLayer::Fullscreen;
+        if (client.above || client.modal)
+            return StackLayer::Above;
+        if (client.below)
+            return StackLayer::Below;
+        return StackLayer::Normal;
+    };
+
+    std::stable_sort(
+        visible_windows.begin(),
+        visible_windows.end(),
+        [this, &layer_for](xcb_window_t lhs, xcb_window_t rhs)
+        {
+            auto const& left = clients_.at(lhs);
+            auto const& right = clients_.at(rhs);
+            auto left_key = std::tuple{
+                static_cast<int>(layer_for(left)),
+                lhs == active_window_ ? 1 : 0,
+                static_cast<long long>(left.order)
+            };
+            auto right_key = std::tuple{
+                static_cast<int>(layer_for(right)),
+                rhs == active_window_ ? 1 : 0,
+                static_cast<long long>(right.order)
+            };
+            return left_key < right_key;
+        }
+    );
+
+    for (size_t i = 1; i < visible_windows.size(); ++i)
+    {
+        uint32_t values[2];
+        values[0] = visible_windows[i - 1];
+        values[1] = XCB_STACK_MODE_ABOVE;
+        uint16_t mask = XCB_CONFIG_WINDOW_SIBLING | XCB_CONFIG_WINDOW_STACK_MODE;
+        xcb_configure_window(conn_.get(), visible_windows[i], mask, values);
+    }
+
+    for (xcb_window_t window : visible_windows)
+    {
+        if (clients_.at(window).transient_for != XCB_NONE)
+            continue;
+        restack_transients(window);
     }
 }
 
@@ -2911,6 +3134,8 @@ void WindowManager::sync_visibility_for_monitor(size_t monitor_idx)
             hide_window(id);
         }
     }
+
+    restack_monitor_layers(monitor_idx);
 }
 
 void WindowManager::sync_visibility_all()

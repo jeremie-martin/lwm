@@ -40,6 +40,8 @@ struct CompiledWindowRule
     std::optional<bool> sticky;
     std::optional<bool> skip_taskbar;
     std::optional<bool> skip_pager;
+    std::optional<WindowLayer> layer;
+    std::optional<bool> borderless;
     std::optional<RuleGeometry> geometry;
     std::optional<bool> center;
 };
@@ -81,6 +83,8 @@ struct WindowRuleResult
     std::optional<bool> sticky;
     std::optional<bool> skip_taskbar;
     std::optional<bool> skip_pager;
+    std::optional<WindowLayer> layer;
+    std::optional<bool> borderless;
 
     // Floating geometry
     std::optional<Geometry> geometry;
@@ -136,6 +140,11 @@ private:
      * @brief Convert type string to WindowType enum
      */
     static std::optional<WindowType> parse_window_type(std::optional<std::string> const& type_str);
+
+    /**
+     * @brief Convert layer string to WindowLayer enum
+     */
+    static std::optional<WindowLayer> parse_window_layer(std::optional<std::string> const& layer_str);
 
     /**
      * @brief Check if a single rule matches

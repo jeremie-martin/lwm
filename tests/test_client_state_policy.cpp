@@ -60,6 +60,8 @@ TEST_CASE("Client has sensible defaults", "[client][state]")
     REQUIRE_FALSE(c.skip_taskbar);
     REQUIRE_FALSE(c.skip_pager);
     REQUIRE_FALSE(c.demands_attention);
+    REQUIRE_FALSE(c.borderless);
+    REQUIRE(c.layer == WindowLayer::Normal);
 
     // Restore geometries should be empty
     REQUIRE_FALSE(c.fullscreen_restore.has_value());
