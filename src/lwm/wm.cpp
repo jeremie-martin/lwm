@@ -1450,6 +1450,28 @@ void WindowManager::set_fullscreen(xcb_window_t window, bool enabled)
 
         client->fullscreen = true;
 
+        // Only one fullscreen window should be visible on a monitor at a time.
+        // Keep fullscreen windows independent across different workspaces unless
+        // one of them is sticky and would therefore be visible simultaneously.
+        std::vector<xcb_window_t> conflicting_fullscreen_windows;
+        conflicting_fullscreen_windows.reserve(clients_.size());
+        for (auto const& [other_window, other_client] : clients_)
+        {
+            if (other_window == window || !other_client.fullscreen || other_client.iconic)
+                continue;
+            if (other_client.monitor != client->monitor)
+                continue;
+
+            bool const shares_visible_scope =
+                client->sticky || other_client.sticky || client->workspace == other_client.workspace;
+            if (shares_visible_scope)
+                conflicting_fullscreen_windows.push_back(other_window);
+        }
+        for (xcb_window_t other_window : conflicting_fullscreen_windows)
+        {
+            set_fullscreen(other_window, false);
+        }
+
         if (client->above)
         {
             client->above = false;

@@ -204,6 +204,66 @@ TEST_CASE(
     destroy_window(conn, w1);
 }
 
+TEST_CASE(
+    "Integration: second fullscreen window clears previous fullscreen state on the same workspace",
+    "[integration][focus][fullscreen][exclusive]"
+)
+{
+    auto test_env = TestEnvironment::create();
+    if (!test_env)
+        return;
+
+    auto& conn = test_env->conn;
+
+    xcb_atom_t net_wm_state = intern_atom(conn.get(), "_NET_WM_STATE");
+    xcb_atom_t net_wm_state_fullscreen = intern_atom(conn.get(), "_NET_WM_STATE_FULLSCREEN");
+    if (net_wm_state == XCB_NONE || net_wm_state_fullscreen == XCB_NONE)
+    {
+        WARN("Failed to intern EWMH atoms.");
+        return;
+    }
+
+    auto has_fullscreen_state = [&](xcb_window_t window)
+    {
+        auto cookie = xcb_get_property(conn.get(), 0, window, net_wm_state, XCB_ATOM_ATOM, 0, 10);
+        auto* reply = xcb_get_property_reply(conn.get(), cookie, nullptr);
+        if (!reply)
+            return false;
+        bool has_fullscreen = false;
+        auto* atoms = static_cast<xcb_atom_t*>(xcb_get_property_value(reply));
+        int len = xcb_get_property_value_length(reply) / 4;
+        for (int i = 0; i < len; ++i)
+        {
+            if (atoms[i] == net_wm_state_fullscreen)
+            {
+                has_fullscreen = true;
+                break;
+            }
+        }
+        free(reply);
+        return has_fullscreen;
+    };
+
+    xcb_window_t w1 = create_window(conn, 10, 10, 640, 360);
+    map_window(conn, w1);
+    REQUIRE(wait_for_active_window(conn, w1, kTimeout));
+
+    send_client_message(conn, w1, net_wm_state, 1, net_wm_state_fullscreen, 0, 0, 0);
+    REQUIRE(wait_for_condition([&]() { return has_fullscreen_state(w1); }, kTimeout));
+
+    xcb_window_t w2 = create_window(conn, 80, 80, 640, 360);
+    map_window(conn, w2);
+    REQUIRE(wait_for_active_window(conn, w2, kTimeout));
+
+    send_client_message(conn, w2, net_wm_state, 1, net_wm_state_fullscreen, 0, 0, 0);
+
+    REQUIRE(wait_for_condition([&]() { return has_fullscreen_state(w2); }, kTimeout));
+    REQUIRE(wait_for_condition([&]() { return !has_fullscreen_state(w1); }, kTimeout));
+
+    destroy_window(conn, w2);
+    destroy_window(conn, w1);
+}
+
 TEST_CASE("Integration: clear_focus clears _NET_WM_STATE_FOCUSED from previous window", "[integration][focus][ewmh]")
 {
     auto test_env = TestEnvironment::create();
