@@ -24,8 +24,9 @@ LWM reads and uses:
 - `WM_NAME` / `_NET_WM_NAME`
 - `WM_CLASS`
 - `WM_HINTS` (`input`, `initial_state`, urgency)
-- `WM_NORMAL_HINTS` (initial user size/position for floating windows)
+- `WM_NORMAL_HINTS` (initial and runtime user size/position hints)
 - `WM_TRANSIENT_FOR`
+- `_NET_WM_USER_TIME_WINDOW`
 - `WM_PROTOCOLS` (`WM_DELETE_WINDOW`, `WM_TAKE_FOCUS`, `_NET_WM_PING`, `_NET_WM_SYNC_REQUEST` when present)
 
 Intentional behavior:
@@ -34,6 +35,7 @@ Intentional behavior:
 - `WM_NORMAL_HINTS.width_inc` / `height_inc` are intentionally not enforced.
 - `WM_NORMAL_HINTS` aspect/gravity hints are intentionally not enforced by layout policy.
 - Transients are treated as floating and inherit parent context where possible.
+- Runtime changes to `WM_HINTS`, `WM_NORMAL_HINTS`, and `WM_TRANSIENT_FOR` are re-evaluated for managed tiled/floating windows.
 
 ### 1.3 WM_STATE Semantics
 
@@ -84,6 +86,11 @@ LWM classifies windows primarily by `_NET_WM_WINDOW_TYPE`:
 - `DIALOG/UTILITY/TOOLBAR/MENU/SPLASH`: managed floating
 - popup/ephemeral types (`TOOLTIP`, `NOTIFICATION`, `POPUP_MENU`, `DROPDOWN_MENU`, `COMBO`, `DND`): mapped but not fully managed
 - `NORMAL`: managed tiled by default
+
+Runtime updates:
+
+- Managed tiled/floating windows are reevaluated when `_NET_WM_WINDOW_TYPE` or `WM_TRANSIENT_FOR` changes.
+- Runtime conversion into `DOCK`, `DESKTOP`, or popup-only behavior is intentionally ignored after manage.
 
 ## 4. EWMH Window State Atoms
 
@@ -154,6 +161,7 @@ For `_NET_ACTIVE_WINDOW`:
 - rejected steals mark window with `DEMANDS_ATTENTION`
 
 `_NET_WM_USER_TIME_WINDOW` indirection is respected when available (user time may come from a child helper window).
+Changes to `_NET_WM_USER_TIME_WINDOW` after manage are re-read and tracked.
 
 ## 8. Intentional Omissions / Partial Support
 

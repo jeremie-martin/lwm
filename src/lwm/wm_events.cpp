@@ -155,7 +155,7 @@ void WindowManager::handle_map_request(xcb_map_request_event_t const& e)
     }
 
     bool has_transient = transient_for_window(e.window).has_value();
-    auto classification = ewmh_.classify_window(e.window, has_transient);
+    auto classification = classify_managed_window(e.window);
 
     auto [instance_name, class_name] = get_wm_class(e.window);
     std::string title = get_window_name(e.window);
@@ -165,27 +165,6 @@ void WindowManager::handle_map_request(xcb_map_request_event_t const& e)
                                 .ewmh_type = ewmh_.get_window_type_enum(e.window),
                                 .is_transient = has_transient };
     auto rule_result = window_rules_.match(match_info, monitors_, config_.workspaces.names);
-
-    if (rule_result.matched && classification.kind != WindowClassification::Kind::Dock
-        && classification.kind != WindowClassification::Kind::Desktop
-        && classification.kind != WindowClassification::Kind::Popup)
-    {
-        if (rule_result.floating.has_value())
-        {
-            classification.kind =
-                *rule_result.floating ? WindowClassification::Kind::Floating : WindowClassification::Kind::Tiled;
-        }
-        if (rule_result.skip_taskbar.has_value())
-            classification.skip_taskbar = *rule_result.skip_taskbar;
-        if (rule_result.skip_pager.has_value())
-            classification.skip_pager = *rule_result.skip_pager;
-        if (rule_result.layer == WindowLayer::Overlay)
-        {
-            classification.kind = WindowClassification::Kind::Floating;
-            classification.skip_taskbar = true;
-            classification.skip_pager = true;
-        }
-    }
 
     bool start_iconic = false;
     bool urgent = false;
@@ -1214,6 +1193,11 @@ void WindowManager::handle_property_notify(xcb_property_notify_event_t const& e)
     {
         update_window_title(e.window);
     }
+    else if (e.atom == ewmh_.get()->_NET_WM_WINDOW_TYPE || (wm_transient_for_ != XCB_NONE && e.atom == wm_transient_for_))
+    {
+        reevaluate_managed_window(e.window);
+        conn_.flush();
+    }
     else if (wm_normal_hints_ != XCB_NONE && e.atom == wm_normal_hints_)
     {
         if (is_floating_window(e.window))
@@ -1242,7 +1226,7 @@ void WindowManager::handle_property_notify(xcb_property_notify_event_t const& e)
     }
     else if (wm_hints_ != XCB_NONE && e.atom == wm_hints_)
     {
-        if (get_client(e.window) != nullptr)
+        if (auto* client = get_client(e.window))
         {
             xcb_icccm_wm_hints_t hints;
             if (xcb_icccm_get_wm_hints_reply(
@@ -1262,6 +1246,14 @@ void WindowManager::handle_property_notify(xcb_property_notify_event_t const& e)
                 {
                     set_client_demands_attention(e.window, false);
                 }
+            }
+
+            if (active_window_ == e.window && !is_focus_eligible(e.window))
+            {
+                if (client->monitor < monitors_.size())
+                    focus_or_fallback(monitors_[client->monitor], false);
+                else
+                    clear_focus();
             }
         }
     }
@@ -1291,7 +1283,10 @@ void WindowManager::handle_property_notify(xcb_property_notify_event_t const& e)
         }
         if (auto* c = get_client(e.window))
         {
-            c->user_time = get_user_time(e.window);
+            if (e.atom == net_wm_user_time_window_)
+                refresh_user_time_tracking(e.window);
+            else
+                c->user_time = get_user_time(e.window);
         }
     }
 }

@@ -81,6 +81,10 @@ public:
     void set_window_desktop(xcb_window_t window, uint32_t desktop);
     void set_window_state(xcb_window_t window, xcb_atom_t state, bool enabled);
     bool has_window_state(xcb_window_t window, xcb_atom_t state) const;
+    void set_window_visible_name(xcb_window_t window, std::string const& name);
+    void clear_window_visible_name(xcb_window_t window);
+    void set_window_visible_icon_name(xcb_window_t window, std::string const& name);
+    void clear_window_visible_icon_name(xcb_window_t window);
     void set_frame_extents(xcb_window_t window, uint32_t left, uint32_t right, uint32_t top, uint32_t bottom);
     void set_allowed_actions(xcb_window_t window, std::vector<xcb_atom_t> const& actions);
 

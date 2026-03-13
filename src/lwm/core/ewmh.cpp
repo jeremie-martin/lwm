@@ -306,6 +306,26 @@ bool Ewmh::has_window_state(xcb_window_t window, xcb_atom_t state) const
     return found;
 }
 
+void Ewmh::set_window_visible_name(xcb_window_t window, std::string const& name)
+{
+    xcb_ewmh_set_wm_visible_name(&ewmh_, window, name.length(), name.c_str());
+}
+
+void Ewmh::clear_window_visible_name(xcb_window_t window)
+{
+    xcb_delete_property(conn_.get(), window, ewmh_._NET_WM_VISIBLE_NAME);
+}
+
+void Ewmh::set_window_visible_icon_name(xcb_window_t window, std::string const& name)
+{
+    xcb_ewmh_set_wm_visible_icon_name(&ewmh_, window, name.length(), name.c_str());
+}
+
+void Ewmh::clear_window_visible_icon_name(xcb_window_t window)
+{
+    xcb_delete_property(conn_.get(), window, ewmh_._NET_WM_VISIBLE_ICON_NAME);
+}
+
 void Ewmh::set_demands_attention(xcb_window_t window, bool urgent)
 {
     set_window_state(window, ewmh_._NET_WM_STATE_DEMANDS_ATTENTION, urgent);

@@ -6,7 +6,7 @@
 
 namespace lwm {
 
-void WindowManager::focus_any_window(xcb_window_t window)
+void WindowManager::focus_any_window(xcb_window_t window, bool record_user_time)
 {
     LOG_TRACE(
         "focus_any_window({:#x}) called, active_window_={:#x}, showing_desktop_={}",
@@ -167,7 +167,8 @@ void WindowManager::focus_any_window(xcb_window_t window)
         ewmh_.set_window_state(window, net_wm_state_focused_, true);
     }
 
-    client->user_time = last_event_time_;
+    if (record_user_time)
+        client->user_time = last_event_time_;
 
     restack_transients(window);
     update_ewmh_client_list();
@@ -197,7 +198,7 @@ void WindowManager::clear_focus()
     conn_.flush();
 }
 
-void WindowManager::focus_or_fallback(Monitor& monitor)
+void WindowManager::focus_or_fallback(Monitor& monitor, bool record_user_time)
 {
     auto& ws = monitor.current();
 
@@ -269,7 +270,7 @@ void WindowManager::focus_or_fallback(Monitor& monitor)
 
     LOG_DEBUG("focus_or_fallback: selected window={:#x} is_floating={}", selection->window, selection->is_floating);
 
-    focus_any_window(selection->window);
+    focus_any_window(selection->window, record_user_time);
 
     LOG_TRACE("focus_or_fallback: DONE");
 }

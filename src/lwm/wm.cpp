@@ -74,6 +74,21 @@ std::string ok_reply(std::string const& message)
 
 std::string error_reply(std::string const& message) { return "error " + message; }
 
+void ensure_property_change_mask(Connection& conn, xcb_window_t window)
+{
+    auto cookie = xcb_get_window_attributes(conn.get(), window);
+    auto* reply = xcb_get_window_attributes_reply(conn.get(), cookie, nullptr);
+
+    uint32_t mask = XCB_EVENT_MASK_PROPERTY_CHANGE;
+    if (reply)
+    {
+        mask |= reply->your_event_mask;
+        free(reply);
+    }
+
+    xcb_change_window_attributes(conn.get(), window, XCB_CW_EVENT_MASK, &mask);
+}
+
 void close_fd(int& fd)
 {
     if (fd >= 0)
@@ -1098,8 +1113,7 @@ void WindowManager::scan_existing_windows()
         if (!is_viewable || override_redirect)
             continue;
 
-        bool has_transient = transient_for_window(window).has_value();
-        auto classification = ewmh_.classify_window(window, has_transient);
+        auto classification = classify_managed_window(window);
 
         switch (classification.kind)
         {
@@ -1149,18 +1163,14 @@ void WindowManager::scan_existing_windows()
             case WindowClassification::Kind::Floating:
             {
                 manage_floating_window(window);
-                if (classification.skip_taskbar)
-                    set_client_skip_taskbar(window, true);
-                if (classification.skip_pager)
-                    set_client_skip_pager(window, true);
-                if (classification.above)
-                    set_window_above(window, true);
+                reevaluate_managed_window(window);
                 break;
             }
 
             case WindowClassification::Kind::Tiled:
             {
                 manage_window(window);
+                reevaluate_managed_window(window);
                 break;
             }
         }
@@ -1230,6 +1240,58 @@ void WindowManager::parse_initial_ewmh_state(Client& client)
 
 void WindowManager::init_user_time(xcb_window_t window)
 {
+    refresh_user_time_tracking(window);
+}
+
+WindowClassification WindowManager::classify_managed_window(xcb_window_t window)
+{
+    bool has_transient = transient_for_window(window).has_value();
+    auto classification = ewmh_.classify_window(window, has_transient);
+
+    auto [instance_name, class_name] = get_wm_class(window);
+    std::string title = get_window_name(window);
+    WindowMatchInfo match_info{ .wm_class = class_name,
+                                .wm_class_name = instance_name,
+                                .title = title,
+                                .ewmh_type = ewmh_.get_window_type_enum(window),
+                                .is_transient = has_transient };
+    auto rule_result = window_rules_.match(match_info, monitors_, config_.workspaces.names);
+
+    if (rule_result.matched && classification.kind != WindowClassification::Kind::Dock
+        && classification.kind != WindowClassification::Kind::Desktop
+        && classification.kind != WindowClassification::Kind::Popup)
+    {
+        if (rule_result.floating.has_value())
+        {
+            classification.kind =
+                *rule_result.floating ? WindowClassification::Kind::Floating : WindowClassification::Kind::Tiled;
+        }
+        if (rule_result.skip_taskbar.has_value())
+            classification.skip_taskbar = *rule_result.skip_taskbar;
+        if (rule_result.skip_pager.has_value())
+            classification.skip_pager = *rule_result.skip_pager;
+        if (rule_result.above.has_value() && *rule_result.above)
+            classification.above = true;
+        if (rule_result.layer == WindowLayer::Overlay)
+        {
+            classification.kind = WindowClassification::Kind::Floating;
+            classification.skip_taskbar = true;
+            classification.skip_pager = true;
+            classification.above = false;
+        }
+    }
+
+    return classification;
+}
+
+void WindowManager::refresh_user_time_tracking(xcb_window_t window)
+{
+    auto* client = get_client(window);
+    if (!client)
+        return;
+
+    client->user_time_window = XCB_NONE;
+
     if (net_wm_user_time_window_ != XCB_NONE)
     {
         auto cookie = xcb_get_property(conn_.get(), 0, window, net_wm_user_time_window_, XCB_ATOM_WINDOW, 0, 1);
@@ -1241,17 +1303,271 @@ void WindowManager::init_user_time(xcb_window_t window)
                 xcb_window_t time_window = *static_cast<xcb_window_t*>(xcb_get_property_value(reply));
                 if (time_window != XCB_NONE)
                 {
-                    if (auto* client = get_client(window))
-                        client->user_time_window = time_window;
-                    uint32_t mask = XCB_EVENT_MASK_PROPERTY_CHANGE;
-                    xcb_change_window_attributes(conn_.get(), time_window, XCB_CW_EVENT_MASK, &mask);
+                    client->user_time_window = time_window;
+                    if (time_window != window)
+                        ensure_property_change_mask(conn_, time_window);
                 }
             }
             free(reply);
         }
     }
-    if (auto* client = get_client(window))
-        client->user_time = get_user_time(window);
+
+    client->user_time = get_user_time(window);
+}
+
+void WindowManager::sync_window_visible_names(xcb_window_t window)
+{
+    // lwm does not currently rewrite client titles or icon names for display,
+    // so the visible-name properties remain unset unless a future policy needs them.
+    ewmh_.clear_window_visible_name(window);
+    ewmh_.clear_window_visible_icon_name(window);
+}
+
+void WindowManager::sync_managed_window_classification(xcb_window_t window, WindowClassification const& classification)
+{
+    auto* client = get_client(window);
+    if (!client)
+        return;
+
+    Client::Kind previous_kind = client->kind;
+    size_t previous_monitor = client->monitor;
+    size_t previous_workspace = client->workspace;
+
+    xcb_window_t previous_transient_for = client->transient_for;
+    bool has_transient = transient_for_window(window).has_value();
+    client->transient_for = has_transient ? transient_for_window(window).value_or(XCB_NONE) : XCB_NONE;
+
+    auto [instance_name, class_name] = get_wm_class(window);
+    WindowMatchInfo match_info{ .wm_class = class_name,
+                                .wm_class_name = instance_name,
+                                .title = get_window_name(window),
+                                .ewmh_type = ewmh_.get_window_type_enum(window),
+                                .is_transient = has_transient };
+    auto rule_result = window_rules_.match(match_info, monitors_, config_.workspaces.names);
+
+    WindowClassification::Kind desired_kind = classification.kind;
+    if (desired_kind != WindowClassification::Kind::Tiled && desired_kind != WindowClassification::Kind::Floating)
+    {
+        if (previous_transient_for != client->transient_for)
+        {
+            restack_transients(previous_transient_for);
+            restack_transients(client->transient_for);
+        }
+        return;
+    }
+
+    WindowLayer desired_layer = rule_result.layer.value_or(WindowLayer::Normal);
+    if (desired_layer == WindowLayer::Overlay)
+    {
+        if (client->kind != Client::Kind::Floating)
+            convert_window_to_floating(window);
+        set_window_layer(window, WindowLayer::Overlay);
+    }
+    else
+    {
+        if (client->layer == WindowLayer::Overlay)
+            set_window_layer(window, WindowLayer::Normal);
+
+        client = get_client(window);
+        if (!client)
+            return;
+
+        if (desired_kind == WindowClassification::Kind::Floating && client->kind == Client::Kind::Tiled)
+            convert_window_to_floating(window);
+        else if (desired_kind == WindowClassification::Kind::Tiled && client->kind == Client::Kind::Floating)
+            convert_window_to_tiled(window);
+    }
+
+    client = get_client(window);
+    if (!client)
+        return;
+
+    if (previous_transient_for != client->transient_for && client->transient_for != XCB_NONE)
+    {
+        if (auto parent_monitor = monitor_index_for_window(client->transient_for))
+        {
+            if (auto parent_workspace = workspace_index_for_window(client->transient_for))
+            {
+                if (client->kind == Client::Kind::Tiled)
+                {
+                    remove_tiled_from_workspace(window, client->monitor, client->workspace);
+                    add_tiled_to_workspace(window, *parent_monitor, *parent_workspace);
+                }
+                else
+                {
+                    client->monitor = *parent_monitor;
+                    client->workspace = *parent_workspace;
+                    ewmh_.set_window_desktop(window, get_ewmh_desktop_index(*parent_monitor, *parent_workspace));
+
+                    Geometry geometry = current_window_geometry(window);
+                    Geometry parent_geometry = current_window_geometry(client->transient_for);
+                    client->floating_geometry = floating::place_floating(
+                        monitors_[*parent_monitor].working_area(),
+                        std::max<uint16_t>(1, geometry.width),
+                        std::max<uint16_t>(1, geometry.height),
+                        parent_geometry
+                    );
+                }
+            }
+        }
+    }
+
+    bool wants_skip_taskbar = has_transient || classification.skip_taskbar
+        || ewmh_.has_window_state(window, ewmh_.get()->_NET_WM_STATE_SKIP_TASKBAR);
+    if (rule_result.skip_taskbar.has_value())
+        wants_skip_taskbar = *rule_result.skip_taskbar;
+    if (client->layer == WindowLayer::Overlay)
+        wants_skip_taskbar = true;
+
+    bool wants_skip_pager = has_transient || classification.skip_pager
+        || ewmh_.has_window_state(window, ewmh_.get()->_NET_WM_STATE_SKIP_PAGER);
+    if (rule_result.skip_pager.has_value())
+        wants_skip_pager = *rule_result.skip_pager;
+    if (client->layer == WindowLayer::Overlay)
+        wants_skip_pager = true;
+
+    bool wants_sticky = is_sticky_desktop(window) || ewmh_.has_window_state(window, ewmh_.get()->_NET_WM_STATE_STICKY);
+    if (rule_result.sticky.has_value())
+        wants_sticky = *rule_result.sticky;
+
+    bool wants_modal = ewmh_.has_window_state(window, ewmh_.get()->_NET_WM_STATE_MODAL);
+
+    bool wants_above = !wants_modal
+        && (classification.above || ewmh_.has_window_state(window, ewmh_.get()->_NET_WM_STATE_ABOVE));
+    if (rule_result.above.has_value())
+        wants_above = *rule_result.above;
+
+    bool wants_below = ewmh_.has_window_state(window, ewmh_.get()->_NET_WM_STATE_BELOW);
+    if (rule_result.below.has_value())
+        wants_below = *rule_result.below;
+
+    if (client->layer == WindowLayer::Overlay)
+    {
+        wants_above = false;
+        wants_below = false;
+    }
+    else if (wants_modal || wants_above)
+    {
+        wants_below = false;
+    }
+
+    bool wants_borderless = rule_result.borderless.value_or(false) || client->layer == WindowLayer::Overlay;
+
+    if (client->skip_taskbar != wants_skip_taskbar)
+        set_client_skip_taskbar(window, wants_skip_taskbar);
+    if (client->skip_pager != wants_skip_pager)
+        set_client_skip_pager(window, wants_skip_pager);
+    if (client->sticky != wants_sticky)
+        set_window_sticky(window, wants_sticky);
+    if (client->modal != wants_modal)
+        set_window_modal(window, wants_modal);
+
+    client = get_client(window);
+    if (!client)
+        return;
+
+    if (client->above != wants_above)
+        set_window_above(window, wants_above);
+    client = get_client(window);
+    if (!client)
+        return;
+
+    if (client->below != wants_below)
+        set_window_below(window, wants_below);
+    client = get_client(window);
+    if (!client)
+        return;
+
+    if (client->borderless != wants_borderless)
+        set_window_borderless(window, wants_borderless);
+
+    client = get_client(window);
+    if (!client)
+        return;
+
+    update_allowed_actions(window);
+
+    if (previous_transient_for != client->transient_for)
+    {
+        restack_transients(previous_transient_for);
+        restack_transients(client->transient_for);
+    }
+
+    std::vector<size_t> affected_monitors;
+    if (previous_monitor < monitors_.size())
+        affected_monitors.push_back(previous_monitor);
+    if (client->monitor < monitors_.size() && client->monitor != previous_monitor)
+        affected_monitors.push_back(client->monitor);
+
+    for (size_t monitor_idx : affected_monitors)
+        sync_visibility_for_monitor(monitor_idx);
+
+    if (previous_kind == Client::Kind::Tiled && previous_monitor < monitors_.size()
+        && (client->kind != Client::Kind::Tiled || previous_monitor != client->monitor
+            || previous_workspace != client->workspace))
+    {
+        rearrange_monitor(monitors_[previous_monitor]);
+    }
+
+    if (client->monitor >= monitors_.size())
+        return;
+
+    if (client->kind == Client::Kind::Tiled)
+    {
+        if (previous_kind != Client::Kind::Tiled || previous_monitor != client->monitor
+            || previous_workspace != client->workspace)
+        {
+            rearrange_monitor(monitors_[client->monitor]);
+        }
+    }
+    else
+    {
+        bool visible = visibility_policy::is_window_visible(
+            showing_desktop_,
+            client->iconic,
+            client->sticky,
+            client->monitor,
+            client->workspace,
+            monitors_
+        );
+
+        if (visible && !client->hidden)
+        {
+            if (client->fullscreen)
+                apply_fullscreen_if_needed(window, fullscreen_policy::ApplyContext::VisibilityTransition);
+            else if (client->maximized_horz || client->maximized_vert)
+                apply_maximized_geometry(window);
+            else
+                apply_floating_geometry(window);
+        }
+    }
+
+    if (window == active_window_ && !is_focus_eligible(window))
+    {
+        if (client->monitor == focused_monitor_
+            && (client->sticky || client->workspace == monitors_[client->monitor].current_workspace))
+        {
+            focus_or_fallback(monitors_[client->monitor], false);
+        }
+        else
+        {
+            clear_focus();
+        }
+    }
+}
+
+void WindowManager::reevaluate_managed_window(xcb_window_t window)
+{
+    auto const* client = get_client(window);
+    if (!client)
+        return;
+
+    if (client->kind != Client::Kind::Tiled && client->kind != Client::Kind::Floating)
+        return;
+
+    sync_managed_window_classification(window, classify_managed_window(window));
+    sync_window_visible_names(window);
+    update_ewmh_client_list();
 }
 
 void WindowManager::apply_post_manage_states(xcb_window_t window, bool has_transient)
@@ -1326,6 +1642,7 @@ void WindowManager::manage_window(xcb_window_t window, bool start_iconic)
 
     monitors_[target_monitor_idx].workspaces[target_workspace_idx].windows.push_back(window);
 
+    sync_window_visible_names(window);
     init_user_time(window);
 
     // Note: We intentionally do NOT select STRUCTURE_NOTIFY on client windows.
@@ -2948,6 +3265,7 @@ void WindowManager::update_window_title(xcb_window_t window)
 
     if (auto* client = get_client(window))
         client->name = name;
+    sync_window_visible_names(window);
 }
 
 void WindowManager::update_struts()

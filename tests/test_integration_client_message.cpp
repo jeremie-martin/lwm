@@ -415,13 +415,18 @@ TEST_CASE(
         &updated_user_time
     );
     xcb_flush(conn.get());
-    std::this_thread::sleep_for(std::chrono::milliseconds(100));
 
-    // Application request with stale timestamp should be denied.
-    send_client_message(conn, w1, net_active_window, 1, 1500, 0, 0, 0);
-
-    REQUIRE(wait_for_active_window(conn, w2, kTimeout));
-    REQUIRE(wait_for_condition([&]() { return has_state(w1, net_wm_state_demands_attention); }, kTimeout));
+    // Application request with stale timestamp should be denied once the WM has observed the helper update.
+    REQUIRE(wait_for_condition(
+        [&]()
+        {
+            send_client_message(conn, w2, net_active_window, 1, 2500, 0, 0, 0);
+            send_client_message(conn, w1, net_active_window, 1, 1500, 0, 0, 0);
+            auto active = get_window_property_window(conn.get(), conn.root(), net_active_window);
+            return active && *active == w2 && has_state(w1, net_wm_state_demands_attention);
+        },
+        kTimeout
+    ));
 
     destroy_window(conn, w2);
     destroy_window(conn, w1);

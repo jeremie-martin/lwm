@@ -140,6 +140,7 @@ void WindowManager::manage_floating_window(xcb_window_t window, bool start_iconi
         clients_[window] = std::move(client);
     }
 
+    sync_window_visible_names(window);
     init_user_time(window);
 
     uint32_t values[] = { XCB_EVENT_MASK_ENTER_WINDOW | XCB_EVENT_MASK_FOCUS_CHANGE | XCB_EVENT_MASK_PROPERTY_CHANGE

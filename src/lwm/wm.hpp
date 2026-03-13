@@ -160,9 +160,14 @@ private:
     void parse_initial_ewmh_state(Client& client);
     void init_user_time(xcb_window_t window);
     void apply_post_manage_states(xcb_window_t window, bool has_transient);
+    WindowClassification classify_managed_window(xcb_window_t window);
+    void refresh_user_time_tracking(xcb_window_t window);
+    void reevaluate_managed_window(xcb_window_t window);
+    void sync_managed_window_classification(xcb_window_t window, WindowClassification const& classification);
+    void sync_window_visible_names(xcb_window_t window);
     void unmanage_window(xcb_window_t window);
     void unmanage_floating_window(xcb_window_t window);
-    void focus_any_window(xcb_window_t window);
+    void focus_any_window(xcb_window_t window, bool record_user_time = true);
     void cycle_focus(bool forward);
     void set_fullscreen(xcb_window_t window, bool enabled);
     void set_window_layer(xcb_window_t window, WindowLayer layer);
@@ -237,7 +242,7 @@ private:
     }
     size_t wrap_monitor_index(int idx) const;
     void warp_to_monitor(Monitor const& monitor);
-    void focus_or_fallback(Monitor& monitor);
+    void focus_or_fallback(Monitor& monitor, bool record_user_time = true);
     Monitor* monitor_containing_window(xcb_window_t window);
     Monitor* monitor_at_point(int16_t x, int16_t y);
     bool is_floating_window(xcb_window_t window) const;
