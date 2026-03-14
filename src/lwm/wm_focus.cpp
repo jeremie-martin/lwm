@@ -284,6 +284,8 @@ bool WindowManager::is_focus_eligible(xcb_window_t window) const
         if (kind == Client::Kind::Dock || kind == Client::Kind::Desktop)
             return false;
     }
+    if (is_suppressed_by_fullscreen(window))
+        return false;
 
     bool accepts_input_focus = should_set_input_focus(window);
     bool supports_take_focus = false;

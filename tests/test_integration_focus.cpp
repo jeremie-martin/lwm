@@ -1,4 +1,5 @@
 #include "x11_test_harness.hpp"
+#include <algorithm>
 #include <catch2/catch_test_macros.hpp>
 #include <chrono>
 #include <optional>
@@ -49,6 +50,68 @@ struct TestEnvironment
         return TestEnvironment{ env, std::move(conn), std::move(wm) };
     }
 };
+
+bool has_state(X11Connection& conn, xcb_window_t window, xcb_atom_t state)
+{
+    xcb_atom_t net_wm_state = intern_atom(conn.get(), "_NET_WM_STATE");
+    if (net_wm_state == XCB_NONE)
+        return false;
+
+    auto cookie = xcb_get_property(conn.get(), 0, window, net_wm_state, XCB_ATOM_ATOM, 0, 16);
+    auto* reply = xcb_get_property_reply(conn.get(), cookie, nullptr);
+    if (!reply)
+        return false;
+
+    bool present = false;
+    auto* atoms = static_cast<xcb_atom_t*>(xcb_get_property_value(reply));
+    int len = xcb_get_property_value_length(reply) / 4;
+    for (int i = 0; i < len; ++i)
+    {
+        if (atoms[i] == state)
+        {
+            present = true;
+            break;
+        }
+    }
+    free(reply);
+    return present;
+}
+
+void set_initial_window_state(X11Connection& conn, xcb_window_t window, std::initializer_list<xcb_atom_t> states)
+{
+    xcb_atom_t net_wm_state = intern_atom(conn.get(), "_NET_WM_STATE");
+    if (net_wm_state == XCB_NONE)
+        return;
+
+    std::vector<xcb_atom_t> atoms(states);
+    xcb_change_property(
+        conn.get(),
+        XCB_PROP_MODE_REPLACE,
+        window,
+        net_wm_state,
+        XCB_ATOM_ATOM,
+        32,
+        static_cast<uint32_t>(atoms.size()),
+        atoms.data()
+    );
+    xcb_flush(conn.get());
+}
+
+bool is_stacked_above(X11Connection& conn, xcb_window_t upper, xcb_window_t lower)
+{
+    auto cookie = xcb_query_tree(conn.get(), conn.root());
+    auto* reply = xcb_query_tree_reply(conn.get(), cookie, nullptr);
+    if (!reply)
+        return false;
+
+    int len = xcb_query_tree_children_length(reply);
+    auto* children = xcb_query_tree_children(reply);
+    auto* upper_it = std::find(children, children + len, upper);
+    auto* lower_it = std::find(children, children + len, lower);
+    bool result = upper_it != children + len && lower_it != children + len && upper_it > lower_it;
+    free(reply);
+    return result;
+}
 
 } // namespace
 
@@ -259,6 +322,259 @@ TEST_CASE(
 
     REQUIRE(wait_for_condition([&]() { return has_fullscreen_state(w2); }, kTimeout));
     REQUIRE(wait_for_condition([&]() { return !has_fullscreen_state(w1); }, kTimeout));
+
+    destroy_window(conn, w2);
+    destroy_window(conn, w1);
+}
+
+TEST_CASE(
+    "Integration: map-time initial fullscreen request replaces current fullscreen owner",
+    "[integration][focus][fullscreen][manage]"
+)
+{
+    auto test_env = TestEnvironment::create();
+    if (!test_env)
+        return;
+
+    auto& conn = test_env->conn;
+
+    xcb_atom_t net_wm_state_fullscreen = intern_atom(conn.get(), "_NET_WM_STATE_FULLSCREEN");
+    if (net_wm_state_fullscreen == XCB_NONE)
+    {
+        WARN("Failed to intern _NET_WM_STATE_FULLSCREEN.");
+        return;
+    }
+
+    xcb_window_t w1 = create_window(conn, 10, 10, 640, 360);
+    map_window(conn, w1);
+    REQUIRE(wait_for_active_window(conn, w1, kTimeout));
+
+    send_client_message(conn, w1, intern_atom(conn.get(), "_NET_WM_STATE"), 1, net_wm_state_fullscreen, 0, 0, 0);
+    REQUIRE(wait_for_condition([&]() { return has_state(conn, w1, net_wm_state_fullscreen); }, kTimeout));
+
+    xcb_window_t w2 = create_window(conn, 40, 40, 640, 360);
+    set_initial_window_state(conn, w2, { net_wm_state_fullscreen });
+    map_window(conn, w2);
+
+    REQUIRE(wait_for_active_window(conn, w2, kTimeout));
+    REQUIRE(wait_for_condition([&]() { return has_state(conn, w2, net_wm_state_fullscreen); }, kTimeout));
+    REQUIRE(wait_for_condition([&]() { return !has_state(conn, w1, net_wm_state_fullscreen); }, kTimeout));
+
+    destroy_window(conn, w2);
+    destroy_window(conn, w1);
+}
+
+TEST_CASE(
+    "Integration: _NET_ACTIVE_WINDOW ignores suppressed sibling and marks attention",
+    "[integration][focus][fullscreen][activation]"
+)
+{
+    auto test_env = TestEnvironment::create();
+    if (!test_env)
+        return;
+
+    auto& conn = test_env->conn;
+
+    xcb_atom_t net_wm_state = intern_atom(conn.get(), "_NET_WM_STATE");
+    xcb_atom_t net_wm_state_fullscreen = intern_atom(conn.get(), "_NET_WM_STATE_FULLSCREEN");
+    xcb_atom_t net_wm_state_demands_attention = intern_atom(conn.get(), "_NET_WM_STATE_DEMANDS_ATTENTION");
+    xcb_atom_t net_active_window = intern_atom(conn.get(), "_NET_ACTIVE_WINDOW");
+    if (net_wm_state == XCB_NONE || net_wm_state_fullscreen == XCB_NONE
+        || net_wm_state_demands_attention == XCB_NONE || net_active_window == XCB_NONE)
+    {
+        WARN("Failed to intern EWMH atoms.");
+        return;
+    }
+
+    xcb_window_t w1 = create_window(conn, 10, 10, 640, 360);
+    map_window(conn, w1);
+    REQUIRE(wait_for_active_window(conn, w1, kTimeout));
+    send_client_message(conn, w1, net_wm_state, 1, net_wm_state_fullscreen, 0, 0, 0);
+    REQUIRE(wait_for_condition([&]() { return has_state(conn, w1, net_wm_state_fullscreen); }, kTimeout));
+
+    xcb_window_t w2 = create_window(conn, 80, 80, 320, 180);
+    map_window(conn, w2);
+    REQUIRE(wait_for_active_window(conn, w1, kTimeout));
+
+    send_client_message(conn, w2, net_active_window, 1, XCB_CURRENT_TIME, 0, 0, 0);
+
+    REQUIRE(wait_for_active_window(conn, w1, kTimeout));
+    REQUIRE(wait_for_condition([&]() { return has_state(conn, w2, net_wm_state_demands_attention); }, kTimeout));
+
+    destroy_window(conn, w2);
+    destroy_window(conn, w1);
+}
+
+TEST_CASE(
+    "Integration: fullscreen suppression stays scoped to the visible workspace",
+    "[integration][focus][fullscreen][workspace]"
+)
+{
+    auto test_env = TestEnvironment::create();
+    if (!test_env)
+        return;
+
+    auto& conn = test_env->conn;
+
+    xcb_atom_t net_current_desktop = intern_atom(conn.get(), "_NET_CURRENT_DESKTOP");
+    xcb_atom_t net_wm_desktop = intern_atom(conn.get(), "_NET_WM_DESKTOP");
+    xcb_atom_t net_wm_state = intern_atom(conn.get(), "_NET_WM_STATE");
+    xcb_atom_t net_wm_state_fullscreen = intern_atom(conn.get(), "_NET_WM_STATE_FULLSCREEN");
+    xcb_atom_t net_active_window = intern_atom(conn.get(), "_NET_ACTIVE_WINDOW");
+    if (net_current_desktop == XCB_NONE || net_wm_desktop == XCB_NONE || net_wm_state == XCB_NONE
+        || net_wm_state_fullscreen == XCB_NONE || net_active_window == XCB_NONE)
+    {
+        WARN("Failed to intern EWMH atoms.");
+        return;
+    }
+
+    xcb_window_t w1 = create_window(conn, 10, 10, 640, 360);
+    map_window(conn, w1);
+    REQUIRE(wait_for_active_window(conn, w1, kTimeout));
+    send_client_message(conn, w1, net_wm_state, 1, net_wm_state_fullscreen, 0, 0, 0);
+    REQUIRE(wait_for_condition([&]() { return has_state(conn, w1, net_wm_state_fullscreen); }, kTimeout));
+
+    xcb_window_t w2 = create_window(conn, 80, 80, 320, 180);
+    map_window(conn, w2);
+    REQUIRE(wait_for_active_window(conn, w1, kTimeout));
+
+    send_client_message(conn, w2, net_wm_desktop, 1);
+    REQUIRE(wait_for_property_cardinal(conn.get(), w2, net_wm_desktop, 1, kTimeout));
+
+    send_client_message(conn, w2, net_active_window, 2, XCB_CURRENT_TIME, 0, 0, 0);
+
+    REQUIRE(wait_for_property_cardinal(conn.get(), conn.root(), net_current_desktop, 1, kTimeout));
+    REQUIRE(wait_for_active_window(conn, w2, kTimeout));
+    REQUIRE(wait_for_condition([&]() { return has_state(conn, w1, net_wm_state_fullscreen); }, kTimeout));
+
+    destroy_window(conn, w2);
+    destroy_window(conn, w1);
+}
+
+TEST_CASE(
+    "Integration: suppressed floating sibling cannot restack above fullscreen owner",
+    "[integration][focus][fullscreen][stacking]"
+)
+{
+    auto test_env = TestEnvironment::create();
+    if (!test_env)
+        return;
+
+    auto& conn = test_env->conn;
+
+    xcb_atom_t net_wm_state = intern_atom(conn.get(), "_NET_WM_STATE");
+    xcb_atom_t net_wm_state_fullscreen = intern_atom(conn.get(), "_NET_WM_STATE_FULLSCREEN");
+    if (net_wm_state == XCB_NONE || net_wm_state_fullscreen == XCB_NONE)
+    {
+        WARN("Failed to intern EWMH atoms.");
+        return;
+    }
+
+    xcb_window_t w1 = create_window(conn, 10, 10, 640, 360);
+    map_window(conn, w1);
+    REQUIRE(wait_for_active_window(conn, w1, kTimeout));
+    send_client_message(conn, w1, net_wm_state, 1, net_wm_state_fullscreen, 0, 0, 0);
+    REQUIRE(wait_for_condition([&]() { return has_state(conn, w1, net_wm_state_fullscreen); }, kTimeout));
+
+    xcb_window_t w2 = create_window(conn, 80, 80, 320, 180);
+    map_window(conn, w2);
+    REQUIRE(wait_for_active_window(conn, w1, kTimeout));
+    REQUIRE(wait_for_condition([&]() { return is_stacked_above(conn, w1, w2); }, kTimeout));
+
+    uint32_t values[] = { w1, XCB_STACK_MODE_ABOVE };
+    xcb_configure_window(
+        conn.get(),
+        w2,
+        XCB_CONFIG_WINDOW_SIBLING | XCB_CONFIG_WINDOW_STACK_MODE,
+        values
+    );
+    xcb_flush(conn.get());
+
+    REQUIRE(wait_for_condition([&]() { return is_stacked_above(conn, w1, w2); }, kTimeout));
+
+    destroy_window(conn, w2);
+    destroy_window(conn, w1);
+}
+
+TEST_CASE(
+    "Integration: iconify and deiconify re-arbitrate fullscreen owner",
+    "[integration][focus][fullscreen][iconify]"
+)
+{
+    auto test_env = TestEnvironment::create();
+    if (!test_env)
+        return;
+
+    auto& conn = test_env->conn;
+
+    xcb_atom_t net_wm_state = intern_atom(conn.get(), "_NET_WM_STATE");
+    xcb_atom_t net_wm_state_fullscreen = intern_atom(conn.get(), "_NET_WM_STATE_FULLSCREEN");
+    xcb_atom_t net_wm_state_hidden = intern_atom(conn.get(), "_NET_WM_STATE_HIDDEN");
+    if (net_wm_state == XCB_NONE || net_wm_state_fullscreen == XCB_NONE || net_wm_state_hidden == XCB_NONE)
+    {
+        WARN("Failed to intern EWMH atoms.");
+        return;
+    }
+
+    xcb_window_t w1 = create_window(conn, 10, 10, 640, 360);
+    map_window(conn, w1);
+    REQUIRE(wait_for_active_window(conn, w1, kTimeout));
+    send_client_message(conn, w1, net_wm_state, 1, net_wm_state_fullscreen, 0, 0, 0);
+    REQUIRE(wait_for_condition([&]() { return has_state(conn, w1, net_wm_state_fullscreen); }, kTimeout));
+
+    xcb_window_t w2 = create_window(conn, 80, 80, 320, 180);
+    map_window(conn, w2);
+    REQUIRE(wait_for_active_window(conn, w1, kTimeout));
+
+    send_client_message(conn, w1, net_wm_state, 1, net_wm_state_hidden, 0, 0, 0);
+    REQUIRE(wait_for_condition([&]() { return has_state(conn, w1, net_wm_state_hidden); }, kTimeout));
+    REQUIRE(wait_for_active_window(conn, w2, kTimeout));
+
+    send_client_message(conn, w1, net_wm_state, 0, net_wm_state_hidden, 0, 0, 0);
+    REQUIRE(wait_for_condition([&]() { return !has_state(conn, w1, net_wm_state_hidden); }, kTimeout));
+    REQUIRE(wait_for_active_window(conn, w1, kTimeout));
+    REQUIRE(wait_for_condition([&]() { return has_state(conn, w1, net_wm_state_fullscreen); }, kTimeout));
+
+    destroy_window(conn, w2);
+    destroy_window(conn, w1);
+}
+
+TEST_CASE(
+    "Integration: exiting showing desktop restores fullscreen owner",
+    "[integration][focus][fullscreen][showdesktop]"
+)
+{
+    auto test_env = TestEnvironment::create();
+    if (!test_env)
+        return;
+
+    auto& conn = test_env->conn;
+
+    xcb_atom_t net_wm_state = intern_atom(conn.get(), "_NET_WM_STATE");
+    xcb_atom_t net_wm_state_fullscreen = intern_atom(conn.get(), "_NET_WM_STATE_FULLSCREEN");
+    xcb_atom_t net_showing_desktop = intern_atom(conn.get(), "_NET_SHOWING_DESKTOP");
+    if (net_wm_state == XCB_NONE || net_wm_state_fullscreen == XCB_NONE || net_showing_desktop == XCB_NONE)
+    {
+        WARN("Failed to intern EWMH atoms.");
+        return;
+    }
+
+    xcb_window_t w1 = create_window(conn, 10, 10, 640, 360);
+    map_window(conn, w1);
+    REQUIRE(wait_for_active_window(conn, w1, kTimeout));
+    send_client_message(conn, w1, net_wm_state, 1, net_wm_state_fullscreen, 0, 0, 0);
+    REQUIRE(wait_for_condition([&]() { return has_state(conn, w1, net_wm_state_fullscreen); }, kTimeout));
+
+    xcb_window_t w2 = create_window(conn, 80, 80, 320, 180);
+    map_window(conn, w2);
+    REQUIRE(wait_for_active_window(conn, w1, kTimeout));
+
+    send_client_message(conn, conn.root(), net_showing_desktop, 1);
+    std::this_thread::sleep_for(std::chrono::milliseconds(100));
+    send_client_message(conn, conn.root(), net_showing_desktop, 0);
+
+    REQUIRE(wait_for_active_window(conn, w1, kTimeout));
+    REQUIRE(wait_for_condition([&]() { return has_state(conn, w1, net_wm_state_fullscreen); }, kTimeout));
 
     destroy_window(conn, w2);
     destroy_window(conn, w1);

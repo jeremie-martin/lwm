@@ -8,6 +8,9 @@ namespace lwm {
 void WindowManager::perform_workspace_switch(WorkspaceSwitchContext const& ctx)
 {
     auto& monitor = monitors_[ctx.monitor_idx];
+    xcb_window_t preferred_owner = XCB_NONE;
+    if (auto owner = fullscreen_owner_for_monitor(ctx.monitor_idx))
+        preferred_owner = *owner;
     LOG_DEBUG(
         "perform_workspace_switch: monitor={} old_ws={} new_ws={}",
         ctx.monitor_idx,
@@ -20,6 +23,7 @@ void WindowManager::perform_workspace_switch(WorkspaceSwitchContext const& ctx)
     monitor.current_workspace = ctx.new_workspace;
 
     update_ewmh_current_desktop();
+    reconcile_fullscreen_for_monitor(ctx.monitor_idx, preferred_owner);
     // sync hides old-workspace windows and shows new-workspace windows
     sync_visibility_for_monitor(ctx.monitor_idx);
     // rearrange computes tiling layout geometry for the now-visible tiled windows
@@ -126,6 +130,12 @@ void WindowManager::move_window_to_workspace(int ws)
         else
             ewmh_.set_window_desktop(window_to_move, desktop);
 
+        xcb_window_t preferred_owner =
+            is_client_fullscreen(window_to_move)
+                && (is_client_sticky(window_to_move) || target_ws == monitors_[monitor_idx].current_workspace)
+            ? window_to_move
+            : XCB_NONE;
+        reconcile_fullscreen_for_monitor(monitor_idx, preferred_owner);
         sync_visibility_for_monitor(monitor_idx);
         focus_or_fallback(monitors_[monitor_idx]);
         conn_.flush();
@@ -155,6 +165,9 @@ void WindowManager::move_window_to_workspace(int ws)
     {
         hide_window(window_to_move);
     }
+    xcb_window_t preferred_owner =
+        is_client_fullscreen(window_to_move) && is_client_sticky(window_to_move) ? window_to_move : XCB_NONE;
+    reconcile_fullscreen_for_monitor(focused_monitor_, preferred_owner);
     rearrange_monitor(monitor);
     LWM_ASSERT_INVARIANTS(clients_, monitors_, floating_windows_, dock_windows_, desktop_windows_);
     focus_or_fallback(monitor);
@@ -239,12 +252,17 @@ void WindowManager::move_window_to_monitor(int direction)
         else
             ewmh_.set_window_desktop(window_to_move, desktop);
 
+        reconcile_fullscreen_for_monitor(source_idx);
+        reconcile_fullscreen_for_monitor(target_idx, is_client_fullscreen(window_to_move) ? window_to_move : XCB_NONE);
         sync_visibility_for_monitor(source_idx);
         sync_visibility_for_monitor(target_idx);
 
         focused_monitor_ = target_idx;
         update_ewmh_current_desktop();
-        focus_any_window(window_to_move);
+        if (is_suppressed_by_fullscreen(window_to_move))
+            focus_or_fallback(monitors_[target_idx]);
+        else
+            focus_any_window(window_to_move);
         if (config_.focus.warp_cursor_on_monitor_change)
         {
             warp_to_monitor(monitors_[target_idx]);
@@ -270,13 +288,18 @@ void WindowManager::move_window_to_monitor(int direction)
     if (is_client_sticky(window_to_move))
         ewmh_.set_window_desktop(window_to_move, 0xFFFFFFFF);
 
+    reconcile_fullscreen_for_monitor(focused_monitor_);
+    reconcile_fullscreen_for_monitor(target_idx, is_client_fullscreen(window_to_move) ? window_to_move : XCB_NONE);
     rearrange_monitor(focused_monitor());
     rearrange_monitor(target_monitor);
     LWM_ASSERT_INVARIANTS(clients_, monitors_, floating_windows_, dock_windows_, desktop_windows_);
 
     focused_monitor_ = target_idx;
     update_ewmh_current_desktop();
-    focus_any_window(window_to_move);
+    if (is_suppressed_by_fullscreen(window_to_move))
+        focus_or_fallback(target_monitor);
+    else
+        focus_any_window(window_to_move);
     if (config_.focus.warp_cursor_on_monitor_change)
     {
         warp_to_monitor(target_monitor);

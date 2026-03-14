@@ -1500,7 +1500,12 @@ void WindowManager::sync_managed_window_classification(xcb_window_t window, Wind
         affected_monitors.push_back(client->monitor);
 
     for (size_t monitor_idx : affected_monitors)
+    {
+        xcb_window_t preferred_owner =
+            client->monitor == monitor_idx && client->fullscreen && is_window_in_visible_scope(window) ? window : XCB_NONE;
+        reconcile_fullscreen_for_monitor(monitor_idx, preferred_owner);
         sync_visibility_for_monitor(monitor_idx);
+    }
 
     if (previous_kind == Client::Kind::Tiled && previous_monitor < monitors_.size()
         && (client->kind != Client::Kind::Tiled || previous_monitor != client->monitor
@@ -1781,6 +1786,23 @@ void WindowManager::unmanage_window(xcb_window_t window)
     clients_.erase(window);
 }
 
+void WindowManager::clear_fullscreen_state(xcb_window_t window)
+{
+    auto* client = get_client(window);
+    if (!client || !client->fullscreen)
+        return;
+
+    client->fullscreen = false;
+    ewmh_.set_window_state(window, ewmh_.get()->_NET_WM_STATE_FULLSCREEN, false);
+
+    if (is_floating_window(window) && client->fullscreen_restore)
+        client->floating_geometry = *client->fullscreen_restore;
+
+    client->fullscreen_restore = std::nullopt;
+    uint32_t border_width = border_width_for_client(*client);
+    xcb_configure_window(conn_.get(), window, XCB_CONFIG_WINDOW_BORDER_WIDTH, &border_width);
+}
+
 void WindowManager::set_fullscreen(xcb_window_t window, bool enabled)
 {
     auto* client = get_client(window);
@@ -1821,28 +1843,6 @@ void WindowManager::set_fullscreen(xcb_window_t window, bool enabled)
 
         client->fullscreen = true;
 
-        // Only one fullscreen window should be visible on a monitor at a time.
-        // Keep fullscreen windows independent across different workspaces unless
-        // one of them is sticky and would therefore be visible simultaneously.
-        std::vector<xcb_window_t> conflicting_fullscreen_windows;
-        conflicting_fullscreen_windows.reserve(clients_.size());
-        for (auto const& [other_window, other_client] : clients_)
-        {
-            if (other_window == window || !other_client.fullscreen || other_client.iconic)
-                continue;
-            if (other_client.monitor != client->monitor)
-                continue;
-
-            bool const shares_visible_scope =
-                client->sticky || other_client.sticky || client->workspace == other_client.workspace;
-            if (shares_visible_scope)
-                conflicting_fullscreen_windows.push_back(other_window);
-        }
-        for (xcb_window_t other_window : conflicting_fullscreen_windows)
-        {
-            set_fullscreen(other_window, false);
-        }
-
         if (client->above)
         {
             client->above = false;
@@ -1864,44 +1864,33 @@ void WindowManager::set_fullscreen(xcb_window_t window, bool enabled)
         }
 
         ewmh_.set_window_state(window, ewmh_.get()->_NET_WM_STATE_FULLSCREEN, true);
-        apply_fullscreen_if_needed(window, fullscreen_policy::ApplyContext::StateTransition);
     }
     else
     {
         if (!client->fullscreen)
             return;
 
-        client->fullscreen = false;
-        ewmh_.set_window_state(window, ewmh_.get()->_NET_WM_STATE_FULLSCREEN, false);
-
-        if (is_floating_window(window))
-        {
-            if (client->fullscreen_restore)
-            {
-                client->floating_geometry = *client->fullscreen_restore;
-                if ((client->sticky || client->workspace == monitors_[client->monitor].current_workspace)
-                    && !client->iconic)
-                {
-                    apply_floating_geometry(window);
-                }
-            }
-        }
-        else if (client->monitor < monitors_.size())
-        {
-            if (client->sticky || client->workspace == monitors_[client->monitor].current_workspace)
-            {
-                rearrange_monitor(monitors_[client->monitor]);
-            }
-        }
-
-        client->fullscreen_restore = std::nullopt;
-        uint32_t border_width = border_width_for_client(*client);
-        xcb_configure_window(conn_.get(), window, XCB_CONFIG_WINDOW_BORDER_WIDTH, &border_width);
+        clear_fullscreen_state(window);
     }
+
+    client = get_client(window);
+    if (!client)
+        return;
 
     update_ewmh_client_list();
     if (client->monitor < monitors_.size())
-        restack_monitor_layers(client->monitor);
+    {
+        xcb_window_t preferred_owner = (enabled && client->fullscreen) ? window : XCB_NONE;
+        reconcile_fullscreen_for_monitor(client->monitor, preferred_owner);
+        sync_visibility_for_monitor(client->monitor);
+        rearrange_monitor(monitors_[client->monitor]);
+
+        if (client->monitor == focused_monitor_
+            && (active_window_ == XCB_NONE || is_suppressed_by_fullscreen(active_window_)))
+        {
+            focus_or_fallback(monitors_[client->monitor], false);
+        }
+    }
     conn_.flush();
 }
 
@@ -2063,6 +2052,8 @@ void WindowManager::set_window_sticky(xcb_window_t window, bool enabled)
 
     if (client->monitor < monitors_.size())
     {
+        xcb_window_t preferred_owner = client->fullscreen ? window : XCB_NONE;
+        reconcile_fullscreen_for_monitor(client->monitor, preferred_owner);
         if (client->kind == Client::Kind::Tiled)
             rearrange_monitor(monitors_[client->monitor]);
         sync_visibility_for_monitor(client->monitor);
@@ -2238,6 +2229,11 @@ void WindowManager::apply_fullscreen_if_needed(xcb_window_t window, fullscreen_p
         LOG_DEBUG("apply_fullscreen_if_needed({:#x}): NOT fullscreen, returning early", window);
         return;
     }
+    if (is_suppressed_by_fullscreen(window))
+    {
+        LOG_DEBUG("apply_fullscreen_if_needed({:#x}): suppressed by fullscreen owner, returning early", window);
+        return;
+    }
     if (is_client_iconic(window))
     {
         LOG_DEBUG("apply_fullscreen_if_needed({:#x}): is iconic, returning early", window);
@@ -2294,9 +2290,6 @@ void WindowManager::apply_fullscreen_if_needed(xcb_window_t window, fullscreen_p
     ev.above_sibling = XCB_NONE;
     ev.override_redirect = 0;
     xcb_send_event(conn_.get(), 0, window, XCB_EVENT_MASK_STRUCTURE_NOTIFY, reinterpret_cast<char*>(&ev));
-
-    uint32_t stack_mode = XCB_STACK_MODE_ABOVE;
-    xcb_configure_window(conn_.get(), window, XCB_CONFIG_WINDOW_STACK_MODE, &stack_mode);
 }
 
 void WindowManager::set_fullscreen_monitors(xcb_window_t window, FullscreenMonitors const& monitors)
@@ -2399,6 +2392,7 @@ void WindowManager::iconify_window(xcb_window_t window)
 
     if (client->monitor < monitors_.size())
     {
+        reconcile_fullscreen_for_monitor(client->monitor);
         if (client->kind == Client::Kind::Tiled)
             rearrange_monitor(monitors_[client->monitor]);
         sync_visibility_for_monitor(client->monitor);
@@ -2437,6 +2431,8 @@ void WindowManager::deiconify_window(xcb_window_t window, bool focus)
 
     if (client->monitor < monitors_.size())
     {
+        xcb_window_t preferred_owner = client->fullscreen ? window : XCB_NONE;
+        reconcile_fullscreen_for_monitor(client->monitor, preferred_owner);
         if (client->kind == Client::Kind::Tiled)
             rearrange_monitor(monitors_[client->monitor]);
         sync_visibility_for_monitor(client->monitor);
@@ -2766,6 +2762,21 @@ std::optional<xcb_window_t> WindowManager::transient_for_window(xcb_window_t win
     return result;
 }
 
+bool WindowManager::is_window_in_visible_scope(xcb_window_t window) const
+{
+    auto const* client = get_client(window);
+    if (!client)
+        return false;
+    return visibility_policy::is_window_visible(
+        showing_desktop_,
+        client->iconic,
+        client->sticky,
+        client->monitor,
+        client->workspace,
+        monitors_
+    );
+}
+
 bool WindowManager::is_window_visible(xcb_window_t window) const
 {
     auto const* client = get_client(window);
@@ -2782,6 +2793,104 @@ bool WindowManager::is_window_visible(xcb_window_t window) const
         client->workspace,
         monitors_
     );
+}
+
+std::optional<xcb_window_t>
+WindowManager::fullscreen_owner_for_monitor(size_t monitor_idx, xcb_window_t preferred_owner) const
+{
+    if (monitor_idx >= monitors_.size() || showing_desktop_)
+        return std::nullopt;
+
+    auto qualifies = [this, monitor_idx](xcb_window_t candidate)
+    {
+        auto const* client = get_client(candidate);
+        return client && client->monitor == monitor_idx
+            && (client->kind == Client::Kind::Tiled || client->kind == Client::Kind::Floating) && client->fullscreen
+            && !client->iconic && is_window_in_visible_scope(candidate);
+    };
+
+    if (preferred_owner != XCB_NONE && qualifies(preferred_owner))
+        return preferred_owner;
+
+    if (active_window_ != XCB_NONE)
+    {
+        if (qualifies(active_window_))
+            return active_window_;
+
+        if (auto const* active = get_client(active_window_);
+            active && active->transient_for != XCB_NONE && qualifies(active->transient_for))
+        {
+            return active->transient_for;
+        }
+    }
+
+    xcb_window_t best = XCB_NONE;
+    uint64_t best_order = 0;
+    for (auto const& [window, client] : clients_)
+    {
+        if (!qualifies(window))
+            continue;
+        if (best == XCB_NONE || client.order > best_order)
+        {
+            best = window;
+            best_order = client.order;
+        }
+    }
+
+    if (best == XCB_NONE)
+        return std::nullopt;
+    return best;
+}
+
+bool WindowManager::is_suppressed_by_fullscreen(xcb_window_t window) const
+{
+    auto const* client = get_client(window);
+    if (!client)
+        return false;
+    if (client->kind != Client::Kind::Tiled && client->kind != Client::Kind::Floating)
+        return false;
+    if (client->layer == WindowLayer::Overlay)
+        return false;
+    if (client->monitor >= monitors_.size())
+        return false;
+    if (client->iconic || !is_window_in_visible_scope(window))
+        return false;
+
+    auto owner = fullscreen_owner_for_monitor(client->monitor);
+    if (!owner || *owner == window)
+        return false;
+
+    if (client->transient_for == *owner)
+        return false;
+
+    return true;
+}
+
+void WindowManager::reconcile_fullscreen_for_monitor(size_t monitor_idx, xcb_window_t preferred_owner)
+{
+    if (monitor_idx >= monitors_.size())
+        return;
+
+    auto owner = fullscreen_owner_for_monitor(monitor_idx, preferred_owner);
+    std::vector<xcb_window_t> losers;
+    losers.reserve(clients_.size());
+
+    for (auto const& [window, client] : clients_)
+    {
+        if (client.monitor != monitor_idx || !client.fullscreen || client.iconic)
+            continue;
+        if (!is_window_in_visible_scope(window))
+            continue;
+        if (owner && *owner == window)
+            continue;
+        losers.push_back(window);
+    }
+
+    for (xcb_window_t loser : losers)
+        clear_fullscreen_state(loser);
+
+    if (monitor_idx == focused_monitor_ && active_window_ != XCB_NONE && is_suppressed_by_fullscreen(active_window_))
+        focus_or_fallback(monitors_[monitor_idx], false);
 }
 
 Geometry WindowManager::overlay_geometry_for_window(xcb_window_t window) const
@@ -2840,12 +2949,15 @@ void WindowManager::restack_monitor_layers(size_t monitor_idx)
         visible_windows.push_back(window);
     }
 
-    auto layer_for = [](Client const& client)
+    auto layer_for = [this](xcb_window_t window)
     {
+        auto const& client = clients_.at(window);
         if (client.layer == WindowLayer::Overlay)
             return StackLayer::Overlay;
         if (client.fullscreen)
             return StackLayer::Fullscreen;
+        if (is_suppressed_by_fullscreen(window))
+            return StackLayer::Below;
         if (client.above || client.modal)
             return StackLayer::Above;
         if (client.below)
@@ -2861,12 +2973,12 @@ void WindowManager::restack_monitor_layers(size_t monitor_idx)
             auto const& left = clients_.at(lhs);
             auto const& right = clients_.at(rhs);
             auto left_key = std::tuple{
-                static_cast<int>(layer_for(left)),
+                static_cast<int>(layer_for(lhs)),
                 lhs == active_window_ ? 1 : 0,
                 static_cast<long long>(left.order)
             };
             auto right_key = std::tuple{
-                static_cast<int>(layer_for(right)),
+                static_cast<int>(layer_for(rhs)),
                 rhs == active_window_ ? 1 : 0,
                 static_cast<long long>(right.order)
             };

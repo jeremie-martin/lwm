@@ -898,6 +898,13 @@ void WindowManager::handle_active_window_request(xcb_client_message_event_t cons
         }
     }
 
+    if (is_suppressed_by_fullscreen(window))
+    {
+        if (source == 1)
+            set_client_demands_attention(window, true);
+        return;
+    }
+
     if (is_client_iconic(window))
     {
         deiconify_window(window, false);
@@ -960,6 +967,22 @@ void WindowManager::handle_desktop_change(xcb_client_message_event_t const& e)
         }
         LWM_ASSERT_INVARIANTS(clients_, monitors_, floating_windows_, dock_windows_, desktop_windows_);
 
+        if (source_mon_idx == target_monitor)
+        {
+            reconcile_fullscreen_for_monitor(
+                target_monitor,
+                is_client_fullscreen(e.window) && target_visible(target_monitor, target_workspace) ? e.window : XCB_NONE
+            );
+        }
+        else
+        {
+            reconcile_fullscreen_for_monitor(source_mon_idx);
+            reconcile_fullscreen_for_monitor(
+                target_monitor,
+                is_client_fullscreen(e.window) && target_visible(target_monitor, target_workspace) ? e.window : XCB_NONE
+            );
+        }
+
         rearrange_monitor(monitors_[source_mon_idx]);
         if (source_mon_idx != target_monitor)
         {
@@ -972,7 +995,11 @@ void WindowManager::handle_desktop_change(xcb_client_message_event_t const& e)
         }
 
         update_ewmh_client_list();
-        if (was_active && !target_visible(target_monitor, target_workspace))
+        if (was_active && is_suppressed_by_fullscreen(e.window))
+        {
+            focus_or_fallback(monitors_[target_monitor], false);
+        }
+        else if (was_active && !target_visible(target_monitor, target_workspace))
         {
             focus_or_fallback(focused_monitor());
         }
@@ -998,13 +1025,33 @@ void WindowManager::handle_desktop_change(xcb_client_message_event_t const& e)
         client->workspace = target_workspace;
         ewmh_.set_window_desktop(e.window, desktop);
 
+        if (source_monitor == target_monitor)
+        {
+            reconcile_fullscreen_for_monitor(
+                target_monitor,
+                is_client_fullscreen(e.window) && target_visible(target_monitor, target_workspace) ? e.window : XCB_NONE
+            );
+        }
+        else
+        {
+            reconcile_fullscreen_for_monitor(source_monitor);
+            reconcile_fullscreen_for_monitor(
+                target_monitor,
+                is_client_fullscreen(e.window) && target_visible(target_monitor, target_workspace) ? e.window : XCB_NONE
+            );
+        }
+
         if (source_monitor != target_monitor)
         {
             sync_visibility_for_monitor(source_monitor);
         }
         sync_visibility_for_monitor(target_monitor);
         update_ewmh_client_list();
-        if (was_active && !target_visible(target_monitor, target_workspace))
+        if (was_active && is_suppressed_by_fullscreen(e.window))
+        {
+            focus_or_fallback(monitors_[target_monitor], false);
+        }
+        else if (was_active && !target_visible(target_monitor, target_workspace))
         {
             focus_or_fallback(focused_monitor());
         }
@@ -1086,6 +1133,8 @@ void WindowManager::handle_showing_desktop(xcb_client_message_event_t const& e)
     }
     else
     {
+        for (size_t i = 0; i < monitors_.size(); ++i)
+            reconcile_fullscreen_for_monitor(i);
         rearrange_all_monitors();
         sync_visibility_all();
         if (!monitors_.empty())
@@ -1121,12 +1170,14 @@ void WindowManager::handle_configure_request(xcb_configure_request_event_t const
     bool is_floating = is_floating_window(e.window);
     uint16_t mask = e.value_mask;
     if (is_floating)
-    {
-        mask &= ~XCB_CONFIG_WINDOW_BORDER_WIDTH;
-    }
+        mask &= ~(XCB_CONFIG_WINDOW_BORDER_WIDTH | XCB_CONFIG_WINDOW_SIBLING | XCB_CONFIG_WINDOW_STACK_MODE);
 
     if (mask == 0)
+    {
+        if (is_floating)
+            send_configure_notify(e.window);
         return;
+    }
 
     uint32_t values[7];
     size_t index = 0;

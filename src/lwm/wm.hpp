@@ -170,6 +170,7 @@ private:
     void focus_any_window(xcb_window_t window, bool record_user_time = true);
     void cycle_focus(bool forward);
     void set_fullscreen(xcb_window_t window, bool enabled);
+    void clear_fullscreen_state(xcb_window_t window);
     void set_window_layer(xcb_window_t window, WindowLayer layer);
     void set_window_borderless(xcb_window_t window, bool enabled);
     void set_window_above(xcb_window_t window, bool enabled);
@@ -253,7 +254,14 @@ private:
     bool is_sticky_desktop(xcb_window_t window) const;
     std::optional<std::pair<size_t, size_t>> resolve_window_desktop(xcb_window_t window) const;
     std::optional<xcb_window_t> transient_for_window(xcb_window_t window) const;
+    bool is_window_in_visible_scope(xcb_window_t window) const;
     bool is_window_visible(xcb_window_t window) const;
+    std::optional<xcb_window_t> fullscreen_owner_for_monitor(
+        size_t monitor_idx,
+        xcb_window_t preferred_owner = XCB_NONE
+    ) const;
+    bool is_suppressed_by_fullscreen(xcb_window_t window) const;
+    void reconcile_fullscreen_for_monitor(size_t monitor_idx, xcb_window_t preferred_owner = XCB_NONE);
     void restack_transients(xcb_window_t parent);
     void restack_monitor_layers(size_t monitor_idx);
     bool is_override_redirect_window(xcb_window_t window) const;
