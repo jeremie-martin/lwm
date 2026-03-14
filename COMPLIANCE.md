@@ -1,62 +1,58 @@
 # ICCCM / EWMH Compliance
 
-This document is normative for protocol behavior.
-
-- `MUST`: required behavior in LWM
-- `MAY`: optional behavior currently implemented
-- `NOT IMPLEMENTED`: explicitly unsupported
+This document is normative for protocol behavior. It describes what LWM exposes to clients and desktop tooling. For the internal model and transition rules, see [`ARCHITECTURE.md`](ARCHITECTURE.md).
 
 ## 1. ICCCM
 
 ### 1.1 WM Ownership and Startup
 
-LWM MUST:
+LWM:
 
-- Acquire `WM_S0` selection.
-- Select `SubstructureRedirectMask` on the root window.
-- Refuse startup if another WM already owns the role.
-- Broadcast `MANAGER` after ownership is acquired.
+- acquires `WM_S0`
+- selects `SubstructureRedirectMask` on the root window
+- refuses startup if another WM already owns the role
+- broadcasts `MANAGER` after ownership is acquired
 
-### 1.2 Read Client Properties
+### 1.2 Client Properties Read by LWM
 
 LWM reads and uses:
 
 - `WM_NAME` / `_NET_WM_NAME`
 - `WM_CLASS`
 - `WM_HINTS` (`input`, `initial_state`, urgency)
-- `WM_NORMAL_HINTS` (initial and runtime user size/position hints)
+- `WM_NORMAL_HINTS` (initial and runtime size/position hints)
 - `WM_TRANSIENT_FOR`
 - `_NET_WM_USER_TIME_WINDOW`
 - `WM_PROTOCOLS` (`WM_DELETE_WINDOW`, `WM_TAKE_FOCUS`, `_NET_WM_PING`, `_NET_WM_SYNC_REQUEST` when present)
 
-Intentional behavior:
+Intentional limits:
 
-- `WM_NORMAL_HINTS.min_width` / `min_height` are intentionally not enforced.
-- `WM_NORMAL_HINTS.width_inc` / `height_inc` are intentionally not enforced.
-- `WM_NORMAL_HINTS` aspect/gravity hints are intentionally not enforced by layout policy.
-- Transients are treated as floating and inherit parent context where possible.
-- Runtime changes to `WM_HINTS`, `WM_NORMAL_HINTS`, and `WM_TRANSIENT_FOR` are re-evaluated for managed tiled/floating windows.
+- `WM_NORMAL_HINTS.min_width` / `min_height` are not enforced
+- `WM_NORMAL_HINTS.width_inc` / `height_inc` are not enforced
+- `WM_NORMAL_HINTS` aspect/gravity hints do not override layout policy
+- runtime changes to `WM_HINTS`, `WM_NORMAL_HINTS`, and `WM_TRANSIENT_FOR` are re-evaluated for managed tiled/floating windows
+- `_NET_WM_USER_TIME_WINDOW` indirection is respected, and changes after manage are re-read so activation time can follow the helper window
 
-### 1.3 WM_STATE Semantics
+### 1.3 `WM_STATE`
 
 LWM writes `WM_STATE` for managed windows:
 
-- `NormalState` for managed normal visibility
+- `NormalState` for normal managed visibility
 - `IconicState` for explicit iconify/minimize
 - `WithdrawnState` on unmanage
 
-Important: workspace visibility changes do not imply `WM_STATE` changes.
+Workspace switching does not change `WM_STATE` on its own.
 
-### 1.4 ICCCM Messages and Requests
+### 1.4 ICCCM Requests
 
-- `WM_CHANGE_STATE(IconicState)` -> iconify.
+- `WM_CHANGE_STATE(IconicState)` iconifies the window
 - `ConfigureRequest`:
-  - tiled windows: synthetic `ConfigureNotify` only (WM keeps geometry authority)
-  - floating windows: apply request within policy constraints
+  - tiled windows receive a synthetic `ConfigureNotify`; the WM keeps geometry authority
+  - floating windows may have geometry applied within WM policy constraints
 
 ## 2. EWMH Root Properties
 
-LWM maintains these root properties:
+LWM maintains:
 
 - `_NET_SUPPORTED`
 - `_NET_SUPPORTING_WM_CHECK`
@@ -71,30 +67,30 @@ LWM maintains these root properties:
 - `_NET_WORKAREA`
 - `_NET_SHOWING_DESKTOP`
 
-Notes:
+Protocol notes:
 
-- `_NET_CLIENT_LIST` tracks managed windows, including dock/desktop windows.
-- `_NET_CLIENT_LIST` updates on manage/unmanage, not workspace show/hide.
-- Per-monitor workspace mapping is used for desktop indices.
+- `_NET_CLIENT_LIST` tracks managed windows, including dock and desktop windows
+- `_NET_CLIENT_LIST` changes on manage/unmanage, not on workspace show/hide
+- desktop indices use the per-monitor mapping described in [`ARCHITECTURE.md`](ARCHITECTURE.md)
 
 ## 3. EWMH Window Types
 
 LWM classifies windows primarily by `_NET_WM_WINDOW_TYPE`:
 
-- `DESKTOP`: managed, bottom layer, no focus
-- `DOCK`: managed, strut-reserving, no normal focus
-- `DIALOG/UTILITY/TOOLBAR/MENU/SPLASH`: managed floating
-- popup/ephemeral types (`TOOLTIP`, `NOTIFICATION`, `POPUP_MENU`, `DROPDOWN_MENU`, `COMBO`, `DND`): mapped but not fully managed
+- `DESKTOP`: managed, bottom layer, not focus-eligible
+- `DOCK`: managed, strut-reserving, not normal-focus eligible
+- `DIALOG`, `UTILITY`, `TOOLBAR`, `MENU`, `SPLASH`: managed floating
 - `NORMAL`: managed tiled by default
+- popup/ephemeral types (`TOOLTIP`, `NOTIFICATION`, `POPUP_MENU`, `DROPDOWN_MENU`, `COMBO`, `DND`): mapped directly, not fully managed
 
-Runtime updates:
+Runtime reclassification:
 
-- Managed tiled/floating windows are reevaluated when `_NET_WM_WINDOW_TYPE` or `WM_TRANSIENT_FOR` changes.
-- Runtime conversion into `DOCK`, `DESKTOP`, or popup-only behavior is intentionally ignored after manage.
+- managed tiled/floating windows are re-evaluated when `_NET_WM_WINDOW_TYPE` or `WM_TRANSIENT_FOR` changes
+- runtime conversion into `DOCK`, `DESKTOP`, or popup-only behavior is intentionally ignored after manage
 
 ## 4. EWMH Window State Atoms
 
-Supported state atoms include:
+Supported state atoms:
 
 - `_NET_WM_STATE_FULLSCREEN`
 - `_NET_WM_STATE_MAXIMIZED_VERT`
@@ -110,24 +106,25 @@ Supported state atoms include:
 - `_NET_WM_STATE_DEMANDS_ATTENTION`
 - `_NET_WM_STATE_FOCUSED`
 
-State policy details:
+State semantics implemented by LWM:
 
-- Sticky scope is per owning monitor.
-- Fullscreen supersedes maximize behavior.
-- Above and below are mutually exclusive.
+- sticky scope is per owning monitor
+- fullscreen supersedes maximize
+- above and below are mutually exclusive
+- visible fullscreen is exclusive per monitor visible scope; conflicting visible fullscreen clients lose fullscreen
 
-## 5. EWMH Per-Window Properties Written by LWM
+## 5. Per-Window Properties Written by LWM
 
 LWM writes:
 
 - `_NET_WM_DESKTOP` (or `0xFFFFFFFF` for sticky)
 - `_NET_WM_STATE`
 - `_NET_WM_ALLOWED_ACTIONS`
-- `_NET_FRAME_EXTENTS` (undecorated -> zero extents)
+- `_NET_FRAME_EXTENTS` (undecorated windows use zero extents)
 
 ## 6. EWMH Client Messages
 
-Handled messages:
+Handled client messages:
 
 - `_NET_CURRENT_DESKTOP`
 - `_NET_ACTIVE_WINDOW`
@@ -141,54 +138,78 @@ Handled messages:
 - `_NET_REQUEST_FRAME_EXTENTS`
 - `_NET_WM_FULLSCREEN_MONITORS`
 
-Known limits:
+### 6.1 Message-Specific Semantics
 
-- moveresize actions are effectively floating-window oriented; tiled geometry remains layout-controlled.
-- gravity/source-indication edge semantics are simplified.
-- partial-strut coordinate ranges are not fully modeled across monitors (basic edge extents are used).
+`_NET_ACTIVE_WINDOW`
 
-### 6.1 WM Protocol Extension Behavior
+- source `1` (application) is subject to user-time focus-stealing checks
+- source `2` (pager/user) is normally allowed
+- rejected steals set `DEMANDS_ATTENTION`
+- suppressed windows are not surfaced while a fullscreen owner remains visible
+- `_NET_WM_USER_TIME_WINDOW` may redirect activation-time lookups to a helper window, and runtime updates to that property are honored
 
-- `_NET_WM_PING`: LWM tracks ping replies and may force-kill unresponsive clients after timeout when close was requested.
-- `_NET_WM_SYNC_REQUEST`: sync requests are sent before WM-driven resize operations, without blocking the event loop for counter completion.
+`_NET_WM_DESKTOP`
 
-## 7. Focus Stealing Prevention
+- desktop indices are translated through the monitor/workspace mapping
+- `0xFFFFFFFF` maps to sticky
 
-For `_NET_ACTIVE_WINDOW`:
+`_NET_SHOWING_DESKTOP`
 
-- source `1` (application): user-time checks apply
-- source `2` (pager/user): activation is allowed
-- rejected steals mark window with `DEMANDS_ATTENTION`
+- hides normal managed tiled/floating windows and clears focus
+- leaving showing-desktop restores visibility, layout, fullscreen ownership, and fallback focus
 
-`_NET_WM_USER_TIME_WINDOW` indirection is respected when available (user time may come from a child helper window).
-Changes to `_NET_WM_USER_TIME_WINDOW` after manage are re-read and tracked.
+`_NET_RESTACK_WINDOW`
 
-## 8. Intentional Omissions / Partial Support
+- for managed tiled/floating windows, LWM reapplies WM stacking policy instead of blindly honoring the requested sibling/stack mode
+- for other windows, including unmanaged and managed dock/desktop windows, the request is forwarded as a raw X restack
 
-- `_NET_VIRTUAL_ROOTS`: not implemented
-- `_NET_WM_ICON`: not implemented
-- `_NET_WM_VISIBLE_NAME` / `_NET_WM_VISIBLE_ICON_NAME`: not implemented
-- `WM_COLORMAP_WINDOWS`: not implemented
-- Session-management protocols: not implemented
-- System tray protocol ownership: not implemented
+`_NET_WM_FULLSCREEN_MONITORS`
 
-These are deliberate scope cuts for a minimal WM.
+- currently affects fullscreen geometry only
+- ownership, suppression, and restacking remain tied to the client's monitor
 
-## 9. Non-Obvious Compliance Decisions
+### 6.2 WM Protocol Extensions
 
-- Off-screen hiding is used instead of WM-driven unmap/remap for workspace visibility.
-- Because of that model, received `UnmapNotify` is treated as client withdrawal.
-- Dock and desktop windows remain in `_NET_CLIENT_LIST`; taskbar/pager filtering should rely on skip flags.
+- `_NET_WM_PING`: LWM tracks replies and may force-kill an unresponsive client after timeout when close was requested
+- `_NET_WM_SYNC_REQUEST`: sync requests are sent before WM-driven resize operations without blocking the event loop
 
-## 10. Quick Conformance Checklist
+## 7. Known Limits and Intentional Simplifications
 
-- [ ] WM selection ownership and `MANAGER` message work on startup.
-- [ ] startup fails cleanly when another WM is active.
-- [ ] `WM_STATE` transitions match manage/iconify/unmanage behavior.
-- [ ] `_NET_SUPPORTED` matches actual implemented atoms.
-- [ ] `_NET_CLIENT_LIST` and `_NET_CLIENT_LIST_STACKING` are accurate.
-- [ ] `_NET_ACTIVE_WINDOW` tracks focus changes.
-- [ ] `_NET_CURRENT_DESKTOP` tracks focused monitor workspace mapping.
-- [ ] `_NET_WORKAREA` updates with strut changes.
-- [ ] `_NET_WM_STATE` client messages add/remove/toggle correctly.
-- [ ] focus-stealing prevention honors source indication and user time.
+- moveresize behavior is effectively floating-window oriented; tiled geometry remains layout-controlled
+- gravity and source-indication edge semantics are simplified
+- partial-strut coordinate ranges are not fully modeled across monitors; basic edge extents are used
+- popup/ephemeral window types are mapped directly rather than fully integrated into workspace/layout/focus policy
+- `_NET_WM_FULLSCREEN_MONITORS` is geometry-only, not full multi-monitor fullscreen arbitration
+
+## 8. Intentional Scope Cuts
+
+NOT IMPLEMENTED:
+
+- `_NET_VIRTUAL_ROOTS`
+- `_NET_WM_ICON`
+- `_NET_WM_VISIBLE_NAME`
+- `_NET_WM_VISIBLE_ICON_NAME`
+- `WM_COLORMAP_WINDOWS`
+- session-management protocols
+- system tray protocol ownership
+
+These are deliberate scope cuts for a small WM.
+
+## 9. Protocol-Level Design Choices
+
+- workspace visibility uses off-screen hiding instead of WM-driven unmap/remap
+- because of that model, received `UnmapNotify` is treated as client withdrawal
+- dock and desktop windows remain in `_NET_CLIENT_LIST`; taskbars and pagers should filter via skip flags, not list membership
+
+## 10. Release Spot-Checks
+
+- [ ] startup ownership and `MANAGER` broadcast work correctly
+- [ ] startup fails cleanly when another WM is active
+- [ ] `WM_STATE` transitions match manage/iconify/unmanage behavior
+- [ ] `_NET_SUPPORTED` matches actual atoms
+- [ ] `_NET_CLIENT_LIST` and `_NET_CLIENT_LIST_STACKING` are accurate
+- [ ] `_NET_ACTIVE_WINDOW` tracks real focus changes
+- [ ] `_NET_CURRENT_DESKTOP` matches the focused monitor's workspace mapping
+- [ ] `_NET_WORKAREA` updates with strut changes
+- [ ] `_NET_WM_STATE` client messages add/remove/toggle correctly
+- [ ] focus-stealing prevention honors source indication and user time

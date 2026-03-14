@@ -2,16 +2,24 @@
 
 LWM is a minimal tiling window manager for X11 written in C++23.
 
+It is intentionally small, but it is not policy-free. The codebase has a specific runtime model:
+
+- per-monitor workspaces rather than one global workspace set
+- focus-follows-mouse with explicit focus-stealing checks
+- off-screen hiding for workspace visibility instead of WM-driven unmap/remap
+- managed fullscreen with a single effective owner per monitor-visible scope
+- enough ICCCM/EWMH support for normal desktop tooling
+
 ## What You Get
 
-- Master/stack tiling with floating windows.
-- Managed overlay layer for monitor-sized special surfaces above fullscreen windows.
-- Per-monitor workspaces (each monitor keeps its own current workspace).
-- Focus-follows-mouse with explicit focus-stealing checks.
-- EWMH/ICCCM support for normal desktop tooling (`wmctrl`, panels, pagers).
-- Explicit IPC control via `lwmctl` over a Unix-domain socket.
-- RANDR hotplug handling.
-- TOML configuration for keybinds, mousebinds, programs, and workspace names.
+- master/stack tiling with floating windows
+- per-monitor workspaces
+- sticky windows scoped to a single monitor
+- managed overlay windows above fullscreen
+- focus-follows-mouse
+- Unix-socket IPC via `lwmctl`
+- RANDR hotplug handling
+- TOML configuration for bindings, rules, programs, and workspace names
 
 ## Build
 
@@ -37,7 +45,7 @@ sudo apt install cmake g++ libxcb1-dev libxcb-keysyms1-dev libxcb-ewmh-dev libxc
 
 ```bash
 make          # release
-make debug    # debug
+make debug    # debug build
 make test     # build + run tests
 ```
 
@@ -49,15 +57,17 @@ cmake ..
 make -j"$(nproc)"
 ```
 
-Binary path: `build/src/app/lwm`
+Main binary path: `build/src/app/lwm`
 
-### Install
+## Install
 
 ```bash
 make install
 ```
 
 Default install path: `/usr/local/bin/lwm`
+
+For X startup, prefer an explicit path in `.xinitrc` or your display-manager session entry instead of relying on `PATH`. That avoids accidentally starting a stale shadow copy from `~/.local/bin` or another earlier install location.
 
 ## Configure
 
@@ -67,32 +77,17 @@ mkdir -p "$XDG_CONFIG_HOME/lwm"
 cp config.toml.example "$XDG_CONFIG_HOME/lwm/config.toml"
 ```
 
-LWM checks `$XDG_CONFIG_HOME/lwm/config.toml` when `XDG_CONFIG_HOME` is set.
-Run with explicit config path if needed:
+LWM reads `$XDG_CONFIG_HOME/lwm/config.toml` when `XDG_CONFIG_HOME` is set. You can also pass an explicit config path:
 
 ```bash
 lwm /path/to/config.toml
 ```
 
-The config file is the source of truth for bindings and behavior toggles. Keep `config.toml.example` nearby while editing.
-
-### Keybinding Actions (Quick List)
-
-Available actions include:
-
-- `spawn`, `kill`
-- `reload_config`
-- `switch_workspace`, `toggle_workspace`, `move_to_workspace`
-- `focus_monitor_left`, `focus_monitor_right`
-- `move_to_monitor_left`, `move_to_monitor_right`
-- `toggle_fullscreen`
-- `focus_next`, `focus_prev`
-
-See `config.toml.example` for exact syntax and default bindings.
+`config.toml.example` is the reference for binding syntax, workspace names, rules, and action syntax.
 
 ## Runtime Control
 
-LWM exposes a small local control socket and ships `lwmctl` for explicit runtime commands:
+LWM exposes a local control socket and ships `lwmctl` for explicit runtime commands:
 
 ```bash
 lwmctl ping
@@ -104,7 +99,7 @@ lwmctl reload-config
 
 Config reload is explicit by design. LWM does not watch the config file automatically.
 
-## Run and Test in Xephyr
+## Run in Xephyr
 
 ```bash
 ./scripts/preview.sh
@@ -116,21 +111,20 @@ Launch test apps into the nested server:
 DISPLAY=:100 xterm
 ```
 
-## Behavior Notes That Matter
+## Mental Model
 
-- Workspace switching is per monitor, not global.
-- Hidden windows are moved off-screen, not unmapped. This avoids redraw issues in some GPU apps.
-- Sticky windows are sticky within their owning monitor (not across all monitors).
-- Overlay-layer windows are managed, borderless, monitor-sized surfaces that stay above fullscreen windows.
-- Popups/tooltips/notifications are mapped but not fully managed.
+- Managed windows are usually tiled, floating, dock, or desktop. Popup and ephemeral types are mapped directly and are not part of normal workspace/layout management.
+- Workspace visibility is implemented by moving managed windows off-screen, not by unmapping them.
+- Sticky means "visible on every workspace of this monitor", not "visible on all monitors".
+- Fullscreen is exclusive within a monitor's visible scope. One visible managed fullscreen owner wins; other visible managed siblings on that monitor are suppressed.
+- Overlay windows and owner-owned transients are the normal exceptions above fullscreen.
 
 ## Documentation
 
-- [`BEHAVIOR.md`](BEHAVIOR.md): user-visible behavior contract
-- [`IMPLEMENTATION.md`](IMPLEMENTATION.md): architecture, event flow, invariants, pitfalls
-- [`COMPLIANCE.md`](COMPLIANCE.md): ICCCM/EWMH support matrix, limits, and test checklist
-- [`CLAUDE.md`](CLAUDE.md): contributor quick reference for local development
-- [`FEATURE_IDEAS.md`](FEATURE_IDEAS.md): prioritized backlog
+- [`ARCHITECTURE.md`](ARCHITECTURE.md): runtime model, invariants, state ownership, and transition funnels
+- [`COMPLIANCE.md`](COMPLIANCE.md): ICCCM/EWMH surface, protocol behavior, and known limits
+- [`CONTRIBUTING.md`](CONTRIBUTING.md): build/test workflow, code map, and change checklist
+- [`FEATURE_IDEAS.md`](FEATURE_IDEAS.md): backlog only
 
 ## License
 
