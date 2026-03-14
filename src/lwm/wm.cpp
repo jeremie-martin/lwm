@@ -1707,7 +1707,7 @@ void WindowManager::manage_window(xcb_window_t window, bool start_iconic)
 
     if (!start_iconic)
     {
-        if (is_workspace_visible(target_monitor_idx, target_workspace_idx))
+        if (is_window_in_visible_scope(window))
         {
             rearrange_monitor(monitors_[target_monitor_idx]);
         }
@@ -1801,6 +1801,12 @@ void WindowManager::clear_fullscreen_state(xcb_window_t window)
     client->fullscreen_restore = std::nullopt;
     uint32_t border_width = border_width_for_client(*client);
     xcb_configure_window(conn_.get(), window, XCB_CONFIG_WINDOW_BORDER_WIDTH, &border_width);
+
+    if (client->kind == Client::Kind::Floating && client->monitor < monitors_.size() && is_window_in_visible_scope(window)
+        && !client->hidden && !is_suppressed_by_fullscreen(window))
+    {
+        apply_floating_geometry(window);
+    }
 }
 
 void WindowManager::set_fullscreen(xcb_window_t window, bool enabled)
@@ -1978,8 +1984,6 @@ void WindowManager::set_window_above(xcb_window_t window, bool enabled)
             client->below = false;
             ewmh_.set_window_state(window, ewmh_.get()->_NET_WM_STATE_BELOW, false);
         }
-        uint32_t stack_mode = XCB_STACK_MODE_ABOVE;
-        xcb_configure_window(conn_.get(), window, XCB_CONFIG_WINDOW_STACK_MODE, &stack_mode);
     }
     else
     {
@@ -2015,8 +2019,6 @@ void WindowManager::set_window_below(xcb_window_t window, bool enabled)
             client->above = false;
             ewmh_.set_window_state(window, ewmh_.get()->_NET_WM_STATE_ABOVE, false);
         }
-        uint32_t stack_mode = XCB_STACK_MODE_BELOW;
-        xcb_configure_window(conn_.get(), window, XCB_CONFIG_WINDOW_STACK_MODE, &stack_mode);
     }
     else
     {
@@ -2084,7 +2086,7 @@ void WindowManager::set_window_maximized(xcb_window_t window, bool horiz, bool v
                 if (is_floating_window(window))
                 {
                     client->floating_geometry = *client->maximize_restore;
-                    if (client->workspace == monitors_[client->monitor].current_workspace && !client->iconic)
+                    if (is_window_in_visible_scope(window) && !client->hidden)
                     {
                         apply_floating_geometry(window);
                     }
@@ -2136,7 +2138,7 @@ void WindowManager::apply_maximized_geometry(xcb_window_t window)
     }
 
     client->floating_geometry = base;
-    if (client->workspace == monitors_[client->monitor].current_workspace && !client->iconic)
+    if (is_window_in_visible_scope(window) && !client->hidden)
     {
         apply_floating_geometry(window);
     }
@@ -2400,7 +2402,10 @@ void WindowManager::iconify_window(xcb_window_t window)
 
     if (active_window_ == window)
     {
-        if (client->monitor == focused_monitor_ && client->workspace == monitors_[client->monitor].current_workspace)
+        bool was_visible = visibility_policy::is_window_visible(
+            showing_desktop_, false, client->sticky, client->monitor, client->workspace, monitors_
+        );
+        if (client->monitor == focused_monitor_ && was_visible)
         {
             focus_or_fallback(monitors_[client->monitor]);
         }
@@ -2438,8 +2443,7 @@ void WindowManager::deiconify_window(xcb_window_t window, bool focus)
         sync_visibility_for_monitor(client->monitor);
     }
 
-    if (focus && client->monitor == focused_monitor_
-        && client->workspace == monitors_[client->monitor].current_workspace)
+    if (focus && client->monitor == focused_monitor_ && is_window_in_visible_scope(window))
     {
         focus_any_window(window);
     }
@@ -2512,6 +2516,11 @@ void WindowManager::rearrange_monitor(Monitor& monitor)
     std::unordered_set<xcb_window_t> seen;
     for (xcb_window_t window : monitor.current().windows)
     {
+        if (is_suppressed_by_fullscreen(window))
+        {
+            hide_window(window);
+            continue;
+        }
         if (is_client_iconic(window))
         {
             LOG_TRACE("rearrange_monitor: unmapping iconic window {:#x}", window);
@@ -2536,6 +2545,11 @@ void WindowManager::rearrange_monitor(Monitor& monitor)
         {
             if (!is_client_sticky(window))
                 continue;
+            if (is_suppressed_by_fullscreen(window))
+            {
+                hide_window(window);
+                continue;
+            }
             if (is_client_iconic(window))
             {
                 LOG_TRACE("rearrange_monitor: unmapping iconic sticky window {:#x}", window);
@@ -2914,6 +2928,8 @@ void WindowManager::restack_transients(xcb_window_t parent)
         return;
     if (!is_window_visible(parent))
         return;
+    if (is_suppressed_by_fullscreen(parent))
+        return;
 
     for (xcb_window_t fw : floating_windows_)
     {
@@ -2921,6 +2937,8 @@ void WindowManager::restack_transients(xcb_window_t parent)
         if (!client || client->transient_for != parent)
             continue;
         if (!is_window_visible(fw))
+            continue;
+        if (is_suppressed_by_fullscreen(fw))
             continue;
 
         uint32_t values[2];
@@ -3540,7 +3558,7 @@ void WindowManager::sync_visibility_for_monitor(size_t monitor_idx)
 
         bool should_be_visible = visibility_policy::is_window_visible(
             showing_desktop_, client.iconic, client.sticky, client.monitor, client.workspace, monitors_
-        );
+        ) && !is_suppressed_by_fullscreen(id);
 
         if (should_be_visible && client.hidden)
         {

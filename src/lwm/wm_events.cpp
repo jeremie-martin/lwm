@@ -144,7 +144,9 @@ void WindowManager::handle_map_request(xcb_map_request_event_t const& e)
     if (auto const* client = get_client(e.window))
     {
         bool focus = client->monitor < monitors_.size() && client->monitor == focused_monitor_
-            && client->workspace == monitors_[client->monitor].current_workspace;
+            && visibility_policy::is_window_visible(
+                showing_desktop_, false, client->sticky, client->monitor, client->workspace, monitors_
+            );
         deiconify_window(e.window, focus);
         return;
     }
@@ -371,7 +373,7 @@ void WindowManager::handle_map_request(xcb_map_request_event_t const& e)
                 if (auto const* client = get_client(e.window))
                 {
                     if (client->monitor < monitors_.size() && client->monitor == focused_monitor_
-                        && client->workspace == monitors_[client->monitor].current_workspace)
+                        && is_window_in_visible_scope(e.window))
                     {
                         focus_any_window(e.window);
                     }
@@ -772,6 +774,16 @@ void WindowManager::handle_client_message(xcb_client_message_event_t const& e)
 
     if (e.type == ewmh->_NET_RESTACK_WINDOW)
     {
+        if (auto const* client = get_client(e.window);
+            client && (client->kind == Client::Kind::Tiled || client->kind == Client::Kind::Floating))
+        {
+            if (client->monitor < monitors_.size())
+                restack_monitor_layers(client->monitor);
+            update_ewmh_client_list();
+            conn_.flush();
+            return;
+        }
+
         xcb_window_t sibling = static_cast<xcb_window_t>(e.data.data32[1]);
         uint32_t detail = e.data.data32[2];
 
@@ -1084,8 +1096,8 @@ void WindowManager::handle_moveresize_window(xcb_client_message_event_t const& e
         client->floating_geometry.height = static_cast<uint16_t>(std::max<int32_t>(1, e.data.data32[4]));
 
     update_floating_monitor_for_geometry(e.window);
-    if (client->monitor < monitors_.size() && client->workspace == monitors_[client->monitor].current_workspace
-        && !is_client_iconic(e.window) && !is_client_fullscreen(e.window))
+    if (client->monitor < monitors_.size() && is_window_in_visible_scope(e.window) && !client->hidden
+        && !is_client_fullscreen(e.window))
     {
         apply_floating_geometry(e.window);
     }
@@ -1261,8 +1273,7 @@ void WindowManager::handle_property_notify(xcb_property_notify_event_t const& e)
                 layout_.apply_size_hints(e.window, hinted_width, hinted_height);
                 client->floating_geometry.width = static_cast<uint16_t>(std::max<uint32_t>(1, hinted_width));
                 client->floating_geometry.height = static_cast<uint16_t>(std::max<uint32_t>(1, hinted_height));
-                if (client->monitor < monitors_.size()
-                    && client->workspace == monitors_[client->monitor].current_workspace && !is_client_iconic(e.window)
+                if (client->monitor < monitors_.size() && is_window_in_visible_scope(e.window) && !client->hidden
                     && !is_client_fullscreen(e.window))
                 {
                     apply_floating_geometry(e.window);

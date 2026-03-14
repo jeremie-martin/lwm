@@ -49,6 +49,9 @@ void WindowManager::focus_any_window(xcb_window_t window, bool record_user_time)
     }
 
     xcb_window_t previous_active = active_window_;
+    std::optional<size_t> previous_monitor;
+    if (auto const* previous = get_client(previous_active); previous && previous->monitor < monitors_.size())
+        previous_monitor = previous->monitor;
     bool is_sticky = is_client_sticky(window);
 
     if (is_floating)
@@ -119,6 +122,23 @@ void WindowManager::focus_any_window(xcb_window_t window, bool record_user_time)
         }
     }
 
+    client = get_client(window);
+    if (!client)
+    {
+        LOG_TRACE("focus_any_window: target disappeared before finalization");
+        return;
+    }
+
+    if (active_window_ != window)
+    {
+        LOG_TRACE(
+            "focus_any_window: focus redirected to {:#x}, skipping stale finalization for {:#x}",
+            active_window_,
+            window
+        );
+        return;
+    }
+
     LOG_TRACE("focus_any_window: updating EWMH current desktop");
     update_ewmh_current_desktop();
 
@@ -153,7 +173,9 @@ void WindowManager::focus_any_window(xcb_window_t window, bool record_user_time)
         xcb_set_input_focus(conn_.get(), XCB_INPUT_FOCUS_POINTER_ROOT, conn_.screen()->root, focus_time);
     }
 
-    if (is_floating && client->monitor < monitors_.size())
+    if (previous_monitor && *previous_monitor < monitors_.size() && *previous_monitor != client->monitor)
+        restack_monitor_layers(*previous_monitor);
+    if (client->monitor < monitors_.size())
         restack_monitor_layers(client->monitor);
 
     set_client_demands_attention(window, false);
@@ -180,6 +202,9 @@ void WindowManager::focus_any_window(xcb_window_t window, bool record_user_time)
 void WindowManager::clear_focus()
 {
     xcb_window_t previous_active = active_window_;
+    std::optional<size_t> previous_monitor;
+    if (auto const* previous = get_client(previous_active); previous && previous->monitor < monitors_.size())
+        previous_monitor = previous->monitor;
     active_window_ = XCB_NONE;
     ewmh_.set_active_window(XCB_NONE);
     xcb_set_input_focus(conn_.get(), XCB_INPUT_FOCUS_POINTER_ROOT, conn_.screen()->root, XCB_CURRENT_TIME);
@@ -194,6 +219,8 @@ void WindowManager::clear_focus()
     {
         xcb_change_window_attributes(conn_.get(), previous_active, XCB_CW_BORDER_PIXEL, &conn_.screen()->black_pixel);
     }
+    if (previous_monitor)
+        restack_monitor_layers(*previous_monitor);
 
     conn_.flush();
 }

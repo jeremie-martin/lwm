@@ -114,6 +114,9 @@ TEST_CASE("KeybindManager::parse_modifier handles malformed modifier strings", "
 
 TEST_CASE("KeybindManager::resolve_command returns command as-is if not preset", "[keybind]")
 {
+    if (!ensure_x11_environment())
+        return;
+
     Config cfg = make_empty_config();
     Connection conn;
     KeybindManager mgr(conn, cfg);
@@ -124,6 +127,9 @@ TEST_CASE("KeybindManager::resolve_command returns command as-is if not preset",
 
 TEST_CASE("KeybindManager::resolve_command expands preset commands", "[keybind]")
 {
+    if (!ensure_x11_environment())
+        return;
+
     Config cfg = make_empty_config();
     cfg.programs.terminal = "/usr/local/bin/st";
     cfg.programs.browser = "/usr/bin/firefox";

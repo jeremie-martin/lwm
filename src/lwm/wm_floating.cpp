@@ -211,7 +211,7 @@ void WindowManager::manage_floating_window(xcb_window_t window, bool start_iconi
     if (!start_iconic)
     {
         sync_visibility_for_monitor(*monitor_idx);
-        if (!suppress_focus_ && *monitor_idx == focused_monitor_ && is_workspace_visible(*monitor_idx, *workspace_idx))
+        if (!suppress_focus_ && *monitor_idx == focused_monitor_ && is_window_in_visible_scope(window))
             focus_any_window(window);
     }
     else
@@ -291,11 +291,20 @@ void WindowManager::update_floating_monitor_for_geometry(xcb_window_t window)
     if (!new_monitor || *new_monitor == client->monitor)
         return;
 
+    size_t source_monitor = client->monitor;
     client->monitor = *new_monitor;
     client->workspace = monitors_[client->monitor].current_workspace;
 
     uint32_t desktop = get_ewmh_desktop_index(client->monitor, client->workspace);
     ewmh_.set_window_desktop(window, desktop);
+
+    reconcile_fullscreen_for_monitor(source_monitor);
+    reconcile_fullscreen_for_monitor(client->monitor, is_client_fullscreen(window) ? window : XCB_NONE);
+    sync_visibility_for_monitor(source_monitor);
+    sync_visibility_for_monitor(client->monitor);
+
+    if (active_window_ == window && is_suppressed_by_fullscreen(window))
+        focus_or_fallback(monitors_[client->monitor], false);
 }
 
 void WindowManager::apply_floating_geometry(xcb_window_t window)
