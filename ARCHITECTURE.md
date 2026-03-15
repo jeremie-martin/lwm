@@ -133,7 +133,7 @@ Stack authority rules:
 
 - `restack_monitor_layers(...)` is the normal managed stacking authority
 - `apply_fullscreen_if_needed(...)` is geometry-only; it should not make independent stacking decisions
-- tiled/floating clients are layered by overlay, fullscreen, above/normal/below, and active-window preference
+- within each stack layer, floating windows are sorted above tiled windows (matching conventional tiling WM behavior); the active-window preference is applied within each kind
 - transient restacking happens relative to visible, unsuppressed parents
 
 Important limit:

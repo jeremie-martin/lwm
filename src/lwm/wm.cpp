@@ -1577,19 +1577,11 @@ void WindowManager::reevaluate_managed_window(xcb_window_t window)
 
 void WindowManager::apply_post_manage_states(xcb_window_t window, bool has_transient)
 {
-    if (has_transient && !ewmh_.has_window_state(window, ewmh_.get()->_NET_WM_STATE_SKIP_TASKBAR))
+    if (has_transient || ewmh_.has_window_state(window, ewmh_.get()->_NET_WM_STATE_SKIP_TASKBAR))
     {
         set_client_skip_taskbar(window, true);
     }
-    if (has_transient && !ewmh_.has_window_state(window, ewmh_.get()->_NET_WM_STATE_SKIP_PAGER))
-    {
-        set_client_skip_pager(window, true);
-    }
-    if (ewmh_.has_window_state(window, ewmh_.get()->_NET_WM_STATE_SKIP_TASKBAR))
-    {
-        set_client_skip_taskbar(window, true);
-    }
-    if (ewmh_.has_window_state(window, ewmh_.get()->_NET_WM_STATE_SKIP_PAGER))
+    if (has_transient || ewmh_.has_window_state(window, ewmh_.get()->_NET_WM_STATE_SKIP_PAGER))
     {
         set_client_skip_pager(window, true);
     }
@@ -2992,11 +2984,13 @@ void WindowManager::restack_monitor_layers(size_t monitor_idx)
             auto const& right = clients_.at(rhs);
             auto left_key = std::tuple{
                 static_cast<int>(layer_for(lhs)),
+                left.kind == Client::Kind::Floating ? 1 : 0,
                 lhs == active_window_ ? 1 : 0,
                 static_cast<long long>(left.order)
             };
             auto right_key = std::tuple{
                 static_cast<int>(layer_for(rhs)),
+                right.kind == Client::Kind::Floating ? 1 : 0,
                 rhs == active_window_ ? 1 : 0,
                 static_cast<long long>(right.order)
             };
