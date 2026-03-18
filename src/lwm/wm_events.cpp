@@ -1346,12 +1346,16 @@ void WindowManager::handle_property_notify(xcb_property_notify_event_t const& e)
     // User time tracking: only scan when relevant atoms change
     if (e.atom == net_wm_user_time_ || e.atom == net_wm_user_time_window_)
     {
-        for (auto& [id, client] : clients_)
+        std::vector<xcb_window_t> time_update_ids;
+        for (auto const& [id, client] : clients_)
         {
             if (client.user_time_window == e.window)
-            {
-                client.user_time = get_user_time(id);
-            }
+                time_update_ids.push_back(id);
+        }
+        for (xcb_window_t id : time_update_ids)
+        {
+            if (auto* client = get_client(id))
+                client->user_time = get_user_time(id);
         }
         if (auto* c = get_client(e.window))
         {

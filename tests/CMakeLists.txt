@@ -23,6 +23,7 @@ FetchContent_MakeAvailable(Catch2)
     test_keybind_policy.cpp
     test_layout_policy.cpp
     test_window_rules.cpp
+    test_monitor_hotplug.cpp
     test_workspace.cpp
     test_workspace_policy.cpp
   )

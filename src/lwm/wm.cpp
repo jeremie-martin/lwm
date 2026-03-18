@@ -2626,22 +2626,6 @@ void WindowManager::launch_program(std::string const& command)
     }
 }
 
-Monitor* WindowManager::monitor_containing_window(xcb_window_t window)
-{
-    // Search ALL tiled workspaces on ALL monitors (for tiled windows only)
-    for (auto& monitor : monitors_)
-    {
-        for (auto& workspace : monitor.workspaces)
-        {
-            if (workspace.find_window(window) != workspace.windows.end())
-            {
-                return &monitor;
-            }
-        }
-    }
-    return nullptr;
-}
-
 Client* WindowManager::get_client(xcb_window_t window)
 {
     auto it = clients_.find(window);
@@ -2961,7 +2945,10 @@ void WindowManager::restack_monitor_layers(size_t monitor_idx)
 
     auto layer_for = [this](xcb_window_t window)
     {
-        auto const& client = clients_.at(window);
+        auto it = clients_.find(window);
+        if (it == clients_.end())
+            return StackLayer::Normal;
+        auto const& client = it->second;
         if (client.layer == WindowLayer::Overlay)
             return StackLayer::Overlay;
         if (client.fullscreen)
@@ -2980,8 +2967,12 @@ void WindowManager::restack_monitor_layers(size_t monitor_idx)
         visible_windows.end(),
         [this, &layer_for](xcb_window_t lhs, xcb_window_t rhs)
         {
-            auto const& left = clients_.at(lhs);
-            auto const& right = clients_.at(rhs);
+            auto lit = clients_.find(lhs);
+            auto rit = clients_.find(rhs);
+            if (lit == clients_.end() || rit == clients_.end())
+                return lit != clients_.end();
+            auto const& left = lit->second;
+            auto const& right = rit->second;
             auto left_key = std::tuple{
                 static_cast<int>(layer_for(lhs)),
                 left.kind == Client::Kind::Floating ? 1 : 0,
@@ -3009,7 +3000,8 @@ void WindowManager::restack_monitor_layers(size_t monitor_idx)
 
     for (xcb_window_t window : visible_windows)
     {
-        if (clients_.at(window).transient_for != XCB_NONE)
+        auto const* client = get_client(window);
+        if (!client || client->transient_for != XCB_NONE)
             continue;
         restack_transients(window);
     }
@@ -3451,6 +3443,11 @@ void WindowManager::unmanage_desktop_window(xcb_window_t window)
 
 void WindowManager::add_tiled_to_workspace(xcb_window_t window, size_t monitor_idx, size_t workspace_idx)
 {
+    if (monitor_idx >= monitors_.size() || workspace_idx >= monitors_[monitor_idx].workspaces.size())
+    {
+        LOG_WARN("add_tiled_to_workspace: invalid indices monitor={} workspace={}", monitor_idx, workspace_idx);
+        return;
+    }
     monitors_[monitor_idx].workspaces[workspace_idx].windows.push_back(window);
     if (auto* client = get_client(window))
     {
@@ -3463,6 +3460,11 @@ void WindowManager::add_tiled_to_workspace(xcb_window_t window, size_t monitor_i
 
 void WindowManager::remove_tiled_from_workspace(xcb_window_t window, size_t monitor_idx, size_t workspace_idx)
 {
+    if (monitor_idx >= monitors_.size() || workspace_idx >= monitors_[monitor_idx].workspaces.size())
+    {
+        LOG_WARN("remove_tiled_from_workspace: invalid indices monitor={} workspace={}", monitor_idx, workspace_idx);
+        return;
+    }
     auto is_iconic = [this](xcb_window_t w) { return is_client_iconic(w); };
     workspace_policy::remove_tiled_window(monitors_[monitor_idx].workspaces[workspace_idx], window, is_iconic);
 }
@@ -3541,7 +3543,10 @@ void WindowManager::show_window(xcb_window_t window)
 void WindowManager::sync_visibility_for_monitor(size_t monitor_idx)
 {
     if (monitor_idx >= monitors_.size())
+    {
+        LOG_WARN("sync_visibility_for_monitor: invalid monitor_idx {}", monitor_idx);
         return;
+    }
 
     for (auto& [id, client] : clients_)
     {

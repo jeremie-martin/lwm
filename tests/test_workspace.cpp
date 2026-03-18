@@ -254,3 +254,72 @@ TEST_CASE("Working area subtracts each strut independently", "[workspace][edge]"
         REQUIRE(area.width == 1800);
     }
 }
+
+TEST_CASE("Removing last window clears focused_window", "[workspace][edge]")
+{
+    Workspace ws;
+    ws.windows.push_back(0x1000);
+    ws.focused_window = 0x1000;
+
+    // Remove the only window
+    auto it = ws.find_window(0x1000);
+    ws.windows.erase(it);
+    ws.focused_window = ws.windows.empty() ? XCB_NONE : ws.windows.back();
+
+    REQUIRE(ws.focused_window == XCB_NONE);
+    REQUIRE(ws.windows.empty());
+}
+
+TEST_CASE("Switching to empty workspace", "[workspace][edge]")
+{
+    Monitor mon;
+    mon.name = "test";
+    mon.width = 1920;
+    mon.height = 1080;
+    init_workspaces(mon);
+
+    // Populate workspace 0
+    mon.workspaces[0].windows.push_back(0x1000);
+    mon.workspaces[0].windows.push_back(0x2000);
+    mon.workspaces[0].focused_window = 0x1000;
+
+    // Workspace 1 stays empty (default-constructed)
+
+    // Switch to empty workspace 1
+    mon.current_workspace = 1;
+
+    REQUIRE(mon.current().windows.empty());
+    REQUIRE(mon.current().focused_window == XCB_NONE);
+}
+
+TEST_CASE("Removing all windows then adding one", "[workspace][edge]")
+{
+    Workspace ws;
+    ws.windows.push_back(0x1000);
+    ws.windows.push_back(0x2000);
+    ws.focused_window = 0x1000;
+
+    // Remove both windows
+    ws.windows.erase(ws.find_window(0x1000));
+    ws.windows.erase(ws.find_window(0x2000));
+    ws.focused_window = ws.windows.empty() ? XCB_NONE : ws.windows.back();
+
+    REQUIRE(ws.windows.empty());
+    REQUIRE(ws.focused_window == XCB_NONE);
+
+    // Add a new window
+    xcb_window_t new_win = 0x3000;
+    ws.windows.push_back(new_win);
+    ws.focused_window = new_win;
+
+    REQUIRE(ws.windows.size() == 1);
+    REQUIRE(ws.windows[0] == 0x3000);
+    REQUIRE(ws.focused_window == 0x3000);
+}
+
+TEST_CASE("find_window on empty workspace returns end", "[workspace][edge]")
+{
+    Workspace ws;
+    REQUIRE(ws.windows.empty());
+    REQUIRE(ws.find_window(0x1000) == ws.windows.end());
+}

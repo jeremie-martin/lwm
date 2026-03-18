@@ -61,7 +61,7 @@ void WindowManager::begin_tiled_drag(xcb_window_t window, int16_t root_x, int16_
         return;
     if (is_floating_window(window))
         return;
-    if (!monitor_containing_window(window))
+    if (!monitor_index_for_window(window))
         return;
 
     auto geom_cookie = xcb_get_geometry(conn_.get(), window);

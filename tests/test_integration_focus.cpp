@@ -1190,3 +1190,127 @@ TEST_CASE("Integration: clear_focus clears _NET_WM_STATE_FOCUSED from previous w
     destroy_window(conn, w2);
     destroy_window(conn, w1);
 }
+
+TEST_CASE("Integration: transient dialog stacks above its parent", "[integration][transient][stacking]")
+{
+    auto test_env = TestEnvironment::create();
+    if (!test_env)
+        return;
+
+    auto& conn = test_env->conn;
+
+    // Create a tiled parent and map it.
+    xcb_window_t parent = create_window(conn, 10, 10, 300, 200);
+    map_window(conn, parent);
+    REQUIRE(wait_for_active_window(conn, parent, kTimeout));
+
+    // Create a transient dialog: set WM_TRANSIENT_FOR before mapping so the WM
+    // recognises it as floating from the start.
+    xcb_window_t transient = create_window(conn, 50, 50, 200, 150);
+    set_transient_for(conn, transient, parent);
+    map_window(conn, transient);
+    REQUIRE(wait_for_active_window(conn, transient, kTimeout));
+
+    // The transient must be stacked above its parent.
+    REQUIRE(wait_for_condition([&]() { return is_stacked_above(conn, transient, parent); }, kTimeout));
+
+    destroy_window(conn, transient);
+    destroy_window(conn, parent);
+}
+
+TEST_CASE(
+    "Integration: transient follows parent visibility across workspace switch",
+    "[integration][transient][workspace]"
+)
+{
+    auto test_env = TestEnvironment::create();
+    if (!test_env)
+        return;
+
+    auto& conn = test_env->conn;
+
+    xcb_atom_t net_current_desktop = intern_atom(conn.get(), "_NET_CURRENT_DESKTOP");
+    xcb_atom_t net_number_of_desktops = intern_atom(conn.get(), "_NET_NUMBER_OF_DESKTOPS");
+    if (net_current_desktop == XCB_NONE || net_number_of_desktops == XCB_NONE)
+    {
+        WARN("Failed to intern EWMH atoms.");
+        return;
+    }
+
+    uint32_t num_desktops = get_window_property_cardinal(conn.get(), conn.root(), net_number_of_desktops).value_or(0);
+    if (num_desktops < 2)
+    {
+        WARN("Need at least 2 workspaces for this test.");
+        return;
+    }
+
+    // Start on workspace 0.
+    REQUIRE(wait_for_property_cardinal(conn.get(), conn.root(), net_current_desktop, 0, kTimeout));
+
+    // Create a tiled parent on ws0 and map it.
+    xcb_window_t parent = create_window(conn, 10, 10, 300, 200);
+    map_window(conn, parent);
+    REQUIRE(wait_for_active_window(conn, parent, kTimeout));
+
+    // Create a transient for the parent and map it.
+    xcb_window_t transient = create_window(conn, 50, 50, 200, 150);
+    set_transient_for(conn, transient, parent);
+    map_window(conn, transient);
+    REQUIRE(wait_for_active_window(conn, transient, kTimeout));
+
+    // Switch to workspace 1.
+    send_client_message(conn, conn.root(), net_current_desktop, 1);
+    REQUIRE(wait_for_property_cardinal(conn.get(), conn.root(), net_current_desktop, 1, kTimeout));
+
+    // Both parent and transient should be hidden off-screen.
+    REQUIRE(wait_for_condition([&]() { return is_hidden_offscreen(conn, parent); }, kTimeout));
+    REQUIRE(wait_for_condition([&]() { return is_hidden_offscreen(conn, transient); }, kTimeout));
+
+    // Switch back to workspace 0.
+    send_client_message(conn, conn.root(), net_current_desktop, 0);
+    REQUIRE(wait_for_property_cardinal(conn.get(), conn.root(), net_current_desktop, 0, kTimeout));
+
+    // Both parent and transient should be visible (not off-screen).
+    REQUIRE(wait_for_condition([&]() { return !is_hidden_offscreen(conn, parent); }, kTimeout));
+    REQUIRE(wait_for_condition([&]() { return !is_hidden_offscreen(conn, transient); }, kTimeout));
+
+    destroy_window(conn, transient);
+    destroy_window(conn, parent);
+}
+
+TEST_CASE(
+    "Integration: multiple transients of same parent all stack above it",
+    "[integration][transient][stacking]"
+)
+{
+    auto test_env = TestEnvironment::create();
+    if (!test_env)
+        return;
+
+    auto& conn = test_env->conn;
+
+    // Create a tiled parent and map it.
+    xcb_window_t parent = create_window(conn, 10, 10, 300, 200);
+    map_window(conn, parent);
+    REQUIRE(wait_for_active_window(conn, parent, kTimeout));
+
+    // Create first transient dialog, set WM_TRANSIENT_FOR before mapping.
+    xcb_window_t transient1 = create_window(conn, 40, 40, 180, 120);
+    set_transient_for(conn, transient1, parent);
+    map_window(conn, transient1);
+    REQUIRE(wait_for_active_window(conn, transient1, kTimeout));
+
+    // Create second transient dialog, set WM_TRANSIENT_FOR before mapping.
+    xcb_window_t transient2 = create_window(conn, 70, 70, 180, 120);
+    set_transient_for(conn, transient2, parent);
+    map_window(conn, transient2);
+    REQUIRE(wait_for_active_window(conn, transient2, kTimeout));
+
+    // Both transients must be stacked above the parent.
+    REQUIRE(wait_for_condition([&]() { return is_stacked_above(conn, transient1, parent); }, kTimeout));
+    REQUIRE(wait_for_condition([&]() { return is_stacked_above(conn, transient2, parent); }, kTimeout));
+
+    destroy_window(conn, transient2);
+    destroy_window(conn, transient1);
+    destroy_window(conn, parent);
+}

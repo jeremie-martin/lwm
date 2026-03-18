@@ -181,3 +181,176 @@ TEST_CASE("Integration: overlay layer stays above fullscreen windows and remains
     destroy_window(conn, overlay_window);
     destroy_window(conn, fullscreen_window);
 }
+
+TEST_CASE("Integration: overlay remains above after fullscreen owner changes", "[integration][overlay]")
+{
+    auto test_env = TestEnvironment::create(overlay_config());
+    if (!test_env)
+        return;
+
+    auto& conn = test_env->conn;
+
+    xcb_atom_t net_wm_state = intern_atom(conn.get(), "_NET_WM_STATE");
+    xcb_atom_t net_wm_state_fullscreen = intern_atom(conn.get(), "_NET_WM_STATE_FULLSCREEN");
+    xcb_atom_t net_wm_window_type_utility = intern_atom(conn.get(), "_NET_WM_WINDOW_TYPE_UTILITY");
+    if (net_wm_state == XCB_NONE || net_wm_state_fullscreen == XCB_NONE || net_wm_window_type_utility == XCB_NONE)
+    {
+        WARN("Failed to intern EWMH atoms.");
+        return;
+    }
+
+    // Create two tiled windows.
+    xcb_window_t tiled1 = create_window(conn, 10, 10, 640, 360);
+    map_window(conn, tiled1);
+    REQUIRE(wait_for_active_window(conn, tiled1, kTimeout));
+
+    xcb_window_t tiled2 = create_window(conn, 20, 20, 640, 360);
+    map_window(conn, tiled2);
+    REQUIRE(wait_for_active_window(conn, tiled2, kTimeout));
+
+    // Create an overlay window.
+    xcb_window_t overlay = create_window(conn, 30, 30, 200, 120);
+    set_window_type(conn, overlay, net_wm_window_type_utility);
+    map_window(conn, overlay);
+    REQUIRE(wait_for_condition([&]() { return matches_root_geometry(conn, overlay); }, kTimeout));
+
+    // Fullscreen the first tiled window.
+    send_client_message(conn, tiled1, net_wm_state, 1, net_wm_state_fullscreen, 0, 0, 0);
+    REQUIRE(wait_for_condition(
+        [&]() { return has_state(conn, tiled1, net_wm_state_fullscreen); },
+        kTimeout
+    ));
+
+    // Overlay must be above the fullscreen window.
+    REQUIRE(wait_for_condition(
+        [&]() { return is_stacked_above(conn, overlay, tiled1); },
+        kTimeout
+    ));
+
+    // Fullscreen the second tiled window (strips fullscreen from the first).
+    send_client_message(conn, tiled2, net_wm_state, 1, net_wm_state_fullscreen, 0, 0, 0);
+    REQUIRE(wait_for_condition(
+        [&]() { return has_state(conn, tiled2, net_wm_state_fullscreen); },
+        kTimeout
+    ));
+
+    // Overlay must still be above the new fullscreen window.
+    REQUIRE(wait_for_condition(
+        [&]() { return is_stacked_above(conn, overlay, tiled2); },
+        kTimeout
+    ));
+
+    destroy_window(conn, overlay);
+    destroy_window(conn, tiled2);
+    destroy_window(conn, tiled1);
+}
+
+TEST_CASE("Integration: overlay stays above normal tiled windows without fullscreen", "[integration][overlay]")
+{
+    auto test_env = TestEnvironment::create(overlay_config());
+    if (!test_env)
+        return;
+
+    auto& conn = test_env->conn;
+
+    xcb_atom_t net_wm_window_type_utility = intern_atom(conn.get(), "_NET_WM_WINDOW_TYPE_UTILITY");
+    if (net_wm_window_type_utility == XCB_NONE)
+    {
+        WARN("Failed to intern EWMH atoms.");
+        return;
+    }
+
+    // Create several tiled windows.
+    xcb_window_t tiled1 = create_window(conn, 10, 10, 640, 360);
+    map_window(conn, tiled1);
+    REQUIRE(wait_for_active_window(conn, tiled1, kTimeout));
+
+    xcb_window_t tiled2 = create_window(conn, 20, 20, 640, 360);
+    map_window(conn, tiled2);
+    REQUIRE(wait_for_active_window(conn, tiled2, kTimeout));
+
+    xcb_window_t tiled3 = create_window(conn, 30, 30, 640, 360);
+    map_window(conn, tiled3);
+    REQUIRE(wait_for_active_window(conn, tiled3, kTimeout));
+
+    // Create an overlay window.
+    xcb_window_t overlay = create_window(conn, 40, 40, 200, 120);
+    set_window_type(conn, overlay, net_wm_window_type_utility);
+    map_window(conn, overlay);
+
+    // Overlay must cover the root geometry.
+    REQUIRE(wait_for_condition([&]() { return matches_root_geometry(conn, overlay); }, kTimeout));
+
+    // Overlay must be stacked above all tiled windows.
+    REQUIRE(wait_for_condition(
+        [&]() { return is_stacked_above(conn, overlay, tiled1); },
+        kTimeout
+    ));
+    REQUIRE(wait_for_condition(
+        [&]() { return is_stacked_above(conn, overlay, tiled2); },
+        kTimeout
+    ));
+    REQUIRE(wait_for_condition(
+        [&]() { return is_stacked_above(conn, overlay, tiled3); },
+        kTimeout
+    ));
+
+    destroy_window(conn, overlay);
+    destroy_window(conn, tiled3);
+    destroy_window(conn, tiled2);
+    destroy_window(conn, tiled1);
+}
+
+TEST_CASE("Integration: multiple overlay windows both stay above fullscreen", "[integration][overlay]")
+{
+    auto test_env = TestEnvironment::create(overlay_config());
+    if (!test_env)
+        return;
+
+    auto& conn = test_env->conn;
+
+    xcb_atom_t net_wm_state = intern_atom(conn.get(), "_NET_WM_STATE");
+    xcb_atom_t net_wm_state_fullscreen = intern_atom(conn.get(), "_NET_WM_STATE_FULLSCREEN");
+    xcb_atom_t net_wm_window_type_utility = intern_atom(conn.get(), "_NET_WM_WINDOW_TYPE_UTILITY");
+    if (net_wm_state == XCB_NONE || net_wm_state_fullscreen == XCB_NONE || net_wm_window_type_utility == XCB_NONE)
+    {
+        WARN("Failed to intern EWMH atoms.");
+        return;
+    }
+
+    // Create a window and make it fullscreen.
+    xcb_window_t fullscreen_window = create_window(conn, 10, 10, 640, 360);
+    map_window(conn, fullscreen_window);
+    REQUIRE(wait_for_active_window(conn, fullscreen_window, kTimeout));
+
+    send_client_message(conn, fullscreen_window, net_wm_state, 1, net_wm_state_fullscreen, 0, 0, 0);
+    REQUIRE(wait_for_condition(
+        [&]() { return has_state(conn, fullscreen_window, net_wm_state_fullscreen); },
+        kTimeout
+    ));
+
+    // Create two overlay (utility) windows.
+    xcb_window_t overlay1 = create_window(conn, 20, 20, 200, 120);
+    set_window_type(conn, overlay1, net_wm_window_type_utility);
+    map_window(conn, overlay1);
+    REQUIRE(wait_for_condition([&]() { return matches_root_geometry(conn, overlay1); }, kTimeout));
+
+    xcb_window_t overlay2 = create_window(conn, 30, 30, 200, 120);
+    set_window_type(conn, overlay2, net_wm_window_type_utility);
+    map_window(conn, overlay2);
+    REQUIRE(wait_for_condition([&]() { return matches_root_geometry(conn, overlay2); }, kTimeout));
+
+    // Both overlays must be stacked above the fullscreen window.
+    REQUIRE(wait_for_condition(
+        [&]() { return is_stacked_above(conn, overlay1, fullscreen_window); },
+        kTimeout
+    ));
+    REQUIRE(wait_for_condition(
+        [&]() { return is_stacked_above(conn, overlay2, fullscreen_window); },
+        kTimeout
+    ));
+
+    destroy_window(conn, overlay2);
+    destroy_window(conn, overlay1);
+    destroy_window(conn, fullscreen_window);
+}

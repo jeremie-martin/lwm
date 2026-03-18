@@ -295,7 +295,7 @@ void WindowManager::update_floating_monitor_for_geometry(xcb_window_t window)
     int32_t center_y = static_cast<int32_t>(geom.y) + static_cast<int32_t>(geom.height) / 2;
     auto new_monitor =
         focus::monitor_index_at_point(monitors_, static_cast<int16_t>(center_x), static_cast<int16_t>(center_y));
-    if (!new_monitor || *new_monitor == client->monitor)
+    if (!new_monitor || *new_monitor == client->monitor || *new_monitor >= monitors_.size())
         return;
 
     size_t source_monitor = client->monitor;

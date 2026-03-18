@@ -244,7 +244,6 @@ private:
     size_t wrap_monitor_index(int idx) const;
     void warp_to_monitor(Monitor const& monitor);
     void focus_or_fallback(Monitor& monitor, bool record_user_time = true);
-    Monitor* monitor_containing_window(xcb_window_t window);
     Monitor* monitor_at_point(int16_t x, int16_t y);
     bool is_floating_window(xcb_window_t window) const;
     std::optional<size_t> monitor_index_for_window(xcb_window_t window) const;
