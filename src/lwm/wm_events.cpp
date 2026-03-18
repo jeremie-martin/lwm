@@ -303,16 +303,20 @@ void WindowManager::handle_map_request(xcb_map_request_event_t const& e)
                     }
                 }
 
-                if (rule_result.above.has_value() && *rule_result.above)
+                if (rule_result.layer == WindowLayer::Overlay)
+                    set_window_layer(e.window, WindowLayer::Overlay);
+                else if (rule_result.above.has_value() && *rule_result.above)
                     set_window_above(e.window, true);
                 if (rule_result.below.has_value() && *rule_result.below)
                     set_window_below(e.window, true);
                 if (rule_result.sticky.has_value() && *rule_result.sticky)
                     set_window_sticky(e.window, true);
-                if (rule_result.fullscreen.has_value() && *rule_result.fullscreen)
+                if (rule_result.layer != WindowLayer::Overlay && rule_result.fullscreen.has_value()
+                    && *rule_result.fullscreen)
                     set_fullscreen(e.window, true);
 
                 // Update visibility after placement changes
+                client = get_client(e.window);
                 if (client)
                     sync_visibility_for_monitor(client->monitor);
             }
@@ -358,13 +362,16 @@ void WindowManager::handle_map_request(xcb_map_request_event_t const& e)
                     }
                 }
 
-                if (rule_result.above.has_value() && *rule_result.above)
+                if (rule_result.layer == WindowLayer::Overlay)
+                    set_window_layer(e.window, WindowLayer::Overlay);
+                else if (rule_result.above.has_value() && *rule_result.above)
                     set_window_above(e.window, true);
                 if (rule_result.below.has_value() && *rule_result.below)
                     set_window_below(e.window, true);
                 if (rule_result.sticky.has_value() && *rule_result.sticky)
                     set_window_sticky(e.window, true);
-                if (rule_result.fullscreen.has_value() && *rule_result.fullscreen)
+                if (rule_result.layer != WindowLayer::Overlay && rule_result.fullscreen.has_value()
+                    && *rule_result.fullscreen)
                     set_fullscreen(e.window, true);
             }
 
