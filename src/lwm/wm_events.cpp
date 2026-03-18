@@ -1275,11 +1275,14 @@ void WindowManager::handle_property_notify(xcb_property_notify_event_t const& e)
             auto* client = get_client(e.window);
             if (client)
             {
-                uint32_t hinted_width = client->floating_geometry.width;
-                uint32_t hinted_height = client->floating_geometry.height;
-                layout_.apply_size_hints(e.window, hinted_width, hinted_height);
-                client->floating_geometry.width = static_cast<uint16_t>(std::max<uint32_t>(1, hinted_width));
-                client->floating_geometry.height = static_cast<uint16_t>(std::max<uint32_t>(1, hinted_height));
+                if (client->layer != WindowLayer::Overlay)
+                {
+                    uint32_t hinted_width = client->floating_geometry.width;
+                    uint32_t hinted_height = client->floating_geometry.height;
+                    layout_.apply_size_hints(e.window, hinted_width, hinted_height);
+                    client->floating_geometry.width = static_cast<uint16_t>(std::max<uint32_t>(1, hinted_width));
+                    client->floating_geometry.height = static_cast<uint16_t>(std::max<uint32_t>(1, hinted_height));
+                }
                 if (client->monitor < monitors_.size() && is_window_in_visible_scope(e.window) && !client->hidden
                     && !is_client_fullscreen(e.window))
                 {
