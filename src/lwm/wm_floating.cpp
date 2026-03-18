@@ -64,7 +64,14 @@ void WindowManager::manage_floating_window(xcb_window_t window, bool start_iconi
     uint32_t hinted_height = 0;
     if (has_hints)
     {
-        if (size_hints.flags & (XCB_ICCCM_SIZE_HINT_US_POSITION | XCB_ICCCM_SIZE_HINT_P_POSITION))
+        // Respect user-specified position (US_POSITION) always.
+        // For program-specified position (P_POSITION), only use it for non-transient
+        // windows — transient windows (dialogs, file pickers) should center on their
+        // parent rather than land at whatever fixed coordinate the app requested.
+        bool dominated_by_parent = transient.has_value();
+        bool user_placed = (size_hints.flags & XCB_ICCCM_SIZE_HINT_US_POSITION) != 0;
+        bool program_placed = (size_hints.flags & XCB_ICCCM_SIZE_HINT_P_POSITION) != 0;
+        if (user_placed || (program_placed && !dominated_by_parent))
         {
             has_position_hint = true;
             hinted_x = static_cast<int16_t>(size_hints.x);
