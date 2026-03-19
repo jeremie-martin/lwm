@@ -15,6 +15,7 @@ add_library(liblwm STATIC
     wm.cpp
     wm_events.cpp
     wm_drag.cpp
+    wm_restart.cpp
 )
 
 target_include_directories(liblwm PUBLIC

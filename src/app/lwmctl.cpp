@@ -30,7 +30,7 @@ std::string trim_ascii(std::string_view value)
 
 void print_usage()
 {
-    std::cerr << "usage: lwmctl [--socket PATH] <ping|version|reload-config>\n";
+    std::cerr << "usage: lwmctl [--socket PATH] <ping|version|reload-config|restart|exec PATH>\n";
 }
 
 std::optional<std::string> root_socket_path()
@@ -187,14 +187,31 @@ int main(int argc, char* argv[])
         args.push_back(std::move(arg));
     }
 
-    if (args.size() != 1)
+    if (args.empty())
     {
         print_usage();
         return 1;
     }
 
     std::string const& command = args[0];
-    if (command != "ping" && command != "version" && command != "reload-config")
+
+    if (command == "exec")
+    {
+        if (args.size() != 2)
+        {
+            std::cerr << "usage: lwmctl exec PATH\n";
+            return 1;
+        }
+        return run_command(resolve_socket_path(cli_socket), "exec " + args[1]);
+    }
+
+    if (args.size() != 1)
+    {
+        print_usage();
+        return 1;
+    }
+
+    if (command != "ping" && command != "version" && command != "reload-config" && command != "restart")
     {
         print_usage();
         return 1;

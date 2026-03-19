@@ -1,9 +1,13 @@
+#include <cerrno>
+#include <cstdio>
 #include <cstdlib>
+#include <cstring>
 #include <filesystem>
 #include <lwm/config/config.hpp>
 #include <lwm/core/log.hpp>
 #include <lwm/wm.hpp>
 #include <string>
+#include <unistd.h>
 
 namespace fs = std::filesystem;
 
@@ -50,7 +54,22 @@ int main(int argc, char* argv[])
         }
 
         lwm::WindowManager wm(std::move(config), config_path);
-        wm.run();
+        auto result = wm.run();
+
+        if (result == lwm::RunResult::Restart)
+        {
+            std::string binary = wm.restart_binary();
+            if (binary.empty())
+                binary = argv[0];
+
+            LOG_INFO("Restarting: {}", binary);
+            lwm::log::shutdown();
+
+            execvp(binary.c_str(), argv);
+            // If we get here, exec failed
+            std::fprintf(stderr, "lwm: exec failed: %s\n", std::strerror(errno));
+            return 1;
+        }
     }
     catch (std::exception const& e)
     {

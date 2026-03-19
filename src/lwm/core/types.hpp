@@ -123,6 +123,7 @@ struct Client
 
     std::optional<Geometry> fullscreen_restore;            ///< Geometry before fullscreen
     std::optional<Geometry> maximize_restore;              ///< Geometry before maximize
+    std::optional<Geometry> float_restore;                 ///< Geometry before tiling (for toggle restore)
     std::optional<FullscreenMonitors> fullscreen_monitors; ///< Multi-monitor fullscreen
 
     uint32_t sync_counter = 0; ///< XSync counter ID (0 if none)

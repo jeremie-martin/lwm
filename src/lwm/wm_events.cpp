@@ -556,6 +556,37 @@ void WindowManager::handle_button_press(xcb_button_press_event_t const& e)
                 begin_drag(target, true, e.root_x, e.root_y);
                 return;
             }
+            if (is_tiled)
+            {
+                if (client->fullscreen || client->iconic || client->layer == WindowLayer::Overlay || showing_desktop_)
+                    return;
+
+                size_t monitor_idx = client->monitor;
+                if (monitor_idx >= monitors_.size())
+                    return;
+
+                convert_window_to_floating(target);
+                auto* c = get_client(target);
+                if (!c || c->kind != Client::Kind::Floating)
+                    return;
+
+                rearrange_monitor(monitors_[monitor_idx]);
+                apply_floating_geometry(target);
+                sync_visibility_for_monitor(monitor_idx);
+                LWM_ASSERT_INVARIANTS(clients_, monitors_, floating_windows_, dock_windows_, desktop_windows_);
+
+                focus_any_window(target);
+                begin_drag(target, true, e.root_x, e.root_y);
+                return;
+            }
+        }
+        else if (binding->action == "toggle_float")
+        {
+            if (is_tiled || is_floating)
+            {
+                toggle_window_float(target);
+                return;
+            }
         }
     }
 
@@ -659,6 +690,11 @@ void WindowManager::handle_key_press(xcb_key_press_event_t const& e)
             set_fullscreen(active_window_, !is_client_fullscreen(active_window_));
         }
     }
+    else if (action->type == "toggle_float")
+    {
+        if (active_window_ != XCB_NONE)
+            toggle_window_float(active_window_);
+    }
     else if (action->type == "focus_next")
     {
         cycle_focus(true);
@@ -673,6 +709,11 @@ void WindowManager::handle_key_press(xcb_key_press_event_t const& e)
         {
             LOG_WARN("Config reload failed: {}", result.error());
         }
+    }
+    else if (action->type == "restart")
+    {
+        LOG_INFO("Restart triggered by keybind");
+        initiate_restart();
     }
 }
 

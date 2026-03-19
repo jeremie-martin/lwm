@@ -21,13 +21,20 @@
 
 namespace lwm {
 
+enum class RunResult
+{
+    Exit,
+    Restart
+};
+
 class WindowManager
 {
 public:
     WindowManager(Config config, std::string config_path);
     ~WindowManager();
 
-    void run();
+    RunResult run();
+    std::string const& restart_binary() const { return restart_binary_; }
 
 private:
     struct DragState
@@ -100,6 +107,13 @@ private:
     xcb_atom_t net_wm_user_time_ = XCB_NONE;
     xcb_atom_t net_wm_user_time_window_ = XCB_NONE;
     xcb_atom_t net_wm_state_focused_ = XCB_NONE;
+    xcb_atom_t lwm_restart_client_ = XCB_NONE;
+    xcb_atom_t lwm_restart_state_ = XCB_NONE;
+    xcb_atom_t lwm_restart_tiled_order_ = XCB_NONE;
+    xcb_atom_t lwm_restart_floating_order_ = XCB_NONE;
+    bool restarting_ = false;
+    bool is_restart_ = false;
+    std::string restart_binary_;
     bool suppress_focus_ = false;
     uint32_t last_event_time_ = XCB_CURRENT_TIME;
     xcb_keysym_t last_toggle_keysym_ = XCB_NO_SYMBOL;
@@ -153,6 +167,7 @@ private:
     void apply_rule_result_to_window(xcb_window_t window, WindowRuleResult const& rule_result);
     void convert_window_to_floating(xcb_window_t window);
     void convert_window_to_tiled(xcb_window_t window);
+    void toggle_window_float(xcb_window_t window);
     Geometry current_window_geometry(xcb_window_t window) const;
 
     void manage_window(xcb_window_t window, bool start_iconic = false);
@@ -316,6 +331,15 @@ private:
     void switch_to_ewmh_desktop(uint32_t desktop);
     void clear_all_borders();
     xcb_atom_t intern_atom(char const* name) const;
+
+    // Hot-reload (exec-based restart)
+    void initiate_restart(std::string binary = {});
+    void serialize_restart_state();
+    bool restore_global_restart_state();
+    void apply_restart_client_state(xcb_window_t window);
+    void restore_window_ordering();
+    void clean_restart_properties();
+    void prepare_restart();
 };
 
 }

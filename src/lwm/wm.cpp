@@ -190,6 +190,10 @@ WindowManager::WindowManager(Config config, std::string config_path)
     net_wm_user_time_window_ = intern_atom("_NET_WM_USER_TIME_WINDOW");
     net_wm_state_focused_ = intern_atom("_NET_WM_STATE_FOCUSED");
     lwm_ipc_socket_ = intern_atom("_LWM_IPC_SOCKET");
+    lwm_restart_client_ = intern_atom("_LWM_RESTART_CLIENT");
+    lwm_restart_state_ = intern_atom("_LWM_RESTART_STATE");
+    lwm_restart_tiled_order_ = intern_atom("_LWM_RESTART_TILED_ORDER");
+    lwm_restart_floating_order_ = intern_atom("_LWM_RESTART_FLOATING_ORDER");
     {
         std::vector<xcb_atom_t> extra;
         if (net_wm_user_time_window_ != XCB_NONE)
@@ -204,8 +208,26 @@ WindowManager::WindowManager(Config config, std::string config_path)
     detect_monitors();
     setup_ewmh();
     setup_ipc();
+    is_restart_ = restore_global_restart_state();
     scan_existing_windows();
-    run_autostart();
+    if (is_restart_)
+    {
+        restore_window_ordering();
+        clean_restart_properties();
+        // Restore focus to the previously active window
+        if (active_window_ != XCB_NONE && is_managed(active_window_))
+        {
+            focus_any_window(active_window_);
+        }
+        else if (!monitors_.empty())
+        {
+            focus_or_fallback(monitors_[focused_monitor_]);
+        }
+    }
+    else
+    {
+        run_autostart();
+    }
     keybinds_.grab_keys(conn_.screen()->root);
     update_ewmh_client_list();
     conn_.flush();
@@ -216,7 +238,7 @@ WindowManager::~WindowManager()
     cleanup_ipc();
 }
 
-void WindowManager::run()
+RunResult WindowManager::run()
 {
     int xfd = xcb_get_file_descriptor(conn_.get());
 
@@ -274,6 +296,20 @@ void WindowManager::run()
             break;
         }
     }
+
+    if (restarting_)
+    {
+        // Verify binary exists before tearing down WM state (point of no return)
+        if (!restart_binary_.empty() && !std::filesystem::exists(restart_binary_))
+        {
+            LOG_ERROR("Restart binary not found: {}", restart_binary_);
+            restarting_ = false;
+            return RunResult::Exit;
+        }
+        prepare_restart();
+        return RunResult::Restart;
+    }
+    return RunResult::Exit;
 }
 
 void WindowManager::setup_ipc()
@@ -443,6 +479,21 @@ std::string WindowManager::run_ipc_command(std::string const& command)
         if (!result)
             return error_reply(result.error());
         return ok_reply("reloaded");
+    }
+
+    if (trimmed == "restart")
+    {
+        initiate_restart();
+        return ok_reply("restarting");
+    }
+
+    if (trimmed.starts_with("exec "))
+    {
+        std::string binary = trim_ascii(trimmed.substr(5));
+        if (binary.empty())
+            return error_reply("exec requires a binary path");
+        initiate_restart(std::move(binary));
+        return ok_reply("restarting");
     }
 
     return error_reply("unknown command");
@@ -682,6 +733,65 @@ void WindowManager::convert_window_to_tiled(xcb_window_t window)
     uint32_t values[] = { XCB_EVENT_MASK_ENTER_WINDOW | XCB_EVENT_MASK_FOCUS_CHANGE | XCB_EVENT_MASK_PROPERTY_CHANGE };
     xcb_change_window_attributes(conn_.get(), window, XCB_CW_EVENT_MASK, values);
     update_allowed_actions(window);
+}
+
+void WindowManager::toggle_window_float(xcb_window_t window)
+{
+    auto* client = get_client(window);
+    if (!client)
+        return;
+    if (client->fullscreen || client->iconic || client->layer == WindowLayer::Overlay)
+        return;
+    if (client->kind != Client::Kind::Tiled && client->kind != Client::Kind::Floating)
+        return;
+    if (showing_desktop_)
+        return;
+
+    size_t monitor_idx = client->monitor;
+    if (monitor_idx >= monitors_.size())
+        return;
+
+    if (client->kind == Client::Kind::Tiled)
+    {
+        convert_window_to_floating(window);
+        client = get_client(window);
+        if (!client)
+            return;
+
+        if (client->float_restore.has_value())
+        {
+            client->floating_geometry = *client->float_restore;
+            client->float_restore = std::nullopt;
+        }
+    }
+    else
+    {
+        client->float_restore = client->maximize_restore.value_or(client->floating_geometry);
+
+        if (client->maximized_horz || client->maximized_vert)
+        {
+            client->maximized_horz = false;
+            client->maximized_vert = false;
+            client->maximize_restore = std::nullopt;
+            ewmh_.set_window_state(window, ewmh_.get()->_NET_WM_STATE_MAXIMIZED_HORZ, false);
+            ewmh_.set_window_state(window, ewmh_.get()->_NET_WM_STATE_MAXIMIZED_VERT, false);
+        }
+
+        convert_window_to_tiled(window);
+        client = get_client(window);
+        if (!client)
+            return;
+    }
+
+    rearrange_monitor(monitors_[monitor_idx]);
+
+    if (client->kind == Client::Kind::Floating && !client->hidden)
+        apply_floating_geometry(window);
+
+    sync_visibility_for_monitor(monitor_idx);
+
+    LWM_ASSERT_INVARIANTS(clients_, monitors_, floating_windows_, dock_windows_, desktop_windows_);
+    focus_any_window(window);
 }
 
 void WindowManager::apply_rule_result_to_window(xcb_window_t window, WindowRuleResult const& rule_result)
@@ -1163,6 +1273,8 @@ void WindowManager::scan_existing_windows()
             case WindowClassification::Kind::Floating:
             {
                 manage_floating_window(window);
+                if (is_restart_)
+                    apply_restart_client_state(window);
                 reevaluate_managed_window(window);
                 break;
             }
@@ -1170,6 +1282,8 @@ void WindowManager::scan_existing_windows()
             case WindowClassification::Kind::Tiled:
             {
                 manage_window(window);
+                if (is_restart_)
+                    apply_restart_client_state(window);
                 reevaluate_managed_window(window);
                 break;
             }
