@@ -146,6 +146,7 @@ void WindowManager::manage_floating_window(xcb_window_t window, bool start_iconi
 
         clients_[window] = std::move(client);
     }
+    cache_focus_hints(window);
 
     sync_window_visible_names(window);
     init_user_time(window);

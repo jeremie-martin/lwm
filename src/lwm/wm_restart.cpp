@@ -361,6 +361,23 @@ void WindowManager::prepare_restart()
     end_drag();
     serialize_restart_state();
 
+    // Move all hidden windows back on-screen so they're recoverable if restart fails.
+    // The new WM instance re-tiles everything via scan_existing_windows() → rearrange_all_monitors().
+    for (auto& [window, client] : clients_)
+    {
+        if (!client.hidden)
+            continue;
+        if (client.kind != Client::Kind::Tiled && client.kind != Client::Kind::Floating)
+            continue;
+
+        int16_t restore_x = client.floating_geometry.x;
+        if (restore_x <= OFF_SCREEN_X / 2)
+            restore_x = 0;
+
+        uint32_t values[] = { static_cast<uint32_t>(static_cast<uint16_t>(restore_x)) };
+        xcb_configure_window(conn_.get(), window, XCB_CONFIG_WINDOW_X, values);
+    }
+
     // Ungrab all keys from root and all managed windows
     xcb_ungrab_key(conn_.get(), XCB_GRAB_ANY, conn_.screen()->root, XCB_MOD_MASK_ANY);
     for (auto const& [window, client] : clients_)
@@ -376,17 +393,28 @@ void WindowManager::prepare_restart()
     // Release WM_S0 selection
     xcb_set_selection_owner(conn_.get(), XCB_NONE, wm_s0_, XCB_CURRENT_TIME);
 
-    // Destroy our WM window
+    // Set RetainPermanent so the X server keeps any lingering resources alive
+    // when the connection closes (via CLOEXEC on exec). Standard practice in i3/dwm.
+    xcb_set_close_down_mode(conn_.get(), XCB_CLOSE_DOWN_RETAIN_PERMANENT);
+
+    // Destroy our WM windows (both the internal WM window and the EWMH supporting window)
     if (wm_window_ != XCB_NONE)
     {
         xcb_destroy_window(conn_.get(), wm_window_);
         wm_window_ = XCB_NONE;
     }
+    ewmh_.destroy_for_restart();
 
     // Clean up IPC
     cleanup_ipc();
 
+    // Flush all requests and do a round-trip sync to guarantee the X server
+    // has fully processed them (especially the SubstructureRedirect release)
+    // before we exec into the new binary.
     conn_.flush();
+    auto cookie = xcb_get_input_focus(conn_.get());
+    free(xcb_get_input_focus_reply(conn_.get(), cookie, nullptr));
+
     LOG_INFO("Restart preparation complete");
 }
 

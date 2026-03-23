@@ -37,6 +37,15 @@ Ewmh::~Ewmh()
     xcb_ewmh_connection_wipe(&ewmh_);
 }
 
+void Ewmh::destroy_for_restart()
+{
+    if (supporting_window_ != XCB_NONE)
+    {
+        xcb_destroy_window(conn_.get(), supporting_window_);
+        supporting_window_ = XCB_NONE;
+    }
+}
+
 void Ewmh::init_atoms()
 {
     create_supporting_window();
@@ -331,26 +340,6 @@ void Ewmh::set_demands_attention(xcb_window_t window, bool urgent)
     set_window_state(window, ewmh_._NET_WM_STATE_DEMANDS_ATTENTION, urgent);
 }
 
-bool Ewmh::has_urgent_hint(xcb_window_t window) const
-{
-    xcb_ewmh_get_atoms_reply_t state;
-    if (!xcb_ewmh_get_wm_state_reply(&ewmh_, xcb_ewmh_get_wm_state(&ewmh_, window), &state, nullptr))
-        return false;
-
-    bool urgent = false;
-    for (uint32_t i = 0; i < state.atoms_len; ++i)
-    {
-        if (state.atoms[i] == ewmh_._NET_WM_STATE_DEMANDS_ATTENTION)
-        {
-            urgent = true;
-            break;
-        }
-    }
-
-    xcb_ewmh_get_atoms_reply_wipe(&state);
-    return urgent;
-}
-
 xcb_atom_t Ewmh::get_window_type(xcb_window_t window) const
 {
     xcb_ewmh_get_atoms_reply_t types;
@@ -368,22 +357,6 @@ xcb_atom_t Ewmh::get_window_type(xcb_window_t window) const
     }
     xcb_ewmh_get_atoms_reply_wipe(&types);
     return type;
-}
-
-bool Ewmh::is_dock_window(xcb_window_t window) const
-{
-    return get_window_type(window) == ewmh_._NET_WM_WINDOW_TYPE_DOCK;
-}
-
-bool Ewmh::is_dialog_window(xcb_window_t window) const
-{
-    return get_window_type(window) == ewmh_._NET_WM_WINDOW_TYPE_DIALOG;
-}
-
-bool Ewmh::should_tile_window(xcb_window_t window) const
-{
-    xcb_atom_t type = get_window_type(window);
-    return type == ewmh_._NET_WM_WINDOW_TYPE_NORMAL;
 }
 
 WindowClassification classify_window_type(WindowType type, bool is_transient)
@@ -450,32 +423,28 @@ WindowClassification classify_window_type(WindowType type, bool is_transient)
 WindowType Ewmh::get_window_type_enum(xcb_window_t window) const
 {
     xcb_atom_t type = get_window_type(window);
-    if (type == ewmh_._NET_WM_WINDOW_TYPE_DESKTOP)
-        return WindowType::Desktop;
-    if (type == ewmh_._NET_WM_WINDOW_TYPE_DOCK)
-        return WindowType::Dock;
-    if (type == ewmh_._NET_WM_WINDOW_TYPE_TOOLBAR)
-        return WindowType::Toolbar;
-    if (type == ewmh_._NET_WM_WINDOW_TYPE_MENU)
-        return WindowType::Menu;
-    if (type == ewmh_._NET_WM_WINDOW_TYPE_UTILITY)
-        return WindowType::Utility;
-    if (type == ewmh_._NET_WM_WINDOW_TYPE_SPLASH)
-        return WindowType::Splash;
-    if (type == ewmh_._NET_WM_WINDOW_TYPE_DIALOG)
-        return WindowType::Dialog;
-    if (type == ewmh_._NET_WM_WINDOW_TYPE_DROPDOWN_MENU)
-        return WindowType::DropdownMenu;
-    if (type == ewmh_._NET_WM_WINDOW_TYPE_POPUP_MENU)
-        return WindowType::PopupMenu;
-    if (type == ewmh_._NET_WM_WINDOW_TYPE_TOOLTIP)
-        return WindowType::Tooltip;
-    if (type == ewmh_._NET_WM_WINDOW_TYPE_NOTIFICATION)
-        return WindowType::Notification;
-    if (type == ewmh_._NET_WM_WINDOW_TYPE_COMBO)
-        return WindowType::Combo;
-    if (type == ewmh_._NET_WM_WINDOW_TYPE_DND)
-        return WindowType::Dnd;
+
+    struct Entry { xcb_atom_t atom; WindowType wtype; };
+    Entry const table[] = {
+        { ewmh_._NET_WM_WINDOW_TYPE_DESKTOP,      WindowType::Desktop },
+        { ewmh_._NET_WM_WINDOW_TYPE_DOCK,          WindowType::Dock },
+        { ewmh_._NET_WM_WINDOW_TYPE_TOOLBAR,       WindowType::Toolbar },
+        { ewmh_._NET_WM_WINDOW_TYPE_MENU,          WindowType::Menu },
+        { ewmh_._NET_WM_WINDOW_TYPE_UTILITY,       WindowType::Utility },
+        { ewmh_._NET_WM_WINDOW_TYPE_SPLASH,        WindowType::Splash },
+        { ewmh_._NET_WM_WINDOW_TYPE_DIALOG,        WindowType::Dialog },
+        { ewmh_._NET_WM_WINDOW_TYPE_DROPDOWN_MENU, WindowType::DropdownMenu },
+        { ewmh_._NET_WM_WINDOW_TYPE_POPUP_MENU,    WindowType::PopupMenu },
+        { ewmh_._NET_WM_WINDOW_TYPE_TOOLTIP,       WindowType::Tooltip },
+        { ewmh_._NET_WM_WINDOW_TYPE_NOTIFICATION,  WindowType::Notification },
+        { ewmh_._NET_WM_WINDOW_TYPE_COMBO,         WindowType::Combo },
+        { ewmh_._NET_WM_WINDOW_TYPE_DND,           WindowType::Dnd },
+    };
+
+    for (auto const& e : table)
+        if (type == e.atom)
+            return e.wtype;
+
     return WindowType::Normal;
 }
 

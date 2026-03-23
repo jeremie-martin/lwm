@@ -250,15 +250,7 @@ void WindowManager::focus_or_fallback(Monitor& monitor, bool record_user_time)
 
     auto eligible = [this](xcb_window_t window) { return !is_client_iconic(window) && is_focus_eligible(window); };
 
-    std::vector<focus_policy::FloatingCandidate> floating_candidates;
-    floating_candidates.reserve(floating_windows_.size());
-    for (xcb_window_t fw : floating_windows_)
-    {
-        auto const* c = get_client(fw);
-        if (!c)
-            continue;
-        floating_candidates.push_back({ fw, c->monitor, c->workspace, c->sticky });
-    }
+    auto floating_candidates = build_floating_candidates();
 
     std::vector<xcb_window_t> sticky_tiled_candidates;
     sticky_tiled_candidates.reserve(ws.windows.size());
@@ -304,38 +296,28 @@ void WindowManager::focus_or_fallback(Monitor& monitor, bool record_user_time)
 
 bool WindowManager::is_focus_eligible(xcb_window_t window) const
 {
-    Client::Kind kind = Client::Kind::Tiled;
-    if (auto* client = get_client(window))
-    {
-        kind = client->kind;
-        if (kind == Client::Kind::Dock || kind == Client::Kind::Desktop)
-            return false;
-    }
+    auto const* client = get_client(window);
+    if (!client)
+        return false;
+    if (client->kind == Client::Kind::Dock || client->kind == Client::Kind::Desktop)
+        return false;
     if (is_suppressed_by_fullscreen(window))
         return false;
-
-    bool accepts_input_focus = should_set_input_focus(window);
-    bool supports_take_focus = false;
-    if (!accepts_input_focus)
-    {
-        supports_take_focus = supports_protocol(window, wm_take_focus_);
-    }
-    return focus_policy::is_focus_eligible(kind, accepts_input_focus, supports_take_focus);
+    return focus_policy::is_focus_eligible(client->kind, client->accepts_input, client->supports_take_focus);
 }
 
 bool WindowManager::should_set_input_focus(xcb_window_t window) const
 {
+    if (auto const* client = get_client(window))
+        return client->accepts_input;
+
+    // Fallback for unmanaged windows (shouldn't happen in normal flow)
     xcb_icccm_wm_hints_t hints;
     if (!xcb_icccm_get_wm_hints_reply(conn_.get(), xcb_icccm_get_wm_hints(conn_.get(), window), &hints, nullptr))
         return true;
-
     if (!(hints.flags & XCB_ICCCM_WM_HINT_INPUT))
         return true;
-
-    if (hints.input)
-        return true;
-
-    return false;
+    return hints.input;
 }
 
 void WindowManager::send_wm_take_focus(xcb_window_t window, uint32_t timestamp)
@@ -343,7 +325,8 @@ void WindowManager::send_wm_take_focus(xcb_window_t window, uint32_t timestamp)
     if (wm_protocols_ == XCB_NONE || wm_take_focus_ == XCB_NONE)
         return;
 
-    if (!supports_protocol(window, wm_take_focus_))
+    auto const* client = get_client(window);
+    if (!client || !client->supports_take_focus)
         return;
 
     xcb_client_message_event_t ev = {};
@@ -367,13 +350,7 @@ void WindowManager::cycle_focus(bool forward)
 
     auto eligible = [this](xcb_window_t window) { return !is_client_iconic(window) && is_focus_eligible(window); };
 
-    std::vector<focus_policy::FloatingCandidate> floating_candidates;
-    for (xcb_window_t fw : floating_windows_)
-    {
-        auto const* c = get_client(fw);
-        if (c)
-            floating_candidates.push_back({ fw, c->monitor, c->workspace, c->sticky });
-    }
+    auto floating_candidates = build_floating_candidates();
 
     auto candidates = focus_policy::build_cycle_candidates(
         ws.windows,
@@ -389,6 +366,20 @@ void WindowManager::cycle_focus(bool forward)
         return;
 
     focus_any_window(target->id);
+}
+
+std::vector<focus_policy::FloatingCandidate> WindowManager::build_floating_candidates() const
+{
+    std::vector<focus_policy::FloatingCandidate> candidates;
+    candidates.reserve(floating_windows_.size());
+    for (xcb_window_t fw : floating_windows_)
+    {
+        auto const* c = get_client(fw);
+        if (!c)
+            continue;
+        candidates.push_back({ fw, c->monitor, c->workspace, c->sticky });
+    }
+    return candidates;
 }
 
 } // namespace lwm

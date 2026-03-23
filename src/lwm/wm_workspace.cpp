@@ -60,7 +60,7 @@ void WindowManager::switch_workspace(int ws)
 
     perform_workspace_switch({ focused_monitor_, switch_result->old_workspace, switch_result->new_workspace });
     focus_or_fallback(monitor);
-    conn_.flush();
+    flush_and_drain_crossing();
 
     LOG_TRACE(
         "switch_workspace: DONE, now current={} previous={}",
@@ -138,7 +138,7 @@ void WindowManager::move_window_to_workspace(int ws)
         reconcile_fullscreen_for_monitor(monitor_idx, preferred_owner);
         sync_visibility_for_monitor(monitor_idx);
         focus_or_fallback(monitors_[monitor_idx]);
-        conn_.flush();
+        flush_and_drain_crossing();
         return;
     }
 
@@ -172,7 +172,7 @@ void WindowManager::move_window_to_workspace(int ws)
     LWM_ASSERT_INVARIANTS(clients_, monitors_, floating_windows_, dock_windows_, desktop_windows_);
     focus_or_fallback(monitor);
 
-    conn_.flush();
+    flush_and_drain_crossing();
 }
 
 size_t WindowManager::wrap_monitor_index(int idx) const
@@ -268,7 +268,7 @@ void WindowManager::move_window_to_monitor(int direction)
             warp_to_monitor(monitors_[target_idx]);
         }
 
-        conn_.flush();
+        flush_and_drain_crossing();
         return;
     }
 
@@ -305,7 +305,7 @@ void WindowManager::move_window_to_monitor(int direction)
         warp_to_monitor(target_monitor);
     }
 
-    conn_.flush();
+    flush_and_drain_crossing();
 }
 
 }

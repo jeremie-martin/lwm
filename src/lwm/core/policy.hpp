@@ -334,3 +334,90 @@ inline bool move_tiled_window(
 }
 
 } // namespace lwm::workspace_policy
+
+namespace lwm::classification_policy {
+
+struct DesiredWindowState
+{
+    bool skip_taskbar = false;
+    bool skip_pager = false;
+    bool sticky = false;
+    bool modal = false;
+    bool above = false;
+    bool below = false;
+    bool borderless = false;
+};
+
+struct DesiredStateInputs
+{
+    bool classification_skip_taskbar = false;
+    bool classification_skip_pager = false;
+    bool classification_above = false;
+
+    bool ewmh_skip_taskbar = false;
+    bool ewmh_skip_pager = false;
+    bool ewmh_sticky = false;
+    bool ewmh_modal = false;
+    bool ewmh_above = false;
+    bool ewmh_below = false;
+
+    std::optional<bool> rule_skip_taskbar;
+    std::optional<bool> rule_skip_pager;
+    std::optional<bool> rule_sticky;
+    std::optional<bool> rule_above;
+    std::optional<bool> rule_below;
+    std::optional<bool> rule_borderless;
+
+    bool has_transient = false;
+    bool is_sticky_desktop = false;
+    WindowLayer layer = WindowLayer::Normal;
+};
+
+inline DesiredWindowState compute_desired_state(DesiredStateInputs const& in)
+{
+    DesiredWindowState out;
+
+    out.skip_taskbar = in.has_transient || in.classification_skip_taskbar || in.ewmh_skip_taskbar;
+    if (in.rule_skip_taskbar.has_value())
+        out.skip_taskbar = *in.rule_skip_taskbar;
+    if (in.layer == WindowLayer::Overlay)
+        out.skip_taskbar = true;
+
+    out.skip_pager = in.has_transient || in.classification_skip_pager || in.ewmh_skip_pager;
+    if (in.rule_skip_pager.has_value())
+        out.skip_pager = *in.rule_skip_pager;
+    if (in.layer == WindowLayer::Overlay)
+        out.skip_pager = true;
+
+    out.sticky = in.is_sticky_desktop || in.ewmh_sticky;
+    if (in.rule_sticky.has_value())
+        out.sticky = *in.rule_sticky;
+    if (in.layer == WindowLayer::Overlay)
+        out.sticky = true;
+
+    out.modal = in.ewmh_modal;
+
+    out.above = !out.modal && (in.classification_above || in.ewmh_above);
+    if (in.rule_above.has_value())
+        out.above = *in.rule_above;
+
+    out.below = in.ewmh_below;
+    if (in.rule_below.has_value())
+        out.below = *in.rule_below;
+
+    if (in.layer == WindowLayer::Overlay)
+    {
+        out.above = false;
+        out.below = false;
+    }
+    else if (out.modal || out.above)
+    {
+        out.below = false;
+    }
+
+    out.borderless = in.rule_borderless.value_or(false) || in.layer == WindowLayer::Overlay;
+
+    return out;
+}
+
+} // namespace lwm::classification_policy

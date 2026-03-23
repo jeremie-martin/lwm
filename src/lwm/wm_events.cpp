@@ -188,6 +188,20 @@ void WindowManager::handle_map_request(xcb_map_request_event_t const& e)
         start_iconic = true;
     }
 
+    auto apply_initial_state_flags = [this](xcb_window_t window, WindowRuleResult const& rule)
+    {
+        if (rule.layer == WindowLayer::Overlay)
+            set_window_layer(window, WindowLayer::Overlay);
+        else if (rule.above.has_value() && *rule.above)
+            set_window_above(window, true);
+        if (rule.below.has_value() && *rule.below)
+            set_window_below(window, true);
+        if (rule.sticky.has_value() && *rule.sticky)
+            set_window_sticky(window, true);
+        if (rule.layer != WindowLayer::Overlay && rule.fullscreen.has_value() && *rule.fullscreen)
+            set_fullscreen(window, true);
+    };
+
     switch (classification.kind)
     {
         case WindowClassification::Kind::Desktop:
@@ -303,17 +317,7 @@ void WindowManager::handle_map_request(xcb_map_request_event_t const& e)
                     }
                 }
 
-                if (rule_result.layer == WindowLayer::Overlay)
-                    set_window_layer(e.window, WindowLayer::Overlay);
-                else if (rule_result.above.has_value() && *rule_result.above)
-                    set_window_above(e.window, true);
-                if (rule_result.below.has_value() && *rule_result.below)
-                    set_window_below(e.window, true);
-                if (rule_result.sticky.has_value() && *rule_result.sticky)
-                    set_window_sticky(e.window, true);
-                if (rule_result.layer != WindowLayer::Overlay && rule_result.fullscreen.has_value()
-                    && *rule_result.fullscreen)
-                    set_fullscreen(e.window, true);
+                apply_initial_state_flags(e.window, rule_result);
 
                 // Update visibility after placement changes
                 client = get_client(e.window);
@@ -362,17 +366,7 @@ void WindowManager::handle_map_request(xcb_map_request_event_t const& e)
                     }
                 }
 
-                if (rule_result.layer == WindowLayer::Overlay)
-                    set_window_layer(e.window, WindowLayer::Overlay);
-                else if (rule_result.above.has_value() && *rule_result.above)
-                    set_window_above(e.window, true);
-                if (rule_result.below.has_value() && *rule_result.below)
-                    set_window_below(e.window, true);
-                if (rule_result.sticky.has_value() && *rule_result.sticky)
-                    set_window_sticky(e.window, true);
-                if (rule_result.layer != WindowLayer::Overlay && rule_result.fullscreen.has_value()
-                    && *rule_result.fullscreen)
-                    set_fullscreen(e.window, true);
+                apply_initial_state_flags(e.window, rule_result);
             }
 
             if (!start_iconic)
@@ -976,6 +970,43 @@ void WindowManager::handle_active_window_request(xcb_client_message_event_t cons
     }
 }
 
+void WindowManager::reconcile_fullscreen_after_desktop_move(
+    xcb_window_t window, size_t source_monitor, size_t target_monitor, size_t target_workspace)
+{
+    xcb_window_t preferred = XCB_NONE;
+    if (is_client_fullscreen(window) && !showing_desktop_ && target_monitor < monitors_.size()
+        && target_workspace == monitors_[target_monitor].current_workspace)
+    {
+        preferred = window;
+    }
+
+    if (source_monitor == target_monitor)
+    {
+        reconcile_fullscreen_for_monitor(target_monitor, preferred);
+    }
+    else
+    {
+        reconcile_fullscreen_for_monitor(source_monitor);
+        reconcile_fullscreen_for_monitor(target_monitor, preferred);
+    }
+}
+
+void WindowManager::finalize_after_desktop_move(
+    xcb_window_t window, bool was_active, size_t target_monitor, size_t target_workspace)
+{
+    update_ewmh_client_list();
+
+    bool visible = !showing_desktop_ && target_monitor < monitors_.size()
+        && target_workspace == monitors_[target_monitor].current_workspace;
+
+    if (was_active && is_suppressed_by_fullscreen(window))
+        focus_or_fallback(monitors_[target_monitor], false);
+    else if (was_active && !visible)
+        focus_or_fallback(focused_monitor());
+
+    flush_and_drain_crossing();
+}
+
 void WindowManager::handle_desktop_change(xcb_client_message_event_t const& e)
 {
     uint32_t desktop = e.data.data32[0];
@@ -1001,12 +1032,6 @@ void WindowManager::handle_desktop_change(xcb_client_message_event_t const& e)
         return;
 
     bool was_active = (active_window_ == e.window);
-    auto target_visible = [&](size_t monitor_idx, size_t workspace_idx)
-    {
-        if (showing_desktop_)
-            return false;
-        return monitor_idx < monitors_.size() && workspace_idx == monitors_[monitor_idx].current_workspace;
-    };
 
     auto* source_client = get_client(e.window);
     if (source_client && source_client->kind == Client::Kind::Tiled)
@@ -1021,49 +1046,23 @@ void WindowManager::handle_desktop_change(xcb_client_message_event_t const& e)
         remove_tiled_from_workspace(e.window, source_mon_idx, source_ws_idx);
         add_tiled_to_workspace(e.window, target_monitor, target_workspace);
 
-        if (!target_visible(target_monitor, target_workspace) || was_active)
+        bool target_ws_visible = !showing_desktop_ && target_workspace == monitors_[target_monitor].current_workspace;
+        if (!target_ws_visible || was_active)
         {
             monitors_[target_monitor].workspaces[target_workspace].focused_window = e.window;
         }
         LWM_ASSERT_INVARIANTS(clients_, monitors_, floating_windows_, dock_windows_, desktop_windows_);
 
-        if (source_mon_idx == target_monitor)
-        {
-            reconcile_fullscreen_for_monitor(
-                target_monitor,
-                is_client_fullscreen(e.window) && target_visible(target_monitor, target_workspace) ? e.window : XCB_NONE
-            );
-        }
-        else
-        {
-            reconcile_fullscreen_for_monitor(source_mon_idx);
-            reconcile_fullscreen_for_monitor(
-                target_monitor,
-                is_client_fullscreen(e.window) && target_visible(target_monitor, target_workspace) ? e.window : XCB_NONE
-            );
-        }
+        reconcile_fullscreen_after_desktop_move(e.window, source_mon_idx, target_monitor, target_workspace);
 
         rearrange_monitor(monitors_[source_mon_idx]);
         if (source_mon_idx != target_monitor)
-        {
             rearrange_monitor(monitors_[target_monitor]);
-        }
 
-        if (!target_visible(target_monitor, target_workspace))
-        {
+        if (!target_ws_visible)
             hide_window(e.window);
-        }
 
-        update_ewmh_client_list();
-        if (was_active && is_suppressed_by_fullscreen(e.window))
-        {
-            focus_or_fallback(monitors_[target_monitor], false);
-        }
-        else if (was_active && !target_visible(target_monitor, target_workspace))
-        {
-            focus_or_fallback(focused_monitor());
-        }
-        conn_.flush();
+        finalize_after_desktop_move(e.window, was_active, target_monitor, target_workspace);
     }
     else if (is_floating_window(e.window))
     {
@@ -1085,37 +1084,13 @@ void WindowManager::handle_desktop_change(xcb_client_message_event_t const& e)
         client->workspace = target_workspace;
         ewmh_.set_window_desktop(e.window, desktop);
 
-        if (source_monitor == target_monitor)
-        {
-            reconcile_fullscreen_for_monitor(
-                target_monitor,
-                is_client_fullscreen(e.window) && target_visible(target_monitor, target_workspace) ? e.window : XCB_NONE
-            );
-        }
-        else
-        {
-            reconcile_fullscreen_for_monitor(source_monitor);
-            reconcile_fullscreen_for_monitor(
-                target_monitor,
-                is_client_fullscreen(e.window) && target_visible(target_monitor, target_workspace) ? e.window : XCB_NONE
-            );
-        }
+        reconcile_fullscreen_after_desktop_move(e.window, source_monitor, target_monitor, target_workspace);
 
         if (source_monitor != target_monitor)
-        {
             sync_visibility_for_monitor(source_monitor);
-        }
         sync_visibility_for_monitor(target_monitor);
-        update_ewmh_client_list();
-        if (was_active && is_suppressed_by_fullscreen(e.window))
-        {
-            focus_or_fallback(monitors_[target_monitor], false);
-        }
-        else if (was_active && !target_visible(target_monitor, target_workspace))
-        {
-            focus_or_fallback(focused_monitor());
-        }
-        conn_.flush();
+
+        finalize_after_desktop_move(e.window, was_active, target_monitor, target_workspace);
     }
 }
 
@@ -1202,7 +1177,7 @@ void WindowManager::handle_showing_desktop(xcb_client_message_event_t const& e)
             focus_or_fallback(focused_monitor());
         }
     }
-    conn_.flush();
+    flush_and_drain_crossing();
 }
 
 void WindowManager::handle_configure_request(xcb_configure_request_event_t const& e)
@@ -1349,6 +1324,8 @@ void WindowManager::handle_property_notify(xcb_property_notify_event_t const& e)
                     nullptr
                 ))
             {
+                client->accepts_input = !(hints.flags & XCB_ICCCM_WM_HINT_INPUT) || hints.input;
+
                 constexpr uint32_t XUrgencyHint = 256;
                 bool urgent = (hints.flags & XUrgencyHint) != 0;
                 if (urgent && e.window != active_window_)
@@ -1360,6 +1337,10 @@ void WindowManager::handle_property_notify(xcb_property_notify_event_t const& e)
                     set_client_demands_attention(e.window, false);
                 }
             }
+            else
+            {
+                client->accepts_input = true; // ICCCM default when WM_HINTS absent
+            }
 
             if (active_window_ == e.window && !is_focus_eligible(e.window))
             {
@@ -1369,6 +1350,11 @@ void WindowManager::handle_property_notify(xcb_property_notify_event_t const& e)
                     clear_focus();
             }
         }
+    }
+    else if (wm_protocols_ != XCB_NONE && e.atom == wm_protocols_)
+    {
+        if (auto* client = get_client(e.window))
+            client->supports_take_focus = supports_protocol(e.window, wm_take_focus_);
     }
     else if ((e.atom == ewmh_.get()->_NET_WM_STRUT || e.atom == ewmh_.get()->_NET_WM_STRUT_PARTIAL)
              && std::ranges::find(dock_windows_, e.window) != dock_windows_.end())
@@ -1605,7 +1591,7 @@ void WindowManager::handle_randr_screen_change()
         focus_or_fallback(monitors_[focused_monitor_]);
     }
 
-    conn_.flush();
+    flush_and_drain_crossing();
 }
 
 } // namespace lwm

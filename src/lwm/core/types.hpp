@@ -118,6 +118,9 @@ struct Client
     bool borderless = false;        ///< WM-managed zero-border window
     WindowLayer layer = WindowLayer::Normal;
 
+    bool accepts_input = true;       ///< Cached WM_HINTS input field (ICCCM default: true)
+    bool supports_take_focus = false; ///< Cached: WM_PROTOCOLS contains WM_TAKE_FOCUS
+
     Geometry floating_geometry;
     xcb_window_t transient_for = XCB_NONE;
 

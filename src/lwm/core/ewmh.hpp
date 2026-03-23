@@ -94,14 +94,10 @@ public:
 
     // Urgent hints
     void set_demands_attention(xcb_window_t window, bool urgent);
-    bool has_urgent_hint(xcb_window_t window) const;
 
     // Window type detection and classification
     xcb_atom_t get_window_type(xcb_window_t window) const;
     WindowType get_window_type_enum(xcb_window_t window) const;
-    bool is_dock_window(xcb_window_t window) const;
-    bool is_dialog_window(xcb_window_t window) const;
-    bool should_tile_window(xcb_window_t window) const;
 
     /**
      * @brief Classify a window based on EWMH type and transient status
@@ -122,6 +118,8 @@ public:
 
     // Strut support
     Strut get_window_strut(xcb_window_t window) const;
+
+    void destroy_for_restart();
 
     xcb_ewmh_connection_t* get() { return &ewmh_; }
     xcb_ewmh_connection_t* get() const { return &ewmh_; }

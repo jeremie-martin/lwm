@@ -301,6 +301,59 @@ TEST_CASE("Integration: overlay stays above normal tiled windows without fullscr
     destroy_window(conn, tiled1);
 }
 
+TEST_CASE("Integration: overlay is sticky and survives workspace switch", "[integration][overlay]")
+{
+    auto test_env = TestEnvironment::create(overlay_config());
+    if (!test_env)
+        return;
+
+    auto& conn = test_env->conn;
+
+    xcb_atom_t net_wm_state = intern_atom(conn.get(), "_NET_WM_STATE");
+    xcb_atom_t net_wm_state_sticky = intern_atom(conn.get(), "_NET_WM_STATE_STICKY");
+    xcb_atom_t net_wm_window_type_utility = intern_atom(conn.get(), "_NET_WM_WINDOW_TYPE_UTILITY");
+    xcb_atom_t net_current_desktop = intern_atom(conn.get(), "_NET_CURRENT_DESKTOP");
+    if (net_wm_state == XCB_NONE || net_wm_state_sticky == XCB_NONE
+        || net_wm_window_type_utility == XCB_NONE || net_current_desktop == XCB_NONE)
+    {
+        WARN("Failed to intern EWMH atoms.");
+        return;
+    }
+
+    // Create an overlay (utility) window on workspace 0.
+    xcb_window_t overlay = create_window(conn, 20, 20, 200, 120);
+    set_window_type(conn, overlay, net_wm_window_type_utility);
+    map_window(conn, overlay);
+    REQUIRE(wait_for_condition([&]() { return matches_root_geometry(conn, overlay); }, kTimeout));
+
+    // Overlay must have _NET_WM_STATE_STICKY set.
+    REQUIRE(wait_for_condition(
+        [&]() { return has_state(conn, overlay, net_wm_state_sticky); },
+        kTimeout
+    ));
+
+    // Switch to workspace 1.
+    send_client_message(conn, conn.root(), net_current_desktop, 1, 0, 0, 0, 0);
+    std::this_thread::sleep_for(std::chrono::milliseconds(200));
+
+    // Overlay must still have root geometry (visible, not hidden off-screen).
+    REQUIRE(wait_for_condition([&]() { return matches_root_geometry(conn, overlay); }, kTimeout));
+
+    // Create a tiled window on workspace 1.
+    xcb_window_t tiled = create_window(conn, 10, 10, 640, 360);
+    map_window(conn, tiled);
+    REQUIRE(wait_for_active_window(conn, tiled, kTimeout));
+
+    // Overlay must still be above the tiled window.
+    REQUIRE(wait_for_condition(
+        [&]() { return is_stacked_above(conn, overlay, tiled); },
+        kTimeout
+    ));
+
+    destroy_window(conn, tiled);
+    destroy_window(conn, overlay);
+}
+
 TEST_CASE("Integration: multiple overlay windows both stay above fullscreen", "[integration][overlay]")
 {
     auto test_env = TestEnvironment::create(overlay_config());

@@ -22,6 +22,23 @@ std::string get_config_path(int argc, char* argv[])
     return "";
 }
 
+lwm::Config load_config(std::string const& config_path)
+{
+    if (!config_path.empty() && fs::exists(config_path))
+    {
+        LOG_INFO("Loading config from: {}", config_path);
+        auto loaded = lwm::load_config_result(config_path);
+        if (loaded)
+            return *loaded;
+        LOG_WARN("{}; using defaults", loaded.error());
+    }
+    else
+    {
+        LOG_INFO("No config file found, using defaults");
+    }
+    return lwm::default_config();
+}
+
 int main(int argc, char* argv[])
 {
     lwm::log::init();
@@ -31,44 +48,46 @@ int main(int argc, char* argv[])
         LOG_INFO("Starting LWM window manager");
 
         std::string config_path = get_config_path(argc, argv);
-        lwm::Config config;
+        int recovery_failures = 0;
 
-        if (!config_path.empty() && fs::exists(config_path))
+        while (true)
         {
-            LOG_INFO("Loading config from: {}", config_path);
-            auto loaded = lwm::load_config_result(config_path);
-            if (loaded)
+            lwm::Config config = load_config(config_path);
+
+            std::string restart_binary;
+            try
             {
-                config = *loaded;
+                lwm::WindowManager wm(std::move(config), config_path);
+                recovery_failures = 0; // Reset on successful construction
+                auto result = wm.run();
+                if (result != lwm::RunResult::Restart)
+                    break;
+
+                restart_binary = wm.restart_binary();
+                wm.prepare_restart();
             }
-            else
+            catch (std::exception const& e)
             {
-                LOG_WARN("{}; using defaults", loaded.error());
-                config = lwm::default_config();
+                ++recovery_failures;
+                if (recovery_failures >= 3)
+                {
+                    LOG_ERROR("WM initialization failed {} times, giving up: {}", recovery_failures, e.what());
+                    throw;
+                }
+                LOG_ERROR("WM initialization failed, retrying ({}/3): {}", recovery_failures, e.what());
+                continue;
             }
-        }
-        else
-        {
-            LOG_INFO("No config file found, using defaults");
-            config = lwm::default_config();
-        }
+            // WindowManager is destroyed here. The X connection closes with
+            // RetainPermanent set, so no resources are destroyed.
 
-        lwm::WindowManager wm(std::move(config), config_path);
-        auto result = wm.run();
-
-        if (result == lwm::RunResult::Restart)
-        {
-            std::string binary = wm.restart_binary();
-            if (binary.empty())
-                binary = argv[0];
-
+            std::string binary = restart_binary.empty() ? std::string(argv[0]) : restart_binary;
             LOG_INFO("Restarting: {}", binary);
-            lwm::log::shutdown();
-
             execvp(binary.c_str(), argv);
-            // If we get here, exec failed
-            std::fprintf(stderr, "lwm: exec failed: %s\n", std::strerror(errno));
-            return 1;
+
+            // exec failed — recover by looping back and creating a new WM.
+            // The restart state is already serialized to X properties, so the
+            // new WM instance will re-adopt all windows automatically.
+            LOG_ERROR("exec failed: {}, recovering", std::strerror(errno));
         }
     }
     catch (std::exception const& e)

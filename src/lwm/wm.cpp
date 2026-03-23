@@ -298,17 +298,7 @@ RunResult WindowManager::run()
     }
 
     if (restarting_)
-    {
-        // Verify binary exists before tearing down WM state (point of no return)
-        if (!restart_binary_.empty() && !std::filesystem::exists(restart_binary_))
-        {
-            LOG_ERROR("Restart binary not found: {}", restart_binary_);
-            restarting_ = false;
-            return RunResult::Exit;
-        }
-        prepare_restart();
         return RunResult::Restart;
-    }
     return RunResult::Exit;
 }
 
@@ -1526,78 +1516,42 @@ void WindowManager::sync_managed_window_classification(xcb_window_t window, Wind
         }
     }
 
-    bool wants_skip_taskbar = has_transient || classification.skip_taskbar
-        || ewmh_.has_window_state(window, ewmh_.get()->_NET_WM_STATE_SKIP_TASKBAR);
-    if (rule_result.skip_taskbar.has_value())
-        wants_skip_taskbar = *rule_result.skip_taskbar;
-    if (client->layer == WindowLayer::Overlay)
-        wants_skip_taskbar = true;
+    auto desired = classification_policy::compute_desired_state({
+        .classification_skip_taskbar = classification.skip_taskbar,
+        .classification_skip_pager = classification.skip_pager,
+        .classification_above = classification.above,
+        .ewmh_skip_taskbar = ewmh_.has_window_state(window, ewmh_.get()->_NET_WM_STATE_SKIP_TASKBAR),
+        .ewmh_skip_pager = ewmh_.has_window_state(window, ewmh_.get()->_NET_WM_STATE_SKIP_PAGER),
+        .ewmh_sticky = ewmh_.has_window_state(window, ewmh_.get()->_NET_WM_STATE_STICKY),
+        .ewmh_modal = ewmh_.has_window_state(window, ewmh_.get()->_NET_WM_STATE_MODAL),
+        .ewmh_above = ewmh_.has_window_state(window, ewmh_.get()->_NET_WM_STATE_ABOVE),
+        .ewmh_below = ewmh_.has_window_state(window, ewmh_.get()->_NET_WM_STATE_BELOW),
+        .rule_skip_taskbar = rule_result.skip_taskbar,
+        .rule_skip_pager = rule_result.skip_pager,
+        .rule_sticky = rule_result.sticky,
+        .rule_above = rule_result.above,
+        .rule_below = rule_result.below,
+        .rule_borderless = rule_result.borderless,
+        .has_transient = has_transient,
+        .is_sticky_desktop = is_sticky_desktop(window),
+        .layer = client->layer,
+    });
 
-    bool wants_skip_pager = has_transient || classification.skip_pager
-        || ewmh_.has_window_state(window, ewmh_.get()->_NET_WM_STATE_SKIP_PAGER);
-    if (rule_result.skip_pager.has_value())
-        wants_skip_pager = *rule_result.skip_pager;
-    if (client->layer == WindowLayer::Overlay)
-        wants_skip_pager = true;
-
-    bool wants_sticky = is_sticky_desktop(window) || ewmh_.has_window_state(window, ewmh_.get()->_NET_WM_STATE_STICKY);
-    if (rule_result.sticky.has_value())
-        wants_sticky = *rule_result.sticky;
-
-    bool wants_modal = ewmh_.has_window_state(window, ewmh_.get()->_NET_WM_STATE_MODAL);
-
-    bool wants_above = !wants_modal
-        && (classification.above || ewmh_.has_window_state(window, ewmh_.get()->_NET_WM_STATE_ABOVE));
-    if (rule_result.above.has_value())
-        wants_above = *rule_result.above;
-
-    bool wants_below = ewmh_.has_window_state(window, ewmh_.get()->_NET_WM_STATE_BELOW);
-    if (rule_result.below.has_value())
-        wants_below = *rule_result.below;
-
-    if (client->layer == WindowLayer::Overlay)
-    {
-        wants_above = false;
-        wants_below = false;
-    }
-    else if (wants_modal || wants_above)
-    {
-        wants_below = false;
-    }
-
-    bool wants_borderless = rule_result.borderless.value_or(false) || client->layer == WindowLayer::Overlay;
-
-    if (client->skip_taskbar != wants_skip_taskbar)
-        set_client_skip_taskbar(window, wants_skip_taskbar);
-    if (client->skip_pager != wants_skip_pager)
-        set_client_skip_pager(window, wants_skip_pager);
-    if (client->sticky != wants_sticky)
-        set_window_sticky(window, wants_sticky);
-    if (client->modal != wants_modal)
-        set_window_modal(window, wants_modal);
-
-    client = get_client(window);
-    if (!client)
-        return;
-
-    if (client->above != wants_above)
-        set_window_above(window, wants_above);
-    client = get_client(window);
-    if (!client)
-        return;
-
-    if (client->below != wants_below)
-        set_window_below(window, wants_below);
-    client = get_client(window);
-    if (!client)
-        return;
-
-    if (client->borderless != wants_borderless)
-        set_window_borderless(window, wants_borderless);
-
-    client = get_client(window);
-    if (!client)
-        return;
+    // None of the setters below modify clients_ map — safe to reuse pointer throughout.
+    if (client->skip_taskbar != desired.skip_taskbar)
+        set_client_skip_taskbar(window, desired.skip_taskbar);
+    if (client->skip_pager != desired.skip_pager)
+        set_client_skip_pager(window, desired.skip_pager);
+    if (client->sticky != desired.sticky)
+        set_window_sticky(window, desired.sticky);
+    if (client->modal != desired.modal)
+        set_window_modal(window, desired.modal);
+    if (client->above != desired.above)
+        set_window_above(window, desired.above);
+    if (client->below != desired.below)
+        set_window_below(window, desired.below);
+    if (client->borderless != desired.borderless)
+        set_window_borderless(window, desired.borderless);
 
     update_allowed_actions(window);
 
@@ -1750,6 +1704,7 @@ void WindowManager::manage_window(xcb_window_t window, bool start_iconic)
 
         clients_[window] = std::move(client);
     }
+    cache_focus_hints(window);
 
     monitors_[target_monitor_idx].workspaces[target_workspace_idx].windows.push_back(window);
 
@@ -2003,7 +1958,7 @@ void WindowManager::set_fullscreen(xcb_window_t window, bool enabled)
             focus_or_fallback(monitors_[client->monitor], false);
         }
     }
-    conn_.flush();
+    flush_and_drain_crossing();
 }
 
 void WindowManager::set_window_layer(xcb_window_t window, WindowLayer layer)
@@ -2039,6 +1994,8 @@ void WindowManager::set_window_layer(xcb_window_t window, WindowLayer layer)
         set_client_skip_taskbar(window, true);
         set_client_skip_pager(window, true);
         set_window_borderless(window, true);
+        if (!client->sticky)
+            set_window_sticky(window, true);
     }
 
     update_allowed_actions(window);
@@ -2168,7 +2125,7 @@ void WindowManager::set_window_sticky(xcb_window_t window, bool enabled)
     }
 
     update_ewmh_client_list();
-    conn_.flush();
+    flush_and_drain_crossing();
 }
 
 void WindowManager::set_window_maximized(xcb_window_t window, bool horiz, bool vert)
@@ -2521,7 +2478,7 @@ void WindowManager::iconify_window(xcb_window_t window)
         }
     }
 
-    conn_.flush();
+    flush_and_drain_crossing();
 }
 
 void WindowManager::deiconify_window(xcb_window_t window, bool focus)
@@ -2555,7 +2512,7 @@ void WindowManager::deiconify_window(xcb_window_t window, bool focus)
     }
 
     apply_fullscreen_if_needed(window, fullscreen_policy::ApplyContext::VisibilityTransition);
-    conn_.flush();
+    flush_and_drain_crossing();
 }
 
 /**
@@ -3119,6 +3076,20 @@ void WindowManager::restack_monitor_layers(size_t monitor_idx)
             continue;
         restack_transients(window);
     }
+
+    // Raise overlay windows to the absolute top of the global X stacking order.
+    // Per-monitor restacking only orders windows relative to same-monitor siblings,
+    // so a newly mapped window on another monitor could end up above the overlay
+    // in the global stack.  This final pass guarantees overlays stay on top.
+    for (xcb_window_t window : visible_windows)
+    {
+        auto const* client = get_client(window);
+        if (client && client->layer == WindowLayer::Overlay)
+        {
+            uint32_t values[] = { XCB_STACK_MODE_ABOVE };
+            xcb_configure_window(conn_.get(), window, XCB_CONFIG_WINDOW_STACK_MODE, values);
+        }
+    }
 }
 
 bool WindowManager::is_override_redirect_window(xcb_window_t window) const
@@ -3493,9 +3464,22 @@ void WindowManager::update_window_title(xcb_window_t window)
 {
     std::string name = get_window_name(window);
 
-    if (auto* client = get_client(window))
-        client->name = name;
+    auto* client = get_client(window);
+    if (!client)
+        return;
+
+    std::string previous_name = client->name;
+    client->name = name;
     sync_window_visible_names(window);
+
+    // Re-evaluate window rules when the title changes, so that title-based
+    // rules (e.g. overlay layer) are applied even when the client sets the
+    // title after the initial MapRequest (common with Electron apps).
+    if (name != previous_name)
+    {
+        reevaluate_managed_window(window);
+        conn_.flush();
+    }
 }
 
 void WindowManager::update_struts()
@@ -3652,6 +3636,49 @@ void WindowManager::show_window(xcb_window_t window)
 
     client->hidden = false;
     LOG_TRACE("show_window({:#x}): marked as visible", window);
+}
+
+void WindowManager::flush_and_drain_crossing()
+{
+    conn_.flush();
+
+    // Round-trip sync: ensures the server has processed all our requests
+    // and generated all resulting events into the connection buffer.
+    auto cookie = xcb_get_input_focus(conn_.get());
+    free(xcb_get_input_focus_reply(conn_.get(), cookie, nullptr));
+
+    // Drain crossing events generated by our visibility changes (moving
+    // windows on/off-screen).  Without this, the next event-loop iteration
+    // would see EnterNotify/MotionNotify for whichever window now sits under
+    // the cursor, overriding the focus we just set via focus_or_fallback().
+    while (auto* event = xcb_poll_for_event(conn_.get()))
+    {
+        uint8_t type = event->response_type & ~0x80;
+        if (type == XCB_ENTER_NOTIFY || type == XCB_LEAVE_NOTIFY || type == XCB_MOTION_NOTIFY)
+        {
+            free(event);
+            continue;
+        }
+        std::unique_ptr<xcb_generic_event_t, decltype(&free)> eventPtr(event, free);
+        handle_event(*event);
+    }
+}
+
+void WindowManager::cache_focus_hints(xcb_window_t window)
+{
+    auto* client = get_client(window);
+    if (!client)
+        return;
+
+    // Read WM_HINTS directly from X (not via should_set_input_focus,
+    // which reads the cache and would return the stale default).
+    xcb_icccm_wm_hints_t hints;
+    if (xcb_icccm_get_wm_hints_reply(conn_.get(), xcb_icccm_get_wm_hints(conn_.get(), window), &hints, nullptr))
+        client->accepts_input = !(hints.flags & XCB_ICCCM_WM_HINT_INPUT) || hints.input;
+    else
+        client->accepts_input = true; // ICCCM default when WM_HINTS absent
+
+    client->supports_take_focus = supports_protocol(window, wm_take_focus_);
 }
 
 void WindowManager::sync_visibility_for_monitor(size_t monitor_idx)

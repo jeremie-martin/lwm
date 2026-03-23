@@ -35,6 +35,7 @@ public:
 
     RunResult run();
     std::string const& restart_binary() const { return restart_binary_; }
+    void prepare_restart();
 
 private:
     struct DragState
@@ -172,6 +173,7 @@ private:
 
     void manage_window(xcb_window_t window, bool start_iconic = false);
     void manage_floating_window(xcb_window_t window, bool start_iconic = false);
+    void cache_focus_hints(xcb_window_t window);
     void parse_initial_ewmh_state(Client& client);
     void init_user_time(xcb_window_t window);
     void apply_post_manage_states(xcb_window_t window, bool has_transient);
@@ -259,6 +261,7 @@ private:
     size_t wrap_monitor_index(int idx) const;
     void warp_to_monitor(Monitor const& monitor);
     void focus_or_fallback(Monitor& monitor, bool record_user_time = true);
+    std::vector<focus_policy::FloatingCandidate> build_floating_candidates() const;
     Monitor* monitor_at_point(int16_t x, int16_t y);
     bool is_floating_window(xcb_window_t window) const;
     std::optional<size_t> monitor_index_for_window(xcb_window_t window) const;
@@ -276,6 +279,10 @@ private:
     ) const;
     bool is_suppressed_by_fullscreen(xcb_window_t window) const;
     void reconcile_fullscreen_for_monitor(size_t monitor_idx, xcb_window_t preferred_owner = XCB_NONE);
+    void reconcile_fullscreen_after_desktop_move(
+        xcb_window_t window, size_t source_monitor, size_t target_monitor, size_t target_workspace);
+    void finalize_after_desktop_move(
+        xcb_window_t window, bool was_active, size_t target_monitor, size_t target_workspace);
     void restack_transients(xcb_window_t parent);
     void restack_monitor_layers(size_t monitor_idx);
     bool is_override_redirect_window(xcb_window_t window) const;
@@ -318,6 +325,7 @@ private:
     // Off-screen visibility management (DWM-style)
     void hide_window(xcb_window_t window);
     void show_window(xcb_window_t window);
+    void flush_and_drain_crossing();
 
     // Derived visibility: sync physical visibility to match policy state
     void sync_visibility_for_monitor(size_t monitor_idx);
@@ -339,7 +347,6 @@ private:
     void apply_restart_client_state(xcb_window_t window);
     void restore_window_ordering();
     void clean_restart_properties();
-    void prepare_restart();
 };
 
 }
