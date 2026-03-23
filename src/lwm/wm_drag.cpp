@@ -223,10 +223,13 @@ void WindowManager::end_drag()
 
                     if (*source_monitor_idx == target_monitor_idx)
                     {
+                        sync_visibility_for_monitor(target_monitor_idx);
                         rearrange_monitor(monitors_[target_monitor_idx]);
                     }
                     else
                     {
+                        sync_visibility_for_monitor(*source_monitor_idx);
+                        sync_visibility_for_monitor(target_monitor_idx);
                         rearrange_monitor(monitors_[*source_monitor_idx]);
                         rearrange_monitor(monitors_[target_monitor_idx]);
                     }

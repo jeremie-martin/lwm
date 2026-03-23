@@ -10,6 +10,25 @@
 
 namespace lwm {
 
+/// EWMH window type classification
+enum class WindowType
+{
+    Desktop,
+    Dock,
+    Toolbar,
+    Menu,
+    Utility,
+    Splash,
+    Dialog,
+    DropdownMenu,
+    PopupMenu,
+    Tooltip,
+    Notification,
+    Combo,
+    Dnd,
+    Normal
+};
+
 /// Off-screen X coordinate for hidden windows (DWM-style visibility management)
 constexpr int16_t OFF_SCREEN_X = -20000;
 
@@ -64,7 +83,7 @@ enum class WindowLayer
  *
  * State flags managed here:
  * - fullscreen, iconic, sticky, above, below
- * - maximized_horz, maximized_vert, shaded, modal
+ * - maximized_horz, maximized_vert, modal
  * - skip_taskbar
  *
  * Restore geometries:
@@ -110,7 +129,7 @@ struct Client
     bool sticky = false;            ///< _NET_WM_STATE_STICKY
     bool maximized_horz = false;    ///< _NET_WM_STATE_MAXIMIZED_HORZ
     bool maximized_vert = false;    ///< _NET_WM_STATE_MAXIMIZED_VERT
-    bool shaded = false;            ///< _NET_WM_STATE_SHADED
+
     bool modal = false;             ///< _NET_WM_STATE_MODAL
     bool skip_taskbar = false;      ///< _NET_WM_STATE_SKIP_TASKBAR
     bool skip_pager = false;        ///< _NET_WM_STATE_SKIP_PAGER
@@ -118,6 +137,7 @@ struct Client
     bool borderless = false;        ///< WM-managed zero-border window
     WindowLayer layer = WindowLayer::Normal;
 
+    WindowType ewmh_type = WindowType::Normal; ///< Cached EWMH window type
     bool accepts_input = true;       ///< Cached WM_HINTS input field (ICCCM default: true)
     bool supports_take_focus = false; ///< Cached: WM_PROTOCOLS contains WM_TAKE_FOCUS
 
@@ -160,6 +180,7 @@ struct Monitor
     size_t current_workspace = 0;
     size_t previous_workspace = 0;
     Strut strut = {};
+    xcb_window_t fullscreen_owner = XCB_NONE; ///< Window owning fullscreen on this monitor (at most one)
 
     Workspace& current() { return workspaces[current_workspace]; }
     Workspace const& current() const { return workspaces[current_workspace]; }

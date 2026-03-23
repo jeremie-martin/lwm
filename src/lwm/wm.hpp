@@ -27,6 +27,12 @@ enum class RunResult
     Restart
 };
 
+struct ClassificationResult
+{
+    WindowClassification classification;
+    WindowRuleResult rule_result;
+};
+
 class WindowManager
 {
 public:
@@ -73,7 +79,7 @@ private:
     // Unified Client registry
     // This is the authoritative source of truth for all managed window state.
     // All state flags (fullscreen, iconic, sticky, above, below, maximized,
-    // shaded, modal) are stored in Client records, not in separate sets.
+    // modal) are stored in Client records, not in separate sets.
     // See types.hpp Client struct for full documentation.
     std::unordered_map<xcb_window_t, Client> clients_;
 
@@ -122,6 +128,17 @@ private:
     DragState drag_state_;
     std::vector<MouseBinding> mousebinds_;
 
+    struct IpcClient
+    {
+        int fd = -1;
+        std::string buffer;
+        std::chrono::steady_clock::time_point deadline;
+    };
+    std::optional<IpcClient> pending_ipc_;
+
+    bool stacking_dirty_ = false;
+    std::vector<xcb_window_t> cached_stacking_order_;
+
     void create_wm_window();
     void setup_root();
     void grab_buttons();
@@ -134,10 +151,26 @@ private:
     void run_autostart();
     void setup_ipc();
     void cleanup_ipc();
-    void handle_ipc();
+    void accept_ipc_client();
+    void process_ipc_client();
+    void close_ipc_client();
 
     void handle_event(xcb_generic_event_t const& event);
     void handle_map_request(xcb_map_request_event_t const& e);
+    void map_desktop_window(xcb_window_t window);
+    void map_dock_window(xcb_window_t window);
+    void map_floating_window(
+        xcb_window_t window,
+        WindowClassification const& classification,
+        WindowRuleResult const& rule_result,
+        bool start_iconic,
+        bool urgent);
+    void map_tiled_window(
+        xcb_window_t window,
+        WindowRuleResult const& rule_result,
+        bool start_iconic,
+        bool urgent);
+    void apply_initial_state_flags(xcb_window_t window, WindowRuleResult const& rule);
     void handle_window_removal(xcb_window_t window);
     void handle_enter_notify(xcb_enter_notify_event_t const& e);
     void handle_motion_notify(xcb_motion_notify_event_t const& e);
@@ -145,7 +178,14 @@ private:
     void handle_button_release(xcb_button_release_event_t const& e);
     void handle_key_press(xcb_key_press_event_t const& e);
     void handle_key_release(xcb_key_release_event_t const& e);
+    bool is_auto_repeat_toggle(xcb_keysym_t keysym, xcb_timestamp_t time);
     void handle_client_message(xcb_client_message_event_t const& e);
+    void handle_close_window_message(xcb_client_message_event_t const& e);
+    void handle_fullscreen_monitors_message(xcb_client_message_event_t const& e);
+    void handle_change_state_message(xcb_client_message_event_t const& e);
+    void handle_current_desktop_message(xcb_client_message_event_t const& e);
+    void handle_frame_extents_message(xcb_client_message_event_t const& e);
+    void handle_restack_message(xcb_client_message_event_t const& e);
     void handle_wm_state_change(xcb_client_message_event_t const& e);
     void handle_active_window_request(xcb_client_message_event_t const& e);
     void handle_desktop_change(xcb_client_message_event_t const& e);
@@ -177,11 +217,18 @@ private:
     void parse_initial_ewmh_state(Client& client);
     void init_user_time(xcb_window_t window);
     void apply_post_manage_states(xcb_window_t window, bool has_transient);
-    WindowClassification classify_managed_window(xcb_window_t window);
+    ClassificationResult classify_managed_window(xcb_window_t window);
     void refresh_user_time_tracking(xcb_window_t window);
     void reevaluate_managed_window(xcb_window_t window);
-    void sync_managed_window_classification(xcb_window_t window, WindowClassification const& classification);
-    void sync_window_visible_names(xcb_window_t window);
+    void sync_managed_window_classification(xcb_window_t window, ClassificationResult const& result);
+    bool sync_kind_and_layer(xcb_window_t window, WindowClassification::Kind desired_kind, WindowRuleResult const& rule_result);
+    void relocate_to_transient_parent(xcb_window_t window, xcb_window_t previous_transient_for);
+    void apply_classification_state(
+        xcb_window_t window,
+        WindowClassification const& classification,
+        WindowRuleResult const& rule_result,
+        bool has_transient);
+
     void unmanage_window(xcb_window_t window);
     void unmanage_floating_window(xcb_window_t window);
     void focus_any_window(xcb_window_t window, bool record_user_time = true);
@@ -190,17 +237,14 @@ private:
     void clear_fullscreen_state(xcb_window_t window);
     void set_window_layer(xcb_window_t window, WindowLayer layer);
     void set_window_borderless(xcb_window_t window, bool enabled);
-    void set_window_above(xcb_window_t window, bool enabled);
-    void set_window_below(xcb_window_t window, bool enabled);
+    void set_window_above(xcb_window_t window, bool enabled) { set_window_above_below(window, true, enabled); }
+    void set_window_below(xcb_window_t window, bool enabled) { set_window_above_below(window, false, enabled); }
+    void set_window_above_below(xcb_window_t window, bool is_above, bool enabled);
     void set_window_sticky(xcb_window_t window, bool enabled);
     void set_window_maximized(xcb_window_t window, bool horiz, bool vert);
     void apply_maximized_geometry(xcb_window_t window);
-    void set_window_shaded(xcb_window_t window, bool enabled);
     void set_window_modal(xcb_window_t window, bool enabled);
-    void apply_fullscreen_if_needed(
-        xcb_window_t window,
-        fullscreen_policy::ApplyContext context = fullscreen_policy::ApplyContext::StateTransition
-    );
+    void apply_fullscreen_if_needed(xcb_window_t window);
     void set_fullscreen_monitors(xcb_window_t window, FullscreenMonitors const& monitors);
     Geometry fullscreen_geometry_for_window(xcb_window_t window) const;
     void iconify_window(xcb_window_t window);
@@ -240,12 +284,13 @@ private:
     bool is_client_below(xcb_window_t window) const;
     bool is_client_maximized_horz(xcb_window_t window) const;
     bool is_client_maximized_vert(xcb_window_t window) const;
-    bool is_client_shaded(xcb_window_t window) const;
+
     bool is_client_modal(xcb_window_t window) const;
     bool is_client_skip_taskbar(xcb_window_t window) const;
     bool is_client_skip_pager(xcb_window_t window) const;
     bool is_client_demands_attention(xcb_window_t window) const;
 
+    void set_simple_client_state(xcb_window_t window, bool Client::*field, xcb_atom_t atom, bool enabled);
     void set_client_skip_taskbar(xcb_window_t window, bool enabled);
     void set_client_skip_pager(xcb_window_t window, bool enabled);
     void set_client_demands_attention(xcb_window_t window, bool enabled);
@@ -273,14 +318,10 @@ private:
     std::optional<xcb_window_t> transient_for_window(xcb_window_t window) const;
     bool is_window_in_visible_scope(xcb_window_t window) const;
     bool is_window_visible(xcb_window_t window) const;
-    std::optional<xcb_window_t> fullscreen_owner_for_monitor(
-        size_t monitor_idx,
-        xcb_window_t preferred_owner = XCB_NONE
-    ) const;
     bool is_suppressed_by_fullscreen(xcb_window_t window) const;
-    void reconcile_fullscreen_for_monitor(size_t monitor_idx, xcb_window_t preferred_owner = XCB_NONE);
-    void reconcile_fullscreen_after_desktop_move(
-        xcb_window_t window, size_t source_monitor, size_t target_monitor, size_t target_workspace);
+    void release_fullscreen_owner(xcb_window_t window);
+    void claim_fullscreen_owner(xcb_window_t window);
+    void update_fullscreen_owner_after_visibility_change(size_t monitor_idx);
     void finalize_after_desktop_move(
         xcb_window_t window, bool was_active, size_t target_monitor, size_t target_workspace);
     void restack_transients(xcb_window_t parent);
@@ -334,6 +375,7 @@ private:
     void setup_ewmh();
     void update_ewmh_desktops();
     void update_ewmh_client_list();
+    void flush_stacking_list();
     void update_ewmh_current_desktop();
     uint32_t get_ewmh_desktop_index(size_t monitor_idx, size_t workspace_idx) const;
     void switch_to_ewmh_desktop(uint32_t desktop);

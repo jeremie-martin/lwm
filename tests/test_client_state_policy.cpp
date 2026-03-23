@@ -55,7 +55,7 @@ TEST_CASE("Client has sensible defaults", "[client][state]")
     REQUIRE_FALSE(c.sticky);
     REQUIRE_FALSE(c.maximized_horz);
     REQUIRE_FALSE(c.maximized_vert);
-    REQUIRE_FALSE(c.shaded);
+
     REQUIRE_FALSE(c.modal);
     REQUIRE_FALSE(c.skip_taskbar);
     REQUIRE_FALSE(c.skip_pager);

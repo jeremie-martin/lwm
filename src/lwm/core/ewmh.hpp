@@ -32,25 +32,21 @@ struct WindowClassification
     bool is_transient = false;
 };
 
-enum class WindowType
-{
-    Desktop,
-    Dock,
-    Toolbar,
-    Menu,
-    Utility,
-    Splash,
-    Dialog,
-    DropdownMenu,
-    PopupMenu,
-    Tooltip,
-    Notification,
-    Combo,
-    Dnd,
-    Normal
-};
-
 WindowClassification classify_window_type(WindowType type, bool is_transient);
+
+struct WindowStateFlags
+{
+    bool skip_taskbar = false;
+    bool skip_pager = false;
+    bool sticky = false;
+    bool modal = false;
+    bool above = false;
+    bool below = false;
+    bool fullscreen = false;
+    bool iconic = false;  ///< _NET_WM_STATE_HIDDEN (EWMH uses "hidden" for iconic/minimized)
+    bool maximized_horz = false;
+    bool maximized_vert = false;
+};
 
 class Ewmh
 {
@@ -81,19 +77,14 @@ public:
     void set_window_desktop(xcb_window_t window, uint32_t desktop);
     void set_window_state(xcb_window_t window, xcb_atom_t state, bool enabled);
     bool has_window_state(xcb_window_t window, xcb_atom_t state) const;
-    void set_window_visible_name(xcb_window_t window, std::string const& name);
-    void clear_window_visible_name(xcb_window_t window);
-    void set_window_visible_icon_name(xcb_window_t window, std::string const& name);
-    void clear_window_visible_icon_name(xcb_window_t window);
+    WindowStateFlags get_window_state_flags(xcb_window_t window) const;
+
     void set_frame_extents(xcb_window_t window, uint32_t left, uint32_t right, uint32_t top, uint32_t bottom);
     void set_allowed_actions(xcb_window_t window, std::vector<xcb_atom_t> const& actions);
 
     // Client list management
     void update_client_list(std::vector<xcb_window_t> const& windows);
     void update_client_list_stacking(std::vector<xcb_window_t> const& windows);
-
-    // Urgent hints
-    void set_demands_attention(xcb_window_t window, bool urgent);
 
     // Window type detection and classification
     xcb_atom_t get_window_type(xcb_window_t window) const;

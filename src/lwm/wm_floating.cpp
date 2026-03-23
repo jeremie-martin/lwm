@@ -142,13 +142,13 @@ void WindowManager::manage_floating_window(xcb_window_t window, bool start_iconi
         client.transient_for = transient.value_or(XCB_NONE);
         client.order = next_client_order_++;
         client.iconic = start_iconic;
+        client.ewmh_type = ewmh_.get_window_type_enum(window);
         parse_initial_ewmh_state(client);
 
         clients_[window] = std::move(client);
     }
     cache_focus_hints(window);
 
-    sync_window_visible_names(window);
     init_user_time(window);
 
     uint32_t values[] = { XCB_EVENT_MASK_ENTER_WINDOW | XCB_EVENT_MASK_FOCUS_CHANGE | XCB_EVENT_MASK_PROPERTY_CHANGE
@@ -179,15 +179,7 @@ void WindowManager::manage_floating_window(xcb_window_t window, bool start_iconi
     uint32_t desktop = get_ewmh_desktop_index(*monitor_idx, *workspace_idx);
     ewmh_.set_window_desktop(window, desktop);
 
-    // Set allowed actions for floating windows (includes move/resize)
-    xcb_ewmh_connection_t* ewmh = ewmh_.get();
-    std::vector<xcb_atom_t> actions = {
-        ewmh->_NET_WM_ACTION_CLOSE,         ewmh->_NET_WM_ACTION_FULLSCREEN, ewmh->_NET_WM_ACTION_CHANGE_DESKTOP,
-        ewmh->_NET_WM_ACTION_ABOVE,         ewmh->_NET_WM_ACTION_BELOW,      ewmh->_NET_WM_ACTION_MINIMIZE,
-        ewmh->_NET_WM_ACTION_SHADE,         ewmh->_NET_WM_ACTION_STICK,      ewmh->_NET_WM_ACTION_MAXIMIZE_VERT,
-        ewmh->_NET_WM_ACTION_MAXIMIZE_HORZ, ewmh->_NET_WM_ACTION_MOVE,       ewmh->_NET_WM_ACTION_RESIZE,
-    };
-    ewmh_.set_allowed_actions(window, actions);
+    update_allowed_actions(window);
 
     update_ewmh_client_list();
 
@@ -195,38 +187,26 @@ void WindowManager::manage_floating_window(xcb_window_t window, bool start_iconi
 
     // Before mapping: Apply geometry-affecting states so window appears at correct position
     // (See COMPLIANCE.md "Window State Application Ordering")
-    if (ewmh_.has_window_state(window, ewmh_.get()->_NET_WM_STATE_FULLSCREEN))
+    // Fetch all EWMH state flags in a single round-trip
+    auto manage_state_flags = ewmh_.get_window_state_flags(window);
+    if (manage_state_flags.fullscreen)
     {
         set_fullscreen(window, true);
     }
 
-    bool wants_max_horz = ewmh_.has_window_state(window, ewmh_.get()->_NET_WM_STATE_MAXIMIZED_HORZ);
-    bool wants_max_vert = ewmh_.has_window_state(window, ewmh_.get()->_NET_WM_STATE_MAXIMIZED_VERT);
-    if (wants_max_horz || wants_max_vert)
+    if (manage_state_flags.maximized_horz || manage_state_flags.maximized_vert)
     {
-        set_window_maximized(window, wants_max_horz, wants_max_vert);
-    }
-
-    if (ewmh_.has_window_state(window, ewmh_.get()->_NET_WM_STATE_SHADED))
-    {
-        set_window_shaded(window, true);
+        set_window_maximized(window, manage_state_flags.maximized_horz, manage_state_flags.maximized_vert);
     }
 
     // With off-screen visibility: map window once when managing
     xcb_map_window(conn_.get(), window);
 
-    // Then update visibility (will hide or position correctly)
-    if (!start_iconic)
-    {
-        sync_visibility_for_monitor(*monitor_idx);
-        if (!suppress_focus_ && *monitor_idx == focused_monitor_ && is_window_in_visible_scope(window))
-            focus_any_window(window);
-    }
-    else
-    {
-        // Iconic windows should be hidden
-        hide_window(window);
-    }
+    // Sync visibility decides whether to hide or show (and applies floating geometry)
+    sync_visibility_for_monitor(*monitor_idx);
+
+    if (!start_iconic && !suppress_focus_ && *monitor_idx == focused_monitor_ && is_window_in_visible_scope(window))
+        focus_any_window(window);
 
     // AFTER mapping: Apply non-geometry states
     apply_post_manage_states(window, transient.has_value());
@@ -244,12 +224,10 @@ void WindowManager::unmanage_floating_window(xcb_window_t window)
     // Tracking state that remains outside Client
     pending_kills_.erase(window);
 
-    // Get monitor/workspace from Client before erasing
     size_t monitor_idx = 0;
     if (auto const* client = get_client(window))
-    {
         monitor_idx = client->monitor;
-    }
+    release_fullscreen_owner(window);
 
     // Remove from unified Client registry (handles all client state including order)
     clients_.erase(window);
@@ -261,6 +239,8 @@ void WindowManager::unmanage_floating_window(xcb_window_t window)
     bool was_active = (active_window_ == window);
     floating_windows_.erase(it);
     update_ewmh_client_list();
+    if (monitor_idx < monitors_.size())
+        update_fullscreen_owner_after_visibility_change(monitor_idx);
 
     if (was_active)
     {
@@ -306,8 +286,8 @@ void WindowManager::update_floating_monitor_for_geometry(xcb_window_t window)
     uint32_t desktop = get_ewmh_desktop_index(client->monitor, client->workspace);
     ewmh_.set_window_desktop(window, desktop);
 
-    reconcile_fullscreen_for_monitor(source_monitor);
-    reconcile_fullscreen_for_monitor(client->monitor, is_client_fullscreen(window) ? window : XCB_NONE);
+    update_fullscreen_owner_after_visibility_change(source_monitor);
+    update_fullscreen_owner_after_visibility_change(client->monitor);
     sync_visibility_for_monitor(source_monitor);
     sync_visibility_for_monitor(client->monitor);
 

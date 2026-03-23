@@ -129,17 +129,6 @@ TEST_CASE("Pointer movement handles monitor transitions, boundaries, and edge ca
     }
 }
 
-TEST_CASE("Fullscreen reapply policy excludes focus-only transitions", "[fullscreen][policy]")
-{
-    using fullscreen_policy::ApplyContext;
-
-    REQUIRE_FALSE(fullscreen_policy::should_reapply(ApplyContext::FocusTransition));
-    REQUIRE(fullscreen_policy::should_reapply(ApplyContext::StateTransition));
-    REQUIRE(fullscreen_policy::should_reapply(ApplyContext::VisibilityTransition));
-    REQUIRE(fullscreen_policy::should_reapply(ApplyContext::LayoutTransition));
-    REQUIRE(fullscreen_policy::should_reapply(ApplyContext::ConfigureTransition));
-}
-
 TEST_CASE("Focus border policy skips fullscreen windows", "[focus][policy]")
 {
     REQUIRE(focus_policy::should_apply_focus_border(false));

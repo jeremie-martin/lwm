@@ -114,7 +114,7 @@ void Ewmh::set_supported_atoms()
         ewmh_._NET_WM_STATE_STICKY,
         ewmh_._NET_WM_STATE_MAXIMIZED_VERT,
         ewmh_._NET_WM_STATE_MAXIMIZED_HORZ,
-        ewmh_._NET_WM_STATE_SHADED,
+
         ewmh_._NET_WM_STATE_MODAL,
         ewmh_._NET_WM_STATE_SKIP_TASKBAR,
         ewmh_._NET_WM_STATE_SKIP_PAGER,
@@ -149,7 +149,7 @@ void Ewmh::set_supported_atoms()
         ewmh_._NET_WM_ACTION_ABOVE,
         ewmh_._NET_WM_ACTION_BELOW,
         ewmh_._NET_WM_ACTION_MINIMIZE,
-        ewmh_._NET_WM_ACTION_SHADE,
+
         ewmh_._NET_WM_ACTION_STICK,
         ewmh_._NET_WM_ACTION_MAXIMIZE_VERT,
         ewmh_._NET_WM_ACTION_MAXIMIZE_HORZ,
@@ -315,29 +315,40 @@ bool Ewmh::has_window_state(xcb_window_t window, xcb_atom_t state) const
     return found;
 }
 
-void Ewmh::set_window_visible_name(xcb_window_t window, std::string const& name)
+WindowStateFlags Ewmh::get_window_state_flags(xcb_window_t window) const
 {
-    xcb_ewmh_set_wm_visible_name(&ewmh_, window, name.length(), name.c_str());
-}
+    WindowStateFlags flags;
+    xcb_ewmh_get_atoms_reply_t current_state;
+    if (!xcb_ewmh_get_wm_state_reply(&ewmh_, xcb_ewmh_get_wm_state(&ewmh_, window), &current_state, nullptr))
+        return flags;
 
-void Ewmh::clear_window_visible_name(xcb_window_t window)
-{
-    xcb_delete_property(conn_.get(), window, ewmh_._NET_WM_VISIBLE_NAME);
-}
+    for (uint32_t i = 0; i < current_state.atoms_len; ++i)
+    {
+        xcb_atom_t atom = current_state.atoms[i];
+        if (atom == ewmh_._NET_WM_STATE_SKIP_TASKBAR)
+            flags.skip_taskbar = true;
+        else if (atom == ewmh_._NET_WM_STATE_SKIP_PAGER)
+            flags.skip_pager = true;
+        else if (atom == ewmh_._NET_WM_STATE_STICKY)
+            flags.sticky = true;
+        else if (atom == ewmh_._NET_WM_STATE_MODAL)
+            flags.modal = true;
+        else if (atom == ewmh_._NET_WM_STATE_ABOVE)
+            flags.above = true;
+        else if (atom == ewmh_._NET_WM_STATE_BELOW)
+            flags.below = true;
+        else if (atom == ewmh_._NET_WM_STATE_FULLSCREEN)
+            flags.fullscreen = true;
+        else if (atom == ewmh_._NET_WM_STATE_HIDDEN)
+            flags.iconic = true;
+        else if (atom == ewmh_._NET_WM_STATE_MAXIMIZED_HORZ)
+            flags.maximized_horz = true;
+        else if (atom == ewmh_._NET_WM_STATE_MAXIMIZED_VERT)
+            flags.maximized_vert = true;
+    }
 
-void Ewmh::set_window_visible_icon_name(xcb_window_t window, std::string const& name)
-{
-    xcb_ewmh_set_wm_visible_icon_name(&ewmh_, window, name.length(), name.c_str());
-}
-
-void Ewmh::clear_window_visible_icon_name(xcb_window_t window)
-{
-    xcb_delete_property(conn_.get(), window, ewmh_._NET_WM_VISIBLE_ICON_NAME);
-}
-
-void Ewmh::set_demands_attention(xcb_window_t window, bool urgent)
-{
-    set_window_state(window, ewmh_._NET_WM_STATE_DEMANDS_ATTENTION, urgent);
+    xcb_ewmh_get_atoms_reply_wipe(&current_state);
+    return flags;
 }
 
 xcb_atom_t Ewmh::get_window_type(xcb_window_t window) const

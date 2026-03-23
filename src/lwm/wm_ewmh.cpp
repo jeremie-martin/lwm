@@ -3,6 +3,7 @@
 #include "wm.hpp"
 #include <algorithm>
 #include <limits>
+#include <tuple>
 
 namespace lwm {
 
@@ -86,38 +87,71 @@ void WindowManager::update_ewmh_client_list()
     }
     ewmh_.update_client_list(windows);
 
-    std::vector<xcb_window_t> stacking;
-    stacking.reserve(windows.size());
-    std::unordered_set<xcb_window_t> managed(windows.begin(), windows.end());
+    stacking_dirty_ = true;
+}
 
-    auto cookie = xcb_query_tree(conn_.get(), conn_.screen()->root);
-    auto* reply = xcb_query_tree_reply(conn_.get(), cookie, nullptr);
-    if (reply)
+void WindowManager::flush_stacking_list()
+{
+    if (!stacking_dirty_)
+        return;
+    stacking_dirty_ = false;
+
+    // Build stacking order from internal state, matching the sort key used
+    // Precompute sort keys to avoid hash lookups during sort.
+    // Hidden windows go first (bottom of stack),
+    // visible windows are ordered by (layer, floating, active, order).
+    struct StackEntry
     {
-        int length = xcb_query_tree_children_length(reply);
-        xcb_window_t* children = xcb_query_tree_children(reply);
-        for (int i = 0; i < length; ++i)
-        {
-            if (managed.contains(children[i]))
-            {
-                stacking.push_back(children[i]);
-                managed.erase(children[i]);
-            }
-        }
-        free(reply);
+        xcb_window_t window;
+        bool visible;
+        int layer;
+        int floating;
+        int active;
+        long long order;
+    };
+
+    auto compute_layer = [this](xcb_window_t window, Client const& client) -> int
+    {
+        if (client.layer == WindowLayer::Overlay)
+            return 4;
+        if (client.fullscreen)
+            return 3;
+        if (is_suppressed_by_fullscreen(window))
+            return 0;
+        if (client.above || client.modal)
+            return 2;
+        if (client.below)
+            return 0;
+        return 1;
+    };
+
+    std::vector<StackEntry> entries;
+    entries.reserve(clients_.size());
+    for (auto const& [window, client] : clients_)
+    {
+        entries.push_back({
+            window,
+            !client.hidden,
+            compute_layer(window, client),
+            client.kind == Client::Kind::Floating ? 1 : 0,
+            window == active_window_ ? 1 : 0,
+            static_cast<long long>(client.order)
+        });
     }
 
-    // Append any windows not found in X tree (shouldn't happen, but be safe)
-    if (!managed.empty())
+    std::stable_sort(entries.begin(), entries.end(), [](StackEntry const& a, StackEntry const& b)
     {
-        for (auto const& entry : ordered)
-        {
-            if (managed.contains(entry.second))
-                stacking.push_back(entry.second);
-        }
-    }
+        if (a.visible != b.visible)
+            return !a.visible;
+        return std::tie(a.layer, a.floating, a.active, a.order) < std::tie(b.layer, b.floating, b.active, b.order);
+    });
 
-    ewmh_.update_client_list_stacking(stacking);
+    cached_stacking_order_.clear();
+    cached_stacking_order_.reserve(entries.size());
+    for (auto const& entry : entries)
+        cached_stacking_order_.push_back(entry.window);
+
+    ewmh_.update_client_list_stacking(cached_stacking_order_);
 }
 
 void WindowManager::update_ewmh_current_desktop()
