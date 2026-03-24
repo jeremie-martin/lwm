@@ -177,17 +177,19 @@ Layout::Layout(Connection& conn, AppearanceConfig const& appearance)
     , appearance_(appearance)
 { }
 
-void Layout::arrange(std::vector<xcb_window_t> const& windows, Geometry const& geometry)
+std::vector<Geometry> Layout::arrange(std::vector<xcb_window_t> const& windows, Geometry const& geometry)
 {
     auto slots = calculate_slots(windows.size(), geometry);
     if (slots.empty())
-        return;
+        return slots;
 
     for (size_t i = 0; i < windows.size(); ++i)
     {
         uint32_t width = slots[i].width;
         uint32_t height = slots[i].height;
         apply_size_hints(windows[i], width, height);
+        slots[i].width = static_cast<uint16_t>(width);
+        slots[i].height = static_cast<uint16_t>(height);
         configure_window(windows[i], slots[i].x, slots[i].y, width, height);
     }
 
@@ -195,6 +197,7 @@ void Layout::arrange(std::vector<xcb_window_t> const& windows, Geometry const& g
     // Layout::arrange just configures geometry - no mapping needed.
 
     conn_.flush();
+    return slots;
 }
 
 std::vector<Geometry> Layout::calculate_slots(size_t count, Geometry const& geometry) const

@@ -72,10 +72,6 @@ private:
     WindowRules window_rules_;
 
     std::vector<Monitor> monitors_;
-    std::vector<xcb_window_t> dock_windows_;
-    std::vector<xcb_window_t> desktop_windows_;
-    std::vector<xcb_window_t> floating_windows_;
-
     // Unified Client registry
     // This is the authoritative source of truth for all managed window state.
     // All state flags (fullscreen, iconic, sticky, above, below, maximized,
@@ -86,6 +82,7 @@ private:
     bool showing_desktop_ = false;
     std::unordered_map<xcb_window_t, std::chrono::steady_clock::time_point> pending_kills_;
     uint64_t next_client_order_ = 0;
+    uint64_t next_mru_order_ = 0;
     int32_t desktop_origin_x_ = 0;
     int32_t desktop_origin_y_ = 0;
     xcb_window_t active_window_ = XCB_NONE;
@@ -194,7 +191,6 @@ private:
     void handle_showing_desktop(xcb_client_message_event_t const& e);
     void handle_configure_request(xcb_configure_request_event_t const& e);
     void handle_property_notify(xcb_property_notify_event_t const& e);
-    void handle_expose(xcb_expose_event_t const& e);
     void handle_randr_screen_change();
     void handle_timeouts();
     std::string run_ipc_command(std::string const& command);
@@ -215,7 +211,6 @@ private:
     void manage_floating_window(xcb_window_t window, bool start_iconic = false);
     void cache_focus_hints(xcb_window_t window);
     void parse_initial_ewmh_state(Client& client);
-    void init_user_time(xcb_window_t window);
     void apply_post_manage_states(xcb_window_t window, bool has_transient);
     ClassificationResult classify_managed_window(xcb_window_t window);
     void refresh_user_time_tracking(xcb_window_t window);
@@ -316,9 +311,10 @@ private:
     bool is_sticky_desktop(xcb_window_t window) const;
     std::optional<std::pair<size_t, size_t>> resolve_window_desktop(xcb_window_t window) const;
     std::optional<xcb_window_t> transient_for_window(xcb_window_t window) const;
-    bool is_window_in_visible_scope(xcb_window_t window) const;
-    bool is_window_visible(xcb_window_t window) const;
+    bool should_be_visible(xcb_window_t window) const;
+    bool is_physically_visible(xcb_window_t window) const;
     bool is_suppressed_by_fullscreen(xcb_window_t window) const;
+    int compute_stack_layer(xcb_window_t window, Client const& client) const;
     void release_fullscreen_owner(xcb_window_t window);
     void claim_fullscreen_owner(xcb_window_t window);
     void update_fullscreen_owner_after_visibility_change(size_t monitor_idx);
@@ -333,6 +329,7 @@ private:
     Geometry overlay_geometry_for_window(xcb_window_t window) const;
     uint32_t border_width_for_client(Client const& client) const;
     bool should_apply_focus_border(xcb_window_t window) const;
+    void send_configure_notify(xcb_window_t window, Geometry const& geom, uint16_t border_width);
     void send_configure_notify(xcb_window_t window);
     void begin_drag(xcb_window_t window, bool resize, int16_t root_x, int16_t root_y);
     void begin_tiled_drag(xcb_window_t window, int16_t root_x, int16_t root_y);
@@ -345,7 +342,6 @@ private:
     void send_wm_take_focus(xcb_window_t window, uint32_t timestamp);
     void send_wm_ping(xcb_window_t window, uint32_t timestamp);
     void send_sync_request(xcb_window_t window, uint32_t timestamp);
-    bool wait_for_sync_counter(xcb_window_t window, uint64_t expected_value);
     void update_sync_state(xcb_window_t window);
     void update_fullscreen_monitor_state(xcb_window_t window);
     void update_focused_monitor_at_point(int16_t x, int16_t y);
@@ -358,6 +354,9 @@ private:
     void update_struts();
     void unmanage_dock_window(xcb_window_t window);
     void unmanage_desktop_window(xcb_window_t window);
+
+    // Window workspace helper (atomically update client fields + EWMH desktop)
+    void assign_window_workspace(xcb_window_t window, size_t monitor_idx, size_t workspace_idx);
 
     // Tiled window membership helpers (atomically update workspace list + client fields + EWMH)
     void add_tiled_to_workspace(xcb_window_t window, size_t monitor_idx, size_t workspace_idx);

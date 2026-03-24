@@ -28,7 +28,7 @@ void WindowManager::perform_workspace_switch(WorkspaceSwitchContext const& ctx)
     // sync floating separately since rearrange only handles tiled layout
     // (floating geometry is applied by sync_visibility_for_monitor above)
 
-    LWM_ASSERT_INVARIANTS(clients_, monitors_, floating_windows_, dock_windows_, desktop_windows_);
+    LWM_ASSERT_INVARIANTS(clients_, monitors_);
     LOG_TRACE("perform_workspace_switch: DONE");
 }
 
@@ -129,6 +129,7 @@ void WindowManager::move_window_to_workspace(int ws)
 
         update_fullscreen_owner_after_visibility_change(monitor_idx);
         sync_visibility_for_monitor(monitor_idx);
+        restack_monitor_layers(monitor_idx);
         focus_or_fallback(monitors_[monitor_idx]);
         flush_and_drain_crossing();
         return;
@@ -156,7 +157,7 @@ void WindowManager::move_window_to_workspace(int ws)
     update_fullscreen_owner_after_visibility_change(focused_monitor_);
     sync_visibility_for_monitor(focused_monitor_);
     rearrange_monitor(monitor);
-    LWM_ASSERT_INVARIANTS(clients_, monitors_, floating_windows_, dock_windows_, desktop_windows_);
+    LWM_ASSERT_INVARIANTS(clients_, monitors_);
     focus_or_fallback(monitor);
 
     flush_and_drain_crossing();
@@ -230,19 +231,14 @@ void WindowManager::move_window_to_monitor(int direction)
             std::nullopt
         );
 
-        client->monitor = target_idx;
-        client->workspace = target_workspace;
-
-        uint32_t desktop = get_ewmh_desktop_index(target_idx, target_workspace);
-        if (is_client_sticky(window_to_move))
-            ewmh_.set_window_desktop(window_to_move, 0xFFFFFFFF);
-        else
-            ewmh_.set_window_desktop(window_to_move, desktop);
+        assign_window_workspace(window_to_move, target_idx, target_workspace);
 
         update_fullscreen_owner_after_visibility_change(source_idx);
         update_fullscreen_owner_after_visibility_change(target_idx);
         sync_visibility_for_monitor(source_idx);
         sync_visibility_for_monitor(target_idx);
+        restack_monitor_layers(source_idx);
+        restack_monitor_layers(target_idx);
 
         focused_monitor_ = target_idx;
         update_ewmh_current_desktop();
@@ -281,7 +277,7 @@ void WindowManager::move_window_to_monitor(int direction)
     sync_visibility_for_monitor(target_idx);
     rearrange_monitor(focused_monitor());
     rearrange_monitor(target_monitor);
-    LWM_ASSERT_INVARIANTS(clients_, monitors_, floating_windows_, dock_windows_, desktop_windows_);
+    LWM_ASSERT_INVARIANTS(clients_, monitors_);
 
     focused_monitor_ = target_idx;
     update_ewmh_current_desktop();

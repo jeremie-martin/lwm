@@ -20,8 +20,6 @@ namespace lwm {
 
 namespace {
 
-constexpr uint32_t WM_STATE_ICONIC = 3;
-
 uint32_t extract_event_time(uint8_t response_type, xcb_generic_event_t const& event)
 {
     switch (response_type)
@@ -123,9 +121,6 @@ void WindowManager::handle_event(xcb_generic_event_t const& event)
         case XCB_PROPERTY_NOTIFY:
             handle_property_notify(reinterpret_cast<xcb_property_notify_event_t const&>(event));
             break;
-        case XCB_EXPOSE:
-            handle_expose(reinterpret_cast<xcb_expose_event_t const&>(event));
-            break;
         case XCB_SELECTION_CLEAR:
         {
             auto const& e = reinterpret_cast<xcb_selection_clear_event_t const&>(event);
@@ -212,9 +207,8 @@ void WindowManager::map_desktop_window(xcb_window_t window)
     xcb_map_window(conn_.get(), window);
     uint32_t stack_mode = XCB_STACK_MODE_BELOW;
     xcb_configure_window(conn_.get(), window, XCB_CONFIG_WINDOW_STACK_MODE, &stack_mode);
-    if (std::ranges::find(desktop_windows_, window) == desktop_windows_.end())
+    if (!clients_.contains(window))
     {
-        desktop_windows_.push_back(window);
         Client client;
         client.id = window;
         client.kind = Client::Kind::Desktop;
@@ -233,9 +227,8 @@ void WindowManager::map_dock_window(xcb_window_t window)
                           | XCB_EVENT_MASK_PROPERTY_CHANGE };
     xcb_change_window_attributes(conn_.get(), window, XCB_CW_EVENT_MASK, values);
     xcb_map_window(conn_.get(), window);
-    if (std::ranges::find(dock_windows_, window) == dock_windows_.end())
+    if (!clients_.contains(window))
     {
-        dock_windows_.push_back(window);
         Client client;
         client.id = window;
         client.kind = Client::Kind::Dock;
@@ -318,7 +311,10 @@ void WindowManager::map_floating_window(
     // Update visibility after placement changes
     client = get_client(window);
     if (client)
+    {
         sync_visibility_for_monitor(client->monitor);
+        restack_monitor_layers(client->monitor);
+    }
 }
 
 void WindowManager::map_tiled_window(
@@ -373,7 +369,7 @@ void WindowManager::map_tiled_window(
         if (auto const* client = get_client(window))
         {
             if (client->monitor < monitors_.size() && client->monitor == focused_monitor_
-                && is_window_in_visible_scope(window))
+                && should_be_visible(window))
             {
                 focus_any_window(window);
             }
@@ -562,7 +558,7 @@ void WindowManager::handle_button_press(xcb_button_press_event_t const& e)
 
                 sync_visibility_for_monitor(monitor_idx);
                 rearrange_monitor(monitors_[monitor_idx]);
-                LWM_ASSERT_INVARIANTS(clients_, monitors_, floating_windows_, dock_windows_, desktop_windows_);
+                LWM_ASSERT_INVARIANTS(clients_, monitors_);
 
                 focus_any_window(target);
                 begin_drag(target, true, e.root_x, e.root_y);
@@ -814,7 +810,6 @@ void WindowManager::handle_restack_message(xcb_client_message_event_t const& e)
     {
         if (client->monitor < monitors_.size())
             restack_monitor_layers(client->monitor);
-        update_ewmh_client_list();
         conn_.flush();
         return;
     }
@@ -834,7 +829,7 @@ void WindowManager::handle_restack_message(xcb_client_message_event_t const& e)
     }
 
     xcb_configure_window(conn_.get(), e.window, mask, values);
-    update_ewmh_client_list();
+    stacking_dirty_ = true;
     conn_.flush();
 }
 
@@ -955,8 +950,6 @@ void WindowManager::handle_active_window_request(xcb_client_message_event_t cons
 void WindowManager::finalize_after_desktop_move(
     xcb_window_t window, bool was_active, size_t target_monitor, size_t target_workspace)
 {
-    update_ewmh_client_list();
-
     bool visible = !showing_desktop_ && target_monitor < monitors_.size()
         && target_workspace == monitors_[target_monitor].current_workspace;
 
@@ -1012,7 +1005,7 @@ void WindowManager::handle_desktop_change(xcb_client_message_event_t const& e)
         {
             monitors_[target_monitor].workspaces[target_workspace].focused_window = e.window;
         }
-        LWM_ASSERT_INVARIANTS(clients_, monitors_, floating_windows_, dock_windows_, desktop_windows_);
+        LWM_ASSERT_INVARIANTS(clients_, monitors_);
 
         update_fullscreen_owner_after_visibility_change(source_mon_idx);
         if (source_mon_idx != target_monitor)
@@ -1044,9 +1037,7 @@ void WindowManager::handle_desktop_change(xcb_client_message_event_t const& e)
                 std::nullopt
             );
         }
-        client->monitor = target_monitor;
-        client->workspace = target_workspace;
-        ewmh_.set_window_desktop(e.window, desktop);
+        assign_window_workspace(e.window, target_monitor, target_workspace);
 
         update_fullscreen_owner_after_visibility_change(source_monitor);
         if (source_monitor != target_monitor)
@@ -1055,6 +1046,9 @@ void WindowManager::handle_desktop_change(xcb_client_message_event_t const& e)
         if (source_monitor != target_monitor)
             sync_visibility_for_monitor(source_monitor);
         sync_visibility_for_monitor(target_monitor);
+        if (source_monitor != target_monitor)
+            restack_monitor_layers(source_monitor);
+        restack_monitor_layers(target_monitor);
 
         finalize_after_desktop_move(e.window, was_active, target_monitor, target_workspace);
     }
@@ -1085,7 +1079,7 @@ void WindowManager::handle_moveresize_window(xcb_client_message_event_t const& e
         client->floating_geometry.height = static_cast<uint16_t>(std::max<int32_t>(1, e.data.data32[4]));
 
     update_floating_monitor_for_geometry(e.window);
-    if (client->monitor < monitors_.size() && is_window_in_visible_scope(e.window) && !client->hidden
+    if (client->monitor < monitors_.size() && should_be_visible(e.window) && !client->hidden
         && !is_client_fullscreen(e.window))
     {
         apply_floating_geometry(e.window);
@@ -1264,7 +1258,7 @@ void WindowManager::handle_property_notify(xcb_property_notify_event_t const& e)
                     client->floating_geometry.width = static_cast<uint16_t>(std::max<uint32_t>(1, hinted_width));
                     client->floating_geometry.height = static_cast<uint16_t>(std::max<uint32_t>(1, hinted_height));
                 }
-                if (client->monitor < monitors_.size() && is_window_in_visible_scope(e.window) && !client->hidden
+                if (client->monitor < monitors_.size() && should_be_visible(e.window) && !client->hidden
                     && !is_client_fullscreen(e.window))
                 {
                     apply_floating_geometry(e.window);
@@ -1321,18 +1315,13 @@ void WindowManager::handle_property_notify(xcb_property_notify_event_t const& e)
         if (auto* client = get_client(e.window))
             client->supports_take_focus = supports_protocol(e.window, wm_take_focus_);
     }
-    else if ((e.atom == ewmh_.get()->_NET_WM_STRUT || e.atom == ewmh_.get()->_NET_WM_STRUT_PARTIAL)
-             && std::ranges::find(dock_windows_, e.window) != dock_windows_.end())
+    else if (auto const* strut_client = get_client(e.window);
+             strut_client && strut_client->kind == Client::Kind::Dock
+             && (e.atom == ewmh_.get()->_NET_WM_STRUT || e.atom == ewmh_.get()->_NET_WM_STRUT_PARTIAL))
     {
         update_struts();
         rearrange_all_monitors();
         conn_.flush();
-    }
-    else if (auto const* client = get_client(e.window))
-    {
-        // Catch-all: rearrange tiled windows for genuinely unknown property changes
-        if (client->kind == Client::Kind::Tiled && client->monitor < monitors_.size())
-            rearrange_monitor(monitors_[client->monitor]);
     }
 
     // User time tracking: only scan when relevant atoms change
@@ -1357,12 +1346,6 @@ void WindowManager::handle_property_notify(xcb_property_notify_event_t const& e)
                 c->user_time = get_user_time(e.window);
         }
     }
-}
-
-void WindowManager::handle_expose(xcb_expose_event_t const& e)
-{
-    // No internal bar to redraw
-    (void)e;
 }
 
 void WindowManager::handle_timeouts()
@@ -1417,18 +1400,17 @@ void WindowManager::handle_randr_screen_change()
     }
 
     // Save floating window locations (geometry persists in Client)
-    for (xcb_window_t fw : floating_windows_)
+    for (auto const& [fw, client] : clients_)
     {
-        if (auto* client = get_client(fw))
-        {
-            std::string monitor_name = (client->monitor < monitors_.size()) ? monitors_[client->monitor].name : "";
-            floating_locations.push_back(
-                {
-                    fw,
-                    { fw, monitor_name, client->workspace }
-            }
-            );
+        if (client.kind != Client::Kind::Floating)
+            continue;
+        std::string monitor_name = (client.monitor < monitors_.size()) ? monitors_[client.monitor].name : "";
+        floating_locations.push_back(
+            {
+                fw,
+                { fw, monitor_name, client.workspace }
         }
+        );
     }
 
     // Save workspace state per monitor name for restoration
@@ -1492,7 +1474,6 @@ void WindowManager::handle_randr_screen_change()
         }
 
         // Restore floating windows to their original monitors
-        floating_windows_.clear();
         for (auto& [floating_window, loc] : floating_locations)
         {
             size_t target_monitor = 0;
@@ -1530,7 +1511,6 @@ void WindowManager::handle_randr_screen_change()
                     );
                 }
             }
-            floating_windows_.push_back(floating_window);
             ewmh_.set_window_desktop(floating_window, desktop);
         }
 
@@ -1544,16 +1524,21 @@ void WindowManager::handle_randr_screen_change()
 
     // Update EWMH for new monitor configuration
     update_ewmh_desktops();
-    update_ewmh_client_list();
     update_ewmh_current_desktop();
 
-    // Revalidate fullscreen owners: monitor indices changed, so re-select owners
-    // and reapply fullscreen geometry for the (potentially resized) monitors
+    // Rebuild per-monitor fullscreen tracking lists from client state
     for (size_t i = 0; i < monitors_.size(); ++i)
     {
         monitors_[i].fullscreen_owner = XCB_NONE;
-        update_fullscreen_owner_after_visibility_change(i);
+        monitors_[i].fullscreen_windows.clear();
     }
+    for (auto const& [id, client] : clients_)
+    {
+        if (client.fullscreen && client.monitor < monitors_.size())
+            monitors_[client.monitor].fullscreen_windows.push_back(id);
+    }
+    for (size_t i = 0; i < monitors_.size(); ++i)
+        update_fullscreen_owner_after_visibility_change(i);
 
     rearrange_all_monitors();
 

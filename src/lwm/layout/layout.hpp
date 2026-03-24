@@ -21,7 +21,7 @@ class Layout
 public:
     Layout(Connection& conn, AppearanceConfig const& appearance);
 
-    void arrange(std::vector<xcb_window_t> const& windows, Geometry const& geometry);
+    std::vector<Geometry> arrange(std::vector<xcb_window_t> const& windows, Geometry const& geometry);
     std::vector<Geometry> calculate_slots(size_t count, Geometry const& geometry) const;
     size_t drop_target_index(size_t count, Geometry const& geometry, int16_t x, int16_t y) const;
     void apply_size_hints(xcb_window_t window, uint32_t& width, uint32_t& height) const;

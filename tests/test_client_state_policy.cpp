@@ -213,19 +213,13 @@ TEST_CASE("Client state stores above and below independently", "[client][state][
 // Focus eligibility with state combinations
 // ─────────────────────────────────────────────────────────────────────────────
 
-TEST_CASE("Focus eligibility checks window kind and input hints", "[client][focus][policy]")
+TEST_CASE("Focus eligibility checks input hints", "[client][focus][policy]")
 {
-    // Tiled/floating windows need input focus or WM_TAKE_FOCUS
-    REQUIRE(focus_policy::is_focus_eligible(Client::Kind::Tiled, true, false));
-    REQUIRE(focus_policy::is_focus_eligible(Client::Kind::Floating, true, false));
-    REQUIRE(focus_policy::is_focus_eligible(Client::Kind::Tiled, false, true));
-    REQUIRE(focus_policy::is_focus_eligible(Client::Kind::Floating, false, true));
-    REQUIRE_FALSE(focus_policy::is_focus_eligible(Client::Kind::Tiled, false, false));
-    REQUIRE_FALSE(focus_policy::is_focus_eligible(Client::Kind::Floating, false, false));
-
-    // Dock and desktop windows are never eligible
-    REQUIRE_FALSE(focus_policy::is_focus_eligible(Client::Kind::Dock, true, true));
-    REQUIRE_FALSE(focus_policy::is_focus_eligible(Client::Kind::Desktop, true, true));
+    // Windows need input focus or WM_TAKE_FOCUS
+    REQUIRE(focus_policy::is_focus_eligible(true, false));
+    REQUIRE(focus_policy::is_focus_eligible(false, true));
+    REQUIRE(focus_policy::is_focus_eligible(true, true));
+    REQUIRE_FALSE(focus_policy::is_focus_eligible(false, false));
 }
 
 // ─────────────────────────────────────────────────────────────────────────────

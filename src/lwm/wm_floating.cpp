@@ -6,14 +6,6 @@
 
 namespace lwm {
 
-namespace {
-
-constexpr uint32_t WM_STATE_WITHDRAWN = 0;
-constexpr uint32_t WM_STATE_NORMAL = 1;
-constexpr uint32_t WM_STATE_ICONIC = 3;
-
-} // namespace
-
 void WindowManager::manage_floating_window(xcb_window_t window, bool start_iconic)
 {
     auto transient = transient_for_window(window);
@@ -126,8 +118,6 @@ void WindowManager::manage_floating_window(xcb_window_t window, bool start_iconi
         );
     }
 
-    floating_windows_.push_back(window);
-
     {
         auto [instance_name, class_name] = get_wm_class(window);
         Client client;
@@ -141,6 +131,7 @@ void WindowManager::manage_floating_window(xcb_window_t window, bool start_iconi
         client.floating_geometry = placement;
         client.transient_for = transient.value_or(XCB_NONE);
         client.order = next_client_order_++;
+        client.mru_order = next_mru_order_++;
         client.iconic = start_iconic;
         client.ewmh_type = ewmh_.get_window_type_enum(window);
         parse_initial_ewmh_state(client);
@@ -149,7 +140,7 @@ void WindowManager::manage_floating_window(xcb_window_t window, bool start_iconi
     }
     cache_focus_hints(window);
 
-    init_user_time(window);
+    refresh_user_time_tracking(window);
 
     uint32_t values[] = { XCB_EVENT_MASK_ENTER_WINDOW | XCB_EVENT_MASK_FOCUS_CHANGE | XCB_EVENT_MASK_PROPERTY_CHANGE
                           | XCB_EVENT_MASK_BUTTON_PRESS };
@@ -204,8 +195,9 @@ void WindowManager::manage_floating_window(xcb_window_t window, bool start_iconi
 
     // Sync visibility decides whether to hide or show (and applies floating geometry)
     sync_visibility_for_monitor(*monitor_idx);
+    restack_monitor_layers(*monitor_idx);
 
-    if (!start_iconic && !suppress_focus_ && *monitor_idx == focused_monitor_ && is_window_in_visible_scope(window))
+    if (!start_iconic && !suppress_focus_ && *monitor_idx == focused_monitor_ && should_be_visible(window))
         focus_any_window(window);
 
     // AFTER mapping: Apply non-geometry states
@@ -227,17 +219,15 @@ void WindowManager::unmanage_floating_window(xcb_window_t window)
     size_t monitor_idx = 0;
     if (auto const* client = get_client(window))
         monitor_idx = client->monitor;
+    else
+        return; // Not managed
+
+    bool was_active = (active_window_ == window);
     release_fullscreen_owner(window);
 
     // Remove from unified Client registry (handles all client state including order)
     clients_.erase(window);
 
-    auto it = std::ranges::find(floating_windows_, window);
-    if (it == floating_windows_.end())
-        return;
-
-    bool was_active = (active_window_ == window);
-    floating_windows_.erase(it);
     update_ewmh_client_list();
     if (monitor_idx < monitors_.size())
         update_fullscreen_owner_after_visibility_change(monitor_idx);
@@ -280,16 +270,15 @@ void WindowManager::update_floating_monitor_for_geometry(xcb_window_t window)
         return;
 
     size_t source_monitor = client->monitor;
-    client->monitor = *new_monitor;
-    client->workspace = monitors_[client->monitor].current_workspace;
-
-    uint32_t desktop = get_ewmh_desktop_index(client->monitor, client->workspace);
-    ewmh_.set_window_desktop(window, desktop);
+    assign_window_workspace(window, *new_monitor, monitors_[*new_monitor].current_workspace);
 
     update_fullscreen_owner_after_visibility_change(source_monitor);
     update_fullscreen_owner_after_visibility_change(client->monitor);
     sync_visibility_for_monitor(source_monitor);
     sync_visibility_for_monitor(client->monitor);
+    restack_monitor_layers(source_monitor);
+    if (source_monitor != client->monitor)
+        restack_monitor_layers(client->monitor);
 
     if (active_window_ == window && is_suppressed_by_fullscreen(window))
         focus_or_fallback(monitors_[client->monitor], false);

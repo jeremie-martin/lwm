@@ -62,10 +62,8 @@ inline bool is_window_visible(
 
 namespace lwm::focus_policy {
 
-inline bool is_focus_eligible(Client::Kind kind, bool accepts_input_focus, bool supports_take_focus)
+inline bool is_focus_eligible(bool accepts_input_focus, bool supports_take_focus)
 {
-    if (kind == Client::Kind::Dock || kind == Client::Kind::Desktop)
-        return false;
     return accepts_input_focus || supports_take_focus;
 }
 
@@ -126,21 +124,6 @@ inline std::optional<FocusSelection> select_focus_candidate(
     }
 
     return std::nullopt;
-}
-
-template <typename T, typename IdGetter>
-inline bool promote_mru(std::vector<T>& items, xcb_window_t id, IdGetter get_id)
-{
-    auto it = std::find_if(items.begin(), items.end(), [&](T const& item) { return get_id(item) == id; });
-    if (it == items.end())
-        return false;
-    if ((it + 1) == items.end())
-        return false;
-
-    T saved = *it;
-    items.erase(it);
-    items.push_back(saved);
-    return true;
 }
 
 struct FocusCycleCandidate

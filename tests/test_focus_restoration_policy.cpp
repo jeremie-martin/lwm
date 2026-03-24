@@ -175,30 +175,6 @@ TEST_CASE("Sticky floating candidate is eligible, non-sticky is ignored", "[focu
     }
 }
 
-TEST_CASE("Floating MRU promotion handles various list positions", "[focus][policy]")
-{
-    SECTION("Moves item to end when in middle of list")
-    {
-        std::vector<xcb_window_t> items = { 0x1000, 0x2000, 0x3000 };
-        bool moved = focus_policy::promote_mru(items, 0x2000, [](xcb_window_t value) { return value; });
-        REQUIRE(moved);
-        REQUIRE(items == std::vector<xcb_window_t>{ 0x1000, 0x3000, 0x2000 });
-    }
-
-    SECTION("Is no-op for last item and ignores missing items")
-    {
-        std::vector<xcb_window_t> last_items = { 0x1000, 0x2000 };
-        bool moved_last = focus_policy::promote_mru(last_items, 0x2000, [](xcb_window_t value) { return value; });
-        REQUIRE_FALSE(moved_last);
-        REQUIRE(last_items == std::vector<xcb_window_t>{ 0x1000, 0x2000 });
-
-        std::vector<xcb_window_t> missing_items = { 0x1000, 0x2000 };
-        bool moved_missing = focus_policy::promote_mru(missing_items, 0x9999, [](xcb_window_t value) { return value; });
-        REQUIRE_FALSE(moved_missing);
-        REQUIRE(missing_items == std::vector<xcb_window_t>{ 0x1000, 0x2000 });
-    }
-}
-
 TEST_CASE("Focus restoration returns none when no candidates", "[focus][policy]")
 {
     Workspace ws = make_workspace({}, XCB_NONE);

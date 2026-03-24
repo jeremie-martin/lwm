@@ -64,9 +64,8 @@ void WindowManager::begin_tiled_drag(xcb_window_t window, int16_t root_x, int16_
     if (!monitor_index_for_window(window))
         return;
 
-    auto geom_cookie = xcb_get_geometry(conn_.get(), window);
-    auto* geom_reply = xcb_get_geometry_reply(conn_.get(), geom_cookie, nullptr);
-    if (!geom_reply)
+    auto const* client = get_client(window);
+    if (!client)
         return;
 
     drag_state_.active = true;
@@ -77,8 +76,7 @@ void WindowManager::begin_tiled_drag(xcb_window_t window, int16_t root_x, int16_
     drag_state_.start_root_y = root_y;
     drag_state_.last_root_x = root_x;
     drag_state_.last_root_y = root_y;
-    drag_state_.start_geometry = { geom_reply->x, geom_reply->y, geom_reply->width, geom_reply->height };
-    free(geom_reply);
+    drag_state_.start_geometry = client->tiled_geometry;
 
     xcb_grab_pointer(
         conn_.get(),
@@ -212,13 +210,7 @@ void WindowManager::end_drag()
 
                     if (!same_workspace)
                     {
-                        if (auto* client = get_client(window))
-                        {
-                            client->monitor = target_monitor_idx;
-                            client->workspace = target_workspace_idx;
-                        }
-                        uint32_t desktop = get_ewmh_desktop_index(target_monitor_idx, target_workspace_idx);
-                        ewmh_.set_window_desktop(window, desktop);
+                        assign_window_workspace(window, target_monitor_idx, target_workspace_idx);
                     }
 
                     if (*source_monitor_idx == target_monitor_idx)
@@ -234,8 +226,7 @@ void WindowManager::end_drag()
                         rearrange_monitor(monitors_[target_monitor_idx]);
                     }
 
-                    LWM_ASSERT_INVARIANTS(clients_, monitors_, floating_windows_, dock_windows_, desktop_windows_);
-                    update_ewmh_client_list();
+                    LWM_ASSERT_INVARIANTS(clients_, monitors_);
                     focus_any_window(window);
                 }
             }

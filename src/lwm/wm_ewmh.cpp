@@ -110,21 +110,6 @@ void WindowManager::flush_stacking_list()
         long long order;
     };
 
-    auto compute_layer = [this](xcb_window_t window, Client const& client) -> int
-    {
-        if (client.layer == WindowLayer::Overlay)
-            return 4;
-        if (client.fullscreen)
-            return 3;
-        if (is_suppressed_by_fullscreen(window))
-            return 0;
-        if (client.above || client.modal)
-            return 2;
-        if (client.below)
-            return 0;
-        return 1;
-    };
-
     std::vector<StackEntry> entries;
     entries.reserve(clients_.size());
     for (auto const& [window, client] : clients_)
@@ -132,7 +117,7 @@ void WindowManager::flush_stacking_list()
         entries.push_back({
             window,
             !client.hidden,
-            compute_layer(window, client),
+            compute_stack_layer(window, client),
             client.kind == Client::Kind::Floating ? 1 : 0,
             window == active_window_ ? 1 : 0,
             static_cast<long long>(client.order)

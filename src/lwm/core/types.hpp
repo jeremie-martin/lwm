@@ -32,6 +32,11 @@ enum class WindowType
 /// Off-screen X coordinate for hidden windows (DWM-style visibility management)
 constexpr int16_t OFF_SCREEN_X = -20000;
 
+/// ICCCM WM_STATE values
+constexpr uint32_t WM_STATE_WITHDRAWN = 0;
+constexpr uint32_t WM_STATE_NORMAL = 1;
+constexpr uint32_t WM_STATE_ICONIC = 3;
+
 struct Geometry
 {
     int16_t x = 0;
@@ -142,6 +147,7 @@ struct Client
     bool supports_take_focus = false; ///< Cached: WM_PROTOCOLS contains WM_TAKE_FOCUS
 
     Geometry floating_geometry;
+    Geometry tiled_geometry;             ///< Last applied tiled layout geometry (avoids X round-trip)
     xcb_window_t transient_for = XCB_NONE;
 
     std::optional<Geometry> fullscreen_restore;            ///< Geometry before fullscreen
@@ -155,7 +161,8 @@ struct Client
     uint32_t user_time = 0;                   ///< Last user interaction time
     xcb_window_t user_time_window = XCB_NONE; ///< _NET_WM_USER_TIME_WINDOW
 
-    uint64_t order = 0; ///< Mapping order for _NET_CLIENT_LIST
+    uint64_t order = 0;     ///< Mapping order for _NET_CLIENT_LIST
+    uint64_t mru_order = 0;  ///< MRU ordering for floating windows (higher = more recent)
 };
 
 struct Workspace
@@ -180,7 +187,8 @@ struct Monitor
     size_t current_workspace = 0;
     size_t previous_workspace = 0;
     Strut strut = {};
-    xcb_window_t fullscreen_owner = XCB_NONE; ///< Window owning fullscreen on this monitor (at most one)
+    xcb_window_t fullscreen_owner = XCB_NONE;           ///< Window owning fullscreen on this monitor (at most one)
+    std::vector<xcb_window_t> fullscreen_windows;       ///< All fullscreen windows on this monitor (for fast owner selection)
 
     Workspace& current() { return workspaces[current_workspace]; }
     Workspace const& current() const { return workspaces[current_workspace]; }

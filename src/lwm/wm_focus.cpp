@@ -2,6 +2,7 @@
 #include "lwm/core/log.hpp"
 #include "lwm/core/policy.hpp"
 #include "wm.hpp"
+#include <algorithm>
 #include <xcb/xcb_icccm.h>
 
 namespace lwm {
@@ -81,7 +82,7 @@ void WindowManager::focus_any_window(xcb_window_t window, bool record_user_time)
             perform_workspace_switch({ client->monitor, old_ws, client->workspace });
         }
 
-        focus_policy::promote_mru(floating_windows_, window, [](xcb_window_t id) { return id; });
+        client->mru_order = next_mru_order_++;
         active_window_ = window;
     }
     else
@@ -193,7 +194,6 @@ void WindowManager::focus_any_window(xcb_window_t window, bool record_user_time)
         client->user_time = last_event_time_;
 
     restack_transients(window);
-    update_ewmh_client_list();
 
     conn_.flush();
     LOG_TRACE("focus_any_window({:#x}): DONE", window);
@@ -303,7 +303,7 @@ bool WindowManager::is_focus_eligible(xcb_window_t window) const
         return false;
     if (is_suppressed_by_fullscreen(window))
         return false;
-    return focus_policy::is_focus_eligible(client->kind, client->accepts_input, client->supports_take_focus);
+    return focus_policy::is_focus_eligible(client->accepts_input, client->supports_take_focus);
 }
 
 bool WindowManager::should_set_input_focus(xcb_window_t window) const
@@ -371,14 +371,18 @@ void WindowManager::cycle_focus(bool forward)
 std::vector<focus_policy::FloatingCandidate> WindowManager::build_floating_candidates() const
 {
     std::vector<focus_policy::FloatingCandidate> candidates;
-    candidates.reserve(floating_windows_.size());
-    for (xcb_window_t fw : floating_windows_)
+    for (auto const& [window, client] : clients_)
     {
-        auto const* c = get_client(fw);
-        if (!c)
+        if (client.kind != Client::Kind::Floating)
             continue;
-        candidates.push_back({ fw, c->monitor, c->workspace, c->sticky });
+        candidates.push_back({ window, client.monitor, client.workspace, client.sticky });
     }
+    std::sort(candidates.begin(), candidates.end(), [this](auto const& a, auto const& b)
+    {
+        auto const* ca = get_client(a.id);
+        auto const* cb = get_client(b.id);
+        return (ca ? ca->mru_order : 0) < (cb ? cb->mru_order : 0);
+    });
     return candidates;
 }
 

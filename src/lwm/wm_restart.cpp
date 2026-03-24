@@ -15,6 +15,7 @@
 
 #include "lwm/core/log.hpp"
 #include "wm.hpp"
+#include <algorithm>
 #include <xcb/xcb.h>
 
 namespace lwm {
@@ -152,10 +153,18 @@ void WindowManager::serialize_restart_state()
         tiled_order.data()
     );
 
-    // Floating window MRU ordering
+    // Floating window MRU ordering: sort by mru_order to produce ordered list
+    std::vector<std::pair<uint64_t, xcb_window_t>> floating_sorted;
+    for (auto const& [window, client] : clients_)
+    {
+        if (client.kind == Client::Kind::Floating)
+            floating_sorted.push_back({ client.mru_order, window });
+    }
+    std::sort(floating_sorted.begin(), floating_sorted.end());
+
     std::vector<uint32_t> floating_order;
-    floating_order.reserve(floating_windows_.size());
-    for (xcb_window_t w : floating_windows_)
+    floating_order.reserve(floating_sorted.size());
+    for (auto const& [order, w] : floating_sorted)
         floating_order.push_back(static_cast<uint32_t>(w));
 
     xcb_change_property(
@@ -307,7 +316,7 @@ void WindowManager::restore_window_ordering()
     }
     free(tiled_reply);
 
-    // Restore floating ordering
+    // Restore floating ordering by assigning mru_order from saved priority
     auto* float_reply = xcb_get_property_reply(conn_.get(), float_cookie, nullptr);
 
     if (float_reply && float_reply->type == XCB_ATOM_WINDOW)
@@ -315,20 +324,13 @@ void WindowManager::restore_window_ordering()
         size_t float_len = xcb_get_property_value_length(float_reply) / 4;
         auto* float_data = static_cast<uint32_t const*>(xcb_get_property_value(float_reply));
 
-        // Build priority map
-        std::unordered_map<xcb_window_t, size_t> float_priority;
+        // Assign mru_order based on saved ordering position
         for (size_t i = 0; i < float_len; ++i)
-            float_priority[static_cast<xcb_window_t>(float_data[i])] = i;
-
-        // Sort floating_windows_ by saved priority
-        std::ranges::sort(floating_windows_, [&](xcb_window_t a, xcb_window_t b)
         {
-            auto ia = float_priority.find(a);
-            auto ib = float_priority.find(b);
-            size_t pa = (ia != float_priority.end()) ? ia->second : SIZE_MAX;
-            size_t pb = (ib != float_priority.end()) ? ib->second : SIZE_MAX;
-            return pa < pb;
-        });
+            auto* client = get_client(static_cast<xcb_window_t>(float_data[i]));
+            if (client && client->kind == Client::Kind::Floating)
+                client->mru_order = next_mru_order_++;
+        }
     }
     free(float_reply);
 
