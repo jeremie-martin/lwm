@@ -44,6 +44,10 @@ struct CompiledWindowRule
     std::optional<bool> borderless;
     std::optional<RuleGeometry> geometry;
     std::optional<bool> center;
+
+    // Set when any matching criterion had an invalid value (empty pattern, unknown type).
+    // Rules with this flag never match any window.
+    bool never_matches = false;
 };
 
 /**

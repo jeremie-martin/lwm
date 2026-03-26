@@ -238,3 +238,158 @@ TEST_CASE("monitor_index_at_point returns nullopt for empty monitor list", "[hot
     auto idx = focus::monitor_index_at_point(monitors, 0, 0);
     REQUIRE_FALSE(idx.has_value());
 }
+
+// ─────────────────────────────────────────────────────────────────────────────
+// plan_hotplug tests
+// ─────────────────────────────────────────────────────────────────────────────
+
+TEST_CASE("plan_hotplug: monitor removal relocates orphaned windows to monitor 0", "[hotplug][policy]")
+{
+    // New monitors: only HDMI-0 remains (DP-0 was removed)
+    std::vector<Monitor> new_monitors;
+    new_monitors.push_back(make_monitor("HDMI-0", 0, 0, 1920, 1080));
+
+    std::vector<hotplug_policy::SavedWindowLocation> tiled = {
+        { 0x1000, "HDMI-0", 0 },
+        { 0x2000, "DP-0", 0 },   // Orphaned — DP-0 is gone
+        { 0x3000, "DP-0", 2 },   // Orphaned, workspace 2 is still valid (4 workspaces: 0-3)
+        { 0x4000, "DP-0", 7 },   // Orphaned + workspace exceeds range, needs clamping
+    };
+
+    std::unordered_map<std::string, hotplug_policy::SavedWorkspaceState> ws_state = {
+        { "HDMI-0", { 0, 0 } },
+    };
+
+    auto plan = hotplug_policy::plan_hotplug(new_monitors, tiled, {}, ws_state, "HDMI-0");
+
+    REQUIRE(plan.tiled_relocations.size() == 4);
+    // Window on existing monitor stays
+    REQUIRE(plan.tiled_relocations[0].target_monitor == 0);
+    REQUIRE(plan.tiled_relocations[0].target_workspace == 0);
+    // Orphaned windows fall back to monitor 0, workspace preserved when valid
+    REQUIRE(plan.tiled_relocations[1].target_monitor == 0);
+    REQUIRE(plan.tiled_relocations[1].target_workspace == 0);
+    REQUIRE(plan.tiled_relocations[2].target_monitor == 0);
+    REQUIRE(plan.tiled_relocations[2].target_workspace == 2); // valid, not clamped
+    // Out-of-range workspace gets clamped to current_workspace
+    REQUIRE(plan.tiled_relocations[3].target_monitor == 0);
+    REQUIRE(plan.tiled_relocations[3].target_workspace == 0); // clamped
+}
+
+TEST_CASE("plan_hotplug: monitor addition keeps existing windows on their monitors", "[hotplug][policy]")
+{
+    std::vector<Monitor> new_monitors;
+    new_monitors.push_back(make_monitor("HDMI-0", 0, 0, 1920, 1080));
+    new_monitors.push_back(make_monitor("DP-0", 1920, 0, 1920, 1080));
+    new_monitors.push_back(make_monitor("DP-1", 3840, 0, 1920, 1080)); // New monitor
+
+    std::vector<hotplug_policy::SavedWindowLocation> tiled = {
+        { 0x1000, "HDMI-0", 0 },
+        { 0x2000, "DP-0", 1 },
+    };
+
+    std::unordered_map<std::string, hotplug_policy::SavedWorkspaceState> ws_state;
+
+    auto plan = hotplug_policy::plan_hotplug(new_monitors, tiled, {}, ws_state, "HDMI-0");
+
+    REQUIRE(plan.tiled_relocations.size() == 2);
+    REQUIRE(plan.tiled_relocations[0].target_monitor == 0); // HDMI-0 stays at index 0
+    REQUIRE(plan.tiled_relocations[1].target_monitor == 1); // DP-0 stays at index 1
+    REQUIRE(plan.tiled_relocations[1].target_workspace == 1);
+}
+
+TEST_CASE("plan_hotplug: monitor rename causes fallback to monitor 0", "[hotplug][policy]")
+{
+    // Old monitor was "DP-0", new one is "DP-1" (different name)
+    std::vector<Monitor> new_monitors;
+    new_monitors.push_back(make_monitor("DP-1", 0, 0, 1920, 1080));
+
+    std::vector<hotplug_policy::SavedWindowLocation> tiled = {
+        { 0x1000, "DP-0", 0 }, // Name doesn't match — falls back
+    };
+
+    std::unordered_map<std::string, hotplug_policy::SavedWorkspaceState> ws_state;
+
+    auto plan = hotplug_policy::plan_hotplug(new_monitors, tiled, {}, ws_state, "DP-0");
+
+    REQUIRE(plan.tiled_relocations.size() == 1);
+    REQUIRE(plan.tiled_relocations[0].target_monitor == 0);
+    // Focused monitor also falls back since "DP-0" doesn't exist
+    REQUIRE(plan.focused_monitor == 0);
+}
+
+TEST_CASE("plan_hotplug: workspace count decrease clamps indices", "[hotplug][policy]")
+{
+    // New monitor has only 4 workspaces (was 9)
+    Monitor mon = make_monitor("HDMI-0", 0, 0, 1920, 1080, 4);
+    std::vector<Monitor> new_monitors = { mon };
+
+    std::unordered_map<std::string, hotplug_policy::SavedWorkspaceState> ws_state = {
+        { "HDMI-0", { 7, 8 } }, // Both exceed new count of 4
+    };
+
+    auto plan = hotplug_policy::plan_hotplug(new_monitors, {}, {}, ws_state, "HDMI-0");
+
+    REQUIRE(plan.workspace_current.size() == 1);
+    REQUIRE(plan.workspace_current[0].second == 3); // Clamped from 7 to 3
+    REQUIRE(plan.workspace_previous.size() == 1);
+    REQUIRE(plan.workspace_previous[0].second == 3); // Clamped from 8 to 3
+}
+
+TEST_CASE("plan_hotplug: focused monitor recovery by name", "[hotplug][policy]")
+{
+    std::vector<Monitor> new_monitors;
+    new_monitors.push_back(make_monitor("HDMI-0", 0, 0, 1920, 1080));
+    new_monitors.push_back(make_monitor("DP-0", 1920, 0, 1920, 1080));
+    new_monitors.push_back(make_monitor("HDMI-1", 3840, 0, 1920, 1080));
+
+    std::unordered_map<std::string, hotplug_policy::SavedWorkspaceState> ws_state;
+
+    SECTION("Finds monitor by name at new index")
+    {
+        auto plan = hotplug_policy::plan_hotplug(new_monitors, {}, {}, ws_state, "HDMI-1");
+        REQUIRE(plan.focused_monitor == 2);
+    }
+
+    SECTION("Falls back to 0 when name disappears")
+    {
+        auto plan = hotplug_policy::plan_hotplug(new_monitors, {}, {}, ws_state, "DP-2");
+        REQUIRE(plan.focused_monitor == 0);
+    }
+}
+
+TEST_CASE("plan_hotplug: floating windows are relocated like tiled", "[hotplug][policy]")
+{
+    std::vector<Monitor> new_monitors;
+    new_monitors.push_back(make_monitor("HDMI-0", 0, 0, 1920, 1080));
+
+    std::vector<hotplug_policy::SavedWindowLocation> floating = {
+        { 0x5000, "DP-0", 7 }, // Orphaned, workspace exceeds range for fallback monitor
+    };
+
+    std::unordered_map<std::string, hotplug_policy::SavedWorkspaceState> ws_state = {
+        { "HDMI-0", { 0, 0 } },
+    };
+
+    auto plan = hotplug_policy::plan_hotplug(new_monitors, {}, floating, ws_state, "HDMI-0");
+
+    REQUIRE(plan.floating_relocations.size() == 1);
+    REQUIRE(plan.floating_relocations[0].target_monitor == 0);
+    REQUIRE(plan.floating_relocations[0].target_workspace == 0); // clamped
+}
+
+TEST_CASE("plan_hotplug: empty new_monitors returns empty plan", "[hotplug][policy]")
+{
+    std::vector<Monitor> empty;
+    std::vector<hotplug_policy::SavedWindowLocation> tiled = {
+        { 0x1000, "HDMI-0", 0 },
+    };
+
+    std::unordered_map<std::string, hotplug_policy::SavedWorkspaceState> ws_state;
+
+    auto plan = hotplug_policy::plan_hotplug(empty, tiled, {}, ws_state, "HDMI-0");
+
+    REQUIRE(plan.tiled_relocations.empty());
+    REQUIRE(plan.floating_relocations.empty());
+    REQUIRE(plan.focused_monitor == 0);
+}

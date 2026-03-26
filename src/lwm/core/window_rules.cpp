@@ -1,7 +1,7 @@
 #include "window_rules.hpp"
+#include "lwm/core/log.hpp"
 #include <algorithm>
 #include <cstring>
-#include <iostream>
 
 namespace lwm {
 
@@ -27,23 +27,26 @@ std::string escape_regex(std::string const& str)
 }
 std::optional<std::regex> WindowRules::compile_pattern(std::optional<std::string> const& pattern)
 {
-    if (!pattern.has_value() || pattern->empty())
+    if (!pattern.has_value())
     {
         return std::nullopt;
     }
 
+    // Anchor the pattern so matching is full-string by default.
+    // Users who want substring matching can use explicit ".*foo.*" syntax.
+    std::string anchored = "^(?:" + *pattern + ")$";
+
     try
     {
-        return std::regex(*pattern, std::regex::ECMAScript | std::regex::optimize);
+        return std::regex(anchored, std::regex::ECMAScript | std::regex::optimize);
     }
     catch (std::regex_error const& e)
     {
         // Fall back to literal string matching by escaping the pattern
-        std::cerr << "Warning: Invalid regex pattern '" << *pattern << "', using literal match: " << e.what()
-                  << std::endl;
+        LOG_WARN("Invalid regex pattern '{}', using literal match: {}", *pattern, e.what());
         try
         {
-            return std::regex(escape_regex(*pattern), std::regex::ECMAScript | std::regex::optimize);
+            return std::regex("^(?:" + escape_regex(*pattern) + ")$", std::regex::ECMAScript | std::regex::optimize);
         }
         catch (...)
         {
@@ -118,11 +121,38 @@ void WindowRules::load_rules(std::vector<WindowRuleConfig> const& configs)
     {
         CompiledWindowRule rule;
 
-        rule.class_regex = compile_pattern(cfg.class_pattern);
-        rule.instance_regex = compile_pattern(cfg.instance_pattern);
-        rule.title_regex = compile_pattern(cfg.title_pattern);
+        // Detect empty patterns (present but empty string) — fail-closed
+        if (cfg.class_pattern.has_value() && cfg.class_pattern->empty())
+        {
+            LOG_WARN("Window rule has empty class_pattern, rule will never match");
+            rule.never_matches = true;
+        }
+        if (cfg.instance_pattern.has_value() && cfg.instance_pattern->empty())
+        {
+            LOG_WARN("Window rule has empty instance_pattern, rule will never match");
+            rule.never_matches = true;
+        }
+        if (cfg.title_pattern.has_value() && cfg.title_pattern->empty())
+        {
+            LOG_WARN("Window rule has empty title_pattern, rule will never match");
+            rule.never_matches = true;
+        }
+
+        if (!rule.never_matches)
+        {
+            rule.class_regex = compile_pattern(cfg.class_pattern);
+            rule.instance_regex = compile_pattern(cfg.instance_pattern);
+            rule.title_regex = compile_pattern(cfg.title_pattern);
+        }
 
         rule.type = parse_window_type(cfg.type);
+
+        // Detect unknown type string — fail-closed
+        if (cfg.type.has_value() && !rule.type.has_value())
+        {
+            LOG_WARN("Window rule has unknown type '{}', rule will never match", *cfg.type);
+            rule.never_matches = true;
+        }
         rule.transient = cfg.transient;
 
         rule.floating = cfg.floating;
@@ -147,9 +177,12 @@ void WindowRules::load_rules(std::vector<WindowRuleConfig> const& configs)
 
 bool WindowRules::matches_rule(CompiledWindowRule const& rule, WindowMatchInfo const& info) const
 {
+    if (rule.never_matches)
+        return false;
+
     if (rule.class_regex.has_value())
     {
-        if (!std::regex_search(info.wm_class, *rule.class_regex))
+        if (!std::regex_match(info.wm_class, *rule.class_regex))
         {
             return false;
         }
@@ -157,7 +190,7 @@ bool WindowRules::matches_rule(CompiledWindowRule const& rule, WindowMatchInfo c
 
     if (rule.instance_regex.has_value())
     {
-        if (!std::regex_search(info.wm_class_name, *rule.instance_regex))
+        if (!std::regex_match(info.wm_class_name, *rule.instance_regex))
         {
             return false;
         }
@@ -165,7 +198,7 @@ bool WindowRules::matches_rule(CompiledWindowRule const& rule, WindowMatchInfo c
 
     if (rule.title_regex.has_value())
     {
-        if (!std::regex_search(info.title, *rule.title_regex))
+        if (!std::regex_match(info.title, *rule.title_regex))
         {
             return false;
         }

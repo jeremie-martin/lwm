@@ -529,7 +529,8 @@ std::expected<void, std::string> WindowManager::apply_config_reload(Config confi
             focused_monitor_ = active->monitor;
             if (active->kind == Client::Kind::Tiled && active->workspace < monitors_[active->monitor].workspaces.size())
             {
-                monitors_[active->monitor].workspaces[active->workspace].focused_window = active_window_;
+                workspace_policy::set_workspace_focus(
+                    monitors_[active->monitor].workspaces[active->workspace], active_window_);
             }
             update_ewmh_current_desktop();
         }
@@ -819,7 +820,7 @@ void WindowManager::apply_rule_result_to_window(xcb_window_t window, WindowRuleR
         remove_tiled_from_workspace(id, source_monitor, source_workspace);
         add_tiled_to_workspace(id, target_monitor, target_workspace);
         if (id == active_window_)
-            monitors_[target_monitor].workspaces[target_workspace].focused_window = id;
+            workspace_policy::set_workspace_focus(monitors_[target_monitor].workspaces[target_workspace], id);
     };
 
     size_t target_monitor = client->monitor;
@@ -2733,8 +2734,12 @@ void WindowManager::claim_fullscreen_owner(xcb_window_t window)
     if (!client || client->monitor >= monitors_.size())
         return;
     auto& monitor = monitors_[client->monitor];
-    if (monitor.fullscreen_owner != XCB_NONE && monitor.fullscreen_owner != window)
-        clear_fullscreen_state(monitor.fullscreen_owner);
+    // Do NOT clear_fullscreen_state on the old owner — just reassign ownership.
+    // The old owner keeps its fullscreen flag and EWMH property, and will be
+    // suppressed (hidden off-screen) by is_suppressed_by_fullscreen() + sync_visibility.
+    auto& fs_list = monitor.fullscreen_windows;
+    if (std::ranges::find(fs_list, window) == fs_list.end())
+        fs_list.push_back(window);
     monitor.fullscreen_owner = window;
 }
 
@@ -2806,10 +2811,10 @@ int WindowManager::compute_stack_layer(xcb_window_t window, Client const& client
 {
     if (client.layer == WindowLayer::Overlay)
         return static_cast<int>(StackLayer::Overlay);
-    if (client.fullscreen)
-        return static_cast<int>(StackLayer::Fullscreen);
     if (is_suppressed_by_fullscreen(window))
         return static_cast<int>(StackLayer::Below);
+    if (client.fullscreen)
+        return static_cast<int>(StackLayer::Fullscreen);
     if (client.above || client.modal)
         return static_cast<int>(StackLayer::Above);
     if (client.below)

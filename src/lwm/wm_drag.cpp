@@ -186,6 +186,7 @@ void WindowManager::end_drag()
                         layout_count += 1;
 
                     source_ws.windows.erase(source_it);
+                    workspace_policy::remove_from_focus_history(source_ws, moved_window);
 
                     size_t target_index = 0;
                     if (layout_count > 0)
@@ -200,7 +201,7 @@ void WindowManager::end_drag()
 
                     size_t insert_index = std::min(target_index, target_ws.windows.size());
                     target_ws.windows.insert(target_ws.windows.begin() + insert_index, moved_window);
-                    target_ws.focused_window = window;
+                    workspace_policy::set_workspace_focus(target_ws, window);
 
                     if (!same_workspace)
                     {

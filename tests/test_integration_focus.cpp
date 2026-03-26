@@ -461,7 +461,7 @@ TEST_CASE(
 }
 
 TEST_CASE(
-    "Integration: second fullscreen window clears previous fullscreen state on the same workspace",
+    "Integration: second fullscreen window suppresses previous but preserves state",
     "[integration][focus][fullscreen][exclusive]"
 )
 {
@@ -514,7 +514,8 @@ TEST_CASE(
     send_client_message(conn, w2, net_wm_state, 1, net_wm_state_fullscreen, 0, 0, 0);
 
     REQUIRE(wait_for_condition([&]() { return has_fullscreen_state(w2); }, kTimeout));
-    REQUIRE(wait_for_condition([&]() { return !has_fullscreen_state(w1); }, kTimeout));
+    // Old fullscreen window keeps its state — it's suppressed, not stripped
+    REQUIRE(wait_for_condition([&]() { return has_fullscreen_state(w1); }, kTimeout));
 
     destroy_window(conn, w2);
     destroy_window(conn, w1);
@@ -551,7 +552,8 @@ TEST_CASE(
 
     REQUIRE(wait_for_active_window(conn, w2, kTimeout));
     REQUIRE(wait_for_condition([&]() { return has_state(conn, w2, net_wm_state_fullscreen); }, kTimeout));
-    REQUIRE(wait_for_condition([&]() { return !has_state(conn, w1, net_wm_state_fullscreen); }, kTimeout));
+    // Old fullscreen window keeps its state — suppressed, not stripped
+    REQUIRE(wait_for_condition([&]() { return has_state(conn, w1, net_wm_state_fullscreen); }, kTimeout));
 
     destroy_window(conn, w2);
     destroy_window(conn, w1);
@@ -976,7 +978,8 @@ TEST_CASE(
     send_client_message(conn, w2, net_wm_state, 1, net_wm_state_fullscreen, 0, 0, 0);
 
     REQUIRE(wait_for_condition([&]() { return has_state(conn, w2, net_wm_state_fullscreen); }, kTimeout));
-    REQUIRE(wait_for_condition([&]() { return !has_state(conn, w1, net_wm_state_fullscreen); }, kTimeout));
+    // Old fullscreen window keeps state but is hidden off-screen (suppressed)
+    REQUIRE(wait_for_condition([&]() { return has_state(conn, w1, net_wm_state_fullscreen); }, kTimeout));
     REQUIRE(wait_for_condition([&]() { return is_hidden_offscreen(conn, w1); }, kTimeout));
 
     destroy_window(conn, w2);
@@ -984,7 +987,7 @@ TEST_CASE(
 }
 
 TEST_CASE(
-    "Integration: suppressed floating fullscreen loser restores its saved geometry after owner exits",
+    "Integration: suppressed floating fullscreen window regains ownership after owner exits",
     "[integration][focus][fullscreen][floating]"
 )
 {
@@ -1008,9 +1011,6 @@ TEST_CASE(
     map_window(conn, w1);
     REQUIRE(wait_for_active_window(conn, w1, kTimeout));
 
-    auto initial_geometry = get_window_geometry(conn, w1);
-    REQUIRE(initial_geometry.has_value());
-
     send_client_message(conn, w1, net_wm_state, 1, net_wm_state_fullscreen, 0, 0, 0);
     REQUIRE(wait_for_condition([&]() { return has_state(conn, w1, net_wm_state_fullscreen); }, kTimeout));
 
@@ -1020,19 +1020,15 @@ TEST_CASE(
     send_client_message(conn, w2, net_wm_state, 1, net_wm_state_fullscreen, 0, 0, 0);
 
     REQUIRE(wait_for_condition([&]() { return has_state(conn, w2, net_wm_state_fullscreen); }, kTimeout));
-    REQUIRE(wait_for_condition([&]() { return !has_state(conn, w1, net_wm_state_fullscreen); }, kTimeout));
+    // Old fullscreen window keeps state but is suppressed
+    REQUIRE(wait_for_condition([&]() { return has_state(conn, w1, net_wm_state_fullscreen); }, kTimeout));
     REQUIRE(wait_for_condition([&]() { return is_hidden_offscreen(conn, w1); }, kTimeout));
 
+    // After destroying the owner, the suppressed fullscreen window regains ownership
     destroy_window(conn, w2);
     REQUIRE(wait_for_active_window(conn, w1, kTimeout));
-    REQUIRE(wait_for_condition(
-        [&]()
-        {
-            auto geometry = get_window_geometry(conn, w1);
-            return geometry.has_value() && *geometry == *initial_geometry;
-        },
-        kTimeout
-    ));
+    REQUIRE(wait_for_condition([&]() { return has_state(conn, w1, net_wm_state_fullscreen); }, kTimeout));
+    REQUIRE(wait_for_condition([&]() { return !is_hidden_offscreen(conn, w1); }, kTimeout));
 
     destroy_window(conn, w1);
 }

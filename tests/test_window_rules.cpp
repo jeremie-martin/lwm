@@ -55,7 +55,7 @@ TEST_CASE("Exact class name matching", "[rules]")
         REQUIRE(*result.floating == true);
     }
 
-    SECTION("Regex search matches substring")
+    SECTION("Exact class does not match substring")
     {
         WindowMatchInfo info{ .wm_class = "Firefox Developer Edition",
                               .wm_class_name = "Navigator",
@@ -64,6 +64,26 @@ TEST_CASE("Exact class name matching", "[rules]")
                               .is_transient = false };
 
         auto result = rules.match(info, {}, {});
+
+        REQUIRE_FALSE(result.matched);
+    }
+
+    SECTION("Wildcard pattern matches substring")
+    {
+        WindowRuleConfig wildcard_cfg;
+        wildcard_cfg.class_pattern = "Firefox.*";
+        wildcard_cfg.floating = true;
+
+        WindowRules wildcard_rules;
+        wildcard_rules.load_rules({ wildcard_cfg });
+
+        WindowMatchInfo info{ .wm_class = "Firefox Developer Edition",
+                              .wm_class_name = "Navigator",
+                              .title = "Test",
+                              .ewmh_type = WindowType::Normal,
+                              .is_transient = false };
+
+        auto result = wildcard_rules.match(info, {}, {});
 
         REQUIRE(result.matched);
     }
@@ -661,7 +681,7 @@ TEST_CASE("No criteria matches all windows", "[rules]")
     REQUIRE(*result.floating == true);
 }
 
-TEST_CASE("Empty class or title patterns match all windows", "[rules][edge]")
+TEST_CASE("Empty class or title patterns cause rule to never match", "[rules][edge]")
 {
     WindowMatchInfo info{ .wm_class = "AnyClass",
                           .wm_class_name = "any",
@@ -669,7 +689,7 @@ TEST_CASE("Empty class or title patterns match all windows", "[rules][edge]")
                           .ewmh_type = WindowType::Normal,
                           .is_transient = false };
 
-    SECTION("Empty class pattern matches any window")
+    SECTION("Empty class pattern never matches")
     {
         WindowRuleConfig cfg;
         cfg.class_pattern = "";
@@ -679,10 +699,10 @@ TEST_CASE("Empty class or title patterns match all windows", "[rules][edge]")
         rules.load_rules({ cfg });
 
         auto result = rules.match(info, {}, {});
-        REQUIRE(result.matched);
+        REQUIRE_FALSE(result.matched);
     }
 
-    SECTION("Empty title pattern matches any window")
+    SECTION("Empty title pattern never matches")
     {
         WindowRuleConfig cfg;
         cfg.title_pattern = "";
@@ -692,7 +712,7 @@ TEST_CASE("Empty class or title patterns match all windows", "[rules][edge]")
         rules.load_rules({ cfg });
 
         auto result = rules.match(info, {}, {});
-        REQUIRE(result.matched);
+        REQUIRE_FALSE(result.matched);
     }
 }
 
@@ -717,7 +737,7 @@ TEST_CASE("Malformed regex pattern falls back to literal match", "[rules][edge]"
     REQUIRE(result.matched);
 }
 
-TEST_CASE("Unknown window type string is treated as no filter", "[rules][edge]")
+TEST_CASE("Unknown window type string causes rule to never match", "[rules][edge]")
 {
     WindowRuleConfig cfg;
     cfg.type = "not_a_real_type"; // Invalid type string
@@ -726,7 +746,7 @@ TEST_CASE("Unknown window type string is treated as no filter", "[rules][edge]")
     WindowRules rules;
     rules.load_rules({ cfg });
 
-    // Rule should load without crashing, and invalid type is treated as no constraint
+    // Rule should load without crashing
     REQUIRE(rules.rule_count() == 1);
 
     WindowMatchInfo info{ .wm_class = "Test",
@@ -737,9 +757,8 @@ TEST_CASE("Unknown window type string is treated as no filter", "[rules][edge]")
 
     auto result = rules.match(info, {}, {});
 
-    // Rule matches because invalid type doesn't act as a constraint
-    REQUIRE(result.matched);
-    REQUIRE(*result.floating == true);
+    // Rule never matches because type string is unrecognized
+    REQUIRE_FALSE(result.matched);
 }
 
 TEST_CASE("Duplicate names resolve to first occurrence", "[rules][edge]")

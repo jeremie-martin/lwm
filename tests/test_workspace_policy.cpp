@@ -312,3 +312,54 @@ TEST_CASE("remove_tiled_window picks last non-iconic via reverse iteration", "[w
     REQUIRE(ws.windows == std::vector<xcb_window_t>{ 0x1000, 0x2000 });
     REQUIRE(ws.focused_window == 0x2000);
 }
+
+TEST_CASE("remove_tiled_window uses focus history for fallback", "[workspace][policy][history]")
+{
+    Workspace ws;
+    ws.windows = { 0x1000, 0x2000, 0x3000 };
+    ws.focused_window = 0x3000;
+    ws.focus_history = { 0x2000, 0x1000, 0x3000 }; // 0x1000 was focused before 0x3000
+
+    auto is_iconic = [](xcb_window_t) { return false; };
+
+    bool removed = workspace_policy::remove_tiled_window(ws, 0x3000, is_iconic);
+
+    REQUIRE(removed);
+    // Should pick 0x1000 from history (most recent before 0x3000), not 0x2000 (last in list)
+    REQUIRE(ws.focused_window == 0x1000);
+    // 0x3000 should be removed from focus_history too
+    REQUIRE(std::ranges::find(ws.focus_history, 0x3000) == ws.focus_history.end());
+}
+
+TEST_CASE("remove_tiled_window cleans up focus_history", "[workspace][policy][history]")
+{
+    Workspace ws;
+    ws.windows = { 0x1000, 0x2000 };
+    ws.focused_window = 0x2000;
+    ws.focus_history = { 0x1000, 0x2000 };
+
+    auto is_iconic = [](xcb_window_t) { return false; };
+
+    workspace_policy::remove_tiled_window(ws, 0x1000, is_iconic);
+
+    // 0x1000 should be removed from history
+    REQUIRE(ws.focus_history == std::vector<xcb_window_t>{ 0x2000 });
+    // Focus should remain on 0x2000 (not affected since non-focused was removed)
+    REQUIRE(ws.focused_window == 0x2000);
+}
+
+TEST_CASE("push_focus_history evicts oldest entry at capacity", "[workspace][policy][history]")
+{
+    Workspace ws;
+    // Push kFocusHistoryMax + 1 distinct windows
+    for (xcb_window_t i = 1; i <= workspace_policy::kFocusHistoryMax + 1; ++i)
+        workspace_policy::push_focus_history(ws, i);
+
+    REQUIRE(ws.focus_history.size() == workspace_policy::kFocusHistoryMax);
+    // Oldest entry (1) should have been evicted
+    REQUIRE(std::ranges::find(ws.focus_history, 1) == ws.focus_history.end());
+    // Most recent entry should be at the back
+    REQUIRE(ws.focus_history.back() == workspace_policy::kFocusHistoryMax + 1);
+    // Second entry (2) should now be the oldest
+    REQUIRE(ws.focus_history.front() == 2);
+}

@@ -266,7 +266,7 @@ void WindowManager::move_window_to_monitor(int direction)
 
     auto& target_monitor = monitors_[target_idx];
     add_tiled_to_workspace(window_to_move, target_idx, target_monitor.current_workspace);
-    target_monitor.current().focused_window = window_to_move;
+    workspace_policy::set_workspace_focus(target_monitor.current(), window_to_move);
 
     if (is_client_sticky(window_to_move))
         ewmh_.set_window_desktop(window_to_move, 0xFFFFFFFF);

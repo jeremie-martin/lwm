@@ -169,6 +169,7 @@ struct Workspace
 {
     std::vector<xcb_window_t> windows;
     xcb_window_t focused_window = XCB_NONE;
+    std::vector<xcb_window_t> focus_history; ///< MRU stack; back = most recent
 
     auto find_window(xcb_window_t id) { return std::ranges::find(windows, id); }
 

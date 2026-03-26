@@ -109,7 +109,9 @@ void WindowManager::focus_any_window(xcb_window_t window, bool record_user_time)
 
         // Apply the decision: focus_window_state is now pure, so we apply state here
         focused_monitor_ = change->target_monitor;
-        monitors_[change->target_monitor].workspaces[change->new_workspace].focused_window = window;
+        workspace_policy::set_workspace_focus(
+            monitors_[change->target_monitor].workspaces[change->new_workspace], window);
+        client->mru_order = next_mru_order_++;
         active_window_ = window;
 
         if (change->workspace_changed)
@@ -336,12 +338,18 @@ void WindowManager::cycle_focus(bool forward)
 
     auto floating_candidates = build_floating_candidates();
 
+    auto get_mru = [this](xcb_window_t w) -> uint64_t {
+        auto const* c = get_client(w);
+        return c ? c->mru_order : 0;
+    };
+
     auto candidates = focus_policy::build_cycle_candidates(
         ws.windows,
         floating_candidates,
         focused_monitor_,
         monitor.current_workspace,
-        eligible
+        eligible,
+        get_mru
     );
 
     auto target = forward ? focus_policy::cycle_focus_next(candidates, active_window_)

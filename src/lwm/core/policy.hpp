@@ -47,14 +47,14 @@ inline bool is_window_visible(
     std::span<Monitor const> monitors
 )
 {
-    if (showing_desktop)
-        return false;
     if (is_iconic)
         return false;
     if (client_monitor >= monitors.size())
         return false;
     if (is_sticky)
         return true;
+    if (showing_desktop)
+        return false;
     return client_workspace == monitors[client_monitor].current_workspace;
 }
 
@@ -101,6 +101,14 @@ inline std::optional<FocusSelection> select_focus_candidate(
         return FocusSelection{ workspace.focused_window, false };
     }
 
+    // Focus history (MRU order, back = most recent)
+    for (auto it = workspace.focus_history.rbegin(); it != workspace.focus_history.rend(); ++it)
+    {
+        if (workspace.find_window(*it) != workspace.windows.end() && eligible(*it))
+            return FocusSelection{ *it, false };
+    }
+
+    // Fallback: last window in tiled list
     for (auto it = workspace.windows.rbegin(); it != workspace.windows.rend(); ++it)
     {
         if (eligible(*it))
@@ -132,22 +140,28 @@ struct FocusCycleCandidate
     bool is_floating = false;
 };
 
-/// Build a list of focus-cycleable candidates from tiled and floating windows.
-/// Returns candidates in order: tiled first, then floating.
+/// Build cycle candidates sorted by MRU order (most recently used first).
+/// get_mru_order returns the MRU timestamp for a window (higher = more recent).
 inline std::vector<FocusCycleCandidate> build_cycle_candidates(
     std::span<xcb_window_t const> tiled_windows,
     std::span<FloatingCandidate const> floating_windows,
     size_t monitor_idx,
     size_t workspace_idx,
-    std::function<bool(xcb_window_t)> const& is_eligible
+    std::function<bool(xcb_window_t)> const& is_eligible,
+    std::function<uint64_t(xcb_window_t)> const& get_mru_order
 )
 {
-    std::vector<FocusCycleCandidate> candidates;
+    struct Ranked
+    {
+        FocusCycleCandidate candidate;
+        uint64_t mru;
+    };
+    std::vector<Ranked> ranked;
 
     for (xcb_window_t w : tiled_windows)
     {
         if (is_eligible(w))
-            candidates.push_back({ w, false });
+            ranked.push_back({ { w, false }, get_mru_order(w) });
     }
 
     for (auto const& fw : floating_windows)
@@ -157,10 +171,31 @@ inline std::vector<FocusCycleCandidate> build_cycle_candidates(
         if (!fw.sticky && fw.workspace != workspace_idx)
             continue;
         if (is_eligible(fw.id))
-            candidates.push_back({ fw.id, true });
+            ranked.push_back({ { fw.id, true }, get_mru_order(fw.id) });
     }
 
-    return candidates;
+    std::stable_sort(ranked.begin(), ranked.end(), [](auto const& a, auto const& b) { return a.mru > b.mru; });
+
+    std::vector<FocusCycleCandidate> result;
+    result.reserve(ranked.size());
+    for (auto& r : ranked)
+        result.push_back(std::move(r.candidate));
+    return result;
+}
+
+/// Backward-compatible overload without MRU ordering (tiled-first, then floating).
+inline std::vector<FocusCycleCandidate> build_cycle_candidates(
+    std::span<xcb_window_t const> tiled_windows,
+    std::span<FloatingCandidate const> floating_windows,
+    size_t monitor_idx,
+    size_t workspace_idx,
+    std::function<bool(xcb_window_t)> const& is_eligible
+)
+{
+    return build_cycle_candidates(
+        tiled_windows, floating_windows, monitor_idx, workspace_idx, is_eligible,
+        [](xcb_window_t) -> uint64_t { return 0; }
+    );
 }
 
 /// Find the next window in focus cycle order.
@@ -248,19 +283,59 @@ inline std::optional<WorkspaceSwitchResult> validate_workspace_switch(Monitor co
     return WorkspaceSwitchResult{ monitor.current_workspace, target };
 }
 
+constexpr size_t kFocusHistoryMax = 16;
+
+/// Push a window to the top (back) of focus_history, removing duplicates.
+inline void push_focus_history(Workspace& ws, xcb_window_t window)
+{
+    if (window == XCB_NONE)
+        return;
+    std::erase(ws.focus_history, window);
+    ws.focus_history.push_back(window);
+    if (ws.focus_history.size() > kFocusHistoryMax)
+        ws.focus_history.erase(ws.focus_history.begin());
+}
+
+/// Remove a window from focus_history.
+inline void remove_from_focus_history(Workspace& ws, xcb_window_t window)
+{
+    std::erase(ws.focus_history, window);
+}
+
+/// Set focused_window and update focus_history in one step.
+inline void set_workspace_focus(Workspace& ws, xcb_window_t window)
+{
+    ws.focused_window = window;
+    push_focus_history(ws, window);
+}
+
 /// Fix up workspace.focused_window after a window has been removed from the window list.
-/// If the removed window was focused, selects the last non-iconic window as the new focus.
+/// Consults focus_history first (MRU), then falls back to last non-iconic window.
 inline void
 fixup_workspace_focus(Workspace& ws, xcb_window_t removed_window, std::function<bool(xcb_window_t)> const& is_iconic)
 {
     if (ws.focused_window != removed_window)
         return;
     ws.focused_window = XCB_NONE;
+
+    // Try focus_history (MRU order, back = most recent)
+    for (auto rit = ws.focus_history.rbegin(); rit != ws.focus_history.rend(); ++rit)
+    {
+        if (*rit != removed_window && ws.find_window(*rit) != ws.windows.end() && !is_iconic(*rit))
+        {
+            xcb_window_t target = *rit; // Extract before set_workspace_focus invalidates iterators
+            set_workspace_focus(ws, target);
+            return;
+        }
+    }
+
+    // Fallback: reverse-iterate window list
     for (auto rit = ws.windows.rbegin(); rit != ws.windows.rend(); ++rit)
     {
         if (!is_iconic(*rit))
         {
-            ws.focused_window = *rit;
+            xcb_window_t target = *rit; // Extract before set_workspace_focus invalidates iterators
+            set_workspace_focus(ws, target);
             break;
         }
     }
@@ -273,6 +348,7 @@ remove_tiled_window(Workspace& workspace, xcb_window_t window, std::function<boo
     if (it == workspace.windows.end())
         return false;
     workspace.windows.erase(it);
+    remove_from_focus_history(workspace, window);
     fixup_workspace_focus(workspace, window, is_iconic);
     return true;
 }
@@ -297,7 +373,7 @@ inline bool move_tiled_window(
 
     auto& target = monitor.workspaces[target_ws];
     target.windows.push_back(window);
-    target.focused_window = window;
+    set_workspace_focus(target, window);
     return true;
 }
 
@@ -389,3 +465,111 @@ inline DesiredWindowState compute_desired_state(DesiredStateInputs const& in)
 }
 
 } // namespace lwm::classification_policy
+
+namespace lwm::hotplug_policy {
+
+struct SavedWindowLocation
+{
+    xcb_window_t id = XCB_NONE;
+    std::string monitor_name;
+    size_t workspace = 0;
+};
+
+struct SavedWorkspaceState
+{
+    size_t current_workspace = 0;
+    size_t previous_workspace = 0;
+};
+
+struct WindowRelocation
+{
+    xcb_window_t id = XCB_NONE;
+    size_t target_monitor = 0;
+    size_t target_workspace = 0;
+    std::string original_monitor_name; ///< Monitor name from before the hotplug
+};
+
+struct HotplugPlan
+{
+    std::vector<WindowRelocation> tiled_relocations;
+    std::vector<WindowRelocation> floating_relocations;
+    size_t focused_monitor = 0;
+    // Per-monitor workspace indices to restore (monitor_idx -> {current, previous})
+    std::vector<std::pair<size_t, size_t>> workspace_current;
+    std::vector<std::pair<size_t, size_t>> workspace_previous;
+};
+
+/// Pure function: compute a relocation plan for windows after a monitor configuration change.
+/// Maps saved window locations (by monitor name) onto the new monitor set.
+/// Windows whose monitor name no longer exists fall back to monitor 0.
+/// Workspace indices are clamped to the new monitor's workspace count.
+inline HotplugPlan plan_hotplug(
+    std::span<Monitor const> new_monitors,
+    std::span<SavedWindowLocation const> tiled_locations,
+    std::span<SavedWindowLocation const> floating_locations,
+    std::unordered_map<std::string, SavedWorkspaceState> const& saved_ws_state,
+    std::string const& focused_monitor_name
+)
+{
+    HotplugPlan plan;
+    if (new_monitors.empty())
+        return plan;
+
+    // Build name -> index map
+    std::unordered_map<std::string, size_t> name_to_index;
+    for (size_t i = 0; i < new_monitors.size(); ++i)
+        name_to_index[new_monitors[i].name] = i;
+
+    // Restore workspace state per monitor
+    for (size_t i = 0; i < new_monitors.size(); ++i)
+    {
+        auto const& mon = new_monitors[i];
+        size_t ws_count = mon.workspaces.size();
+        if (ws_count == 0)
+            ws_count = 1; // Defensive
+
+        if (auto it = saved_ws_state.find(mon.name); it != saved_ws_state.end())
+        {
+            plan.workspace_current.push_back({ i, std::min(it->second.current_workspace, ws_count - 1) });
+            plan.workspace_previous.push_back({ i, std::min(it->second.previous_workspace, ws_count - 1) });
+        }
+    }
+
+    // Helper: resolve a saved location to a target monitor + clamped workspace
+    auto resolve_location = [&](SavedWindowLocation const& loc) -> WindowRelocation {
+        size_t target_monitor = 0;
+        if (auto it = name_to_index.find(loc.monitor_name); it != name_to_index.end())
+            target_monitor = it->second;
+
+        size_t ws_count = new_monitors[target_monitor].workspaces.size();
+        size_t target_workspace = loc.workspace;
+        if (ws_count > 0 && target_workspace >= ws_count)
+        {
+            // Clamp to the monitor's current workspace (from saved state, or 0)
+            target_workspace = 0;
+            if (auto it = saved_ws_state.find(new_monitors[target_monitor].name); it != saved_ws_state.end())
+                target_workspace = std::min(it->second.current_workspace, ws_count - 1);
+        }
+
+        return { loc.id, target_monitor, target_workspace, loc.monitor_name };
+    };
+
+    // Plan tiled relocations
+    plan.tiled_relocations.reserve(tiled_locations.size());
+    for (auto const& loc : tiled_locations)
+        plan.tiled_relocations.push_back(resolve_location(loc));
+
+    // Plan floating relocations
+    plan.floating_relocations.reserve(floating_locations.size());
+    for (auto const& loc : floating_locations)
+        plan.floating_relocations.push_back(resolve_location(loc));
+
+    // Resolve focused monitor by name, fallback to 0
+    plan.focused_monitor = 0;
+    if (auto it = name_to_index.find(focused_monitor_name); it != name_to_index.end())
+        plan.focused_monitor = it->second;
+
+    return plan;
+}
+
+} // namespace lwm::hotplug_policy

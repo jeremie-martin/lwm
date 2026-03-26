@@ -240,9 +240,12 @@ TEST_CASE("Visibility handles show desktop, workspace, and invalid monitor", "[v
     monitors[1].current_workspace = 0;
     monitors[2].current_workspace = 4;
 
-    // Show desktop hides all windows
+    // Show desktop hides non-sticky windows
     REQUIRE_FALSE(visibility_policy::is_window_visible(true, false, false, 0, 0, monitors));
-    REQUIRE_FALSE(visibility_policy::is_window_visible(true, false, true, 0, 0, monitors));
+    // Sticky windows survive show-desktop
+    REQUIRE(visibility_policy::is_window_visible(true, false, true, 0, 0, monitors));
+    // Iconic sticky windows are still hidden during show-desktop
+    REQUIRE_FALSE(visibility_policy::is_window_visible(true, true, true, 0, 0, monitors));
 
     // Current workspace on each monitor is visible
     REQUIRE(visibility_policy::is_workspace_visible(false, 0, 2, monitors));
