@@ -76,6 +76,9 @@ void WindowManager::handle_event(xcb_generic_event_t const& event)
             handle_window_removal(e.window);
             break;
         }
+        case XCB_FOCUS_IN:
+            handle_focus_in(reinterpret_cast<xcb_focus_in_event_t const&>(event));
+            break;
         case XCB_ENTER_NOTIFY:
             handle_enter_notify(reinterpret_cast<xcb_enter_notify_event_t const&>(event));
             break;
@@ -400,6 +403,37 @@ void WindowManager::handle_window_removal(xcb_window_t window)
     }
 }
 
+void WindowManager::handle_focus_in(xcb_focus_in_event_t const& e)
+{
+    // Only react to genuine focus transitions, not grab/ungrab notifications.
+    if (e.mode != XCB_NOTIFY_MODE_NORMAL && e.mode != XCB_NOTIFY_MODE_WHILE_GRABBED)
+        return;
+
+    // Inferior detail means focus moved within a subwindow of the same
+    // top-level — ignore since it doesn't represent a top-level change.
+    if (e.detail == XCB_NOTIFY_DETAIL_INFERIOR)
+        return;
+
+    // Already tracking this window — nothing to do.
+    if (e.event == active_window_)
+        return;
+
+    auto const* client = get_client(e.event);
+    if (!client)
+        return;
+
+    // Ignore hidden (off-screen) windows — stale FocusIn events can arrive
+    // during flush_and_drain_crossing after visibility changes.
+    if (client->hidden)
+        return;
+
+    if (!is_focus_eligible(e.event))
+        return;
+
+    LOG_DEBUG("FocusIn: external focus change to {:#x} (was {:#x}), syncing WM state", e.event, active_window_);
+    focus_any_window(e.event, false);
+}
+
 void WindowManager::handle_enter_notify(xcb_enter_notify_event_t const& e)
 {
     LOG_TRACE(
@@ -443,8 +477,11 @@ void WindowManager::handle_enter_notify(xcb_enter_notify_event_t const& e)
 
         if (client && (client->kind == Client::Kind::Floating || client->kind == Client::Kind::Tiled))
         {
-            LOG_DEBUG("EnterNotify: focusing window {:#x}", e.event);
-            focus_any_window(e.event);
+            if (e.event != active_window_)
+            {
+                LOG_DEBUG("EnterNotify: focusing window {:#x}", e.event);
+                focus_any_window(e.event);
+            }
             return;
         }
     }

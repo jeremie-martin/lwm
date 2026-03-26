@@ -16,6 +16,7 @@ FetchContent_MakeAvailable(Catch2)
     test_focus_restoration_policy.cpp
     test_integration_client_message.cpp
     test_integration_focus.cpp
+    test_integration_focus_input.cpp
     test_integration_overlay.cpp
     test_integration_property_notify.cpp
     test_integration_wm_state.cpp

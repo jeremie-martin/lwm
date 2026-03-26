@@ -165,14 +165,12 @@ void WindowManager::focus_any_window(xcb_window_t window, bool record_user_time)
 
     xcb_timestamp_t focus_time = last_event_time_ ? last_event_time_ : XCB_CURRENT_TIME;
     send_wm_take_focus(window, last_event_time_);
-    if (should_set_input_focus(window))
-    {
-        xcb_set_input_focus(conn_.get(), XCB_INPUT_FOCUS_POINTER_ROOT, window, focus_time);
-    }
-    else
-    {
-        xcb_set_input_focus(conn_.get(), XCB_INPUT_FOCUS_POINTER_ROOT, conn_.screen()->root, focus_time);
-    }
+    // Always set input focus directly on the target window.  ICCCM prescribes
+    // root-focus for "Globally Active" windows (accepts_input=false), but doing
+    // so leaves keyboard input stranded on root until the client responds to
+    // WM_TAKE_FOCUS.  Following dwm/i3 convention we always focus the window;
+    // a well-behaved Globally Active client can still redirect via WM_TAKE_FOCUS.
+    xcb_set_input_focus(conn_.get(), XCB_INPUT_FOCUS_POINTER_ROOT, window, focus_time);
 
     if (previous_monitor && *previous_monitor < monitors_.size() && *previous_monitor != client->monitor)
         restack_monitor_layers(*previous_monitor);
@@ -304,20 +302,6 @@ bool WindowManager::is_focus_eligible(xcb_window_t window) const
     if (is_suppressed_by_fullscreen(window))
         return false;
     return focus_policy::is_focus_eligible(client->accepts_input, client->supports_take_focus);
-}
-
-bool WindowManager::should_set_input_focus(xcb_window_t window) const
-{
-    if (auto const* client = get_client(window))
-        return client->accepts_input;
-
-    // Fallback for unmanaged windows (shouldn't happen in normal flow)
-    xcb_icccm_wm_hints_t hints;
-    if (!xcb_icccm_get_wm_hints_reply(conn_.get(), xcb_icccm_get_wm_hints(conn_.get(), window), &hints, nullptr))
-        return true;
-    if (!(hints.flags & XCB_ICCCM_WM_HINT_INPUT))
-        return true;
-    return hints.input;
 }
 
 void WindowManager::send_wm_take_focus(xcb_window_t window, uint32_t timestamp)

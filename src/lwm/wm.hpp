@@ -169,6 +169,7 @@ private:
         bool urgent);
     void apply_initial_state_flags(xcb_window_t window, WindowRuleResult const& rule);
     void handle_window_removal(xcb_window_t window);
+    void handle_focus_in(xcb_focus_in_event_t const& e);
     void handle_enter_notify(xcb_enter_notify_event_t const& e);
     void handle_motion_notify(xcb_motion_notify_event_t const& e);
     void handle_button_press(xcb_button_press_event_t const& e);
@@ -338,7 +339,6 @@ private:
     MouseBinding const* resolve_mouse_binding(uint16_t state, uint8_t button) const;
     bool supports_protocol(xcb_window_t window, xcb_atom_t protocol) const;
     bool is_focus_eligible(xcb_window_t window) const;
-    bool should_set_input_focus(xcb_window_t window) const;
     void send_wm_take_focus(xcb_window_t window, uint32_t timestamp);
     void send_wm_ping(xcb_window_t window, uint32_t timestamp);
     void send_sync_request(xcb_window_t window, uint32_t timestamp);

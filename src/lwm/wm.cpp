@@ -3524,8 +3524,7 @@ void WindowManager::cache_focus_hints(xcb_window_t window)
     if (!client)
         return;
 
-    // Read WM_HINTS directly from X (not via should_set_input_focus,
-    // which reads the cache and would return the stale default).
+    // Read WM_HINTS directly from X (the cached default would be stale).
     xcb_icccm_wm_hints_t hints;
     if (xcb_icccm_get_wm_hints_reply(conn_.get(), xcb_icccm_get_wm_hints(conn_.get(), window), &hints, nullptr))
         client->accepts_input = !(hints.flags & XCB_ICCCM_WM_HINT_INPUT) || hints.input;
