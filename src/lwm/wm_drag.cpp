@@ -227,6 +227,7 @@ void WindowManager::end_drag()
                         rearrange_monitor(monitors_[target_monitor_idx]);
                     }
 
+                    flush_and_drain_crossing();
                     LWM_ASSERT_INVARIANTS(clients_, monitors_);
                     focus_any_window(window);
                 }
@@ -238,7 +239,7 @@ void WindowManager::end_drag()
     drag_state_.tiled = false;
     drag_state_.window = XCB_NONE;
     xcb_ungrab_pointer(conn_.get(), XCB_CURRENT_TIME);
-    conn_.flush();
+    flush_and_drain_crossing();
 }
 
 }

@@ -251,7 +251,6 @@ void WindowManager::map_floating_window(
     bool urgent)
 {
     manage_floating_window(window, start_iconic);
-    flush_and_drain_crossing();
 
     if (classification.skip_taskbar)
         set_client_skip_taskbar(window, true);
@@ -316,6 +315,8 @@ void WindowManager::map_floating_window(
         sync_visibility_for_monitor(client->monitor);
         restack_monitor_layers(client->monitor);
     }
+
+    flush_and_drain_crossing();
 }
 
 void WindowManager::map_tiled_window(
@@ -325,7 +326,6 @@ void WindowManager::map_tiled_window(
     bool urgent)
 {
     manage_window(window, start_iconic);
-    flush_and_drain_crossing();
 
     if (urgent)
         set_client_demands_attention(window, true);
@@ -377,6 +377,8 @@ void WindowManager::map_tiled_window(
             }
         }
     }
+
+    flush_and_drain_crossing();
 }
 
 void WindowManager::handle_window_removal(xcb_window_t window)
@@ -563,6 +565,7 @@ void WindowManager::handle_button_press(xcb_button_press_event_t const& e)
 
                 sync_visibility_for_monitor(monitor_idx);
                 rearrange_monitor(monitors_[monitor_idx]);
+                flush_and_drain_crossing();
                 LWM_ASSERT_INVARIANTS(clients_, monitors_);
 
                 focus_any_window(target);
@@ -955,10 +958,10 @@ void WindowManager::handle_active_window_request(xcb_client_message_event_t cons
 void WindowManager::finalize_after_desktop_move(
     xcb_window_t window, bool was_active, size_t target_monitor, size_t target_workspace)
 {
-    bool visible = !showing_desktop_ && target_monitor < monitors_.size()
+    bool visible = target_monitor < monitors_.size() && !showing_desktop_
         && target_workspace == monitors_[target_monitor].current_workspace;
 
-    if (was_active && is_suppressed_by_fullscreen(window))
+    if (was_active && target_monitor < monitors_.size() && is_suppressed_by_fullscreen(window))
         focus_or_fallback(monitors_[target_monitor], false);
     else if (was_active && !visible)
         focus_or_fallback(focused_monitor());
@@ -997,6 +1000,10 @@ void WindowManager::handle_desktop_change(xcb_client_message_event_t const& e)
     {
         size_t source_mon_idx = source_client->monitor;
         size_t source_ws_idx = source_client->workspace;
+
+        if (source_mon_idx >= monitors_.size()
+            || source_ws_idx >= monitors_[source_mon_idx].workspaces.size())
+            return;
 
         auto& source_ws = monitors_[source_mon_idx].workspaces[source_ws_idx];
         if (source_ws.find_window(e.window) == source_ws.windows.end())

@@ -244,3 +244,48 @@ TEST_CASE(
 
     destroy_window(conn, w1);
 }
+
+// =============================================================================
+// Desktop move: moving the focused window to a hidden workspace via
+// _NET_WM_DESKTOP should transfer focus to a remaining window.
+// =============================================================================
+TEST_CASE(
+    "Integration: moving focused window to hidden workspace transfers focus",
+    "[integration][workspace][focus]"
+)
+{
+    auto test_env = TestEnvironment::create();
+    if (!test_env)
+        SKIP("Test environment not available");
+
+    auto& conn = test_env->conn;
+
+    xcb_atom_t net_wm_desktop = intern_atom(conn.get(), "_NET_WM_DESKTOP");
+    xcb_atom_t net_number_of_desktops = intern_atom(conn.get(), "_NET_NUMBER_OF_DESKTOPS");
+    REQUIRE(net_wm_desktop != XCB_NONE);
+    REQUIRE(net_number_of_desktops != XCB_NONE);
+
+    uint32_t num_desktops = get_window_property_cardinal(conn.get(), conn.root(), net_number_of_desktops).value_or(0);
+    if (num_desktops < 2)
+        SKIP("Need at least 2 desktops");
+
+    xcb_window_t w1 = create_window(conn, 10, 10, 200, 150);
+    map_window(conn, w1);
+    REQUIRE(wait_for_active_window(conn, w1, kTimeout));
+
+    xcb_window_t w2 = create_window(conn, 40, 40, 200, 150);
+    map_window(conn, w2);
+    REQUIRE(wait_for_active_window(conn, w2, kTimeout));
+
+    // Move w2 to desktop 1 (currently on desktop 0)
+    send_client_message(conn, w2, net_wm_desktop, 1);
+
+    // w2 is now on a hidden workspace — focus should fall back to w1
+    CHECK(wait_for_active_window(conn, w1, kTimeout));
+
+    // Verify w2 was actually moved
+    CHECK(wait_for_property_cardinal(conn.get(), w2, net_wm_desktop, 1, kTimeout));
+
+    destroy_window(conn, w2);
+    destroy_window(conn, w1);
+}

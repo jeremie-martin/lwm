@@ -166,7 +166,7 @@ void WindowManager::focus_any_window(xcb_window_t window, bool record_user_time)
     }
 
     xcb_timestamp_t focus_time = last_event_time_ ? last_event_time_ : XCB_CURRENT_TIME;
-    send_wm_take_focus(window, last_event_time_);
+    send_wm_take_focus(window, focus_time);
     // Always set input focus directly on the target window.  ICCCM prescribes
     // root-focus for "Globally Active" windows (accepts_input=false), but doing
     // so leaves keyboard input stranded on root until the client responds to
@@ -321,7 +321,7 @@ void WindowManager::send_wm_take_focus(xcb_window_t window, uint32_t timestamp)
     ev.type = wm_protocols_;
     ev.format = 32;
     ev.data.data32[0] = wm_take_focus_;
-    ev.data.data32[1] = timestamp ? timestamp : XCB_CURRENT_TIME;
+    ev.data.data32[1] = timestamp;
 
     xcb_send_event(conn_.get(), 0, window, XCB_EVENT_MASK_NO_EVENT, reinterpret_cast<char*>(&ev));
 }

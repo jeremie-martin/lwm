@@ -686,7 +686,7 @@ void WindowManager::convert_window_to_floating(xcb_window_t window)
     }
     client->floating_geometry = geometry;
 
-    uint32_t values[] = { XCB_EVENT_MASK_ENTER_WINDOW | XCB_EVENT_MASK_FOCUS_CHANGE | XCB_EVENT_MASK_PROPERTY_CHANGE
+    uint32_t values[] = { XCB_EVENT_MASK_ENTER_WINDOW | XCB_EVENT_MASK_PROPERTY_CHANGE
                           | XCB_EVENT_MASK_BUTTON_PRESS };
     xcb_change_window_attributes(conn_.get(), window, XCB_CW_EVENT_MASK, values);
     update_allowed_actions(window);
@@ -702,7 +702,7 @@ void WindowManager::convert_window_to_tiled(xcb_window_t window)
     size_t workspace_idx = std::min(client->workspace, monitors_[client->monitor].workspaces.size() - 1);
     add_tiled_to_workspace(window, client->monitor, workspace_idx);
 
-    uint32_t values[] = { XCB_EVENT_MASK_ENTER_WINDOW | XCB_EVENT_MASK_FOCUS_CHANGE | XCB_EVENT_MASK_PROPERTY_CHANGE };
+    uint32_t values[] = { XCB_EVENT_MASK_ENTER_WINDOW | XCB_EVENT_MASK_PROPERTY_CHANGE };
     xcb_change_window_attributes(conn_.get(), window, XCB_CW_EVENT_MASK, values);
     update_allowed_actions(window);
 }
@@ -757,6 +757,7 @@ void WindowManager::toggle_window_float(xcb_window_t window)
 
     sync_visibility_for_monitor(monitor_idx);
     rearrange_monitor(monitors_[monitor_idx]);
+    flush_and_drain_crossing();
 
     LWM_ASSERT_INVARIANTS(clients_, monitors_);
     focus_any_window(window);
@@ -1603,6 +1604,8 @@ void WindowManager::sync_managed_window_classification(xcb_window_t window, Clas
             clear_focus();
         }
     }
+
+    flush_and_drain_crossing();
 }
 
 void WindowManager::reevaluate_managed_window(xcb_window_t window)
@@ -1690,7 +1693,7 @@ void WindowManager::manage_window(xcb_window_t window, bool start_iconic)
     // We receive UnmapNotify/DestroyNotify via root's SubstructureNotifyMask.
     // Selecting STRUCTURE_NOTIFY on clients would cause duplicate UnmapNotify events,
     // leading to incorrect unmanagement of windows during workspace switches (ICCCM compliance).
-    uint32_t values[] = { XCB_EVENT_MASK_ENTER_WINDOW | XCB_EVENT_MASK_FOCUS_CHANGE | XCB_EVENT_MASK_PROPERTY_CHANGE };
+    uint32_t values[] = { XCB_EVENT_MASK_ENTER_WINDOW | XCB_EVENT_MASK_PROPERTY_CHANGE };
     xcb_change_window_attributes(conn_.get(), window, XCB_CW_EVENT_MASK, values);
 
     if (auto const* client = get_client(window))
@@ -1796,7 +1799,7 @@ void WindowManager::unmanage_window(xcb_window_t window)
             }
         }
 
-        conn_.flush();
+        flush_and_drain_crossing();
         return;
     }
 

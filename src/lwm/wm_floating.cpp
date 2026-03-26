@@ -142,7 +142,7 @@ void WindowManager::manage_floating_window(xcb_window_t window, bool start_iconi
 
     refresh_user_time_tracking(window);
 
-    uint32_t values[] = { XCB_EVENT_MASK_ENTER_WINDOW | XCB_EVENT_MASK_FOCUS_CHANGE | XCB_EVENT_MASK_PROPERTY_CHANGE
+    uint32_t values[] = { XCB_EVENT_MASK_ENTER_WINDOW | XCB_EVENT_MASK_PROPERTY_CHANGE
                           | XCB_EVENT_MASK_BUTTON_PRESS };
     xcb_change_window_attributes(conn_.get(), window, XCB_CW_EVENT_MASK, values);
     if (auto const* client = get_client(window))
@@ -244,7 +244,7 @@ void WindowManager::unmanage_floating_window(xcb_window_t window)
         }
     }
 
-    conn_.flush();
+    flush_and_drain_crossing();
 }
 
 bool WindowManager::is_floating_window(xcb_window_t window) const
@@ -282,6 +282,8 @@ void WindowManager::update_floating_monitor_for_geometry(xcb_window_t window)
 
     if (active_window_ == window && is_suppressed_by_fullscreen(window))
         focus_or_fallback(monitors_[client->monitor], false);
+
+    flush_and_drain_crossing();
 }
 
 void WindowManager::apply_floating_geometry(xcb_window_t window)
