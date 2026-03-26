@@ -30,7 +30,10 @@ ctest --test-dir build --output-on-failure
 - `src/lwm/wm_floating.cpp`: floating geometry and geometry-driven monitor reassignment
 - `src/lwm/wm_drag.cpp`: drag state machine for floating move/resize and tiled reorder
 - `src/lwm/wm_ewmh.cpp`: desktop, workarea, client-list, and root-property updates
+- `src/lwm/wm_restart.cpp`: state serialization, restore, and graceful restart
 - `src/lwm/core/types.hpp`: `Client`, `Workspace`, and `Monitor`
+- `src/lwm/core/policy.hpp`: pure policy functions (focus, visibility, workspace, classification, hotplug)
+- `src/lwm/core/invariants.hpp`: debug-build invariant assertions
 
 ## If You Change Behavior
 

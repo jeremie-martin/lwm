@@ -32,12 +32,12 @@ Managed window classes:
 The single most important rule in this codebase is that different pieces of state have different owners.
 
 - `Client` is the authoritative per-window runtime state.
-- `clients_` is the full managed-window registry.
+- `clients_` is the unified managed-window registry for all kinds (tiled, floating, dock, desktop). There are no parallel per-kind containers; `Client::kind` distinguishes them, and `Client::mru_order` provides floating MRU ordering.
 - `Workspace::windows` is the authoritative tiled membership for that workspace.
-- `floating_windows_` is the authoritative floating MRU list and floating membership container.
 - `active_window_` is the current focused managed window.
 - `focused_monitor_` is the command target monitor.
 - `Workspace::focused_window` is remembered focus for fallback on that workspace; it is not itself proof of current X focus.
+- `Workspace::focus_history` is a bounded MRU stack (back = most recent, max 16 entries) used by the fallback algorithm before it resorts to scanning `Workspace::windows`.
 
 High-value distinctions:
 
@@ -91,19 +91,21 @@ Focus sources converge on the same policy:
 - `_NET_ACTIVE_WINDOW`
 - explicit fallback after workspace, monitor, iconify, unmanage, or fullscreen transitions
 
-Fallback order (`focus_or_fallback(...)`):
+Fallback order (`focus_or_fallback(...)`, implemented via `focus_policy::select_focus_candidate`):
 
-1. remembered workspace focus if still eligible
-2. another eligible tiled window on the current workspace
-3. eligible sticky tiled window from another workspace on the same monitor
-4. eligible floating window in MRU order
-5. clear focus
+1. `Workspace::focused_window` if still in the workspace and eligible
+2. first eligible window from `Workspace::focus_history` (MRU, back = most recent)
+3. last eligible tiled window in `Workspace::windows`
+4. eligible sticky tiled window from another workspace on the same monitor
+5. eligible floating window on the monitor in MRU order (`Client::mru_order`)
+6. clear focus
 
 Important nuance:
 
 - `active_window_` and X input focus must stay aligned
 - focus changes may need to restack both the old and new monitor, not just the newly focused one
 - hidden, iconified, suppressed, dock, and desktop windows are not focus-eligible
+- after any transition that changes window visibility (workspace switch, manage/unmanage, fullscreen, iconify), the WM calls `flush_and_drain_crossing()` — this flushes pending X requests, performs a server round-trip, and discards stale `EnterNotify`/`LeaveNotify`/`MotionNotify` events to prevent focus-follows-mouse from overriding the programmatic focus assignment
 
 ## 5. Fullscreen, Suppression, and Stacking
 
@@ -118,8 +120,9 @@ Visible scope means:
 
 Fullscreen ownership rules:
 
-- at most one managed tiled or floating fullscreen owner is effective on a monitor's visible scope
-- when multiple visible fullscreen windows conflict, one owner is elected and the other visible fullscreen windows lose fullscreen
+- at most one managed tiled or floating fullscreen owner is effective on a monitor's visible scope, tracked in `Monitor::fullscreen_owner`
+- `Monitor::fullscreen_windows` tracks all fullscreen-flagged windows on the monitor; `update_fullscreen_owner_after_visibility_change(...)` selects the highest-order visible candidate as the effective owner
+- when multiple visible fullscreen windows conflict, one owner is elected and the other visible fullscreen windows are suppressed
 - hidden or off-workspace fullscreen windows may keep their fullscreen state until they re-enter visible scope
 
 Suppression rules while an owner exists:
@@ -148,19 +151,21 @@ Primary transition funnels:
 
 - `perform_workspace_switch(...)`
 - `focus_any_window(...)`
-- `reconcile_fullscreen_for_monitor(...)`
+- `update_fullscreen_owner_after_visibility_change(...)`
 - `sync_visibility_for_monitor(...)`
 - `update_floating_monitor_for_geometry(...)`
 - `restack_monitor_layers(...)`
+- `flush_and_drain_crossing(...)` (crossing-event drain after visibility changes)
 
 `perform_workspace_switch(...)` contract:
 
 1. update monitor current and previous workspace
 2. update `_NET_CURRENT_DESKTOP`
-3. reconcile fullscreen ownership for the new visible scope
+3. select fullscreen owner for the new visible scope via `update_fullscreen_owner_after_visibility_change(...)`
 4. sync visibility for the monitor
 5. rearrange tiled layout for the monitor
 6. restore focus in the caller
+7. drain crossing events via `flush_and_drain_crossing(...)`
 
 Window movement rules:
 
@@ -225,3 +230,4 @@ Using monitor names rather than indices is what prevents unplug/replug index chu
 - Letting focus be finalized after a nested workspace/fullscreen transition has already redirected it.
 - Forgetting that visible-scope decisions and physical visibility are different things.
 - Adding new state transitions without routing them through the existing visibility, fullscreen, and focus funnels.
+- Forgetting to call `flush_and_drain_crossing()` after a visibility change that precedes a programmatic focus assignment. Stale crossing events will cause focus-follows-mouse to immediately override the intended focus target.

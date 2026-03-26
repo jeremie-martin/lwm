@@ -100,7 +100,6 @@ Supported state atoms:
 - `_NET_WM_STATE_ABOVE`
 - `_NET_WM_STATE_BELOW`
 - `_NET_WM_STATE_MODAL`
-- `_NET_WM_STATE_SHADED`
 - `_NET_WM_STATE_SKIP_TASKBAR`
 - `_NET_WM_STATE_SKIP_PAGER`
 - `_NET_WM_STATE_DEMANDS_ATTENTION`
@@ -111,7 +110,8 @@ State semantics implemented by LWM:
 - sticky scope is per owning monitor
 - fullscreen supersedes maximize
 - above and below are mutually exclusive
-- visible fullscreen is exclusive per monitor visible scope; conflicting visible fullscreen clients lose fullscreen
+- visible fullscreen is exclusive per monitor visible scope; conflicting visible fullscreen clients are suppressed
+- `_NET_WM_STATE_FOCUSED` is WM-managed (read-only); client requests to change it are ignored
 
 ## 5. Per-Window Properties Written by LWM
 
@@ -185,6 +185,7 @@ Handled client messages:
 
 NOT IMPLEMENTED:
 
+- `_NET_WM_STATE_SHADED`
 - `_NET_VIRTUAL_ROOTS`
 - `_NET_WM_ICON`
 - `_NET_WM_VISIBLE_NAME`

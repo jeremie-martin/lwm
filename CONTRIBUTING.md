@@ -28,7 +28,10 @@ ctest --test-dir build --output-on-failure
 - `src/lwm/wm_floating.cpp`: floating geometry and geometry-driven monitor reassignment
 - `src/lwm/wm_drag.cpp`: drag state machine for floating move/resize and tiled reorder
 - `src/lwm/wm_ewmh.cpp`: desktop, workarea, client-list, and root-property updates
+- `src/lwm/wm_restart.cpp`: state serialization, restore, and graceful restart
 - `src/lwm/core/types.hpp`: `Client`, `Workspace`, and `Monitor`
+- `src/lwm/core/policy.hpp`: pure policy functions (focus selection, workspace manipulation, visibility, classification, hotplug)
+- `src/lwm/core/invariants.hpp`: debug-build invariant assertions
 - `config.toml.example`: user-facing config surface
 
 Start with [`ARCHITECTURE.md`](ARCHITECTURE.md) before editing any of the state-transition code.
@@ -38,10 +41,17 @@ Start with [`ARCHITECTURE.md`](ARCHITECTURE.md) before editing any of the state-
 Use the smallest relevant suite first, then run the broader suite before finishing.
 
 - focus, fullscreen, stacking, activation: `tests/test_integration_focus.cpp`
+- focus-follows-mouse and input models: `tests/test_integration_focus_input.cpp`
+- focus fallback selection and cycling: `tests/test_focus_policy.cpp`, `tests/test_focus_cycling_policy.cpp`, `tests/test_focus_restoration_policy.cpp`
 - workspace visibility and monitor/workspace moves: `tests/test_integration_workspace.cpp`
+- workspace policy (focus history, tiled membership): `tests/test_workspace_policy.cpp`
+- WM_STATE transitions (manage, iconify, unmanage): `tests/test_integration_wm_state.cpp`
+- overlay windows above fullscreen: `tests/test_integration_overlay.cpp`
+- monitor hotplug and window relocation: `tests/test_monitor_hotplug.cpp`
 - property-driven reclassification and hint changes: `tests/test_integration_property_notify.cpp`
-- keybind behavior and config parsing: `tests/test_keybind_policy.cpp`, `tests/test_config.cpp`
+- keybind behavior and config parsing: `tests/test_keybind_policy.cpp`
 - EWMH/root-property behavior: `tests/test_ewmh_policy.cpp`, `tests/test_ewmh_classification.cpp`, `tests/test_integration_client_message.cpp`
+- client state and window rules: `tests/test_client_state_policy.cpp`, `tests/test_window_rules.cpp`
 
 When a change crosses visibility, focus, and fullscreen boundaries, treat it as integration work and add or update an integration test.
 
