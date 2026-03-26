@@ -174,7 +174,7 @@ TEST_CASE("Integration: tiled windows take focus in map order", "[integration][f
 {
     auto test_env = TestEnvironment::create();
     if (!test_env)
-        return;
+        SKIP("Test environment not available");
 
     auto& conn = test_env->conn;
 
@@ -194,7 +194,7 @@ TEST_CASE("Integration: focus restores to previous tiled window after destroy", 
 {
     auto test_env = TestEnvironment::create();
     if (!test_env)
-        return;
+        SKIP("Test environment not available");
 
     auto& conn = test_env->conn;
 
@@ -216,7 +216,7 @@ TEST_CASE("Integration: tiled focus change restacks active window above sibling"
 {
     auto test_env = TestEnvironment::create();
     if (!test_env)
-        return;
+        SKIP("Test environment not available");
 
     auto& conn = test_env->conn;
 
@@ -249,7 +249,7 @@ TEST_CASE("Integration: _NET_RESTACK_WINDOW does not override managed stack poli
 {
     auto test_env = TestEnvironment::create();
     if (!test_env)
-        return;
+        SKIP("Test environment not available");
 
     auto& conn = test_env->conn;
 
@@ -282,7 +282,7 @@ TEST_CASE("Integration: focused tiled window does not restack above floating dia
 {
     auto test_env = TestEnvironment::create();
     if (!test_env)
-        return;
+        SKIP("Test environment not available");
 
     auto& conn = test_env->conn;
 
@@ -320,7 +320,7 @@ TEST_CASE(
 {
     auto test_env = TestEnvironment::create();
     if (!test_env)
-        return;
+        SKIP("Test environment not available");
 
     auto& conn = test_env->conn;
 
@@ -354,7 +354,7 @@ TEST_CASE("Integration: floating window grabs focus and yields on destroy", "[in
 {
     auto test_env = TestEnvironment::create();
     if (!test_env)
-        return;
+        SKIP("Test environment not available");
 
     auto& conn = test_env->conn;
 
@@ -388,7 +388,7 @@ TEST_CASE(
 {
     auto test_env = TestEnvironment::create();
     if (!test_env)
-        return;
+        SKIP("Test environment not available");
 
     auto& conn = test_env->conn;
 
@@ -467,7 +467,7 @@ TEST_CASE(
 {
     auto test_env = TestEnvironment::create();
     if (!test_env)
-        return;
+        SKIP("Test environment not available");
 
     auto& conn = test_env->conn;
 
@@ -527,7 +527,7 @@ TEST_CASE(
 {
     auto test_env = TestEnvironment::create();
     if (!test_env)
-        return;
+        SKIP("Test environment not available");
 
     auto& conn = test_env->conn;
 
@@ -564,7 +564,7 @@ TEST_CASE(
 {
     auto test_env = TestEnvironment::create();
     if (!test_env)
-        return;
+        SKIP("Test environment not available");
 
     auto& conn = test_env->conn;
 
@@ -605,7 +605,7 @@ TEST_CASE(
 {
     auto test_env = TestEnvironment::create();
     if (!test_env)
-        return;
+        SKIP("Test environment not available");
 
     auto& conn = test_env->conn;
 
@@ -655,7 +655,7 @@ TEST_CASE(
 {
     auto test_env = TestEnvironment::create();
     if (!test_env)
-        return;
+        SKIP("Test environment not available");
 
     auto& conn = test_env->conn;
 
@@ -701,7 +701,7 @@ TEST_CASE(
 {
     auto test_env = TestEnvironment::create();
     if (!test_env)
-        return;
+        SKIP("Test environment not available");
 
     auto& conn = test_env->conn;
 
@@ -743,7 +743,7 @@ TEST_CASE("Integration: sticky window on another workspace can take focus when m
 {
     auto test_env = TestEnvironment::create();
     if (!test_env)
-        return;
+        SKIP("Test environment not available");
 
     auto& conn = test_env->conn;
 
@@ -786,7 +786,7 @@ TEST_CASE("Integration: iconifying a visible sticky window restores focus fallba
 {
     auto test_env = TestEnvironment::create();
     if (!test_env)
-        return;
+        SKIP("Test environment not available");
 
     auto& conn = test_env->conn;
 
@@ -834,7 +834,7 @@ TEST_CASE(
 {
     auto test_env = TestEnvironment::create();
     if (!test_env)
-        return;
+        SKIP("Test environment not available");
 
     auto& conn = test_env->conn;
 
@@ -869,7 +869,7 @@ TEST_CASE(
 {
     auto test_env = TestEnvironment::create();
     if (!test_env)
-        return;
+        SKIP("Test environment not available");
 
     auto& conn = test_env->conn;
 
@@ -908,7 +908,7 @@ TEST_CASE(
 {
     auto test_env = TestEnvironment::create();
     if (!test_env)
-        return;
+        SKIP("Test environment not available");
 
     auto& conn = test_env->conn;
 
@@ -952,7 +952,7 @@ TEST_CASE(
 {
     auto test_env = TestEnvironment::create();
     if (!test_env)
-        return;
+        SKIP("Test environment not available");
 
     auto& conn = test_env->conn;
 
@@ -990,7 +990,7 @@ TEST_CASE(
 {
     auto test_env = TestEnvironment::create();
     if (!test_env)
-        return;
+        SKIP("Test environment not available");
 
     auto& conn = test_env->conn;
 
@@ -1044,7 +1044,7 @@ TEST_CASE(
 {
     auto test_env = TestEnvironment::create();
     if (!test_env)
-        return;
+        SKIP("Test environment not available");
 
     auto& conn = test_env->conn;
 
@@ -1087,7 +1087,7 @@ TEST_CASE(
 {
     auto test_env = TestEnvironment::create();
     if (!test_env)
-        return;
+        SKIP("Test environment not available");
 
     auto& conn = test_env->conn;
 
@@ -1125,7 +1125,7 @@ TEST_CASE("Integration: clear_focus clears _NET_WM_STATE_FOCUSED from previous w
 {
     auto test_env = TestEnvironment::create();
     if (!test_env)
-        return;
+        SKIP("Test environment not available");
 
     auto& conn = test_env->conn;
 
@@ -1195,7 +1195,7 @@ TEST_CASE("Integration: transient dialog stacks above its parent", "[integration
 {
     auto test_env = TestEnvironment::create();
     if (!test_env)
-        return;
+        SKIP("Test environment not available");
 
     auto& conn = test_env->conn;
 
@@ -1225,7 +1225,7 @@ TEST_CASE(
 {
     auto test_env = TestEnvironment::create();
     if (!test_env)
-        return;
+        SKIP("Test environment not available");
 
     auto& conn = test_env->conn;
 
@@ -1285,7 +1285,7 @@ TEST_CASE(
 {
     auto test_env = TestEnvironment::create();
     if (!test_env)
-        return;
+        SKIP("Test environment not available");
 
     auto& conn = test_env->conn;
 

@@ -131,6 +131,9 @@ TEST_CASE("Workspace indices are clamped when workspace count decreases", "[hotp
     mon.previous_workspace = 8;
 
     // Simulate workspace count reduction (e.g., config reload)
+    // NOTE: The actual WM performs this clamping in handle_randr_screen_change().
+    // That function is too coupled to WM runtime to unit-test, so we test the
+    // invariant directly: after resize, indices must be within bounds.
     size_t new_count = 4;
     mon.workspaces.resize(new_count);
 
@@ -141,6 +144,8 @@ TEST_CASE("Workspace indices are clamped when workspace count decreases", "[hotp
 
     REQUIRE(mon.current_workspace == 3);
     REQUIRE(mon.previous_workspace == 3);
+    REQUIRE(mon.current_workspace < mon.workspaces.size());
+    REQUIRE(mon.previous_workspace < mon.workspaces.size());
 }
 
 // ─────────────────────────────────────────────────────────────────────────────

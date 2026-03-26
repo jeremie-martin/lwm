@@ -165,7 +165,7 @@ TEST_CASE("Integration: _NET_WM_WINDOW_TYPE changes reclassify managed windows",
 {
     auto test_env = TestEnvironment::create();
     if (!test_env)
-        return;
+        SKIP("Test environment not available");
 
     auto& conn = test_env->conn;
 
@@ -240,7 +240,7 @@ TEST_CASE("Integration: WM_TRANSIENT_FOR changes reclassify managed windows", "[
 {
     auto test_env = TestEnvironment::create();
     if (!test_env)
-        return;
+        SKIP("Test environment not available");
 
     auto& conn = test_env->conn;
 
@@ -320,7 +320,7 @@ TEST_CASE(
 {
     auto test_env = TestEnvironment::create();
     if (!test_env)
-        return;
+        SKIP("Test environment not available");
 
     auto& conn = test_env->conn;
 
@@ -416,7 +416,7 @@ TEST_CASE("Integration: WM_HINTS.input changes can revoke focus eligibility", "[
 {
     auto test_env = TestEnvironment::create();
     if (!test_env)
-        return;
+        SKIP("Test environment not available");
 
     auto& conn = test_env->conn;
 
@@ -439,7 +439,7 @@ TEST_CASE("Integration: _NET_SUPPORTED does not overclaim visible-name atoms", "
 {
     auto test_env = TestEnvironment::create();
     if (!test_env)
-        return;
+        SKIP("Test environment not available");
 
     auto& conn = test_env->conn;
 

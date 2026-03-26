@@ -1,3 +1,4 @@
+#include "lwm/core/policy.hpp"
 #include "lwm/core/types.hpp"
 #include <catch2/catch_test_macros.hpp>
 
@@ -40,20 +41,20 @@ TEST_CASE("Windows persist across workspace switches", "[workspace][critical]")
     REQUIRE(mon.current().windows[0] == 0x1000);
 }
 
-TEST_CASE("Workspace data structure updates focused_window when window is removed", "[workspace][data]")
+TEST_CASE("Removing focused window falls back via policy (skips iconic)", "[workspace][data]")
 {
     Workspace ws;
-    ws.windows.push_back(0x1000);
-    ws.windows.push_back(0x2000);
-    ws.focused_window = 0x1000;
+    ws.windows = { 0x1000, 0x2000, 0x3000 };
+    ws.focused_window = 0x3000;
 
-    // Remove focused window
-    auto it = ws.find_window(ws.focused_window);
-    ws.windows.erase(it);
-    ws.focused_window = ws.windows.empty() ? XCB_NONE : ws.windows.back();
+    auto is_iconic = [](xcb_window_t w) { return w == 0x2000; };
 
-    // focused_window should fall back to last remaining window
-    REQUIRE(ws.focused_window == 0x2000);
+    bool removed = workspace_policy::remove_tiled_window(ws, 0x3000, is_iconic);
+
+    REQUIRE(removed);
+    // Should skip iconic 0x2000 and fall back to 0x1000
+    REQUIRE(ws.focused_window == 0x1000);
+    REQUIRE(ws.windows == std::vector<xcb_window_t>{ 0x1000, 0x2000 });
 }
 
 TEST_CASE("Window can be found across workspaces", "[workspace]")
@@ -117,26 +118,20 @@ TEST_CASE("Empty workspace has no focused window", "[workspace]")
     REQUIRE(ws.focused_window == XCB_NONE);
 }
 
-TEST_CASE("Moving window between workspaces preserves data", "[workspace]")
+TEST_CASE("Moving window between workspaces via policy preserves data", "[workspace]")
 {
     Monitor mon;
     mon.name = "test";
     init_workspaces(mon);
+    mon.current_workspace = 0;
 
-    // Add window to workspace 0
-    xcb_window_t win = 0x1000;
-    mon.workspaces[0].windows.push_back(win);
+    mon.workspaces[0].windows.push_back(0x1000);
     mon.workspaces[0].focused_window = 0x1000;
 
-    // Move window to workspace 2
-    auto it = mon.workspaces[0].find_window(0x1000);
-    xcb_window_t moved = *it;
-    mon.workspaces[0].windows.erase(it);
-    mon.workspaces[0].focused_window = XCB_NONE;
-    mon.workspaces[2].windows.push_back(moved);
-    mon.workspaces[2].focused_window = moved;
+    auto is_iconic = [](xcb_window_t) { return false; };
+    bool moved = workspace_policy::move_tiled_window(mon, 0x1000, 2, is_iconic);
 
-    // Verify window moved correctly
+    REQUIRE(moved);
     REQUIRE(mon.workspaces[0].windows.empty());
     REQUIRE(mon.workspaces[0].focused_window == XCB_NONE);
     REQUIRE(mon.workspaces[2].windows.size() == 1);
@@ -261,11 +256,10 @@ TEST_CASE("Removing last window clears focused_window", "[workspace][edge]")
     ws.windows.push_back(0x1000);
     ws.focused_window = 0x1000;
 
-    // Remove the only window
-    auto it = ws.find_window(0x1000);
-    ws.windows.erase(it);
-    ws.focused_window = ws.windows.empty() ? XCB_NONE : ws.windows.back();
+    auto is_iconic = [](xcb_window_t) { return false; };
+    bool removed = workspace_policy::remove_tiled_window(ws, 0x1000, is_iconic);
 
+    REQUIRE(removed);
     REQUIRE(ws.focused_window == XCB_NONE);
     REQUIRE(ws.windows.empty());
 }
@@ -295,22 +289,19 @@ TEST_CASE("Switching to empty workspace", "[workspace][edge]")
 TEST_CASE("Removing all windows then adding one", "[workspace][edge]")
 {
     Workspace ws;
-    ws.windows.push_back(0x1000);
-    ws.windows.push_back(0x2000);
+    ws.windows = { 0x1000, 0x2000 };
     ws.focused_window = 0x1000;
 
-    // Remove both windows
-    ws.windows.erase(ws.find_window(0x1000));
-    ws.windows.erase(ws.find_window(0x2000));
-    ws.focused_window = ws.windows.empty() ? XCB_NONE : ws.windows.back();
+    auto is_iconic = [](xcb_window_t) { return false; };
+    workspace_policy::remove_tiled_window(ws, 0x1000, is_iconic);
+    workspace_policy::remove_tiled_window(ws, 0x2000, is_iconic);
 
     REQUIRE(ws.windows.empty());
     REQUIRE(ws.focused_window == XCB_NONE);
 
     // Add a new window
-    xcb_window_t new_win = 0x3000;
-    ws.windows.push_back(new_win);
-    ws.focused_window = new_win;
+    ws.windows.push_back(0x3000);
+    ws.focused_window = 0x3000;
 
     REQUIRE(ws.windows.size() == 1);
     REQUIRE(ws.windows[0] == 0x3000);

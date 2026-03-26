@@ -23,16 +23,6 @@ TEST_CASE("Dock windows ignore transient flag", "[ewmh][classification]")
     REQUIRE(result.is_transient);
 }
 
-TEST_CASE("Menu windows float and skip taskbar", "[ewmh][classification]")
-{
-    auto result = classify_window_type(WindowType::Menu, false);
-
-    REQUIRE(result.kind == WindowClassification::Kind::Floating);
-    REQUIRE(result.skip_taskbar);
-    REQUIRE(result.skip_pager);
-    REQUIRE_FALSE(result.above);
-}
-
 TEST_CASE("Utility windows float above and skip taskbar", "[ewmh][classification]")
 {
     auto result = classify_window_type(WindowType::Utility, false);
@@ -59,6 +49,32 @@ TEST_CASE("Popup types are classified as popup", "[ewmh][classification]")
     REQUIRE(result.kind == WindowClassification::Kind::Popup);
     REQUIRE(result.skip_taskbar);
     REQUIRE(result.skip_pager);
+}
+
+TEST_CASE("Menu, Toolbar, and Splash windows float and skip taskbar", "[ewmh][classification]")
+{
+    for (auto type : { WindowType::Menu, WindowType::Toolbar, WindowType::Splash })
+    {
+        CAPTURE(type);
+        auto result = classify_window_type(type, false);
+        REQUIRE(result.kind == WindowClassification::Kind::Floating);
+        REQUIRE(result.skip_taskbar);
+        REQUIRE(result.skip_pager);
+        REQUIRE_FALSE(result.above);
+    }
+}
+
+TEST_CASE("All popup-class types are classified as popup", "[ewmh][classification]")
+{
+    for (auto type : { WindowType::DropdownMenu, WindowType::PopupMenu, WindowType::Notification,
+                       WindowType::Combo, WindowType::Dnd })
+    {
+        CAPTURE(type);
+        auto result = classify_window_type(type, false);
+        REQUIRE(result.kind == WindowClassification::Kind::Popup);
+        REQUIRE(result.skip_taskbar);
+        REQUIRE(result.skip_pager);
+    }
 }
 
 TEST_CASE("Normal windows honor transient flag", "[ewmh][classification]")

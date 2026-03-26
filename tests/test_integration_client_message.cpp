@@ -76,7 +76,7 @@ TEST_CASE(
 {
     auto test_env = TestEnvironment::create();
     if (!test_env)
-        return;
+        SKIP("Test environment not available");
 
     auto& env = test_env->x11_env;
     auto& conn = test_env->conn;
@@ -148,7 +148,7 @@ TEST_CASE(
 {
     auto test_env = TestEnvironment::create();
     if (!test_env)
-        return;
+        SKIP("Test environment not available");
 
     auto& env = test_env->x11_env;
     auto& conn = test_env->conn;
@@ -193,7 +193,7 @@ TEST_CASE("Integration: client message to invalid window ID is ignored", "[integ
 {
     auto test_env = TestEnvironment::create();
     if (!test_env)
-        return;
+        SKIP("Test environment not available");
 
     auto& env = test_env->x11_env;
     auto& conn = test_env->conn;
@@ -224,7 +224,7 @@ TEST_CASE(
 {
     auto test_env = TestEnvironment::create();
     if (!test_env)
-        return;
+        SKIP("Test environment not available");
 
     auto& env = test_env->x11_env;
     auto& conn = test_env->conn;
@@ -271,7 +271,7 @@ TEST_CASE(
 {
     auto test_env = TestEnvironment::create();
     if (!test_env)
-        return;
+        SKIP("Test environment not available");
 
     auto& env = test_env->x11_env;
     auto& conn = test_env->conn;
@@ -331,7 +331,7 @@ TEST_CASE(
 {
     auto test_env = TestEnvironment::create();
     if (!test_env)
-        return;
+        SKIP("Test environment not available");
 
     auto& conn = test_env->conn;
 

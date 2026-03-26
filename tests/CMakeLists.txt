@@ -34,4 +34,4 @@ target_link_libraries(lwm_tests PRIVATE liblwm Catch2::Catch2WithMain)
 target_include_directories(lwm_tests PRIVATE ${CMAKE_SOURCE_DIR}/src)
 
 include(Catch)
-catch_discover_tests(lwm_tests)
+catch_discover_tests(lwm_tests PROPERTIES SKIP_RETURN_CODE 4)

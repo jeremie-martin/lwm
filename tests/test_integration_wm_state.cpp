@@ -104,7 +104,7 @@ TEST_CASE("Integration: _NET_WM_STATE add above sets state atom", "[integration]
 {
     auto test_env = TestEnvironment::create();
     if (!test_env)
-        return;
+        SKIP("Test environment not available");
     auto& conn = test_env->conn;
 
     xcb_atom_t state_above = intern_atom(conn.get(), "_NET_WM_STATE_ABOVE");
@@ -124,7 +124,7 @@ TEST_CASE("Integration: _NET_WM_STATE add below sets state atom", "[integration]
 {
     auto test_env = TestEnvironment::create();
     if (!test_env)
-        return;
+        SKIP("Test environment not available");
     auto& conn = test_env->conn;
 
     xcb_atom_t state_below = intern_atom(conn.get(), "_NET_WM_STATE_BELOW");
@@ -144,7 +144,7 @@ TEST_CASE("Integration: above and below are mutually exclusive", "[integration][
 {
     auto test_env = TestEnvironment::create();
     if (!test_env)
-        return;
+        SKIP("Test environment not available");
     auto& conn = test_env->conn;
 
     xcb_atom_t state_above = intern_atom(conn.get(), "_NET_WM_STATE_ABOVE");
@@ -175,7 +175,7 @@ TEST_CASE("Integration: _NET_WM_STATE remove above clears state", "[integration]
 {
     auto test_env = TestEnvironment::create();
     if (!test_env)
-        return;
+        SKIP("Test environment not available");
     auto& conn = test_env->conn;
 
     xcb_atom_t state_above = intern_atom(conn.get(), "_NET_WM_STATE_ABOVE");
@@ -197,7 +197,7 @@ TEST_CASE("Integration: _NET_WM_STATE toggle cycles above", "[integration][wm_st
 {
     auto test_env = TestEnvironment::create();
     if (!test_env)
-        return;
+        SKIP("Test environment not available");
     auto& conn = test_env->conn;
 
     xcb_atom_t state_above = intern_atom(conn.get(), "_NET_WM_STATE_ABOVE");
@@ -225,7 +225,7 @@ TEST_CASE("Integration: _NET_WM_STATE add skip_taskbar", "[integration][wm_state
 {
     auto test_env = TestEnvironment::create();
     if (!test_env)
-        return;
+        SKIP("Test environment not available");
     auto& conn = test_env->conn;
 
     xcb_atom_t skip_taskbar = intern_atom(conn.get(), "_NET_WM_STATE_SKIP_TASKBAR");
@@ -247,7 +247,7 @@ TEST_CASE("Integration: _NET_WM_STATE add skip_pager", "[integration][wm_state][
 {
     auto test_env = TestEnvironment::create();
     if (!test_env)
-        return;
+        SKIP("Test environment not available");
     auto& conn = test_env->conn;
 
     xcb_atom_t skip_pager = intern_atom(conn.get(), "_NET_WM_STATE_SKIP_PAGER");
@@ -273,7 +273,7 @@ TEST_CASE("Integration: _NET_WM_STATE add demands_attention", "[integration][wm_
 {
     auto test_env = TestEnvironment::create();
     if (!test_env)
-        return;
+        SKIP("Test environment not available");
     auto& conn = test_env->conn;
 
     xcb_atom_t demands_attn = intern_atom(conn.get(), "_NET_WM_STATE_DEMANDS_ATTENTION");
@@ -306,7 +306,7 @@ TEST_CASE("Integration: _NET_WM_STATE add modal sets above", "[integration][wm_s
 {
     auto test_env = TestEnvironment::create();
     if (!test_env)
-        return;
+        SKIP("Test environment not available");
     auto& conn = test_env->conn;
 
     xcb_atom_t state_modal = intern_atom(conn.get(), "_NET_WM_STATE_MODAL");
@@ -340,7 +340,7 @@ TEST_CASE(
 {
     auto test_env = TestEnvironment::create();
     if (!test_env)
-        return;
+        SKIP("Test environment not available");
     auto& conn = test_env->conn;
 
     xcb_atom_t skip_taskbar = intern_atom(conn.get(), "_NET_WM_STATE_SKIP_TASKBAR");

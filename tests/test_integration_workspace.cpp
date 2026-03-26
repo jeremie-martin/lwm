@@ -56,7 +56,7 @@ TEST_CASE("Integration: workspace switch updates _NET_CURRENT_DESKTOP", "[integr
 {
     auto test_env = TestEnvironment::create();
     if (!test_env)
-        return;
+        SKIP("Test environment not available");
 
     auto& conn = test_env->conn;
 
@@ -83,7 +83,7 @@ TEST_CASE("Integration: workspace switch back and forth", "[integration][workspa
 {
     auto test_env = TestEnvironment::create();
     if (!test_env)
-        return;
+        SKIP("Test environment not available");
 
     auto& conn = test_env->conn;
 
@@ -109,7 +109,7 @@ TEST_CASE("Integration: windows persist across workspace switches", "[integratio
 {
     auto test_env = TestEnvironment::create();
     if (!test_env)
-        return;
+        SKIP("Test environment not available");
 
     auto& conn = test_env->conn;
 
@@ -153,7 +153,7 @@ TEST_CASE(
 {
     auto test_env = TestEnvironment::create();
     if (!test_env)
-        return;
+        SKIP("Test environment not available");
 
     auto& conn = test_env->conn;
 

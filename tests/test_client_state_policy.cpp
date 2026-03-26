@@ -194,19 +194,26 @@ TEST_CASE("Maximized states can be set independently", "[client][state][maximize
 // Above/Below state tests
 // ─────────────────────────────────────────────────────────────────────────────
 
-TEST_CASE("Client state stores above and below independently", "[client][state][stacking]")
+TEST_CASE("compute_desired_state enforces above/below mutual exclusion", "[client][state][stacking][policy]")
 {
-    Client c = make_client(0x1000, Client::Kind::Floating);
+    SECTION("Above set clears below")
+    {
+        classification_policy::DesiredStateInputs in{};
+        in.ewmh_above = true;
+        in.ewmh_below = true;
+        auto out = classification_policy::compute_desired_state(in);
+        REQUIRE(out.above);
+        REQUIRE_FALSE(out.below);
+    }
 
-    // Setting above
-    c.above = true;
-    REQUIRE(c.above);
-    REQUIRE_FALSE(c.below);
-
-    // Setting below (above and below are stored independently)
-    c.below = true;
-    REQUIRE(c.below);
-    // Note: Mutual exclusion is enforced by WM code, not the Client struct
+    SECTION("Only below takes effect alone")
+    {
+        classification_policy::DesiredStateInputs in{};
+        in.ewmh_below = true;
+        auto out = classification_policy::compute_desired_state(in);
+        REQUIRE_FALSE(out.above);
+        REQUIRE(out.below);
+    }
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -279,13 +286,225 @@ TEST_CASE("Sticky and fullscreen can coexist", "[client][state][combination]")
     REQUIRE(c.fullscreen);
 }
 
-TEST_CASE("Modal and above can coexist", "[client][state][combination]")
+TEST_CASE("Modal suppresses explicit above in desired state", "[client][state][combination][policy]")
 {
-    Client c = make_client(0x1000, Client::Kind::Floating);
+    SECTION("Modal suppresses EWMH above")
+    {
+        classification_policy::DesiredStateInputs in{};
+        in.ewmh_modal = true;
+        in.ewmh_above = true;
+        auto out = classification_policy::compute_desired_state(in);
+        REQUIRE(out.modal);
+        REQUIRE_FALSE(out.above);
+    }
 
-    c.modal = true;
-    c.above = true;
+    SECTION("Modal suppresses classification above")
+    {
+        classification_policy::DesiredStateInputs in{};
+        in.ewmh_modal = true;
+        in.classification_above = true;
+        auto out = classification_policy::compute_desired_state(in);
+        REQUIRE(out.modal);
+        REQUIRE_FALSE(out.above);
+    }
 
-    REQUIRE(c.modal);
-    REQUIRE(c.above);
+    SECTION("Without modal, classification above works")
+    {
+        classification_policy::DesiredStateInputs in{};
+        in.classification_above = true;
+        auto out = classification_policy::compute_desired_state(in);
+        REQUIRE_FALSE(out.modal);
+        REQUIRE(out.above);
+    }
+
+    SECTION("rule_above overrides modal suppression")
+    {
+        classification_policy::DesiredStateInputs in{};
+        in.ewmh_modal = true;
+        in.rule_above = true;
+        auto out = classification_policy::compute_desired_state(in);
+        REQUIRE(out.modal);
+        REQUIRE(out.above);
+    }
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// compute_desired_state tests
+// ─────────────────────────────────────────────────────────────────────────────
+
+TEST_CASE("compute_desired_state defaults are all false", "[policy][classification]")
+{
+    classification_policy::DesiredStateInputs in{};
+    auto out = classification_policy::compute_desired_state(in);
+
+    REQUIRE_FALSE(out.skip_taskbar);
+    REQUIRE_FALSE(out.skip_pager);
+    REQUIRE_FALSE(out.sticky);
+    REQUIRE_FALSE(out.modal);
+    REQUIRE_FALSE(out.above);
+    REQUIRE_FALSE(out.below);
+    REQUIRE_FALSE(out.borderless);
+}
+
+TEST_CASE("compute_desired_state: skip flags merge classification, ewmh, and transient", "[policy][classification]")
+{
+    SECTION("Classification skip_taskbar propagates")
+    {
+        classification_policy::DesiredStateInputs in{};
+        in.classification_skip_taskbar = true;
+        auto out = classification_policy::compute_desired_state(in);
+        REQUIRE(out.skip_taskbar);
+    }
+
+    SECTION("EWMH skip_pager propagates")
+    {
+        classification_policy::DesiredStateInputs in{};
+        in.ewmh_skip_pager = true;
+        auto out = classification_policy::compute_desired_state(in);
+        REQUIRE(out.skip_pager);
+    }
+
+    SECTION("Transient windows get skip flags")
+    {
+        classification_policy::DesiredStateInputs in{};
+        in.has_transient = true;
+        auto out = classification_policy::compute_desired_state(in);
+        REQUIRE(out.skip_taskbar);
+        REQUIRE(out.skip_pager);
+    }
+
+    SECTION("Rule overrides classification and EWMH")
+    {
+        classification_policy::DesiredStateInputs in{};
+        in.classification_skip_taskbar = true;
+        in.ewmh_skip_pager = true;
+        in.rule_skip_taskbar = false;
+        in.rule_skip_pager = false;
+        auto out = classification_policy::compute_desired_state(in);
+        REQUIRE_FALSE(out.skip_taskbar);
+        REQUIRE_FALSE(out.skip_pager);
+    }
+}
+
+TEST_CASE("compute_desired_state: sticky merges desktop flag, ewmh, and rules", "[policy][classification]")
+{
+    SECTION("EWMH sticky")
+    {
+        classification_policy::DesiredStateInputs in{};
+        in.ewmh_sticky = true;
+        auto out = classification_policy::compute_desired_state(in);
+        REQUIRE(out.sticky);
+    }
+
+    SECTION("Sticky desktop flag")
+    {
+        classification_policy::DesiredStateInputs in{};
+        in.is_sticky_desktop = true;
+        auto out = classification_policy::compute_desired_state(in);
+        REQUIRE(out.sticky);
+    }
+
+    SECTION("Rule overrides ewmh sticky off")
+    {
+        classification_policy::DesiredStateInputs in{};
+        in.ewmh_sticky = true;
+        in.rule_sticky = false;
+        auto out = classification_policy::compute_desired_state(in);
+        REQUIRE_FALSE(out.sticky);
+    }
+
+    SECTION("Rule forces sticky on")
+    {
+        classification_policy::DesiredStateInputs in{};
+        in.rule_sticky = true;
+        auto out = classification_policy::compute_desired_state(in);
+        REQUIRE(out.sticky);
+    }
+}
+
+TEST_CASE("compute_desired_state: overlay layer forces skip, sticky, borderless, clears above/below", "[policy][classification]")
+{
+    classification_policy::DesiredStateInputs in{};
+    in.layer = WindowLayer::Overlay;
+    in.ewmh_above = true;
+    in.ewmh_below = true;
+    auto out = classification_policy::compute_desired_state(in);
+
+    REQUIRE(out.skip_taskbar);
+    REQUIRE(out.skip_pager);
+    REQUIRE(out.sticky);
+    REQUIRE(out.borderless);
+    REQUIRE_FALSE(out.above);
+    REQUIRE_FALSE(out.below);
+}
+
+TEST_CASE("compute_desired_state: modal clears below", "[policy][classification]")
+{
+    classification_policy::DesiredStateInputs in{};
+    in.ewmh_modal = true;
+    in.ewmh_below = true;
+    auto out = classification_policy::compute_desired_state(in);
+
+    REQUIRE(out.modal);
+    REQUIRE_FALSE(out.below);
+}
+
+TEST_CASE("compute_desired_state: rule_below overrides ewmh", "[policy][classification]")
+{
+    SECTION("Rule suppresses ewmh below")
+    {
+        classification_policy::DesiredStateInputs in{};
+        in.ewmh_below = true;
+        in.rule_below = false;
+        auto out = classification_policy::compute_desired_state(in);
+        REQUIRE_FALSE(out.below);
+    }
+
+    SECTION("Rule forces below on")
+    {
+        classification_policy::DesiredStateInputs in{};
+        in.rule_below = true;
+        auto out = classification_policy::compute_desired_state(in);
+        REQUIRE(out.below);
+    }
+}
+
+TEST_CASE("compute_desired_state: rule_above overrides classification", "[policy][classification]")
+{
+    SECTION("Rule forces above off despite classification")
+    {
+        classification_policy::DesiredStateInputs in{};
+        in.classification_above = true;
+        in.rule_above = false;
+        auto out = classification_policy::compute_desired_state(in);
+        REQUIRE_FALSE(out.above);
+    }
+
+    SECTION("Rule forces above on without classification")
+    {
+        classification_policy::DesiredStateInputs in{};
+        in.rule_above = true;
+        auto out = classification_policy::compute_desired_state(in);
+        REQUIRE(out.above);
+    }
+}
+
+TEST_CASE("compute_desired_state: borderless only from rule or overlay", "[policy][classification]")
+{
+    SECTION("Rule sets borderless")
+    {
+        classification_policy::DesiredStateInputs in{};
+        in.rule_borderless = true;
+        auto out = classification_policy::compute_desired_state(in);
+        REQUIRE(out.borderless);
+    }
+
+    SECTION("Overlay forces borderless regardless of rule")
+    {
+        classification_policy::DesiredStateInputs in{};
+        in.layer = WindowLayer::Overlay;
+        in.rule_borderless = false;
+        auto out = classification_policy::compute_desired_state(in);
+        REQUIRE(out.borderless);
+    }
 }

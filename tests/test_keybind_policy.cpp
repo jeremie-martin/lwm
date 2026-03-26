@@ -115,7 +115,7 @@ TEST_CASE("KeybindManager::parse_modifier handles malformed modifier strings", "
 TEST_CASE("KeybindManager::resolve_command returns command as-is if not preset", "[keybind]")
 {
     if (!ensure_x11_environment())
-        return;
+        SKIP("X11 environment not available");
 
     Config cfg = make_empty_config();
     Connection conn;
@@ -128,7 +128,7 @@ TEST_CASE("KeybindManager::resolve_command returns command as-is if not preset",
 TEST_CASE("KeybindManager::resolve_command expands preset commands", "[keybind]")
 {
     if (!ensure_x11_environment())
-        return;
+        SKIP("X11 environment not available");
 
     Config cfg = make_empty_config();
     cfg.programs.terminal = "/usr/local/bin/st";
@@ -150,7 +150,7 @@ TEST_CASE("KeybindManager::resolve_command expands preset commands", "[keybind]"
 TEST_CASE("KeybindManager::resolve returns nullopt for unregistered bindings", "[keybind]")
 {
     if (!ensure_x11_environment())
-        return;
+        SKIP("X11 environment not available");
 
     Config cfg = make_empty_config();
     Connection conn;
@@ -163,7 +163,7 @@ TEST_CASE("KeybindManager::resolve returns nullopt for unregistered bindings", "
 TEST_CASE("KeybindManager::resolve handles multiple bindings across keys, modifiers, and actions", "[keybind]")
 {
     if (!ensure_x11_environment())
-        return;
+        SKIP("X11 environment not available");
 
     Config cfg = make_empty_config();
     cfg.keybinds.push_back({ "super", "a", "spawn", "terminal", -1 });
@@ -202,7 +202,7 @@ TEST_CASE("KeybindManager::resolve handles multiple bindings across keys, modifi
 TEST_CASE("KeybindManager handles all standard keybind modifiers", "[keybind]")
 {
     if (!ensure_x11_environment())
-        return;
+        SKIP("X11 environment not available");
 
     Config cfg = make_empty_config();
     cfg.keybinds.push_back({ "super", "a", "spawn", "test-cmd-1", -1 });
@@ -229,7 +229,7 @@ TEST_CASE("KeybindManager handles all standard keybind modifiers", "[keybind]")
 TEST_CASE("KeybindManager handles modifier state filtering", "[keybind]")
 {
     if (!ensure_x11_environment())
-        return;
+        SKIP("X11 environment not available");
 
     Config cfg = make_empty_config();
     cfg.keybinds.push_back({ "super", "a", "spawn", "test", -1 });
@@ -254,7 +254,7 @@ TEST_CASE("KeybindManager handles modifier state filtering", "[keybind]")
 TEST_CASE("KeybindManager handles invalid key names in config", "[keybind]")
 {
     if (!ensure_x11_environment())
-        return;
+        SKIP("X11 environment not available");
 
     Config cfg = make_empty_config();
     cfg.keybinds.push_back({ "super", "InvalidKeyThatDoesNotExist", "spawn", "test", -1 });
@@ -270,7 +270,7 @@ TEST_CASE("KeybindManager handles invalid key names in config", "[keybind]")
 TEST_CASE("KeybindManager handles all action types", "[keybind]")
 {
     if (!ensure_x11_environment())
-        return;
+        SKIP("X11 environment not available");
 
     Config cfg = make_empty_config();
     cfg.keybinds.push_back({ "super", "a", "spawn", "terminal", -1 });

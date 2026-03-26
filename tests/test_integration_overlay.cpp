@@ -126,7 +126,7 @@ TEST_CASE("Integration: overlay layer stays above fullscreen windows and remains
 {
     auto test_env = TestEnvironment::create(overlay_config());
     if (!test_env)
-        return;
+        SKIP("Test environment not available");
 
     auto& conn = test_env->conn;
 
@@ -186,7 +186,7 @@ TEST_CASE("Integration: overlay remains above after fullscreen owner changes", "
 {
     auto test_env = TestEnvironment::create(overlay_config());
     if (!test_env)
-        return;
+        SKIP("Test environment not available");
 
     auto& conn = test_env->conn;
 
@@ -249,7 +249,7 @@ TEST_CASE("Integration: overlay stays above normal tiled windows without fullscr
 {
     auto test_env = TestEnvironment::create(overlay_config());
     if (!test_env)
-        return;
+        SKIP("Test environment not available");
 
     auto& conn = test_env->conn;
 
@@ -305,7 +305,7 @@ TEST_CASE("Integration: overlay is sticky and survives workspace switch", "[inte
 {
     auto test_env = TestEnvironment::create(overlay_config());
     if (!test_env)
-        return;
+        SKIP("Test environment not available");
 
     auto& conn = test_env->conn;
 
@@ -358,7 +358,7 @@ TEST_CASE("Integration: multiple overlay windows both stay above fullscreen", "[
 {
     auto test_env = TestEnvironment::create(overlay_config());
     if (!test_env)
-        return;
+        SKIP("Test environment not available");
 
     auto& conn = test_env->conn;
 

@@ -202,7 +202,7 @@ TEST_CASE("Integration: reload-config updates desktop names and keeps failed rel
 {
     auto env = TestEnvironment::create(make_config("dev", "web"));
     if (!env || !ensure_lwmctl_available())
-        return;
+        SKIP("Test environment or lwmctl not available");
 
     auto socket_path = wait_for_ipc_socket_path(env->conn);
     REQUIRE(socket_path.has_value());
@@ -225,7 +225,7 @@ TEST_CASE("Integration: reload-config rejects workspace-count changes", "[integr
 {
     auto env = TestEnvironment::create(make_config("one", "two"));
     if (!env || !ensure_lwmctl_available())
-        return;
+        SKIP("Test environment or lwmctl not available");
 
     auto socket_path = wait_for_ipc_socket_path(env->conn);
     REQUIRE(socket_path.has_value());
@@ -247,7 +247,7 @@ TEST_CASE("Integration: IPC ping and reload succeed", "[integration][ipc][reload
 {
     auto env = TestEnvironment::create(make_config("left", "right"));
     if (!env || !ensure_lwmctl_available())
-        return;
+        SKIP("Test environment or lwmctl not available");
 
     auto socket_path = wait_for_ipc_socket_path(env->conn);
     REQUIRE(socket_path.has_value());
@@ -265,17 +265,14 @@ TEST_CASE("Integration: reload-config does not rerun autostart", "[integration][
 {
     auto marker_dir = make_temp_dir();
     if (marker_dir.empty())
-    {
-        WARN("Failed to create marker directory.");
-        return;
-    }
+        SKIP("Failed to create marker directory");
 
     std::filesystem::path marker_path = std::filesystem::path(marker_dir) / "autostart.log";
     std::string autostart_cmd = "sh -c 'echo start >> " + marker_path.string() + "'";
 
     auto env = TestEnvironment::create(make_config("alpha", "beta", 2, autostart_cmd));
     if (!env || !ensure_lwmctl_available())
-        return;
+        SKIP("Test environment or lwmctl not available");
 
     auto socket_path = wait_for_ipc_socket_path(env->conn);
     REQUIRE(socket_path.has_value());
@@ -302,7 +299,7 @@ TEST_CASE("Integration: reload-config reapplies geometry rules to visible floati
 {
     auto env = TestEnvironment::create(make_config("left", "right"));
     if (!env || !ensure_lwmctl_available())
-        return;
+        SKIP("Test environment or lwmctl not available");
 
     auto socket_path = wait_for_ipc_socket_path(env->conn);
     REQUIRE(socket_path.has_value());

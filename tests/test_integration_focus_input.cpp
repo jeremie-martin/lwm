@@ -121,7 +121,7 @@ TEST_CASE(
 {
     auto test_env = TestEnvironment::create();
     if (!test_env)
-        return;
+        SKIP("Test environment not available");
     auto& conn = test_env->conn;
 
     xcb_window_t w1 = create_window(conn, 10, 10, 200, 150);
@@ -153,7 +153,7 @@ TEST_CASE(
 {
     auto test_env = TestEnvironment::create();
     if (!test_env)
-        return;
+        SKIP("Test environment not available");
     auto& conn = test_env->conn;
 
     xcb_window_t w1 = create_window(conn, 10, 10, 200, 150);
@@ -184,7 +184,7 @@ TEST_CASE(
 {
     auto test_env = TestEnvironment::create();
     if (!test_env)
-        return;
+        SKIP("Test environment not available");
     auto& conn = test_env->conn;
 
     xcb_window_t w1 = create_window(conn, 10, 10, 200, 150);
@@ -228,7 +228,7 @@ TEST_CASE(
 {
     auto test_env = TestEnvironment::create();
     if (!test_env)
-        return;
+        SKIP("Test environment not available");
     auto& conn = test_env->conn;
 
     xcb_atom_t wm_take_focus = intern_atom(conn.get(), "WM_TAKE_FOCUS");
@@ -261,7 +261,7 @@ TEST_CASE(
 {
     auto test_env = TestEnvironment::create();
     if (!test_env)
-        return;
+        SKIP("Test environment not available");
     auto& conn = test_env->conn;
 
     xcb_atom_t net_active_window = intern_atom(conn.get(), "_NET_ACTIVE_WINDOW");
