@@ -169,7 +169,6 @@ private:
         bool urgent);
     void apply_initial_state_flags(xcb_window_t window, WindowRuleResult const& rule);
     void handle_window_removal(xcb_window_t window);
-    void handle_focus_in(xcb_focus_in_event_t const& e);
     void handle_enter_notify(xcb_enter_notify_event_t const& e);
     void handle_motion_notify(xcb_motion_notify_event_t const& e);
     void handle_button_press(xcb_button_press_event_t const& e);
