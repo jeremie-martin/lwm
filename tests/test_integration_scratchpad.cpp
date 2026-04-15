@@ -298,6 +298,128 @@ TEST_CASE("Integration: named scratchpads can finish a pending launch after a la
     destroy_window(conn, window);
 }
 
+TEST_CASE("Integration: scratchpad regains focus on pointer enter after keyboard focus change", "[integration][scratchpad]")
+{
+    auto test_env = TestEnvironment::create(scratchpad_match_config());
+    if (!test_env)
+        SKIP("Test environment not available");
+
+    auto& conn = test_env->conn;
+    auto socket_path = wait_for_ipc_socket_path(conn);
+    REQUIRE(socket_path.has_value());
+
+    // Create a tiled window as background
+    xcb_window_t tiled = create_window(conn, 10, 10, 400, 300);
+    set_window_wm_class(conn, tiled, "tiled-inst", "TiledClass");
+    map_window(conn, tiled);
+    REQUIRE(wait_for_active_window(conn, tiled, kTimeout));
+
+    // Trigger scratchpad toggle → pending launch
+    auto toggle_result = send_ipc_command(*socket_path, "scratchpad toggle terminal");
+    REQUIRE(toggle_result.has_value());
+    REQUIRE(*toggle_result == "ok");
+
+    // Create scratchpad window that selects ButtonPress (like Iced/winit apps).
+    // ButtonPress is exclusive in X11 — if the WM also selects it, the WM's
+    // ChangeWindowAttributes fails atomically with BadAccess, dropping all
+    // event selections including ENTER_WINDOW and breaking focus-follows-mouse.
+    xcb_window_t sp = create_window(conn, 10, 10, 240, 160);
+    set_window_wm_class(conn, sp, "scratchpad-instance", "ScratchpadClass");
+    uint32_t app_mask = XCB_EVENT_MASK_BUTTON_PRESS | XCB_EVENT_MASK_PROPERTY_CHANGE;
+    xcb_change_window_attributes(conn.get(), sp, XCB_CW_EVENT_MASK, &app_mask);
+    map_window(conn, sp);
+    REQUIRE(wait_for_active_window(conn, sp, kTimeout));
+    auto sp_geom = get_window_geometry(conn, sp);
+    REQUIRE(sp_geom.has_value());
+    REQUIRE(sp_geom->x >= 0);
+
+    // Use _NET_ACTIVE_WINDOW to focus the tiled window (simulating keyboard focus change)
+    xcb_atom_t net_active_window = intern_atom(conn.get(), "_NET_ACTIVE_WINDOW");
+    REQUIRE(net_active_window != XCB_NONE);
+    send_client_message(conn, tiled, net_active_window, 2, XCB_CURRENT_TIME, 0);
+    REQUIRE(wait_for_active_window(conn, tiled, kTimeout));
+
+    // Scratchpad should still be on-screen (not hidden)
+    {
+        auto geom = get_window_geometry(conn, sp);
+        REQUIRE(geom.has_value());
+        REQUIRE(geom->x >= 0);
+    }
+
+    // Warp to root (away), then to scratchpad center — should trigger EnterNotify and refocus
+    xcb_warp_pointer(conn.get(), XCB_NONE, conn.root(), 0, 0, 0, 0, 0, 0);
+    xcb_flush(conn.get());
+    std::this_thread::sleep_for(std::chrono::milliseconds(50));
+
+    int16_t sp_cx = static_cast<int16_t>(sp_geom->x + sp_geom->width / 2);
+    int16_t sp_cy = static_cast<int16_t>(sp_geom->y + sp_geom->height / 2);
+    xcb_warp_pointer(conn.get(), XCB_NONE, conn.root(), 0, 0, 0, 0, sp_cx, sp_cy);
+    xcb_flush(conn.get());
+    REQUIRE(wait_for_active_window(conn, sp, kTimeout));
+
+    destroy_window(conn, sp);
+    destroy_window(conn, tiled);
+}
+
+TEST_CASE("Integration: floating scratchpad preserves kind and geometry across restart", "[integration][scratchpad]")
+{
+    auto test_env = TestEnvironment::create(scratchpad_match_config());
+    if (!test_env)
+        SKIP("Test environment not available");
+
+    auto& conn = test_env->conn;
+    auto socket_path = wait_for_ipc_socket_path(conn);
+    REQUIRE(socket_path.has_value());
+
+    // Create a tiled window so the scratchpad has something to be compared against
+    xcb_window_t tiled = create_window(conn, 10, 10, 400, 300);
+    set_window_wm_class(conn, tiled, "tiled-inst", "TiledClass");
+    map_window(conn, tiled);
+    REQUIRE(wait_for_active_window(conn, tiled, kTimeout));
+
+    // Launch scratchpad
+    auto toggle_result = send_ipc_command(*socket_path, "scratchpad toggle terminal");
+    REQUIRE(toggle_result.has_value());
+    REQUIRE(*toggle_result == "ok");
+
+    // Create and map scratchpad window
+    xcb_window_t sp = create_window(conn, 10, 10, 240, 160);
+    set_window_wm_class(conn, sp, "scratchpad-instance", "ScratchpadClass");
+    map_window(conn, sp);
+    REQUIRE(wait_for_active_window(conn, sp, kTimeout));
+
+    // Record the geometry the WM assigned (centered floating)
+    auto geom_before = get_window_geometry(conn, sp);
+    REQUIRE(geom_before.has_value());
+    REQUIRE(geom_before->x >= 0);
+
+    // Trigger restart via IPC
+    auto restart_result = send_ipc_command(*socket_path, "restart");
+    // The connection may be dropped mid-restart, so don't require a reply
+
+    // Wait for the new WM instance to become ready
+    REQUIRE(wait_for_wm_ready(conn, std::chrono::seconds(5)));
+    std::this_thread::sleep_for(std::chrono::milliseconds(200));
+
+    // After restart: scratchpad should still be floating with the same geometry
+    auto geom_after = get_window_geometry(conn, sp);
+    REQUIRE(geom_after.has_value());
+    CHECK(geom_after->x == geom_before->x);
+    CHECK(geom_after->y == geom_before->y);
+    CHECK(geom_after->width == geom_before->width);
+    CHECK(geom_after->height == geom_before->height);
+
+    // The window should NOT have been moved to a tiled position.
+    // Tiled windows on a 1280x720 Xvfb with 1 workspace fill the full working area
+    // minus padding, so a tiled window's x would be the padding value.
+    // The floating scratchpad should be centered, which is a different x.
+    // As a basic check: the geometry should not have changed at all.
+    REQUIRE(*geom_after == *geom_before);
+
+    destroy_window(conn, sp);
+    destroy_window(conn, tiled);
+}
+
 TEST_CASE("Integration: scratchpad cycle keeps pooled windows in rotation", "[integration][scratchpad]")
 {
     auto test_env = TestEnvironment::create(scratchpad_match_config());
@@ -352,4 +474,46 @@ TEST_CASE("Integration: scratchpad cycle keeps pooled windows in rotation", "[in
 
     destroy_window(conn, second);
     destroy_window(conn, first);
+}
+
+TEST_CASE("Integration: hidden scratchpad stays hidden across restart", "[integration][scratchpad]")
+{
+    auto test_env = TestEnvironment::create(scratchpad_match_config());
+    if (!test_env)
+        SKIP("Test environment not available");
+
+    auto& conn = test_env->conn;
+    auto socket_path = wait_for_ipc_socket_path(conn);
+    REQUIRE(socket_path.has_value());
+
+    xcb_window_t tiled = create_window(conn, 10, 10, 400, 300);
+    set_window_wm_class(conn, tiled, "tiled-inst", "TiledClass");
+    map_window(conn, tiled);
+    REQUIRE(wait_for_active_window(conn, tiled, kTimeout));
+
+    auto first_toggle = send_ipc_command(*socket_path, "scratchpad toggle terminal");
+    REQUIRE(first_toggle.has_value());
+    REQUIRE(*first_toggle == "ok");
+
+    xcb_window_t sp = create_window(conn, 10, 10, 240, 160);
+    set_window_wm_class(conn, sp, "scratchpad-instance", "ScratchpadClass");
+    map_window(conn, sp);
+    REQUIRE(wait_for_active_window(conn, sp, kTimeout));
+    REQUIRE(wait_for_condition([&]() { return !is_hidden_offscreen(conn, sp); }, kTimeout));
+
+    auto second_toggle = send_ipc_command(*socket_path, "scratchpad toggle terminal");
+    REQUIRE(second_toggle.has_value());
+    REQUIRE(*second_toggle == "ok");
+    REQUIRE(wait_for_condition([&]() { return is_hidden_offscreen(conn, sp); }, kTimeout));
+    REQUIRE(wait_for_active_window(conn, tiled, kTimeout));
+
+    auto restart_result = send_ipc_command(*socket_path, "restart");
+    (void)restart_result;
+
+    REQUIRE(wait_for_wm_ready(conn, std::chrono::seconds(5)));
+    REQUIRE(wait_for_condition([&]() { return is_hidden_offscreen(conn, sp); }, kTimeout));
+    REQUIRE(wait_for_active_window(conn, tiled, kTimeout));
+
+    destroy_window(conn, sp);
+    destroy_window(conn, tiled);
 }

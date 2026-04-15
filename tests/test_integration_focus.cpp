@@ -1,8 +1,11 @@
 #include "x11_test_harness.hpp"
+#include <X11/Xlib.h>
 #include <algorithm>
 #include <catch2/catch_test_macros.hpp>
 #include <chrono>
 #include <optional>
+#include <xcb/xcb_keysyms.h>
+#include <xcb/xtest.h>
 
 using namespace lwm::test;
 
@@ -166,6 +169,71 @@ bool is_hidden_offscreen(X11Connection& conn, xcb_window_t window)
 {
     auto geometry = get_window_geometry(conn, window);
     return geometry.has_value() && geometry->x < 0;
+}
+
+bool property_has_atom(xcb_connection_t* conn, xcb_window_t window, xcb_atom_t property, xcb_atom_t atom)
+{
+    auto cookie = xcb_get_property(conn, 0, window, property, XCB_ATOM_ATOM, 0, 64);
+    auto* reply = xcb_get_property_reply(conn, cookie, nullptr);
+    if (!reply)
+        return false;
+
+    bool present = false;
+    auto* atoms = static_cast<xcb_atom_t*>(xcb_get_property_value(reply));
+    int len = xcb_get_property_value_length(reply) / 4;
+    for (int i = 0; i < len; ++i)
+    {
+        if (atoms[i] == atom)
+        {
+            present = true;
+            break;
+        }
+    }
+    free(reply);
+    return present;
+}
+
+bool xtest_available(X11Connection& conn)
+{
+    auto* extension = xcb_get_extension_data(conn.get(), &xcb_test_id);
+    return extension && extension->present;
+}
+
+std::optional<xcb_keycode_t> first_keycode_for_keysym(X11Connection& conn, xcb_keysym_t keysym)
+{
+    xcb_key_symbols_t* key_symbols = xcb_key_symbols_alloc(conn.get());
+    if (!key_symbols)
+        return std::nullopt;
+
+    xcb_keycode_t* keycodes = xcb_key_symbols_get_keycode(key_symbols, keysym);
+    std::optional<xcb_keycode_t> result;
+    if (keycodes && keycodes[0] != XCB_NO_SYMBOL)
+        result = keycodes[0];
+
+    free(keycodes);
+    xcb_key_symbols_free(key_symbols);
+    return result;
+}
+
+bool send_mouse_chord(
+    X11Connection& conn,
+    xcb_keysym_t modifier,
+    uint8_t button,
+    int16_t root_x,
+    int16_t root_y
+)
+{
+    auto modifier_code = first_keycode_for_keysym(conn, modifier);
+    if (!modifier_code)
+        return false;
+
+    xcb_test_fake_input(conn.get(), XCB_MOTION_NOTIFY, 0, XCB_CURRENT_TIME, conn.root(), root_x, root_y, 0);
+    xcb_test_fake_input(conn.get(), XCB_KEY_PRESS, *modifier_code, XCB_CURRENT_TIME, conn.root(), 0, 0, 0);
+    xcb_test_fake_input(conn.get(), XCB_BUTTON_PRESS, button, XCB_CURRENT_TIME, conn.root(), 0, 0, 0);
+    xcb_test_fake_input(conn.get(), XCB_BUTTON_RELEASE, button, XCB_CURRENT_TIME, conn.root(), 0, 0, 0);
+    xcb_test_fake_input(conn.get(), XCB_KEY_RELEASE, *modifier_code, XCB_CURRENT_TIME, conn.root(), 0, 0, 0);
+    xcb_flush(conn.get());
+    return true;
 }
 
 } // namespace
@@ -382,6 +450,45 @@ TEST_CASE("Integration: floating window grabs focus and yields on destroy", "[in
 }
 
 TEST_CASE(
+    "Integration: Super+Button2 on a managed window still reaches toggle_float",
+    "[integration][focus][mouse]"
+)
+{
+    auto test_env = TestEnvironment::create();
+    if (!test_env)
+        SKIP("Test environment not available");
+
+    auto& conn = test_env->conn;
+
+    if (!xtest_available(conn))
+        SKIP("XTEST extension not available");
+
+    xcb_atom_t net_wm_allowed_actions = intern_atom(conn.get(), "_NET_WM_ALLOWED_ACTIONS");
+    xcb_atom_t net_wm_action_move = intern_atom(conn.get(), "_NET_WM_ACTION_MOVE");
+    REQUIRE(net_wm_allowed_actions != XCB_NONE);
+    REQUIRE(net_wm_action_move != XCB_NONE);
+
+    xcb_window_t window = create_window(conn, 10, 10, 320, 220);
+    map_window(conn, window);
+    REQUIRE(wait_for_active_window(conn, window, kTimeout));
+    REQUIRE_FALSE(property_has_atom(conn.get(), window, net_wm_allowed_actions, net_wm_action_move));
+
+    auto geometry = get_window_geometry(conn, window);
+    REQUIRE(geometry.has_value());
+
+    int16_t center_x = static_cast<int16_t>(geometry->x + geometry->width / 2);
+    int16_t center_y = static_cast<int16_t>(geometry->y + geometry->height / 2);
+    REQUIRE(send_mouse_chord(conn, XStringToKeysym("Super_L"), XCB_BUTTON_INDEX_2, center_x, center_y));
+
+    REQUIRE(wait_for_condition(
+        [&]() { return property_has_atom(conn.get(), window, net_wm_allowed_actions, net_wm_action_move); },
+        kTimeout
+    ));
+
+    destroy_window(conn, window);
+}
+
+TEST_CASE(
     "Integration: fullscreen window keeps zero border width when focus leaves and returns",
     "[integration][focus][fullscreen]"
 )
@@ -458,6 +565,85 @@ TEST_CASE(
 
     destroy_window(conn, w2);
     destroy_window(conn, w1);
+}
+
+TEST_CASE(
+    "Integration: floating fullscreen window keeps fullscreen geometry across restart",
+    "[integration][focus][fullscreen][restart]"
+)
+{
+    auto test_env = TestEnvironment::create();
+    if (!test_env)
+        SKIP("Test environment not available");
+
+    auto& conn = test_env->conn;
+    auto& wm = test_env->wm;
+
+    xcb_atom_t net_wm_state = intern_atom(conn.get(), "_NET_WM_STATE");
+    xcb_atom_t net_wm_state_fullscreen = intern_atom(conn.get(), "_NET_WM_STATE_FULLSCREEN");
+    xcb_atom_t net_current_desktop = intern_atom(conn.get(), "_NET_CURRENT_DESKTOP");
+    xcb_atom_t net_number_of_desktops = intern_atom(conn.get(), "_NET_NUMBER_OF_DESKTOPS");
+    xcb_atom_t dialog_type = intern_atom(conn.get(), "_NET_WM_WINDOW_TYPE_DIALOG");
+    if (net_wm_state == XCB_NONE || net_wm_state_fullscreen == XCB_NONE
+        || net_current_desktop == XCB_NONE || net_number_of_desktops == XCB_NONE || dialog_type == XCB_NONE)
+    {
+        WARN("Failed to intern EWMH atoms.");
+        return;
+    }
+
+    uint32_t num_desktops = get_window_property_cardinal(conn.get(), conn.root(), net_number_of_desktops).value_or(0);
+    if (num_desktops < 2)
+    {
+        WARN("Need at least 2 workspaces for this test.");
+        return;
+    }
+
+    xcb_window_t window = create_window(conn, 10, 10, 320, 220);
+    set_window_type(conn, window, dialog_type);
+    map_window(conn, window);
+    REQUIRE(wait_for_active_window(conn, window, kTimeout));
+    auto floating_geometry = get_window_geometry(conn, window);
+    REQUIRE(floating_geometry.has_value());
+    REQUIRE(floating_geometry->width < conn.screen()->width_in_pixels);
+    REQUIRE(floating_geometry->height < conn.screen()->height_in_pixels);
+
+    send_client_message(conn, window, net_wm_state, 1, net_wm_state_fullscreen, 0, 0, 0);
+    REQUIRE(wait_for_condition([&]() { return has_state(conn, window, net_wm_state_fullscreen); }, kTimeout));
+
+    // Floating fullscreen geometry is applied when the window is shown again.
+    send_client_message(conn, conn.root(), net_current_desktop, 1);
+    REQUIRE(wait_for_property_cardinal(conn.get(), conn.root(), net_current_desktop, 1, kTimeout));
+    send_client_message(conn, conn.root(), net_current_desktop, 0);
+    REQUIRE(wait_for_property_cardinal(conn.get(), conn.root(), net_current_desktop, 0, kTimeout));
+
+    REQUIRE(wait_for_condition(
+        [&]()
+        {
+            auto geometry = get_window_geometry(conn, window);
+            return geometry.has_value() && geometry->x == 0 && geometry->y == 0
+                && geometry->width == conn.screen()->width_in_pixels
+                && geometry->height == conn.screen()->height_in_pixels;
+        },
+        kTimeout
+    ));
+
+    auto restart_result = run_lwmctl(wm, {"restart"});
+    (void)restart_result;
+    REQUIRE(wait_for_wm_ready(conn, std::chrono::seconds(5)));
+
+    REQUIRE(wait_for_condition([&]() { return has_state(conn, window, net_wm_state_fullscreen); }, kTimeout));
+    REQUIRE(wait_for_condition(
+        [&]()
+        {
+            auto geometry = get_window_geometry(conn, window);
+            return geometry.has_value() && geometry->x == 0 && geometry->y == 0
+                && geometry->width == conn.screen()->width_in_pixels
+                && geometry->height == conn.screen()->height_in_pixels;
+        },
+        kTimeout
+    ));
+
+    destroy_window(conn, window);
 }
 
 TEST_CASE(

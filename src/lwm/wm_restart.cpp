@@ -23,9 +23,10 @@ namespace lwm {
 
 namespace {
 
-constexpr uint32_t RESTART_STATE_VERSION = 2;
+constexpr uint32_t RESTART_STATE_VERSION = 3;
 constexpr uint32_t RESTART_RATIO_STATE_VERSION = 2;
-constexpr size_t CLIENT_PROP_COUNT = 23; // v2: +in_scratchpad, +scratchpad_restore_kind
+constexpr size_t CLIENT_PROP_BASE_COUNT = 24; // v3: +kind
+constexpr size_t CLIENT_PROP_COUNT = 25; // v4: +wm_initiated_urgency
 
 // Double-cast is intentional: int16_t → uint16_t reinterprets the bit pattern (e.g. -100 → 65436),
 // then uint16_t → uint32_t zero-extends, preserving the 16-bit pattern without sign-extension.
@@ -100,6 +101,10 @@ void WindowManager::serialize_restart_state()
         data[22] = client.scratchpad_restore_kind.has_value()
             ? (*client.scratchpad_restore_kind == Client::Kind::Tiled ? 1 : 2)
             : 0;
+        // v3: current kind (1=Tiled, 2=Floating)
+        data[23] = (client.kind == Client::Kind::Tiled) ? 1 : 2;
+        // v4: urgency ownership (0=app-owned/none, 1=WM-owned)
+        data[24] = client.wm_initiated_urgency ? 1 : 0;
 
         xcb_change_property(
             conn_.get(),
@@ -406,7 +411,7 @@ void WindowManager::apply_restart_client_state(xcb_window_t window)
         return;
 
     size_t len = xcb_get_property_value_length(reply) / 4;
-    if (reply->type != XCB_ATOM_CARDINAL || len < CLIENT_PROP_COUNT)
+    if (reply->type != XCB_ATOM_CARDINAL || len < CLIENT_PROP_BASE_COUNT)
     {
         free(reply);
         return;
@@ -422,7 +427,8 @@ void WindowManager::apply_restart_client_state(xcb_window_t window)
 
     client->layer = (data[0] == 1) ? WindowLayer::Overlay : WindowLayer::Normal;
     client->borderless = data[1] != 0;
-    client->floating_geometry = unpack_geometry(data + 2);
+    Geometry saved_floating_geometry = unpack_geometry(data + 2);
+    client->floating_geometry = saved_floating_geometry;
     client->fullscreen_restore = unpack_optional_geometry(data + 6);
     client->maximize_restore = unpack_optional_geometry(data + 11);
     client->float_restore = unpack_optional_geometry(data + 16);
@@ -437,7 +443,26 @@ void WindowManager::apply_restart_client_state(xcb_window_t window)
             client->scratchpad_restore_kind = Client::Kind::Floating;
     }
 
+    // v3: restore window kind — scan_existing_windows reclassifies from scratch,
+    // which can turn floating scratchpads into tiled windows.
+    std::optional<Client::Kind> saved_kind;
+    if (len >= 24)
+        saved_kind = (data[23] == 1) ? Client::Kind::Tiled : Client::Kind::Floating;
+    if (len >= 25)
+        client->wm_initiated_urgency = data[24] != 0;
+
     free(reply);
+
+    if (saved_kind && *saved_kind == Client::Kind::Floating && client->kind == Client::Kind::Tiled)
+    {
+        convert_window_to_floating(window);
+        // convert_window_to_floating computes fresh geometry from the tiled position,
+        // overwriting floating_geometry. Restore the saved value.
+        if (auto* c = get_client(window))
+            c->floating_geometry = saved_floating_geometry;
+    }
+    else if (saved_kind && *saved_kind == Client::Kind::Tiled && client->kind == Client::Kind::Floating)
+        convert_window_to_tiled(window);
 
     // Restore scratchpad name
     auto name_cookie = xcb_get_property(
@@ -607,8 +632,10 @@ void WindowManager::prepare_restart()
     for (auto const& [window, client] : clients_)
         xcb_ungrab_key(conn_.get(), XCB_GRAB_ANY, window, XCB_MOD_MASK_ANY);
 
-    // Ungrab buttons on root
+    // Ungrab buttons on root and all managed windows
     xcb_ungrab_button(conn_.get(), XCB_BUTTON_INDEX_ANY, conn_.screen()->root, XCB_MOD_MASK_ANY);
+    for (auto const& [window, client] : clients_)
+        xcb_ungrab_button(conn_.get(), XCB_BUTTON_INDEX_ANY, window, XCB_MOD_MASK_ANY);
 
     // Clear root event mask (releases SubstructureRedirect so the new WM can claim it)
     uint32_t no_events = XCB_EVENT_MASK_NO_EVENT;

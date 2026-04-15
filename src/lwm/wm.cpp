@@ -1113,8 +1113,7 @@ void WindowManager::convert_window_to_floating(xcb_window_t window)
     }
     client->floating_geometry = geometry;
 
-    uint32_t values[] = { XCB_EVENT_MASK_ENTER_WINDOW | XCB_EVENT_MASK_PROPERTY_CHANGE
-                          | XCB_EVENT_MASK_BUTTON_PRESS };
+    uint32_t values[] = { kManagedWindowEventMask };
     xcb_change_window_attributes(conn_.get(), window, XCB_CW_EVENT_MASK, values);
     update_allowed_actions(window);
 }
@@ -1144,7 +1143,7 @@ void WindowManager::convert_window_to_tiled(xcb_window_t window)
     }
     client->saved_tiled_pos = std::nullopt;
 
-    uint32_t values[] = { XCB_EVENT_MASK_ENTER_WINDOW | XCB_EVENT_MASK_PROPERTY_CHANGE };
+    uint32_t values[] = { kManagedWindowEventMask };
     xcb_change_window_attributes(conn_.get(), window, XCB_CW_EVENT_MASK, values);
     update_allowed_actions(window);
 }
@@ -1622,6 +1621,20 @@ void WindowManager::scan_existing_windows()
     int length = xcb_query_tree_children_length(reply);
     xcb_window_t* children = xcb_query_tree_children(reply);
 
+    auto apply_restart_floating_state = [this](xcb_window_t window)
+    {
+        auto const* client = get_client(window);
+        if (!client || client->kind != Client::Kind::Floating || client->hidden || !should_be_visible(window))
+            return;
+
+        if (client->fullscreen)
+            apply_fullscreen_if_needed(window);
+        else if (client->maximized_horz || client->maximized_vert)
+            apply_maximized_geometry(window);
+        else
+            apply_floating_geometry(window);
+    };
+
     suppress_focus_ = true;
     for (int i = 0; i < length; ++i)
     {
@@ -1658,8 +1671,25 @@ void WindowManager::scan_existing_windows()
             {
                 manage_floating_window(window);
                 if (is_restart_)
+                {
                     apply_restart_client_state(window);
-                reevaluate_managed_window(window);
+                    // Restart-time X properties carry the attention state itself but not a
+                    // reliable app-vs-WM ownership signal on older blobs. Preserve ownership
+                    // conservatively for urgent non-active windows until focus clears it.
+                    if (auto* c = get_client(window); c && c->demands_attention && window != active_window_)
+                        c->wm_initiated_urgency = true;
+                }
+                // Sync demands_attention through full setter for WM_HINTS + border consistency.
+                // parse_initial_ewmh_state sets the flag directly, bypassing WM_HINTS sync.
+                if (auto* c = get_client(window); c && c->demands_attention)
+                {
+                    c->demands_attention = false;
+                    set_client_demands_attention(window, true);
+                }
+                if (is_restart_)
+                    apply_restart_floating_state(window);
+                else
+                    reevaluate_managed_window(window);
                 break;
             }
 
@@ -1667,8 +1697,24 @@ void WindowManager::scan_existing_windows()
             {
                 manage_window(window);
                 if (is_restart_)
+                {
                     apply_restart_client_state(window);
-                reevaluate_managed_window(window);
+                    // Restart-time X properties carry the attention state itself but not a
+                    // reliable app-vs-WM ownership signal on older blobs. Preserve ownership
+                    // conservatively for urgent non-active windows until focus clears it.
+                    if (auto* c = get_client(window); c && c->demands_attention && window != active_window_)
+                        c->wm_initiated_urgency = true;
+                }
+                // Sync demands_attention through full setter for WM_HINTS + border consistency.
+                if (auto* c = get_client(window); c && c->demands_attention)
+                {
+                    c->demands_attention = false;
+                    set_client_demands_attention(window, true);
+                }
+                if (is_restart_)
+                    apply_restart_floating_state(window);
+                else
+                    reevaluate_managed_window(window);
                 break;
             }
         }
@@ -1737,6 +1783,8 @@ void WindowManager::parse_initial_ewmh_state(Client& client)
                 client.skip_pager = true;
                 client.app_skip_pager = true;
             }
+            else if (state == ewmh->_NET_WM_STATE_HIDDEN)
+                client.iconic = true;
             else if (state == ewmh->_NET_WM_STATE_DEMANDS_ATTENTION)
                 client.demands_attention = true;
         }
@@ -2246,8 +2294,17 @@ void WindowManager::manage_window(xcb_window_t window, bool start_iconic)
     // We receive UnmapNotify/DestroyNotify via root's SubstructureNotifyMask.
     // Selecting STRUCTURE_NOTIFY on clients would cause duplicate UnmapNotify events,
     // leading to incorrect unmanagement of windows during workspace switches (ICCCM compliance).
-    uint32_t values[] = { XCB_EVENT_MASK_ENTER_WINDOW | XCB_EVENT_MASK_PROPERTY_CHANGE };
+    uint32_t values[] = { kManagedWindowEventMask };
     xcb_change_window_attributes(conn_.get(), window, XCB_CW_EVENT_MASK, values);
+
+    // Passive button grab for click-to-focus.  SYNC mode freezes the pointer so
+    // we can focus and then REPLAY_POINTER to pass the click to the app (and to
+    // any root grab for mod+button bindings).
+    xcb_grab_button(
+        conn_.get(), 0, window, XCB_EVENT_MASK_BUTTON_PRESS,
+        XCB_GRAB_MODE_SYNC, XCB_GRAB_MODE_ASYNC,
+        XCB_NONE, XCB_NONE, XCB_BUTTON_INDEX_ANY, XCB_MOD_MASK_ANY
+    );
 
     if (auto const* client = get_client(window))
     {
@@ -2725,6 +2782,12 @@ void WindowManager::set_client_demands_attention(xcb_window_t window, bool enabl
 
     set_simple_client_state(window, &Client::demands_attention, ewmh_.get()->_NET_WM_STATE_DEMANDS_ATTENTION, enabled);
 
+    if (!enabled)
+    {
+        if (auto* c = get_client(window))
+            c->wm_initiated_urgency = false;
+    }
+
     // Sync ICCCM WM_HINTS urgency flag so panels that check WM_HINTS (e.g. polybar
     // xworkspaces) also see the urgency state.
     xcb_icccm_wm_hints_t hints;
@@ -2756,8 +2819,10 @@ void WindowManager::set_client_demands_attention(xcb_window_t window, bool enabl
 
 std::optional<xcb_window_t> WindowManager::resolve_notification_target(NotificationAttentionRequest const& req) const
 {
-    // Name-based resolution: case-insensitive match against wm_class_name and wm_class,
-    // exclude active_window_, pick highest mru_order (most recently interacted with).
+    // Name-based resolution: case-insensitive match against wm_class_name and wm_class.
+    // Prefers non-active windows (MRU among them), but returns active_window_ when it is
+    // the only match — the caller decides whether to skip it.  This prevents the
+    // desktop-entry → app-name fallback from crossing to an unrelated application.
     auto ci_equal = [](std::string_view a, std::string_view b) -> bool
     {
         if (a.size() != b.size())
@@ -2774,14 +2839,18 @@ std::optional<xcb_window_t> WindowManager::resolve_notification_target(Notificat
     {
         xcb_window_t best = XCB_NONE;
         uint64_t best_mru = 0;
+        bool active_matches = false;
         for (auto const& [wid, client] : clients_)
         {
-            if (wid == active_window_)
-                continue;
             if (client.kind != Client::Kind::Tiled && client.kind != Client::Kind::Floating)
                 continue;
             if (!ci_equal(client.wm_class_name, name) && !ci_equal(client.wm_class, name))
                 continue;
+            if (wid == active_window_)
+            {
+                active_matches = true;
+                continue;
+            }
             if (best == XCB_NONE || client.mru_order > best_mru)
             {
                 best = wid;
@@ -2790,6 +2859,8 @@ std::optional<xcb_window_t> WindowManager::resolve_notification_target(Notificat
         }
         if (best != XCB_NONE)
             return best;
+        if (active_matches)
+            return active_window_;
         return std::nullopt;
     };
 
@@ -2810,24 +2881,33 @@ std::optional<xcb_window_t> WindowManager::resolve_notification_target(Notificat
 
 std::string WindowManager::handle_notification_attention(NotificationAttentionRequest const& req)
 {
-    // Exact window ID: skip if already focused (the user is looking at it).
+    xcb_window_t target = XCB_NONE;
+
     if (req.window != XCB_NONE)
     {
+        // Exact window ID path.
         auto const* client = get_client(req.window);
         if (!client || (client->kind != Client::Kind::Tiled && client->kind != Client::Kind::Floating))
             return ok_reply("no-match");
-        if (req.window == active_window_)
-            return ok_reply("skipped-active");
-        set_client_demands_attention(req.window, true);
-        return ok_reply(std::to_string(req.window));
+        target = req.window;
+    }
+    else
+    {
+        // Name-based fallback: single best match.
+        auto resolved = resolve_notification_target(req);
+        if (!resolved)
+            return ok_reply("no-match");
+        target = *resolved;
     }
 
-    // Name-based fallback: single best match.
-    auto target = resolve_notification_target(req);
-    if (!target)
-        return ok_reply("no-match");
-    set_client_demands_attention(*target, true);
-    return ok_reply(std::to_string(*target));
+    // Skip if the user is already looking at the target window.
+    if (target == active_window_)
+        return ok_reply("skipped-active");
+
+    if (auto* client = get_client(target))
+        client->wm_initiated_urgency = true;
+    set_client_demands_attention(target, true);
+    return ok_reply(std::to_string(target));
 }
 
 void WindowManager::apply_fullscreen_if_needed(xcb_window_t window)

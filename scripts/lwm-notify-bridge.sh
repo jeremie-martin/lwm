@@ -20,7 +20,6 @@ while IFS= read -r line; do
     ] | @tsv' 2>/dev/null) || continue
 
     IFS=$'\t' read -r app_name x_wid desktop_entry <<< "$parsed"
-    [ -z "$app_name" ] && continue
 
     # Layer 1: explicit x-window-id hint (e.g. notify-send -h int:x-window-id:$WINDOWID)
     if [ -n "$x_wid" ] && [ "$x_wid" != "0" ]; then
@@ -32,5 +31,7 @@ while IFS= read -r line; do
     args=()
     [ -n "$desktop_entry" ] && args+=("desktop-entry=$desktop_entry")
     [ -n "$app_name" ] && args+=("app-name=$app_name")
-    (( ${#args[@]} )) && lwmctl notify-attention "${args[@]}" >/dev/null 2>&1 &
+    if (( ${#args[@]} )); then
+        lwmctl notify-attention "${args[@]}" >/dev/null 2>&1 &
+    fi
 done

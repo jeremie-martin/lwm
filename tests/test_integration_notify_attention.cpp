@@ -3,6 +3,7 @@
 #include <catch2/catch_test_macros.hpp>
 #include <chrono>
 #include <optional>
+#include <thread>
 #include <xcb/xcb_icccm.h>
 
 using namespace lwm::test;
@@ -237,6 +238,154 @@ TEST_CASE(
 }
 
 TEST_CASE(
+    "Integration: notify-attention app-name skips active instead of marking sibling",
+    "[integration][notify_attention]"
+)
+{
+    auto test_env = TestEnvironment::create();
+    if (!test_env)
+        SKIP("Test environment not available");
+
+    auto& conn = test_env->conn;
+    auto& wm = test_env->wm;
+
+    xcb_atom_t net_wm_state = intern_atom(conn.get(), "_NET_WM_STATE");
+    xcb_atom_t net_wm_state_demands_attention = intern_atom(conn.get(), "_NET_WM_STATE_DEMANDS_ATTENTION");
+    REQUIRE(net_wm_state != XCB_NONE);
+    REQUIRE(net_wm_state_demands_attention != XCB_NONE);
+
+    // Create two windows with different WM_CLASS.
+    // w1 = "BrowserApp", w2 = "EditorApp".
+    xcb_window_t w1 = create_window(conn, 10, 10, 200, 150);
+    set_window_wm_class(conn, w1, "browser", "BrowserApp");
+    map_window(conn, w1);
+    REQUIRE(wait_for_active_window(conn, w1, kTimeout));
+
+    xcb_window_t w2 = create_window(conn, 40, 40, 200, 150);
+    set_window_wm_class(conn, w2, "editor", "EditorApp");
+    map_window(conn, w2);
+    REQUIRE(wait_for_active_window(conn, w2, kTimeout));
+
+    // Notification for "EditorApp" — the active window.
+    // Should return skipped-active, NOT mark w1 (which is a different app).
+    auto result = run_lwmctl(wm, {"notify-attention", "app-name=EditorApp"});
+    REQUIRE(result.has_value());
+    REQUIRE(result->exit_code == 0);
+    REQUIRE(result->stdout_text.find("skipped-active") != std::string::npos);
+    REQUIRE_FALSE(property_has_atom(conn.get(), w1, net_wm_state, net_wm_state_demands_attention));
+    REQUIRE_FALSE(property_has_atom(conn.get(), w2, net_wm_state, net_wm_state_demands_attention));
+
+    destroy_window(conn, w2);
+    destroy_window(conn, w1);
+}
+
+TEST_CASE(
+    "Integration: notify-attention desktop-entry does not cross to wrong app via app-name fallback",
+    "[integration][notify_attention]"
+)
+{
+    auto test_env = TestEnvironment::create();
+    if (!test_env)
+        SKIP("Test environment not available");
+
+    auto& conn = test_env->conn;
+    auto& wm = test_env->wm;
+
+    xcb_atom_t net_wm_state = intern_atom(conn.get(), "_NET_WM_STATE");
+    xcb_atom_t net_wm_state_demands_attention = intern_atom(conn.get(), "_NET_WM_STATE_DEMANDS_ATTENTION");
+    REQUIRE(net_wm_state != XCB_NONE);
+    REQUIRE(net_wm_state_demands_attention != XCB_NONE);
+
+    // w1: WM_CLASS instance="chromium" class="Chromium"
+    xcb_window_t w1 = create_window(conn, 10, 10, 200, 150);
+    set_window_wm_class(conn, w1, "chromium", "Chromium");
+    map_window(conn, w1);
+    REQUIRE(wait_for_active_window(conn, w1, kTimeout));
+
+    // w2: WM_CLASS instance="google-chrome" class="Google-chrome" (active)
+    xcb_window_t w2 = create_window(conn, 40, 40, 200, 150);
+    set_window_wm_class(conn, w2, "google-chrome", "Google-chrome");
+    map_window(conn, w2);
+    REQUIRE(wait_for_active_window(conn, w2, kTimeout));
+
+    // Notification with desktop-entry matching the active window's class,
+    // plus an app-name that matches w1.  Before the fix, desktop-entry would
+    // fail to match any non-active window and fall through to app-name,
+    // incorrectly marking w1 (Chromium) urgent.
+    auto result = run_lwmctl(wm, {"notify-attention", "desktop-entry=Google-chrome", "app-name=Chromium"});
+    REQUIRE(result.has_value());
+    REQUIRE(result->exit_code == 0);
+    REQUIRE(result->stdout_text.find("skipped-active") != std::string::npos);
+    REQUIRE_FALSE(property_has_atom(conn.get(), w1, net_wm_state, net_wm_state_demands_attention));
+
+    destroy_window(conn, w2);
+    destroy_window(conn, w1);
+}
+
+TEST_CASE(
+    "Integration: WM-initiated urgency survives app WM_HINTS rewrite",
+    "[integration][notify_attention][wm_hints]"
+)
+{
+    auto test_env = TestEnvironment::create();
+    if (!test_env)
+        SKIP("Test environment not available");
+
+    auto& conn = test_env->conn;
+    auto& wm = test_env->wm;
+
+    xcb_atom_t net_wm_state = intern_atom(conn.get(), "_NET_WM_STATE");
+    xcb_atom_t net_wm_state_demands_attention = intern_atom(conn.get(), "_NET_WM_STATE_DEMANDS_ATTENTION");
+    xcb_atom_t net_active_window = intern_atom(conn.get(), "_NET_ACTIVE_WINDOW");
+    REQUIRE(net_wm_state != XCB_NONE);
+    REQUIRE(net_wm_state_demands_attention != XCB_NONE);
+    REQUIRE(net_active_window != XCB_NONE);
+
+    xcb_window_t w1 = create_window(conn, 10, 10, 200, 150);
+    map_window(conn, w1);
+    REQUIRE(wait_for_active_window(conn, w1, kTimeout));
+
+    xcb_window_t w2 = create_window(conn, 40, 40, 200, 150);
+    map_window(conn, w2);
+    REQUIRE(wait_for_active_window(conn, w2, kTimeout));
+
+    // Mark w1 urgent via WM IPC (WM-initiated urgency).
+    std::string window_arg = "window=" + std::to_string(w1);
+    run_lwmctl(wm, {"notify-attention", window_arg});
+    REQUIRE(wait_for_condition(
+        [&]() { return property_has_atom(conn.get(), w1, net_wm_state, net_wm_state_demands_attention); },
+        kTimeout
+    ));
+
+    // App rewrites WM_HINTS (e.g. changing window group) WITHOUT urgency.
+    // This should NOT clear the WM-initiated urgency.
+    xcb_icccm_wm_hints_t hints = {};
+    hints.flags = XCB_ICCCM_WM_HINT_INPUT;
+    hints.input = 1;
+    xcb_icccm_set_wm_hints(conn.get(), w1, &hints);
+    xcb_flush(conn.get());
+
+    // Give the WM time to process the PropertyNotify.
+    std::this_thread::sleep_for(std::chrono::milliseconds(200));
+
+    // Urgency should still be present.
+    REQUIRE(property_has_atom(conn.get(), w1, net_wm_state, net_wm_state_demands_attention));
+    REQUIRE(has_wm_hints_urgency(conn.get(), w1));
+
+    // Focusing w1 should still clear urgency as before.
+    send_client_message(conn, w1, net_active_window, 2);
+    REQUIRE(wait_for_active_window(conn, w1, kTimeout));
+
+    REQUIRE(wait_for_condition(
+        [&]() { return !property_has_atom(conn.get(), w1, net_wm_state, net_wm_state_demands_attention); },
+        kTimeout
+    ));
+
+    destroy_window(conn, w2);
+    destroy_window(conn, w1);
+}
+
+TEST_CASE(
     "Integration: notify-attention accepts app-name values with spaces",
     "[integration][notify_attention]"
 )
@@ -271,6 +420,78 @@ TEST_CASE(
         kTimeout
     ));
     REQUIRE_FALSE(property_has_atom(conn.get(), w2, net_wm_state, net_wm_state_demands_attention));
+
+    destroy_window(conn, w2);
+    destroy_window(conn, w1);
+}
+
+TEST_CASE(
+    "Integration: WM-initiated urgency survives restart and later WM_HINTS rewrites",
+    "[integration][notify_attention][restart][wm_hints]"
+)
+{
+    auto test_env = TestEnvironment::create();
+    if (!test_env)
+        SKIP("Test environment not available");
+
+    auto& conn = test_env->conn;
+    auto& wm = test_env->wm;
+
+    xcb_atom_t net_wm_state = intern_atom(conn.get(), "_NET_WM_STATE");
+    xcb_atom_t net_wm_state_demands_attention = intern_atom(conn.get(), "_NET_WM_STATE_DEMANDS_ATTENTION");
+    xcb_atom_t net_active_window = intern_atom(conn.get(), "_NET_ACTIVE_WINDOW");
+    REQUIRE(net_wm_state != XCB_NONE);
+    REQUIRE(net_wm_state_demands_attention != XCB_NONE);
+    REQUIRE(net_active_window != XCB_NONE);
+
+    xcb_window_t w1 = create_window(conn, 10, 10, 200, 150);
+    map_window(conn, w1);
+    REQUIRE(wait_for_active_window(conn, w1, kTimeout));
+
+    xcb_window_t w2 = create_window(conn, 40, 40, 200, 150);
+    map_window(conn, w2);
+    REQUIRE(wait_for_active_window(conn, w2, kTimeout));
+
+    std::string window_arg = "window=" + std::to_string(w1);
+    auto notify_result = run_lwmctl(wm, {"notify-attention", window_arg});
+    REQUIRE(notify_result.has_value());
+    REQUIRE(notify_result->exit_code == 0);
+    REQUIRE(wait_for_condition(
+        [&]() { return property_has_atom(conn.get(), w1, net_wm_state, net_wm_state_demands_attention); },
+        kTimeout
+    ));
+    REQUIRE(wait_for_condition([&]() { return has_wm_hints_urgency(conn.get(), w1); }, kTimeout));
+
+    auto restart_result = run_lwmctl(wm, {"restart"});
+    (void)restart_result;
+    REQUIRE(wait_for_wm_ready(conn, std::chrono::seconds(5)));
+
+    REQUIRE(wait_for_condition(
+        [&]() { return property_has_atom(conn.get(), w1, net_wm_state, net_wm_state_demands_attention); },
+        kTimeout
+    ));
+    REQUIRE(wait_for_condition([&]() { return has_wm_hints_urgency(conn.get(), w1); }, kTimeout));
+
+    xcb_icccm_wm_hints_t hints = {};
+    hints.flags = XCB_ICCCM_WM_HINT_INPUT;
+    hints.input = 1;
+    xcb_icccm_set_wm_hints(conn.get(), w1, &hints);
+    xcb_flush(conn.get());
+    REQUIRE(wait_for_condition(
+        [&]()
+        {
+            return property_has_atom(conn.get(), w1, net_wm_state, net_wm_state_demands_attention)
+                && has_wm_hints_urgency(conn.get(), w1);
+        },
+        kTimeout
+    ));
+
+    send_client_message(conn, w1, net_active_window, 2);
+    REQUIRE(wait_for_active_window(conn, w1, kTimeout));
+    REQUIRE(wait_for_condition(
+        [&]() { return !property_has_atom(conn.get(), w1, net_wm_state, net_wm_state_demands_attention); },
+        kTimeout
+    ));
 
     destroy_window(conn, w2);
     destroy_window(conn, w1);

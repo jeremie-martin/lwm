@@ -23,6 +23,22 @@
 
 namespace lwm {
 
+/// Event mask selected on every managed (tiled/floating) client window.
+/// Does NOT include ButtonPress — that is an exclusive mask in X11 (only one
+/// client per window).  Applications that select it would cause our entire
+/// ChangeWindowAttributes to fail with BadAccess, silently dropping EnterWindow.
+/// Click-to-focus uses passive grabs on the managed window itself; modifier
+/// button bindings still install root passive grabs for root/gap clicks, but
+/// managed-window presses are handled in handle_button_press() because
+/// ReplayPointer skips ancestor passive grabs.
+///
+/// PointerMotion is NOT exclusive — multiple clients can select it on the same
+/// window.  We need it so that the WM receives MotionNotify even when the app
+/// also selects PointerMotion (e.g. terminals).  Without it, focus-follows-mouse
+/// fails to recover after a new window steals focus on a different monitor.
+constexpr uint32_t kManagedWindowEventMask =
+    XCB_EVENT_MASK_ENTER_WINDOW | XCB_EVENT_MASK_PROPERTY_CHANGE | XCB_EVENT_MASK_POINTER_MOTION;
+
 enum class RunResult
 {
     Exit,

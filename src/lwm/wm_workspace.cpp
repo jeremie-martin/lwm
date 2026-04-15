@@ -40,7 +40,7 @@ void WindowManager::perform_workspace_switch(WorkspaceSwitchContext const& ctx)
     // Re-assert so panels checking WM_HINTS (e.g. polybar) see the urgency.
     for (auto const& [wid, client] : clients_)
     {
-        if (!client.demands_attention)
+        if (!client.demands_attention || wid == active_window_)
             continue;
         xcb_icccm_wm_hints_t hints;
         if (xcb_icccm_get_wm_hints_reply(conn_.get(), xcb_icccm_get_wm_hints(conn_.get(), wid), &hints, nullptr))

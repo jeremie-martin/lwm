@@ -148,6 +148,7 @@ struct Client
     bool app_skip_pager = false;    ///< app's explicit SKIP_PAGER preference (not WM-derived)
     bool app_above = false;         ///< app's explicit ABOVE preference (not WM-derived)
     bool demands_attention = false; ///< _NET_WM_STATE_DEMANDS_ATTENTION
+    bool wm_initiated_urgency = false; ///< Urgency set by WM (notify-attention/focus-steal), not app
     bool borderless = false;        ///< WM-managed zero-border window
     WindowLayer layer = WindowLayer::Normal;
 

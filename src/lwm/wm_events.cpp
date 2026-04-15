@@ -337,8 +337,16 @@ void WindowManager::map_floating_window(
         set_client_skip_pager(window, true);
     if (classification.above)
         set_window_above(window, true);
-    if (urgent)
-        set_client_demands_attention(window, true);
+    {
+        auto* c = get_client(window);
+        bool ewmh_demands = c && c->demands_attention;
+        if (urgent || ewmh_demands)
+        {
+            if (ewmh_demands)
+                c->demands_attention = false; // Reset so setter runs full sync (WM_HINTS + border)
+            set_client_demands_attention(window, true);
+        }
+    }
     if (is_sticky_desktop(window) && !is_client_sticky(window))
         set_window_sticky(window, true);
 
@@ -418,8 +426,16 @@ void WindowManager::map_tiled_window(
 {
     manage_window(window, start_iconic);
 
-    if (urgent)
-        set_client_demands_attention(window, true);
+    {
+        auto* c = get_client(window);
+        bool ewmh_demands = c && c->demands_attention;
+        if (urgent || ewmh_demands)
+        {
+            if (ewmh_demands)
+                c->demands_attention = false; // Reset so setter runs full sync (WM_HINTS + border)
+            set_client_demands_attention(window, true);
+        }
+    }
     if (is_sticky_desktop(window) && !is_client_sticky(window))
         set_window_sticky(window, true);
 
@@ -627,64 +643,79 @@ WindowManager::MouseBinding const* WindowManager::resolve_mouse_binding(uint16_t
 
 void WindowManager::handle_button_press(xcb_button_press_event_t const& e)
 {
+    bool from_window_grab = e.event != conn_.screen()->root;
     xcb_window_t target = e.event;
-    if (target == conn_.screen()->root && e.child != XCB_NONE)
+    if (!from_window_grab && e.child != XCB_NONE)
         target = e.child;
 
     auto const* client = get_client(target);
 
+    auto allow_window_grab = [&](uint8_t mode)
+    {
+        if (!from_window_grab)
+            return;
+        xcb_allow_events(conn_.get(), mode, e.time);
+        conn_.flush();
+    };
+
     // Ignore button press on hidden (off-screen) windows
     if (client && client->hidden)
+    {
+        allow_window_grab(XCB_ALLOW_ASYNC_POINTER);
         return;
+    }
 
     bool is_floating = client && client->kind == Client::Kind::Floating;
     bool is_tiled = client && client->kind == Client::Kind::Tiled;
 
-    if (auto const* binding = resolve_mouse_binding(e.state, e.detail))
+    auto handle_binding = [&](MouseBinding const& binding) -> bool
     {
-        if (binding->action == "drag_window")
+        if (from_window_grab)
+            allow_window_grab(XCB_ALLOW_ASYNC_POINTER);
+
+        if (binding.action == "drag_window")
         {
             if (is_floating)
             {
                 focus_any_window(target);
                 begin_drag(target, false, e.root_x, e.root_y);
-                return;
+                return true;
             }
             if (is_tiled)
             {
                 focus_any_window(target);
                 begin_tiled_drag(target, e.root_x, e.root_y);
-                return;
+                return true;
             }
         }
-        else if (binding->action == "resize_floating")
+        else if (binding.action == "resize_floating")
         {
             if (is_floating)
             {
                 focus_any_window(target);
                 begin_drag(target, true, e.root_x, e.root_y);
-                return;
+                return true;
             }
             // For tiled windows or root: try tiled split resize first
             if (auto border_hit = try_hit_split_border(e.root_x, e.root_y))
             {
                 begin_tiled_resize(border_hit->hit, border_hit->monitor_idx, e.root_x, e.root_y);
-                return;
+                return true;
             }
             // Fallback: convert tiled to floating and resize
             if (is_tiled)
             {
                 if (client->fullscreen || client->iconic || client->layer == WindowLayer::Overlay || showing_desktop_)
-                    return;
+                    return true;
 
                 size_t monitor_idx = client->monitor;
                 if (monitor_idx >= monitors_.size())
-                    return;
+                    return true;
 
                 convert_window_to_floating(target);
                 auto* c = get_client(target);
                 if (!c || c->kind != Client::Kind::Floating)
-                    return;
+                    return true;
 
                 sync_visibility_for_monitor(monitor_idx);
                 rearrange_monitor(monitors_[monitor_idx]);
@@ -693,17 +724,36 @@ void WindowManager::handle_button_press(xcb_button_press_event_t const& e)
 
                 focus_any_window(target);
                 begin_drag(target, true, e.root_x, e.root_y);
-                return;
+                return true;
             }
         }
-        else if (binding->action == "toggle_float")
+        else if (binding.action == "toggle_float")
         {
             if (is_tiled || is_floating)
             {
                 toggle_window_float(target);
-                return;
+                return true;
             }
         }
+        return false;
+    };
+
+    // Managed windows use a passive SYNC grab for click-to-focus. Regular clicks
+    // should still replay to the client, but modifier bindings must be handled
+    // here because ReplayPointer skips ancestor passive grabs such as the root
+    // grabs installed by grab_buttons().
+    if (auto const* binding = resolve_mouse_binding(e.state, e.detail); binding && handle_binding(*binding))
+        return;
+
+    if (from_window_grab)
+    {
+        if (is_floating || is_tiled)
+        {
+            if (target != active_window_)
+                focus_any_window(target);
+        }
+        allow_window_grab(XCB_ALLOW_REPLAY_POINTER);
+        return;
     }
 
     if (target != conn_.screen()->root)
@@ -1129,6 +1179,8 @@ void WindowManager::handle_active_window_request(xcb_client_message_event_t cons
             if (timestamp < active_client->user_time)
             {
                 LOG_DEBUG("Focus stealing prevented, setting demands attention");
+                if (auto* req_client = get_client(window))
+                    req_client->wm_initiated_urgency = true;
                 set_client_demands_attention(window, true);
                 return;
             }
@@ -1138,7 +1190,11 @@ void WindowManager::handle_active_window_request(xcb_client_message_event_t cons
     if (is_suppressed_by_fullscreen(window))
     {
         if (source == 1)
+        {
+            if (auto* suppressed_client = get_client(window))
+                suppressed_client->wm_initiated_urgency = true;
             set_client_demands_attention(window, true);
+        }
         return;
     }
 
@@ -1512,13 +1568,26 @@ void WindowManager::handle_property_notify(xcb_property_notify_event_t const& e)
                 // WM-initiated urgency (via notify-attention IPC) that should
                 // persist even if the app clears its own WM_HINTS flag — the
                 // WM_HINTS urgency is re-synced on workspace switch.
+                // Also preserve WM-initiated urgency on non-active windows:
+                // if the WM set urgency (notify-attention / focus-steal prevention)
+                // and the app later rewrites WM_HINTS without the urgency flag,
+                // that should not clear the WM-initiated attention state.
                 if (urgent && e.window != active_window_)
                 {
                     set_client_demands_attention(e.window, true);
                 }
-                else if (!urgent && e.window != active_window_)
+                else if (!urgent && e.window != active_window_ && !client->wm_initiated_urgency)
                 {
                     set_client_demands_attention(e.window, false);
+                }
+                else if (!urgent && e.window != active_window_ && client->wm_initiated_urgency)
+                {
+                    // App rewrote WM_HINTS without urgency, but the WM owns
+                    // the urgency state.  Re-assert the ICCCM flag so panels
+                    // that check WM_HINTS (e.g. polybar) still see it.
+                    hints.flags |= XUrgencyHint;
+                    xcb_icccm_set_wm_hints(conn_.get(), e.window, &hints);
+                    conn_.flush();
                 }
             }
             else
