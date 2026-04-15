@@ -33,7 +33,7 @@ struct TestEnvironment
             return std::nullopt;
         }
 
-        LwmProcess wm(env.display());
+        LwmProcess wm(env.display(), "[workspaces]\ncount = 2\n");
         if (!wm.running())
         {
             WARN("Failed to start lwm.");
@@ -300,9 +300,9 @@ TEST_CASE(
     // Wait a bit for the message to be processed
     std::this_thread::sleep_for(std::chrono::milliseconds(100));
 
-    // Window should still have its original desktop property (sticky windows don't have a specific desktop)
+    // Per EWMH spec, sticky windows have _NET_WM_DESKTOP = 0xFFFFFFFF
     uint32_t final_desktop = get_window_property_cardinal(conn.get(), w1, net_wm_desktop).value_or(0);
-    REQUIRE(final_desktop == initial_desktop);
+    REQUIRE(final_desktop == 0xFFFFFFFF);
 
     // Window should have sticky state set
     auto cookie = xcb_get_property(conn.get(), 0, w1, net_wm_state, XCB_ATOM_ATOM, 0, 10);

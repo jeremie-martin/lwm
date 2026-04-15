@@ -306,6 +306,61 @@ TEST_CASE("Integration: _NET_WM_WINDOW_TYPE changes reclassify managed windows",
     destroy_window(conn, window);
 }
 
+TEST_CASE(
+    "Integration: fullscreen reevaluation keeps ABOVE cleared on window-type changes",
+    "[integration][property][ewmh][fullscreen]"
+)
+{
+    auto test_env = TestEnvironment::create();
+    if (!test_env)
+        SKIP("Test environment not available");
+
+    auto& conn = test_env->conn;
+
+    xcb_atom_t net_wm_allowed_actions = intern_atom(conn.get(), "_NET_WM_ALLOWED_ACTIONS");
+    xcb_atom_t net_wm_state = intern_atom(conn.get(), "_NET_WM_STATE");
+    xcb_atom_t action_move = intern_atom(conn.get(), "_NET_WM_ACTION_MOVE");
+    xcb_atom_t action_resize = intern_atom(conn.get(), "_NET_WM_ACTION_RESIZE");
+    xcb_atom_t state_above = intern_atom(conn.get(), "_NET_WM_STATE_ABOVE");
+    xcb_atom_t state_fullscreen = intern_atom(conn.get(), "_NET_WM_STATE_FULLSCREEN");
+    xcb_atom_t type_dialog = intern_atom(conn.get(), "_NET_WM_WINDOW_TYPE_DIALOG");
+    if (net_wm_allowed_actions == XCB_NONE || net_wm_state == XCB_NONE || action_move == XCB_NONE
+        || action_resize == XCB_NONE || state_above == XCB_NONE || state_fullscreen == XCB_NONE
+        || type_dialog == XCB_NONE)
+    {
+        WARN("Failed to intern EWMH atoms.");
+        return;
+    }
+
+    xcb_window_t window = create_window(conn, 20, 20, 320, 220);
+    map_window(conn, window);
+    REQUIRE(wait_for_active_window(conn, window, kTimeout));
+
+    send_client_message(conn, window, net_wm_state, 1, state_above, 0, 0, 0);
+    REQUIRE(wait_for_condition([&]() { return property_has_atom(conn.get(), window, net_wm_state, state_above); }, kTimeout));
+
+    send_client_message(conn, window, net_wm_state, 1, state_fullscreen, 0, 0, 0);
+    REQUIRE(wait_for_condition([&]() { return property_has_atom(conn.get(), window, net_wm_state, state_fullscreen); }, kTimeout));
+    REQUIRE(wait_for_condition([&]() { return !property_has_atom(conn.get(), window, net_wm_state, state_above); }, kTimeout));
+
+    REQUIRE_FALSE(property_has_atom(conn.get(), window, net_wm_allowed_actions, action_move));
+    REQUIRE_FALSE(property_has_atom(conn.get(), window, net_wm_allowed_actions, action_resize));
+
+    set_window_type(conn, window, type_dialog);
+    REQUIRE(wait_for_condition(
+        [&]()
+        {
+            return property_has_atom(conn.get(), window, net_wm_allowed_actions, action_move)
+                && property_has_atom(conn.get(), window, net_wm_allowed_actions, action_resize)
+                && property_has_atom(conn.get(), window, net_wm_state, state_fullscreen)
+                && !property_has_atom(conn.get(), window, net_wm_state, state_above);
+        },
+        kTimeout
+    ));
+
+    destroy_window(conn, window);
+}
+
 TEST_CASE("Integration: WM_TRANSIENT_FOR changes reclassify managed windows", "[integration][property][transient]")
 {
     auto test_env = TestEnvironment::create();

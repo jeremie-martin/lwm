@@ -1094,6 +1094,24 @@ void WindowManager::handle_wm_state_change(xcb_client_message_event_t const& e)
 
     handle_state(first);
     handle_state(second);
+
+    // Keep app_* preferences in sync when the app explicitly toggles these atoms.
+    if (auto* client = get_client(e.window))
+    {
+        auto sync_app_pref = [&](xcb_atom_t state)
+        {
+            if (state == ewmh->_NET_WM_STATE_SKIP_TASKBAR)
+                client->app_skip_taskbar = client->skip_taskbar;
+            else if (state == ewmh->_NET_WM_STATE_SKIP_PAGER)
+                client->app_skip_pager = client->skip_pager;
+            else if (state == ewmh->_NET_WM_STATE_ABOVE)
+                client->app_above = client->above;
+        };
+        if (first != XCB_ATOM_NONE)
+            sync_app_pref(first);
+        if (second != XCB_ATOM_NONE)
+            sync_app_pref(second);
+    }
 }
 
 void WindowManager::handle_active_window_request(xcb_client_message_event_t const& e)

@@ -165,7 +165,8 @@ TEST_CASE("Integration: overlay layer stays above fullscreen windows and remains
 
     xcb_window_t tiled_window = create_window(conn, 60, 60, 320, 200);
     map_window(conn, tiled_window);
-    REQUIRE(wait_for_active_window(conn, tiled_window, kTimeout));
+    // tiled_window is suppressed by the fullscreen owner; fullscreen owner stays active
+    REQUIRE(wait_for_active_window(conn, fullscreen_window, kTimeout));
 
     REQUIRE(wait_for_condition([&]() { return matches_root_geometry(conn, overlay_window); }, kTimeout));
     REQUIRE(wait_for_condition(

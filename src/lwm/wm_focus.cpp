@@ -80,6 +80,11 @@ void WindowManager::focus_any_window(xcb_window_t window, bool record_user_time)
                 client->workspace
             );
             perform_workspace_switch({ client->monitor, old_ws, client->workspace });
+            if (is_suppressed_by_fullscreen(window))
+            {
+                focus_or_fallback(monitors_[client->monitor], false);
+                return;
+            }
         }
 
         client->mru_order = next_mru_order_++;
@@ -122,6 +127,13 @@ void WindowManager::focus_any_window(xcb_window_t window, bool record_user_time)
                 change->new_workspace
             );
             perform_workspace_switch({ change->target_monitor, change->old_workspace, change->new_workspace });
+            // After the workspace switch a sticky fullscreen owner may now suppress the target.
+            if (is_suppressed_by_fullscreen(window))
+            {
+                active_window_ = previous_active;
+                focus_or_fallback(monitors_[change->target_monitor], false);
+                return;
+            }
         }
     }
 

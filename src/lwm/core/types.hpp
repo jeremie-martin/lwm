@@ -144,6 +144,9 @@ struct Client
     bool modal = false;             ///< _NET_WM_STATE_MODAL
     bool skip_taskbar = false;      ///< _NET_WM_STATE_SKIP_TASKBAR
     bool skip_pager = false;        ///< _NET_WM_STATE_SKIP_PAGER
+    bool app_skip_taskbar = false;  ///< app's explicit SKIP_TASKBAR preference (not WM-derived)
+    bool app_skip_pager = false;    ///< app's explicit SKIP_PAGER preference (not WM-derived)
+    bool app_above = false;         ///< app's explicit ABOVE preference (not WM-derived)
     bool demands_attention = false; ///< _NET_WM_STATE_DEMANDS_ATTENTION
     bool borderless = false;        ///< WM-managed zero-border window
     WindowLayer layer = WindowLayer::Normal;
@@ -170,6 +173,13 @@ struct Client
 
     uint64_t order = 0;     ///< Mapping order for _NET_CLIENT_LIST
     uint64_t mru_order = 0;  ///< MRU ordering for floating windows (higher = more recent)
+
+    /// Saved position in ws.windows before the last float conversion.
+    /// Set in convert_window_to_floating, cleared in convert_window_to_tiled.
+    /// Only valid when monitor/workspace match the conversion target; used to
+    /// restore layout order when a window returns to the same workspace as tiled.
+    struct SavedTilePos { size_t index = 0; size_t monitor = 0; size_t workspace = 0; };
+    std::optional<SavedTilePos> saved_tiled_pos;
 
     // Scratchpad state
     bool in_scratchpad = false;                          ///< True when hidden in scratchpad

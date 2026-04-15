@@ -33,7 +33,7 @@ struct TestEnvironment
             return std::nullopt;
         }
 
-        LwmProcess wm(env.display());
+        LwmProcess wm(env.display(), "[workspaces]\ncount = 2\n");
         if (!wm.running())
         {
             WARN("Failed to start lwm.");

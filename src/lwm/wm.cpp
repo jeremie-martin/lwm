@@ -1091,6 +1091,10 @@ void WindowManager::convert_window_to_floating(xcb_window_t window)
 
     size_t monitor_idx = client->monitor;
     size_t workspace_idx = client->workspace;
+    auto& ws = monitors_[monitor_idx].workspaces[workspace_idx];
+    auto pos_it = ws.find_window(window);
+    if (pos_it != ws.windows.end())
+        client->saved_tiled_pos = { static_cast<size_t>(std::distance(ws.windows.begin(), pos_it)), monitor_idx, workspace_idx };
     remove_tiled_from_workspace(window, monitor_idx, workspace_idx);
 
     client->kind = Client::Kind::Floating;
@@ -1123,8 +1127,22 @@ void WindowManager::convert_window_to_tiled(xcb_window_t window)
 
     client->kind = Client::Kind::Tiled;
     client->suppress_next_configure_request = false;
-    size_t workspace_idx = std::min(client->workspace, monitors_[client->monitor].workspaces.size() - 1);
-    add_tiled_to_workspace(window, client->monitor, workspace_idx);
+    size_t monitor_idx = client->monitor;
+    size_t workspace_idx = std::min(client->workspace, monitors_[monitor_idx].workspaces.size() - 1);
+    add_tiled_to_workspace(window, monitor_idx, workspace_idx);
+    // Restore original position when returning to the same workspace (e.g. type-change round-trip)
+    // so existing windows keep their layout slots instead of being displaced by the re-entering window.
+    if (client->saved_tiled_pos
+        && client->saved_tiled_pos->monitor == monitor_idx
+        && client->saved_tiled_pos->workspace == workspace_idx)
+    {
+        auto& ws_wins = monitors_[monitor_idx].workspaces[workspace_idx].windows;
+        size_t target_pos = client->saved_tiled_pos->index;
+        auto it = std::prev(ws_wins.end()); // window was just push_backed by add_tiled_to_workspace
+        if (target_pos + 1 < ws_wins.size()) // only rotate if not already in the right place
+            std::rotate(ws_wins.begin() + target_pos, it, it + 1);
+    }
+    client->saved_tiled_pos = std::nullopt;
 
     uint32_t values[] = { XCB_EVENT_MASK_ENTER_WINDOW | XCB_EVENT_MASK_PROPERTY_CHANGE };
     xcb_change_window_attributes(conn_.get(), window, XCB_CW_EVENT_MASK, values);
@@ -1699,7 +1717,10 @@ void WindowManager::parse_initial_ewmh_state(Client& client)
         {
             xcb_atom_t state = initial_state.atoms[i];
             if (state == ewmh->_NET_WM_STATE_ABOVE)
+            {
                 client.above = true;
+                client.app_above = true;
+            }
             else if (state == ewmh->_NET_WM_STATE_BELOW)
                 client.below = true;
             else if (state == ewmh->_NET_WM_STATE_STICKY)
@@ -1707,9 +1728,15 @@ void WindowManager::parse_initial_ewmh_state(Client& client)
             else if (state == ewmh->_NET_WM_STATE_MODAL)
                 client.modal = true;
             else if (state == ewmh->_NET_WM_STATE_SKIP_TASKBAR)
+            {
                 client.skip_taskbar = true;
+                client.app_skip_taskbar = true;
+            }
             else if (state == ewmh->_NET_WM_STATE_SKIP_PAGER)
+            {
                 client.skip_pager = true;
+                client.app_skip_pager = true;
+            }
             else if (state == ewmh->_NET_WM_STATE_DEMANDS_ATTENTION)
                 client.demands_attention = true;
         }
@@ -1891,11 +1918,11 @@ void WindowManager::apply_classification_state(
         .classification_skip_taskbar = classification.skip_taskbar,
         .classification_skip_pager = classification.skip_pager,
         .classification_above = classification.above,
-        .ewmh_skip_taskbar = state_flags.skip_taskbar,
-        .ewmh_skip_pager = state_flags.skip_pager,
+        .ewmh_skip_taskbar = client->app_skip_taskbar,
+        .ewmh_skip_pager = client->app_skip_pager,
         .ewmh_sticky = state_flags.sticky,
         .ewmh_modal = state_flags.modal,
-        .ewmh_above = state_flags.above,
+        .ewmh_above = !client->fullscreen && client->app_above,
         .ewmh_below = state_flags.below,
         .rule_skip_taskbar = rule_result.skip_taskbar,
         .rule_skip_pager = rule_result.skip_pager,
@@ -3027,7 +3054,7 @@ void WindowManager::deiconify_window(xcb_window_t window, bool focus)
             restack_monitor_layers(client->monitor);
     }
 
-    if (focus && client->monitor == focused_monitor_ && should_be_visible(window))
+    if ((focus || client->fullscreen) && client->monitor == focused_monitor_ && should_be_visible(window))
     {
         focus_any_window(window);
     }
@@ -3567,7 +3594,7 @@ void WindowManager::restack_monitor_layers(size_t monitor_idx)
             continue;
         if (client.kind != Client::Kind::Tiled && client.kind != Client::Kind::Floating)
             continue;
-        if (!is_physically_visible(window))
+        if (!should_be_visible(window))
             continue;
         visible_windows.push_back(window);
     }

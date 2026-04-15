@@ -443,12 +443,12 @@ TEST_CASE(
     REQUIRE(wait_for_condition(has_fullscreen_state, kTimeout));
     REQUIRE(wait_for_condition(border_width_is_zero, kTimeout));
 
-    // Move focus away.
+    // Map a sibling window; suppression model keeps the fullscreen owner active.
     xcb_window_t w2 = create_window(conn, 60, 60, 320, 180);
     map_window(conn, w2);
-    REQUIRE(wait_for_active_window(conn, w2, kTimeout));
+    REQUIRE(wait_for_active_window(conn, w1, kTimeout));
 
-    // Request focus back to fullscreen window.
+    // Explicit focus request for fullscreen window (already active).
     send_client_message(conn, w1, net_active_window, 2, XCB_CURRENT_TIME, 0, 0, 0);
     REQUIRE(wait_for_active_window(conn, w1, kTimeout));
 
@@ -509,7 +509,7 @@ TEST_CASE(
 
     xcb_window_t w2 = create_window(conn, 80, 80, 640, 360);
     map_window(conn, w2);
-    REQUIRE(wait_for_active_window(conn, w2, kTimeout));
+    // w2 is suppressed by w1's fullscreen; w1 stays active until w2 claims ownership
 
     send_client_message(conn, w2, net_wm_state, 1, net_wm_state_fullscreen, 0, 0, 0);
 
@@ -974,7 +974,7 @@ TEST_CASE(
 
     xcb_window_t w2 = create_window(conn, 80, 80, 640, 360);
     map_window(conn, w2);
-    REQUIRE(wait_for_active_window(conn, w2, kTimeout));
+    // w2 is suppressed by w1's fullscreen until w2 claims ownership via fullscreen request
     send_client_message(conn, w2, net_wm_state, 1, net_wm_state_fullscreen, 0, 0, 0);
 
     REQUIRE(wait_for_condition([&]() { return has_state(conn, w2, net_wm_state_fullscreen); }, kTimeout));
@@ -1016,7 +1016,7 @@ TEST_CASE(
 
     xcb_window_t w2 = create_window(conn, 20, 20, 640, 360);
     map_window(conn, w2);
-    REQUIRE(wait_for_active_window(conn, w2, kTimeout));
+    // w2 is suppressed by w1's fullscreen until w2 claims ownership via fullscreen request
     send_client_message(conn, w2, net_wm_state, 1, net_wm_state_fullscreen, 0, 0, 0);
 
     REQUIRE(wait_for_condition([&]() { return has_state(conn, w2, net_wm_state_fullscreen); }, kTimeout));
