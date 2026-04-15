@@ -40,6 +40,7 @@ add_subdirectory(src)
 
 # Install binaries to /usr/local/bin
 install(TARGETS lwm lwmctl DESTINATION bin)
+install(PROGRAMS scripts/lwm-notify-bridge.sh DESTINATION bin RENAME lwm-notify-bridge)
 
 # Optional tests
 option(BUILD_TESTS "Build unit tests" OFF)

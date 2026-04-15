@@ -5,6 +5,17 @@
 padding = 10
 border_width = 2
 border_color = 0xFF0000       # Red (hex)
+urgent_border_color = 0xFFA500  # Amber/orange for urgency hints (hex)
+
+[layout]
+# Layout strategy: "master-stack" (more strategies coming in the future)
+strategy = "master-stack"
+# Default split ratio for the master/stack divide (0.1 to 0.9)
+default_ratio = 0.5
+# Minimum allowed ratio (prevents windows from becoming too small)
+min_ratio = 0.1
+# Pixel threshold for detecting mouse hover over split borders
+resize_grab_threshold = 8
 
 [focus]
 # If true, warp cursor to the target monitor center on explicit monitor changes.
@@ -34,6 +45,7 @@ names = ["1", "2", "3", "4", "5", "6", "7", "8", "9", "10"]
 #     "picom",              # Compositor
 #     "nitrogen --restore", # Wallpaper
 #     "dunst",              # Notifications
+#     "lwm-notify-bridge",  # D-Bus notification → urgency bridge
 #     "terminal",           # Resolves to programs.terminal
 # ]
 
@@ -44,7 +56,8 @@ names = ["1", "2", "3", "4", "5", "6", "7", "8", "9", "10"]
 #         "switch_workspace", "toggle_workspace", "move_to_workspace",
 #         "focus_monitor_left", "focus_monitor_right",
 #         "move_to_monitor_left", "move_to_monitor_right",
-#         "toggle_fullscreen", "toggle_float", "focus_next", "focus_prev"
+#         "toggle_fullscreen", "toggle_float", "focus_next", "focus_prev",
+#         "ratio_grow", "ratio_shrink"
 # command: for "spawn" action, use "terminal", "browser", "launcher", or a path
 # workspace: for "switch_workspace"/"move_to_workspace" actions, the workspace index (0..count-1)
 #            (not used for "toggle_workspace")
@@ -247,6 +260,17 @@ action = "focus_next"
 mod = "super"
 key = "k"
 action = "focus_prev"
+
+# Master ratio adjustment
+[[keybinds]]
+mod = "super"
+key = "h"
+action = "ratio_shrink"
+
+[[keybinds]]
+mod = "super"
+key = "l"
+action = "ratio_grow"
 
 # ─────────────────────────────────────────────────────────────────────────────
 # Window Rules

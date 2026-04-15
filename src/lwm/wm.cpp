@@ -4,11 +4,11 @@
 #include "lwm/core/ipc.hpp"
 #include "lwm/core/log.hpp"
 #include "lwm/core/policy.hpp"
-#include <array>
 #include <algorithm>
 #include <cstddef>
 #include <cerrno>
 #include <cctype>
+#include <charconv>
 #include <chrono>
 #include <csignal>
 #include <cstdlib>
@@ -68,6 +68,35 @@ std::string ok_reply(std::string const& message)
 
 std::string error_reply(std::string const& message) { return "error " + message; }
 
+bool is_notification_attention_param_start(std::string_view params, size_t pos)
+{
+    if (pos >= params.size() || !std::isspace(static_cast<unsigned char>(params[pos])))
+        return false;
+
+    size_t key_start = pos + 1;
+    constexpr std::string_view keys[] = { "window", "desktop-entry", "app-name" };
+    for (std::string_view key : keys)
+    {
+        if (params.substr(key_start).starts_with(key))
+        {
+            size_t after_key = key_start + key.size();
+            if (after_key < params.size() && params[after_key] == '=')
+                return true;
+        }
+    }
+    return false;
+}
+
+size_t find_next_notification_attention_param(std::string_view params)
+{
+    for (size_t i = 0; i < params.size(); ++i)
+    {
+        if (is_notification_attention_param_start(params, i))
+            return i;
+    }
+    return std::string_view::npos;
+}
+
 void ensure_property_change_mask(Connection& conn, xcb_window_t window)
 {
     auto cookie = xcb_get_window_attributes(conn.get(), window);
@@ -93,7 +122,27 @@ void close_fd(int& fd)
 }
 
 
-void sigchld_handler(int /*sig*/) { while (waitpid(-1, nullptr, WNOHANG) > 0); }
+void sigchld_handler(int /*sig*/)
+{
+    int saved_errno = errno;
+    while (waitpid(-1, nullptr, WNOHANG) > 0) {}
+    errno = saved_errno;
+}
+
+// Self-pipe for SIGHUP: handler writes a byte, main loop reads it.
+int g_sighup_write_fd = -1;
+
+void sighup_handler(int /*sig*/)
+{
+    int saved_errno = errno;
+    if (g_sighup_write_fd >= 0)
+    {
+        char byte = 1;
+        // write() is async-signal-safe; ignore failure (pipe full = already pending)
+        (void)write(g_sighup_write_fd, &byte, 1);
+    }
+    errno = saved_errno;
+}
 
 void setup_signal_handlers()
 {
@@ -101,6 +150,11 @@ void setup_signal_handlers()
     sa.sa_handler = sigchld_handler;
     sa.sa_flags = SA_RESTART | SA_NOCLDSTOP;
     sigaction(SIGCHLD, &sa, nullptr);
+
+    sa = {};
+    sa.sa_handler = sighup_handler;
+    sa.sa_flags = SA_RESTART;
+    sigaction(SIGHUP, &sa, nullptr);
 }
 
 }
@@ -113,6 +167,8 @@ WindowManager::WindowManager(Config config, std::string config_path)
     , layout_(conn_, config_.appearance, config_.layout)
     , config_path_(std::move(config_path))
 {
+    if (pipe2(signal_pipe_, O_CLOEXEC | O_NONBLOCK) == 0)
+        g_sighup_write_fd = signal_pipe_[1];
     setup_signal_handlers();
     init_mousebinds();
     create_wm_window();
@@ -212,11 +268,23 @@ WindowManager::~WindowManager()
     if (cursor_resize_v_ != XCB_NONE)
         xcb_free_cursor(conn_.get(), cursor_resize_v_);
     cleanup_ipc();
+    g_sighup_write_fd = -1;
+    close_fd(signal_pipe_[0]);
+    close_fd(signal_pipe_[1]);
 }
 
 RunResult WindowManager::run()
 {
     int xfd = xcb_get_file_descriptor(conn_.get());
+
+    // Poll fd index constants for fixed entries
+    constexpr size_t POLL_X = 0;
+    constexpr size_t POLL_SIGNAL = 1;
+    constexpr size_t POLL_IPC_LISTENER = 2;
+    constexpr size_t POLL_IPC_CLIENT = 3;
+    constexpr size_t POLL_SUBSCRIBERS = 4;
+
+    std::vector<pollfd> poll_fds;
 
     while (running_)
     {
@@ -249,32 +317,52 @@ RunResult WindowManager::run()
             }
         }
 
-        // Build poll array: X fd, IPC listener, and optionally the pending IPC client
-        std::array<pollfd, 3> poll_fds = {
-            pollfd{ .fd = xfd, .events = POLLIN, .revents = 0 },
-            pollfd{ .fd = ipc_listener_fd_, .events = POLLIN, .revents = 0 },
-            pollfd{ .fd = pending_ipc_ ? pending_ipc_->fd : -1, .events = POLLIN, .revents = 0 },
-        };
-        nfds_t nfds = 1;
-        if (ipc_listener_fd_ >= 0)
-            nfds = 2;
-        if (pending_ipc_)
-            nfds = 3;
+        // Build poll array: X fd, signal pipe, IPC listener, pending client, subscribers
+        poll_fds.clear();
+        poll_fds.push_back({.fd = xfd, .events = POLLIN, .revents = 0});
+        poll_fds.push_back({.fd = signal_pipe_[0], .events = POLLIN, .revents = 0});
+        poll_fds.push_back({.fd = ipc_listener_fd_, .events = POLLIN, .revents = 0});
+        poll_fds.push_back({.fd = pending_ipc_ ? pending_ipc_->fd : -1, .events = POLLIN, .revents = 0});
+        size_t polled_subscriber_count = subscribers_.size();
+        for (auto const& sub : subscribers_)
+            poll_fds.push_back({.fd = sub.fd, .events = 0, .revents = 0}); // only detect HUP/ERR
 
-        int poll_result = poll(poll_fds.data(), nfds, timeout_ms);
+        int poll_result = poll(poll_fds.data(), static_cast<nfds_t>(poll_fds.size()), timeout_ms);
         if (poll_result > 0)
         {
+            // SIGHUP: drain pipe and reload config
+            if (poll_fds[POLL_SIGNAL].revents & POLLIN)
+            {
+                char buf[64];
+                while (read(signal_pipe_[0], buf, sizeof(buf)) > 0) {}
+                LOG_INFO("SIGHUP received, reloading config");
+                auto result = reload_config();
+                if (result)
+                    LOG_INFO("Config reloaded successfully");
+                else
+                    LOG_ERROR("Config reload failed: {}", result.error());
+                emit_config_reload_result(result, "sighup");
+            }
+
             // Accept a new IPC client (only if no pending client)
-            if (ipc_listener_fd_ >= 0 && (poll_fds[1].revents & POLLIN))
+            if (poll_fds[POLL_IPC_LISTENER].revents & POLLIN)
             {
                 accept_ipc_client();
             }
 
             // Process readable data from pending IPC client
-            if (pending_ipc_ && (poll_fds[2].revents & POLLIN))
+            if (pending_ipc_ && (poll_fds[POLL_IPC_CLIENT].revents & POLLIN))
             {
                 process_ipc_client();
             }
+
+            // Check subscriber disconnects (only those that were in the poll array)
+            for (size_t i = 0; i < polled_subscriber_count; ++i)
+            {
+                if (poll_fds[POLL_SUBSCRIBERS + i].revents & (POLLHUP | POLLERR | POLLNVAL))
+                    close_fd(subscribers_[i].fd);
+            }
+            cleanup_dead_subscribers();
 
             while (auto event = xcb_poll_for_event(conn_.get()))
             {
@@ -361,6 +449,9 @@ void WindowManager::setup_ipc()
 void WindowManager::cleanup_ipc()
 {
     close_ipc_client();
+    for (auto& sub : subscribers_)
+        close_fd(sub.fd);
+    subscribers_.clear();
     close_fd(ipc_listener_fd_);
 
     if (!ipc_socket_path_.empty())
@@ -371,6 +462,52 @@ void WindowManager::cleanup_ipc()
         ipc::delete_root_property(conn_.get(), conn_.screen()->root, lwm_ipc_socket_);
         conn_.flush();
     }
+}
+
+void WindowManager::emit_event(EventType type, std::string_view json)
+{
+    if (subscribers_.empty())
+        return;
+
+    // Check if any subscriber wants this event type before copying the string
+    bool any_match = false;
+    for (auto const& sub : subscribers_)
+    {
+        if (sub.fd >= 0 && (sub.event_mask & type))
+        {
+            any_match = true;
+            break;
+        }
+    }
+    if (!any_match)
+        return;
+
+    std::string line;
+    line.reserve(json.size() + 1);
+    line.append(json);
+    line.push_back('\n');
+
+    for (auto& sub : subscribers_)
+    {
+        if (sub.fd < 0 || !(sub.event_mask & type))
+            continue;
+        ssize_t sent = send(sub.fd, line.data(), line.size(), MSG_NOSIGNAL | MSG_DONTWAIT);
+        if (sent < 0)
+        {
+            if (errno != EAGAIN && errno != EWOULDBLOCK)
+                close_fd(sub.fd);
+        }
+        else if (static_cast<size_t>(sent) < line.size())
+        {
+            // Partial write: stream is now corrupt, disconnect subscriber
+            close_fd(sub.fd);
+        }
+    }
+}
+
+void WindowManager::cleanup_dead_subscribers()
+{
+    std::erase_if(subscribers_, [](Subscriber const& s) { return s.fd < 0; });
 }
 
 void WindowManager::accept_ipc_client()
@@ -429,10 +566,13 @@ void WindowManager::process_ipc_client()
                 if (line_end != std::string::npos)
                     request.resize(line_end);
 
-                std::string reply = run_ipc_command(request) + '\n';
-                // Non-blocking send; if it would block, just drop the response
-                send(pending_ipc_->fd, reply.data(), reply.size(), MSG_NOSIGNAL | MSG_DONTWAIT);
-                close_ipc_client();
+                auto reply = run_ipc_command(request);
+                if (reply)
+                {
+                    reply->push_back('\n');
+                    send(pending_ipc_->fd, reply->data(), reply->size(), MSG_NOSIGNAL | MSG_DONTWAIT);
+                    close_ipc_client();
+                }
                 return;
             }
             continue;
@@ -442,10 +582,15 @@ void WindowManager::process_ipc_client()
             // Client closed connection - process whatever we have
             if (!pending_ipc_->buffer.empty())
             {
-                std::string reply = run_ipc_command(pending_ipc_->buffer) + '\n';
-                send(pending_ipc_->fd, reply.data(), reply.size(), MSG_NOSIGNAL | MSG_DONTWAIT);
+                auto reply = run_ipc_command(pending_ipc_->buffer);
+                if (reply)
+                {
+                    reply->push_back('\n');
+                    send(pending_ipc_->fd, reply->data(), reply->size(), MSG_NOSIGNAL | MSG_DONTWAIT);
+                }
             }
-            close_ipc_client();
+            if (pending_ipc_)
+                close_ipc_client();
             return;
         }
         // received < 0
@@ -468,7 +613,7 @@ void WindowManager::close_ipc_client()
     pending_ipc_.reset();
 }
 
-std::string WindowManager::run_ipc_command(std::string const& command)
+std::optional<std::string> WindowManager::run_ipc_command(std::string const& command)
 {
     std::string trimmed = trim_ascii(command);
     if (trimmed.empty())
@@ -483,9 +628,34 @@ std::string WindowManager::run_ipc_command(std::string const& command)
     if (trimmed == "reload-config")
     {
         auto result = reload_config();
+        emit_config_reload_result(result, "ipc");
         if (!result)
             return error_reply(result.error());
         return ok_reply("reloaded");
+    }
+
+    if (trimmed == "subscribe" || trimmed.starts_with("subscribe "))
+    {
+        if (subscribers_.size() >= MAX_SUBSCRIBERS)
+            return error_reply("max subscribers reached");
+        if (!pending_ipc_)
+            return error_reply("no connection to promote");
+
+        std::string filter_str;
+        if (trimmed.starts_with("subscribe "))
+            filter_str = trim_ascii(trimmed.substr(10));
+        uint32_t mask = parse_event_filter(filter_str);
+        if (mask == 0)
+            return error_reply("no recognized event types in filter");
+
+        // Send reply directly, then promote to subscriber
+        std::string reply = ok_reply("subscribed") + '\n';
+        send(pending_ipc_->fd, reply.data(), reply.size(), MSG_NOSIGNAL | MSG_DONTWAIT);
+
+        subscribers_.push_back({.fd = pending_ipc_->fd, .event_mask = mask});
+        pending_ipc_->fd = -1; // prevent close_ipc_client from closing it
+        pending_ipc_.reset();
+        return std::nullopt; // connection promoted to subscriber
     }
 
     if (trimmed == "restart")
@@ -513,6 +683,7 @@ std::string WindowManager::run_ipc_command(std::string const& command)
             {
                 focused_monitor().current().layout_strategy = LayoutStrategy::MasterStack;
                 rearrange_monitor(focused_monitor(), true);
+                emit_event(Event_LayoutChange, "{\"event\":\"layout_change\",\"action\":\"layout_set\",\"value\":\"master-stack\"}");
                 return ok_reply("layout set to master-stack");
             }
             return error_reply("unknown layout: " + name);
@@ -538,6 +709,7 @@ std::string WindowManager::run_ipc_command(std::string const& command)
                 return error_reply("ratio out of range [" + std::to_string(min_r) + ", " + std::to_string(1.0 - min_r) + "]");
             focused_monitor().current().split_ratios[SplitAddress { 0, 0 }] = val;
             rearrange_monitor(focused_monitor(), true);
+            emit_event(Event_LayoutChange, "{\"event\":\"layout_change\",\"action\":\"ratio_set\",\"value\":" + std::to_string(val) + "}");
             return ok_reply("ratio set");
         }
     }
@@ -546,6 +718,7 @@ std::string WindowManager::run_ipc_command(std::string const& command)
     {
         focused_monitor().current().split_ratios.clear();
         rearrange_monitor(focused_monitor(), true);
+        emit_event(Event_LayoutChange, "{\"event\":\"layout_change\",\"action\":\"ratio_reset\"}");
         return ok_reply("ratios reset");
     }
 
@@ -564,11 +737,81 @@ std::string WindowManager::run_ipc_command(std::string const& command)
                 return error_reply("invalid delta value: " + delta_str);
             }
             adjust_master_ratio(delta);
+            emit_event(Event_LayoutChange, "{\"event\":\"layout_change\",\"action\":\"ratio_adjust\",\"delta\":" + std::to_string(delta) + "}");
             return ok_reply("ratio adjusted");
         }
     }
 
+    if (trimmed == "notify-attention" || trimmed.starts_with("notify-attention "))
+    {
+        std::string_view params = trimmed;
+        params.remove_prefix(std::string_view("notify-attention").size());
+        while (!params.empty() && params.front() == ' ')
+            params.remove_prefix(1);
+
+        NotificationAttentionRequest req;
+        while (!params.empty())
+        {
+            size_t eq = params.find('=');
+            if (eq == std::string_view::npos)
+                return error_reply("invalid parameter (expected key=value): " + std::string(params));
+
+            std::string_view key = params.substr(0, eq);
+            params.remove_prefix(eq + 1);
+
+            size_t next_param = find_next_notification_attention_param(params);
+            std::string value = trim_ascii(params.substr(0, next_param));
+            params.remove_prefix(next_param == std::string_view::npos ? params.size() : next_param);
+            while (!params.empty() && std::isspace(static_cast<unsigned char>(params.front())))
+                params.remove_prefix(1);
+
+            if (key == "window")
+            {
+                uint32_t xid = 0;
+                int base = 10;
+                std::string_view digits = value;
+                if (digits.size() > 2 && digits[0] == '0' && (digits[1] == 'x' || digits[1] == 'X'))
+                {
+                    base = 16;
+                    digits.remove_prefix(2);
+                }
+                auto [ptr, ec] = std::from_chars(digits.data(), digits.data() + digits.size(), xid, base);
+                if (ec != std::errc {} || ptr != digits.data() + digits.size())
+                    return error_reply("invalid window id: " + value);
+                req.window = xid;
+            }
+            else if (key == "desktop-entry")
+            {
+                req.desktop_entry = std::move(value);
+            }
+            else if (key == "app-name")
+            {
+                req.app_name = std::move(value);
+            }
+            else
+            {
+                return error_reply("unknown parameter: " + std::string(key));
+            }
+        }
+
+        if (req.window == XCB_NONE && req.desktop_entry.empty() && req.app_name.empty())
+            return error_reply("notify-attention requires at least one of: window, desktop-entry, app-name");
+
+        return handle_notification_attention(req);
+    }
+
     return error_reply("unknown command");
+}
+
+void WindowManager::emit_config_reload_result(std::expected<void, std::string> const& result, char const* source)
+{
+    if (result)
+        emit_event(Event_ConfigReload,
+            std::string("{\"event\":\"config_reload\",\"success\":true,\"source\":\"") + source + "\"}");
+    else
+        emit_event(Event_ConfigReload,
+            std::string("{\"event\":\"config_reload\",\"success\":false,\"source\":\"") + source
+            + "\",\"error\":\"" + json_escape(result.error()) + "\"}");
 }
 
 std::expected<void, std::string> WindowManager::reload_config()
@@ -672,6 +915,15 @@ uint32_t WindowManager::border_width_for_client(Client const& client) const
     return config_.appearance.border_width;
 }
 
+uint32_t WindowManager::border_color_for_client(Client const& client) const
+{
+    if (client.id == active_window_)
+        return config_.appearance.border_color;
+    if (client.demands_attention)
+        return config_.appearance.urgent_border_color;
+    return conn_.screen()->black_pixel;
+}
+
 bool WindowManager::should_apply_focus_border(xcb_window_t window) const
 {
     auto const* client = get_client(window);
@@ -684,18 +936,13 @@ bool WindowManager::should_apply_focus_border(xcb_window_t window) const
 
 void WindowManager::apply_appearance_reload()
 {
-    uint32_t inactive_border = conn_.screen()->black_pixel;
-
     for (auto const& [window, client] : clients_)
     {
         if (client.kind != Client::Kind::Tiled && client.kind != Client::Kind::Floating)
             continue;
 
-        uint32_t border_color = inactive_border;
         uint32_t border_width = border_width_for_client(client);
-
-        if (window == active_window_ && border_width > 0)
-            border_color = config_.appearance.border_color;
+        uint32_t border_color = border_color_for_client(client);
 
         xcb_change_window_attributes(conn_.get(), window, XCB_CW_BORDER_PIXEL, &border_color);
         xcb_configure_window(conn_.get(), window, XCB_CONFIG_WINDOW_BORDER_WIDTH, &border_width);
@@ -767,6 +1014,7 @@ void WindowManager::convert_window_to_floating(xcb_window_t window)
 
     client->kind = Client::Kind::Floating;
     client->mru_order = next_mru_order_++;
+    client->suppress_next_configure_request = false;
 
     Geometry geometry = current_window_geometry(window);
     if (client->hidden || geometry.x <= OFF_SCREEN_X / 2)
@@ -793,6 +1041,7 @@ void WindowManager::convert_window_to_tiled(xcb_window_t window)
         return;
 
     client->kind = Client::Kind::Tiled;
+    client->suppress_next_configure_request = false;
     size_t workspace_idx = std::min(client->workspace, monitors_[client->monitor].workspaces.size() - 1);
     add_tiled_to_workspace(window, client->monitor, workspace_idx);
 
@@ -946,6 +1195,8 @@ void WindowManager::apply_rule_result_to_window(xcb_window_t window, WindowRuleR
             client->floating_geometry.y =
                 area.y + static_cast<int16_t>((area.height - client->floating_geometry.height) / 2);
         }
+
+        client->suppress_next_configure_request = rule_result.geometry.has_value() || rule_result.center;
     }
 
     if (rule_result.skip_taskbar.has_value())
@@ -1635,6 +1886,86 @@ void WindowManager::sync_managed_window_classification(xcb_window_t window, Clas
     if (!client)
         return;
 
+    if (rule_result.fullscreen.has_value() && !*rule_result.fullscreen)
+        set_fullscreen(window, false);
+
+    auto move_window = [this](xcb_window_t id, size_t target_monitor, size_t target_workspace)
+    {
+        auto* movable = get_client(id);
+        if (!movable || target_monitor >= monitors_.size())
+            return;
+
+        target_workspace = std::min(target_workspace, monitors_[target_monitor].workspaces.size() - 1);
+        if (movable->kind == Client::Kind::Floating)
+        {
+            bool monitor_changed = movable->monitor != target_monitor;
+            movable->monitor = target_monitor;
+            movable->workspace = target_workspace;
+            if (monitor_changed)
+            {
+                movable->floating_geometry = floating::place_floating(
+                    monitors_[target_monitor].working_area(),
+                    movable->floating_geometry.width,
+                    movable->floating_geometry.height,
+                    std::nullopt
+                );
+            }
+
+            if (movable->sticky)
+                ewmh_.set_window_desktop(id, 0xFFFFFFFF);
+            else
+                ewmh_.set_window_desktop(id, get_ewmh_desktop_index(target_monitor, target_workspace));
+            return;
+        }
+
+        if (movable->monitor == target_monitor && movable->workspace == target_workspace)
+            return;
+
+        size_t source_monitor = movable->monitor;
+        size_t source_workspace = movable->workspace;
+        remove_tiled_from_workspace(id, source_monitor, source_workspace);
+        add_tiled_to_workspace(id, target_monitor, target_workspace);
+        if (id == active_window_)
+            workspace_policy::set_workspace_focus(monitors_[target_monitor].workspaces[target_workspace], id);
+    };
+
+    size_t target_monitor = client->monitor;
+    size_t target_workspace = client->workspace;
+    if (rule_result.target_monitor.has_value())
+        target_monitor = *rule_result.target_monitor;
+    if (rule_result.target_workspace.has_value())
+        target_workspace = *rule_result.target_workspace;
+    if (rule_result.target_monitor.has_value() || rule_result.target_workspace.has_value())
+    {
+        move_window(window, target_monitor, target_workspace);
+        client = get_client(window);
+        if (!client)
+            return;
+    }
+
+    // Title-based reevaluation should honor the full rule result, including
+    // floating placement directives such as geometry and centering.
+    if (client->kind == Client::Kind::Floating && client->monitor < monitors_.size()
+        && rule_result.layer != WindowLayer::Overlay)
+    {
+        if (rule_result.geometry.has_value())
+            client->floating_geometry = *rule_result.geometry;
+
+        if (rule_result.center)
+        {
+            Geometry area = monitors_[client->monitor].working_area();
+            client->floating_geometry.x =
+                area.x + static_cast<int16_t>((area.width - client->floating_geometry.width) / 2);
+            client->floating_geometry.y =
+                area.y + static_cast<int16_t>((area.height - client->floating_geometry.height) / 2);
+        }
+
+        client->suppress_next_configure_request = rule_result.geometry.has_value() || rule_result.center;
+    }
+
+    if (rule_result.fullscreen.has_value() && *rule_result.fullscreen)
+        set_fullscreen(window, true);
+
     if (previous_transient_for != client->transient_for)
     {
         restack_transients(previous_transient_for);
@@ -2070,11 +2401,8 @@ void WindowManager::set_window_borderless(xcb_window_t window, bool enabled)
     client->borderless = enabled;
     uint32_t border_width = border_width_for_client(*client);
     xcb_configure_window(conn_.get(), window, XCB_CONFIG_WINDOW_BORDER_WIDTH, &border_width);
-    if (window == active_window_)
-    {
-        uint32_t border_color = (border_width > 0) ? config_.appearance.border_color : conn_.screen()->black_pixel;
-        xcb_change_window_attributes(conn_.get(), window, XCB_CW_BORDER_PIXEL, &border_color);
-    }
+    uint32_t color = (border_width > 0) ? border_color_for_client(*client) : conn_.screen()->black_pixel;
+    xcb_change_window_attributes(conn_.get(), window, XCB_CW_BORDER_PIXEL, &color);
     update_allowed_actions(window);
     conn_.flush();
 }
@@ -2268,7 +2596,115 @@ void WindowManager::set_client_skip_pager(xcb_window_t window, bool enabled)
 
 void WindowManager::set_client_demands_attention(xcb_window_t window, bool enabled)
 {
+    auto const* client = get_client(window);
+    if (client && client->demands_attention == enabled)
+        return;
+
     set_simple_client_state(window, &Client::demands_attention, ewmh_.get()->_NET_WM_STATE_DEMANDS_ATTENTION, enabled);
+
+    // Sync ICCCM WM_HINTS urgency flag so panels that check WM_HINTS (e.g. polybar
+    // xworkspaces) also see the urgency state.
+    xcb_icccm_wm_hints_t hints;
+    if (xcb_icccm_get_wm_hints_reply(conn_.get(), xcb_icccm_get_wm_hints(conn_.get(), window), &hints, nullptr))
+    {
+        if (enabled)
+            hints.flags |= XUrgencyHint;
+        else
+            hints.flags &= ~XUrgencyHint;
+        xcb_icccm_set_wm_hints(conn_.get(), window, &hints);
+    }
+    else if (enabled)
+    {
+        xcb_icccm_wm_hints_t new_hints = {};
+        new_hints.flags = XUrgencyHint;
+        xcb_icccm_set_wm_hints(conn_.get(), window, &new_hints);
+    }
+
+    if (client && window != active_window_ && border_width_for_client(*client) > 0)
+    {
+        uint32_t color = border_color_for_client(*client);
+        xcb_change_window_attributes(conn_.get(), window, XCB_CW_BORDER_PIXEL, &color);
+    }
+
+    // Re-publish client list so EWMH panels (e.g. polybar) re-check urgency.
+    update_ewmh_client_list();
+    conn_.flush();
+}
+
+std::optional<xcb_window_t> WindowManager::resolve_notification_target(NotificationAttentionRequest const& req) const
+{
+    // Name-based resolution: case-insensitive match against wm_class_name and wm_class,
+    // exclude active_window_, pick highest mru_order (most recently interacted with).
+    auto ci_equal = [](std::string_view a, std::string_view b) -> bool
+    {
+        if (a.size() != b.size())
+            return false;
+        for (size_t i = 0; i < a.size(); ++i)
+        {
+            if (std::tolower(static_cast<unsigned char>(a[i])) != std::tolower(static_cast<unsigned char>(b[i])))
+                return false;
+        }
+        return true;
+    };
+
+    auto best_match = [&](std::string_view name) -> std::optional<xcb_window_t>
+    {
+        xcb_window_t best = XCB_NONE;
+        uint64_t best_mru = 0;
+        for (auto const& [wid, client] : clients_)
+        {
+            if (wid == active_window_)
+                continue;
+            if (client.kind != Client::Kind::Tiled && client.kind != Client::Kind::Floating)
+                continue;
+            if (!ci_equal(client.wm_class_name, name) && !ci_equal(client.wm_class, name))
+                continue;
+            if (best == XCB_NONE || client.mru_order > best_mru)
+            {
+                best = wid;
+                best_mru = client.mru_order;
+            }
+        }
+        if (best != XCB_NONE)
+            return best;
+        return std::nullopt;
+    };
+
+    if (!req.desktop_entry.empty())
+    {
+        if (auto w = best_match(req.desktop_entry))
+            return w;
+    }
+
+    if (!req.app_name.empty())
+    {
+        if (auto w = best_match(req.app_name))
+            return w;
+    }
+
+    return std::nullopt;
+}
+
+std::string WindowManager::handle_notification_attention(NotificationAttentionRequest const& req)
+{
+    // Exact window ID: skip if already focused (the user is looking at it).
+    if (req.window != XCB_NONE)
+    {
+        auto const* client = get_client(req.window);
+        if (!client || (client->kind != Client::Kind::Tiled && client->kind != Client::Kind::Floating))
+            return ok_reply("no-match");
+        if (req.window == active_window_)
+            return ok_reply("skipped-active");
+        set_client_demands_attention(req.window, true);
+        return ok_reply(std::to_string(req.window));
+    }
+
+    // Name-based fallback: single best match.
+    auto target = resolve_notification_target(req);
+    if (!target)
+        return ok_reply("no-match");
+    set_client_demands_attention(*target, true);
+    return ok_reply(std::to_string(*target));
 }
 
 void WindowManager::apply_fullscreen_if_needed(xcb_window_t window)

@@ -21,7 +21,7 @@ struct TestEnvironment
 
     bool ok() const { return conn.ok() && wm.running(); }
 
-    static std::optional<TestEnvironment> create()
+    static std::optional<TestEnvironment> create(std::string const& config = {})
     {
         auto& env = X11TestEnvironment::instance();
         if (!env.available())
@@ -37,7 +37,7 @@ struct TestEnvironment
             return std::nullopt;
         }
 
-        LwmProcess wm(env.display());
+        LwmProcess wm(env.display(), config);
         if (!wm.running())
         {
             WARN("Failed to start lwm.");
@@ -157,6 +157,78 @@ void set_wm_input_hint(X11Connection& conn, xcb_window_t window, bool input)
     hints.input = input ? 1 : 0;
     xcb_icccm_set_wm_hints(conn.get(), window, &hints);
     xcb_flush(conn.get());
+}
+
+void set_window_title(X11Connection& conn, xcb_window_t window, std::string const& title)
+{
+    xcb_atom_t net_wm_name = intern_atom(conn.get(), "_NET_WM_NAME");
+    xcb_atom_t utf8_string = intern_atom(conn.get(), "UTF8_STRING");
+
+    if (net_wm_name != XCB_NONE && utf8_string != XCB_NONE)
+    {
+        xcb_change_property(
+            conn.get(),
+            XCB_PROP_MODE_REPLACE,
+            window,
+            net_wm_name,
+            utf8_string,
+            8,
+            static_cast<uint32_t>(title.size()),
+            title.data()
+        );
+    }
+
+    xcb_change_property(
+        conn.get(),
+        XCB_PROP_MODE_REPLACE,
+        window,
+        XCB_ATOM_WM_NAME,
+        XCB_ATOM_STRING,
+        8,
+        static_cast<uint32_t>(title.size()),
+        title.data()
+    );
+    xcb_flush(conn.get());
+}
+
+bool wait_for_window_geometry(
+    X11Connection& conn,
+    xcb_window_t window,
+    int16_t x,
+    int16_t y,
+    uint16_t width,
+    uint16_t height
+)
+{
+    return wait_for_condition(
+        [&conn, window, x, y, width, height]()
+        {
+            auto cookie = xcb_get_geometry(conn.get(), window);
+            auto* reply = xcb_get_geometry_reply(conn.get(), cookie, nullptr);
+            if (!reply)
+                return false;
+
+            bool matches = reply->x == x && reply->y == y && reply->width == width && reply->height == height;
+            free(reply);
+            return matches;
+        },
+        kTimeout
+    );
+}
+
+std::string title_rule_geometry_config()
+{
+    return R"(
+[workspaces]
+count = 1
+names = ["1"]
+
+[[rules]]
+title = "micro"
+floating = true
+center = true
+geometry = { width = 400, height = 240 }
+)";
 }
 
 } // namespace
@@ -433,6 +505,57 @@ TEST_CASE("Integration: WM_HINTS.input changes can revoke focus eligibility", "[
 
     destroy_window(conn, w2);
     destroy_window(conn, w1);
+}
+
+TEST_CASE(
+    "Integration: title rule geometry applies when title matches before map",
+    "[integration][property][title][rules][map]"
+)
+{
+    auto test_env = TestEnvironment::create(title_rule_geometry_config());
+    if (!test_env)
+        SKIP("Test environment not available");
+
+    auto& conn = test_env->conn;
+
+    xcb_window_t window = create_window(conn, 60, 60, 220, 160);
+    set_window_title(conn, window, "micro");
+    map_window(conn, window);
+    REQUIRE(wait_for_active_window(conn, window, kTimeout));
+
+    REQUIRE(wait_for_window_geometry(conn, window, 440, 240, 400, 240));
+
+    destroy_window(conn, window);
+}
+
+TEST_CASE(
+    "Integration: WM_NAME changes reapply title rule geometry for managed windows",
+    "[integration][property][title][rules]"
+)
+{
+    auto test_env = TestEnvironment::create(title_rule_geometry_config());
+    if (!test_env)
+        SKIP("Test environment not available");
+
+    auto& conn = test_env->conn;
+
+    xcb_window_t window = create_window(conn, 60, 60, 220, 160);
+    map_window(conn, window);
+    REQUIRE(wait_for_active_window(conn, window, kTimeout));
+
+    set_window_title(conn, window, "micro");
+    uint32_t values[] = { 60, 60, 220, 160 };
+    xcb_configure_window(
+        conn.get(),
+        window,
+        XCB_CONFIG_WINDOW_X | XCB_CONFIG_WINDOW_Y | XCB_CONFIG_WINDOW_WIDTH | XCB_CONFIG_WINDOW_HEIGHT,
+        values
+    );
+    xcb_flush(conn.get());
+
+    REQUIRE(wait_for_window_geometry(conn, window, 440, 240, 400, 240));
+
+    destroy_window(conn, window);
 }
 
 TEST_CASE("Integration: _NET_SUPPORTED does not overclaim visible-name atoms", "[integration][ewmh][root]")

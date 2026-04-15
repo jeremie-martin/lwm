@@ -39,6 +39,9 @@ constexpr uint32_t WM_STATE_WITHDRAWN = 0;
 constexpr uint32_t WM_STATE_NORMAL = 1;
 constexpr uint32_t WM_STATE_ICONIC = 3;
 
+/// ICCCM WM_HINTS urgency flag (not exposed by xcb_icccm as a named constant)
+constexpr uint32_t XUrgencyHint = 256; // 1L << 8
+
 struct Geometry
 {
     int16_t x = 0;
@@ -151,6 +154,7 @@ struct Client
     Geometry floating_geometry;
     Geometry tiled_geometry;             ///< Last applied tiled layout geometry (avoids X round-trip)
     xcb_window_t transient_for = XCB_NONE;
+    bool suppress_next_configure_request = false; ///< Preserve WM-chosen startup placement against one client resize/move request
 
     std::optional<Geometry> fullscreen_restore;            ///< Geometry before fullscreen
     std::optional<Geometry> maximize_restore;              ///< Geometry before maximize

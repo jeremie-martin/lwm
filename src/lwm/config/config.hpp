@@ -65,6 +65,7 @@ struct AppearanceConfig
     uint32_t padding = 10;
     uint32_t border_width = 2;
     uint32_t border_color = 0xFF0000;
+    uint32_t urgent_border_color = 0xFFA500;
 };
 
 struct ProgramsConfig
@@ -85,6 +86,14 @@ struct WorkspacesConfig
     std::vector<std::string> names;
 };
 
+struct LayoutConfig
+{
+    std::string strategy = "master-stack";
+    double default_ratio = 0.5;
+    double min_ratio = 0.1;
+    uint32_t resize_grab_threshold = 8; // pixels from split border to trigger resize
+};
+
 struct AutostartConfig
 {
     std::vector<std::string> commands;
@@ -93,6 +102,7 @@ struct AutostartConfig
 struct Config
 {
     AppearanceConfig appearance;
+    LayoutConfig layout;
     FocusConfig focus;
     ProgramsConfig programs;
     WorkspacesConfig workspaces;

@@ -1,6 +1,7 @@
 #include "lwm/core/ipc.hpp"
 #include <cctype>
 #include <cerrno>
+#include <csignal>
 #include <cstdlib>
 #include <cstring>
 #include <iostream>
@@ -41,7 +42,15 @@ void print_usage()
               << "  layout set NAME          set layout strategy (master-stack)\n"
               << "  ratio set VALUE          set master split ratio (0.1-0.9)\n"
               << "  ratio reset              reset all split ratios to defaults\n"
-              << "  ratio adjust DELTA       adjust master ratio by delta (e.g. +0.05)\n";
+              << "  ratio adjust DELTA       adjust master ratio by delta (e.g. +0.05)\n"
+              << "  notify-attention PARAMS  mark a managed window as urgent\n"
+              << "                           params: window=<xid> desktop-entry=<name>\n"
+              << "                                   app-name=<name>\n"
+              << "  subscribe [FILTER]       stream events as JSON lines\n"
+              << "                           filter: comma-separated event types\n"
+              << "                           (window_map,window_unmap,focus_change,\n"
+              << "                            workspace_switch,layout_change,config_reload,\n"
+              << "                            key_action)\n";
 }
 
 std::optional<std::string> root_socket_path()
@@ -169,6 +178,86 @@ int run_command(std::string const& socket_path, std::string const& command)
     return 0;
 }
 
+int run_subscribe(std::string const& socket_path, std::string const& filter)
+{
+    int fd = connect_socket(socket_path);
+    if (fd < 0)
+        return 1;
+
+    std::string request = "subscribe";
+    if (!filter.empty())
+    {
+        request.push_back(' ');
+        request.append(filter);
+    }
+    request.push_back('\n');
+
+    if (send(fd, request.data(), request.size(), 0) < 0)
+    {
+        std::cerr << "failed to send subscribe request: " << std::strerror(errno) << '\n';
+        close(fd);
+        return 1;
+    }
+
+    // Read initial response (ok subscribed or error ...)
+    std::string initial;
+    std::vector<char> buf(4096);
+    while (true)
+    {
+        ssize_t n = recv(fd, buf.data(), buf.size(), 0);
+        if (n <= 0)
+        {
+            std::cerr << "connection closed before subscription confirmed\n";
+            close(fd);
+            return 1;
+        }
+        initial.append(buf.data(), static_cast<size_t>(n));
+        if (initial.find('\n') != std::string::npos)
+            break;
+    }
+
+    // Check for error response
+    auto first_line_end = initial.find('\n');
+    std::string first_line = initial.substr(0, first_line_end);
+    if (first_line.rfind("error", 0) == 0)
+    {
+        std::cerr << (first_line.size() > 6 ? first_line.substr(6) : "subscription failed") << '\n';
+        close(fd);
+        return 1;
+    }
+
+    // Ignore SIGPIPE so a closed stdout consumer becomes a normal write failure.
+    signal(SIGPIPE, SIG_IGN);
+
+    auto write_stdout = [](char const* data, size_t size) -> bool
+    {
+        std::cout.write(data, static_cast<std::streamsize>(size));
+        std::cout.flush();
+        return static_cast<bool>(std::cout);
+    };
+
+    // Print any remaining data after the first line (unlikely but possible)
+    if (first_line_end + 1 < initial.size()
+        && !write_stdout(initial.data() + first_line_end + 1, initial.size() - first_line_end - 1))
+    {
+        close(fd);
+        return 0;
+    }
+
+    // Stream events until EOF or SIGINT
+    while (true)
+    {
+        ssize_t n = recv(fd, buf.data(), buf.size(), 0);
+        if (n <= 0)
+            break;
+        if (!write_stdout(buf.data(), static_cast<size_t>(n)))
+            break;
+    }
+
+    close(fd);
+    return 0;
+}
+
 } // namespace
 
 int main(int argc, char* argv[])
@@ -243,6 +332,34 @@ int main(int argc, char* argv[])
             return run_command(socket_path, "ratio adjust " + args[2]);
         std::cerr << "usage: lwmctl ratio <set VALUE|reset|adjust DELTA>\n";
         return 1;
+    }
+
+    if (command == "notify-attention")
+    {
+        if (args.size() < 2)
+        {
+            std::cerr << "usage: lwmctl notify-attention <key=value ...>\n";
+            return 1;
+        }
+        std::string ipc_cmd = "notify-attention";
+        for (size_t i = 1; i < args.size(); ++i)
+        {
+            ipc_cmd.push_back(' ');
+            ipc_cmd.append(args[i]);
+        }
+        return run_command(socket_path, ipc_cmd);
+    }
+
+    if (command == "subscribe")
+    {
+        std::string filter;
+        for (size_t i = 1; i < args.size(); ++i)
+        {
+            if (!filter.empty())
+                filter.push_back(',');
+            filter.append(args[i]);
+        }
+        return run_subscribe(socket_path, filter);
     }
 
     // Simple commands (no arguments)

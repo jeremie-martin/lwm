@@ -2,6 +2,7 @@
 
 #include "lwm/config/config.hpp"
 #include "lwm/core/connection.hpp"
+#include "lwm/core/events.hpp"
 #include "lwm/core/ewmh.hpp"
 #include "lwm/core/invariants.hpp"
 #include "lwm/core/policy.hpp"
@@ -156,6 +157,18 @@ private:
     };
     std::optional<IpcClient> pending_ipc_;
 
+    // SIGHUP self-pipe: handler writes to [1], main loop polls [0]
+    int signal_pipe_[2] = {-1, -1};
+
+    // Event subscribers (long-lived IPC connections)
+    struct Subscriber
+    {
+        int fd = -1;
+        uint32_t event_mask = Event_All;
+    };
+    std::vector<Subscriber> subscribers_;
+    static constexpr size_t MAX_SUBSCRIBERS = 8;
+
     bool stacking_dirty_ = false;
     std::vector<xcb_window_t> cached_stacking_order_;
 
@@ -174,6 +187,8 @@ private:
     void accept_ipc_client();
     void process_ipc_client();
     void close_ipc_client();
+    void emit_event(EventType type, std::string_view json);
+    void cleanup_dead_subscribers();
 
     void handle_event(xcb_generic_event_t const& event);
     void handle_map_request(xcb_map_request_event_t const& e);
@@ -216,8 +231,9 @@ private:
     void handle_property_notify(xcb_property_notify_event_t const& e);
     void handle_randr_screen_change();
     void handle_timeouts();
-    std::string run_ipc_command(std::string const& command);
+    std::optional<std::string> run_ipc_command(std::string const& command);
     std::expected<void, std::string> reload_config();
+    void emit_config_reload_result(std::expected<void, std::string> const& result, char const* source);
     std::expected<void, std::string> apply_config_reload(Config config);
     std::expected<void, std::string> validate_reload(Config const& config) const;
     void regrab_all_keys();
@@ -352,6 +368,7 @@ private:
     void apply_floating_geometry(xcb_window_t window);
     Geometry overlay_geometry_for_window(xcb_window_t window) const;
     uint32_t border_width_for_client(Client const& client) const;
+    uint32_t border_color_for_client(Client const& client) const;
     bool should_apply_focus_border(xcb_window_t window) const;
     void send_configure_notify(xcb_window_t window, Geometry const& geom, uint16_t border_width);
     void send_configure_notify(xcb_window_t window);
@@ -415,6 +432,16 @@ private:
     void switch_to_ewmh_desktop(uint32_t desktop);
     void clear_all_borders();
     xcb_atom_t intern_atom(char const* name) const;
+
+    // Notification attention bridge
+    struct NotificationAttentionRequest
+    {
+        xcb_window_t window = XCB_NONE;
+        std::string desktop_entry;
+        std::string app_name;
+    };
+    std::optional<xcb_window_t> resolve_notification_target(NotificationAttentionRequest const& req) const;
+    std::string handle_notification_attention(NotificationAttentionRequest const& req);
 
     // Hot-reload (exec-based restart)
     void initiate_restart(std::string binary = {});

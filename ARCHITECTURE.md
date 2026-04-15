@@ -206,6 +206,10 @@ Property changes that matter at runtime:
 
 Those updates are easy to regress because they can change classification, focus eligibility, stacking exceptions, geometry policy, or workarea computation after manage-time.
 
+### Notification-derived urgency
+
+Notification popup windows (`_NET_WM_WINDOW_TYPE_NOTIFICATION`) remain unmanaged popups. Notification-derived urgency is translated onto a managed tiled/floating client via an explicit IPC ingress (`notify-attention` command) rather than through popup window lifecycle. The recommended bridge (`scripts/lwm-notify-bridge.sh`) monitors D-Bus `Notify` calls via `busctl` and extracts the `x-window-id` hint (injected by a shell wrapper around `notify-send` that adds `$WINDOWID`). It passes the exact window ID to LWM, which sets `demands_attention` via the same `set_client_demands_attention` path as ICCCM/EWMH urgency. The focused window is skipped (the user is already looking at it). Focus clears the attention state.
+
 ## 8. Hotplug Contract
 
 RANDR changes are handled as a structural rebuild, not as a small patch to old monitor indices.

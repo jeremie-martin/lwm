@@ -147,17 +147,19 @@ void WindowManager::focus_any_window(xcb_window_t window, bool record_user_time)
 
     if (previous_active != XCB_NONE && previous_active != window && is_managed(previous_active))
     {
-        xcb_change_window_attributes(conn_.get(), previous_active, XCB_CW_BORDER_PIXEL, &conn_.screen()->black_pixel);
+        if (auto const* prev_client = get_client(previous_active))
+        {
+            uint32_t color = border_color_for_client(*prev_client);
+            xcb_change_window_attributes(conn_.get(), previous_active, XCB_CW_BORDER_PIXEL, &color);
+        }
     }
 
     if (should_apply_focus_border(window))
     {
-        xcb_change_window_attributes(conn_.get(), window, XCB_CW_BORDER_PIXEL, &config_.appearance.border_color);
-        if (auto const* focused = get_client(window))
-        {
-            uint32_t border_width = border_width_for_client(*focused);
-            xcb_configure_window(conn_.get(), window, XCB_CONFIG_WINDOW_BORDER_WIDTH, &border_width);
-        }
+        uint32_t focus_color = border_color_for_client(*client);
+        xcb_change_window_attributes(conn_.get(), window, XCB_CW_BORDER_PIXEL, &focus_color);
+        uint32_t border_width = border_width_for_client(*client);
+        xcb_configure_window(conn_.get(), window, XCB_CONFIG_WINDOW_BORDER_WIDTH, &border_width);
         LOG_TRACE("focus_any_window: applied focus border visuals");
     }
     else
@@ -179,7 +181,8 @@ void WindowManager::focus_any_window(xcb_window_t window, bool record_user_time)
     if (client->monitor < monitors_.size())
         restack_monitor_layers(client->monitor);
 
-    set_client_demands_attention(window, false);
+    if (client->demands_attention)
+        set_client_demands_attention(window, false);
     ewmh_.set_active_window(window);
     if (net_wm_state_focused_ != XCB_NONE)
     {
@@ -196,6 +199,12 @@ void WindowManager::focus_any_window(xcb_window_t window, bool record_user_time)
     restack_transients(window);
 
     conn_.flush();
+
+    emit_event(Event_FocusChange,
+        "{\"event\":\"focus_change\",\"window\":" + std::to_string(window)
+        + ",\"class\":\"" + json_escape(client->wm_class)
+        + "\",\"title\":\"" + json_escape(client->name) + "\"}");
+
     LOG_TRACE("focus_any_window({:#x}): DONE", window);
 }
 
@@ -217,7 +226,11 @@ void WindowManager::clear_focus()
 
     if (previous_active != XCB_NONE && is_managed(previous_active))
     {
-        xcb_change_window_attributes(conn_.get(), previous_active, XCB_CW_BORDER_PIXEL, &conn_.screen()->black_pixel);
+        if (auto const* prev_client = get_client(previous_active))
+        {
+            uint32_t color = border_color_for_client(*prev_client);
+            xcb_change_window_attributes(conn_.get(), previous_active, XCB_CW_BORDER_PIXEL, &color);
+        }
     }
     if (previous_monitor)
         restack_monitor_layers(*previous_monitor);

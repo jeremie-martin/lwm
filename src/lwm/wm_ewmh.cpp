@@ -235,7 +235,7 @@ void WindowManager::switch_to_ewmh_desktop(uint32_t desktop)
         update_ewmh_current_desktop();
     }
     focus_or_fallback(monitor);
-    conn_.flush();
+    flush_and_drain_crossing();
     LOG_DEBUG("switch_to_ewmh_desktop: DONE, now on monitor {} ws {}", focused_monitor_, monitor.current_workspace);
 }
 

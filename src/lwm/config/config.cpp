@@ -1,4 +1,5 @@
 #include "config.hpp"
+#include <algorithm>
 #include <toml++/toml.hpp>
 
 namespace lwm {
@@ -115,6 +116,9 @@ Config default_config()
         // Focus cycling
         {       "super",          "j",           "focus_next",         "", -1 },
         {       "super",          "k",           "focus_prev",         "", -1 },
+        // Master ratio
+        {       "super",          "h",         "ratio_shrink",         "", -1 },
+        {       "super",          "l",           "ratio_grow",         "", -1 },
     };
 
     cfg.mousebinds = {
@@ -142,6 +146,21 @@ ConfigLoadResult load_config_result(std::string const& path)
                 cfg.appearance.border_width = static_cast<uint32_t>(*v);
             if (auto v = (*appearance)["border_color"].value<int64_t>())
                 cfg.appearance.border_color = static_cast<uint32_t>(*v);
+            if (auto v = (*appearance)["urgent_border_color"].value<int64_t>())
+                cfg.appearance.urgent_border_color = static_cast<uint32_t>(*v);
+        }
+
+        // Layout
+        if (auto layout = tbl["layout"].as_table())
+        {
+            if (auto v = (*layout)["strategy"].value<std::string>())
+                cfg.layout.strategy = *v;
+            if (auto v = (*layout)["min_ratio"].value<double>())
+                cfg.layout.min_ratio = std::clamp(*v, 0.05, 0.45);
+            if (auto v = (*layout)["default_ratio"].value<double>())
+                cfg.layout.default_ratio = std::clamp(*v, cfg.layout.min_ratio, 1.0 - cfg.layout.min_ratio);
+            if (auto v = (*layout)["resize_grab_threshold"].value<int64_t>())
+                cfg.layout.resize_grab_threshold = static_cast<uint32_t>(std::clamp(*v, int64_t(1), int64_t(100)));
         }
 
         if (auto focus = tbl["focus"].as_table())

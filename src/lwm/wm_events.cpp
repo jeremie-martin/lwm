@@ -42,6 +42,18 @@ uint32_t extract_event_time(uint8_t response_type, xcb_generic_event_t const& ev
     }
 }
 
+char const* client_kind_str(Client::Kind kind)
+{
+    switch (kind)
+    {
+        case Client::Kind::Tiled: return "tiled";
+        case Client::Kind::Floating: return "floating";
+        case Client::Kind::Dock: return "dock";
+        case Client::Kind::Desktop: return "desktop";
+    }
+    return "unknown";
+}
+
 }
 
 void WindowManager::handle_event(xcb_generic_event_t const& event)
@@ -153,7 +165,7 @@ void WindowManager::handle_map_request(xcb_map_request_event_t const& e)
 
     bool start_iconic = false;
     bool urgent = false;
-    constexpr uint32_t XUrgencyHint = 256; // 1L << 8
+
     xcb_icccm_wm_hints_t hints;
     if (xcb_icccm_get_wm_hints_reply(conn_.get(), xcb_icccm_get_wm_hints(conn_.get(), e.window), &hints, nullptr))
     {
@@ -165,24 +177,45 @@ void WindowManager::handle_map_request(xcb_map_request_event_t const& e)
     if (ewmh_.has_window_state(e.window, ewmh_.get()->_NET_WM_STATE_HIDDEN))
         start_iconic = true;
 
+    char const* kind_str = nullptr;
     switch (classification.kind)
     {
         case WindowClassification::Kind::Desktop:
             map_desktop_window(e.window);
-            return;
+            kind_str = "desktop";
+            break;
         case WindowClassification::Kind::Dock:
             map_dock_window(e.window);
-            return;
+            kind_str = "dock";
+            break;
         case WindowClassification::Kind::Popup:
             xcb_map_window(conn_.get(), e.window);
             conn_.flush();
-            return;
+            kind_str = "popup";
+            break;
         case WindowClassification::Kind::Floating:
             map_floating_window(e.window, classification, rule_result, start_iconic, urgent);
-            return;
+            kind_str = "floating";
+            break;
         case WindowClassification::Kind::Tiled:
             map_tiled_window(e.window, rule_result, start_iconic, urgent);
-            return;
+            kind_str = "tiled";
+            break;
+    }
+
+    if (kind_str && !subscribers_.empty())
+    {
+        auto const* client = get_client(e.window);
+        std::string json = "{\"event\":\"window_map\",\"window\":" + std::to_string(e.window)
+            + ",\"class\":\"" + json_escape(client ? client->wm_class : std::string{})
+            + "\",\"kind\":\"" + kind_str + "\"";
+        if (client)
+        {
+            json += ",\"monitor\":" + std::to_string(client->monitor)
+                + ",\"workspace\":" + std::to_string(client->workspace);
+        }
+        json += "}";
+        emit_event(Event_WindowMap, json);
     }
 }
 
@@ -306,6 +339,9 @@ void WindowManager::map_floating_window(
         }
     }
 
+    if (client)
+        client->suppress_next_configure_request = rule_result.geometry.has_value() || rule_result.center;
+
     apply_initial_state_flags(window, rule_result);
 
     // Update visibility after placement changes
@@ -313,6 +349,15 @@ void WindowManager::map_floating_window(
     if (client)
     {
         sync_visibility_for_monitor(client->monitor);
+        if (!client->hidden && should_be_visible(window))
+        {
+            if (client->fullscreen)
+                apply_fullscreen_if_needed(window);
+            else if (client->maximized_horz || client->maximized_vert)
+                apply_maximized_geometry(window);
+            else
+                apply_floating_geometry(window);
+        }
         restack_monitor_layers(client->monitor);
     }
 
@@ -387,6 +432,16 @@ void WindowManager::handle_window_removal(xcb_window_t window)
     if (!client)
         return;
 
+    // Capture info before unmanage destroys the client record
+    std::string unmap_json;
+    if (!subscribers_.empty())
+    {
+        unmap_json = "{\"event\":\"window_unmap\",\"window\":" + std::to_string(window)
+            + ",\"kind\":\"" + client_kind_str(client->kind) + "\""
+            + ",\"monitor\":" + std::to_string(client->monitor)
+            + ",\"workspace\":" + std::to_string(client->workspace) + "}";
+    }
+
     switch (client->kind)
     {
         case Client::Kind::Tiled:
@@ -402,6 +457,9 @@ void WindowManager::handle_window_removal(xcb_window_t window)
             unmanage_desktop_window(window);
             break;
     }
+
+    if (!unmap_json.empty())
+        emit_event(Event_WindowUnmap, unmap_json);
 }
 
 void WindowManager::handle_enter_notify(xcb_enter_notify_event_t const& e)
@@ -754,10 +812,10 @@ void WindowManager::handle_key_press(xcb_key_press_event_t const& e)
     }
     else if (action->type == "reload_config")
     {
-        if (auto result = reload_config(); !result)
-        {
+        auto result = reload_config();
+        if (!result)
             LOG_WARN("Config reload failed: {}", result.error());
-        }
+        emit_config_reload_result(result, "keybind");
     }
     else if (action->type == "restart")
     {
@@ -767,11 +825,20 @@ void WindowManager::handle_key_press(xcb_key_press_event_t const& e)
     else if (action->type == "ratio_grow")
     {
         adjust_master_ratio(0.05);
+        emit_event(Event_LayoutChange, "{\"event\":\"layout_change\",\"action\":\"ratio_grow\"}");
     }
     else if (action->type == "ratio_shrink")
     {
         adjust_master_ratio(-0.05);
+        emit_event(Event_LayoutChange, "{\"event\":\"layout_change\",\"action\":\"ratio_shrink\"}");
     }
+    else
+    {
+        return;
+    }
+
+    emit_event(Event_KeyAction,
+        "{\"event\":\"key_action\",\"action\":\"" + json_escape(action->type) + "\"}");
 }
 
 void WindowManager::handle_key_release(xcb_key_release_event_t const& e)
@@ -1268,6 +1335,17 @@ void WindowManager::handle_configure_request(xcb_configure_request_event_t const
         if (!client)
             return;
 
+        uint16_t geometry_mask = XCB_CONFIG_WINDOW_X | XCB_CONFIG_WINDOW_Y | XCB_CONFIG_WINDOW_WIDTH
+            | XCB_CONFIG_WINDOW_HEIGHT;
+        if (client->suppress_next_configure_request && (mask & geometry_mask) != 0)
+        {
+            client->suppress_next_configure_request = false;
+            apply_floating_geometry(e.window);
+            send_configure_notify(e.window);
+            conn_.flush();
+            return;
+        }
+
         if (mask & XCB_CONFIG_WINDOW_X)
             client->floating_geometry.x = e.x;
         if (mask & XCB_CONFIG_WINDOW_Y)
@@ -1354,13 +1432,17 @@ void WindowManager::handle_property_notify(xcb_property_notify_event_t const& e)
             {
                 client->accepts_input = !(hints.flags & XCB_ICCCM_WM_HINT_INPUT) || hints.input;
 
-                constexpr uint32_t XUrgencyHint = 256;
+
                 bool urgent = (hints.flags & XUrgencyHint) != 0;
+                // Only act on non-active windows. The active window may have
+                // WM-initiated urgency (via notify-attention IPC) that should
+                // persist even if the app clears its own WM_HINTS flag — the
+                // WM_HINTS urgency is re-synced on workspace switch.
                 if (urgent && e.window != active_window_)
                 {
                     set_client_demands_attention(e.window, true);
                 }
-                else if (!urgent)
+                else if (!urgent && e.window != active_window_)
                 {
                     set_client_demands_attention(e.window, false);
                 }

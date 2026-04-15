@@ -2,6 +2,7 @@
 #include "lwm/core/log.hpp"
 #include "lwm/core/policy.hpp"
 #include "wm.hpp"
+#include <xcb/xcb_icccm.h>
 
 namespace lwm {
 
@@ -27,6 +28,30 @@ void WindowManager::perform_workspace_switch(WorkspaceSwitchContext const& ctx)
     rearrange_monitor(monitor);
     // sync floating separately since rearrange only handles tiled layout
     // (floating geometry is applied by sync_visibility_for_monitor above)
+
+    emit_event(Event_WorkspaceSwitch,
+        "{\"event\":\"workspace_switch\",\"monitor\":" + std::to_string(ctx.monitor_idx)
+        + ",\"from\":" + std::to_string(ctx.old_workspace)
+        + ",\"to\":" + std::to_string(ctx.new_workspace) + "}");
+
+    // Re-sync WM_HINTS urgency for windows that still have demands_attention.
+    // Apps may have cleared their own WM_HINTS urgency on focus (standard ICCCM
+    // behavior), but the WM considers them still urgent (set via notify-attention).
+    // Re-assert so panels checking WM_HINTS (e.g. polybar) see the urgency.
+    for (auto const& [wid, client] : clients_)
+    {
+        if (!client.demands_attention)
+            continue;
+        xcb_icccm_wm_hints_t hints;
+        if (xcb_icccm_get_wm_hints_reply(conn_.get(), xcb_icccm_get_wm_hints(conn_.get(), wid), &hints, nullptr))
+        {
+            if (!(hints.flags & XUrgencyHint))
+            {
+                hints.flags |= XUrgencyHint;
+                xcb_icccm_set_wm_hints(conn_.get(), wid, &hints);
+            }
+        }
+    }
 
     LWM_ASSERT_INVARIANTS(clients_, monitors_);
     LOG_TRACE("perform_workspace_switch: DONE");
