@@ -224,10 +224,8 @@ count = 1
 names = ["1"]
 
 [[rules]]
-title = "micro"
-floating = true
-center = true
-geometry = { width = 400, height = 240 }
+match = { title = "micro" }
+apply = { floating = true, center = true, geometry = { width = 400, height = 240 } }
 )";
 }
 

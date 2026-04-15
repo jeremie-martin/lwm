@@ -325,7 +325,7 @@ private:
     void focus_monitor(int direction); // -1 = left, +1 = right
     void move_window_to_monitor(int direction);
 
-    void launch_program(std::string const& path);
+    void launch_program(CommandConfig const& command);
     void adjust_master_ratio(double delta);
 
     Client* get_client(xcb_window_t window);

@@ -1,4 +1,6 @@
 include(FetchContent)
+pkg_check_modules(XCB_XTEST REQUIRED IMPORTED_TARGET xcb-xtest)
+
 FetchContent_Declare(
     Catch2
     GIT_REPOSITORY https://github.com/catchorg/Catch2.git
@@ -7,6 +9,7 @@ FetchContent_Declare(
 FetchContent_MakeAvailable(Catch2)
 
   add_executable(lwm_tests
+    test_config_parser.cpp
     test_client_state_policy.cpp
     test_ewmh_classification.cpp
     test_ewmh_policy.cpp
@@ -34,7 +37,7 @@ FetchContent_MakeAvailable(Catch2)
     test_workspace_policy.cpp
   )
 
-target_link_libraries(lwm_tests PRIVATE liblwm Catch2::Catch2WithMain)
+target_link_libraries(lwm_tests PRIVATE liblwm Catch2::Catch2WithMain PkgConfig::XCB_XTEST)
 target_include_directories(lwm_tests PRIVATE ${CMAKE_SOURCE_DIR}/src)
 
 include(Catch)

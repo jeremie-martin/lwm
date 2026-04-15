@@ -1,14 +1,18 @@
 #include "x11_test_harness.hpp"
+#include <X11/Xlib.h>
 #include <algorithm>
 #include <array>
 #include <catch2/catch_test_macros.hpp>
 #include <chrono>
+#include <cstdlib>
 #include <optional>
 #include <poll.h>
 #include <string>
 #include <thread>
 #include <sys/wait.h>
 #include <unistd.h>
+#include <xcb/xcb_keysyms.h>
+#include <xcb/xtest.h>
 
 using namespace lwm::test;
 
@@ -109,6 +113,43 @@ bool wait_for_process_exit(pid_t pid, std::chrono::milliseconds timeout, int& st
     );
 }
 
+bool xtest_available(X11Connection& conn)
+{
+    auto* extension = xcb_get_extension_data(conn.get(), &xcb_test_id);
+    return extension && extension->present;
+}
+
+std::optional<xcb_keycode_t> first_keycode_for_keysym(X11Connection& conn, xcb_keysym_t keysym)
+{
+    xcb_key_symbols_t* key_symbols = xcb_key_symbols_alloc(conn.get());
+    if (!key_symbols)
+        return std::nullopt;
+
+    xcb_keycode_t* keycodes = xcb_key_symbols_get_keycode(key_symbols, keysym);
+    std::optional<xcb_keycode_t> result;
+    if (keycodes && keycodes[0] != XCB_NO_SYMBOL)
+        result = keycodes[0];
+
+    free(keycodes);
+    xcb_key_symbols_free(key_symbols);
+    return result;
+}
+
+bool send_key_chord(X11Connection& conn, xcb_keysym_t modifier, xcb_keysym_t key)
+{
+    auto modifier_code = first_keycode_for_keysym(conn, modifier);
+    auto key_code = first_keycode_for_keysym(conn, key);
+    if (!modifier_code || !key_code)
+        return false;
+
+    xcb_test_fake_input(conn.get(), XCB_KEY_PRESS, *modifier_code, XCB_CURRENT_TIME, conn.root(), 0, 0, 0);
+    xcb_test_fake_input(conn.get(), XCB_KEY_PRESS, *key_code, XCB_CURRENT_TIME, conn.root(), 0, 0, 0);
+    xcb_test_fake_input(conn.get(), XCB_KEY_RELEASE, *key_code, XCB_CURRENT_TIME, conn.root(), 0, 0, 0);
+    xcb_test_fake_input(conn.get(), XCB_KEY_RELEASE, *modifier_code, XCB_CURRENT_TIME, conn.root(), 0, 0, 0);
+    xcb_flush(conn.get());
+    return true;
+}
+
 } // namespace
 
 TEST_CASE(
@@ -205,4 +246,85 @@ TEST_CASE(
 
     destroy_window(conn, w2);
     destroy_window(conn, w1);
+}
+
+TEST_CASE(
+    "Integration: lwmctl subscribe preserves monitor direction in key_action events",
+    "[integration][subscribe]"
+)
+{
+    auto test_env = TestEnvironment::create();
+    if (!test_env)
+        SKIP("Test environment not available");
+
+    auto& conn = test_env->conn;
+    auto& wm = test_env->wm;
+
+    if (!xtest_available(conn))
+        SKIP("XTEST extension not available");
+
+    int stdout_pipe[2] = { -1, -1 };
+    int stderr_pipe[2] = { -1, -1 };
+    REQUIRE(pipe(stdout_pipe) == 0);
+    REQUIRE(pipe(stderr_pipe) == 0);
+
+    pid_t pid = fork();
+    REQUIRE(pid >= 0);
+
+    if (pid == 0)
+    {
+        dup2(stdout_pipe[1], STDOUT_FILENO);
+        dup2(stderr_pipe[1], STDERR_FILENO);
+        close(stdout_pipe[0]);
+        close(stdout_pipe[1]);
+        close(stderr_pipe[0]);
+        close(stderr_pipe[1]);
+
+        setenv("DISPLAY", wm.display().c_str(), 1);
+        setenv("XDG_RUNTIME_DIR", wm.runtime_dir().c_str(), 1);
+
+        std::filesystem::path executable = lwmctl_executable_path();
+        execl(executable.c_str(), executable.c_str(), "subscribe", "key_action", nullptr);
+        _exit(127);
+    }
+
+    close(stdout_pipe[1]);
+    stdout_pipe[1] = -1;
+    close(stderr_pipe[1]);
+    stderr_pipe[1] = -1;
+
+    auto cleanup_child = [&]()
+    {
+        if (stdout_pipe[0] >= 0)
+            close(stdout_pipe[0]);
+        if (stderr_pipe[0] >= 0)
+            close(stderr_pipe[0]);
+
+        if (pid > 0)
+        {
+            int status = 0;
+            if (!wait_for_process_exit(pid, std::chrono::milliseconds(200), status))
+            {
+                kill(pid, SIGKILL);
+                waitpid(pid, &status, 0);
+            }
+            pid = -1;
+        }
+    };
+
+    std::this_thread::sleep_for(std::chrono::milliseconds(100));
+
+    REQUIRE(send_key_chord(conn, XStringToKeysym("Super_L"), XStringToKeysym("Left")));
+    auto left_event = read_line_with_timeout(stdout_pipe[0], kTimeout);
+    REQUIRE(left_event.has_value());
+    CHECK(left_event->find("\"event\":\"key_action\"") != std::string::npos);
+    CHECK(left_event->find("\"action\":\"focus_monitor_left\"") != std::string::npos);
+
+    REQUIRE(send_key_chord(conn, XStringToKeysym("Super_L"), XStringToKeysym("Right")));
+    auto right_event = read_line_with_timeout(stdout_pipe[0], kTimeout);
+    REQUIRE(right_event.has_value());
+    CHECK(right_event->find("\"event\":\"key_action\"") != std::string::npos);
+    CHECK(right_event->find("\"action\":\"focus_monitor_right\"") != std::string::npos);
+
+    cleanup_child();
 }

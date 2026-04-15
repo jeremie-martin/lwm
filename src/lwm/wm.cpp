@@ -1679,9 +1679,8 @@ void WindowManager::run_autostart()
 {
     for (auto const& cmd : config_.autostart.commands)
     {
-        std::string resolved = keybinds_.resolve_command(cmd, config_);
-        LOG_INFO("Autostart: {}", resolved);
-        launch_program(resolved);
+        LOG_INFO("Autostart: {}", cmd.describe());
+        launch_program(cmd);
     }
 }
 
@@ -3198,13 +3197,28 @@ void WindowManager::rearrange_all_monitors()
     }
 }
 
-void WindowManager::launch_program(std::string const& command)
+void WindowManager::launch_program(CommandConfig const& command)
 {
     if (fork() == 0)
     {
         setsid();
-        execl("/bin/sh", "sh", "-c", command.c_str(), nullptr);
-        exit(1);
+
+        if (command.kind == CommandConfig::Kind::Shell)
+        {
+            execl("/bin/sh", "sh", "-c", command.shell.c_str(), nullptr);
+            _exit(1);
+        }
+
+        std::vector<char*> argv;
+        argv.reserve(command.argv.size() + 1);
+        for (auto const& arg : command.argv)
+        {
+            argv.push_back(const_cast<char*>(arg.c_str()));
+        }
+        argv.push_back(nullptr);
+
+        execvp(argv.front(), argv.data());
+        _exit(1);
     }
 }
 

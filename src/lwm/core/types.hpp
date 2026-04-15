@@ -1,5 +1,6 @@
 #pragma once
 
+#include "lwm/core/command.hpp"
 #include <algorithm>
 #include <cstdint>
 #include <limits>
@@ -290,8 +291,10 @@ struct KeyBinding
 struct Action
 {
     std::string type;
-    std::string command;
+    std::optional<CommandConfig> command;
+    std::string target;
     int workspace = -1;
+    int direction = 0;
 };
 
 } // namespace lwm

@@ -97,7 +97,7 @@ std::string make_config(
     if (!autostart_command.empty())
     {
         out << "\n[autostart]\n";
-        out << "commands = [\"" << toml_escape(autostart_command) << "\"]\n";
+        out << "commands = [{ shell = \"" << toml_escape(autostart_command) << "\" }]\n";
     }
 
     if (!extra.empty())
@@ -314,8 +314,8 @@ TEST_CASE("Integration: reload-config reapplies geometry rules to visible floati
 
     std::string rules = R"(
 [[rules]]
-type = "dialog"
-geometry = { x = 300, y = 200, width = 240, height = 160 }
+match = { type = "dialog" }
+apply = { geometry = { x = 300, y = 200, width = 240, height = 160 } }
 )";
     REQUIRE(env->wm.write_config(make_config("left", "right", 2, {}, rules)));
 

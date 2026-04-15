@@ -27,7 +27,7 @@ void KeybindManager::load_bindings(Config const& config)
         if (keysym != XCB_NO_SYMBOL)
         {
             KeyBinding binding{ mod, keysym };
-            Action action{ kb.action, kb.command, kb.workspace };
+            Action action{ kb.action, kb.command, kb.target, kb.workspace, kb.direction };
             bindings_[binding] = action;
         }
     }
@@ -74,17 +74,6 @@ std::optional<Action> KeybindManager::resolve(uint16_t state, xcb_keysym_t keysy
         return it->second;
     }
     return std::nullopt;
-}
-
-std::string KeybindManager::resolve_command(std::string const& command, Config const& config) const
-{
-    if (command == "terminal")
-        return config.programs.terminal;
-    if (command == "browser")
-        return config.programs.browser;
-    if (command == "launcher")
-        return config.programs.launcher;
-    return command;
 }
 
 uint16_t KeybindManager::parse_modifier(std::string const& mod)

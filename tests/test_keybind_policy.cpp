@@ -3,6 +3,7 @@
 #include "x11_test_harness.hpp"
 #include <X11/Xlib.h>
 #include <catch2/catch_test_macros.hpp>
+#include <memory>
 
 using namespace lwm;
 
@@ -15,10 +16,30 @@ Config make_empty_config()
     return cfg;
 }
 
-Config make_default_config()
+CommandConfig make_shell_command(std::string value)
 {
-    Config cfg;
-    return cfg;
+    return CommandConfig::shell_command(std::move(value));
+}
+
+KeybindConfig make_spawn_bind(std::string mod, std::string key, std::string command)
+{
+    KeybindConfig keybind;
+    keybind.mod = std::move(mod);
+    keybind.key = std::move(key);
+    keybind.action = "spawn";
+    keybind.command = make_shell_command(std::move(command));
+    return keybind;
+}
+
+KeybindConfig make_action_bind(std::string mod, std::string key, std::string action, int workspace = -1, int direction = 0)
+{
+    KeybindConfig keybind;
+    keybind.mod = std::move(mod);
+    keybind.key = std::move(key);
+    keybind.action = std::move(action);
+    keybind.workspace = workspace;
+    keybind.direction = direction;
+    return keybind;
 }
 
 bool ensure_x11_environment()
@@ -30,6 +51,19 @@ bool ensure_x11_environment()
         return false;
     }
     return true;
+}
+
+std::unique_ptr<Connection> make_connection_or_null()
+{
+    try
+    {
+        return std::make_unique<Connection>();
+    }
+    catch (std::exception const& e)
+    {
+        WARN(e.what());
+        return nullptr;
+    }
 }
 
 } // namespace
@@ -109,38 +143,26 @@ TEST_CASE("KeybindManager::parse_modifier handles malformed modifier strings", "
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// Command resolution tests (no X11 needed)
+// Command payload tests (requires X11)
 // ─────────────────────────────────────────────────────────────────────────────
 
-TEST_CASE("KeybindManager::resolve_command returns command as-is if not preset", "[keybind]")
+TEST_CASE("KeybindManager preserves shell command payloads for spawn actions", "[keybind]")
 {
     if (!ensure_x11_environment())
         SKIP("X11 environment not available");
 
     Config cfg = make_empty_config();
-    Connection conn;
-    KeybindManager mgr(conn, cfg);
+    cfg.keybinds.push_back(make_spawn_bind("super", "a", "/usr/bin/firefox"));
+    auto conn = make_connection_or_null();
+    if (!conn)
+        SKIP("X11 connection not available");
+    KeybindManager mgr(*conn, cfg);
 
-    REQUIRE(mgr.resolve_command("/usr/bin/firefox", cfg) == "/usr/bin/firefox");
-    REQUIRE(mgr.resolve_command("my-custom-command", cfg) == "my-custom-command");
-}
-
-TEST_CASE("KeybindManager::resolve_command expands preset commands", "[keybind]")
-{
-    if (!ensure_x11_environment())
-        SKIP("X11 environment not available");
-
-    Config cfg = make_empty_config();
-    cfg.programs.terminal = "/usr/local/bin/st";
-    cfg.programs.browser = "/usr/bin/firefox";
-    cfg.programs.launcher = "dmenu_run";
-
-    Connection conn;
-    KeybindManager mgr(conn, cfg);
-
-    REQUIRE(mgr.resolve_command("terminal", cfg) == "/usr/local/bin/st");
-    REQUIRE(mgr.resolve_command("browser", cfg) == "/usr/bin/firefox");
-    REQUIRE(mgr.resolve_command("launcher", cfg) == "dmenu_run");
+    auto action = mgr.resolve(XCB_MOD_MASK_4, XStringToKeysym("a"));
+    REQUIRE(action.has_value());
+    REQUIRE(action->command.has_value());
+    REQUIRE(action->command->kind == CommandConfig::Kind::Shell);
+    REQUIRE(action->command->shell == "/usr/bin/firefox");
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -153,8 +175,10 @@ TEST_CASE("KeybindManager::resolve returns nullopt for unregistered bindings", "
         SKIP("X11 environment not available");
 
     Config cfg = make_empty_config();
-    Connection conn;
-    KeybindManager mgr(conn, cfg);
+    auto conn = make_connection_or_null();
+    if (!conn)
+        SKIP("X11 connection not available");
+    KeybindManager mgr(*conn, cfg);
 
     auto result = mgr.resolve(XCB_MOD_MASK_4, 0x61);
     REQUIRE_FALSE(result.has_value());
@@ -166,14 +190,16 @@ TEST_CASE("KeybindManager::resolve handles multiple bindings across keys, modifi
         SKIP("X11 environment not available");
 
     Config cfg = make_empty_config();
-    cfg.keybinds.push_back({ "super", "a", "spawn", "terminal", -1 });
-    cfg.keybinds.push_back({ "super", "b", "spawn", "browser", -1 });
-    cfg.keybinds.push_back({ "super+shift", "a", "kill", "", -1 });
-    cfg.keybinds.push_back({ "super", "1", "switch_workspace", "", 0 });
-    cfg.keybinds.push_back({ "super+shift", "1", "move_to_workspace", "", 0 });
+    cfg.keybinds.push_back(make_spawn_bind("super", "a", "terminal"));
+    cfg.keybinds.push_back(make_spawn_bind("super", "b", "browser"));
+    cfg.keybinds.push_back(make_action_bind("super+shift", "a", "kill"));
+    cfg.keybinds.push_back(make_action_bind("super", "1", "switch_workspace", 0));
+    cfg.keybinds.push_back(make_action_bind("super+shift", "1", "move_to_workspace", 0));
 
-    Connection conn;
-    KeybindManager mgr(conn, cfg);
+    auto conn = make_connection_or_null();
+    if (!conn)
+        SKIP("X11 connection not available");
+    KeybindManager mgr(*conn, cfg);
 
     uint16_t super = XCB_MOD_MASK_4;
     uint16_t super_shift = XCB_MOD_MASK_4 | XCB_MOD_MASK_SHIFT;
@@ -181,8 +207,8 @@ TEST_CASE("KeybindManager::resolve handles multiple bindings across keys, modifi
     // Distinguish by key
     auto result_a = mgr.resolve(super, XStringToKeysym("a"));
     auto result_b = mgr.resolve(super, XStringToKeysym("b"));
-    REQUIRE(result_a->command == "terminal");
-    REQUIRE(result_b->command == "browser");
+    REQUIRE(result_a->command->shell == "terminal");
+    REQUIRE(result_b->command->shell == "browser");
 
     // Distinguish by modifier
     auto spawn_result = mgr.resolve(super, XStringToKeysym("a"));
@@ -205,13 +231,15 @@ TEST_CASE("KeybindManager handles all standard keybind modifiers", "[keybind]")
         SKIP("X11 environment not available");
 
     Config cfg = make_empty_config();
-    cfg.keybinds.push_back({ "super", "a", "spawn", "test-cmd-1", -1 });
-    cfg.keybinds.push_back({ "super+shift", "a", "spawn", "test-cmd-2", -1 });
-    cfg.keybinds.push_back({ "super+ctrl", "a", "spawn", "test-cmd-3", -1 });
-    cfg.keybinds.push_back({ "super+alt", "a", "spawn", "test-cmd-4", -1 });
+    cfg.keybinds.push_back(make_spawn_bind("super", "a", "test-cmd-1"));
+    cfg.keybinds.push_back(make_spawn_bind("super+shift", "a", "test-cmd-2"));
+    cfg.keybinds.push_back(make_spawn_bind("super+ctrl", "a", "test-cmd-3"));
+    cfg.keybinds.push_back(make_spawn_bind("super+alt", "a", "test-cmd-4"));
 
-    Connection conn;
-    KeybindManager mgr(conn, cfg);
+    auto conn = make_connection_or_null();
+    if (!conn)
+        SKIP("X11 connection not available");
+    KeybindManager mgr(*conn, cfg);
 
     uint16_t super = XCB_MOD_MASK_4;
     uint16_t super_shift = XCB_MOD_MASK_4 | XCB_MOD_MASK_SHIFT;
@@ -220,10 +248,10 @@ TEST_CASE("KeybindManager handles all standard keybind modifiers", "[keybind]")
 
     auto keysym = XStringToKeysym("a");
 
-    REQUIRE(mgr.resolve(super, keysym)->command == "test-cmd-1");
-    REQUIRE(mgr.resolve(super_shift, keysym)->command == "test-cmd-2");
-    REQUIRE(mgr.resolve(super_ctrl, keysym)->command == "test-cmd-3");
-    REQUIRE(mgr.resolve(super_alt, keysym)->command == "test-cmd-4");
+    REQUIRE(mgr.resolve(super, keysym)->command->shell == "test-cmd-1");
+    REQUIRE(mgr.resolve(super_shift, keysym)->command->shell == "test-cmd-2");
+    REQUIRE(mgr.resolve(super_ctrl, keysym)->command->shell == "test-cmd-3");
+    REQUIRE(mgr.resolve(super_alt, keysym)->command->shell == "test-cmd-4");
 }
 
 TEST_CASE("KeybindManager handles modifier state filtering", "[keybind]")
@@ -232,10 +260,12 @@ TEST_CASE("KeybindManager handles modifier state filtering", "[keybind]")
         SKIP("X11 environment not available");
 
     Config cfg = make_empty_config();
-    cfg.keybinds.push_back({ "super", "a", "spawn", "test", -1 });
+    cfg.keybinds.push_back(make_spawn_bind("super", "a", "test"));
 
-    Connection conn;
-    KeybindManager mgr(conn, cfg);
+    auto conn = make_connection_or_null();
+    if (!conn)
+        SKIP("X11 connection not available");
+    KeybindManager mgr(*conn, cfg);
 
     uint16_t super = XCB_MOD_MASK_4;
     uint16_t super_shift = XCB_MOD_MASK_4 | XCB_MOD_MASK_SHIFT;
@@ -257,10 +287,12 @@ TEST_CASE("KeybindManager handles invalid key names in config", "[keybind]")
         SKIP("X11 environment not available");
 
     Config cfg = make_empty_config();
-    cfg.keybinds.push_back({ "super", "InvalidKeyThatDoesNotExist", "spawn", "test", -1 });
+    cfg.keybinds.push_back(make_spawn_bind("super", "InvalidKeyThatDoesNotExist", "test"));
 
-    Connection conn;
-    KeybindManager mgr(conn, cfg);
+    auto conn = make_connection_or_null();
+    if (!conn)
+        SKIP("X11 connection not available");
+    KeybindManager mgr(*conn, cfg);
 
     uint16_t super = XCB_MOD_MASK_4;
     auto result = mgr.resolve(super, 0x1234);
@@ -273,25 +305,30 @@ TEST_CASE("KeybindManager handles all action types", "[keybind]")
         SKIP("X11 environment not available");
 
     Config cfg = make_empty_config();
-    cfg.keybinds.push_back({ "super", "a", "spawn", "terminal", -1 });
-    cfg.keybinds.push_back({ "super", "q", "kill", "", -1 });
-    cfg.keybinds.push_back({ "super", "1", "switch_workspace", "", 0 });
-    cfg.keybinds.push_back({ "super+shift", "1", "move_to_workspace", "", 0 });
-    cfg.keybinds.push_back({ "super", "Left", "focus_monitor_left", "", -1 });
-    cfg.keybinds.push_back({ "super+shift", "Left", "move_to_monitor_left", "", -1 });
-    cfg.keybinds.push_back({ "super", "f", "toggle_fullscreen", "", -1 });
-    cfg.keybinds.push_back({ "super", "j", "focus_next", "", -1 });
-    cfg.keybinds.push_back({ "super", "k", "focus_prev", "", -1 });
+    cfg.keybinds.push_back(make_spawn_bind("super", "a", "terminal"));
+    cfg.keybinds.push_back(make_action_bind("super", "q", "kill"));
+    cfg.keybinds.push_back(make_action_bind("super", "1", "switch_workspace", 0));
+    cfg.keybinds.push_back(make_action_bind("super+shift", "1", "move_to_workspace", 0));
+    cfg.keybinds.push_back(make_action_bind("super", "Left", "focus_monitor", -1, -1));
+    cfg.keybinds.push_back(make_action_bind("super+shift", "Left", "move_to_monitor", -1, -1));
+    cfg.keybinds.push_back(make_action_bind("super", "f", "toggle_fullscreen"));
+    cfg.keybinds.push_back(make_action_bind("super", "j", "focus_next"));
+    cfg.keybinds.push_back(make_action_bind("super", "k", "focus_prev"));
 
-    Connection conn;
-    KeybindManager mgr(conn, cfg);
+    auto conn = make_connection_or_null();
+    if (!conn)
+        SKIP("X11 connection not available");
+    KeybindManager mgr(*conn, cfg);
 
     uint16_t super = XCB_MOD_MASK_4;
 
     REQUIRE(mgr.resolve(super, XStringToKeysym("a"))->type == "spawn");
     REQUIRE(mgr.resolve(super, XStringToKeysym("q"))->type == "kill");
     REQUIRE(mgr.resolve(super, XStringToKeysym("1"))->type == "switch_workspace");
-    REQUIRE(mgr.resolve(super, XStringToKeysym("Left"))->type == "focus_monitor_left");
+    auto left_monitor = mgr.resolve(super, XStringToKeysym("Left"));
+    REQUIRE(left_monitor.has_value());
+    REQUIRE(left_monitor->type == "focus_monitor");
+    REQUIRE(left_monitor->direction == -1);
     REQUIRE(mgr.resolve(super, XStringToKeysym("f"))->type == "toggle_fullscreen");
     REQUIRE(mgr.resolve(super, XStringToKeysym("j"))->type == "focus_next");
     REQUIRE(mgr.resolve(super, XStringToKeysym("k"))->type == "focus_prev");

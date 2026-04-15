@@ -1,8 +1,10 @@
 #pragma once
 
+#include "lwm/core/command.hpp"
 #include <cstddef>
 #include <cstdint>
 #include <expected>
+#include <map>
 #include <optional>
 #include <string>
 #include <vector>
@@ -50,8 +52,10 @@ struct KeybindConfig
     std::string mod;
     std::string key;
     std::string action;
-    std::string command;
+    std::optional<CommandConfig> command;
+    std::string target;
     int workspace = -1;
+    int direction = 0;
 };
 
 struct MousebindConfig
@@ -67,13 +71,6 @@ struct AppearanceConfig
     uint32_t border_width = 2;
     uint32_t border_color = 0xFF0000;
     uint32_t urgent_border_color = 0xFFA500;
-};
-
-struct ProgramsConfig
-{
-    std::string terminal = "/usr/local/bin/st";
-    std::string browser = "/usr/bin/firefox";
-    std::string launcher = "dmenu_run";
 };
 
 struct FocusConfig
@@ -97,13 +94,13 @@ struct LayoutConfig
 
 struct AutostartConfig
 {
-    std::vector<std::string> commands;
+    std::vector<CommandConfig> commands;
 };
 
 struct ScratchpadConfig
 {
     std::string name;
-    std::string command;
+    CommandConfig spawn;
     std::optional<std::string> class_pattern;
     std::optional<std::string> instance_pattern;
     std::optional<std::string> title_pattern;
@@ -116,7 +113,7 @@ struct Config
     AppearanceConfig appearance;
     LayoutConfig layout;
     FocusConfig focus;
-    ProgramsConfig programs;
+    std::map<std::string, CommandConfig> commands;
     WorkspacesConfig workspaces;
     AutostartConfig autostart;
     std::vector<KeybindConfig> keybinds;

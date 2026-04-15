@@ -4,70 +4,44 @@
 [appearance]
 padding = 10
 border_width = 2
-border_color = 0xFF0000       # Red (hex)
-urgent_border_color = 0xFFA500  # Amber/orange for urgency hints (hex)
+border_color = 0xFF0000
+urgent_border_color = 0xFFA500
 
 [layout]
-# Layout strategy: "master-stack" (more strategies coming in the future)
+# Layout strategy: "master-stack" (more strategies may be added later)
 strategy = "master-stack"
-# Default split ratio for the master/stack divide (0.1 to 0.9)
 default_ratio = 0.5
-# Minimum allowed ratio (prevents windows from becoming too small)
 min_ratio = 0.1
-# Pixel threshold for detecting mouse hover over split borders
 resize_grab_threshold = 8
 
 [focus]
-# If true, warp cursor to the target monitor center on explicit monitor changes.
 warp_cursor_on_monitor_change = false
 
-[programs]
-terminal = "/usr/local/bin/st"
-browser = "/usr/bin/firefox"
-launcher = "rofi -show drun"
+[commands]
+terminal = { argv = ["/usr/local/bin/st"] }
+browser = { argv = ["/usr/bin/firefox"] }
+launcher = { argv = ["dmenu_run"] }
+notify_bridge = { argv = ["lwm-notify-bridge"] }
 
 [workspaces]
 # Number of workspaces per monitor (must be >= 1).
 count = 10
-# Optional names for workspaces (shown in EWMH and the internal bar).
-# If omitted, defaults to "1".."count".
+# Optional names exposed through EWMH and the internal bar.
 names = ["1", "2", "3", "4", "5", "6", "7", "8", "9", "10"]
 
-# ─────────────────────────────────────────────────────────────────────────────
-# Autostart
-# ─────────────────────────────────────────────────────────────────────────────
-#
-# Commands to run when LWM starts. Executed asynchronously (non-blocking).
-# Use "terminal", "browser", or "launcher" to reference [programs] values.
-#
-# [autostart]
-# commands = [
-#     "picom",              # Compositor
-#     "nitrogen --restore", # Wallpaper
-#     "dunst",              # Notifications
-#     "lwm-notify-bridge",  # D-Bus notification → urgency bridge
-#     "terminal",           # Resolves to programs.terminal
-# ]
-
-# Keybindings
-# mod: "super", "super+shift", "super+ctrl", etc.
-# key: X11 keysym name (e.g., "Return", "q", "ampersand", "Left", "Right")
-# action: "spawn", "kill", "reload_config", "restart",
-#         "switch_workspace", "toggle_workspace", "move_to_workspace",
-#         "focus_monitor_left", "focus_monitor_right",
-#         "move_to_monitor_left", "move_to_monitor_right",
-#         "toggle_fullscreen", "toggle_float", "focus_next", "focus_prev",
-#         "ratio_grow", "ratio_shrink",
-#         "toggle_scratchpad", "scratchpad_stash", "scratchpad_cycle"
-# command: for "spawn" action, use "terminal", "browser", "launcher", or a path
-# workspace: for "switch_workspace"/"move_to_workspace" actions, the workspace index (0..count-1)
-#            (not used for "toggle_workspace")
+# Commands run once when LWM starts. Use:
+# - { ref = "name" } to reuse an entry from [commands]
+# - { argv = ["cmd", "--flag"] } for structured execution without a shell
+# - { shell = "cd ~/proj && make run" } for explicit shell commands
+[autostart]
+commands = [
+    { ref = "notify_bridge" },
+]
 
 # Mouse bindings
-# mod: "super", "super+shift", "super+ctrl", etc.
-# button: mouse button number (1 = left, 3 = right)
+# mod: modifiers only ("super", "super+shift", "ctrl", ...)
+# button: X11 mouse button number (1 = left, 2 = middle, 3 = right)
 # action: "drag_window", "resize_floating", "toggle_float"
-
 [[mousebinds]]
 mod = "super"
 button = 1
@@ -83,309 +57,138 @@ mod = "super"
 button = 2
 action = "toggle_float"
 
-# Program launching
-[[keybinds]]
-mod = "super"
-key = "Return"
-action = "spawn"
-command = "terminal"
+# Explicit bindings
+# key: one combo string, e.g. "super+Return", "super+shift+Left", "Print"
+# Exactly one action field is allowed in each [[binds]] entry.
+[[binds]]
+key = "super+Return"
+spawn = { ref = "terminal" }
 
-[[keybinds]]
-mod = "super"
-key = "d"
-action = "spawn"
-command = "launcher"
+[[binds]]
+key = "super+d"
+spawn = { ref = "launcher" }
 
-[[keybinds]]
-mod = "super"
-key = "q"
-action = "kill"
+[[binds]]
+key = "super+q"
+kill = true
 
-# Workspace switching (AZERTY layout)
-[[keybinds]]
-mod = "super"
-key = "ampersand"
-action = "switch_workspace"
-workspace = 0
+[[binds]]
+key = "super+Left"
+focus_monitor = -1
 
-[[keybinds]]
-mod = "super"
-key = "eacute"
-action = "switch_workspace"
-workspace = 1
+[[binds]]
+key = "super+Right"
+focus_monitor = 1
 
-[[keybinds]]
-mod = "super"
-key = "quotedbl"
-action = "switch_workspace"
-workspace = 2
+[[binds]]
+key = "super+shift+Left"
+move_to_monitor = -1
 
-[[keybinds]]
-mod = "super"
-key = "apostrophe"
-action = "switch_workspace"
-workspace = 3
+[[binds]]
+key = "super+shift+Right"
+move_to_monitor = 1
 
-[[keybinds]]
-mod = "super"
-key = "parenleft"
-action = "switch_workspace"
-workspace = 4
+[[binds]]
+key = "super+f"
+toggle_fullscreen = true
 
-[[keybinds]]
-mod = "super"
-key = "minus"
-action = "switch_workspace"
-workspace = 5
+[[binds]]
+key = "super+shift+f"
+toggle_float = true
 
-[[keybinds]]
-mod = "super"
-key = "egrave"
-action = "switch_workspace"
-workspace = 6
+[[binds]]
+key = "super+j"
+focus_next = true
 
-[[keybinds]]
-mod = "super"
-key = "underscore"
-action = "switch_workspace"
-workspace = 7
+[[binds]]
+key = "super+k"
+focus_prev = true
 
-[[keybinds]]
-mod = "super"
-key = "ccedilla"
-action = "switch_workspace"
-workspace = 8
+[[binds]]
+key = "super+h"
+ratio_shrink = true
 
-[[keybinds]]
-mod = "super"
-key = "agrave"
-action = "switch_workspace"
-workspace = 9
+[[binds]]
+key = "super+l"
+ratio_grow = true
 
-# Move window to workspace (on current monitor)
-[[keybinds]]
+[[binds]]
+key = "Print"
+spawn = { shell = "~/.local/bin/screenshot --mode selection" }
+
+# Generated workspace binding groups
+# mode:
+#   "switch" => focus workspace N
+#   "move"   => send focused window to workspace N
+# keys length must exactly match [workspaces].count.
+[[workspace_binds]]
+mode = "switch"
+mod = "super"
+keys = ["ampersand", "eacute", "quotedbl", "apostrophe", "parenleft", "minus", "egrave", "underscore", "ccedilla", "agrave"]
+
+[[workspace_binds]]
+mode = "move"
 mod = "super+shift"
-key = "ampersand"
-action = "move_to_workspace"
-workspace = 0
+keys = ["ampersand", "eacute", "quotedbl", "apostrophe", "parenleft", "minus", "egrave", "underscore", "ccedilla", "agrave"]
 
-[[keybinds]]
-mod = "super+shift"
-key = "eacute"
-action = "move_to_workspace"
-workspace = 1
-
-[[keybinds]]
-mod = "super+shift"
-key = "quotedbl"
-action = "move_to_workspace"
-workspace = 2
-
-[[keybinds]]
-mod = "super+shift"
-key = "apostrophe"
-action = "move_to_workspace"
-workspace = 3
-
-[[keybinds]]
-mod = "super+shift"
-key = "parenleft"
-action = "move_to_workspace"
-workspace = 4
-
-[[keybinds]]
-mod = "super+shift"
-key = "minus"
-action = "move_to_workspace"
-workspace = 5
-
-[[keybinds]]
-mod = "super+shift"
-key = "egrave"
-action = "move_to_workspace"
-workspace = 6
-
-[[keybinds]]
-mod = "super+shift"
-key = "underscore"
-action = "move_to_workspace"
-workspace = 7
-
-[[keybinds]]
-mod = "super+shift"
-key = "ccedilla"
-action = "move_to_workspace"
-workspace = 8
-
-[[keybinds]]
-mod = "super+shift"
-key = "agrave"
-action = "move_to_workspace"
-workspace = 9
-
-# Monitor focus switching
-[[keybinds]]
-mod = "super"
-key = "Left"
-action = "focus_monitor_left"
-
-[[keybinds]]
-mod = "super"
-key = "Right"
-action = "focus_monitor_right"
-
-# Move window to adjacent monitor
-[[keybinds]]
-mod = "super+shift"
-key = "Left"
-action = "move_to_monitor_left"
-
-[[keybinds]]
-mod = "super+shift"
-key = "Right"
-action = "move_to_monitor_right"
-
-# Toggle fullscreen
-[[keybinds]]
-mod = "super"
-key = "f"
-action = "toggle_fullscreen"
-
-# Focus cycling
-[[keybinds]]
-mod = "super"
-key = "j"
-action = "focus_next"
-
-[[keybinds]]
-mod = "super"
-key = "k"
-action = "focus_prev"
-
-# Master ratio adjustment
-[[keybinds]]
-mod = "super"
-key = "h"
-action = "ratio_shrink"
-
-[[keybinds]]
-mod = "super"
-key = "l"
-action = "ratio_grow"
-
-# ─────────────────────────────────────────────────────────────────────────────
-# Window Rules
-# ─────────────────────────────────────────────────────────────────────────────
+# Optional QWERTY workspace groups:
+# [[workspace_binds]]
+# mode = "switch"
+# mod = "super"
+# keys = ["1", "2", "3", "4", "5", "6", "7", "8", "9", "0"]
 #
-# Rules are evaluated in order - first match wins.
-# All specified criteria in a rule are combined with AND logic.
-#
-# Matching criteria (all optional, all use regex):
-#   class       = "Firefox"           # WM_CLASS class name
-#   instance    = "Navigator"         # WM_CLASS instance name
-#   title       = ".*YouTube.*"       # Window title (_NET_WM_NAME or WM_NAME)
-#   type        = "dialog"            # EWMH type: normal, dialog, utility, toolbar, splash, menu
-#   transient   = true                # Match only transient windows
-#
-# Actions:
-#   floating    = true/false          # Force floating or tiled mode
-#   workspace   = 5                   # Target workspace (by index, 0-based)
-#   workspace_name = "dev"            # Target workspace (by name)
-#   monitor     = 1                   # Target monitor (by index, 0-based)
-#   monitor_name = "HDMI-1"           # Target monitor (by RANDR name)
-#   fullscreen  = true                # Start fullscreen
-#   above       = true                # Always on top
-#   below       = true                # Always below
-#   sticky      = true                # Visible on all workspaces
-#   skip_taskbar = true               # Exclude from taskbar
-#   skip_pager  = true                # Exclude from pager
-#   layer       = "overlay"           # Managed top layer above fullscreen (floating only)
-#   borderless  = true                # Zero border for floating windows
-#   geometry    = { x = 100, y = 100, width = 800, height = 600 }  # Floating only
-#   center      = true                # Center on monitor (floating only)
-#
-# Note: Rules cannot override dock/desktop/popup window behavior (EWMH compliance).
+# [[workspace_binds]]
+# mode = "move"
+# mod = "super+shift"
+# keys = ["1", "2", "3", "4", "5", "6", "7", "8", "9", "0"]
 
-# Example: Force all dialog windows to float
+# Window rules
+# Rules are evaluated in order. First match wins.
+#
+# match keys:
+#   class, instance, title  => regex
+#   type                    => EWMH type string
+#   transient               => true/false
+#
+# apply keys:
+#   floating, fullscreen, above, below, sticky, skip_taskbar, skip_pager
+#   layer = "overlay"
+#   borderless = true
+#   center = true
+#   geometry = { x = 100, y = 100, width = 800, height = 600 }
+#   workspace = 1
+#   monitor = 0
+#   workspace_name = "dev"   # optional if you prefer names
+#   monitor_name = "HDMI-1"  # optional if you prefer names
+#   scratchpad = "music"
+
+# Example: float and center dialog windows
 # [[rules]]
-# type = "dialog"
-# floating = true
+# match = { type = "dialog" }
+# apply = { floating = true, center = true }
 
-# Example: Put Firefox on workspace 2
+# Example: pin Slack to a monitor/workspace
 # [[rules]]
-# class = "Firefox"
-# workspace = 1
+# match = { class = "Slack" }
+# apply = { monitor_name = "HDMI-1", workspace_name = "chat" }
 
-# Example: Float and center a specific app with custom size
+# Example: managed overlay above fullscreen
 # [[rules]]
-# class = "pavucontrol"
-# floating = true
-# center = true
-# geometry = { width = 800, height = 600 }
+# match = { type = "utility" }
+# apply = { layer = "overlay" }
 
-# Example: Put Slack on HDMI-1, workspace "chat"
-# [[rules]]
-# class = "Slack"
-# monitor_name = "HDMI-1"
-# workspace_name = "chat"
-
-# Example: Make picture-in-picture windows float and stay above
-# [[rules]]
-# title = "Picture-in-Picture"
-# floating = true
-# above = true
-# sticky = true
-
-# Example: Put a utility window in the managed overlay layer
-# [[rules]]
-# type = "utility"
-# layer = "overlay"
-
-# Example: Assign Spotify to a named scratchpad
-# [[rules]]
-# class = "Spotify"
-# scratchpad = "music"
-
-# ─────────────────────────────────────────────────────────────────────────────
-# Named Scratchpads
-# ─────────────────────────────────────────────────────────────────────────────
+# Named scratchpads
+# Toggle with:
+#   [[binds]]
+#   key = "super+u"
+#   toggle_scratchpad = "terminal"
 #
-# Named scratchpads are pre-configured floating windows that can be toggled
-# on/off with a keybind. They always appear floating and centered on the
-# current monitor. If no matching window exists, the configured command is
-# auto-launched.
-#
-# Fields:
-#   name      = "terminal"              # Unique identifier (required)
-#   command   = "alacritty --title dd"  # Program to auto-launch (required)
-#   class     = "Alacritty"             # WM_CLASS match (regex)
-#   instance  = "..."                   # WM_CLASS instance match (regex)
-#   title     = "dd"                    # Window title match (regex)
-#   width     = 0.8                     # Fraction of monitor working area (0.1-1.0)
-#   height    = 0.7                     # Fraction of monitor working area (0.1-1.0)
-#
-# Use toggle_scratchpad action with command = "<name>" to toggle:
-#   [[keybinds]]
-#   mod = "super"
-#   key = "u"
-#   action = "toggle_scratchpad"
-#   command = "terminal"
-#
-# Generic scratchpad pool:
-#   scratchpad_stash  — stash the focused window to the pool
-#   scratchpad_cycle  — cycle through pool windows (MRU order)
+# Generic scratchpad pool actions:
+#   scratchpad_stash = true
+#   scratchpad_cycle = true
 
 # [[scratchpads]]
 # name = "terminal"
-# command = "alacritty --title dropdown"
-# class = "Alacritty"
-# title = "dropdown"
-# width = 0.8
-# height = 0.6
-
-# [[scratchpads]]
-# name = "mixer"
-# command = "pavucontrol"
-# class = "Pavucontrol"
-# width = 0.5
-# height = 0.5
+# spawn = { argv = ["alacritty", "--title", "dropdown"] }
+# match = { class = "Alacritty", title = "dropdown" }
+# size = { width = 0.8, height = 0.6 }

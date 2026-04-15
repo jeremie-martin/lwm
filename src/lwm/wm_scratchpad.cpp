@@ -84,13 +84,13 @@ void WindowManager::toggle_named_scratchpad(std::string_view name)
     {
         if (state->pending_launch)
             return; // already waiting
-        if (config->command.empty())
+        if (config->spawn.empty())
         {
             LOG_WARN("Scratchpad '{}' has no command configured", name);
             return;
         }
-        LOG_INFO("Scratchpad '{}': launching '{}'", name, config->command);
-        launch_program(keybinds_.resolve_command(config->command, config_));
+        LOG_INFO("Scratchpad '{}': launching '{}'", name, config->spawn.describe());
+        launch_program(config->spawn);
         state->pending_launch = true;
         return;
     }

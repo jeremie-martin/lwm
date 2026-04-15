@@ -54,6 +54,27 @@ char const* client_kind_str(Client::Kind kind)
     return "unknown";
 }
 
+std::string key_action_event_name(Action const& action)
+{
+    if (action.type == "focus_monitor")
+    {
+        if (action.direction < 0)
+            return "focus_monitor_left";
+        if (action.direction > 0)
+            return "focus_monitor_right";
+    }
+
+    if (action.type == "move_to_monitor")
+    {
+        if (action.direction < 0)
+            return "move_to_monitor_left";
+        if (action.direction > 0)
+            return "move_to_monitor_right";
+    }
+
+    return action.type;
+}
+
 }
 
 void WindowManager::handle_event(xcb_generic_event_t const& event)
@@ -798,25 +819,18 @@ void WindowManager::handle_key_press(xcb_key_press_event_t const& e)
     {
         move_window_to_workspace(action->workspace);
     }
-    else if (action->type == "focus_monitor_left")
+    else if (action->type == "focus_monitor")
     {
-        focus_monitor(-1);
+        focus_monitor(action->direction);
     }
-    else if (action->type == "focus_monitor_right")
+    else if (action->type == "move_to_monitor")
     {
-        focus_monitor(1);
-    }
-    else if (action->type == "move_to_monitor_left")
-    {
-        move_window_to_monitor(-1);
-    }
-    else if (action->type == "move_to_monitor_right")
-    {
-        move_window_to_monitor(1);
+        move_window_to_monitor(action->direction);
     }
     else if (action->type == "spawn")
     {
-        launch_program(keybinds_.resolve_command(action->command, config_));
+        if (action->command.has_value())
+            launch_program(*action->command);
     }
     else if (action->type == "toggle_fullscreen")
     {
@@ -862,7 +876,7 @@ void WindowManager::handle_key_press(xcb_key_press_event_t const& e)
     }
     else if (action->type == "toggle_scratchpad")
     {
-        toggle_named_scratchpad(action->command);
+        toggle_named_scratchpad(action->target);
     }
     else if (action->type == "scratchpad_stash")
     {
@@ -878,8 +892,9 @@ void WindowManager::handle_key_press(xcb_key_press_event_t const& e)
         return;
     }
 
+    std::string event_action = key_action_event_name(*action);
     emit_event(Event_KeyAction,
-        "{\"event\":\"key_action\",\"action\":\"" + json_escape(action->type) + "\"}");
+        "{\"event\":\"key_action\",\"action\":\"" + json_escape(event_action) + "\"}");
 }
 
 void WindowManager::handle_key_release(xcb_key_release_event_t const& e)

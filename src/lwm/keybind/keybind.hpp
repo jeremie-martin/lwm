@@ -17,16 +17,14 @@ public:
     void reload(Config const& config);
     std::optional<Action> resolve(uint16_t state, xcb_keysym_t keysym) const;
 
-    std::string resolve_command(std::string const& command, Config const& config) const;
-
     static uint16_t parse_modifier(std::string const& mod);
+    static xcb_keysym_t parse_keysym(std::string const& key);
 
 private:
     Connection& conn_;
     std::map<KeyBinding, Action> bindings_;
 
     void load_bindings(Config const& config);
-    static xcb_keysym_t parse_keysym(std::string const& key);
 };
 
 } // namespace lwm

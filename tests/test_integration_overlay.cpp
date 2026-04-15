@@ -60,8 +60,8 @@ count = 2
 names = ["1", "2"]
 
 [[rules]]
-type = "utility"
-layer = "overlay"
+match = { type = "utility" }
+apply = { layer = "overlay" }
 )";
 }
 

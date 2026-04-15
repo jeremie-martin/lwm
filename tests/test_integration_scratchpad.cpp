@@ -1,6 +1,8 @@
 #include "x11_test_harness.hpp"
 #include <catch2/catch_test_macros.hpp>
+#include <cerrno>
 #include <chrono>
+#include <cstring>
 #include <optional>
 #include <sys/socket.h>
 #include <sys/un.h>
@@ -212,34 +214,36 @@ void set_window_title(X11Connection& conn, xcb_window_t window, std::string cons
 std::string scratchpad_match_config()
 {
     return R"(
+[commands]
+terminal = { argv = ["/bin/true"] }
+
 [workspaces]
 count = 1
 names = ["1"]
 
 [[scratchpads]]
 name = "terminal"
-command = "/bin/true"
-class = "ScratchpadClass"
-instance = "scratchpad-instance"
-width = 0.8
-height = 0.6
+spawn = { ref = "terminal" }
+match = { class = "ScratchpadClass", instance = "scratchpad-instance" }
+size = { width = 0.8, height = 0.6 }
 )";
 }
 
 std::string title_scratchpad_match_config()
 {
     return R"(
+[commands]
+terminal = { argv = ["/bin/true"] }
+
 [workspaces]
 count = 1
 names = ["1"]
 
 [[scratchpads]]
 name = "terminal"
-command = "/bin/true"
-class = "ScratchpadClass"
-title = "dropdown"
-width = 0.8
-height = 0.6
+spawn = { ref = "terminal" }
+match = { class = "ScratchpadClass", title = "dropdown" }
+size = { width = 0.8, height = 0.6 }
 )";
 }
 

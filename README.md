@@ -19,7 +19,7 @@ It is intentionally small, but it is not policy-free. The codebase has a specifi
 - focus-follows-mouse
 - Unix-socket IPC via `lwmctl`
 - RANDR hotplug handling
-- TOML configuration for bindings, rules, programs, and workspace names
+- TOML configuration for commands, bindings, rules, and workspace names
 
 ## Build
 
