@@ -44,6 +44,16 @@ public:
     void prepare_restart();
 
 private:
+    struct TiledResizeState
+    {
+        size_t monitor_idx = 0;
+        size_t workspace_idx = 0; // abort drag if workspace changes
+        SplitAddress address {};
+        SplitDirection direction = SplitDirection::Horizontal;
+        double start_ratio = 0.5;
+        int32_t available_extent = 0; // total available pixels along split axis
+    };
+
     struct DragState
     {
         bool active = false;
@@ -55,6 +65,7 @@ private:
         int16_t last_root_x = 0;
         int16_t last_root_y = 0;
         Geometry start_geometry;
+        std::optional<TiledResizeState> tiled_resize;
     };
 
     struct MouseBinding
@@ -115,6 +126,7 @@ private:
     xcb_atom_t lwm_restart_state_ = XCB_NONE;
     xcb_atom_t lwm_restart_tiled_order_ = XCB_NONE;
     xcb_atom_t lwm_restart_floating_order_ = XCB_NONE;
+    xcb_atom_t lwm_restart_ratios_ = XCB_NONE;
     bool restarting_ = false;
     bool is_restart_ = false;
     std::string restart_binary_;
@@ -124,6 +136,17 @@ private:
     xcb_timestamp_t last_toggle_release_time_ = 0;
     DragState drag_state_;
     std::vector<MouseBinding> mousebinds_;
+
+    // Cursor resources for tiled resize hover feedback
+    xcb_cursor_t cursor_default_ = XCB_NONE;
+    xcb_cursor_t cursor_resize_h_ = XCB_NONE;
+    xcb_cursor_t cursor_resize_v_ = XCB_NONE;
+    xcb_cursor_t current_root_cursor_ = XCB_NONE;
+
+    // Double-click detection for gap ratio reset
+    xcb_timestamp_t last_gap_click_time_ = 0;
+    SplitAddress last_gap_click_address_ {};
+    size_t last_gap_click_monitor_ = 0;
 
     struct IpcClient
     {
@@ -247,7 +270,7 @@ private:
     void kill_window(xcb_window_t window);
     void clear_focus();
 
-    void rearrange_monitor(Monitor& monitor);
+    void rearrange_monitor(Monitor& monitor, bool geometry_only = false);
     void rearrange_all_monitors();
 
     struct WorkspaceSwitchContext
@@ -266,6 +289,7 @@ private:
     void move_window_to_monitor(int direction);
 
     void launch_program(std::string const& path);
+    void adjust_master_ratio(double delta);
 
     Client* get_client(xcb_window_t window);
     Client const* get_client(xcb_window_t window) const;
@@ -333,8 +357,20 @@ private:
     void send_configure_notify(xcb_window_t window);
     void begin_drag(xcb_window_t window, bool resize, int16_t root_x, int16_t root_y);
     void begin_tiled_drag(xcb_window_t window, int16_t root_x, int16_t root_y);
+    void begin_tiled_resize(SplitHitResult const& hit, size_t monitor_idx, int16_t root_x, int16_t root_y);
     void update_drag(int16_t root_x, int16_t root_y);
     void end_drag();
+    void grab_pointer_for_drag(xcb_cursor_t cursor = XCB_NONE);
+    void set_root_cursor(xcb_cursor_t cursor);
+    void reset_split_ratio(SplitAddress address, size_t monitor_idx);
+    size_t visible_tiled_count(Monitor const& monitor) const;
+
+    struct SplitBorderHit
+    {
+        SplitHitResult hit;
+        size_t monitor_idx;
+    };
+    std::optional<SplitBorderHit> try_hit_split_border(int16_t x, int16_t y);
     MouseBinding const* resolve_mouse_binding(uint16_t state, uint8_t button) const;
     bool supports_protocol(xcb_window_t window, xcb_atom_t protocol) const;
     bool is_focus_eligible(xcb_window_t window) const;

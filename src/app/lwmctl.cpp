@@ -30,7 +30,18 @@ std::string trim_ascii(std::string_view value)
 
 void print_usage()
 {
-    std::cerr << "usage: lwmctl [--socket PATH] <ping|version|reload-config|restart|exec PATH>\n";
+    std::cerr << "usage: lwmctl [--socket PATH] <command>\n"
+              << "\n"
+              << "commands:\n"
+              << "  ping                     check if WM is running\n"
+              << "  version                  show WM version\n"
+              << "  reload-config            reload configuration\n"
+              << "  restart                  restart WM\n"
+              << "  exec PATH               restart WM with a different binary\n"
+              << "  layout set NAME          set layout strategy (master-stack)\n"
+              << "  ratio set VALUE          set master split ratio (0.1-0.9)\n"
+              << "  ratio reset              reset all split ratios to defaults\n"
+              << "  ratio adjust DELTA       adjust master ratio by delta (e.g. +0.05)\n";
 }
 
 std::optional<std::string> root_socket_path()
@@ -194,7 +205,9 @@ int main(int argc, char* argv[])
     }
 
     std::string const& command = args[0];
+    std::string socket_path = resolve_socket_path(cli_socket);
 
+    // Commands with arguments
     if (command == "exec")
     {
         if (args.size() != 2)
@@ -202,9 +215,37 @@ int main(int argc, char* argv[])
             std::cerr << "usage: lwmctl exec PATH\n";
             return 1;
         }
-        return run_command(resolve_socket_path(cli_socket), "exec " + args[1]);
+        return run_command(socket_path, "exec " + args[1]);
     }
 
+    if (command == "layout")
+    {
+        if (args.size() != 3 || args[1] != "set")
+        {
+            std::cerr << "usage: lwmctl layout set NAME\n";
+            return 1;
+        }
+        return run_command(socket_path, "layout set " + args[2]);
+    }
+
+    if (command == "ratio")
+    {
+        if (args.size() < 2)
+        {
+            std::cerr << "usage: lwmctl ratio <set VALUE|reset|adjust DELTA>\n";
+            return 1;
+        }
+        if (args[1] == "reset" && args.size() == 2)
+            return run_command(socket_path, "ratio reset");
+        if (args[1] == "set" && args.size() == 3)
+            return run_command(socket_path, "ratio set " + args[2]);
+        if (args[1] == "adjust" && args.size() == 3)
+            return run_command(socket_path, "ratio adjust " + args[2]);
+        std::cerr << "usage: lwmctl ratio <set VALUE|reset|adjust DELTA>\n";
+        return 1;
+    }
+
+    // Simple commands (no arguments)
     if (args.size() != 1)
     {
         print_usage();
@@ -217,5 +258,5 @@ int main(int argc, char* argv[])
         return 1;
     }
 
-    return run_command(resolve_socket_path(cli_socket), command);
+    return run_command(socket_path, command);
 }

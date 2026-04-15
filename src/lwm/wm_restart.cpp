@@ -16,6 +16,7 @@
 #include "lwm/core/log.hpp"
 #include "wm.hpp"
 #include <algorithm>
+#include <cstring>
 #include <xcb/xcb.h>
 
 namespace lwm {
@@ -23,6 +24,7 @@ namespace lwm {
 namespace {
 
 constexpr uint32_t RESTART_STATE_VERSION = 1;
+constexpr uint32_t RESTART_RATIO_STATE_VERSION = 2;
 constexpr size_t CLIENT_PROP_COUNT = 21;
 
 // Double-cast is intentional: int16_t → uint16_t reinterprets the bit pattern (e.g. -100 → 65436),
@@ -178,6 +180,45 @@ void WindowManager::serialize_restart_state()
         floating_order.data()
     );
 
+    // Split ratios per workspace: [version, num_monitors, for each monitor: [num_workspaces,
+    //   for each workspace: [num_entries, for each entry: [depth, path, ratio_lo, ratio_hi]]]]
+    // Ratio stored as uint64_t bit pattern split into two uint32_t values.
+    {
+        std::vector<uint32_t> ratio_data;
+        ratio_data.push_back(RESTART_RATIO_STATE_VERSION);
+        ratio_data.push_back(static_cast<uint32_t>(monitors_.size()));
+        for (auto const& monitor : monitors_)
+        {
+            ratio_data.push_back(static_cast<uint32_t>(monitor.workspaces.size()));
+            for (auto const& workspace : monitor.workspaces)
+            {
+                ratio_data.push_back(static_cast<uint32_t>(workspace.split_ratios.size()));
+                for (auto const& [addr, ratio] : workspace.split_ratios)
+                {
+                    auto serialized_addr = serialize_split_address(addr);
+                    ratio_data.push_back(serialized_addr.depth);
+                    ratio_data.push_back(serialized_addr.path);
+                    // Store double as two uint32_t via bit reinterpretation
+                    uint64_t ratio_bits;
+                    std::memcpy(&ratio_bits, &ratio, sizeof(double));
+                    ratio_data.push_back(static_cast<uint32_t>(ratio_bits & 0xFFFFFFFF));
+                    ratio_data.push_back(static_cast<uint32_t>(ratio_bits >> 32));
+                }
+            }
+        }
+
+        xcb_change_property(
+            conn_.get(),
+            XCB_PROP_MODE_REPLACE,
+            conn_.screen()->root,
+            lwm_restart_ratios_,
+            XCB_ATOM_CARDINAL,
+            32,
+            static_cast<uint32_t>(ratio_data.size()),
+            ratio_data.data()
+        );
+    }
+
     conn_.flush();
     LOG_INFO("Restart state serialized ({} clients, {} tiled, {} floating)",
         clients_.size(), tiled_order.size(), floating_order.size());
@@ -232,6 +273,83 @@ bool WindowManager::restore_global_restart_state()
         focused_monitor_ = 0;
 
     free(reply);
+
+    // Restore split ratios
+    {
+        auto ratio_cookie = xcb_get_property(
+            conn_.get(), false, conn_.screen()->root,
+            lwm_restart_ratios_, XCB_ATOM_CARDINAL, 0, 65536
+        );
+        auto* ratio_reply = xcb_get_property_reply(conn_.get(), ratio_cookie, nullptr);
+        if (ratio_reply && ratio_reply->type == XCB_ATOM_CARDINAL)
+        {
+            size_t rlen = xcb_get_property_value_length(ratio_reply) / 4;
+            auto* rdata = static_cast<uint32_t const*>(xcb_get_property_value(ratio_reply));
+            size_t pos = 0;
+
+            if (rlen >= 2 && (rdata[0] == 1 || rdata[0] == RESTART_RATIO_STATE_VERSION))
+            {
+                uint32_t ratio_version = rdata[0];
+                pos = 1;
+                uint32_t num_monitors_r = rdata[pos++];
+                for (uint32_t mi = 0; mi < num_monitors_r && pos < rlen; ++mi)
+                {
+                    uint32_t num_ws = rdata[pos++];
+                    for (uint32_t wi = 0; wi < num_ws && pos < rlen; ++wi)
+                    {
+                        uint32_t num_entries = rdata[pos++];
+                        bool can_apply = mi < monitors_.size() && wi < monitors_[mi].workspaces.size();
+                        for (uint32_t ei = 0; ei < num_entries; ++ei)
+                        {
+                            std::optional<SplitAddress> addr;
+                            uint32_t ratio_lo;
+                            uint32_t ratio_hi;
+                            if (ratio_version == 1)
+                            {
+                                if (pos + 2 >= rlen)
+                                {
+                                    pos = rlen;
+                                    break;
+                                }
+                                uint32_t packed_addr = rdata[pos++];
+                                ratio_lo = rdata[pos++];
+                                ratio_hi = rdata[pos++];
+                                addr = SplitAddress {
+                                    static_cast<uint8_t>(packed_addr & 0xFF),
+                                    (packed_addr >> 8)
+                                };
+                            }
+                            else
+                            {
+                                if (pos + 3 >= rlen)
+                                {
+                                    pos = rlen;
+                                    break;
+                                }
+                                uint32_t depth = rdata[pos++];
+                                uint32_t path = rdata[pos++];
+                                ratio_lo = rdata[pos++];
+                                ratio_hi = rdata[pos++];
+                                addr = deserialize_split_address(depth, path);
+                            }
+
+                            if (!can_apply || !addr.has_value())
+                                continue;
+
+                            uint64_t ratio_bits = static_cast<uint64_t>(ratio_lo) | (static_cast<uint64_t>(ratio_hi) << 32);
+                            double ratio;
+                            std::memcpy(&ratio, &ratio_bits, sizeof(double));
+
+                            if (ratio > 0.0 && ratio < 1.0)
+                                monitors_[mi].workspaces[wi].split_ratios[*addr] = ratio;
+                        }
+                    }
+                }
+            }
+        }
+        free(ratio_reply);
+    }
+
     LOG_INFO("Global state restored: focused_monitor={} active_window={:#x} showing_desktop={}",
         focused_monitor_, active_window_, showing_desktop_);
     return true;
@@ -345,6 +463,7 @@ void WindowManager::clean_restart_properties()
     xcb_delete_property(conn_.get(), conn_.screen()->root, lwm_restart_state_);
     xcb_delete_property(conn_.get(), conn_.screen()->root, lwm_restart_tiled_order_);
     xcb_delete_property(conn_.get(), conn_.screen()->root, lwm_restart_floating_order_);
+    xcb_delete_property(conn_.get(), conn_.screen()->root, lwm_restart_ratios_);
 
     // Delete per-window properties
     for (auto const& [window, client] : clients_)

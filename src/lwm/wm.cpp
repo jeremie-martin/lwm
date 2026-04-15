@@ -110,7 +110,7 @@ WindowManager::WindowManager(Config config, std::string config_path)
     , conn_()
     , ewmh_(conn_)
     , keybinds_(conn_, config_)
-    , layout_(conn_, config_.appearance)
+    , layout_(conn_, config_.appearance, config_.layout)
     , config_path_(std::move(config_path))
 {
     setup_signal_handlers();
@@ -141,6 +141,7 @@ WindowManager::WindowManager(Config config, std::string config_path)
     lwm_restart_state_ = intern_atom("_LWM_RESTART_STATE");
     lwm_restart_tiled_order_ = intern_atom("_LWM_RESTART_TILED_ORDER");
     lwm_restart_floating_order_ = intern_atom("_LWM_RESTART_FLOATING_ORDER");
+    lwm_restart_ratios_ = intern_atom("_LWM_RESTART_RATIOS");
     {
         std::vector<xcb_atom_t> extra;
         if (net_wm_user_time_window_ != XCB_NONE)
@@ -151,6 +152,28 @@ WindowManager::WindowManager(Config config, std::string config_path)
             ewmh_.set_extra_supported_atoms(extra);
     }
     layout_.set_sync_request_callback([this](xcb_window_t window) { send_sync_request(window, last_event_time_); });
+
+    // Create cursors for tiled resize hover feedback
+    {
+        xcb_font_t font = xcb_generate_id(conn_.get());
+        xcb_open_font(conn_.get(), font, 6, "cursor");
+
+        cursor_default_ = xcb_generate_id(conn_.get());
+        xcb_create_glyph_cursor(conn_.get(), cursor_default_, font, font,
+            68, 69, 0, 0, 0, 0xFFFF, 0xFFFF, 0xFFFF); // left_ptr
+
+        cursor_resize_h_ = xcb_generate_id(conn_.get());
+        xcb_create_glyph_cursor(conn_.get(), cursor_resize_h_, font, font,
+            108, 109, 0, 0, 0, 0xFFFF, 0xFFFF, 0xFFFF); // sb_h_double_arrow
+
+        cursor_resize_v_ = xcb_generate_id(conn_.get());
+        xcb_create_glyph_cursor(conn_.get(), cursor_resize_v_, font, font,
+            116, 117, 0, 0, 0, 0xFFFF, 0xFFFF, 0xFFFF); // sb_v_double_arrow
+
+        xcb_close_font(conn_.get(), font);
+
+        set_root_cursor(cursor_default_);
+    }
     window_rules_.load_rules(config_.rules);
     detect_monitors();
     setup_ewmh();
@@ -182,6 +205,12 @@ WindowManager::WindowManager(Config config, std::string config_path)
 
 WindowManager::~WindowManager()
 {
+    if (cursor_default_ != XCB_NONE)
+        xcb_free_cursor(conn_.get(), cursor_default_);
+    if (cursor_resize_h_ != XCB_NONE)
+        xcb_free_cursor(conn_.get(), cursor_resize_h_);
+    if (cursor_resize_v_ != XCB_NONE)
+        xcb_free_cursor(conn_.get(), cursor_resize_v_);
     cleanup_ipc();
 }
 
@@ -472,6 +501,71 @@ std::string WindowManager::run_ipc_command(std::string const& command)
             return error_reply("exec requires a binary path");
         initiate_restart(std::move(binary));
         return ok_reply("restarting");
+    }
+
+    // Layout commands
+    {
+        constexpr std::string_view layout_set_prefix = "layout set ";
+        if (trimmed.starts_with(layout_set_prefix))
+        {
+            std::string name = trim_ascii(trimmed.substr(layout_set_prefix.size()));
+            if (name == "master-stack")
+            {
+                focused_monitor().current().layout_strategy = LayoutStrategy::MasterStack;
+                rearrange_monitor(focused_monitor(), true);
+                return ok_reply("layout set to master-stack");
+            }
+            return error_reply("unknown layout: " + name);
+        }
+    }
+
+    {
+        constexpr std::string_view ratio_set_prefix = "ratio set ";
+        if (trimmed.starts_with(ratio_set_prefix))
+        {
+            std::string val_str = trim_ascii(trimmed.substr(ratio_set_prefix.size()));
+            double val;
+            try
+            {
+                val = std::stod(val_str);
+            }
+            catch (...)
+            {
+                return error_reply("invalid ratio value: " + val_str);
+            }
+            double min_r = config_.layout.min_ratio;
+            if (val < min_r || val > 1.0 - min_r)
+                return error_reply("ratio out of range [" + std::to_string(min_r) + ", " + std::to_string(1.0 - min_r) + "]");
+            focused_monitor().current().split_ratios[SplitAddress { 0, 0 }] = val;
+            rearrange_monitor(focused_monitor(), true);
+            return ok_reply("ratio set");
+        }
+    }
+
+    if (trimmed == "ratio reset")
+    {
+        focused_monitor().current().split_ratios.clear();
+        rearrange_monitor(focused_monitor(), true);
+        return ok_reply("ratios reset");
+    }
+
+    {
+        constexpr std::string_view ratio_adj_prefix = "ratio adjust ";
+        if (trimmed.starts_with(ratio_adj_prefix))
+        {
+            std::string delta_str = trim_ascii(trimmed.substr(ratio_adj_prefix.size()));
+            double delta;
+            try
+            {
+                delta = std::stod(delta_str);
+            }
+            catch (...)
+            {
+                return error_reply("invalid delta value: " + delta_str);
+            }
+            adjust_master_ratio(delta);
+            return ok_reply("ratio adjusted");
+        }
     }
 
     return error_reply("unknown command");
@@ -1158,7 +1252,12 @@ void WindowManager::create_fallback_monitor()
 
 void WindowManager::init_monitor_workspaces(Monitor& monitor)
 {
-    monitor.workspaces.assign(config_.workspaces.count, Workspace{});
+    Workspace ws_template {};
+    // Apply configured layout strategy
+    if (config_.layout.strategy == "master-stack")
+        ws_template.layout_strategy = LayoutStrategy::MasterStack;
+
+    monitor.workspaces.assign(config_.workspaces.count, ws_template);
     monitor.current_workspace = 0;
     monitor.previous_workspace = 0;
 }
@@ -2446,7 +2545,7 @@ void WindowManager::kill_window(xcb_window_t window)
     conn_.flush();
 }
 
-void WindowManager::rearrange_monitor(Monitor& monitor)
+void WindowManager::rearrange_monitor(Monitor& monitor, bool geometry_only)
 {
     size_t monitor_idx = monitor_index(monitor);
 
@@ -2522,7 +2621,25 @@ void WindowManager::rearrange_monitor(Monitor& monitor)
         LOG_DEBUG("rearrange_monitor: fullscreen_windows[{}] = {:#x}", i, fullscreen_windows[i]);
     }
 
-    auto applied = layout_.arrange(visible_windows, monitor.working_area());
+    auto& ws = monitor.current();
+
+    // Collect old geometries so arrange can skip unchanged windows
+    std::vector<Geometry> old_geometries;
+    if (geometry_only)
+    {
+        old_geometries.reserve(visible_windows.size());
+        for (auto w : visible_windows)
+        {
+            if (auto const* c = get_client(w))
+                old_geometries.push_back(c->tiled_geometry);
+            else
+                old_geometries.push_back({});
+        }
+    }
+
+    auto applied = layout_.arrange(
+        visible_windows, monitor.working_area(), ws.layout_strategy, ws.split_ratios,
+        geometry_only ? &old_geometries : nullptr);
     for (size_t i = 0; i < visible_windows.size() && i < applied.size(); ++i)
     {
         if (auto* c = get_client(visible_windows[i]))
@@ -2536,7 +2653,8 @@ void WindowManager::rearrange_monitor(Monitor& monitor)
         apply_fullscreen_if_needed(window);
     }
 
-    restack_monitor_layers(monitor_idx);
+    if (!geometry_only)
+        restack_monitor_layers(monitor_idx);
     conn_.flush();
 
     LOG_TRACE("rearrange_monitor: DONE");
@@ -2559,6 +2677,33 @@ void WindowManager::launch_program(std::string const& command)
         execl("/bin/sh", "sh", "-c", command.c_str(), nullptr);
         exit(1);
     }
+}
+
+void WindowManager::adjust_master_ratio(double delta)
+{
+    auto& ws = focused_monitor().current();
+    double min_ratio = config_.layout.min_ratio;
+
+    // Root split address = {depth=0, path=0}
+    SplitAddress root_addr { 0, 0 };
+
+    double current = config_.layout.default_ratio;
+    if (auto it = ws.split_ratios.find(root_addr); it != ws.split_ratios.end())
+        current = it->second;
+
+    double clamped = std::clamp(current + delta, min_ratio, 1.0 - min_ratio);
+    ws.split_ratios[root_addr] = clamped;
+
+    rearrange_monitor(focused_monitor(), true);
+}
+
+void WindowManager::reset_split_ratio(SplitAddress address, size_t monitor_idx)
+{
+    if (monitor_idx >= monitors_.size())
+        return;
+    auto& ws = monitors_[monitor_idx].current();
+    if (ws.split_ratios.erase(address) > 0)
+        rearrange_monitor(monitors_[monitor_idx], true);
 }
 
 Client* WindowManager::get_client(xcb_window_t window)

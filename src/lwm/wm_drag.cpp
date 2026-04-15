@@ -14,8 +14,83 @@
 
 #include "lwm/core/focus.hpp"
 #include "wm.hpp"
+#include <unordered_set>
 
 namespace lwm {
+
+void WindowManager::set_root_cursor(xcb_cursor_t cursor)
+{
+    if (cursor == current_root_cursor_)
+        return;
+    uint32_t cursor_val = cursor;
+    xcb_change_window_attributes(conn_.get(), conn_.screen()->root, XCB_CW_CURSOR, &cursor_val);
+    current_root_cursor_ = cursor;
+}
+
+void WindowManager::grab_pointer_for_drag(xcb_cursor_t cursor)
+{
+    xcb_grab_pointer(
+        conn_.get(),
+        0,
+        conn_.screen()->root,
+        XCB_EVENT_MASK_POINTER_MOTION | XCB_EVENT_MASK_BUTTON_RELEASE,
+        XCB_GRAB_MODE_ASYNC,
+        XCB_GRAB_MODE_ASYNC,
+        XCB_NONE,
+        cursor,
+        XCB_CURRENT_TIME
+    );
+    conn_.flush();
+}
+
+size_t WindowManager::visible_tiled_count(Monitor const& monitor) const
+{
+    size_t count = 0;
+    std::unordered_set<xcb_window_t> seen;
+    auto const& ws = monitor.current();
+    for (auto w : ws.windows)
+    {
+        if (auto const* c = get_client(w); c && !c->fullscreen && !c->hidden)
+        {
+            ++count;
+            seen.insert(w);
+        }
+    }
+    for (auto const& other_ws : monitor.workspaces)
+    {
+        if (&other_ws == &ws)
+            continue;
+        for (auto w : other_ws.windows)
+        {
+            if (seen.contains(w))
+                continue;
+            if (auto const* c = get_client(w); c && c->sticky && !c->hidden && !c->fullscreen)
+            {
+                ++count;
+                seen.insert(w);
+            }
+        }
+    }
+    return count;
+}
+
+std::optional<WindowManager::SplitBorderHit> WindowManager::try_hit_split_border(int16_t x, int16_t y)
+{
+    Monitor* mon = monitor_at_point(x, y);
+    if (!mon)
+        return std::nullopt;
+
+    size_t vis_count = visible_tiled_count(*mon);
+    if (vis_count < 2)
+        return std::nullopt;
+
+    auto& ws = mon->current();
+    auto hit = layout_.hit_test(vis_count, mon->working_area(), ws.layout_strategy, ws.split_ratios, x, y);
+    if (!hit)
+        return std::nullopt;
+
+    return SplitBorderHit { *hit, monitor_index(*mon) };
+}
 
 void WindowManager::begin_drag(xcb_window_t window, bool resize, int16_t root_x, int16_t root_y)
 {
@@ -39,18 +114,7 @@ void WindowManager::begin_drag(xcb_window_t window, bool resize, int16_t root_x,
     drag_state_.last_root_y = root_y;
     drag_state_.start_geometry = client->floating_geometry;
 
-    xcb_grab_pointer(
-        conn_.get(),
-        0,
-        conn_.screen()->root,
-        XCB_EVENT_MASK_POINTER_MOTION | XCB_EVENT_MASK_BUTTON_RELEASE,
-        XCB_GRAB_MODE_ASYNC,
-        XCB_GRAB_MODE_ASYNC,
-        XCB_NONE,
-        XCB_NONE,
-        XCB_CURRENT_TIME
-    );
-    conn_.flush();
+    grab_pointer_for_drag();
 }
 
 void WindowManager::begin_tiled_drag(xcb_window_t window, int16_t root_x, int16_t root_y)
@@ -78,18 +142,36 @@ void WindowManager::begin_tiled_drag(xcb_window_t window, int16_t root_x, int16_
     drag_state_.last_root_y = root_y;
     drag_state_.start_geometry = client->tiled_geometry;
 
-    xcb_grab_pointer(
-        conn_.get(),
-        0,
-        conn_.screen()->root,
-        XCB_EVENT_MASK_POINTER_MOTION | XCB_EVENT_MASK_BUTTON_RELEASE,
-        XCB_GRAB_MODE_ASYNC,
-        XCB_GRAB_MODE_ASYNC,
-        XCB_NONE,
-        XCB_NONE,
-        XCB_CURRENT_TIME
-    );
-    conn_.flush();
+    grab_pointer_for_drag();
+}
+
+void WindowManager::begin_tiled_resize(
+    SplitHitResult const& hit,
+    size_t monitor_idx,
+    int16_t root_x,
+    int16_t root_y)
+{
+    drag_state_.active = true;
+    drag_state_.tiled = true;
+    drag_state_.resizing = true;
+    drag_state_.window = XCB_NONE;
+    drag_state_.start_root_x = root_x;
+    drag_state_.start_root_y = root_y;
+    drag_state_.last_root_x = root_x;
+    drag_state_.last_root_y = root_y;
+
+    drag_state_.tiled_resize = TiledResizeState {
+        monitor_idx,
+        monitors_[monitor_idx].current_workspace,
+        hit.address,
+        hit.direction,
+        hit.ratio,
+        hit.available_extent
+    };
+
+    xcb_cursor_t resize_cursor = (hit.direction == SplitDirection::Horizontal)
+        ? cursor_resize_h_ : cursor_resize_v_;
+    grab_pointer_for_drag(resize_cursor);
 }
 
 void WindowManager::update_drag(int16_t root_x, int16_t root_y)
@@ -100,6 +182,80 @@ void WindowManager::update_drag(int16_t root_x, int16_t root_y)
     drag_state_.last_root_x = root_x;
     drag_state_.last_root_y = root_y;
 
+    // Tiled resize: adjust split ratio from mouse delta
+    if (drag_state_.tiled_resize.has_value())
+    {
+        auto& tr = *drag_state_.tiled_resize;
+        if (tr.monitor_idx >= monitors_.size()
+            || monitors_[tr.monitor_idx].current_workspace != tr.workspace_idx)
+        {
+            end_drag();
+            return;
+        }
+
+        int32_t pixel_delta;
+        if (tr.direction == SplitDirection::Horizontal)
+            pixel_delta = static_cast<int32_t>(root_x) - static_cast<int32_t>(drag_state_.start_root_x);
+        else
+            pixel_delta = static_cast<int32_t>(root_y) - static_cast<int32_t>(drag_state_.start_root_y);
+
+        if (tr.available_extent <= 0)
+            return;
+
+        // Motion compression: drain all queued motion events, use the latest position.
+        // This prevents redundant rearranges when events queue up faster than we process them.
+        {
+            xcb_generic_event_t* ev;
+            while ((ev = xcb_poll_for_queued_event(conn_.get())) != nullptr)
+            {
+                uint8_t type = ev->response_type & ~0x80;
+                if (type == XCB_MOTION_NOTIFY)
+                {
+                    auto* m = reinterpret_cast<xcb_motion_notify_event_t*>(ev);
+                    root_x = m->root_x;
+                    root_y = m->root_y;
+                    drag_state_.last_root_x = root_x;
+                    drag_state_.last_root_y = root_y;
+                    free(ev);
+                    continue;
+                }
+                // Non-motion event: push back is not possible, so just stop compressing.
+                // The event loop will pick up remaining events after we return.
+                // We must handle this event now to avoid losing it.
+                handle_event(*ev);
+                free(ev);
+                if (!drag_state_.active || !drag_state_.tiled_resize.has_value())
+                    return; // drag was cancelled by the handled event
+                break;
+            }
+
+            // Recompute delta with compressed coordinates
+            if (tr.direction == SplitDirection::Horizontal)
+                pixel_delta = static_cast<int32_t>(root_x) - static_cast<int32_t>(drag_state_.start_root_x);
+            else
+                pixel_delta = static_cast<int32_t>(root_y) - static_cast<int32_t>(drag_state_.start_root_y);
+        }
+
+        double ratio_delta = static_cast<double>(pixel_delta) / static_cast<double>(tr.available_extent);
+        double min_r = config_.layout.min_ratio;
+        double new_ratio = std::clamp(tr.start_ratio + ratio_delta, min_r, 1.0 - min_r);
+
+        auto& ws = monitors_[tr.monitor_idx].current();
+        auto it = ws.split_ratios.find(tr.address);
+        if (it != ws.split_ratios.end() && it->second == new_ratio)
+            return;
+
+        // Server grab prevents clients from repainting between window configures,
+        // eliminating flicker when multiple tiled windows resize simultaneously.
+        xcb_grab_server(conn_.get());
+        ws.split_ratios[tr.address] = new_ratio;
+        rearrange_monitor(monitors_[tr.monitor_idx], true);
+        xcb_ungrab_server(conn_.get());
+        conn_.flush();
+        return;
+    }
+
+    // Tiled reorder: move window visually to follow pointer
     if (drag_state_.tiled)
     {
         int32_t dx = static_cast<int32_t>(root_x) - static_cast<int32_t>(drag_state_.start_root_x);
@@ -158,7 +314,7 @@ void WindowManager::end_drag()
     if (!drag_state_.active)
         return;
 
-    if (drag_state_.tiled)
+    if (drag_state_.tiled && !drag_state_.tiled_resize)
     {
         xcb_window_t window = drag_state_.window;
         auto source_monitor_idx = monitor_index_for_window(window);
@@ -194,6 +350,8 @@ void WindowManager::end_drag()
                         target_index = layout_.drop_target_index(
                             layout_count,
                             monitors_[target_monitor_idx].working_area(),
+                            target_ws.layout_strategy,
+                            target_ws.split_ratios,
                             drag_state_.last_root_x,
                             drag_state_.last_root_y
                         );
@@ -235,10 +393,18 @@ void WindowManager::end_drag()
         }
     }
 
+    bool was_tiled_resize = drag_state_.tiled_resize.has_value();
+
     drag_state_.active = false;
     drag_state_.tiled = false;
+    drag_state_.resizing = false;
     drag_state_.window = XCB_NONE;
+    drag_state_.tiled_resize.reset();
     xcb_ungrab_pointer(conn_.get(), XCB_CURRENT_TIME);
+
+    if (was_tiled_resize && cursor_default_ != XCB_NONE)
+        set_root_cursor(cursor_default_);
+
     flush_and_drain_crossing();
 }
 

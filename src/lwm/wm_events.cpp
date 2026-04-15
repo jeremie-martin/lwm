@@ -495,6 +495,15 @@ void WindowManager::handle_motion_notify(xcb_motion_notify_event_t const& e)
         }
     }
 
+    // Cursor feedback: change root cursor to resize arrow when pointer is near a split border
+    if (cursor_default_ != XCB_NONE)
+    {
+        xcb_cursor_t desired = cursor_default_;
+        if (auto border_hit = try_hit_split_border(e.root_x, e.root_y))
+            desired = (border_hit->hit.direction == SplitDirection::Horizontal) ? cursor_resize_h_ : cursor_resize_v_;
+        set_root_cursor(desired);
+    }
+
     update_focused_monitor_at_point(e.root_x, e.root_y);
 }
 
@@ -549,6 +558,13 @@ void WindowManager::handle_button_press(xcb_button_press_event_t const& e)
                 begin_drag(target, true, e.root_x, e.root_y);
                 return;
             }
+            // For tiled windows or root: try tiled split resize first
+            if (auto border_hit = try_hit_split_border(e.root_x, e.root_y))
+            {
+                begin_tiled_resize(border_hit->hit, border_hit->monitor_idx, e.root_x, e.root_y);
+                return;
+            }
+            // Fallback: convert tiled to floating and resize
             if (is_tiled)
             {
                 if (client->fullscreen || client->iconic || client->layer == WindowLayer::Overlay || showing_desktop_)
@@ -590,6 +606,39 @@ void WindowManager::handle_button_press(xcb_button_press_event_t const& e)
             if (target != active_window_)
                 focus_any_window(target);
             return;
+        }
+    }
+
+    // Bare click on root: check if in a gap between tiled windows
+    // Only handle unmodified or ctrl-only clicks to avoid stealing Mod+click bindings
+    {
+        uint16_t clean_mod = e.state & ~(XCB_MOD_MASK_LOCK | XCB_MOD_MASK_2 | XCB_MOD_MASK_CONTROL);
+        if (target == conn_.screen()->root && e.child == XCB_NONE && e.detail == 1 && clean_mod == 0)
+        {
+            if (auto border_hit = try_hit_split_border(e.root_x, e.root_y))
+            {
+                bool ctrl_held = (e.state & XCB_MOD_MASK_CONTROL) != 0;
+
+                bool is_double_click = !ctrl_held
+                    && static_cast<int32_t>(e.time - last_gap_click_time_) > 0
+                    && static_cast<int32_t>(e.time - last_gap_click_time_) < 400
+                    && last_gap_click_address_ == border_hit->hit.address
+                    && last_gap_click_monitor_ == border_hit->monitor_idx;
+
+                last_gap_click_time_ = e.time;
+                last_gap_click_address_ = border_hit->hit.address;
+                last_gap_click_monitor_ = border_hit->monitor_idx;
+
+                if (is_double_click || ctrl_held)
+                {
+                    reset_split_ratio(border_hit->hit.address, border_hit->monitor_idx);
+                    last_gap_click_time_ = 0;
+                    return;
+                }
+
+                begin_tiled_resize(border_hit->hit, border_hit->monitor_idx, e.root_x, e.root_y);
+                return;
+            }
         }
     }
 
@@ -714,6 +763,14 @@ void WindowManager::handle_key_press(xcb_key_press_event_t const& e)
     {
         LOG_INFO("Restart triggered by keybind");
         initiate_restart();
+    }
+    else if (action->type == "ratio_grow")
+    {
+        adjust_master_ratio(0.05);
+    }
+    else if (action->type == "ratio_shrink")
+    {
+        adjust_master_ratio(-0.05);
     }
 }
 

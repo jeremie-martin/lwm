@@ -7,6 +7,8 @@ add_library(liblwm STATIC
     core/window_rules.cpp
     config/config.cpp
     layout/layout.cpp
+    layout/split_tree.cpp
+    layout/strategy.cpp
     keybind/keybind.cpp
     wm_focus.cpp
     wm_floating.cpp

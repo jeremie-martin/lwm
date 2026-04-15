@@ -2,6 +2,8 @@
 
 #include <algorithm>
 #include <cstdint>
+#include <limits>
+#include <map>
 #include <optional>
 #include <string>
 #include <vector>
@@ -165,11 +167,51 @@ struct Client
     uint64_t mru_order = 0;  ///< MRU ordering for floating windows (higher = more recent)
 };
 
+/// Identifies a split node by its structural position in the layout tree.
+/// path encodes the sequence of left(0)/right(1) choices from the root:
+/// bit i = child direction taken at depth i.
+struct SplitAddress
+{
+    uint8_t depth;   // 0 = root
+    uint32_t path;   // bit field: bit i = direction at depth i (0=left, 1=right)
+
+    auto operator<=>(SplitAddress const&) const = default;
+};
+
+struct SerializedSplitAddress
+{
+    uint32_t depth;
+    uint32_t path;
+};
+
+constexpr SerializedSplitAddress serialize_split_address(SplitAddress const& address)
+{
+    return { static_cast<uint32_t>(address.depth), address.path };
+}
+
+constexpr std::optional<SplitAddress> deserialize_split_address(uint32_t depth, uint32_t path)
+{
+    if (depth > std::numeric_limits<uint8_t>::max())
+        return std::nullopt;
+    return SplitAddress { static_cast<uint8_t>(depth), path };
+}
+
+using SplitRatioMap = std::map<SplitAddress, double>;
+
+/// Layout strategy for a workspace's tiling algorithm.
+enum class LayoutStrategy
+{
+    MasterStack
+};
+
 struct Workspace
 {
     std::vector<xcb_window_t> windows;
     xcb_window_t focused_window = XCB_NONE;
     std::vector<xcb_window_t> focus_history; ///< MRU stack; back = most recent
+
+    LayoutStrategy layout_strategy = LayoutStrategy::MasterStack;
+    SplitRatioMap split_ratios; ///< Per-workspace split ratios, keyed by structural address
 
     auto find_window(xcb_window_t id) { return std::ranges::find(windows, id); }
 
