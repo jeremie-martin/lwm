@@ -20,6 +20,7 @@
 #include <sys/wait.h>
 #include <unistd.h>
 #include <xcb/xcb.h>
+#include <xcb/xcb_icccm.h>
 
 namespace lwm::test {
 
@@ -365,6 +366,29 @@ inline void map_window(X11Connection& conn, xcb_window_t window)
     xcb_flush(conn.get());
 }
 
+inline void set_window_wm_class(
+    X11Connection& conn,
+    xcb_window_t window,
+    std::string const& instance_name,
+    std::string const& class_name
+)
+{
+    std::string value;
+    value.reserve(instance_name.size() + class_name.size() + 2);
+    value.append(instance_name);
+    value.push_back('\0');
+    value.append(class_name);
+    value.push_back('\0');
+
+    xcb_icccm_set_wm_class(
+        conn.get(),
+        window,
+        static_cast<uint32_t>(value.size()),
+        value.c_str()
+    );
+    xcb_flush(conn.get());
+}
+
 inline void destroy_window(X11Connection& conn, xcb_window_t window)
 {
     xcb_destroy_window(conn.get(), window);
@@ -518,6 +542,28 @@ inline std::string make_temp_dir()
     return std::string(result);
 }
 
+inline std::filesystem::path find_test_executable_path(std::string_view name)
+{
+    std::filesystem::path current = std::filesystem::current_path();
+
+    for (int depth = 0; depth < 6; ++depth)
+    {
+        std::filesystem::path direct = current / "src" / "app" / std::string(name);
+        if (std::filesystem::exists(direct))
+            return direct;
+
+        std::filesystem::path in_build = current / "build" / "src" / "app" / std::string(name);
+        if (std::filesystem::exists(in_build))
+            return in_build;
+
+        if (current == current.root_path())
+            break;
+        current = current.parent_path();
+    }
+
+    return {};
+}
+
 inline bool write_text_file(std::filesystem::path const& path, std::string_view content)
 {
     std::error_code ec;
@@ -643,8 +689,8 @@ public:
         , config_home_(make_temp_dir())
         , runtime_dir_(make_temp_dir())
     {
-        std::filesystem::path executable = std::filesystem::current_path() / "src" / "app" / "lwm";
-        if (!std::filesystem::exists(executable))
+        std::filesystem::path executable = find_test_executable_path("lwm");
+        if (executable.empty())
             return;
 
         if (!config_contents.empty() && !write_config(config_contents))
@@ -760,7 +806,7 @@ private:
 
 inline std::filesystem::path lwmctl_executable_path()
 {
-    return std::filesystem::current_path() / "src" / "app" / "lwmctl";
+    return find_test_executable_path("lwmctl");
 }
 
 inline std::optional<CommandResult>

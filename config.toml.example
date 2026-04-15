@@ -57,7 +57,8 @@ names = ["1", "2", "3", "4", "5", "6", "7", "8", "9", "10"]
 #         "focus_monitor_left", "focus_monitor_right",
 #         "move_to_monitor_left", "move_to_monitor_right",
 #         "toggle_fullscreen", "toggle_float", "focus_next", "focus_prev",
-#         "ratio_grow", "ratio_shrink"
+#         "ratio_grow", "ratio_shrink",
+#         "toggle_scratchpad", "scratchpad_stash", "scratchpad_cycle"
 # command: for "spawn" action, use "terminal", "browser", "launcher", or a path
 # workspace: for "switch_workspace"/"move_to_workspace" actions, the workspace index (0..count-1)
 #            (not used for "toggle_workspace")
@@ -339,3 +340,52 @@ action = "ratio_grow"
 # [[rules]]
 # type = "utility"
 # layer = "overlay"
+
+# Example: Assign Spotify to a named scratchpad
+# [[rules]]
+# class = "Spotify"
+# scratchpad = "music"
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Named Scratchpads
+# ─────────────────────────────────────────────────────────────────────────────
+#
+# Named scratchpads are pre-configured floating windows that can be toggled
+# on/off with a keybind. They always appear floating and centered on the
+# current monitor. If no matching window exists, the configured command is
+# auto-launched.
+#
+# Fields:
+#   name      = "terminal"              # Unique identifier (required)
+#   command   = "alacritty --title dd"  # Program to auto-launch (required)
+#   class     = "Alacritty"             # WM_CLASS match (regex)
+#   instance  = "..."                   # WM_CLASS instance match (regex)
+#   title     = "dd"                    # Window title match (regex)
+#   width     = 0.8                     # Fraction of monitor working area (0.1-1.0)
+#   height    = 0.7                     # Fraction of monitor working area (0.1-1.0)
+#
+# Use toggle_scratchpad action with command = "<name>" to toggle:
+#   [[keybinds]]
+#   mod = "super"
+#   key = "u"
+#   action = "toggle_scratchpad"
+#   command = "terminal"
+#
+# Generic scratchpad pool:
+#   scratchpad_stash  — stash the focused window to the pool
+#   scratchpad_cycle  — cycle through pool windows (MRU order)
+
+# [[scratchpads]]
+# name = "terminal"
+# command = "alacritty --title dropdown"
+# class = "Alacritty"
+# title = "dropdown"
+# width = 0.8
+# height = 0.6
+
+# [[scratchpads]]
+# name = "mixer"
+# command = "pavucontrol"
+# class = "Pavucontrol"
+# width = 0.5
+# height = 0.5

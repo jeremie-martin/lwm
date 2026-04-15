@@ -23,9 +23,9 @@ namespace lwm {
 
 namespace {
 
-constexpr uint32_t RESTART_STATE_VERSION = 1;
+constexpr uint32_t RESTART_STATE_VERSION = 2;
 constexpr uint32_t RESTART_RATIO_STATE_VERSION = 2;
-constexpr size_t CLIENT_PROP_COUNT = 21;
+constexpr size_t CLIENT_PROP_COUNT = 23; // v2: +in_scratchpad, +scratchpad_restore_kind
 
 // Double-cast is intentional: int16_t → uint16_t reinterprets the bit pattern (e.g. -100 → 65436),
 // then uint16_t → uint32_t zero-extends, preserving the 16-bit pattern without sign-extension.
@@ -95,6 +95,11 @@ void WindowManager::serialize_restart_state()
         pack_optional_geometry(data + 6, client.fullscreen_restore);
         pack_optional_geometry(data + 11, client.maximize_restore);
         pack_optional_geometry(data + 16, client.float_restore);
+        data[21] = client.in_scratchpad ? 1 : 0;
+        // 0=none, 1=Tiled, 2=Floating
+        data[22] = client.scratchpad_restore_kind.has_value()
+            ? (*client.scratchpad_restore_kind == Client::Kind::Tiled ? 1 : 2)
+            : 0;
 
         xcb_change_property(
             conn_.get(),
@@ -105,6 +110,41 @@ void WindowManager::serialize_restart_state()
             32,
             CLIENT_PROP_COUNT,
             data
+        );
+
+        // Store scratchpad name as UTF8 string property
+        if (client.scratchpad_name.has_value())
+        {
+            xcb_change_property(
+                conn_.get(),
+                XCB_PROP_MODE_REPLACE,
+                window,
+                lwm_restart_scratchpad_name_,
+                utf8_string_,
+                8,
+                static_cast<uint32_t>(client.scratchpad_name->size()),
+                client.scratchpad_name->c_str()
+            );
+        }
+    }
+
+    // Scratchpad pool ordering (generic pool window IDs in MRU order)
+    if (!scratchpad_pool_.empty())
+    {
+        std::vector<uint32_t> pool_data;
+        pool_data.reserve(scratchpad_pool_.size());
+        for (xcb_window_t w : scratchpad_pool_)
+            pool_data.push_back(static_cast<uint32_t>(w));
+
+        xcb_change_property(
+            conn_.get(),
+            XCB_PROP_MODE_REPLACE,
+            conn_.screen()->root,
+            lwm_restart_scratchpad_pool_,
+            XCB_ATOM_WINDOW,
+            32,
+            static_cast<uint32_t>(pool_data.size()),
+            pool_data.data()
         );
     }
 
@@ -387,7 +427,45 @@ void WindowManager::apply_restart_client_state(xcb_window_t window)
     client->maximize_restore = unpack_optional_geometry(data + 11);
     client->float_restore = unpack_optional_geometry(data + 16);
 
+    // v2 scratchpad fields
+    if (len >= 23)
+    {
+        client->in_scratchpad = data[21] != 0;
+        if (data[22] == 1)
+            client->scratchpad_restore_kind = Client::Kind::Tiled;
+        else if (data[22] == 2)
+            client->scratchpad_restore_kind = Client::Kind::Floating;
+    }
+
     free(reply);
+
+    // Restore scratchpad name
+    auto name_cookie = xcb_get_property(
+        conn_.get(), false, window,
+        lwm_restart_scratchpad_name_, utf8_string_, 0, 256
+    );
+    auto* name_reply = xcb_get_property_reply(conn_.get(), name_cookie, nullptr);
+    if (name_reply && name_reply->type == utf8_string_ && xcb_get_property_value_length(name_reply) > 0)
+    {
+        client->scratchpad_name = std::string(
+            static_cast<char const*>(xcb_get_property_value(name_reply)),
+            static_cast<size_t>(xcb_get_property_value_length(name_reply))
+        );
+
+        // Re-claim named scratchpad slot
+        if (client->scratchpad_name.has_value())
+        {
+            for (auto& sp : named_scratchpads_)
+            {
+                if (sp.name == *client->scratchpad_name && sp.window == XCB_NONE)
+                {
+                    sp.window = window;
+                    break;
+                }
+            }
+        }
+    }
+    free(name_reply);
 }
 
 void WindowManager::restore_window_ordering()
@@ -452,6 +530,27 @@ void WindowManager::restore_window_ordering()
     }
     free(float_reply);
 
+    // Restore scratchpad pool ordering
+    auto pool_cookie = xcb_get_property(
+        conn_.get(), false, conn_.screen()->root,
+        lwm_restart_scratchpad_pool_, XCB_ATOM_WINDOW, 0, 65536
+    );
+    auto* pool_reply = xcb_get_property_reply(conn_.get(), pool_cookie, nullptr);
+    if (pool_reply && pool_reply->type == XCB_ATOM_WINDOW)
+    {
+        size_t pool_len = xcb_get_property_value_length(pool_reply) / 4;
+        auto* pool_data = static_cast<uint32_t const*>(xcb_get_property_value(pool_reply));
+
+        scratchpad_pool_.clear();
+        for (size_t i = 0; i < pool_len; ++i)
+        {
+            xcb_window_t w = static_cast<xcb_window_t>(pool_data[i]);
+            if (get_client(w))
+                scratchpad_pool_.push_back(w);
+        }
+    }
+    free(pool_reply);
+
     LOG_INFO("Window ordering restored");
 }
 
@@ -464,12 +563,16 @@ void WindowManager::clean_restart_properties()
     xcb_delete_property(conn_.get(), conn_.screen()->root, lwm_restart_tiled_order_);
     xcb_delete_property(conn_.get(), conn_.screen()->root, lwm_restart_floating_order_);
     xcb_delete_property(conn_.get(), conn_.screen()->root, lwm_restart_ratios_);
+    xcb_delete_property(conn_.get(), conn_.screen()->root, lwm_restart_scratchpad_pool_);
 
     // Delete per-window properties
     for (auto const& [window, client] : clients_)
     {
         if (client.kind == Client::Kind::Tiled || client.kind == Client::Kind::Floating)
+        {
             xcb_delete_property(conn_.get(), window, lwm_restart_client_);
+            xcb_delete_property(conn_.get(), window, lwm_restart_scratchpad_name_);
+        }
     }
 
     conn_.flush();

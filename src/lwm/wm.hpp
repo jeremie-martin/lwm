@@ -15,6 +15,7 @@
 #include <expected>
 #include <memory>
 #include <optional>
+#include <regex>
 #include <string>
 #include <unordered_map>
 #include <vector>
@@ -172,6 +173,25 @@ private:
     bool stacking_dirty_ = false;
     std::vector<xcb_window_t> cached_stacking_order_;
 
+    // Scratchpad state
+    struct NamedScratchpadState
+    {
+        std::string name;
+        xcb_window_t window = XCB_NONE;
+        bool pending_launch = false;
+    };
+    std::vector<NamedScratchpadState> named_scratchpads_;
+    std::vector<xcb_window_t> scratchpad_pool_; ///< Generic pool, MRU-ordered (back = most recent)
+
+    struct CompiledScratchpadMatcher
+    {
+        std::string name;
+        std::optional<std::regex> class_regex;
+        std::optional<std::regex> instance_regex;
+        std::optional<std::regex> title_regex;
+    };
+    std::vector<CompiledScratchpadMatcher> scratchpad_matchers_;
+
     void create_wm_window();
     void setup_root();
     void grab_buttons();
@@ -281,6 +301,7 @@ private:
     void apply_fullscreen_if_needed(xcb_window_t window);
     void set_fullscreen_monitors(xcb_window_t window, FullscreenMonitors const& monitors);
     Geometry fullscreen_geometry_for_window(xcb_window_t window) const;
+    void set_iconic_state(xcb_window_t window, bool iconic);
     void iconify_window(xcb_window_t window);
     void deiconify_window(xcb_window_t window, bool focus);
     void kill_window(xcb_window_t window);
@@ -442,6 +463,26 @@ private:
     };
     std::optional<xcb_window_t> resolve_notification_target(NotificationAttentionRequest const& req) const;
     std::string handle_notification_attention(NotificationAttentionRequest const& req);
+
+    // Scratchpad operations
+    void toggle_named_scratchpad(std::string_view name);
+    void stash_to_scratchpad(xcb_window_t window);
+    void cycle_scratchpad_pool();
+    std::optional<std::string> match_scratchpad_for_window(xcb_window_t window, WindowRuleResult const& rule_result);
+    void hide_scratchpad_window(xcb_window_t window);
+    void show_named_scratchpad_window(xcb_window_t window, ScratchpadConfig const& config);
+    void show_pool_scratchpad_window(xcb_window_t window);
+    void release_scratchpad_window(xcb_window_t window);
+    void finalize_scratchpad_claim(xcb_window_t window, NamedScratchpadState& state, std::string_view name);
+    void init_scratchpad_state();
+    void rebuild_scratchpad_matchers();
+    ScratchpadConfig const* find_scratchpad_config(std::string_view name) const;
+    NamedScratchpadState* find_named_scratchpad(std::string_view name);
+    xcb_window_t find_visible_pool_window() const;
+
+    // Restart serialization atoms for scratchpad
+    xcb_atom_t lwm_restart_scratchpad_name_ = XCB_NONE;
+    xcb_atom_t lwm_restart_scratchpad_pool_ = XCB_NONE;
 
     // Hot-reload (exec-based restart)
     void initiate_restart(std::string binary = {});

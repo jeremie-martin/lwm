@@ -192,3 +192,34 @@ TEST_CASE("Floating placement works correctly on all monitor positions", "[float
         REQUIRE(placed.y == -690);
     }
 }
+
+TEST_CASE("Floating translation keeps windows on the target monitor", "[floating]")
+{
+    SECTION("Preserves the relative offset between monitor work areas")
+    {
+        Geometry source_area{ 0, 0, 1920, 1080 };
+        Geometry target_area{ 1920, 0, 1920, 1080 };
+        Geometry geometry{ 120, 180, 400, 300 };
+
+        auto translated = floating::translate_to_area(geometry, source_area, target_area);
+
+        REQUIRE(translated.x == 2040);
+        REQUIRE(translated.y == 180);
+        REQUIRE(translated.width == geometry.width);
+        REQUIRE(translated.height == geometry.height);
+    }
+
+    SECTION("Clamps translated geometry inside a smaller target area")
+    {
+        Geometry source_area{ 0, 30, 1920, 1050 };
+        Geometry target_area{ 1920, 0, 1280, 720 };
+        Geometry geometry{ 1600, 900, 400, 300 };
+
+        auto translated = floating::translate_to_area(geometry, source_area, target_area);
+
+        REQUIRE(translated.x == 2800);
+        REQUIRE(translated.y == 420);
+        REQUIRE(translated.width == geometry.width);
+        REQUIRE(translated.height == geometry.height);
+    }
+}

@@ -198,6 +198,8 @@ WindowManager::WindowManager(Config config, std::string config_path)
     lwm_restart_tiled_order_ = intern_atom("_LWM_RESTART_TILED_ORDER");
     lwm_restart_floating_order_ = intern_atom("_LWM_RESTART_FLOATING_ORDER");
     lwm_restart_ratios_ = intern_atom("_LWM_RESTART_RATIOS");
+    lwm_restart_scratchpad_name_ = intern_atom("_LWM_RESTART_SCRATCHPAD_NAME");
+    lwm_restart_scratchpad_pool_ = intern_atom("_LWM_RESTART_SCRATCHPAD_POOL");
     {
         std::vector<xcb_atom_t> extra;
         if (net_wm_user_time_window_ != XCB_NONE)
@@ -231,6 +233,7 @@ WindowManager::WindowManager(Config config, std::string config_path)
         set_root_cursor(cursor_default_);
     }
     window_rules_.load_rules(config_.rules);
+    init_scratchpad_state();
     detect_monitors();
     setup_ewmh();
     setup_ipc();
@@ -800,6 +803,44 @@ std::optional<std::string> WindowManager::run_ipc_command(std::string const& com
         return handle_notification_attention(req);
     }
 
+    if (trimmed == "scratchpad stash")
+    {
+        if (active_window_ != XCB_NONE)
+            stash_to_scratchpad(active_window_);
+        return ok_reply("");
+    }
+    if (trimmed == "scratchpad cycle")
+    {
+        cycle_scratchpad_pool();
+        return ok_reply("");
+    }
+    if (trimmed.starts_with("scratchpad toggle "))
+    {
+        std::string name(trimmed.substr(18));
+        toggle_named_scratchpad(name);
+        return ok_reply("");
+    }
+    if (trimmed == "scratchpad list")
+    {
+        std::string json = "{\"named\":[";
+        for (size_t i = 0; i < named_scratchpads_.size(); ++i)
+        {
+            if (i > 0)
+                json += ",";
+            auto const& sp = named_scratchpads_[i];
+            json += "{\"name\":\"" + json_escape(sp.name) + "\",\"window\":" + std::to_string(sp.window) + ",\"pending\":" + (sp.pending_launch ? "true" : "false") + "}";
+        }
+        json += "],\"pool\":[";
+        for (size_t i = 0; i < scratchpad_pool_.size(); ++i)
+        {
+            if (i > 0)
+                json += ",";
+            json += std::to_string(scratchpad_pool_[i]);
+        }
+        json += "]}";
+        return json;
+    }
+
     return error_reply("unknown command");
 }
 
@@ -854,6 +895,46 @@ std::expected<void, std::string> WindowManager::apply_config_reload(Config confi
     init_mousebinds();
     grab_buttons();
     regrab_all_keys();
+
+    // Rebuild scratchpad state: preserve claimed windows, update matchers
+    {
+        std::vector<NamedScratchpadState> old_states = std::move(named_scratchpads_);
+        named_scratchpads_.clear();
+        for (auto const& sp : config_.scratchpads)
+        {
+            NamedScratchpadState state { sp.name, XCB_NONE, false };
+            // Preserve existing window claim if scratchpad name survived reload
+            for (auto& old : old_states)
+            {
+                if (old.name == sp.name && old.window != XCB_NONE)
+                {
+                    state.window = old.window;
+                    break;
+                }
+            }
+            named_scratchpads_.push_back(std::move(state));
+        }
+        rebuild_scratchpad_matchers();
+
+        // Unhide windows orphaned by removed scratchpad names
+        for (auto& [window, client] : clients_)
+        {
+            if (!client.scratchpad_name.has_value())
+                continue;
+            if (!find_named_scratchpad(*client.scratchpad_name))
+            {
+                LOG_INFO("Scratchpad '{}' removed from config, restoring window {:#x}",
+                    *client.scratchpad_name, window);
+                client.scratchpad_name.reset();
+                if (client.in_scratchpad && client.iconic)
+                {
+                    client.in_scratchpad = false;
+                    client.iconic = false;
+                    set_iconic_state(window, false);
+                }
+            }
+        }
+    }
     update_ewmh_desktops();
     reapply_rules_to_existing_windows();
     rearrange_all_monitors();
@@ -2040,7 +2121,7 @@ void WindowManager::sync_managed_window_classification(xcb_window_t window, Clas
 
 void WindowManager::reevaluate_managed_window(xcb_window_t window)
 {
-    auto const* client = get_client(window);
+    auto* client = get_client(window);
     if (!client)
         return;
 
@@ -2048,6 +2129,22 @@ void WindowManager::reevaluate_managed_window(xcb_window_t window)
         return;
 
     auto result = classify_managed_window(window);
+
+    if (!client->scratchpad_name.has_value() && !client->in_scratchpad)
+    {
+        auto scratchpad_match = match_scratchpad_for_window(window, result.rule_result);
+        if (scratchpad_match)
+        {
+            auto* state = find_named_scratchpad(*scratchpad_match);
+            if (state && state->window == XCB_NONE && state->pending_launch)
+            {
+                client->scratchpad_name = scratchpad_match;
+                finalize_scratchpad_claim(window, *state, *scratchpad_match);
+                return;
+            }
+        }
+    }
+
     sync_managed_window_classification(window, result);
 }
 
@@ -2856,6 +2953,16 @@ Geometry WindowManager::fullscreen_geometry_for_window(xcb_window_t window) cons
     return area;
 }
 
+void WindowManager::set_iconic_state(xcb_window_t window, bool iconic)
+{
+    if (wm_state_ != XCB_NONE)
+    {
+        uint32_t data[] = { iconic ? WM_STATE_ICONIC : WM_STATE_NORMAL, 0 };
+        xcb_change_property(conn_.get(), XCB_PROP_MODE_REPLACE, window, wm_state_, wm_state_, 32, 2, data);
+    }
+    ewmh_.set_window_state(window, ewmh_.get()->_NET_WM_STATE_HIDDEN, iconic);
+}
+
 void WindowManager::iconify_window(xcb_window_t window)
 {
     auto* client = get_client(window);
@@ -2866,14 +2973,7 @@ void WindowManager::iconify_window(xcb_window_t window)
         return;
 
     client->iconic = true;
-
-    if (wm_state_ != XCB_NONE)
-    {
-        uint32_t data[] = { WM_STATE_ICONIC, 0 };
-        xcb_change_property(conn_.get(), XCB_PROP_MODE_REPLACE, window, wm_state_, wm_state_, 32, 2, data);
-    }
-
-    ewmh_.set_window_state(window, ewmh_.get()->_NET_WM_STATE_HIDDEN, true);
+    set_iconic_state(window, true);
 
     if (client->monitor < monitors_.size())
     {
@@ -2911,14 +3011,7 @@ void WindowManager::deiconify_window(xcb_window_t window, bool focus)
         return;
 
     client->iconic = false;
-
-    if (wm_state_ != XCB_NONE)
-    {
-        uint32_t data[] = { WM_STATE_NORMAL, 0 };
-        xcb_change_property(conn_.get(), XCB_PROP_MODE_REPLACE, window, wm_state_, wm_state_, 32, 2, data);
-    }
-
-    ewmh_.set_window_state(window, ewmh_.get()->_NET_WM_STATE_HIDDEN, false);
+    set_iconic_state(window, false);
 
     if (client->monitor < monitors_.size())
     {

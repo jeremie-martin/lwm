@@ -169,6 +169,12 @@ struct Client
 
     uint64_t order = 0;     ///< Mapping order for _NET_CLIENT_LIST
     uint64_t mru_order = 0;  ///< MRU ordering for floating windows (higher = more recent)
+
+    // Scratchpad state
+    bool in_scratchpad = false;                          ///< True when hidden in scratchpad
+    std::optional<std::string> scratchpad_name;          ///< Non-empty for named scratchpads
+    std::optional<Kind> scratchpad_restore_kind;         ///< Original kind before pool stash
+    std::optional<Geometry> scratchpad_restore_geometry;  ///< Floating geometry to restore (pool)
 };
 
 /// Identifies a split node by its structural position in the layout tree.

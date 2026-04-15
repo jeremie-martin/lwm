@@ -44,6 +44,7 @@ struct CompiledWindowRule
     std::optional<bool> borderless;
     std::optional<RuleGeometry> geometry;
     std::optional<bool> center;
+    std::optional<std::string> scratchpad; ///< Assign to named scratchpad
 
     // Set when any matching criterion had an invalid value (empty pattern, unknown type).
     // Rules with this flag never match any window.
@@ -93,6 +94,9 @@ struct WindowRuleResult
     // Floating geometry
     std::optional<Geometry> geometry;
     bool center = false;
+
+    // Scratchpad assignment
+    std::optional<std::string> scratchpad;
 };
 
 /**
@@ -132,13 +136,13 @@ public:
      */
     size_t rule_count() const { return rules_.size(); }
 
-private:
-    std::vector<CompiledWindowRule> rules_;
-
     /**
      * @brief Compile a regex pattern, falling back to literal on failure
      */
     static std::optional<std::regex> compile_pattern(std::optional<std::string> const& pattern);
+
+private:
+    std::vector<CompiledWindowRule> rules_;
 
     /**
      * @brief Convert type string to WindowType enum

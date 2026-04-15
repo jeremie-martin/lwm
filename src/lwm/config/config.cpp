@@ -309,6 +309,8 @@ ConfigLoadResult load_config_result(std::string const& path)
                         rule_cfg.borderless = *v;
                     if (auto v = (*rule)["center"].value<bool>())
                         rule_cfg.center = *v;
+                    if (auto v = (*rule)["scratchpad"].value<std::string>())
+                        rule_cfg.scratchpad = *v;
 
                     // Geometry (inline table)
                     if (auto geom = (*rule)["geometry"].as_table())
@@ -326,6 +328,34 @@ ConfigLoadResult load_config_result(std::string const& path)
                     }
 
                     cfg.rules.push_back(rule_cfg);
+                }
+            }
+        }
+
+        // Scratchpads
+        if (auto scratchpads = tbl["scratchpads"].as_array())
+        {
+            for (auto const& item : *scratchpads)
+            {
+                if (auto sp = item.as_table())
+                {
+                    ScratchpadConfig scratch;
+                    if (auto v = (*sp)["name"].value<std::string>())
+                        scratch.name = *v;
+                    if (auto v = (*sp)["command"].value<std::string>())
+                        scratch.command = *v;
+                    if (auto v = (*sp)["class"].value<std::string>())
+                        scratch.class_pattern = *v;
+                    if (auto v = (*sp)["instance"].value<std::string>())
+                        scratch.instance_pattern = *v;
+                    if (auto v = (*sp)["title"].value<std::string>())
+                        scratch.title_pattern = *v;
+                    if (auto v = (*sp)["width"].value<double>())
+                        scratch.width = std::clamp(*v, 0.1, 1.0);
+                    if (auto v = (*sp)["height"].value<double>())
+                        scratch.height = std::clamp(*v, 0.1, 1.0);
+                    if (!scratch.name.empty())
+                        cfg.scratchpads.push_back(std::move(scratch));
                 }
             }
         }

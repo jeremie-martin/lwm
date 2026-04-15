@@ -170,6 +170,7 @@ void WindowRules::load_rules(std::vector<WindowRuleConfig> const& configs)
         rule.borderless = cfg.borderless;
         rule.geometry = cfg.geometry;
         rule.center = cfg.center;
+        rule.scratchpad = cfg.scratchpad;
 
         rules_.push_back(std::move(rule));
     }
@@ -326,6 +327,7 @@ WindowRuleResult WindowRules::match(
         }
 
         result.center = rule.center.value_or(false);
+        result.scratchpad = rule.scratchpad;
 
         if (result.layer == WindowLayer::Overlay)
         {

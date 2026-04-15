@@ -21,6 +21,7 @@ FetchContent_MakeAvailable(Catch2)
     test_integration_overlay.cpp
     test_integration_property_notify.cpp
     test_integration_subscribe.cpp
+    test_integration_scratchpad.cpp
     test_integration_wm_state.cpp
     test_integration_workspace.cpp
     test_floating_policy.cpp

@@ -3,6 +3,35 @@
 
 namespace lwm::floating {
 
+namespace {
+
+Geometry clamp_geometry(Geometry area, Geometry geometry)
+{
+    int32_t target_x = geometry.x;
+    int32_t target_y = geometry.y;
+
+    int32_t min_x = area.x;
+    int32_t max_x = static_cast<int32_t>(area.x) + static_cast<int32_t>(area.width)
+        - static_cast<int32_t>(geometry.width);
+    if (max_x < min_x)
+        max_x = min_x;
+
+    int32_t min_y = area.y;
+    int32_t max_y = static_cast<int32_t>(area.y) + static_cast<int32_t>(area.height)
+        - static_cast<int32_t>(geometry.height);
+    if (max_y < min_y)
+        max_y = min_y;
+
+    target_x = std::clamp(target_x, min_x, max_x);
+    target_y = std::clamp(target_y, min_y, max_y);
+
+    geometry.x = static_cast<int16_t>(target_x);
+    geometry.y = static_cast<int16_t>(target_y);
+    return geometry;
+}
+
+} // namespace
+
 Geometry place_floating(Geometry area, uint16_t width, uint16_t height, std::optional<Geometry> parent)
 {
     int32_t target_x = 0;
@@ -41,6 +70,23 @@ Geometry place_floating(Geometry area, uint16_t width, uint16_t height, std::opt
     result.width = width;
     result.height = height;
     return result;
+}
+
+Geometry clamp_to_area(Geometry area, Geometry geometry)
+{
+    return clamp_geometry(area, geometry);
+}
+
+Geometry translate_to_area(Geometry geometry, Geometry source_area, Geometry target_area)
+{
+    Geometry translated = geometry;
+    translated.x = static_cast<int16_t>(
+        static_cast<int32_t>(target_area.x) + (static_cast<int32_t>(geometry.x) - static_cast<int32_t>(source_area.x))
+    );
+    translated.y = static_cast<int16_t>(
+        static_cast<int32_t>(target_area.y) + (static_cast<int32_t>(geometry.y) - static_cast<int32_t>(source_area.y))
+    );
+    return clamp_geometry(target_area, translated);
 }
 
 } // namespace lwm::floating

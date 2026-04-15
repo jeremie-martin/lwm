@@ -177,6 +177,19 @@ void WindowManager::handle_map_request(xcb_map_request_event_t const& e)
     if (ewmh_.has_window_state(e.window, ewmh_.get()->_NET_WM_STATE_HIDDEN))
         start_iconic = true;
 
+    // Detect scratchpad match BEFORE mapping so the window never enters the tiled layout.
+    // If matched, force floating + iconic so it maps hidden, then finalize after.
+    auto scratchpad_match = (classification.kind == WindowClassification::Kind::Tiled
+        || classification.kind == WindowClassification::Kind::Floating)
+        ? match_scratchpad_for_window(e.window, rule_result)
+        : std::optional<std::string>{};
+
+    if (scratchpad_match)
+    {
+        classification.kind = WindowClassification::Kind::Floating;
+        start_iconic = true;
+    }
+
     char const* kind_str = nullptr;
     switch (classification.kind)
     {
@@ -201,6 +214,18 @@ void WindowManager::handle_map_request(xcb_map_request_event_t const& e)
             map_tiled_window(e.window, rule_result, start_iconic, urgent);
             kind_str = "tiled";
             break;
+    }
+
+    // Finalize scratchpad claim after the window is managed
+    if (scratchpad_match)
+    {
+        auto* client_ptr = get_client(e.window);
+        auto* state = find_named_scratchpad(*scratchpad_match);
+        if (client_ptr && state && state->window == XCB_NONE)
+        {
+            client_ptr->scratchpad_name = scratchpad_match;
+            finalize_scratchpad_claim(e.window, *state, *scratchpad_match);
+        }
     }
 
     if (kind_str && !subscribers_.empty())
@@ -441,6 +466,9 @@ void WindowManager::handle_window_removal(xcb_window_t window)
             + ",\"monitor\":" + std::to_string(client->monitor)
             + ",\"workspace\":" + std::to_string(client->workspace) + "}";
     }
+
+    // Release scratchpad slot before unmanage destroys the client
+    release_scratchpad_window(window);
 
     switch (client->kind)
     {
@@ -831,6 +859,19 @@ void WindowManager::handle_key_press(xcb_key_press_event_t const& e)
     {
         adjust_master_ratio(-0.05);
         emit_event(Event_LayoutChange, "{\"event\":\"layout_change\",\"action\":\"ratio_shrink\"}");
+    }
+    else if (action->type == "toggle_scratchpad")
+    {
+        toggle_named_scratchpad(action->command);
+    }
+    else if (action->type == "scratchpad_stash")
+    {
+        if (active_window_ != XCB_NONE)
+            stash_to_scratchpad(active_window_);
+    }
+    else if (action->type == "scratchpad_cycle")
+    {
+        cycle_scratchpad_pool();
     }
     else
     {

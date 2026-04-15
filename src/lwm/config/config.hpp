@@ -42,6 +42,7 @@ struct WindowRuleConfig
     std::optional<bool> borderless;            // Zero border for managed floating windows
     std::optional<RuleGeometry> geometry;      // Floating geometry
     std::optional<bool> center;
+    std::optional<std::string> scratchpad; ///< Assign to named scratchpad
 };
 
 struct KeybindConfig
@@ -99,6 +100,17 @@ struct AutostartConfig
     std::vector<std::string> commands;
 };
 
+struct ScratchpadConfig
+{
+    std::string name;
+    std::string command;
+    std::optional<std::string> class_pattern;
+    std::optional<std::string> instance_pattern;
+    std::optional<std::string> title_pattern;
+    double width = 0.8;   ///< Fraction of monitor working area
+    double height = 0.7;
+};
+
 struct Config
 {
     AppearanceConfig appearance;
@@ -110,6 +122,7 @@ struct Config
     std::vector<KeybindConfig> keybinds;
     std::vector<MousebindConfig> mousebinds;
     std::vector<WindowRuleConfig> rules;
+    std::vector<ScratchpadConfig> scratchpads;
 };
 
 using ConfigLoadResult = std::expected<Config, std::string>;
