@@ -90,7 +90,7 @@ bool has_wm_hints_urgency(xcb_connection_t* conn, xcb_window_t window)
 // ─────────────────────────────────────────────────────────────────────────────
 
 TEST_CASE(
-    "Integration: notify-attention sets urgency by exact window ID",
+    "Integration: notify-attention sets urgency by exact window ID even when names are ambiguous",
     "[integration][notify_attention]"
 )
 {
@@ -107,16 +107,19 @@ TEST_CASE(
     REQUIRE(net_wm_state_demands_attention != XCB_NONE);
 
     xcb_window_t w1 = create_window(conn, 10, 10, 200, 150);
+    set_window_wm_class(conn, w1, "ghostty", "Ghostty");
     map_window(conn, w1);
     REQUIRE(wait_for_active_window(conn, w1, kTimeout));
 
     xcb_window_t w2 = create_window(conn, 40, 40, 200, 150);
+    set_window_wm_class(conn, w2, "ghostty", "Ghostty");
     map_window(conn, w2);
     REQUIRE(wait_for_active_window(conn, w2, kTimeout));
 
-    // Mark w1 by exact window ID — both EWMH and ICCCM urgency
+    // Mark w1 by exact window ID — both EWMH and ICCCM urgency.
+    // The app-name is ambiguous, but window= is authoritative.
     std::string window_arg = "window=" + std::to_string(w1);
-    auto result = run_lwmctl(wm, {"notify-attention", window_arg});
+    auto result = run_lwmctl(wm, {"notify-attention", window_arg, "app-name=Ghostty"});
     REQUIRE(result.has_value());
     REQUIRE(result->exit_code == 0);
 
@@ -238,6 +241,95 @@ TEST_CASE(
 }
 
 TEST_CASE(
+    "Integration: notify-attention invalid exact window does not fall back to app-name",
+    "[integration][notify_attention]"
+)
+{
+    auto test_env = TestEnvironment::create();
+    if (!test_env)
+        SKIP("Test environment not available");
+
+    auto& conn = test_env->conn;
+    auto& wm = test_env->wm;
+
+    xcb_atom_t net_wm_state = intern_atom(conn.get(), "_NET_WM_STATE");
+    xcb_atom_t net_wm_state_demands_attention = intern_atom(conn.get(), "_NET_WM_STATE_DEMANDS_ATTENTION");
+    REQUIRE(net_wm_state != XCB_NONE);
+    REQUIRE(net_wm_state_demands_attention != XCB_NONE);
+
+    xcb_window_t w1 = create_window(conn, 10, 10, 200, 150);
+    set_window_wm_class(conn, w1, "ghostty", "Ghostty");
+    map_window(conn, w1);
+    REQUIRE(wait_for_active_window(conn, w1, kTimeout));
+
+    xcb_window_t w2 = create_window(conn, 40, 40, 200, 150);
+    set_window_wm_class(conn, w2, "editor", "EditorApp");
+    map_window(conn, w2);
+    REQUIRE(wait_for_active_window(conn, w2, kTimeout));
+
+    auto result = run_lwmctl(wm, {"notify-attention", "window=0", "app-name=Ghostty"});
+    REQUIRE(result.has_value());
+    REQUIRE(result->exit_code == 0);
+    REQUIRE(result->stdout_text.find("no-match") != std::string::npos);
+    REQUIRE_FALSE(property_has_atom(conn.get(), w1, net_wm_state, net_wm_state_demands_attention));
+    REQUIRE_FALSE(has_wm_hints_urgency(conn.get(), w1));
+
+    destroy_window(conn, w2);
+    destroy_window(conn, w1);
+}
+
+TEST_CASE(
+    "Integration: notify-attention app-name ambiguity returns no-match across workspaces",
+    "[integration][notify_attention]"
+)
+{
+    auto test_env = TestEnvironment::create();
+    if (!test_env)
+        SKIP("Test environment not available");
+
+    auto& conn = test_env->conn;
+    auto& wm = test_env->wm;
+
+    xcb_atom_t net_wm_state = intern_atom(conn.get(), "_NET_WM_STATE");
+    xcb_atom_t net_wm_state_demands_attention = intern_atom(conn.get(), "_NET_WM_STATE_DEMANDS_ATTENTION");
+    xcb_atom_t net_wm_desktop = intern_atom(conn.get(), "_NET_WM_DESKTOP");
+    xcb_atom_t net_number_of_desktops = intern_atom(conn.get(), "_NET_NUMBER_OF_DESKTOPS");
+    REQUIRE(net_wm_state != XCB_NONE);
+    REQUIRE(net_wm_state_demands_attention != XCB_NONE);
+    REQUIRE(net_wm_desktop != XCB_NONE);
+    REQUIRE(net_number_of_desktops != XCB_NONE);
+
+    uint32_t num_desktops = get_window_property_cardinal(conn.get(), conn.root(), net_number_of_desktops).value_or(0);
+    if (num_desktops < 2)
+        SKIP("Need at least 2 desktops");
+
+    xcb_window_t w1 = create_window(conn, 10, 10, 200, 150);
+    set_window_wm_class(conn, w1, "ghostty", "Ghostty");
+    map_window(conn, w1);
+    REQUIRE(wait_for_active_window(conn, w1, kTimeout));
+
+    xcb_window_t w2 = create_window(conn, 40, 40, 200, 150);
+    set_window_wm_class(conn, w2, "ghostty", "Ghostty");
+    map_window(conn, w2);
+    REQUIRE(wait_for_active_window(conn, w2, kTimeout));
+
+    send_client_message(conn, w2, net_wm_desktop, 1);
+    REQUIRE(wait_for_property_cardinal(conn.get(), w2, net_wm_desktop, 1, kTimeout));
+
+    auto result = run_lwmctl(wm, {"notify-attention", "app-name=Ghostty"});
+    REQUIRE(result.has_value());
+    REQUIRE(result->exit_code == 0);
+    REQUIRE(result->stdout_text.find("no-match") != std::string::npos);
+    REQUIRE_FALSE(property_has_atom(conn.get(), w1, net_wm_state, net_wm_state_demands_attention));
+    REQUIRE_FALSE(property_has_atom(conn.get(), w2, net_wm_state, net_wm_state_demands_attention));
+    REQUIRE_FALSE(has_wm_hints_urgency(conn.get(), w1));
+    REQUIRE_FALSE(has_wm_hints_urgency(conn.get(), w2));
+
+    destroy_window(conn, w2);
+    destroy_window(conn, w1);
+}
+
+TEST_CASE(
     "Integration: notify-attention app-name skips active instead of marking sibling",
     "[integration][notify_attention]"
 )
@@ -280,7 +372,7 @@ TEST_CASE(
 }
 
 TEST_CASE(
-    "Integration: notify-attention desktop-entry does not cross to wrong app via app-name fallback",
+    "Integration: notify-attention desktop-entry and app-name ambiguity returns no-match",
     "[integration][notify_attention]"
 )
 {
@@ -308,15 +400,14 @@ TEST_CASE(
     map_window(conn, w2);
     REQUIRE(wait_for_active_window(conn, w2, kTimeout));
 
-    // Notification with desktop-entry matching the active window's class,
-    // plus an app-name that matches w1.  Before the fix, desktop-entry would
-    // fail to match any non-active window and fall through to app-name,
-    // incorrectly marking w1 (Chromium) urgent.
+    // desktop-entry and app-name each match a different managed client.  This is
+    // ambiguous app metadata, not a source-window identity.
     auto result = run_lwmctl(wm, {"notify-attention", "desktop-entry=Google-chrome", "app-name=Chromium"});
     REQUIRE(result.has_value());
     REQUIRE(result->exit_code == 0);
-    REQUIRE(result->stdout_text.find("skipped-active") != std::string::npos);
+    REQUIRE(result->stdout_text.find("no-match") != std::string::npos);
     REQUIRE_FALSE(property_has_atom(conn.get(), w1, net_wm_state, net_wm_state_demands_attention));
+    REQUIRE_FALSE(property_has_atom(conn.get(), w2, net_wm_state, net_wm_state_demands_attention));
 
     destroy_window(conn, w2);
     destroy_window(conn, w1);

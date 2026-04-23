@@ -770,6 +770,7 @@ std::optional<std::string> WindowManager::run_ipc_command(std::string const& com
 
             if (key == "window")
             {
+                req.window_specified = true;
                 uint32_t xid = 0;
                 int base = 10;
                 std::string_view digits = value;
@@ -797,7 +798,7 @@ std::optional<std::string> WindowManager::run_ipc_command(std::string const& com
             }
         }
 
-        if (req.window == XCB_NONE && req.desktop_entry.empty() && req.app_name.empty())
+        if (!req.window_specified && req.desktop_entry.empty() && req.app_name.empty())
             return error_reply("notify-attention requires at least one of: window, desktop-entry, app-name");
 
         return handle_notification_attention(req);
@@ -2819,10 +2820,8 @@ void WindowManager::set_client_demands_attention(xcb_window_t window, bool enabl
 
 std::optional<xcb_window_t> WindowManager::resolve_notification_target(NotificationAttentionRequest const& req) const
 {
-    // Name-based resolution: case-insensitive match against wm_class_name and wm_class.
-    // Prefers non-active windows (MRU among them), but returns active_window_ when it is
-    // the only match — the caller decides whether to skip it.  This prevents the
-    // desktop-entry → app-name fallback from crossing to an unrelated application.
+    // Name metadata identifies applications, not individual windows.  Use it only
+    // when it resolves to exactly one managed tiled/floating client.
     auto ci_equal = [](std::string_view a, std::string_view b) -> bool
     {
         if (a.size() != b.size())
@@ -2835,47 +2834,35 @@ std::optional<xcb_window_t> WindowManager::resolve_notification_target(Notificat
         return true;
     };
 
-    auto best_match = [&](std::string_view name) -> std::optional<xcb_window_t>
-    {
-        xcb_window_t best = XCB_NONE;
-        uint64_t best_mru = 0;
-        bool active_matches = false;
-        for (auto const& [wid, client] : clients_)
-        {
-            if (client.kind != Client::Kind::Tiled && client.kind != Client::Kind::Floating)
-                continue;
-            if (!ci_equal(client.wm_class_name, name) && !ci_equal(client.wm_class, name))
-                continue;
-            if (wid == active_window_)
-            {
-                active_matches = true;
-                continue;
-            }
-            if (best == XCB_NONE || client.mru_order > best_mru)
-            {
-                best = wid;
-                best_mru = client.mru_order;
-            }
-        }
-        if (best != XCB_NONE)
-            return best;
-        if (active_matches)
-            return active_window_;
-        return std::nullopt;
-    };
-
+    std::vector<std::string_view> names;
     if (!req.desktop_entry.empty())
-    {
-        if (auto w = best_match(req.desktop_entry))
-            return w;
-    }
-
+        names.push_back(req.desktop_entry);
     if (!req.app_name.empty())
+        names.push_back(req.app_name);
+
+    xcb_window_t match = XCB_NONE;
+    for (auto const& [wid, client] : clients_)
     {
-        if (auto w = best_match(req.app_name))
-            return w;
+        if (client.kind != Client::Kind::Tiled && client.kind != Client::Kind::Floating)
+            continue;
+
+        bool matched = std::ranges::any_of(
+            names,
+            [&](std::string_view name)
+            {
+                return ci_equal(client.wm_class_name, name) || ci_equal(client.wm_class, name);
+            }
+        );
+        if (!matched)
+            continue;
+
+        if (match != XCB_NONE)
+            return std::nullopt;
+        match = wid;
     }
 
+    if (match != XCB_NONE)
+        return match;
     return std::nullopt;
 }
 
@@ -2883,7 +2870,7 @@ std::string WindowManager::handle_notification_attention(NotificationAttentionRe
 {
     xcb_window_t target = XCB_NONE;
 
-    if (req.window != XCB_NONE)
+    if (req.window_specified)
     {
         // Exact window ID path.
         auto const* client = get_client(req.window);
@@ -2893,7 +2880,7 @@ std::string WindowManager::handle_notification_attention(NotificationAttentionRe
     }
     else
     {
-        // Name-based fallback: single best match.
+        // Name-based fallback: only exact one-client matches are safe.
         auto resolved = resolve_notification_target(req);
         if (!resolved)
             return ok_reply("no-match");

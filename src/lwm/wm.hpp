@@ -473,6 +473,7 @@ private:
     // Notification attention bridge
     struct NotificationAttentionRequest
     {
+        bool window_specified = false;
         xcb_window_t window = XCB_NONE;
         std::string desktop_entry;
         std::string app_name;

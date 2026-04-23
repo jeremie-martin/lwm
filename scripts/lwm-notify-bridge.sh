@@ -4,7 +4,7 @@
 # Monitors org.freedesktop.Notifications.Notify method calls via busctl
 # and tells LWM which window to mark urgent. Resolution layers:
 #   1. x-window-id hint (exact, if sender includes it via $WINDOWID)
-#   2. app-name / desktop-entry fallback (LWM resolves by WM_CLASS + MRU)
+#   2. app-name / desktop-entry fallback only when LWM finds one unique client
 #
 # Dependencies: busctl, jq, lwmctl
 # Usage: lwm-notify-bridge &
@@ -27,7 +27,7 @@ while IFS= read -r line; do
         continue
     fi
 
-    # Layer 2: name-based fallback — let LWM resolve by WM_CLASS + MRU
+    # Layer 2: name-based fallback — LWM ignores ambiguous app/class matches.
     args=()
     [ -n "$desktop_entry" ] && args+=("desktop-entry=$desktop_entry")
     [ -n "$app_name" ] && args+=("app-name=$app_name")
