@@ -470,16 +470,7 @@ private:
     void clear_all_borders();
     xcb_atom_t intern_atom(char const* name) const;
 
-    // Notification attention bridge
-    struct NotificationAttentionRequest
-    {
-        bool window_specified = false;
-        xcb_window_t window = XCB_NONE;
-        std::string desktop_entry;
-        std::string app_name;
-    };
-    std::optional<xcb_window_t> resolve_notification_target(NotificationAttentionRequest const& req) const;
-    std::string handle_notification_attention(NotificationAttentionRequest const& req);
+    std::string handle_notification_attention(xcb_window_t window);
 
     // Scratchpad operations
     void toggle_named_scratchpad(std::string_view name);

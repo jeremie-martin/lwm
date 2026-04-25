@@ -17,6 +17,7 @@
 #include <filesystem>
 #include <limits>
 #include <memory>
+#include <optional>
 #include <poll.h>
 #include <string_view>
 #include <tuple>
@@ -68,33 +69,26 @@ std::string ok_reply(std::string const& message)
 
 std::string error_reply(std::string const& message) { return "error " + message; }
 
-bool is_notification_attention_param_start(std::string_view params, size_t pos)
+std::optional<xcb_window_t> parse_window_id(std::string_view value)
 {
-    if (pos >= params.size() || !std::isspace(static_cast<unsigned char>(params[pos])))
-        return false;
+    uint32_t xid = 0;
+    int base = 10;
+    std::string_view digits = value;
 
-    size_t key_start = pos + 1;
-    constexpr std::string_view keys[] = { "window", "desktop-entry", "app-name" };
-    for (std::string_view key : keys)
+    if (digits.size() > 2 && digits[0] == '0' && (digits[1] == 'x' || digits[1] == 'X'))
     {
-        if (params.substr(key_start).starts_with(key))
-        {
-            size_t after_key = key_start + key.size();
-            if (after_key < params.size() && params[after_key] == '=')
-                return true;
-        }
+        base = 16;
+        digits.remove_prefix(2);
     }
-    return false;
-}
 
-size_t find_next_notification_attention_param(std::string_view params)
-{
-    for (size_t i = 0; i < params.size(); ++i)
-    {
-        if (is_notification_attention_param_start(params, i))
-            return i;
-    }
-    return std::string_view::npos;
+    if (digits.empty())
+        return std::nullopt;
+
+    auto [ptr, ec] = std::from_chars(digits.data(), digits.data() + digits.size(), xid, base);
+    if (ec != std::errc {} || ptr != digits.data() + digits.size())
+        return std::nullopt;
+
+    return static_cast<xcb_window_t>(xid);
 }
 
 void ensure_property_change_mask(Connection& conn, xcb_window_t window)
@@ -745,63 +739,23 @@ std::optional<std::string> WindowManager::run_ipc_command(std::string const& com
         }
     }
 
-    if (trimmed == "notify-attention" || trimmed.starts_with("notify-attention "))
     {
-        std::string_view params = trimmed;
-        params.remove_prefix(std::string_view("notify-attention").size());
-        while (!params.empty() && params.front() == ' ')
-            params.remove_prefix(1);
-
-        NotificationAttentionRequest req;
-        while (!params.empty())
+        constexpr std::string_view notify_prefix = "notify-attention";
+        constexpr std::string_view window_prefix = "window=";
+        if (trimmed == notify_prefix || trimmed.starts_with("notify-attention "))
         {
-            size_t eq = params.find('=');
-            if (eq == std::string_view::npos)
-                return error_reply("invalid parameter (expected key=value): " + std::string(params));
+            std::string arg = trim_ascii(trimmed.substr(notify_prefix.size()));
+            // After trimming edges, any remaining whitespace means extra tokens.
+            if (!arg.starts_with(window_prefix) || arg.find_first_of(" \t\r\n") != std::string::npos)
+                return error_reply("usage: notify-attention window=<xid>");
 
-            std::string_view key = params.substr(0, eq);
-            params.remove_prefix(eq + 1);
+            std::string_view value = std::string_view(arg).substr(window_prefix.size());
+            auto window = parse_window_id(value);
+            if (!window)
+                return error_reply("invalid window id: " + std::string(value));
 
-            size_t next_param = find_next_notification_attention_param(params);
-            std::string value = trim_ascii(params.substr(0, next_param));
-            params.remove_prefix(next_param == std::string_view::npos ? params.size() : next_param);
-            while (!params.empty() && std::isspace(static_cast<unsigned char>(params.front())))
-                params.remove_prefix(1);
-
-            if (key == "window")
-            {
-                req.window_specified = true;
-                uint32_t xid = 0;
-                int base = 10;
-                std::string_view digits = value;
-                if (digits.size() > 2 && digits[0] == '0' && (digits[1] == 'x' || digits[1] == 'X'))
-                {
-                    base = 16;
-                    digits.remove_prefix(2);
-                }
-                auto [ptr, ec] = std::from_chars(digits.data(), digits.data() + digits.size(), xid, base);
-                if (ec != std::errc {} || ptr != digits.data() + digits.size())
-                    return error_reply("invalid window id: " + value);
-                req.window = xid;
-            }
-            else if (key == "desktop-entry")
-            {
-                req.desktop_entry = std::move(value);
-            }
-            else if (key == "app-name")
-            {
-                req.app_name = std::move(value);
-            }
-            else
-            {
-                return error_reply("unknown parameter: " + std::string(key));
-            }
+            return handle_notification_attention(*window);
         }
-
-        if (!req.window_specified && req.desktop_entry.empty() && req.app_name.empty())
-            return error_reply("notify-attention requires at least one of: window, desktop-entry, app-name");
-
-        return handle_notification_attention(req);
     }
 
     if (trimmed == "scratchpad stash")
@@ -2818,81 +2772,16 @@ void WindowManager::set_client_demands_attention(xcb_window_t window, bool enabl
     conn_.flush();
 }
 
-std::optional<xcb_window_t> WindowManager::resolve_notification_target(NotificationAttentionRequest const& req) const
+std::string WindowManager::handle_notification_attention(xcb_window_t target)
 {
-    // Name metadata identifies applications, not individual windows.  Use it only
-    // when it resolves to exactly one managed tiled/floating client.
-    auto ci_equal = [](std::string_view a, std::string_view b) -> bool
-    {
-        if (a.size() != b.size())
-            return false;
-        for (size_t i = 0; i < a.size(); ++i)
-        {
-            if (std::tolower(static_cast<unsigned char>(a[i])) != std::tolower(static_cast<unsigned char>(b[i])))
-                return false;
-        }
-        return true;
-    };
+    auto* client = get_client(target);
+    if (!client || (client->kind != Client::Kind::Tiled && client->kind != Client::Kind::Floating))
+        return ok_reply("no-match");
 
-    std::vector<std::string_view> names;
-    if (!req.desktop_entry.empty())
-        names.push_back(req.desktop_entry);
-    if (!req.app_name.empty())
-        names.push_back(req.app_name);
-
-    xcb_window_t match = XCB_NONE;
-    for (auto const& [wid, client] : clients_)
-    {
-        if (client.kind != Client::Kind::Tiled && client.kind != Client::Kind::Floating)
-            continue;
-
-        bool matched = std::ranges::any_of(
-            names,
-            [&](std::string_view name)
-            {
-                return ci_equal(client.wm_class_name, name) || ci_equal(client.wm_class, name);
-            }
-        );
-        if (!matched)
-            continue;
-
-        if (match != XCB_NONE)
-            return std::nullopt;
-        match = wid;
-    }
-
-    if (match != XCB_NONE)
-        return match;
-    return std::nullopt;
-}
-
-std::string WindowManager::handle_notification_attention(NotificationAttentionRequest const& req)
-{
-    xcb_window_t target = XCB_NONE;
-
-    if (req.window_specified)
-    {
-        // Exact window ID path.
-        auto const* client = get_client(req.window);
-        if (!client || (client->kind != Client::Kind::Tiled && client->kind != Client::Kind::Floating))
-            return ok_reply("no-match");
-        target = req.window;
-    }
-    else
-    {
-        // Name-based fallback: only exact one-client matches are safe.
-        auto resolved = resolve_notification_target(req);
-        if (!resolved)
-            return ok_reply("no-match");
-        target = *resolved;
-    }
-
-    // Skip if the user is already looking at the target window.
     if (target == active_window_)
         return ok_reply("skipped-active");
 
-    if (auto* client = get_client(target))
-        client->wm_initiated_urgency = true;
+    client->wm_initiated_urgency = true;
     set_client_demands_attention(target, true);
     return ok_reply(std::to_string(target));
 }

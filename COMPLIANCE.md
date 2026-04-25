@@ -81,7 +81,7 @@ LWM classifies windows primarily by `_NET_WM_WINDOW_TYPE`:
 - `DOCK`: managed, strut-reserving, not normal-focus eligible
 - `DIALOG`, `UTILITY`, `TOOLBAR`, `MENU`, `SPLASH`: managed floating
 - `NORMAL`: managed tiled by default
-- popup/ephemeral types (`TOOLTIP`, `NOTIFICATION`, `POPUP_MENU`, `DROPDOWN_MENU`, `COMBO`, `DND`): mapped directly, not fully managed. `_NET_WM_WINDOW_TYPE_NOTIFICATION` windows are never themselves urgency carriers; notification-derived urgency is bridged to managed app windows via IPC, using exact source window IDs or unambiguous single-client app metadata only.
+- popup/ephemeral types (`TOOLTIP`, `NOTIFICATION`, `POPUP_MENU`, `DROPDOWN_MENU`, `COMBO`, `DND`): mapped directly, not fully managed. `_NET_WM_WINDOW_TYPE_NOTIFICATION` windows are never themselves urgency carriers; tools may mark a managed source window through `notify-attention window=<xid>`, but LWM does not guess from notification metadata.
 
 Runtime reclassification:
 

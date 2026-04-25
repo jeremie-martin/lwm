@@ -43,9 +43,8 @@ void print_usage()
               << "  ratio set VALUE          set master split ratio (0.1-0.9)\n"
               << "  ratio reset              reset all split ratios to defaults\n"
               << "  ratio adjust DELTA       adjust master ratio by delta (e.g. +0.05)\n"
-              << "  notify-attention PARAMS  mark a managed window as urgent\n"
-              << "                           params: window=<xid> desktop-entry=<name>\n"
-              << "                                   app-name=<name>\n"
+              << "  notify-attention window=<xid>\n"
+              << "                           mark a managed window as needing attention\n"
               << "  subscribe [FILTER]       stream events as JSON lines\n"
               << "                           filter: comma-separated event types\n"
               << "                           (window_map,window_unmap,focus_change,\n"
@@ -336,17 +335,12 @@ int main(int argc, char* argv[])
 
     if (command == "notify-attention")
     {
-        if (args.size() < 2)
+        if (args.size() != 2)
         {
-            std::cerr << "usage: lwmctl notify-attention <key=value ...>\n";
+            std::cerr << "usage: lwmctl notify-attention window=<xid>\n";
             return 1;
         }
-        std::string ipc_cmd = "notify-attention";
-        for (size_t i = 1; i < args.size(); ++i)
-        {
-            ipc_cmd.push_back(' ');
-            ipc_cmd.append(args[i]);
-        }
+        std::string ipc_cmd = "notify-attention " + args[1];
         return run_command(socket_path, ipc_cmd);
     }
 

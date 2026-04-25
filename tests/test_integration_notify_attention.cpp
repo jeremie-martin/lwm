@@ -3,6 +3,7 @@
 #include <catch2/catch_test_macros.hpp>
 #include <chrono>
 #include <optional>
+#include <sstream>
 #include <thread>
 #include <xcb/xcb_icccm.h>
 
@@ -116,10 +117,8 @@ TEST_CASE(
     map_window(conn, w2);
     REQUIRE(wait_for_active_window(conn, w2, kTimeout));
 
-    // Mark w1 by exact window ID — both EWMH and ICCCM urgency.
-    // The app-name is ambiguous, but window= is authoritative.
     std::string window_arg = "window=" + std::to_string(w1);
-    auto result = run_lwmctl(wm, {"notify-attention", window_arg, "app-name=Ghostty"});
+    auto result = run_lwmctl(wm, {"notify-attention", window_arg});
     REQUIRE(result.has_value());
     REQUIRE(result->exit_code == 0);
 
@@ -224,24 +223,7 @@ TEST_CASE(
 }
 
 TEST_CASE(
-    "Integration: notify-attention returns no-match for unknown app",
-    "[integration][notify_attention]"
-)
-{
-    auto test_env = TestEnvironment::create();
-    if (!test_env)
-        SKIP("Test environment not available");
-
-    auto& wm = test_env->wm;
-
-    auto result = run_lwmctl(wm, {"notify-attention", "app-name=NonExistentApp"});
-    REQUIRE(result.has_value());
-    REQUIRE(result->exit_code == 0);
-    REQUIRE(result->stdout_text.find("no-match") != std::string::npos);
-}
-
-TEST_CASE(
-    "Integration: notify-attention invalid exact window does not fall back to app-name",
+    "Integration: notify-attention returns no-match for unmanaged window ID",
     "[integration][notify_attention]"
 )
 {
@@ -258,16 +240,14 @@ TEST_CASE(
     REQUIRE(net_wm_state_demands_attention != XCB_NONE);
 
     xcb_window_t w1 = create_window(conn, 10, 10, 200, 150);
-    set_window_wm_class(conn, w1, "ghostty", "Ghostty");
     map_window(conn, w1);
     REQUIRE(wait_for_active_window(conn, w1, kTimeout));
 
     xcb_window_t w2 = create_window(conn, 40, 40, 200, 150);
-    set_window_wm_class(conn, w2, "editor", "EditorApp");
     map_window(conn, w2);
     REQUIRE(wait_for_active_window(conn, w2, kTimeout));
 
-    auto result = run_lwmctl(wm, {"notify-attention", "window=0", "app-name=Ghostty"});
+    auto result = run_lwmctl(wm, {"notify-attention", "window=0"});
     REQUIRE(result.has_value());
     REQUIRE(result->exit_code == 0);
     REQUIRE(result->stdout_text.find("no-match") != std::string::npos);
@@ -279,7 +259,27 @@ TEST_CASE(
 }
 
 TEST_CASE(
-    "Integration: notify-attention app-name ambiguity returns no-match across workspaces",
+    "Integration: notify-attention rejects app metadata",
+    "[integration][notify_attention]"
+)
+{
+    auto test_env = TestEnvironment::create();
+    if (!test_env)
+        SKIP("Test environment not available");
+
+    auto& wm = test_env->wm;
+
+    for (auto const& arg : { std::string("app-name=Ghostty"), std::string("desktop-entry=Ghostty") })
+    {
+        auto result = run_lwmctl(wm, {"notify-attention", arg});
+        REQUIRE(result.has_value());
+        REQUIRE(result->exit_code != 0);
+        REQUIRE(result->stderr_text.find("usage: notify-attention window=<xid>") != std::string::npos);
+    }
+}
+
+TEST_CASE(
+    "Integration: notify-attention rejects extra tokens after window=<xid>",
     "[integration][notify_attention]"
 )
 {
@@ -292,45 +292,32 @@ TEST_CASE(
 
     xcb_atom_t net_wm_state = intern_atom(conn.get(), "_NET_WM_STATE");
     xcb_atom_t net_wm_state_demands_attention = intern_atom(conn.get(), "_NET_WM_STATE_DEMANDS_ATTENTION");
-    xcb_atom_t net_wm_desktop = intern_atom(conn.get(), "_NET_WM_DESKTOP");
-    xcb_atom_t net_number_of_desktops = intern_atom(conn.get(), "_NET_NUMBER_OF_DESKTOPS");
     REQUIRE(net_wm_state != XCB_NONE);
     REQUIRE(net_wm_state_demands_attention != XCB_NONE);
-    REQUIRE(net_wm_desktop != XCB_NONE);
-    REQUIRE(net_number_of_desktops != XCB_NONE);
-
-    uint32_t num_desktops = get_window_property_cardinal(conn.get(), conn.root(), net_number_of_desktops).value_or(0);
-    if (num_desktops < 2)
-        SKIP("Need at least 2 desktops");
 
     xcb_window_t w1 = create_window(conn, 10, 10, 200, 150);
-    set_window_wm_class(conn, w1, "ghostty", "Ghostty");
     map_window(conn, w1);
     REQUIRE(wait_for_active_window(conn, w1, kTimeout));
 
     xcb_window_t w2 = create_window(conn, 40, 40, 200, 150);
-    set_window_wm_class(conn, w2, "ghostty", "Ghostty");
     map_window(conn, w2);
     REQUIRE(wait_for_active_window(conn, w2, kTimeout));
 
-    send_client_message(conn, w2, net_wm_desktop, 1);
-    REQUIRE(wait_for_property_cardinal(conn.get(), w2, net_wm_desktop, 1, kTimeout));
-
-    auto result = run_lwmctl(wm, {"notify-attention", "app-name=Ghostty"});
+    // Single shell arg with embedded whitespace reaches the WM as one token,
+    // bypassing lwmctl's argv-count check. The WM parser must still reject it.
+    std::string arg = "window=" + std::to_string(w1) + " app-name=Ghostty";
+    auto result = run_lwmctl(wm, {"notify-attention", arg});
     REQUIRE(result.has_value());
-    REQUIRE(result->exit_code == 0);
-    REQUIRE(result->stdout_text.find("no-match") != std::string::npos);
+    REQUIRE(result->exit_code != 0);
+    REQUIRE(result->stderr_text.find("usage: notify-attention window=<xid>") != std::string::npos);
     REQUIRE_FALSE(property_has_atom(conn.get(), w1, net_wm_state, net_wm_state_demands_attention));
-    REQUIRE_FALSE(property_has_atom(conn.get(), w2, net_wm_state, net_wm_state_demands_attention));
-    REQUIRE_FALSE(has_wm_hints_urgency(conn.get(), w1));
-    REQUIRE_FALSE(has_wm_hints_urgency(conn.get(), w2));
 
     destroy_window(conn, w2);
     destroy_window(conn, w1);
 }
 
 TEST_CASE(
-    "Integration: notify-attention app-name skips active instead of marking sibling",
+    "Integration: notify-attention accepts hex window id",
     "[integration][notify_attention]"
 )
 {
@@ -346,68 +333,23 @@ TEST_CASE(
     REQUIRE(net_wm_state != XCB_NONE);
     REQUIRE(net_wm_state_demands_attention != XCB_NONE);
 
-    // Create two windows with different WM_CLASS.
-    // w1 = "BrowserApp", w2 = "EditorApp".
     xcb_window_t w1 = create_window(conn, 10, 10, 200, 150);
-    set_window_wm_class(conn, w1, "browser", "BrowserApp");
     map_window(conn, w1);
     REQUIRE(wait_for_active_window(conn, w1, kTimeout));
 
     xcb_window_t w2 = create_window(conn, 40, 40, 200, 150);
-    set_window_wm_class(conn, w2, "editor", "EditorApp");
     map_window(conn, w2);
     REQUIRE(wait_for_active_window(conn, w2, kTimeout));
 
-    // Notification for "EditorApp" — the active window.
-    // Should return skipped-active, NOT mark w1 (which is a different app).
-    auto result = run_lwmctl(wm, {"notify-attention", "app-name=EditorApp"});
+    std::ostringstream hex_arg;
+    hex_arg << "window=0x" << std::hex << w1;
+    auto result = run_lwmctl(wm, {"notify-attention", hex_arg.str()});
     REQUIRE(result.has_value());
     REQUIRE(result->exit_code == 0);
-    REQUIRE(result->stdout_text.find("skipped-active") != std::string::npos);
-    REQUIRE_FALSE(property_has_atom(conn.get(), w1, net_wm_state, net_wm_state_demands_attention));
-    REQUIRE_FALSE(property_has_atom(conn.get(), w2, net_wm_state, net_wm_state_demands_attention));
-
-    destroy_window(conn, w2);
-    destroy_window(conn, w1);
-}
-
-TEST_CASE(
-    "Integration: notify-attention desktop-entry and app-name ambiguity returns no-match",
-    "[integration][notify_attention]"
-)
-{
-    auto test_env = TestEnvironment::create();
-    if (!test_env)
-        SKIP("Test environment not available");
-
-    auto& conn = test_env->conn;
-    auto& wm = test_env->wm;
-
-    xcb_atom_t net_wm_state = intern_atom(conn.get(), "_NET_WM_STATE");
-    xcb_atom_t net_wm_state_demands_attention = intern_atom(conn.get(), "_NET_WM_STATE_DEMANDS_ATTENTION");
-    REQUIRE(net_wm_state != XCB_NONE);
-    REQUIRE(net_wm_state_demands_attention != XCB_NONE);
-
-    // w1: WM_CLASS instance="chromium" class="Chromium"
-    xcb_window_t w1 = create_window(conn, 10, 10, 200, 150);
-    set_window_wm_class(conn, w1, "chromium", "Chromium");
-    map_window(conn, w1);
-    REQUIRE(wait_for_active_window(conn, w1, kTimeout));
-
-    // w2: WM_CLASS instance="google-chrome" class="Google-chrome" (active)
-    xcb_window_t w2 = create_window(conn, 40, 40, 200, 150);
-    set_window_wm_class(conn, w2, "google-chrome", "Google-chrome");
-    map_window(conn, w2);
-    REQUIRE(wait_for_active_window(conn, w2, kTimeout));
-
-    // desktop-entry and app-name each match a different managed client.  This is
-    // ambiguous app metadata, not a source-window identity.
-    auto result = run_lwmctl(wm, {"notify-attention", "desktop-entry=Google-chrome", "app-name=Chromium"});
-    REQUIRE(result.has_value());
-    REQUIRE(result->exit_code == 0);
-    REQUIRE(result->stdout_text.find("no-match") != std::string::npos);
-    REQUIRE_FALSE(property_has_atom(conn.get(), w1, net_wm_state, net_wm_state_demands_attention));
-    REQUIRE_FALSE(property_has_atom(conn.get(), w2, net_wm_state, net_wm_state_demands_attention));
+    REQUIRE(wait_for_condition(
+        [&]() { return property_has_atom(conn.get(), w1, net_wm_state, net_wm_state_demands_attention); },
+        kTimeout
+    ));
 
     destroy_window(conn, w2);
     destroy_window(conn, w1);
@@ -471,46 +413,6 @@ TEST_CASE(
         [&]() { return !property_has_atom(conn.get(), w1, net_wm_state, net_wm_state_demands_attention); },
         kTimeout
     ));
-
-    destroy_window(conn, w2);
-    destroy_window(conn, w1);
-}
-
-TEST_CASE(
-    "Integration: notify-attention accepts app-name values with spaces",
-    "[integration][notify_attention]"
-)
-{
-    auto test_env = TestEnvironment::create();
-    if (!test_env)
-        SKIP("Test environment not available");
-
-    auto& conn = test_env->conn;
-    auto& wm = test_env->wm;
-
-    xcb_atom_t net_wm_state = intern_atom(conn.get(), "_NET_WM_STATE");
-    xcb_atom_t net_wm_state_demands_attention = intern_atom(conn.get(), "_NET_WM_STATE_DEMANDS_ATTENTION");
-    REQUIRE(net_wm_state != XCB_NONE);
-    REQUIRE(net_wm_state_demands_attention != XCB_NONE);
-
-    xcb_window_t w1 = create_window(conn, 10, 10, 200, 150);
-    set_window_wm_class(conn, w1, "code-instance", "Visual Studio Code");
-    map_window(conn, w1);
-    REQUIRE(wait_for_active_window(conn, w1, kTimeout));
-
-    xcb_window_t w2 = create_window(conn, 40, 40, 200, 150);
-    set_window_wm_class(conn, w2, "terminal", "Terminal");
-    map_window(conn, w2);
-    REQUIRE(wait_for_active_window(conn, w2, kTimeout));
-
-    auto result = run_lwmctl(wm, {"notify-attention", "app-name=Visual Studio Code"});
-    REQUIRE(result.has_value());
-    REQUIRE(result->exit_code == 0);
-    REQUIRE(wait_for_condition(
-        [&]() { return property_has_atom(conn.get(), w1, net_wm_state, net_wm_state_demands_attention); },
-        kTimeout
-    ));
-    REQUIRE_FALSE(property_has_atom(conn.get(), w2, net_wm_state, net_wm_state_demands_attention));
 
     destroy_window(conn, w2);
     destroy_window(conn, w1);

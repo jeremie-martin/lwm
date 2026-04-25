@@ -206,9 +206,11 @@ Property changes that matter at runtime:
 
 Those updates are easy to regress because they can change classification, focus eligibility, stacking exceptions, geometry policy, or workarea computation after manage-time.
 
-### Notification-derived urgency
+### Notification Attention
 
-Notification popup windows (`_NET_WM_WINDOW_TYPE_NOTIFICATION`) remain unmanaged popups. Notification-derived urgency is translated onto a managed tiled/floating client via an explicit IPC ingress (`notify-attention` command) rather than through popup window lifecycle. The recommended bridge (`scripts/lwm-notify-bridge.sh`) monitors D-Bus `Notify` calls via `busctl` and extracts the `x-window-id` hint (injected by a shell wrapper around `notify-send` that adds `$WINDOWID`). It passes the exact window ID to LWM, which sets `demands_attention` via the same `set_client_demands_attention` path as ICCCM/EWMH urgency. When no exact window ID is available, app metadata (`desktop-entry` / `app-name`) is only a fallback if it resolves to exactly one managed tiled/floating client; ambiguous terminal/app siblings are ignored rather than guessed by PID, MRU, workspace, title, or process lineage. The focused window is skipped (the user is already looking at it). Focus clears the attention state.
+Notification popup windows (`_NET_WM_WINDOW_TYPE_NOTIFICATION`) remain unmanaged popups. LWM does not infer a source client from D-Bus notification metadata, app names, desktop entries, PIDs, titles, MRU order, or process lineage. Those values identify applications or processes, not the exact window that caused a notification.
+
+Tools that know their source X11 window can explicitly request attention with `lwmctl notify-attention window=<xid>`. The helper `scripts/lwm-notify.sh` shows the normal desktop notification with `notify-send` and then calls that IPC command with `$WINDOWID`, which is the robust path for terminal-hosted agents. LWM only accepts a managed tiled/floating source window, skips the currently focused window, and clears attention on focus.
 
 ## 8. Hotplug Contract
 
