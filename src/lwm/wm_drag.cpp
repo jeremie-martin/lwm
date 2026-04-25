@@ -60,10 +60,12 @@ size_t WindowManager::visible_tiled_count(Monitor const& monitor) const
 {
     size_t count = 0;
     std::unordered_set<xcb_window_t> seen;
+    // workspace.windows entries are guaranteed managed; assert_workspace_consistency enforces it.
     auto const& ws = monitor.current();
     for (auto w : ws.windows)
     {
-        if (auto const* c = get_client(w); c && !c->fullscreen && !c->hidden)
+        auto const& c = require_client(w);
+        if (!c.fullscreen && !c.hidden)
         {
             ++count;
             seen.insert(w);
@@ -77,7 +79,8 @@ size_t WindowManager::visible_tiled_count(Monitor const& monitor) const
         {
             if (seen.contains(w))
                 continue;
-            if (auto const* c = get_client(w); c && c->sticky && !c->hidden && !c->fullscreen)
+            auto const& c = require_client(w);
+            if (c.sticky && !c.hidden && !c.fullscreen)
             {
                 ++count;
                 seen.insert(w);
@@ -150,9 +153,6 @@ void WindowManager::begin_tiled_drag(xcb_window_t window, int16_t root_x, int16_
     if (client->fullscreen)
         return;
     if (client->kind != Client::Kind::Tiled)
-        return;
-    if (client->monitor >= monitors_.size()
-        || client->workspace >= monitors_[client->monitor].workspaces.size())
         return;
 
     drag_state_ = TiledMove { window, root_x, root_y, root_x, root_y, client->tiled_geometry };
@@ -367,48 +367,41 @@ void WindowManager::end_drag()
 
         size_t source_monitor_idx = client->monitor;
         size_t source_workspace_idx = client->workspace;
-        if (source_monitor_idx < monitors_.size()
-            && source_workspace_idx < monitors_[source_monitor_idx].workspaces.size())
+        auto target_monitor =
+            focus::monitor_index_at_point(monitors_, drag.last_root_x, drag.last_root_y);
+        size_t target_monitor_idx = target_monitor.value_or(source_monitor_idx);
+        size_t target_workspace_idx = monitors_[target_monitor_idx].current_workspace;
+        bool same_workspace =
+            source_monitor_idx == target_monitor_idx && source_workspace_idx == target_workspace_idx;
+
+        auto& source_ws = monitors_[source_monitor_idx].workspaces[source_workspace_idx];
+        auto source_it = source_ws.find_window(window);
+        if (source_it == source_ws.windows.end())
+            return;
+
+        auto& target_ws = monitors_[target_monitor_idx].workspaces[target_workspace_idx];
+        size_t layout_count = target_ws.windows.size();
+        if (!same_workspace)
+            layout_count += 1;
+
+        size_t target_index = 0;
+        if (layout_count > 0)
         {
-            auto target_monitor =
-                focus::monitor_index_at_point(monitors_, drag.last_root_x, drag.last_root_y);
-            size_t target_monitor_idx = target_monitor.value_or(source_monitor_idx);
-            if (target_monitor_idx < monitors_.size())
-            {
-                size_t target_workspace_idx = monitors_[target_monitor_idx].current_workspace;
-                bool same_workspace =
-                    source_monitor_idx == target_monitor_idx && source_workspace_idx == target_workspace_idx;
+            target_index = layout_.drop_target_index(
+                layout_count,
+                monitors_[target_monitor_idx].working_area(),
+                target_ws.layout_strategy,
+                target_ws.split_ratios,
+                drag.last_root_x,
+                drag.last_root_y
+            );
+        }
 
-                auto& source_ws = monitors_[source_monitor_idx].workspaces[source_workspace_idx];
-                auto source_it = source_ws.find_window(window);
-                if (source_it != source_ws.windows.end())
-                {
-                    auto& target_ws = monitors_[target_monitor_idx].workspaces[target_workspace_idx];
-                    size_t layout_count = target_ws.windows.size();
-                    if (!same_workspace)
-                        layout_count += 1;
-
-                    size_t target_index = 0;
-                    if (layout_count > 0)
-                    {
-                        target_index = layout_.drop_target_index(
-                            layout_count,
-                            monitors_[target_monitor_idx].working_area(),
-                            target_ws.layout_strategy,
-                            target_ws.split_ratios,
-                            drag.last_root_x,
-                            drag.last_root_y
-                        );
-                    }
-
-                    if (move_tiled_client_to_workspace(*client, target_monitor_idx, target_workspace_idx, target_index))
-                    {
-                        workspace_policy::set_workspace_focus(target_ws, window);
-                        flush_and_drain_crossing();
-                        focus_any_window(window);
-                    }
-                }
-            }
+        if (move_tiled_client_to_workspace(*client, target_monitor_idx, target_workspace_idx, target_index))
+        {
+            workspace_policy::set_workspace_focus(target_ws, window);
+            flush_and_drain_crossing();
+            focus_any_window(window);
         }
     };
 

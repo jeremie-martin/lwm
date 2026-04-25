@@ -37,17 +37,6 @@ void WindowManager::focus_any_window(xcb_window_t window, bool record_user_time)
 
     bool is_floating = (client->kind == Client::Kind::Floating);
 
-    if (client->monitor >= monitors_.size())
-    {
-        LOG_TRACE("focus_any_window: rejected (invalid monitor index)");
-        return;
-    }
-    if (client->workspace >= monitors_[client->monitor].workspaces.size())
-    {
-        LOG_TRACE("focus_any_window: rejected (invalid workspace index)");
-        return;
-    }
-
     if (client->iconic)
     {
         LOG_DEBUG("focus_any_window: deiconifying window {:#x}", window);
@@ -56,7 +45,7 @@ void WindowManager::focus_any_window(xcb_window_t window, bool record_user_time)
 
     xcb_window_t previous_active = active_window_;
     std::optional<size_t> previous_monitor;
-    if (auto const* previous = get_client(previous_active); previous && previous->monitor < monitors_.size())
+    if (auto const* previous = get_client(previous_active))
         previous_monitor = previous->monitor;
     bool is_sticky = client->sticky;
 
@@ -74,21 +63,21 @@ void WindowManager::focus_any_window(xcb_window_t window, bool record_user_time)
 
         focused_monitor_ = client->monitor;
         auto& monitor = monitors_[client->monitor];
-        if (!is_sticky && monitor.current_workspace != client->workspace)
+        if (!is_sticky)
         {
-            size_t old_ws = monitor.current_workspace;
-            LOG_DEBUG(
-                "focus_any_window({:#x}): WORKSPACE SWITCH TRIGGERED by focus! "
-                "old_ws={} new_ws={}",
-                window,
-                old_ws,
-                client->workspace
-            );
-            perform_workspace_switch({ client->monitor, old_ws, client->workspace });
-            if (is_suppressed_by_fullscreen(*client))
+            if (auto ctx = WorkspaceSwitchContext::validate(client->monitor, monitor, client->workspace))
             {
-                focus_or_fallback(monitors_[client->monitor], false);
-                return;
+                LOG_DEBUG(
+                    "focus_any_window({:#x}): WORKSPACE SWITCH TRIGGERED by focus! "
+                    "old_ws={} new_ws={}",
+                    window, ctx->old_workspace(), ctx->new_workspace()
+                );
+                perform_workspace_switch(*ctx);
+                if (is_suppressed_by_fullscreen(*client))
+                {
+                    focus_or_fallback(monitors_[client->monitor], false);
+                    return;
+                }
             }
         }
 
@@ -127,22 +116,22 @@ void WindowManager::focus_any_window(xcb_window_t window, bool record_user_time)
         active_window_ = window;
 
         auto& monitor = monitors_[client->monitor];
-        if (!is_sticky && monitor.current_workspace != client->workspace)
+        if (!is_sticky)
         {
-            size_t old_workspace = monitor.current_workspace;
-            size_t new_workspace = client->workspace;
-            LOG_DEBUG(
-                "focus_any_window: WORKSPACE SWITCH TRIGGERED by focus! old_ws={} new_ws={}",
-                old_workspace,
-                new_workspace
-            );
-            perform_workspace_switch({ client->monitor, old_workspace, new_workspace });
-            // After the workspace switch a sticky fullscreen owner may now suppress the target.
-            if (is_suppressed_by_fullscreen(*client))
+            if (auto ctx = WorkspaceSwitchContext::validate(client->monitor, monitor, client->workspace))
             {
-                active_window_ = previous_active;
-                focus_or_fallback(monitors_[client->monitor], false);
-                return;
+                LOG_DEBUG(
+                    "focus_any_window: WORKSPACE SWITCH TRIGGERED by focus! old_ws={} new_ws={}",
+                    ctx->old_workspace(), ctx->new_workspace()
+                );
+                perform_workspace_switch(*ctx);
+                // After the workspace switch a sticky fullscreen owner may now suppress the target.
+                if (is_suppressed_by_fullscreen(*client))
+                {
+                    active_window_ = previous_active;
+                    focus_or_fallback(monitors_[client->monitor], false);
+                    return;
+                }
             }
         }
     }
@@ -198,10 +187,9 @@ void WindowManager::focus_any_window(xcb_window_t window, bool record_user_time)
     // a well-behaved Globally Active client can still redirect via WM_TAKE_FOCUS.
     xcb_set_input_focus(conn_.get(), XCB_INPUT_FOCUS_POINTER_ROOT, window, focus_time);
 
-    if (previous_monitor && *previous_monitor < monitors_.size() && *previous_monitor != client->monitor)
+    if (previous_monitor && *previous_monitor != client->monitor)
         restack_monitor_layers(*previous_monitor);
-    if (client->monitor < monitors_.size())
-        restack_monitor_layers(client->monitor);
+    restack_monitor_layers(client->monitor);
 
     if (client->urgency.active())
         clear_client_urgency(*client);
@@ -234,7 +222,7 @@ void WindowManager::clear_focus()
 {
     xcb_window_t previous_active = active_window_;
     std::optional<size_t> previous_monitor;
-    if (auto const* previous = get_client(previous_active); previous && previous->monitor < monitors_.size())
+    if (auto const* previous = get_client(previous_active))
         previous_monitor = previous->monitor;
     active_window_ = XCB_NONE;
     ewmh_.set_active_window(XCB_NONE);

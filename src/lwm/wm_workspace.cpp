@@ -5,19 +5,28 @@
 
 namespace lwm {
 
+std::optional<WindowManager::WorkspaceSwitchContext>
+WindowManager::WorkspaceSwitchContext::validate(size_t monitor_idx, Monitor const& monitor, size_t target_workspace)
+{
+    auto result = workspace_policy::validate_workspace_switch(monitor, target_workspace);
+    if (!result)
+        return std::nullopt;
+    return WorkspaceSwitchContext{ monitor_idx, result->old_workspace, result->new_workspace };
+}
+
 void WindowManager::perform_workspace_switch(WorkspaceSwitchContext const& ctx)
 {
-    auto& monitor = monitors_[ctx.monitor_idx];
+    auto& monitor = monitors_[ctx.monitor_idx()];
     LOG_DEBUG(
         "perform_workspace_switch: monitor={} old_ws={} new_ws={}",
-        ctx.monitor_idx,
-        ctx.old_workspace,
-        ctx.new_workspace
+        ctx.monitor_idx(),
+        ctx.old_workspace(),
+        ctx.new_workspace()
     );
 
     // 1. Mutate workspace state. Must happen first; subsequent steps read it.
-    monitor.previous_workspace = ctx.old_workspace;
-    monitor.current_workspace = ctx.new_workspace;
+    monitor.previous_workspace = ctx.old_workspace();
+    monitor.current_workspace = ctx.new_workspace();
 
     // 2. EWMH _NET_CURRENT_DESKTOP — reads monitor.current_workspace set above.
     update_ewmh_current_desktop();
@@ -26,12 +35,12 @@ void WindowManager::perform_workspace_switch(WorkspaceSwitchContext const& ctx)
     //    new workspace, then re-tile. Order is load-bearing: see CONTRIBUTING.md
     //    "Design Principles" — sync_visibility_for_monitor maintains the
     //    authoritative `hidden` flag that rearrange_monitor reads.
-    finalize_visibility_on_monitor(ctx.monitor_idx);
+    finalize_visibility_on_monitor(ctx.monitor_idx());
 
     emit_event(Event_WorkspaceSwitch,
-        "{\"event\":\"workspace_switch\",\"monitor\":" + std::to_string(ctx.monitor_idx)
-        + ",\"from\":" + std::to_string(ctx.old_workspace)
-        + ",\"to\":" + std::to_string(ctx.new_workspace) + "}");
+        "{\"event\":\"workspace_switch\",\"monitor\":" + std::to_string(ctx.monitor_idx())
+        + ",\"from\":" + std::to_string(ctx.old_workspace())
+        + ",\"to\":" + std::to_string(ctx.new_workspace()) + "}");
 
     // Re-sync WM_HINTS urgency for windows that still have active urgency.
     // Apps may have cleared their own WM_HINTS urgency on focus (standard ICCCM
@@ -58,20 +67,14 @@ void WindowManager::switch_workspace(size_t ws)
         monitor.previous_workspace
     );
 
-    auto switch_result = workspace_policy::validate_workspace_switch(monitor, ws);
-    if (!switch_result)
+    auto ctx = WorkspaceSwitchContext::validate(focused_monitor_, monitor, ws);
+    if (!ctx)
     {
         LOG_TRACE("switch_workspace: policy rejected switch");
         return;
     }
 
-    LOG_DEBUG(
-        "switch_workspace: policy approved, old_ws={} new_ws={}",
-        switch_result->old_workspace,
-        switch_result->new_workspace
-    );
-
-    perform_workspace_switch({ focused_monitor_, switch_result->old_workspace, switch_result->new_workspace });
+    perform_workspace_switch(*ctx);
     focus_or_fallback(monitor);
     flush_and_drain_crossing();
 
@@ -132,9 +135,6 @@ void WindowManager::move_window_to_workspace(size_t ws)
 
     if (client->kind == Client::Kind::Floating)
     {
-        if (client->monitor >= monitors_.size())
-            return;
-
         size_t monitor_idx = client->monitor;
         if (!move_floating_client_to_workspace(*client, monitor_idx, target_ws, false))
             return;
@@ -206,9 +206,6 @@ void WindowManager::move_window_to_monitor(int direction)
 
     if (client->kind == Client::Kind::Floating)
     {
-        if (client->monitor >= monitors_.size())
-            return;
-
         size_t source_idx = client->monitor;
         size_t target_idx = wrap_monitor_index(static_cast<int>(source_idx) + direction);
         if (target_idx == source_idx)

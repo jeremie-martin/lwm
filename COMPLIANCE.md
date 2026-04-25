@@ -152,6 +152,8 @@ Handled client messages:
 
 - desktop indices are translated through the monitor/workspace mapping
 - `0xFFFFFFFF` maps to sticky
+- a missing or sticky hint at manage time is treated as "no opinion" — the window lands on the focused monitor's current workspace
+- a present hint that decodes to an out-of-range monitor or workspace index is logged at WARN and ignored (same fallback as missing)
 
 `_NET_SHOWING_DESKTOP`
 

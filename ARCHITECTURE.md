@@ -157,7 +157,13 @@ Primary transition funnels:
 - `restack_monitor_layers(...)`
 - `flush_and_drain_crossing(...)` (crossing-event drain after visibility changes)
 
-`perform_workspace_switch(...)` contract:
+`perform_workspace_switch(...)` takes a validated `WorkspaceSwitchContext`. The context
+is constructed via `WorkspaceSwitchContext::validate(monitor_idx, monitor, target_workspace)`,
+which returns `nullopt` for no-op switches (target equals current) and out-of-range targets.
+The private constructor prevents callers from passing an invalid switch, so the funnel
+itself does not re-validate.
+
+Funnel contract:
 
 1. update monitor current and previous workspace
 2. update `_NET_CURRENT_DESKTOP`
@@ -225,6 +231,10 @@ Required behavior:
 - restore focus target and rearrange all monitors
 
 Using monitor names rather than indices is what prevents unplug/replug index churn from turning into workspace placement bugs.
+
+The rebind is **comprehensive**: every entry in `clients_` is reassigned to a valid `(monitor, workspace)` before `handle_randr_screen_change` returns. `plan_hotplug` covers tiled and floating windows by name; dock/desktop clients are rebound by name in the same pass; a final sweep walks `clients_` and clamps any residual stale indices to monitor `0` (logging a warning).
+
+**Post-rebind invariant**: for every Tiled and Floating client, `client.monitor < monitors_.size()` and `client.workspace < monitors_[client.monitor].workspaces.size()`. Downstream code reads these fields without bounds-checking. Dock/Desktop clients are rebound on a best-effort basis by name; their indices are not part of the invariant (consistent with `core/invariants.hpp` `assert_client_managed`).
 
 ## 9. Common Regression Traps
 

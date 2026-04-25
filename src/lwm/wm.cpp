@@ -1039,7 +1039,7 @@ Geometry WindowManager::current_window_geometry(xcb_window_t window) const
 void WindowManager::convert_window_to_floating(xcb_window_t window)
 {
     auto* client = get_client(window);
-    if (!client || client->kind != Client::Kind::Tiled || client->monitor >= monitors_.size())
+    if (!client || client->kind != Client::Kind::Tiled)
         return;
 
     std::optional<Geometry> prior_floating = prior_floating_geometry(*client);
@@ -1075,7 +1075,7 @@ void WindowManager::convert_window_to_floating(xcb_window_t window)
 void WindowManager::convert_window_to_tiled(xcb_window_t window, std::optional<Geometry> prior_floating)
 {
     auto* client = get_client(window);
-    if (!client || client->kind != Client::Kind::Floating || client->monitor >= monitors_.size())
+    if (!client || client->kind != Client::Kind::Floating)
         return;
 
     auto saved_position = saved_tiled_pos(*client);
@@ -1115,8 +1115,6 @@ void WindowManager::toggle_window_float(xcb_window_t window)
         return;
 
     size_t monitor_idx = client->monitor;
-    if (monitor_idx >= monitors_.size())
-        return;
 
     bool toggled_to_floating = client->kind == Client::Kind::Tiled;
     if (toggled_to_floating)
@@ -1198,8 +1196,7 @@ void WindowManager::apply_rule_target_location(xcb_window_t window, WindowRuleRe
 void WindowManager::apply_rule_floating_placement(xcb_window_t window, WindowRuleResult const& rule_result)
 {
     auto* client = get_client(window);
-    if (!client || client->kind != Client::Kind::Floating || client->monitor >= monitors_.size()
-        || rule_result.layer == WindowLayer::Overlay)
+    if (!client || client->kind != Client::Kind::Floating || rule_result.layer == WindowLayer::Overlay)
     {
         return;
     }
@@ -1505,6 +1502,7 @@ void WindowManager::detect_monitors()
 
     if (!res_reply)
     {
+        LOG_WARN("randr: get_screen_resources_current returned no reply, falling back to single monitor");
         create_fallback_monitor();
         return;
     }
@@ -1518,7 +1516,10 @@ void WindowManager::detect_monitors()
         auto* out_reply = xcb_randr_get_output_info_reply(conn_.get(), out_cookie, nullptr);
 
         if (!out_reply)
+        {
+            LOG_WARN("randr: get_output_info(output={:#x}) returned no reply, skipping", outputs[i]);
             continue;
+        }
         if (out_reply->connection != XCB_RANDR_CONNECTION_CONNECTED || out_reply->crtc == XCB_NONE)
         {
             free(out_reply);
@@ -1532,7 +1533,17 @@ void WindowManager::detect_monitors()
         auto crtc_cookie = xcb_randr_get_crtc_info(conn_.get(), out_reply->crtc, res_reply->config_timestamp);
         auto* crtc_reply = xcb_randr_get_crtc_info_reply(conn_.get(), crtc_cookie, nullptr);
 
-        if (crtc_reply && crtc_reply->width > 0 && crtc_reply->height > 0)
+        if (!crtc_reply)
+        {
+            LOG_WARN("randr: get_crtc_info(crtc={:#x}, output={}) returned no reply, skipping monitor",
+                out_reply->crtc, output_name);
+        }
+        else if (crtc_reply->width == 0 || crtc_reply->height == 0)
+        {
+            LOG_WARN("randr: crtc={:#x} (output={}) has zero dimensions ({}x{}), skipping monitor",
+                out_reply->crtc, output_name, crtc_reply->width, crtc_reply->height);
+        }
+        else
         {
             Monitor monitor;
             monitor.output = outputs[i];
@@ -1808,13 +1819,10 @@ ClassificationResult WindowManager::classify_managed_window(xcb_window_t window)
     return { classification, rule_result };
 }
 
-void WindowManager::refresh_user_time_tracking(xcb_window_t window)
+void WindowManager::refresh_user_time_tracking_into(Client& client)
 {
-    auto* client = get_client(window);
-    if (!client)
-        return;
-
-    client->user_time_window = XCB_NONE;
+    xcb_window_t window = client.id;
+    client.user_time_window = XCB_NONE;
 
     if (net_wm_user_time_window_ != XCB_NONE)
     {
@@ -1827,7 +1835,7 @@ void WindowManager::refresh_user_time_tracking(xcb_window_t window)
                 xcb_window_t time_window = *static_cast<xcb_window_t*>(xcb_get_property_value(reply));
                 if (time_window != XCB_NONE)
                 {
-                    client->user_time_window = time_window;
+                    client.user_time_window = time_window;
                     if (time_window != window)
                         ensure_property_change_mask(conn_, time_window);
                 }
@@ -1836,7 +1844,13 @@ void WindowManager::refresh_user_time_tracking(xcb_window_t window)
         }
     }
 
-    client->user_time = get_user_time(window);
+    client.user_time = get_user_time(window);
+}
+
+void WindowManager::refresh_user_time_tracking(xcb_window_t window)
+{
+    if (auto* client = get_client(window))
+        refresh_user_time_tracking_into(*client);
 }
 
 
@@ -2016,28 +2030,22 @@ void WindowManager::sync_managed_window_classification(xcb_window_t window, Clas
     bool kind_changed = previous_kind != client->kind;
 
     // Sync visibility on all affected monitors
-    if (previous_monitor < monitors_.size())
-    {
-        update_fullscreen_owner_after_visibility_change(previous_monitor);
-        sync_visibility_for_monitor(previous_monitor);
-    }
-    if (monitor_changed && current_monitor < monitors_.size())
+    update_fullscreen_owner_after_visibility_change(previous_monitor);
+    sync_visibility_for_monitor(previous_monitor);
+    if (monitor_changed)
     {
         update_fullscreen_owner_after_visibility_change(current_monitor);
         sync_visibility_for_monitor(current_monitor);
     }
 
     // Rearrange/restack previous monitor if window moved away
-    if (previous_monitor < monitors_.size() && (monitor_changed || workspace_changed || kind_changed))
+    if (monitor_changed || workspace_changed || kind_changed)
     {
         if (previous_kind == Client::Kind::Tiled)
             rearrange_monitor(monitors_[previous_monitor]);
         else if (monitor_changed)
             restack_monitor_layers(previous_monitor);
     }
-
-    if (current_monitor >= monitors_.size())
-        return;
 
     // Rearrange/apply geometry on current monitor
     if (client->kind == Client::Kind::Tiled)
@@ -2148,8 +2156,11 @@ void WindowManager::manage_window(xcb_window_t window, bool start_iconic)
     auto [instance_name, class_name] = get_wm_class(window);
     std::string window_name = get_window_name(window);
     auto target = resolve_window_desktop(window);
-    size_t target_monitor_idx = target ? target->first : focused_monitor_;
-    size_t target_workspace_idx = target ? target->second : monitors_[target_monitor_idx].current_workspace;
+    if (target.kind == DesktopResolution::OutOfRange)
+        LOG_WARN("manage_window({:#x}): _NET_WM_DESKTOP out of range, falling back to focused monitor", window);
+    bool resolved = target.kind == DesktopResolution::Resolved;
+    size_t target_monitor_idx = resolved ? target.monitor : focused_monitor_;
+    size_t target_workspace_idx = resolved ? target.workspace : monitors_[target_monitor_idx].current_workspace;
 
     {
         Client client;
@@ -2319,7 +2330,7 @@ void WindowManager::clear_fullscreen_state(Client& client)
     if (client.app_prefs.above && client.layer != WindowLayer::Overlay && client.layer_hint != LayerHint::Above)
         set_window_layer_hint(client, LayerHint::Above);
 
-    if (client.kind == Client::Kind::Floating && client.monitor < monitors_.size() && should_be_visible(client)
+    if (client.kind == Client::Kind::Floating && should_be_visible(client)
         && !client.hidden && !is_suppressed_by_fullscreen(client))
     {
         apply_floating_geometry(client);
@@ -3112,6 +3123,28 @@ Client const* WindowManager::get_client(xcb_window_t window) const
     return it != clients_.end() ? &it->second : nullptr;
 }
 
+Client& WindowManager::require_client(xcb_window_t window)
+{
+    auto it = clients_.find(window);
+    if (it == clients_.end())
+    {
+        LOG_CRITICAL("require_client: window {:#x} not in clients registry", window);
+        std::abort();
+    }
+    return it->second;
+}
+
+Client const& WindowManager::require_client(xcb_window_t window) const
+{
+    auto it = clients_.find(window);
+    if (it == clients_.end())
+    {
+        LOG_CRITICAL("require_client: window {:#x} not in clients registry", window);
+        std::abort();
+    }
+    return it->second;
+}
+
 /**
  * @brief Get raw _NET_WM_DESKTOP value for a window.
  * @return The desktop index, or nullopt if not set. 0xFFFFFFFF indicates sticky.
@@ -3136,28 +3169,25 @@ bool WindowManager::is_sticky_desktop(xcb_window_t window) const
     return desktop && *desktop == 0xFFFFFFFF;
 }
 
-std::optional<std::pair<size_t, size_t>> WindowManager::resolve_window_desktop(xcb_window_t window) const
+WindowManager::DesktopResolutionResult WindowManager::resolve_window_desktop(xcb_window_t window) const
 {
     if (config_.workspaces.count == 0)
-        return std::nullopt;
+        return { DesktopResolution::NoHint };
 
     auto desktop = get_window_desktop(window);
     if (!desktop)
-        return std::nullopt;
+        return { DesktopResolution::NoHint };
 
     auto indices = ewmh_policy::desktop_to_indices(*desktop, config_.workspaces.count);
     if (!indices)
-        return std::nullopt;
+        return { DesktopResolution::OutOfRange };
     size_t monitor_idx = indices->first;
     size_t workspace_idx = indices->second;
 
-    if (monitor_idx >= monitors_.size())
-        return std::nullopt;
+    if (monitor_idx >= monitors_.size() || workspace_idx >= monitors_[monitor_idx].workspaces.size())
+        return { DesktopResolution::OutOfRange };
 
-    if (workspace_idx >= monitors_[monitor_idx].workspaces.size())
-        return std::nullopt;
-
-    return std::pair<size_t, size_t>{ monitor_idx, workspace_idx };
+    return { DesktopResolution::Resolved, monitor_idx, workspace_idx };
 }
 
 std::optional<xcb_window_t> WindowManager::transient_for_window(xcb_window_t window) const
@@ -4063,20 +4093,23 @@ void WindowManager::flush_and_drain_crossing()
     }
 }
 
-void WindowManager::cache_focus_hints(xcb_window_t window)
+void WindowManager::cache_focus_hints_into(Client& client)
 {
-    auto* client = get_client(window);
-    if (!client)
-        return;
-
+    xcb_window_t window = client.id;
     // Read WM_HINTS directly from X (the cached default would be stale).
     xcb_icccm_wm_hints_t hints;
     if (xcb_icccm_get_wm_hints_reply(conn_.get(), xcb_icccm_get_wm_hints(conn_.get(), window), &hints, nullptr))
-        client->accepts_input = !(hints.flags & XCB_ICCCM_WM_HINT_INPUT) || hints.input;
+        client.accepts_input = !(hints.flags & XCB_ICCCM_WM_HINT_INPUT) || hints.input;
     else
-        client->accepts_input = true; // ICCCM default when WM_HINTS absent
+        client.accepts_input = true; // ICCCM default when WM_HINTS absent
 
-    client->supports_take_focus = supports_protocol(window, wm_take_focus_);
+    client.supports_take_focus = supports_protocol(window, wm_take_focus_);
+}
+
+void WindowManager::cache_focus_hints(xcb_window_t window)
+{
+    if (auto* client = get_client(window))
+        cache_focus_hints_into(*client);
 }
 
 void WindowManager::sync_visibility_for_monitor(size_t monitor_idx)
@@ -4095,11 +4128,9 @@ void WindowManager::sync_visibility_for_monitor(size_t monitor_idx)
             continue;
 
         bool suppressed = is_suppressed_by_fullscreen(client);
-        bool should_be_visible = visibility_policy::is_window_visible(
-            showing_desktop_, client.iconic, client.sticky, client.monitor, client.workspace, monitors_
-        ) && !suppressed;
+        bool should_show = should_be_visible(client) && !suppressed;
 
-        if (should_be_visible && client.hidden)
+        if (should_show && client.hidden)
         {
             show_window(client);
             if (client.kind == Client::Kind::Floating)
@@ -4116,7 +4147,7 @@ void WindowManager::sync_visibility_for_monitor(size_t monitor_idx)
             }
             // Tiled geometry is handled by rearrange_monitor / layout_.arrange
         }
-        else if (!should_be_visible && !client.hidden)
+        else if (!should_show && !client.hidden)
         {
             hide_window(client);
         }

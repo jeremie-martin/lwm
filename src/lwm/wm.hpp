@@ -345,10 +345,17 @@ private:
 
     void manage_window(xcb_window_t window, bool start_iconic = false);
     void manage_floating_window(xcb_window_t window, bool start_iconic = false);
+    /// Populate accepts_input / supports_take_focus on a client struct from X11 properties.
+    /// The _into form takes a reference so it can be called before the client is inserted
+    /// into clients_; the window-keyed wrapper is for event-handler use after insert.
+    void cache_focus_hints_into(Client& client);
     void cache_focus_hints(xcb_window_t window);
     void parse_initial_ewmh_state(Client& client);
     void apply_post_manage_states(xcb_window_t window, bool has_transient);
     ClassificationResult classify_managed_window(xcb_window_t window);
+    /// Same split: _into populates user_time fields before insert; window-keyed wrapper
+    /// is for event-handler refresh after insert.
+    void refresh_user_time_tracking_into(Client& client);
     void refresh_user_time_tracking(xcb_window_t window);
     void reevaluate_managed_window(xcb_window_t window);
     void sync_managed_window_classification(xcb_window_t window, ClassificationResult const& result);
@@ -385,11 +392,26 @@ private:
     void rearrange_monitor(Monitor& monitor, bool geometry_only = false);
     void rearrange_all_monitors();
 
-    struct WorkspaceSwitchContext
+    /// Validated input for perform_workspace_switch. Construct via validate() — the
+    /// private constructor prevents callers from passing a no-op or out-of-range
+    /// switch, so perform_workspace_switch can act without re-checking.
+    class WorkspaceSwitchContext
     {
-        size_t monitor_idx;
-        size_t old_workspace;
-        size_t new_workspace;
+    public:
+        /// Returns nullopt if target_workspace equals current or is out of range.
+        static std::optional<WorkspaceSwitchContext>
+        validate(size_t monitor_idx, Monitor const& monitor, size_t target_workspace);
+
+        size_t monitor_idx() const { return monitor_idx_; }
+        size_t old_workspace() const { return old_workspace_; }
+        size_t new_workspace() const { return new_workspace_; }
+
+    private:
+        WorkspaceSwitchContext(size_t monitor_idx, size_t old_workspace, size_t new_workspace)
+            : monitor_idx_(monitor_idx), old_workspace_(old_workspace), new_workspace_(new_workspace) {}
+        size_t monitor_idx_;
+        size_t old_workspace_;
+        size_t new_workspace_;
     };
 
     void perform_workspace_switch(WorkspaceSwitchContext const& ctx);
@@ -403,8 +425,14 @@ private:
     void launch_program(CommandConfig const& command);
     void adjust_master_ratio(double delta);
 
+    /// Lookup: nullable handle for X event boundaries where the window may not be managed.
     Client* get_client(xcb_window_t window);
     Client const* get_client(xcb_window_t window) const;
+    /// Require: asserts the client exists. Use from internal funnels that already proved
+    /// managed status (iterating clients_, post-manage finalization, operations on
+    /// active_window_, hotplug-plan apply, restart-state apply).
+    Client& require_client(xcb_window_t window);
+    Client const& require_client(xcb_window_t window) const;
     bool is_managed(xcb_window_t window) const { return clients_.contains(window); }
     bool window_is_iconic(xcb_window_t window) const
     {
@@ -435,7 +463,23 @@ private:
     std::optional<uint32_t> get_raw_window_desktop(xcb_window_t window) const;
     std::optional<uint32_t> get_window_desktop(xcb_window_t window) const;
     bool is_sticky_desktop(xcb_window_t window) const;
-    std::optional<std::pair<size_t, size_t>> resolve_window_desktop(xcb_window_t window) const;
+
+    /// Outcome of resolving a window's _NET_WM_DESKTOP hint to (monitor, workspace).
+    /// Discriminates the three reasons a hint can fail to land at a concrete location,
+    /// so callers can distinguish "the window has no opinion" from "the app sent garbage".
+    enum class DesktopResolution
+    {
+        Resolved,    ///< monitor/workspace are valid indices.
+        NoHint,      ///< Window has no _NET_WM_DESKTOP, or it is sticky (0xFFFFFFFF).
+        OutOfRange,  ///< Hint present but decodes to an invalid monitor or workspace index.
+    };
+    struct DesktopResolutionResult
+    {
+        DesktopResolution kind = DesktopResolution::NoHint;
+        size_t monitor = 0;
+        size_t workspace = 0;
+    };
+    DesktopResolutionResult resolve_window_desktop(xcb_window_t window) const;
     std::optional<xcb_window_t> transient_for_window(xcb_window_t window) const;
     bool should_be_visible(Client const& client) const;
     bool is_physically_visible(Client const& client) const;

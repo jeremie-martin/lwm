@@ -225,13 +225,13 @@ void WindowManager::switch_to_ewmh_desktop(uint32_t desktop)
     );
 
     focused_monitor_ = monitor_idx;
-    if (workspace_idx != old_workspace)
+    if (auto ctx = WorkspaceSwitchContext::validate(monitor_idx, monitor, workspace_idx))
     {
-        perform_workspace_switch({ monitor_idx, old_workspace, workspace_idx });
+        perform_workspace_switch(*ctx);
     }
     else
     {
-        // Only monitor changed, no workspace switch needed
+        // Only monitor changed (or no-op), no workspace switch needed
         update_ewmh_current_desktop();
     }
     focus_or_fallback(monitor);

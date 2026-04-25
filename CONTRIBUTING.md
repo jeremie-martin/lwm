@@ -49,6 +49,13 @@ Two rules to apply when changing the core:
 
 If a change is hard to test without faking something inside the WM, treat it as a design signal: restructure the production code rather than the test. Defensive code is for the boundaries, not the model.
 
+**Client lookup convention.** `WindowManager` exposes two complementary lookups:
+
+- `get_client(window) → Client*` is the **lookup** path: nullable, for X event dispatch boundaries where the window may not be managed (override-redirect, race with destroy, an EWMH client message naming an arbitrary window).
+- `require_client(window) → Client&` is the **require** path: aborts if the window is not in `clients_`. Use it from internal funnels that already proved managed status — iterating `clients_` or `Workspace::windows` or `scratchpad_pool_`, post-`manage_*` finalization, hotplug-plan apply, restart-state apply, operations on `active_window_` or `monitors_[i].fullscreen_owner`.
+
+When you find yourself writing `auto* c = get_client(w); if (!c) return;` in code that did not just receive `w` from an X event, the right fix is usually `require_client` — the null branch is dead code that hides where the real ownership boundary should sit.
+
 ## Test Map
 
 Use the smallest relevant suite first, then run the broader suite before finishing.

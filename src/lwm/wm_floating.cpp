@@ -16,8 +16,7 @@ void WindowManager::manage_floating_window(xcb_window_t window, bool start_iconi
     if (transient)
     {
         if (auto const* parent = get_client(*transient);
-            parent && parent->monitor < monitors_.size()
-            && parent->workspace < monitors_[parent->monitor].workspaces.size())
+            parent && (parent->kind == Client::Kind::Tiled || parent->kind == Client::Kind::Floating))
         {
             monitor_idx = parent->monitor;
             workspace_idx = parent->workspace;
@@ -34,10 +33,13 @@ void WindowManager::manage_floating_window(xcb_window_t window, bool start_iconi
 
     if (!monitor_idx || !workspace_idx)
     {
-        if (auto target = resolve_window_desktop(window))
+        auto target = resolve_window_desktop(window);
+        if (target.kind == WindowManager::DesktopResolution::OutOfRange)
+            LOG_WARN("manage_floating_window({:#x}): _NET_WM_DESKTOP out of range, ignoring hint", window);
+        else if (target.kind == WindowManager::DesktopResolution::Resolved)
         {
-            monitor_idx = target->first;
-            workspace_idx = target->second;
+            monitor_idx = target.monitor;
+            workspace_idx = target.workspace;
         }
     }
 
@@ -139,12 +141,11 @@ void WindowManager::manage_floating_window(xcb_window_t window, bool start_iconi
         client.iconic = start_iconic;
         client.ewmh_type = ewmh_.get_window_type_enum(window);
         parse_initial_ewmh_state(client);
+        cache_focus_hints_into(client);
+        refresh_user_time_tracking_into(client);
 
         clients_[window] = std::move(client);
     }
-    cache_focus_hints(window);
-
-    refresh_user_time_tracking(window);
 
     uint32_t values[] = { kManagedWindowEventMask };
     xcb_change_window_attributes(conn_.get(), window, XCB_CW_EVENT_MASK, values);
@@ -156,11 +157,9 @@ void WindowManager::manage_floating_window(xcb_window_t window, bool start_iconi
         XCB_NONE, XCB_NONE, XCB_BUTTON_INDEX_ANY, XCB_MOD_MASK_ANY
     );
 
-    auto* client = get_client(window);
-    if (!client)
-        return;
+    auto& client = require_client(window);
 
-    uint32_t border_width = border_width_for_client(*client);
+    uint32_t border_width = border_width_for_client(client);
     xcb_configure_window(conn_.get(), window, XCB_CONFIG_WINDOW_BORDER_WIDTH, &border_width);
 
     if (wm_state_ != XCB_NONE)
@@ -175,14 +174,14 @@ void WindowManager::manage_floating_window(xcb_window_t window, bool start_iconi
         ewmh_.set_window_state(window, ewmh_.get()->_NET_WM_STATE_HIDDEN, true);
     }
 
-    update_sync_state(*client);
-    update_fullscreen_monitor_state(*client);
+    update_sync_state(client);
+    update_fullscreen_monitor_state(client);
 
     ewmh_.set_frame_extents(window, 0, 0, 0, 0); // LWM doesn't add frames
     uint32_t desktop = get_ewmh_desktop_index(*monitor_idx, *workspace_idx);
     ewmh_.set_window_desktop(window, desktop);
 
-    update_allowed_actions(*client);
+    update_allowed_actions(client);
 
     update_ewmh_client_list();
 
@@ -194,12 +193,12 @@ void WindowManager::manage_floating_window(xcb_window_t window, bool start_iconi
     auto manage_state_flags = ewmh_.get_window_state_flags(window);
     if (manage_state_flags.fullscreen)
     {
-        set_fullscreen(*client, true);
+        set_fullscreen(client, true);
     }
 
     if (manage_state_flags.maximized_horz || manage_state_flags.maximized_vert)
     {
-        set_window_maximized(*client, manage_state_flags.maximized_horz, manage_state_flags.maximized_vert);
+        set_window_maximized(client, manage_state_flags.maximized_horz, manage_state_flags.maximized_vert);
     }
 
     // With off-screen visibility: map window once when managing
@@ -209,7 +208,7 @@ void WindowManager::manage_floating_window(xcb_window_t window, bool start_iconi
     sync_visibility_for_monitor(*monitor_idx);
     restack_monitor_layers(*monitor_idx);
 
-    if (!start_iconic && !suppress_focus_ && *monitor_idx == focused_monitor_ && should_be_visible(*client))
+    if (!start_iconic && !suppress_focus_ && *monitor_idx == focused_monitor_ && should_be_visible(client))
         focus_any_window(window);
 
     // AFTER mapping: Apply non-geometry states
@@ -241,12 +240,11 @@ void WindowManager::unmanage_floating_window(xcb_window_t window)
     clients_.erase(window);
 
     update_ewmh_client_list();
-    if (monitor_idx < monitors_.size())
-        update_fullscreen_owner_after_visibility_change(monitor_idx);
+    update_fullscreen_owner_after_visibility_change(monitor_idx);
 
     if (was_active)
     {
-        if (monitor_idx == focused_monitor_ && monitor_idx < monitors_.size())
+        if (monitor_idx == focused_monitor_)
         {
             focus_or_fallback(monitors_[monitor_idx]);
         }
@@ -275,13 +273,13 @@ void WindowManager::update_floating_monitor_for_geometry(Client& client)
     int32_t center_y = static_cast<int32_t>(geom.y) + static_cast<int32_t>(geom.height) / 2;
     auto new_monitor =
         focus::monitor_index_at_point(monitors_, static_cast<int16_t>(center_x), static_cast<int16_t>(center_y));
-    if (!new_monitor || *new_monitor == client.monitor || *new_monitor >= monitors_.size())
+    if (!new_monitor || *new_monitor == client.monitor)
         return;
 
     if (!move_floating_client_to_workspace(client, *new_monitor, monitors_[*new_monitor].current_workspace, false))
         return;
 
-    if (active_window_ == client.id && is_suppressed_by_fullscreen(client) && client.monitor < monitors_.size())
+    if (active_window_ == client.id && is_suppressed_by_fullscreen(client))
         focus_or_fallback(monitors_[client.monitor], false);
 
     flush_and_drain_crossing();

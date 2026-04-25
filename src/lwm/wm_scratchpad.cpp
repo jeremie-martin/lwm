@@ -160,8 +160,7 @@ void WindowManager::stash_to_scratchpad(xcb_window_t window)
     std::erase(scratchpad_pool_, window);
     scratchpad_pool_.push_back(window);
 
-    if (client->monitor < monitors_.size())
-        finalize_visibility_on_monitor(client->monitor);
+    finalize_visibility_on_monitor(client->monitor);
 
     if (active_window_ == window && focused_monitor_ < monitors_.size())
         focus_or_fallback(monitors_[focused_monitor_]);
@@ -171,15 +170,17 @@ void WindowManager::stash_to_scratchpad(xcb_window_t window)
 
 xcb_window_t WindowManager::find_visible_pool_window() const
 {
+    // scratchpad_pool_ entries are guaranteed managed: release_scratchpad_window runs
+    // before unmanage erases from clients_.
     for (auto it = scratchpad_pool_.rbegin(); it != scratchpad_pool_.rend(); ++it)
     {
-        auto const* client = get_client(*it);
-        if (client && client->scratchpad
-            && std::holds_alternative<VisibleScratchpadPoolMembership>(*client->scratchpad)
-            && !client->iconic && !client->hidden)
+        auto const& client = require_client(*it);
+        if (client.scratchpad
+            && std::holds_alternative<VisibleScratchpadPoolMembership>(*client.scratchpad)
+            && !client.iconic && !client.hidden
+            && is_physically_visible(client))
         {
-            if (is_physically_visible(*client))
-                return *it;
+            return *it;
         }
     }
     return XCB_NONE;
@@ -200,14 +201,13 @@ void WindowManager::cycle_scratchpad_pool()
 
             for (auto it = scratchpad_pool_.rbegin(); it != scratchpad_pool_.rend(); ++it)
             {
-                if (*it != visible)
+                if (*it == visible)
+                    continue;
+                auto const& client = require_client(*it);
+                if (is_hidden_pool_scratchpad(client) && client.iconic)
                 {
-                    auto* client = get_client(*it);
-                    if (client && is_hidden_pool_scratchpad(*client) && client->iconic)
-                    {
-                        show_pool_scratchpad_window(*it);
-                        return;
-                    }
+                    show_pool_scratchpad_window(*it);
+                    return;
                 }
             }
         }
@@ -220,8 +220,8 @@ void WindowManager::cycle_scratchpad_pool()
 
     for (auto it = scratchpad_pool_.rbegin(); it != scratchpad_pool_.rend(); ++it)
     {
-        auto* client = get_client(*it);
-        if (client && is_hidden_pool_scratchpad(*client) && client->iconic)
+        auto const& client = require_client(*it);
+        if (is_hidden_pool_scratchpad(client) && client.iconic)
         {
             show_pool_scratchpad_window(*it);
             return;
@@ -260,8 +260,7 @@ void WindowManager::hide_scratchpad_window(xcb_window_t window)
     client->iconic = true;
     set_iconic_state(window, true);
 
-    if (client->monitor < monitors_.size())
-        finalize_visibility_on_monitor(client->monitor);
+    finalize_visibility_on_monitor(client->monitor);
 
     if (active_window_ == window && focused_monitor_ < monitors_.size())
         focus_or_fallback(monitors_[focused_monitor_]);
@@ -306,7 +305,7 @@ void WindowManager::show_named_scratchpad_window(xcb_window_t window, Scratchpad
         rearrange_monitor(monitors_[target_monitor]);
     restack_monitor_layers(target_monitor);
 
-    if (old_monitor != target_monitor && old_monitor < monitors_.size())
+    if (old_monitor != target_monitor)
         finalize_visibility_on_monitor(old_monitor);
 
     focus_any_window(window);
@@ -360,18 +359,11 @@ void WindowManager::show_pool_scratchpad_window(xcb_window_t window)
             if (old_monitor != target_monitor)
             {
                 Geometry target_area = monitors_[target_monitor].working_area();
-                if (old_monitor < monitors_.size())
-                {
-                    restored_geometry = floating::translate_to_area(
-                        restored_geometry,
-                        monitors_[old_monitor].working_area(),
-                        target_area
-                    );
-                }
-                else
-                {
-                    restored_geometry = floating::clamp_to_area(target_area, restored_geometry);
-                }
+                restored_geometry = floating::translate_to_area(
+                    restored_geometry,
+                    monitors_[old_monitor].working_area(),
+                    target_area
+                );
             }
             floating_geometry(*client) = restored_geometry;
         }
