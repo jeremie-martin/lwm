@@ -18,12 +18,21 @@ namespace lwm {
 // Initialization and config reload
 // ---------------------------------------------------------------------------
 
+std::optional<Geometry> WindowManager::detach_tiled_to_floating(Client& client)
+{
+    std::optional<Geometry> prior_floating = prior_floating_geometry(client);
+    Geometry geometry = client.tiled_geometry;
+    remove_tiled_from_workspace(client, client.monitor, client.workspace);
+    set_floating_state(client, geometry);
+    return prior_floating;
+}
+
 void WindowManager::init_scratchpad_state()
 {
     named_scratchpads_.clear();
     for (auto const& sp : config_.scratchpads)
     {
-        named_scratchpads_.push_back({ sp.name, XCB_NONE, false });
+        named_scratchpads_.push_back({ sp.name });
     }
     rebuild_scratchpad_matchers();
 }
@@ -80,9 +89,10 @@ void WindowManager::toggle_named_scratchpad(std::string_view name)
         return;
 
     // No window claimed — auto-launch
-    if (state->window == XCB_NONE)
+    xcb_window_t claimed = state->window();
+    if (claimed == XCB_NONE)
     {
-        if (state->pending_launch)
+        if (state->pending_launch())
             return; // already waiting
         if (config->spawn.empty())
         {
@@ -91,27 +101,27 @@ void WindowManager::toggle_named_scratchpad(std::string_view name)
         }
         LOG_INFO("Scratchpad '{}': launching '{}'", name, config->spawn.describe());
         launch_program(config->spawn);
-        state->pending_launch = true;
+        state->mark_launch_pending();
         return;
     }
 
-    auto* client = get_client(state->window);
+    auto* client = get_client(claimed);
     if (!client)
     {
-        state->window = XCB_NONE;
+        state->mark_empty();
         return;
     }
 
-    if (!client->iconic && !client->hidden && is_physically_visible(state->window))
+    if (!client->iconic && !client->hidden && is_physically_visible(*client))
     {
-        if (active_window_ == state->window)
-            hide_scratchpad_window(state->window);
+        if (active_window_ == claimed)
+            hide_scratchpad_window(claimed);
         else
-            focus_any_window(state->window);
+            focus_any_window(claimed);
         return;
     }
 
-    show_named_scratchpad_window(state->window, *config);
+    show_named_scratchpad_window(claimed, *config);
 }
 
 // ---------------------------------------------------------------------------
@@ -123,28 +133,27 @@ void WindowManager::stash_to_scratchpad(xcb_window_t window)
     auto* client = get_client(window);
     if (!client)
         return;
-    if (client->in_scratchpad || client->scratchpad_name.has_value())
+    if (client->scratchpad.has_value())
         return;
     if (client->fullscreen || client->iconic)
         return;
     if (client->kind != Client::Kind::Tiled && client->kind != Client::Kind::Floating)
         return;
-    if (drag_state_.active)
+    if (drag_active())
         return;
 
     LOG_INFO("Stashing window {:#x} to scratchpad pool", window);
 
-    client->scratchpad_restore_kind = client->kind;
-    if (client->kind == Client::Kind::Floating)
-        client->scratchpad_restore_geometry = client->floating_geometry;
-
     if (client->kind == Client::Kind::Tiled)
     {
-        remove_tiled_from_workspace(window, client->monitor, client->workspace);
-        client->kind = Client::Kind::Floating;
+        auto prior_floating = detach_tiled_to_floating(*client);
+        client->scratchpad = HiddenTiledScratchpadPoolMembership { prior_floating };
+    }
+    else
+    {
+        client->scratchpad = HiddenFloatingScratchpadPoolMembership { floating_geometry(*client) };
     }
 
-    client->in_scratchpad = true;
     client->iconic = true;
     set_iconic_state(window, true);
 
@@ -152,10 +161,7 @@ void WindowManager::stash_to_scratchpad(xcb_window_t window)
     scratchpad_pool_.push_back(window);
 
     if (client->monitor < monitors_.size())
-    {
-        sync_visibility_for_monitor(client->monitor);
-        rearrange_monitor(monitors_[client->monitor]);
-    }
+        finalize_visibility_on_monitor(client->monitor);
 
     if (active_window_ == window && focused_monitor_ < monitors_.size())
         focus_or_fallback(monitors_[focused_monitor_]);
@@ -168,9 +174,11 @@ xcb_window_t WindowManager::find_visible_pool_window() const
     for (auto it = scratchpad_pool_.rbegin(); it != scratchpad_pool_.rend(); ++it)
     {
         auto const* client = get_client(*it);
-        if (client && !client->iconic && !client->hidden && !client->scratchpad_name.has_value())
+        if (client && client->scratchpad
+            && std::holds_alternative<VisibleScratchpadPoolMembership>(*client->scratchpad)
+            && !client->iconic && !client->hidden)
         {
-            if (is_physically_visible(*it))
+            if (is_physically_visible(*client))
                 return *it;
         }
     }
@@ -195,7 +203,7 @@ void WindowManager::cycle_scratchpad_pool()
                 if (*it != visible)
                 {
                     auto* client = get_client(*it);
-                    if (client && client->in_scratchpad && client->iconic)
+                    if (client && is_hidden_pool_scratchpad(*client) && client->iconic)
                     {
                         show_pool_scratchpad_window(*it);
                         return;
@@ -213,7 +221,7 @@ void WindowManager::cycle_scratchpad_pool()
     for (auto it = scratchpad_pool_.rbegin(); it != scratchpad_pool_.rend(); ++it)
     {
         auto* client = get_client(*it);
-        if (client && client->in_scratchpad && client->iconic)
+        if (client && is_hidden_pool_scratchpad(*client) && client->iconic)
         {
             show_pool_scratchpad_window(*it);
             return;
@@ -233,27 +241,27 @@ void WindowManager::hide_scratchpad_window(xcb_window_t window)
 
     LOG_DEBUG("Hiding scratchpad window {:#x}", window);
 
-    if (client->kind == Client::Kind::Tiled && !client->scratchpad_name.has_value())
+    if (scratchpad_named(*client))
     {
-        client->scratchpad_restore_kind = Client::Kind::Tiled;
-        remove_tiled_from_workspace(window, client->monitor, client->workspace);
-        client->kind = Client::Kind::Floating; // Satisfy invariants while hidden
+        // Named scratchpads are always restored using their configured floating placement.
     }
-    else if (client->kind == Client::Kind::Floating && !client->scratchpad_name.has_value())
+    else if (client->kind == Client::Kind::Tiled)
     {
-        client->scratchpad_restore_kind = Client::Kind::Floating;
-        client->scratchpad_restore_geometry = client->floating_geometry;
+        // Hidden tiled scratchpads are kept as Floating to satisfy the invariant
+        // that Tiled clients live in their workspace's tiled list.
+        auto prior_floating = detach_tiled_to_floating(*client);
+        client->scratchpad = HiddenTiledScratchpadPoolMembership { prior_floating };
+    }
+    else if (client->kind == Client::Kind::Floating)
+    {
+        client->scratchpad = HiddenFloatingScratchpadPoolMembership { floating_geometry(*client) };
     }
 
-    client->in_scratchpad = true;
     client->iconic = true;
     set_iconic_state(window, true);
 
     if (client->monitor < monitors_.size())
-    {
-        sync_visibility_for_monitor(client->monitor);
-        rearrange_monitor(monitors_[client->monitor]);
-    }
+        finalize_visibility_on_monitor(client->monitor);
 
     if (active_window_ == window && focused_monitor_ < monitors_.size())
         focus_or_fallback(monitors_[focused_monitor_]);
@@ -276,8 +284,7 @@ void WindowManager::show_named_scratchpad_window(xcb_window_t window, Scratchpad
     bool was_tiled = client->kind == Client::Kind::Tiled;
     if (was_tiled)
     {
-        remove_tiled_from_workspace(window, client->monitor, client->workspace);
-        client->kind = Client::Kind::Floating;
+        detach_tiled_to_floating(*client);
         client->mru_order = next_mru_order_++;
     }
 
@@ -286,25 +293,21 @@ void WindowManager::show_named_scratchpad_window(xcb_window_t window, Scratchpad
     uint16_t h = static_cast<uint16_t>(static_cast<double>(wa.height) * config.height);
     int16_t x = static_cast<int16_t>(wa.x + (wa.width - w) / 2);
     int16_t y = static_cast<int16_t>(wa.y + (wa.height - h) / 2);
-    client->floating_geometry = { x, y, w, h };
+    floating_geometry(*client) = { x, y, w, h };
 
-    assign_window_workspace(window, target_monitor, target_workspace);
+    assign_window_workspace(*client, target_monitor, target_workspace);
 
     client->iconic = false;
-    client->in_scratchpad = false;
     set_iconic_state(window, false);
 
     sync_visibility_for_monitor(target_monitor);
-    apply_floating_geometry(window);
+    apply_floating_geometry(*client);
     if (was_tiled)
         rearrange_monitor(monitors_[target_monitor]);
     restack_monitor_layers(target_monitor);
 
     if (old_monitor != target_monitor && old_monitor < monitors_.size())
-    {
-        sync_visibility_for_monitor(old_monitor);
-        rearrange_monitor(monitors_[old_monitor]);
-    }
+        finalize_visibility_on_monitor(old_monitor);
 
     focus_any_window(window);
     flush_and_drain_crossing();
@@ -322,29 +325,38 @@ void WindowManager::show_pool_scratchpad_window(xcb_window_t window)
     size_t target_monitor = focused_monitor_;
     size_t target_workspace = monitors_[target_monitor].current_workspace;
 
-    Client::Kind restore_kind = client->scratchpad_restore_kind.value_or(Client::Kind::Floating);
+    auto const* hidden_tiled = hidden_tiled_pool_scratchpad(*client);
+    bool restore_tiled = hidden_tiled != nullptr;
+    std::optional<Geometry> restore_prior_floating;
+    if (hidden_tiled)
+        restore_prior_floating = hidden_tiled->prior_floating;
+    std::optional<Geometry> restore_geometry;
+    if (auto const* hidden_floating = hidden_floating_pool_scratchpad(*client))
+    {
+        restore_geometry = hidden_floating->restore_geometry;
+    }
 
-    assign_window_workspace(window, target_monitor, target_workspace);
+    assign_window_workspace(*client, target_monitor, target_workspace);
 
     client->iconic = false;
-    client->in_scratchpad = false;
+    client->scratchpad = VisibleScratchpadPoolMembership {};
     set_iconic_state(window, false);
 
-    if (restore_kind == Client::Kind::Tiled)
+    if (restore_tiled)
     {
-        client->kind = Client::Kind::Tiled;
-        add_tiled_to_workspace(window, target_monitor, target_workspace);
+        set_tiled_state(*client, restore_prior_floating);
+        add_tiled_to_workspace(*client, target_monitor, target_workspace);
     }
     else
     {
         if (client->kind == Client::Kind::Tiled)
         {
-            client->kind = Client::Kind::Floating;
+            set_floating_state(*client, restore_geometry ? *restore_geometry : client->tiled_geometry);
             client->mru_order = next_mru_order_++;
         }
-        if (client->scratchpad_restore_geometry.has_value())
+        if (restore_geometry.has_value())
         {
-            Geometry restored_geometry = *client->scratchpad_restore_geometry;
+            Geometry restored_geometry = *restore_geometry;
             if (old_monitor != target_monitor)
             {
                 Geometry target_area = monitors_[target_monitor].working_area();
@@ -361,19 +373,16 @@ void WindowManager::show_pool_scratchpad_window(xcb_window_t window)
                     restored_geometry = floating::clamp_to_area(target_area, restored_geometry);
                 }
             }
-            client->floating_geometry = restored_geometry;
+            floating_geometry(*client) = restored_geometry;
         }
     }
-
-    client->scratchpad_restore_kind.reset();
-    client->scratchpad_restore_geometry.reset();
 
     sync_visibility_for_monitor(target_monitor);
     if (client->kind == Client::Kind::Tiled)
         rearrange_monitor(monitors_[target_monitor]);
     else
     {
-        apply_floating_geometry(window);
+        apply_floating_geometry(*client);
         restack_monitor_layers(target_monitor);
     }
 
@@ -388,14 +397,13 @@ void WindowManager::show_pool_scratchpad_window(xcb_window_t window)
 void WindowManager::finalize_scratchpad_claim(
     xcb_window_t window, NamedScratchpadState& state, std::string_view name)
 {
-    state.window = window;
-    bool was_pending = state.pending_launch;
-    state.pending_launch = false;
+    bool was_pending = state.pending_launch();
+    state.mark_claimed(window);
 
     auto* client = get_client(window);
     if (!client)
         return;
-    client->in_scratchpad = true;
+    client->scratchpad = NamedScratchpadMembership { std::string(name) };
 
     if (was_pending)
     {
@@ -415,7 +423,7 @@ std::optional<std::string> WindowManager::match_scratchpad_for_window(
     if (rule_result.scratchpad.has_value())
     {
         auto* state = find_named_scratchpad(*rule_result.scratchpad);
-        if (state && state->window == XCB_NONE)
+        if (state && state->window() == XCB_NONE)
             return rule_result.scratchpad;
     }
 
@@ -425,7 +433,7 @@ std::optional<std::string> WindowManager::match_scratchpad_for_window(
     for (auto const& matcher : scratchpad_matchers_)
     {
         auto* state = find_named_scratchpad(matcher.name);
-        if (!state || state->window != XCB_NONE)
+        if (!state || state->window() != XCB_NONE)
             continue;
 
         if (matcher.class_regex.has_value() && !std::regex_match(wm_class, *matcher.class_regex))
@@ -453,13 +461,13 @@ void WindowManager::release_scratchpad_window(xcb_window_t window)
     if (!client)
         return;
 
-    if (client->scratchpad_name.has_value())
+    if (auto const* named = scratchpad_named(*client))
     {
-        auto* state = find_named_scratchpad(*client->scratchpad_name);
-        if (state && state->window == window)
+        auto* state = find_named_scratchpad(named->name);
+        if (state && state->window() == window)
         {
             LOG_INFO("Named scratchpad '{}' window {:#x} removed", state->name, window);
-            state->window = XCB_NONE;
+            state->mark_empty();
         }
     }
 

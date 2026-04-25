@@ -10,14 +10,6 @@
 
 namespace lwm {
 
-namespace layout_policy {
-
-std::vector<Geometry> calculate_slots(size_t count, Geometry const& geometry, AppearanceConfig const& appearance);
-size_t
-drop_target_index(size_t count, Geometry const& geometry, AppearanceConfig const& appearance, int16_t x, int16_t y);
-
-} // namespace layout_policy
-
 class Layout
 {
 public:

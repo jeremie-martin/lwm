@@ -17,8 +17,6 @@
 #include "wm.hpp"
 #include <algorithm>
 #include <cstring>
-#include <type_traits>
-#include <variant>
 #include <xcb/xcb.h>
 
 namespace lwm {
@@ -28,7 +26,16 @@ namespace {
 constexpr uint32_t RESTART_STATE_VERSION = 3;
 constexpr uint32_t RESTART_RATIO_STATE_VERSION = 2;
 constexpr size_t CLIENT_PROP_BASE_COUNT = 24; // v3: +kind
-constexpr size_t CLIENT_PROP_COUNT = 25; // v4: +wm_initiated_urgency
+constexpr size_t CLIENT_PROP_URGENCY_COUNT = 25; // v4: +urgency ownership
+constexpr size_t CLIENT_PROP_COUNT = 26; // v5: +app preference bits
+
+constexpr uint32_t APP_PREF_SKIP_TASKBAR = 1U << 0;
+constexpr uint32_t APP_PREF_SKIP_PAGER = 1U << 1;
+constexpr uint32_t APP_PREF_ABOVE = 1U << 2;
+
+constexpr uint8_t KNOWN_URGENCY_SOURCES = static_cast<uint8_t>(
+    static_cast<uint8_t>(UrgencySource::WmInitiated) | static_cast<uint8_t>(UrgencySource::App)
+);
 
 // Double-cast is intentional: int16_t → uint16_t reinterprets the bit pattern (e.g. -100 → 65436),
 // then uint16_t → uint32_t zero-extends, preserving the 16-bit pattern without sign-extension.
@@ -72,26 +79,10 @@ std::optional<Geometry> unpack_optional_geometry(uint32_t const* data)
     return unpack_geometry(data + 1);
 }
 
-template<typename ClientT>
-void restore_visible_pool_scratchpad_membership(ClientT& client)
+void restore_visible_pool_scratchpad_membership(Client& client)
 {
-    if constexpr (requires { client.scratchpad; })
-    {
-        if (!client.scratchpad)
-        {
-            // Derive the variant alternative instead of naming it so this
-            // restart fix also builds before the scratchpad state refactor.
-            using ScratchpadMembershipT = std::remove_cvref_t<decltype(*client.scratchpad)>;
-            using VisiblePoolMembershipT = std::variant_alternative_t<1, ScratchpadMembershipT>;
-            client.scratchpad = VisiblePoolMembershipT {};
-        }
-    }
-    else if (!client.in_scratchpad && !client.scratchpad_name.has_value())
-    {
-        client.scratchpad_name.reset();
-        client.scratchpad_restore_kind.reset();
-        client.scratchpad_restore_geometry.reset();
-    }
+    if (!client.scratchpad)
+        client.scratchpad = VisibleScratchpadPoolMembership {};
 }
 
 } // namespace
@@ -116,19 +107,32 @@ void WindowManager::serialize_restart_state()
         uint32_t data[CLIENT_PROP_COUNT];
         data[0] = (client.layer == WindowLayer::Overlay) ? 1 : 0;
         data[1] = client.borderless ? 1 : 0;
-        pack_geometry(data + 2, client.floating_geometry);
+        std::optional<Geometry> prior_floating;
+        if (client.kind == Client::Kind::Tiled)
+            prior_floating = prior_floating_geometry(client);
+        else if (auto const* hidden_tiled = hidden_tiled_pool_scratchpad(client))
+            prior_floating = hidden_tiled->prior_floating;
+        Geometry restart_floating_geometry =
+            client.kind == Client::Kind::Floating ? floating_geometry(client) : prior_floating.value_or(Geometry {});
+        pack_geometry(data + 2, restart_floating_geometry);
         pack_optional_geometry(data + 6, client.fullscreen_restore);
         pack_optional_geometry(data + 11, client.maximize_restore);
-        pack_optional_geometry(data + 16, client.float_restore);
-        data[21] = client.in_scratchpad ? 1 : 0;
+        pack_optional_geometry(data + 16, prior_floating);
+        data[21] = ((scratchpad_named(client) && client.iconic) || is_hidden_pool_scratchpad(client)) ? 1 : 0;
         // 0=none, 1=Tiled, 2=Floating
-        data[22] = client.scratchpad_restore_kind.has_value()
-            ? (*client.scratchpad_restore_kind == Client::Kind::Tiled ? 1 : 2)
-            : 0;
+        if (is_hidden_tiled_pool_scratchpad(client))
+            data[22] = 1;
+        else if (hidden_floating_pool_scratchpad(client))
+            data[22] = 2;
+        else
+            data[22] = 0;
         // v3: current kind (1=Tiled, 2=Floating)
         data[23] = (client.kind == Client::Kind::Tiled) ? 1 : 2;
-        // v4: urgency ownership (0=app-owned/none, 1=WM-owned)
-        data[24] = client.wm_initiated_urgency ? 1 : 0;
+        // v4/v5: urgency source mask. Bit 0 remains WM-initiated for v4 compatibility.
+        data[24] = client.urgency.sources;
+        data[25] = (client.app_prefs.skip_taskbar ? APP_PREF_SKIP_TASKBAR : 0)
+            | (client.app_prefs.skip_pager ? APP_PREF_SKIP_PAGER : 0)
+            | (client.app_prefs.above ? APP_PREF_ABOVE : 0);
 
         xcb_change_property(
             conn_.get(),
@@ -142,7 +146,7 @@ void WindowManager::serialize_restart_state()
         );
 
         // Store scratchpad name as UTF8 string property
-        if (client.scratchpad_name.has_value())
+        if (auto const* named = scratchpad_named(client))
         {
             xcb_change_property(
                 conn_.get(),
@@ -151,8 +155,8 @@ void WindowManager::serialize_restart_state()
                 lwm_restart_scratchpad_name_,
                 utf8_string_,
                 8,
-                static_cast<uint32_t>(client.scratchpad_name->size()),
-                client.scratchpad_name->c_str()
+                static_cast<uint32_t>(named->name.size()),
+                named->name.c_str()
             );
         }
     }
@@ -452,19 +456,17 @@ void WindowManager::apply_restart_client_state(xcb_window_t window)
     client->layer = (data[0] == 1) ? WindowLayer::Overlay : WindowLayer::Normal;
     client->borderless = data[1] != 0;
     Geometry saved_floating_geometry = unpack_geometry(data + 2);
-    client->floating_geometry = saved_floating_geometry;
     client->fullscreen_restore = unpack_optional_geometry(data + 6);
     client->maximize_restore = unpack_optional_geometry(data + 11);
-    client->float_restore = unpack_optional_geometry(data + 16);
+    std::optional<Geometry> saved_prior_floating = unpack_optional_geometry(data + 16);
 
     // v2 scratchpad fields
     if (len >= 23)
     {
-        client->in_scratchpad = data[21] != 0;
         if (data[22] == 1)
-            client->scratchpad_restore_kind = Client::Kind::Tiled;
+            client->scratchpad = HiddenTiledScratchpadPoolMembership { saved_prior_floating };
         else if (data[22] == 2)
-            client->scratchpad_restore_kind = Client::Kind::Floating;
+            client->scratchpad = HiddenFloatingScratchpadPoolMembership { saved_floating_geometry };
     }
 
     // v3: restore window kind — scan_existing_windows reclassifies from scratch,
@@ -472,8 +474,24 @@ void WindowManager::apply_restart_client_state(xcb_window_t window)
     std::optional<Client::Kind> saved_kind;
     if (len >= 24)
         saved_kind = (data[23] == 1) ? Client::Kind::Tiled : Client::Kind::Floating;
-    if (len >= 25)
-        client->wm_initiated_urgency = data[24] != 0;
+    if (len >= CLIENT_PROP_COUNT)
+    {
+        client->urgency.sources = static_cast<uint8_t>(data[24]) & KNOWN_URGENCY_SOURCES;
+
+        uint32_t const app_pref_bits = data[25];
+        client->app_prefs.skip_taskbar = (app_pref_bits & APP_PREF_SKIP_TASKBAR) != 0;
+        client->app_prefs.skip_pager = (app_pref_bits & APP_PREF_SKIP_PAGER) != 0;
+        client->app_prefs.above = (app_pref_bits & APP_PREF_ABOVE) != 0;
+    }
+    else if (len >= CLIENT_PROP_URGENCY_COUNT)
+    {
+        if (data[24] != 0)
+            client->urgency.sources = static_cast<uint8_t>(UrgencySource::WmInitiated);
+    }
+    else if (client->urgency.active() && window != active_window_)
+    {
+        client->urgency.add(UrgencySource::WmInitiated);
+    }
 
     free(reply);
 
@@ -481,12 +499,22 @@ void WindowManager::apply_restart_client_state(xcb_window_t window)
     {
         convert_window_to_floating(window);
         // convert_window_to_floating computes fresh geometry from the tiled position,
-        // overwriting floating_geometry. Restore the saved value.
+        // overwriting the floating geometry. Restore the saved value.
         if (auto* c = get_client(window))
-            c->floating_geometry = saved_floating_geometry;
+            floating_geometry(*c) = saved_floating_geometry;
     }
     else if (saved_kind && *saved_kind == Client::Kind::Tiled && client->kind == Client::Kind::Floating)
-        convert_window_to_tiled(window);
+    {
+        convert_window_to_tiled(window, saved_prior_floating);
+    }
+    else if (saved_kind && *saved_kind == Client::Kind::Tiled)
+    {
+        set_tiled_state(*client, saved_prior_floating);
+    }
+    else if (saved_kind && *saved_kind == Client::Kind::Floating)
+    {
+        floating_geometry(*client) = saved_floating_geometry;
+    }
 
     // Restore scratchpad name
     auto name_cookie = xcb_get_property(
@@ -496,19 +524,20 @@ void WindowManager::apply_restart_client_state(xcb_window_t window)
     auto* name_reply = xcb_get_property_reply(conn_.get(), name_cookie, nullptr);
     if (name_reply && name_reply->type == utf8_string_ && xcb_get_property_value_length(name_reply) > 0)
     {
-        client->scratchpad_name = std::string(
+        std::string scratchpad_name(
             static_cast<char const*>(xcb_get_property_value(name_reply)),
             static_cast<size_t>(xcb_get_property_value_length(name_reply))
         );
+        client->scratchpad = NamedScratchpadMembership { scratchpad_name };
 
         // Re-claim named scratchpad slot
-        if (client->scratchpad_name.has_value())
+        if (!scratchpad_name.empty())
         {
             for (auto& sp : named_scratchpads_)
             {
-                if (sp.name == *client->scratchpad_name && sp.window == XCB_NONE)
+                if (sp.name == scratchpad_name && sp.window() == XCB_NONE)
                 {
-                    sp.window = window;
+                    sp.mark_claimed(window);
                     break;
                 }
             }
@@ -647,7 +676,10 @@ void WindowManager::prepare_restart()
         if (client.kind != Client::Kind::Tiled && client.kind != Client::Kind::Floating)
             continue;
 
-        int16_t restore_x = client.floating_geometry.x;
+        Geometry restore_geometry = client.kind == Client::Kind::Floating
+            ? floating_geometry(client)
+            : prior_floating_geometry(client).value_or(Geometry {});
+        int16_t restore_x = restore_geometry.x;
         if (restore_x <= OFF_SCREEN_X / 2)
             restore_x = 0;
 

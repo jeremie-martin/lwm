@@ -84,6 +84,18 @@ bool has_wm_hints_urgency(xcb_connection_t* conn, xcb_window_t window)
     return false;
 }
 
+void set_wm_hints_urgency(xcb_connection_t* conn, xcb_window_t window, bool urgent)
+{
+    constexpr uint32_t XUrgencyHint = 256;
+    xcb_icccm_wm_hints_t hints = {};
+    hints.flags = XCB_ICCCM_WM_HINT_INPUT;
+    hints.input = 1;
+    if (urgent)
+        hints.flags |= XUrgencyHint;
+    xcb_icccm_set_wm_hints(conn, window, &hints);
+    xcb_flush(conn);
+}
+
 } // namespace
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -411,6 +423,174 @@ TEST_CASE(
 
     REQUIRE(wait_for_condition(
         [&]() { return !property_has_atom(conn.get(), w1, net_wm_state, net_wm_state_demands_attention); },
+        kTimeout
+    ));
+
+    destroy_window(conn, w2);
+    destroy_window(conn, w1);
+}
+
+TEST_CASE(
+    "Integration: WM-initiated urgency survives app _NET_WM_STATE remove and toggle",
+    "[integration][notify_attention][wm_state]"
+)
+{
+    auto test_env = TestEnvironment::create();
+    if (!test_env)
+        SKIP("Test environment not available");
+
+    auto& conn = test_env->conn;
+    auto& wm = test_env->wm;
+
+    xcb_atom_t net_wm_state = intern_atom(conn.get(), "_NET_WM_STATE");
+    xcb_atom_t net_wm_state_demands_attention = intern_atom(conn.get(), "_NET_WM_STATE_DEMANDS_ATTENTION");
+    xcb_atom_t net_active_window = intern_atom(conn.get(), "_NET_ACTIVE_WINDOW");
+    REQUIRE(net_wm_state != XCB_NONE);
+    REQUIRE(net_wm_state_demands_attention != XCB_NONE);
+    REQUIRE(net_active_window != XCB_NONE);
+
+    xcb_window_t w1 = create_window(conn, 10, 10, 200, 150);
+    map_window(conn, w1);
+    REQUIRE(wait_for_active_window(conn, w1, kTimeout));
+
+    xcb_window_t w2 = create_window(conn, 40, 40, 200, 150);
+    map_window(conn, w2);
+    REQUIRE(wait_for_active_window(conn, w2, kTimeout));
+
+    std::string window_arg = "window=" + std::to_string(w1);
+    run_lwmctl(wm, {"notify-attention", window_arg});
+    REQUIRE(wait_for_condition(
+        [&]() { return property_has_atom(conn.get(), w1, net_wm_state, net_wm_state_demands_attention); },
+        kTimeout
+    ));
+
+    send_client_message(conn, w1, net_wm_state, 0, net_wm_state_demands_attention, 0, 0, 0);
+    std::this_thread::sleep_for(std::chrono::milliseconds(200));
+    REQUIRE(property_has_atom(conn.get(), w1, net_wm_state, net_wm_state_demands_attention));
+    REQUIRE(has_wm_hints_urgency(conn.get(), w1));
+
+    send_client_message(conn, w1, net_wm_state, 2, net_wm_state_demands_attention, 0, 0, 0);
+    std::this_thread::sleep_for(std::chrono::milliseconds(200));
+    REQUIRE(property_has_atom(conn.get(), w1, net_wm_state, net_wm_state_demands_attention));
+    REQUIRE(has_wm_hints_urgency(conn.get(), w1));
+
+    send_client_message(conn, w1, net_active_window, 2);
+    REQUIRE(wait_for_active_window(conn, w1, kTimeout));
+    REQUIRE(wait_for_condition(
+        [&]() { return !property_has_atom(conn.get(), w1, net_wm_state, net_wm_state_demands_attention); },
+        kTimeout
+    ));
+    REQUIRE(wait_for_condition([&]() { return !has_wm_hints_urgency(conn.get(), w1); }, kTimeout));
+
+    destroy_window(conn, w2);
+    destroy_window(conn, w1);
+}
+
+TEST_CASE(
+    "Integration: app-only urgency clears on app WM_HINTS rewrite",
+    "[integration][notify_attention][wm_hints]"
+)
+{
+    auto test_env = TestEnvironment::create();
+    if (!test_env)
+        SKIP("Test environment not available");
+
+    auto& conn = test_env->conn;
+
+    xcb_atom_t net_wm_state = intern_atom(conn.get(), "_NET_WM_STATE");
+    xcb_atom_t net_wm_state_demands_attention = intern_atom(conn.get(), "_NET_WM_STATE_DEMANDS_ATTENTION");
+    REQUIRE(net_wm_state != XCB_NONE);
+    REQUIRE(net_wm_state_demands_attention != XCB_NONE);
+
+    xcb_window_t w1 = create_window(conn, 10, 10, 200, 150);
+    map_window(conn, w1);
+    REQUIRE(wait_for_active_window(conn, w1, kTimeout));
+
+    xcb_window_t w2 = create_window(conn, 40, 40, 200, 150);
+    map_window(conn, w2);
+    REQUIRE(wait_for_active_window(conn, w2, kTimeout));
+
+    set_wm_hints_urgency(conn.get(), w1, true);
+    REQUIRE(wait_for_condition(
+        [&]()
+        {
+            return property_has_atom(conn.get(), w1, net_wm_state, net_wm_state_demands_attention)
+                && has_wm_hints_urgency(conn.get(), w1);
+        },
+        kTimeout
+    ));
+
+    set_wm_hints_urgency(conn.get(), w1, false);
+    REQUIRE(wait_for_condition(
+        [&]()
+        {
+            return !property_has_atom(conn.get(), w1, net_wm_state, net_wm_state_demands_attention)
+                && !has_wm_hints_urgency(conn.get(), w1);
+        },
+        kTimeout
+    ));
+
+    destroy_window(conn, w2);
+    destroy_window(conn, w1);
+}
+
+TEST_CASE(
+    "Integration: app-only urgency survives restart as app-owned state",
+    "[integration][notify_attention][restart][wm_state]"
+)
+{
+    auto test_env = TestEnvironment::create();
+    if (!test_env)
+        SKIP("Test environment not available");
+
+    auto& conn = test_env->conn;
+    auto& wm = test_env->wm;
+
+    xcb_atom_t net_wm_state = intern_atom(conn.get(), "_NET_WM_STATE");
+    xcb_atom_t net_wm_state_demands_attention = intern_atom(conn.get(), "_NET_WM_STATE_DEMANDS_ATTENTION");
+    REQUIRE(net_wm_state != XCB_NONE);
+    REQUIRE(net_wm_state_demands_attention != XCB_NONE);
+
+    xcb_window_t w1 = create_window(conn, 10, 10, 200, 150);
+    map_window(conn, w1);
+    REQUIRE(wait_for_active_window(conn, w1, kTimeout));
+
+    xcb_window_t w2 = create_window(conn, 40, 40, 200, 150);
+    map_window(conn, w2);
+    REQUIRE(wait_for_active_window(conn, w2, kTimeout));
+
+    set_wm_hints_urgency(conn.get(), w1, true);
+    REQUIRE(wait_for_condition(
+        [&]()
+        {
+            return property_has_atom(conn.get(), w1, net_wm_state, net_wm_state_demands_attention)
+                && has_wm_hints_urgency(conn.get(), w1);
+        },
+        kTimeout
+    ));
+
+    auto restart_result = run_lwmctl(wm, {"restart"});
+    (void)restart_result;
+    REQUIRE(wait_for_wm_ready(conn, std::chrono::seconds(5)));
+    REQUIRE(wait_for_active_window(conn, w2, kTimeout));
+    std::this_thread::sleep_for(std::chrono::milliseconds(100));
+
+    REQUIRE(wait_for_condition(
+        [&]()
+        {
+            return property_has_atom(conn.get(), w1, net_wm_state, net_wm_state_demands_attention)
+                && has_wm_hints_urgency(conn.get(), w1);
+        },
+        kTimeout
+    ));
+
+    send_client_message(conn, w1, net_wm_state, 0, net_wm_state_demands_attention, 0, 0, 0);
+    REQUIRE(wait_for_condition(
+        [&]()
+        {
+            return !property_has_atom(conn.get(), w1, net_wm_state, net_wm_state_demands_attention)
+                && !has_wm_hints_urgency(conn.get(), w1);
+        },
         kTimeout
     ));
 

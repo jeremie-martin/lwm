@@ -27,8 +27,7 @@ void KeybindManager::load_bindings(Config const& config)
         if (keysym != XCB_NO_SYMBOL)
         {
             KeyBinding binding{ mod, keysym };
-            Action action{ kb.action, kb.command, kb.target, kb.workspace, kb.direction };
-            bindings_[binding] = action;
+            bindings_[binding] = kb.action;
         }
     }
 }

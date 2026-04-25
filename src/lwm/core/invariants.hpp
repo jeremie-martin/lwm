@@ -98,7 +98,8 @@ assert_focus_consistency(std::unordered_map<xcb_window_t, Client> const& clients
  *
  * Verifies state flags are internally consistent:
  * - If fullscreen, should not also be iconic
- * - If above, should not also be below
+ *
+ * (above/below mutex is now enforced by construction via LayerHint.)
  */
 inline void assert_client_state_consistency(Client const& client)
 {
@@ -106,9 +107,13 @@ inline void assert_client_state_consistency(Client const& client)
     {
         LOG_ERROR("INVARIANT VIOLATION: Window {:#x} is both fullscreen and iconic", client.id);
     }
-    if (client.above && client.below)
+    if (client.kind == Client::Kind::Tiled && tiled_state(client) == nullptr)
     {
-        LOG_ERROR("INVARIANT VIOLATION: Window {:#x} is both above and below", client.id);
+        LOG_ERROR("INVARIANT VIOLATION: Tiled window {:#x} does not hold TiledState", client.id);
+    }
+    if (client.kind == Client::Kind::Floating && floating_state(client) == nullptr)
+    {
+        LOG_ERROR("INVARIANT VIOLATION: Floating window {:#x} does not hold FloatingState", client.id);
     }
 }
 

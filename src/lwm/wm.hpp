@@ -18,6 +18,7 @@
 #include <regex>
 #include <string>
 #include <unordered_map>
+#include <variant>
 #include <vector>
 #include <xcb/sync.h>
 
@@ -62,7 +63,39 @@ public:
     void prepare_restart();
 
 private:
-    struct TiledResizeState
+    struct NoDrag {};
+
+    struct FloatingMove
+    {
+        xcb_window_t window = XCB_NONE;
+        int16_t start_root_x = 0;
+        int16_t start_root_y = 0;
+        int16_t last_root_x = 0;
+        int16_t last_root_y = 0;
+        Geometry start_geometry;
+    };
+
+    struct FloatingResize
+    {
+        xcb_window_t window = XCB_NONE;
+        int16_t start_root_x = 0;
+        int16_t start_root_y = 0;
+        int16_t last_root_x = 0;
+        int16_t last_root_y = 0;
+        Geometry start_geometry;
+    };
+
+    struct TiledMove
+    {
+        xcb_window_t window = XCB_NONE;
+        int16_t start_root_x = 0;
+        int16_t start_root_y = 0;
+        int16_t last_root_x = 0;
+        int16_t last_root_y = 0;
+        Geometry start_geometry;
+    };
+
+    struct TiledResize
     {
         size_t monitor_idx = 0;
         size_t workspace_idx = 0; // abort drag if workspace changes
@@ -70,21 +103,13 @@ private:
         SplitDirection direction = SplitDirection::Horizontal;
         double start_ratio = 0.5;
         int32_t available_extent = 0; // total available pixels along split axis
-    };
-
-    struct DragState
-    {
-        bool active = false;
-        bool resizing = false;
-        bool tiled = false;
-        xcb_window_t window = XCB_NONE;
         int16_t start_root_x = 0;
         int16_t start_root_y = 0;
         int16_t last_root_x = 0;
         int16_t last_root_y = 0;
-        Geometry start_geometry;
-        std::optional<TiledResizeState> tiled_resize;
     };
+
+    using DragState = std::variant<NoDrag, FloatingMove, FloatingResize, TiledMove, TiledResize>;
 
     struct MouseBinding
     {
@@ -192,9 +217,42 @@ private:
     // Scratchpad state
     struct NamedScratchpadState
     {
+        struct Empty {};
+        struct LaunchPending {};
+        struct Claimed
+        {
+            xcb_window_t window = XCB_NONE;
+        };
+
         std::string name;
-        xcb_window_t window = XCB_NONE;
-        bool pending_launch = false;
+        std::variant<Empty, LaunchPending, Claimed> state = Empty {};
+
+        xcb_window_t window() const
+        {
+            if (auto const* claimed = std::get_if<Claimed>(&state))
+                return claimed->window;
+            return XCB_NONE;
+        }
+
+        bool pending_launch() const
+        {
+            return std::holds_alternative<LaunchPending>(state);
+        }
+
+        void mark_empty()
+        {
+            state = Empty {};
+        }
+
+        void mark_launch_pending()
+        {
+            state = LaunchPending {};
+        }
+
+        void mark_claimed(xcb_window_t claimed_window)
+        {
+            state = Claimed { claimed_window };
+        }
     };
     std::vector<NamedScratchpadState> named_scratchpads_;
     std::vector<xcb_window_t> scratchpad_pool_; ///< Generic pool, MRU-ordered (back = most recent)
@@ -238,10 +296,11 @@ private:
         bool urgent);
     void map_tiled_window(
         xcb_window_t window,
+        WindowClassification const& classification,
         WindowRuleResult const& rule_result,
         bool start_iconic,
         bool urgent);
-    void apply_initial_state_flags(xcb_window_t window, WindowRuleResult const& rule);
+    void apply_initial_state_flags(Client& client, WindowRuleResult const& rule);
     void handle_window_removal(xcb_window_t window);
     void handle_enter_notify(xcb_enter_notify_event_t const& e);
     void handle_motion_notify(xcb_motion_notify_event_t const& e);
@@ -274,11 +333,13 @@ private:
     std::expected<void, std::string> validate_reload(Config const& config) const;
     void regrab_all_keys();
     void apply_appearance_reload();
-    void update_allowed_actions(xcb_window_t window);
+    void update_allowed_actions(Client const& client);
     void reapply_rules_to_existing_windows();
     void apply_rule_result_to_window(xcb_window_t window, WindowRuleResult const& rule_result);
+    void apply_rule_target_location(xcb_window_t window, WindowRuleResult const& rule_result);
+    void apply_rule_floating_placement(xcb_window_t window, WindowRuleResult const& rule_result);
     void convert_window_to_floating(xcb_window_t window);
-    void convert_window_to_tiled(xcb_window_t window);
+    void convert_window_to_tiled(xcb_window_t window, std::optional<Geometry> prior_floating = std::nullopt);
     void toggle_window_float(xcb_window_t window);
     Geometry current_window_geometry(xcb_window_t window) const;
 
@@ -303,20 +364,18 @@ private:
     void unmanage_floating_window(xcb_window_t window);
     void focus_any_window(xcb_window_t window, bool record_user_time = true);
     void cycle_focus(bool forward);
-    void set_fullscreen(xcb_window_t window, bool enabled);
-    void clear_fullscreen_state(xcb_window_t window);
-    void set_window_layer(xcb_window_t window, WindowLayer layer);
-    void set_window_borderless(xcb_window_t window, bool enabled);
-    void set_window_above(xcb_window_t window, bool enabled) { set_window_above_below(window, true, enabled); }
-    void set_window_below(xcb_window_t window, bool enabled) { set_window_above_below(window, false, enabled); }
-    void set_window_above_below(xcb_window_t window, bool is_above, bool enabled);
-    void set_window_sticky(xcb_window_t window, bool enabled);
-    void set_window_maximized(xcb_window_t window, bool horiz, bool vert);
-    void apply_maximized_geometry(xcb_window_t window);
-    void set_window_modal(xcb_window_t window, bool enabled);
-    void apply_fullscreen_if_needed(xcb_window_t window);
-    void set_fullscreen_monitors(xcb_window_t window, FullscreenMonitors const& monitors);
-    Geometry fullscreen_geometry_for_window(xcb_window_t window) const;
+    void set_fullscreen(Client& client, bool enabled);
+    void clear_fullscreen_state(Client& client);
+    void set_window_layer(Client& client, WindowLayer layer);
+    void set_window_borderless(Client& client, bool enabled);
+    void set_window_layer_hint(Client& client, LayerHint hint);
+    void set_window_sticky(Client& client, bool enabled);
+    void set_window_maximized(Client& client, bool horiz, bool vert);
+    void apply_maximized_geometry(Client& client);
+    void set_window_modal(Client& client, bool enabled);
+    void apply_fullscreen_if_needed(Client& client);
+    void set_fullscreen_monitors(Client& client, FullscreenMonitors const& monitors);
+    Geometry fullscreen_geometry_for_client(Client const& client) const;
     void set_iconic_state(xcb_window_t window, bool iconic);
     void iconify_window(xcb_window_t window);
     void deiconify_window(xcb_window_t window, bool focus);
@@ -334,9 +393,9 @@ private:
     };
 
     void perform_workspace_switch(WorkspaceSwitchContext const& ctx);
-    void switch_workspace(int ws);
+    void switch_workspace(size_t ws);
     void toggle_workspace();
-    void move_window_to_workspace(int ws);
+    void move_window_to_workspace(size_t ws);
 
     void focus_monitor(int direction); // -1 = left, +1 = right
     void move_window_to_monitor(int direction);
@@ -347,25 +406,17 @@ private:
     Client* get_client(xcb_window_t window);
     Client const* get_client(xcb_window_t window) const;
     bool is_managed(xcb_window_t window) const { return clients_.contains(window); }
+    bool window_is_iconic(xcb_window_t window) const
+    {
+        auto const* c = get_client(window);
+        return c && c->iconic;
+    }
 
-    bool is_client_fullscreen(xcb_window_t window) const;
-    bool is_client_overlay(xcb_window_t window) const;
-    bool is_client_iconic(xcb_window_t window) const;
-    bool is_client_sticky(xcb_window_t window) const;
-    bool is_client_above(xcb_window_t window) const;
-    bool is_client_below(xcb_window_t window) const;
-    bool is_client_maximized_horz(xcb_window_t window) const;
-    bool is_client_maximized_vert(xcb_window_t window) const;
-
-    bool is_client_modal(xcb_window_t window) const;
-    bool is_client_skip_taskbar(xcb_window_t window) const;
-    bool is_client_skip_pager(xcb_window_t window) const;
-    bool is_client_demands_attention(xcb_window_t window) const;
-
-    void set_simple_client_state(xcb_window_t window, bool Client::*field, xcb_atom_t atom, bool enabled);
-    void set_client_skip_taskbar(xcb_window_t window, bool enabled);
-    void set_client_skip_pager(xcb_window_t window, bool enabled);
-    void set_client_demands_attention(xcb_window_t window, bool enabled);
+    void set_client_skip_taskbar(Client& client, bool enabled);
+    void set_client_skip_pager(Client& client, bool enabled);
+    void set_client_urgency(Client& client, UrgencySource source, bool enabled);
+    void clear_client_urgency(Client& client);
+    void sync_client_urgency_state(Client& client);
 
     Monitor& focused_monitor() { return monitors_[focused_monitor_]; }
     Monitor const& focused_monitor() const { return monitors_[focused_monitor_]; }
@@ -381,19 +432,17 @@ private:
     std::vector<focus_policy::FloatingCandidate> build_floating_candidates() const;
     Monitor* monitor_at_point(int16_t x, int16_t y);
     bool is_floating_window(xcb_window_t window) const;
-    std::optional<size_t> monitor_index_for_window(xcb_window_t window) const;
-    std::optional<size_t> workspace_index_for_window(xcb_window_t window) const;
     std::optional<uint32_t> get_raw_window_desktop(xcb_window_t window) const;
     std::optional<uint32_t> get_window_desktop(xcb_window_t window) const;
     bool is_sticky_desktop(xcb_window_t window) const;
     std::optional<std::pair<size_t, size_t>> resolve_window_desktop(xcb_window_t window) const;
     std::optional<xcb_window_t> transient_for_window(xcb_window_t window) const;
-    bool should_be_visible(xcb_window_t window) const;
-    bool is_physically_visible(xcb_window_t window) const;
-    bool is_suppressed_by_fullscreen(xcb_window_t window) const;
-    int compute_stack_layer(xcb_window_t window, Client const& client) const;
-    void release_fullscreen_owner(xcb_window_t window);
-    void claim_fullscreen_owner(xcb_window_t window);
+    bool should_be_visible(Client const& client) const;
+    bool is_physically_visible(Client const& client) const;
+    bool is_suppressed_by_fullscreen(Client const& client) const;
+    int compute_stack_layer(Client const& client) const;
+    void release_fullscreen_owner(Client const& client);
+    void claim_fullscreen_owner(Client const& client);
     void update_fullscreen_owner_after_visibility_change(size_t monitor_idx);
     void finalize_after_desktop_move(
         xcb_window_t window, bool was_active, size_t target_monitor, size_t target_workspace);
@@ -401,17 +450,20 @@ private:
     void restack_monitor_layers(size_t monitor_idx);
     bool is_override_redirect_window(xcb_window_t window) const;
     bool is_workspace_visible(size_t monitor_idx, size_t workspace_idx) const;
-    void update_floating_monitor_for_geometry(xcb_window_t window);
-    void apply_floating_geometry(xcb_window_t window);
-    Geometry overlay_geometry_for_window(xcb_window_t window) const;
+    void update_floating_monitor_for_geometry(Client& client);
+    void apply_floating_geometry(Client& client);
+    Geometry overlay_geometry_for_client(Client const& client) const;
     uint32_t border_width_for_client(Client const& client) const;
     uint32_t border_color_for_client(Client const& client) const;
-    bool should_apply_focus_border(xcb_window_t window) const;
+    bool should_apply_focus_border(Client const& client) const;
     void send_configure_notify(xcb_window_t window, Geometry const& geom, uint16_t border_width);
-    void send_configure_notify(xcb_window_t window);
-    void begin_drag(xcb_window_t window, bool resize, int16_t root_x, int16_t root_y);
+    void send_configure_notify(Client const& client);
+    bool drag_active() const;
+    void begin_floating_move(xcb_window_t window, int16_t root_x, int16_t root_y);
+    void begin_floating_resize(xcb_window_t window, int16_t root_x, int16_t root_y);
     void begin_tiled_drag(xcb_window_t window, int16_t root_x, int16_t root_y);
     void begin_tiled_resize(SplitHitResult const& hit, size_t monitor_idx, int16_t root_x, int16_t root_y);
+    void record_drag_position(int16_t root_x, int16_t root_y);
     void update_drag(int16_t root_x, int16_t root_y);
     void end_drag();
     void grab_pointer_for_drag(xcb_cursor_t cursor = XCB_NONE);
@@ -427,12 +479,17 @@ private:
     std::optional<SplitBorderHit> try_hit_split_border(int16_t x, int16_t y);
     MouseBinding const* resolve_mouse_binding(uint16_t state, uint8_t button) const;
     bool supports_protocol(xcb_window_t window, xcb_atom_t protocol) const;
-    bool is_focus_eligible(xcb_window_t window) const;
-    void send_wm_take_focus(xcb_window_t window, uint32_t timestamp);
+    bool is_focus_eligible(Client const& client) const;
+    bool is_focus_candidate(xcb_window_t window) const
+    {
+        auto const* c = get_client(window);
+        return c && !c->iconic && is_focus_eligible(*c);
+    }
+    void send_wm_take_focus(Client const& client, uint32_t timestamp);
     void send_wm_ping(xcb_window_t window, uint32_t timestamp);
-    void send_sync_request(xcb_window_t window, uint32_t timestamp);
-    void update_sync_state(xcb_window_t window);
-    void update_fullscreen_monitor_state(xcb_window_t window);
+    void send_sync_request(Client& client, uint32_t timestamp);
+    void update_sync_state(Client& client);
+    void update_fullscreen_monitor_state(Client& client);
     void update_focused_monitor_at_point(int16_t x, int16_t y);
     std::string get_window_name(xcb_window_t window);
     std::pair<std::string, std::string> get_wm_class(xcb_window_t window);
@@ -445,20 +502,35 @@ private:
     void unmanage_desktop_window(xcb_window_t window);
 
     // Window workspace helper (atomically update client fields + EWMH desktop)
-    void assign_window_workspace(xcb_window_t window, size_t monitor_idx, size_t workspace_idx);
+    void assign_window_workspace(Client& client, size_t monitor_idx, size_t workspace_idx);
+
+    bool move_tiled_client_to_workspace(
+        Client& client,
+        size_t target_monitor,
+        size_t target_workspace,
+        std::optional<size_t> insert_index = std::nullopt);
+    bool move_floating_client_to_workspace(
+        Client& client,
+        size_t target_monitor,
+        size_t target_workspace,
+        bool place_on_monitor_change);
 
     // Tiled window membership helpers (atomically update workspace list + client fields + EWMH)
-    void add_tiled_to_workspace(xcb_window_t window, size_t monitor_idx, size_t workspace_idx);
-    void remove_tiled_from_workspace(xcb_window_t window, size_t monitor_idx, size_t workspace_idx);
+    void add_tiled_to_workspace(Client& client, size_t monitor_idx, size_t workspace_idx);
+    void remove_tiled_from_workspace(Client const& client, size_t monitor_idx, size_t workspace_idx);
 
     // Off-screen visibility management (DWM-style)
-    void hide_window(xcb_window_t window);
-    void show_window(xcb_window_t window);
+    void hide_window(Client& client);
+    void show_window(Client& client);
     void flush_and_drain_crossing();
 
     // Derived visibility: sync physical visibility to match policy state
     void sync_visibility_for_monitor(size_t monitor_idx);
     void sync_visibility_all();
+
+    // Funnel: refresh fullscreen ownership, sync visibility, then re-tile.
+    // Use at any unconditional site that previously called these three in order.
+    void finalize_visibility_on_monitor(size_t monitor_idx);
 
     void setup_ewmh();
     void update_ewmh_desktops();
@@ -473,6 +545,7 @@ private:
     std::string handle_notification_attention(xcb_window_t window);
 
     // Scratchpad operations
+    std::optional<Geometry> detach_tiled_to_floating(Client& client);
     void toggle_named_scratchpad(std::string_view name);
     void stash_to_scratchpad(xcb_window_t window);
     void cycle_scratchpad_pool();

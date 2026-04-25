@@ -171,6 +171,38 @@ bool ensure_lwmctl_available()
     return true;
 }
 
+void set_window_title(X11Connection& conn, xcb_window_t window, std::string const& title)
+{
+    xcb_atom_t net_wm_name = intern_atom(conn.get(), "_NET_WM_NAME");
+    xcb_atom_t utf8_string = intern_atom(conn.get(), "UTF8_STRING");
+
+    if (net_wm_name != XCB_NONE && utf8_string != XCB_NONE)
+    {
+        xcb_change_property(
+            conn.get(),
+            XCB_PROP_MODE_REPLACE,
+            window,
+            net_wm_name,
+            utf8_string,
+            8,
+            static_cast<uint32_t>(title.size()),
+            title.data()
+        );
+    }
+
+    xcb_change_property(
+        conn.get(),
+        XCB_PROP_MODE_REPLACE,
+        window,
+        XCB_ATOM_WM_NAME,
+        XCB_ATOM_STRING,
+        8,
+        static_cast<uint32_t>(title.size()),
+        title.data()
+    );
+    xcb_flush(conn.get());
+}
+
 bool wait_for_window_geometry(
     X11Connection& conn,
     xcb_window_t window,
@@ -325,4 +357,40 @@ apply = { geometry = { x = 300, y = 200, width = 240, height = 160 } }
     REQUIRE(wait_for_window_geometry(env->conn, floating, 300, 200, 240, 160));
 
     destroy_window(env->conn, floating);
+}
+
+TEST_CASE("Integration: reload-config reapplies workspace rules to existing windows", "[integration][ipc][reload][rules][workspace]")
+{
+    auto env = TestEnvironment::create(make_config("left", "right"));
+    if (!env || !ensure_lwmctl_available())
+        SKIP("Test environment or lwmctl not available");
+
+    auto socket_path = wait_for_ipc_socket_path(env->conn);
+    REQUIRE(socket_path.has_value());
+
+    xcb_atom_t net_current_desktop = intern_atom(env->conn.get(), "_NET_CURRENT_DESKTOP");
+    xcb_atom_t net_wm_desktop = intern_atom(env->conn.get(), "_NET_WM_DESKTOP");
+    REQUIRE(net_current_desktop != XCB_NONE);
+    REQUIRE(net_wm_desktop != XCB_NONE);
+
+    xcb_window_t window = create_window(env->conn, 40, 40, 120, 90);
+    set_window_title(env->conn, window, "reload-move");
+    map_window(env->conn, window);
+    REQUIRE(wait_for_active_window(env->conn, window, kTimeout));
+    REQUIRE(wait_for_property_cardinal(env->conn.get(), window, net_wm_desktop, 0, kTimeout));
+
+    std::string rules = R"(
+[[rules]]
+match = { title = "reload-move" }
+apply = { workspace = 1 }
+)";
+    REQUIRE(env->wm.write_config(make_config("left", "right", 2, {}, rules)));
+
+    auto reload_result = run_lwmctl(env->wm, { "reload-config" }, *socket_path);
+    REQUIRE(reload_result.has_value());
+    REQUIRE(reload_result->exit_code == 0);
+    REQUIRE(wait_for_property_cardinal(env->conn.get(), window, net_wm_desktop, 1, kTimeout));
+    REQUIRE(wait_for_property_cardinal(env->conn.get(), env->conn.root(), net_current_desktop, 0, kTimeout));
+
+    destroy_window(env->conn, window);
 }

@@ -1,4 +1,5 @@
 #include "x11_test_harness.hpp"
+#include <X11/Xlib.h>
 #include <catch2/catch_test_macros.hpp>
 #include <cerrno>
 #include <chrono>
@@ -6,6 +7,8 @@
 #include <optional>
 #include <sys/socket.h>
 #include <sys/un.h>
+#include <xcb/xcb_keysyms.h>
+#include <xcb/xtest.h>
 
 using namespace lwm::test;
 
@@ -177,6 +180,49 @@ std::optional<std::string> send_ipc_command(std::string const& socket_path, std:
         response.pop_back();
 
     return response;
+}
+
+bool xtest_available(X11Connection& conn)
+{
+    auto* extension = xcb_get_extension_data(conn.get(), &xcb_test_id);
+    return extension && extension->present;
+}
+
+std::optional<xcb_keycode_t> first_keycode_for_keysym(X11Connection& conn, xcb_keysym_t keysym)
+{
+    xcb_key_symbols_t* key_symbols = xcb_key_symbols_alloc(conn.get());
+    if (!key_symbols)
+        return std::nullopt;
+
+    xcb_keycode_t* keycodes = xcb_key_symbols_get_keycode(key_symbols, keysym);
+    std::optional<xcb_keycode_t> result;
+    if (keycodes && keycodes[0] != XCB_NO_SYMBOL)
+        result = keycodes[0];
+
+    free(keycodes);
+    xcb_key_symbols_free(key_symbols);
+    return result;
+}
+
+bool send_mouse_chord(
+    X11Connection& conn,
+    xcb_keysym_t modifier,
+    uint8_t button,
+    int16_t root_x,
+    int16_t root_y
+)
+{
+    auto modifier_code = first_keycode_for_keysym(conn, modifier);
+    if (!modifier_code)
+        return false;
+
+    xcb_test_fake_input(conn.get(), XCB_MOTION_NOTIFY, 0, XCB_CURRENT_TIME, conn.root(), root_x, root_y, 0);
+    xcb_test_fake_input(conn.get(), XCB_KEY_PRESS, *modifier_code, XCB_CURRENT_TIME, conn.root(), 0, 0, 0);
+    xcb_test_fake_input(conn.get(), XCB_BUTTON_PRESS, button, XCB_CURRENT_TIME, conn.root(), 0, 0, 0);
+    xcb_test_fake_input(conn.get(), XCB_BUTTON_RELEASE, button, XCB_CURRENT_TIME, conn.root(), 0, 0, 0);
+    xcb_test_fake_input(conn.get(), XCB_KEY_RELEASE, *modifier_code, XCB_CURRENT_TIME, conn.root(), 0, 0, 0);
+    xcb_flush(conn.get());
+    return true;
 }
 
 void set_window_title(X11Connection& conn, xcb_window_t window, std::string const& title)
@@ -474,6 +520,107 @@ TEST_CASE("Integration: scratchpad cycle keeps pooled windows in rotation", "[in
 
     destroy_window(conn, second);
     destroy_window(conn, first);
+}
+
+TEST_CASE(
+    "Integration: tiled scratchpad pool preserves prior floating geometry",
+    "[integration][scratchpad][floating]"
+)
+{
+    auto test_env = TestEnvironment::create(scratchpad_match_config());
+    if (!test_env)
+        SKIP("Test environment not available");
+
+    auto& conn = test_env->conn;
+    if (!xtest_available(conn))
+        SKIP("XTEST extension not available");
+
+    auto socket_path = wait_for_ipc_socket_path(conn);
+    REQUIRE(socket_path.has_value());
+
+    xcb_atom_t net_moveresize_window = intern_atom(conn.get(), "_NET_MOVERESIZE_WINDOW");
+    REQUIRE(net_moveresize_window != XCB_NONE);
+
+    xcb_window_t window = create_window(conn, 10, 10, 300, 220);
+    set_window_wm_class(conn, window, "pool-prior", "PoolWindow");
+    map_window(conn, window);
+    REQUIRE(wait_for_active_window(conn, window, kTimeout));
+
+    auto toggle_float_at_window_center = [&]()
+    {
+        auto geometry = get_window_geometry(conn, window);
+        REQUIRE(geometry.has_value());
+
+        int16_t center_x = static_cast<int16_t>(geometry->x + geometry->width / 2);
+        int16_t center_y = static_cast<int16_t>(geometry->y + geometry->height / 2);
+        return send_mouse_chord(conn, XStringToKeysym("Super_L"), XCB_BUTTON_INDEX_2, center_x, center_y);
+    };
+
+    REQUIRE(toggle_float_at_window_center());
+
+    WindowGeometry saved_float { 123, 87, 345, 234 };
+    constexpr uint32_t move_resize_flags = (1u << 8) | (1u << 9) | (1u << 10) | (1u << 11);
+    send_client_message(
+        conn,
+        window,
+        net_moveresize_window,
+        move_resize_flags,
+        static_cast<uint32_t>(saved_float.x),
+        static_cast<uint32_t>(saved_float.y),
+        saved_float.width,
+        saved_float.height
+    );
+    REQUIRE(wait_for_window_geometry(
+        conn,
+        window,
+        saved_float.x,
+        saved_float.y,
+        saved_float.width,
+        saved_float.height
+    ));
+
+    REQUIRE(toggle_float_at_window_center());
+    REQUIRE(wait_for_condition(
+        [&]()
+        {
+            auto geometry = get_window_geometry(conn, window);
+            return geometry.has_value() && *geometry != saved_float;
+        },
+        kTimeout
+    ));
+
+    auto stash = send_ipc_command(*socket_path, "scratchpad stash");
+    REQUIRE(stash.has_value());
+    REQUIRE(*stash == "ok");
+    REQUIRE(wait_for_condition([&]() { return is_hidden_offscreen(conn, window); }, kTimeout));
+
+    auto show = send_ipc_command(*socket_path, "scratchpad cycle");
+    REQUIRE(show.has_value());
+    REQUIRE(*show == "ok");
+    REQUIRE(wait_for_active_window(conn, window, kTimeout));
+    REQUIRE(wait_for_condition([&]() { return !is_hidden_offscreen(conn, window); }, kTimeout));
+
+    REQUIRE(toggle_float_at_window_center());
+    WindowGeometry final_geometry {};
+    bool restored_saved_geometry = wait_for_condition(
+        [&]()
+        {
+            auto geometry = get_window_geometry(conn, window);
+            if (!geometry)
+                return false;
+            final_geometry = *geometry;
+            return *geometry == saved_float;
+        },
+        kTimeout
+    );
+    INFO(
+        "restored floating geometry was "
+        << final_geometry.x << "," << final_geometry.y << " "
+        << final_geometry.width << "x" << final_geometry.height
+    );
+    REQUIRE(restored_saved_geometry);
+
+    destroy_window(conn, window);
 }
 
 TEST_CASE("Integration: visible scratchpad pool window keeps cycling after restart", "[integration][scratchpad]")

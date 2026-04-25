@@ -5,6 +5,7 @@
 #include <optional>
 #include <string>
 #include <unistd.h>
+#include <variant>
 #include <vector>
 
 using namespace lwm;
@@ -49,6 +50,12 @@ ConfigLoadResult load_from_string(std::string const& contents)
 {
     TempConfigFile file(contents);
     return load_config_result(file.path());
+}
+
+template<typename T>
+T const* action_as(Action const& action)
+{
+    return std::get_if<T>(&action);
 }
 
 } // namespace
@@ -106,10 +113,10 @@ apply = { floating = true, scratchpad = "term", center = true }
     REQUIRE(cfg.autostart.commands.front().argv.front() == "/usr/bin/printf");
     REQUIRE(cfg.scratchpads.size() == 1);
     REQUIRE(cfg.keybinds.size() == 8);
-    REQUIRE(cfg.keybinds[0].action == "spawn");
-    REQUIRE(cfg.keybinds[0].command.has_value());
-    REQUIRE(cfg.keybinds[1].action == "toggle_scratchpad");
-    REQUIRE(cfg.keybinds[1].target == "term");
+    REQUIRE(action_as<SpawnAction>(cfg.keybinds[0].action) != nullptr);
+    auto const* scratchpad_action = action_as<ToggleScratchpadAction>(cfg.keybinds[1].action);
+    REQUIRE(scratchpad_action != nullptr);
+    REQUIRE(scratchpad_action->name == "term");
     REQUIRE(cfg.rules.size() == 1);
     REQUIRE(cfg.rules[0].scratchpad == "term");
 }
@@ -150,14 +157,14 @@ count = 3
 
     REQUIRE(loaded.has_value());
     REQUIRE_FALSE(loaded->keybinds.empty());
-    REQUIRE(loaded->keybinds.front().action == "spawn");
-    REQUIRE(loaded->keybinds.front().command.has_value());
-    REQUIRE(loaded->keybinds.front().command->argv.front() == "/usr/bin/ghostty");
+    auto const* spawn_action = action_as<SpawnAction>(loaded->keybinds.front().action);
+    REQUIRE(spawn_action != nullptr);
+    REQUIRE(spawn_action->command.argv.front() == "/usr/bin/ghostty");
 
     size_t switch_bind_count = 0;
     for (auto const& keybind : loaded->keybinds)
     {
-        if (keybind.action == "switch_workspace")
+        if (action_as<SwitchWorkspaceAction>(keybind.action))
             ++switch_bind_count;
     }
     REQUIRE(switch_bind_count == 6);
@@ -187,16 +194,16 @@ keys = ["F1", "F2", "F3"]
 
     for (auto const& keybind : loaded->keybinds)
     {
-        if (keybind.action == "spawn" && keybind.key == "Return" && keybind.command.has_value())
+        if (auto const* spawn = action_as<SpawnAction>(keybind.action); spawn && keybind.key == "Return")
         {
-            saw_terminal_spawn = keybind.command->kind == CommandConfig::Kind::Argv
-                && keybind.command->argv.front() == "/usr/bin/ghostty";
+            saw_terminal_spawn = spawn->command.kind == CommandConfig::Kind::Argv
+                && spawn->command.argv.front() == "/usr/bin/ghostty";
         }
-        if (keybind.action == "focus_monitor")
+        if (action_as<FocusMonitorAction>(keybind.action))
             saw_focus_monitor = true;
-        if (keybind.action == "switch_workspace")
+        if (action_as<SwitchWorkspaceAction>(keybind.action))
             ++switch_bind_count;
-        if (keybind.action == "move_to_workspace")
+        if (action_as<MoveToWorkspaceAction>(keybind.action))
             ++move_bind_count;
     }
 

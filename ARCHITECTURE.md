@@ -121,7 +121,7 @@ Visible scope means:
 Fullscreen ownership rules:
 
 - at most one managed tiled or floating fullscreen owner is effective on a monitor's visible scope, tracked in `Monitor::fullscreen_owner`
-- `Monitor::fullscreen_windows` tracks all fullscreen-flagged windows on the monitor; `update_fullscreen_owner_after_visibility_change(...)` selects the highest-order visible candidate as the effective owner
+- `update_fullscreen_owner_after_visibility_change(...)` selects the effective owner from visible fullscreen clients on the monitor, preserving the current owner when valid and otherwise choosing the highest-order visible candidate
 - when multiple visible fullscreen windows conflict, one owner is elected and the other visible fullscreen windows are suppressed
 - hidden or off-workspace fullscreen windows may keep their fullscreen state until they re-enter visible scope
 

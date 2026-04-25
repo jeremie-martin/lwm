@@ -27,7 +27,19 @@ Client make_client(xcb_window_t id, Client::Kind kind = Client::Kind::Tiled)
 {
     Client c;
     c.id = id;
-    c.kind = kind;
+    switch (kind)
+    {
+        case Client::Kind::Tiled:
+            set_tiled_state(c);
+            break;
+        case Client::Kind::Floating:
+            set_floating_state(c, Geometry{ 0, 0, 300, 200 });
+            break;
+        case Client::Kind::Dock:
+        case Client::Kind::Desktop:
+            c.kind = kind;
+            break;
+    }
     return c;
 }
 
@@ -49,8 +61,7 @@ TEST_CASE("Client has sensible defaults", "[client][state]")
     // All state flags should default to false
     REQUIRE_FALSE(c.hidden);
     REQUIRE_FALSE(c.fullscreen);
-    REQUIRE_FALSE(c.above);
-    REQUIRE_FALSE(c.below);
+    REQUIRE(c.layer_hint == lwm::LayerHint::Normal);
     REQUIRE_FALSE(c.iconic);
     REQUIRE_FALSE(c.sticky);
     REQUIRE_FALSE(c.maximized_horz);
@@ -59,29 +70,136 @@ TEST_CASE("Client has sensible defaults", "[client][state]")
     REQUIRE_FALSE(c.modal);
     REQUIRE_FALSE(c.skip_taskbar);
     REQUIRE_FALSE(c.skip_pager);
-    REQUIRE_FALSE(c.demands_attention);
+    REQUIRE_FALSE(c.app_prefs.skip_taskbar);
+    REQUIRE_FALSE(c.app_prefs.skip_pager);
+    REQUIRE_FALSE(c.app_prefs.above);
+    REQUIRE_FALSE(c.urgency.active());
+    REQUIRE_FALSE(c.urgency.has(UrgencySource::App));
+    REQUIRE_FALSE(c.urgency.has(UrgencySource::WmInitiated));
+    REQUIRE_FALSE(c.ignore_next_wm_hints_urgency_echo);
     REQUIRE_FALSE(c.borderless);
     REQUIRE(c.layer == WindowLayer::Normal);
 
     // Restore geometries should be empty
+    REQUIRE(tiled_state(c) != nullptr);
+    REQUIRE_FALSE(prior_floating_geometry(c).has_value());
     REQUIRE_FALSE(c.fullscreen_restore.has_value());
     REQUIRE_FALSE(c.maximize_restore.has_value());
     REQUIRE_FALSE(c.fullscreen_monitors.has_value());
+}
+
+TEST_CASE("Urgency tracks app and WM sources independently", "[client][state][urgency]")
+{
+    Urgency urgency;
+
+    REQUIRE_FALSE(urgency.active());
+    REQUIRE(urgency.add(UrgencySource::App));
+    REQUIRE_FALSE(urgency.add(UrgencySource::App));
+    REQUIRE(urgency.active());
+    REQUIRE(urgency.has(UrgencySource::App));
+    REQUIRE_FALSE(urgency.has(UrgencySource::WmInitiated));
+
+    REQUIRE(urgency.add(UrgencySource::WmInitiated));
+    REQUIRE(urgency.remove(UrgencySource::App));
+    REQUIRE(urgency.active());
+    REQUIRE_FALSE(urgency.has(UrgencySource::App));
+    REQUIRE(urgency.has(UrgencySource::WmInitiated));
+
+    REQUIRE(urgency.clear());
+    REQUIRE_FALSE(urgency.active());
+}
+
+TEST_CASE("Fullscreen owner selector preserves valid owner before falling back by order", "[client][fullscreen]")
+{
+    std::vector<fullscreen_policy::FullscreenCandidate> candidates = {
+        { 0x1000, true, 10 },
+        { 0x2000, true, 30 },
+        { 0x3000, true, 20 },
+    };
+
+    REQUIRE(fullscreen_policy::select_owner(0x1000, candidates) == 0x1000);
+    REQUIRE(fullscreen_policy::select_owner(XCB_NONE, candidates) == 0x2000);
+
+    candidates[1].eligible = false;
+    REQUIRE(fullscreen_policy::select_owner(0x2000, candidates) == 0x3000);
+
+    for (auto& candidate : candidates)
+        candidate.eligible = false;
+    REQUIRE(fullscreen_policy::select_owner(0x1000, candidates) == XCB_NONE);
 }
 
 TEST_CASE("Client kind can be set to all valid types", "[client][state]")
 {
     Client tiled = make_client(0x1000, Client::Kind::Tiled);
     REQUIRE(tiled.kind == Client::Kind::Tiled);
+    REQUIRE(is_user_window(tiled));
 
     Client floating = make_client(0x2000, Client::Kind::Floating);
     REQUIRE(floating.kind == Client::Kind::Floating);
+    REQUIRE(is_user_window(floating));
 
     Client dock = make_client(0x3000, Client::Kind::Dock);
     REQUIRE(dock.kind == Client::Kind::Dock);
+    REQUIRE_FALSE(is_user_window(dock));
 
     Client desktop = make_client(0x4000, Client::Kind::Desktop);
     REQUIRE(desktop.kind == Client::Kind::Desktop);
+    REQUIRE_FALSE(is_user_window(desktop));
+}
+
+TEST_CASE("Tiling state carries only tiled restore data for tiled clients", "[client][state][tiling]")
+{
+    Client c = make_client(0x1000, Client::Kind::Tiled);
+
+    REQUIRE(tiled_state(c) != nullptr);
+    REQUIRE(floating_state(c) == nullptr);
+    REQUIRE_FALSE(prior_floating_geometry(c).has_value());
+
+    prior_floating_geometry(c) = Geometry{ 50, 60, 700, 500 };
+
+    REQUIRE(prior_floating_geometry(c).has_value());
+    REQUIRE(prior_floating_geometry(c)->x == 50);
+    REQUIRE(prior_floating_geometry(c)->width == 700);
+}
+
+TEST_CASE("Tiling state carries floating geometry and saved tile position for floating clients", "[client][state][tiling]")
+{
+    Client c = make_client(0x2000, Client::Kind::Floating);
+
+    REQUIRE(floating_state(c) != nullptr);
+    REQUIRE(tiled_state(c) == nullptr);
+    REQUIRE(floating_geometry(c).width == 300);
+    REQUIRE_FALSE(saved_tiled_pos(c).has_value());
+
+    saved_tiled_pos(c) = Client::SavedTilePos{ 2, 1, 3 };
+
+    REQUIRE(saved_tiled_pos(c).has_value());
+    REQUIRE(saved_tiled_pos(c)->index == 2);
+    REQUIRE(saved_tiled_pos(c)->monitor == 1);
+    REQUIRE(saved_tiled_pos(c)->workspace == 3);
+}
+
+TEST_CASE("Tiling state transitions discard incompatible state", "[client][state][tiling]")
+{
+    Client c = make_client(0x3000, Client::Kind::Floating);
+    saved_tiled_pos(c) = Client::SavedTilePos{ 1, 0, 0 };
+
+    set_tiled_state(c, Geometry{ 10, 20, 400, 300 });
+
+    REQUIRE(c.kind == Client::Kind::Tiled);
+    REQUIRE(tiled_state(c) != nullptr);
+    REQUIRE(floating_state(c) == nullptr);
+    REQUIRE(prior_floating_geometry(c).has_value());
+    REQUIRE(prior_floating_geometry(c)->height == 300);
+
+    set_floating_state(c, Geometry{ 30, 40, 500, 350 }, Client::SavedTilePos{ 4, 2, 1 });
+
+    REQUIRE(c.kind == Client::Kind::Floating);
+    REQUIRE(floating_state(c) != nullptr);
+    REQUIRE(tiled_state(c) == nullptr);
+    REQUIRE(floating_geometry(c).x == 30);
+    REQUIRE(saved_tiled_pos(c).has_value());
+    REQUIRE(saved_tiled_pos(c)->index == 4);
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -199,7 +317,7 @@ TEST_CASE("compute_desired_state enforces above/below mutual exclusion", "[clien
     SECTION("Above set clears below")
     {
         classification_policy::DesiredStateInputs in{};
-        in.ewmh_above = true;
+        in.app_above = true;
         in.ewmh_below = true;
         auto out = classification_policy::compute_desired_state(in);
         REQUIRE(out.above);
@@ -295,7 +413,7 @@ TEST_CASE("Modal suppresses explicit above in desired state", "[client][state][c
     {
         classification_policy::DesiredStateInputs in{};
         in.ewmh_modal = true;
-        in.ewmh_above = true;
+        in.app_above = true;
         auto out = classification_policy::compute_desired_state(in);
         REQUIRE(out.modal);
         REQUIRE_FALSE(out.above);
@@ -349,7 +467,7 @@ TEST_CASE("compute_desired_state defaults are all false", "[policy][classificati
     REQUIRE_FALSE(out.borderless);
 }
 
-TEST_CASE("compute_desired_state: skip flags merge classification, ewmh, and transient", "[policy][classification]")
+TEST_CASE("compute_desired_state: skip flags merge classification, app prefs, and transient", "[policy][classification]")
 {
     SECTION("Classification skip_taskbar propagates")
     {
@@ -359,10 +477,10 @@ TEST_CASE("compute_desired_state: skip flags merge classification, ewmh, and tra
         REQUIRE(out.skip_taskbar);
     }
 
-    SECTION("EWMH skip_pager propagates")
+    SECTION("App skip_pager propagates")
     {
         classification_policy::DesiredStateInputs in{};
-        in.ewmh_skip_pager = true;
+        in.app_skip_pager = true;
         auto out = classification_policy::compute_desired_state(in);
         REQUIRE(out.skip_pager);
     }
@@ -380,7 +498,7 @@ TEST_CASE("compute_desired_state: skip flags merge classification, ewmh, and tra
     {
         classification_policy::DesiredStateInputs in{};
         in.classification_skip_taskbar = true;
-        in.ewmh_skip_pager = true;
+        in.app_skip_pager = true;
         in.rule_skip_taskbar = false;
         in.rule_skip_pager = false;
         auto out = classification_policy::compute_desired_state(in);
@@ -429,7 +547,7 @@ TEST_CASE("compute_desired_state: overlay layer forces skip, sticky, borderless,
 {
     classification_policy::DesiredStateInputs in{};
     in.layer = WindowLayer::Overlay;
-    in.ewmh_above = true;
+    in.app_above = true;
     in.ewmh_below = true;
     auto out = classification_policy::compute_desired_state(in);
 

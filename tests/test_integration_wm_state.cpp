@@ -171,6 +171,66 @@ TEST_CASE("Integration: above and below are mutually exclusive", "[integration][
     destroy_window(conn, w);
 }
 
+TEST_CASE(
+    "Integration: toggling above after below re-enables above",
+    "[integration][wm_state][above][below]"
+)
+{
+    auto test_env = TestEnvironment::create();
+    if (!test_env)
+        SKIP("Test environment not available");
+    auto& conn = test_env->conn;
+
+    xcb_atom_t state_above = intern_atom(conn.get(), "_NET_WM_STATE_ABOVE");
+    xcb_atom_t state_below = intern_atom(conn.get(), "_NET_WM_STATE_BELOW");
+
+    xcb_window_t w = create_window(conn, 10, 10, 200, 200);
+    map_window(conn, w);
+    REQUIRE(wait_for_active_window(conn, w, kTimeout));
+
+    send_wm_state_change(conn, w, 1, state_above);
+    REQUIRE(wait_for_condition([&]() { return has_state(conn, w, state_above); }, kTimeout));
+
+    send_wm_state_change(conn, w, 1, state_below);
+    REQUIRE(wait_for_condition([&]() { return has_state(conn, w, state_below); }, kTimeout));
+    REQUIRE(wait_for_condition([&]() { return !has_state(conn, w, state_above); }, kTimeout));
+
+    send_wm_state_change(conn, w, 2, state_above);
+    REQUIRE(wait_for_condition([&]() { return has_state(conn, w, state_above); }, kTimeout));
+    REQUIRE(wait_for_condition([&]() { return !has_state(conn, w, state_below); }, kTimeout));
+
+    destroy_window(conn, w);
+}
+
+TEST_CASE("Integration: initial above/below conflict is normalized", "[integration][wm_state][above][below]")
+{
+    auto test_env = TestEnvironment::create();
+    if (!test_env)
+        SKIP("Test environment not available");
+    auto& conn = test_env->conn;
+
+    xcb_atom_t net_wm_state = intern_atom(conn.get(), "_NET_WM_STATE");
+    xcb_atom_t state_above = intern_atom(conn.get(), "_NET_WM_STATE_ABOVE");
+    xcb_atom_t state_below = intern_atom(conn.get(), "_NET_WM_STATE_BELOW");
+
+    xcb_window_t w = create_window(conn, 10, 10, 200, 200);
+    xcb_atom_t initial_states[] = { state_below, state_above };
+    xcb_change_property(conn.get(), XCB_PROP_MODE_REPLACE, w, net_wm_state, XCB_ATOM_ATOM, 32, 2, initial_states);
+    xcb_flush(conn.get());
+
+    map_window(conn, w);
+    REQUIRE(wait_for_active_window(conn, w, kTimeout));
+
+    REQUIRE(wait_for_condition([&]() { return has_state(conn, w, state_above); }, kTimeout));
+    REQUIRE(wait_for_condition([&]() { return !has_state(conn, w, state_below); }, kTimeout));
+
+    send_wm_state_change(conn, w, 0, state_above);
+    REQUIRE(wait_for_condition([&]() { return !has_state(conn, w, state_above); }, kTimeout));
+    REQUIRE(wait_for_condition([&]() { return !has_state(conn, w, state_below); }, kTimeout));
+
+    destroy_window(conn, w);
+}
+
 TEST_CASE("Integration: _NET_WM_STATE remove above clears state", "[integration][wm_state][above]")
 {
     auto test_env = TestEnvironment::create();
@@ -261,6 +321,31 @@ TEST_CASE("Integration: _NET_WM_STATE add skip_pager", "[integration][wm_state][
 
     send_wm_state_change(conn, w, 0, skip_pager);
     REQUIRE(wait_for_condition([&]() { return !has_state(conn, w, skip_pager); }, kTimeout));
+
+    destroy_window(conn, w);
+}
+
+TEST_CASE("Integration: _NET_WM_STATE add/remove maximized atoms", "[integration][wm_state][maximized]")
+{
+    auto test_env = TestEnvironment::create();
+    if (!test_env)
+        SKIP("Test environment not available");
+    auto& conn = test_env->conn;
+
+    xcb_atom_t maximized_horz = intern_atom(conn.get(), "_NET_WM_STATE_MAXIMIZED_HORZ");
+    xcb_atom_t maximized_vert = intern_atom(conn.get(), "_NET_WM_STATE_MAXIMIZED_VERT");
+
+    xcb_window_t w = create_window(conn, 10, 10, 200, 200);
+    map_window(conn, w);
+    REQUIRE(wait_for_active_window(conn, w, kTimeout));
+
+    send_wm_state_change(conn, w, 1, maximized_horz, maximized_vert);
+    REQUIRE(wait_for_condition([&]() { return has_state(conn, w, maximized_horz); }, kTimeout));
+    REQUIRE(wait_for_condition([&]() { return has_state(conn, w, maximized_vert); }, kTimeout));
+
+    send_wm_state_change(conn, w, 0, maximized_horz, maximized_vert);
+    REQUIRE(wait_for_condition([&]() { return !has_state(conn, w, maximized_horz); }, kTimeout));
+    REQUIRE(wait_for_condition([&]() { return !has_state(conn, w, maximized_vert); }, kTimeout));
 
     destroy_window(conn, w);
 }

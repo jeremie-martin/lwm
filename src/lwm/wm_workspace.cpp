@@ -2,7 +2,6 @@
 #include "lwm/core/log.hpp"
 #include "lwm/core/policy.hpp"
 #include "wm.hpp"
-#include <xcb/xcb_icccm.h>
 
 namespace lwm {
 
@@ -16,48 +15,40 @@ void WindowManager::perform_workspace_switch(WorkspaceSwitchContext const& ctx)
         ctx.new_workspace
     );
 
-    // Apply the workspace mutation, then sync visibility to match new state.
+    // 1. Mutate workspace state. Must happen first; subsequent steps read it.
     monitor.previous_workspace = ctx.old_workspace;
     monitor.current_workspace = ctx.new_workspace;
 
+    // 2. EWMH _NET_CURRENT_DESKTOP — reads monitor.current_workspace set above.
     update_ewmh_current_desktop();
-    update_fullscreen_owner_after_visibility_change(ctx.monitor_idx);
-    // sync hides old-workspace windows and shows new-workspace windows
-    sync_visibility_for_monitor(ctx.monitor_idx);
-    // rearrange computes tiling layout geometry for the now-visible tiled windows
-    rearrange_monitor(monitor);
-    // sync floating separately since rearrange only handles tiled layout
-    // (floating geometry is applied by sync_visibility_for_monitor above)
+
+    // 3. Recompute fullscreen ownership, sync per-window visibility against the
+    //    new workspace, then re-tile. Order is load-bearing: see CONTRIBUTING.md
+    //    "Design Principles" — sync_visibility_for_monitor maintains the
+    //    authoritative `hidden` flag that rearrange_monitor reads.
+    finalize_visibility_on_monitor(ctx.monitor_idx);
 
     emit_event(Event_WorkspaceSwitch,
         "{\"event\":\"workspace_switch\",\"monitor\":" + std::to_string(ctx.monitor_idx)
         + ",\"from\":" + std::to_string(ctx.old_workspace)
         + ",\"to\":" + std::to_string(ctx.new_workspace) + "}");
 
-    // Re-sync WM_HINTS urgency for windows that still have demands_attention.
+    // Re-sync WM_HINTS urgency for windows that still have active urgency.
     // Apps may have cleared their own WM_HINTS urgency on focus (standard ICCCM
     // behavior), but the WM considers them still urgent (set via notify-attention).
     // Re-assert so panels checking WM_HINTS (e.g. polybar) see the urgency.
-    for (auto const& [wid, client] : clients_)
+    for (auto& [wid, client] : clients_)
     {
-        if (!client.demands_attention || wid == active_window_)
+        if (!client.urgency.active() || wid == active_window_)
             continue;
-        xcb_icccm_wm_hints_t hints;
-        if (xcb_icccm_get_wm_hints_reply(conn_.get(), xcb_icccm_get_wm_hints(conn_.get(), wid), &hints, nullptr))
-        {
-            if (!(hints.flags & XUrgencyHint))
-            {
-                hints.flags |= XUrgencyHint;
-                xcb_icccm_set_wm_hints(conn_.get(), wid, &hints);
-            }
-        }
+        sync_client_urgency_state(client);
     }
 
     LWM_ASSERT_INVARIANTS(clients_, monitors_);
     LOG_TRACE("perform_workspace_switch: DONE");
 }
 
-void WindowManager::switch_workspace(int ws)
+void WindowManager::switch_workspace(size_t ws)
 {
     auto& monitor = focused_monitor();
     LOG_TRACE(
@@ -116,73 +107,46 @@ void WindowManager::toggle_workspace()
     }
 
     LOG_TRACE("toggle_workspace: switching to workspace {}", target);
-    switch_workspace(static_cast<int>(target));
+    switch_workspace(target);
     LOG_TRACE("toggle_workspace: DONE");
 }
 
-void WindowManager::move_window_to_workspace(int ws)
+void WindowManager::move_window_to_workspace(size_t ws)
 {
     auto& monitor = focused_monitor();
     size_t workspace_count = monitor.workspaces.size();
     if (workspace_count == 0)
         return;
 
-    if (ws < 0 || static_cast<size_t>(ws) >= workspace_count || static_cast<size_t>(ws) == monitor.current_workspace)
+    if (ws >= workspace_count || ws == monitor.current_workspace)
         return;
 
     if (active_window_ == XCB_NONE)
         return;
 
     xcb_window_t window_to_move = active_window_;
-    size_t target_ws = static_cast<size_t>(ws);
+    size_t target_ws = ws;
+    auto* client = get_client(window_to_move);
+    if (!client)
+        return;
 
-    if (is_floating_window(window_to_move))
+    if (client->kind == Client::Kind::Floating)
     {
-        auto* client = get_client(window_to_move);
-        if (!client)
+        if (client->monitor >= monitors_.size())
             return;
 
         size_t monitor_idx = client->monitor;
-
-        client->workspace = target_ws;
-
-        uint32_t desktop = get_ewmh_desktop_index(monitor_idx, target_ws);
-        if (is_client_sticky(window_to_move))
-            ewmh_.set_window_desktop(window_to_move, 0xFFFFFFFF);
-        else
-            ewmh_.set_window_desktop(window_to_move, desktop);
-
-        update_fullscreen_owner_after_visibility_change(monitor_idx);
-        sync_visibility_for_monitor(monitor_idx);
-        restack_monitor_layers(monitor_idx);
+        if (!move_floating_client_to_workspace(*client, monitor_idx, target_ws, false))
+            return;
         focus_or_fallback(monitors_[monitor_idx]);
         flush_and_drain_crossing();
         return;
     }
 
-    if (!workspace_policy::move_tiled_window(
-            monitor,
-            window_to_move,
-            target_ws,
-            [this](xcb_window_t window) { return is_client_iconic(window); }
-        ))
-    {
+    if (!move_tiled_client_to_workspace(*client, focused_monitor_, target_ws))
         return;
-    }
 
-    if (auto* client = get_client(window_to_move))
-        client->workspace = target_ws;
-
-    uint32_t desktop = get_ewmh_desktop_index(focused_monitor_, target_ws);
-    if (is_client_sticky(window_to_move))
-        ewmh_.set_window_desktop(window_to_move, 0xFFFFFFFF);
-    else
-        ewmh_.set_window_desktop(window_to_move, desktop);
-
-    update_fullscreen_owner_after_visibility_change(focused_monitor_);
-    sync_visibility_for_monitor(focused_monitor_);
-    rearrange_monitor(monitor);
-    LWM_ASSERT_INVARIANTS(clients_, monitors_);
+    workspace_policy::set_workspace_focus(monitor.workspaces[target_ws], window_to_move);
     focus_or_fallback(monitor);
 
     flush_and_drain_crossing();
@@ -236,11 +200,13 @@ void WindowManager::move_window_to_monitor(int direction)
         return;
 
     xcb_window_t window_to_move = active_window_;
+    auto* client = get_client(window_to_move);
+    if (!client)
+        return;
 
-    if (is_floating_window(window_to_move))
+    if (client->kind == Client::Kind::Floating)
     {
-        auto* client = get_client(window_to_move);
-        if (!client)
+        if (client->monitor >= monitors_.size())
             return;
 
         size_t source_idx = client->monitor;
@@ -249,25 +215,12 @@ void WindowManager::move_window_to_monitor(int direction)
             return;
 
         size_t target_workspace = monitors_[target_idx].current_workspace;
-        client->floating_geometry = floating::place_floating(
-            monitors_[target_idx].working_area(),
-            client->floating_geometry.width,
-            client->floating_geometry.height,
-            std::nullopt
-        );
-
-        assign_window_workspace(window_to_move, target_idx, target_workspace);
-
-        update_fullscreen_owner_after_visibility_change(source_idx);
-        update_fullscreen_owner_after_visibility_change(target_idx);
-        sync_visibility_for_monitor(source_idx);
-        sync_visibility_for_monitor(target_idx);
-        restack_monitor_layers(source_idx);
-        restack_monitor_layers(target_idx);
+        if (!move_floating_client_to_workspace(*client, target_idx, target_workspace, true))
+            return;
 
         focused_monitor_ = target_idx;
         update_ewmh_current_desktop();
-        if (is_suppressed_by_fullscreen(window_to_move))
+        if (is_suppressed_by_fullscreen(*client))
             focus_or_fallback(monitors_[target_idx]);
         else
             focus_any_window(window_to_move);
@@ -280,33 +233,18 @@ void WindowManager::move_window_to_monitor(int direction)
         return;
     }
 
-    auto& source_ws = focused_monitor().current();
     size_t target_idx = wrap_monitor_index(static_cast<int>(focused_monitor_) + direction);
     if (target_idx == focused_monitor_)
         return;
 
-    auto is_iconic = [this](xcb_window_t w) { return is_client_iconic(w); };
-    if (!workspace_policy::remove_tiled_window(source_ws, window_to_move, is_iconic))
-        return;
-
     auto& target_monitor = monitors_[target_idx];
-    add_tiled_to_workspace(window_to_move, target_idx, target_monitor.current_workspace);
+    if (!move_tiled_client_to_workspace(*client, target_idx, target_monitor.current_workspace))
+        return;
     workspace_policy::set_workspace_focus(target_monitor.current(), window_to_move);
-
-    if (is_client_sticky(window_to_move))
-        ewmh_.set_window_desktop(window_to_move, 0xFFFFFFFF);
-
-    update_fullscreen_owner_after_visibility_change(focused_monitor_);
-    update_fullscreen_owner_after_visibility_change(target_idx);
-    sync_visibility_for_monitor(focused_monitor_);
-    sync_visibility_for_monitor(target_idx);
-    rearrange_monitor(focused_monitor());
-    rearrange_monitor(target_monitor);
-    LWM_ASSERT_INVARIANTS(clients_, monitors_);
 
     focused_monitor_ = target_idx;
     update_ewmh_current_desktop();
-    if (is_suppressed_by_fullscreen(window_to_move))
+    if (is_suppressed_by_fullscreen(*client))
         focus_or_fallback(target_monitor);
     else
         focus_any_window(window_to_move);

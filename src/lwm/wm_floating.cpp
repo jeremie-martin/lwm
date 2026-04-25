@@ -15,8 +15,13 @@ void WindowManager::manage_floating_window(xcb_window_t window, bool start_iconi
 
     if (transient)
     {
-        monitor_idx = monitor_index_for_window(*transient);
-        workspace_idx = workspace_index_for_window(*transient);
+        if (auto const* parent = get_client(*transient);
+            parent && parent->monitor < monitors_.size()
+            && parent->workspace < monitors_[parent->monitor].workspaces.size())
+        {
+            monitor_idx = parent->monitor;
+            workspace_idx = parent->workspace;
+        }
 
         auto geom_cookie = xcb_get_geometry(conn_.get(), *transient);
         auto* geom_reply = xcb_get_geometry_reply(conn_.get(), geom_cookie, nullptr);
@@ -122,13 +127,12 @@ void WindowManager::manage_floating_window(xcb_window_t window, bool start_iconi
         auto [instance_name, class_name] = get_wm_class(window);
         Client client;
         client.id = window;
-        client.kind = Client::Kind::Floating;
+        set_floating_state(client, placement);
         client.monitor = *monitor_idx;
         client.workspace = *workspace_idx;
         client.name = get_window_name(window);
         client.wm_class = class_name;
         client.wm_class_name = instance_name;
-        client.floating_geometry = placement;
         client.transient_for = transient.value_or(XCB_NONE);
         client.order = next_client_order_++;
         client.mru_order = next_mru_order_++;
@@ -152,11 +156,12 @@ void WindowManager::manage_floating_window(xcb_window_t window, bool start_iconi
         XCB_NONE, XCB_NONE, XCB_BUTTON_INDEX_ANY, XCB_MOD_MASK_ANY
     );
 
-    if (auto const* client = get_client(window))
-    {
-        uint32_t border_width = border_width_for_client(*client);
-        xcb_configure_window(conn_.get(), window, XCB_CONFIG_WINDOW_BORDER_WIDTH, &border_width);
-    }
+    auto* client = get_client(window);
+    if (!client)
+        return;
+
+    uint32_t border_width = border_width_for_client(*client);
+    xcb_configure_window(conn_.get(), window, XCB_CONFIG_WINDOW_BORDER_WIDTH, &border_width);
 
     if (wm_state_ != XCB_NONE)
     {
@@ -170,14 +175,14 @@ void WindowManager::manage_floating_window(xcb_window_t window, bool start_iconi
         ewmh_.set_window_state(window, ewmh_.get()->_NET_WM_STATE_HIDDEN, true);
     }
 
-    update_sync_state(window);
-    update_fullscreen_monitor_state(window);
+    update_sync_state(*client);
+    update_fullscreen_monitor_state(*client);
 
     ewmh_.set_frame_extents(window, 0, 0, 0, 0); // LWM doesn't add frames
     uint32_t desktop = get_ewmh_desktop_index(*monitor_idx, *workspace_idx);
     ewmh_.set_window_desktop(window, desktop);
 
-    update_allowed_actions(window);
+    update_allowed_actions(*client);
 
     update_ewmh_client_list();
 
@@ -189,12 +194,12 @@ void WindowManager::manage_floating_window(xcb_window_t window, bool start_iconi
     auto manage_state_flags = ewmh_.get_window_state_flags(window);
     if (manage_state_flags.fullscreen)
     {
-        set_fullscreen(window, true);
+        set_fullscreen(*client, true);
     }
 
     if (manage_state_flags.maximized_horz || manage_state_flags.maximized_vert)
     {
-        set_window_maximized(window, manage_state_flags.maximized_horz, manage_state_flags.maximized_vert);
+        set_window_maximized(*client, manage_state_flags.maximized_horz, manage_state_flags.maximized_vert);
     }
 
     // With off-screen visibility: map window once when managing
@@ -204,7 +209,7 @@ void WindowManager::manage_floating_window(xcb_window_t window, bool start_iconi
     sync_visibility_for_monitor(*monitor_idx);
     restack_monitor_layers(*monitor_idx);
 
-    if (!start_iconic && !suppress_focus_ && *monitor_idx == focused_monitor_ && should_be_visible(window))
+    if (!start_iconic && !suppress_focus_ && *monitor_idx == focused_monitor_ && should_be_visible(*client))
         focus_any_window(window);
 
     // AFTER mapping: Apply non-geometry states
@@ -224,13 +229,13 @@ void WindowManager::unmanage_floating_window(xcb_window_t window)
     pending_kills_.erase(window);
 
     size_t monitor_idx = 0;
-    if (auto const* client = get_client(window))
-        monitor_idx = client->monitor;
-    else
+    auto const* client = get_client(window);
+    if (!client)
         return; // Not managed
+    monitor_idx = client->monitor;
 
     bool was_active = (active_window_ == window);
-    release_fullscreen_owner(window);
+    release_fullscreen_owner(*client);
 
     // Remove from unified Client registry (handles all client state including order)
     clients_.erase(window);
@@ -260,63 +265,50 @@ bool WindowManager::is_floating_window(xcb_window_t window) const
     return client && client->kind == Client::Kind::Floating;
 }
 
-void WindowManager::update_floating_monitor_for_geometry(xcb_window_t window)
+void WindowManager::update_floating_monitor_for_geometry(Client& client)
 {
-    auto* client = get_client(window);
-    if (!client)
-        return;
-    if (client->layer == WindowLayer::Overlay)
+    if (client.layer == WindowLayer::Overlay)
         return;
 
-    auto const& geom = client->floating_geometry;
+    auto const& geom = floating_geometry(client);
     int32_t center_x = static_cast<int32_t>(geom.x) + static_cast<int32_t>(geom.width) / 2;
     int32_t center_y = static_cast<int32_t>(geom.y) + static_cast<int32_t>(geom.height) / 2;
     auto new_monitor =
         focus::monitor_index_at_point(monitors_, static_cast<int16_t>(center_x), static_cast<int16_t>(center_y));
-    if (!new_monitor || *new_monitor == client->monitor || *new_monitor >= monitors_.size())
+    if (!new_monitor || *new_monitor == client.monitor || *new_monitor >= monitors_.size())
         return;
 
-    size_t source_monitor = client->monitor;
-    assign_window_workspace(window, *new_monitor, monitors_[*new_monitor].current_workspace);
+    if (!move_floating_client_to_workspace(client, *new_monitor, monitors_[*new_monitor].current_workspace, false))
+        return;
 
-    update_fullscreen_owner_after_visibility_change(source_monitor);
-    update_fullscreen_owner_after_visibility_change(client->monitor);
-    sync_visibility_for_monitor(source_monitor);
-    sync_visibility_for_monitor(client->monitor);
-    restack_monitor_layers(source_monitor);
-    if (source_monitor != client->monitor)
-        restack_monitor_layers(client->monitor);
-
-    if (active_window_ == window && is_suppressed_by_fullscreen(window))
-        focus_or_fallback(monitors_[client->monitor], false);
+    if (active_window_ == client.id && is_suppressed_by_fullscreen(client) && client.monitor < monitors_.size())
+        focus_or_fallback(monitors_[client.monitor], false);
 
     flush_and_drain_crossing();
 }
 
-void WindowManager::apply_floating_geometry(xcb_window_t window)
+void WindowManager::apply_floating_geometry(Client& client)
 {
-    auto* client = get_client(window);
-    if (!client)
-        return;
+    xcb_window_t window = client.id;
 
-    Geometry geom = client->floating_geometry;
-    if (client->layer == WindowLayer::Overlay)
+    Geometry geom = floating_geometry(client);
+    if (client.layer == WindowLayer::Overlay)
     {
-        geom = overlay_geometry_for_window(window);
-        client->floating_geometry = geom;
+        geom = overlay_geometry_for_client(client);
+        floating_geometry(client) = geom;
     }
 
     uint32_t width = geom.width;
     uint32_t height = geom.height;
-    if (client->layer != WindowLayer::Overlay)
+    if (client.layer != WindowLayer::Overlay)
         layout_.apply_size_hints(window, width, height);
 
-    send_sync_request(window, last_event_time_);
+    send_sync_request(client, last_event_time_);
 
     int32_t x = static_cast<int32_t>(geom.x);
     int32_t y = static_cast<int32_t>(geom.y);
 
-    uint32_t border_width = border_width_for_client(*client);
+    uint32_t border_width = border_width_for_client(client);
     uint32_t values[] = { static_cast<uint32_t>(x), static_cast<uint32_t>(y), width, height, border_width };
     uint16_t mask = XCB_CONFIG_WINDOW_X | XCB_CONFIG_WINDOW_Y | XCB_CONFIG_WINDOW_WIDTH | XCB_CONFIG_WINDOW_HEIGHT
         | XCB_CONFIG_WINDOW_BORDER_WIDTH;

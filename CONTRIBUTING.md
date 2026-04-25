@@ -36,6 +36,19 @@ ctest --test-dir build --output-on-failure
 
 Start with [`ARCHITECTURE.md`](ARCHITECTURE.md) before editing any of the state-transition code.
 
+## Design Principles
+
+Two rules to apply when changing the core:
+
+**Make invalid states unrepresentable.** Model domain concepts as explicit types in `src/lwm/core/types.hpp` and pure functions in `src/lwm/core/policy.hpp`. Invariants live in `src/lwm/core/invariants.hpp` and are owned by the module that drives the transition (visibility, stacking, and fullscreen are owned by `src/lwm/wm.cpp`). Encode "after changing X, also do Y" inside one funnel rather than spreading the sequence across call sites. Treat repeated null checks, fallback branches, and "just in case" code in the core as smells that usually point at a missing type or a misplaced ownership boundary.
+
+**Test through the real code path.** The boundaries are the X server, the IPC socket, and the filesystem config — fake those, run everything between for real:
+
+- pure logic → `*_policy.cpp` against `src/lwm/core/policy.hpp`
+- end-to-end behavior → `*_integration_*.cpp` against `tests/x11_test_harness.hpp` (Xvfb)
+
+If a change is hard to test without faking something inside the WM, treat it as a design signal: restructure the production code rather than the test. Defensive code is for the boundaries, not the model.
+
 ## Test Map
 
 Use the smallest relevant suite first, then run the broader suite before finishing.

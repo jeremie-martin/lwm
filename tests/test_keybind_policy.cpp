@@ -4,6 +4,7 @@
 #include <X11/Xlib.h>
 #include <catch2/catch_test_macros.hpp>
 #include <memory>
+#include <variant>
 
 using namespace lwm;
 
@@ -26,8 +27,7 @@ KeybindConfig make_spawn_bind(std::string mod, std::string key, std::string comm
     KeybindConfig keybind;
     keybind.mod = std::move(mod);
     keybind.key = std::move(key);
-    keybind.action = "spawn";
-    keybind.command = make_shell_command(std::move(command));
+    keybind.action = SpawnAction { make_shell_command(std::move(command)) };
     return keybind;
 }
 
@@ -36,10 +36,29 @@ KeybindConfig make_action_bind(std::string mod, std::string key, std::string act
     KeybindConfig keybind;
     keybind.mod = std::move(mod);
     keybind.key = std::move(key);
-    keybind.action = std::move(action);
-    keybind.workspace = workspace;
-    keybind.direction = direction;
+    if (action == "kill")
+        keybind.action = KillAction {};
+    else if (action == "switch_workspace")
+        keybind.action = SwitchWorkspaceAction { static_cast<size_t>(workspace) };
+    else if (action == "move_to_workspace")
+        keybind.action = MoveToWorkspaceAction { static_cast<size_t>(workspace) };
+    else if (action == "focus_monitor")
+        keybind.action = FocusMonitorAction { direction };
+    else if (action == "move_to_monitor")
+        keybind.action = MoveToMonitorAction { direction };
+    else if (action == "toggle_fullscreen")
+        keybind.action = ToggleFullscreenAction {};
+    else if (action == "focus_next")
+        keybind.action = FocusNextAction {};
+    else if (action == "focus_prev")
+        keybind.action = FocusPrevAction {};
     return keybind;
+}
+
+template<typename T>
+T const* action_as(Action const& action)
+{
+    return std::get_if<T>(&action);
 }
 
 bool ensure_x11_environment()
@@ -160,9 +179,10 @@ TEST_CASE("KeybindManager preserves shell command payloads for spawn actions", "
 
     auto action = mgr.resolve(XCB_MOD_MASK_4, XStringToKeysym("a"));
     REQUIRE(action.has_value());
-    REQUIRE(action->command.has_value());
-    REQUIRE(action->command->kind == CommandConfig::Kind::Shell);
-    REQUIRE(action->command->shell == "/usr/bin/firefox");
+    auto const* spawn = action_as<SpawnAction>(*action);
+    REQUIRE(spawn != nullptr);
+    REQUIRE(spawn->command.kind == CommandConfig::Kind::Shell);
+    REQUIRE(spawn->command.shell == "/usr/bin/firefox");
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -207,22 +227,22 @@ TEST_CASE("KeybindManager::resolve handles multiple bindings across keys, modifi
     // Distinguish by key
     auto result_a = mgr.resolve(super, XStringToKeysym("a"));
     auto result_b = mgr.resolve(super, XStringToKeysym("b"));
-    REQUIRE(result_a->command->shell == "terminal");
-    REQUIRE(result_b->command->shell == "browser");
+    REQUIRE(action_as<SpawnAction>(*result_a)->command.shell == "terminal");
+    REQUIRE(action_as<SpawnAction>(*result_b)->command.shell == "browser");
 
     // Distinguish by modifier
     auto spawn_result = mgr.resolve(super, XStringToKeysym("a"));
     auto kill_result = mgr.resolve(super_shift, XStringToKeysym("a"));
-    REQUIRE(spawn_result->type == "spawn");
-    REQUIRE(kill_result->type == "kill");
+    REQUIRE(action_as<SpawnAction>(*spawn_result) != nullptr);
+    REQUIRE(action_as<KillAction>(*kill_result) != nullptr);
 
     // Workspace actions
     auto switch_result = mgr.resolve(super, XStringToKeysym("1"));
     auto move_result = mgr.resolve(super_shift, XStringToKeysym("1"));
-    REQUIRE(switch_result->type == "switch_workspace");
-    REQUIRE(switch_result->workspace == 0);
-    REQUIRE(move_result->type == "move_to_workspace");
-    REQUIRE(move_result->workspace == 0);
+    REQUIRE(action_as<SwitchWorkspaceAction>(*switch_result) != nullptr);
+    REQUIRE(action_as<SwitchWorkspaceAction>(*switch_result)->workspace == 0);
+    REQUIRE(action_as<MoveToWorkspaceAction>(*move_result) != nullptr);
+    REQUIRE(action_as<MoveToWorkspaceAction>(*move_result)->workspace == 0);
 }
 
 TEST_CASE("KeybindManager handles all standard keybind modifiers", "[keybind]")
@@ -248,10 +268,10 @@ TEST_CASE("KeybindManager handles all standard keybind modifiers", "[keybind]")
 
     auto keysym = XStringToKeysym("a");
 
-    REQUIRE(mgr.resolve(super, keysym)->command->shell == "test-cmd-1");
-    REQUIRE(mgr.resolve(super_shift, keysym)->command->shell == "test-cmd-2");
-    REQUIRE(mgr.resolve(super_ctrl, keysym)->command->shell == "test-cmd-3");
-    REQUIRE(mgr.resolve(super_alt, keysym)->command->shell == "test-cmd-4");
+    REQUIRE(action_as<SpawnAction>(*mgr.resolve(super, keysym))->command.shell == "test-cmd-1");
+    REQUIRE(action_as<SpawnAction>(*mgr.resolve(super_shift, keysym))->command.shell == "test-cmd-2");
+    REQUIRE(action_as<SpawnAction>(*mgr.resolve(super_ctrl, keysym))->command.shell == "test-cmd-3");
+    REQUIRE(action_as<SpawnAction>(*mgr.resolve(super_alt, keysym))->command.shell == "test-cmd-4");
 }
 
 TEST_CASE("KeybindManager handles modifier state filtering", "[keybind]")
@@ -322,14 +342,14 @@ TEST_CASE("KeybindManager handles all action types", "[keybind]")
 
     uint16_t super = XCB_MOD_MASK_4;
 
-    REQUIRE(mgr.resolve(super, XStringToKeysym("a"))->type == "spawn");
-    REQUIRE(mgr.resolve(super, XStringToKeysym("q"))->type == "kill");
-    REQUIRE(mgr.resolve(super, XStringToKeysym("1"))->type == "switch_workspace");
+    REQUIRE(action_as<SpawnAction>(*mgr.resolve(super, XStringToKeysym("a"))) != nullptr);
+    REQUIRE(action_as<KillAction>(*mgr.resolve(super, XStringToKeysym("q"))) != nullptr);
+    REQUIRE(action_as<SwitchWorkspaceAction>(*mgr.resolve(super, XStringToKeysym("1"))) != nullptr);
     auto left_monitor = mgr.resolve(super, XStringToKeysym("Left"));
     REQUIRE(left_monitor.has_value());
-    REQUIRE(left_monitor->type == "focus_monitor");
-    REQUIRE(left_monitor->direction == -1);
-    REQUIRE(mgr.resolve(super, XStringToKeysym("f"))->type == "toggle_fullscreen");
-    REQUIRE(mgr.resolve(super, XStringToKeysym("j"))->type == "focus_next");
-    REQUIRE(mgr.resolve(super, XStringToKeysym("k"))->type == "focus_prev");
+    REQUIRE(action_as<FocusMonitorAction>(*left_monitor) != nullptr);
+    REQUIRE(action_as<FocusMonitorAction>(*left_monitor)->direction == -1);
+    REQUIRE(action_as<ToggleFullscreenAction>(*mgr.resolve(super, XStringToKeysym("f"))) != nullptr);
+    REQUIRE(action_as<FocusNextAction>(*mgr.resolve(super, XStringToKeysym("j"))) != nullptr);
+    REQUIRE(action_as<FocusPrevAction>(*mgr.resolve(super, XStringToKeysym("k"))) != nullptr);
 }

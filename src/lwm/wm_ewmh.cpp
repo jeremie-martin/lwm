@@ -117,7 +117,7 @@ void WindowManager::flush_stacking_list()
         entries.push_back({
             window,
             !client.hidden,
-            compute_stack_layer(window, client),
+            compute_stack_layer(client),
             client.kind == Client::Kind::Floating ? 1 : 0,
             window == active_window_ ? 1 : 0,
             static_cast<long long>(client.order)

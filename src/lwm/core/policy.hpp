@@ -60,6 +60,41 @@ inline bool is_window_visible(
 
 } // namespace lwm::visibility_policy
 
+namespace lwm::fullscreen_policy {
+
+struct FullscreenCandidate
+{
+    xcb_window_t window = XCB_NONE;
+    bool eligible = false;
+    uint64_t order = 0;
+};
+
+inline xcb_window_t
+select_owner(xcb_window_t current_owner, std::span<FullscreenCandidate const> candidates)
+{
+    for (auto const& candidate : candidates)
+    {
+        if (candidate.window == current_owner && candidate.eligible)
+            return current_owner;
+    }
+
+    xcb_window_t best = XCB_NONE;
+    uint64_t best_order = 0;
+    for (auto const& candidate : candidates)
+    {
+        if (!candidate.eligible)
+            continue;
+        if (best == XCB_NONE || candidate.order > best_order)
+        {
+            best = candidate.window;
+            best_order = candidate.order;
+        }
+    }
+    return best;
+}
+
+} // namespace lwm::fullscreen_policy
+
 namespace lwm::focus_policy {
 
 inline bool is_focus_eligible(bool accepts_input_focus, bool supports_take_focus)
@@ -266,21 +301,17 @@ struct WorkspaceSwitchResult
     size_t new_workspace = 0;
 };
 
-inline std::optional<WorkspaceSwitchResult> validate_workspace_switch(Monitor const& monitor, int target_ws)
+inline std::optional<WorkspaceSwitchResult> validate_workspace_switch(Monitor const& monitor, size_t target_ws)
 {
     size_t workspace_count = monitor.workspaces.size();
     if (workspace_count == 0)
         return std::nullopt;
-    if (target_ws < 0)
+    if (target_ws >= workspace_count)
+        return std::nullopt;
+    if (target_ws == monitor.current_workspace)
         return std::nullopt;
 
-    size_t target = static_cast<size_t>(target_ws);
-    if (target >= workspace_count)
-        return std::nullopt;
-    if (target == monitor.current_workspace)
-        return std::nullopt;
-
-    return WorkspaceSwitchResult{ monitor.current_workspace, target };
+    return WorkspaceSwitchResult{ monitor.current_workspace, target_ws };
 }
 
 constexpr size_t kFocusHistoryMax = 16;
@@ -398,11 +429,11 @@ struct DesiredStateInputs
     bool classification_skip_pager = false;
     bool classification_above = false;
 
-    bool ewmh_skip_taskbar = false;
-    bool ewmh_skip_pager = false;
+    bool app_skip_taskbar = false;
+    bool app_skip_pager = false;
     bool ewmh_sticky = false;
     bool ewmh_modal = false;
-    bool ewmh_above = false;
+    bool app_above = false;
     bool ewmh_below = false;
 
     std::optional<bool> rule_skip_taskbar;
@@ -421,13 +452,13 @@ inline DesiredWindowState compute_desired_state(DesiredStateInputs const& in)
 {
     DesiredWindowState out;
 
-    out.skip_taskbar = in.has_transient || in.classification_skip_taskbar || in.ewmh_skip_taskbar;
+    out.skip_taskbar = in.has_transient || in.classification_skip_taskbar || in.app_skip_taskbar;
     if (in.rule_skip_taskbar.has_value())
         out.skip_taskbar = *in.rule_skip_taskbar;
     if (in.layer == WindowLayer::Overlay)
         out.skip_taskbar = true;
 
-    out.skip_pager = in.has_transient || in.classification_skip_pager || in.ewmh_skip_pager;
+    out.skip_pager = in.has_transient || in.classification_skip_pager || in.app_skip_pager;
     if (in.rule_skip_pager.has_value())
         out.skip_pager = *in.rule_skip_pager;
     if (in.layer == WindowLayer::Overlay)
@@ -441,7 +472,7 @@ inline DesiredWindowState compute_desired_state(DesiredStateInputs const& in)
 
     out.modal = in.ewmh_modal;
 
-    out.above = !out.modal && (in.classification_above || in.ewmh_above);
+    out.above = !out.modal && (in.classification_above || in.app_above);
     if (in.rule_above.has_value())
         out.above = *in.rule_above;
 

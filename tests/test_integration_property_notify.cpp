@@ -229,6 +229,19 @@ apply = { floating = true, center = true, geometry = { width = 400, height = 240
 )";
 }
 
+std::string title_rule_workspace_config()
+{
+    return R"(
+[workspaces]
+count = 2
+names = ["one", "two"]
+
+[[rules]]
+match = { title = "move-me" }
+apply = { workspace = 1 }
+)";
+}
+
 } // namespace
 
 TEST_CASE("Integration: _NET_WM_WINDOW_TYPE changes reclassify managed windows", "[integration][property][ewmh]")
@@ -582,6 +595,32 @@ TEST_CASE(
 }
 
 TEST_CASE(
+    "Integration: title rule workspace applies when title matches before map",
+    "[integration][property][title][rules][workspace][map]"
+)
+{
+    auto test_env = TestEnvironment::create(title_rule_workspace_config());
+    if (!test_env)
+        SKIP("Test environment not available");
+
+    auto& conn = test_env->conn;
+
+    xcb_atom_t net_current_desktop = intern_atom(conn.get(), "_NET_CURRENT_DESKTOP");
+    xcb_atom_t net_wm_desktop = intern_atom(conn.get(), "_NET_WM_DESKTOP");
+    REQUIRE(net_current_desktop != XCB_NONE);
+    REQUIRE(net_wm_desktop != XCB_NONE);
+
+    xcb_window_t window = create_window(conn, 60, 60, 220, 160);
+    set_window_title(conn, window, "move-me");
+    map_window(conn, window);
+
+    REQUIRE(wait_for_property_cardinal(conn.get(), window, net_wm_desktop, 1, kTimeout));
+    REQUIRE(wait_for_property_cardinal(conn.get(), conn.root(), net_current_desktop, 0, kTimeout));
+
+    destroy_window(conn, window);
+}
+
+TEST_CASE(
     "Integration: WM_NAME changes reapply title rule geometry for managed windows",
     "[integration][property][title][rules]"
 )
@@ -607,6 +646,35 @@ TEST_CASE(
     xcb_flush(conn.get());
 
     REQUIRE(wait_for_window_geometry(conn, window, 440, 240, 400, 240));
+
+    destroy_window(conn, window);
+}
+
+TEST_CASE(
+    "Integration: WM_NAME changes reapply title rule workspace for managed windows",
+    "[integration][property][title][rules][workspace]"
+)
+{
+    auto test_env = TestEnvironment::create(title_rule_workspace_config());
+    if (!test_env)
+        SKIP("Test environment not available");
+
+    auto& conn = test_env->conn;
+
+    xcb_atom_t net_current_desktop = intern_atom(conn.get(), "_NET_CURRENT_DESKTOP");
+    xcb_atom_t net_wm_desktop = intern_atom(conn.get(), "_NET_WM_DESKTOP");
+    REQUIRE(net_current_desktop != XCB_NONE);
+    REQUIRE(net_wm_desktop != XCB_NONE);
+
+    xcb_window_t window = create_window(conn, 60, 60, 220, 160);
+    map_window(conn, window);
+    REQUIRE(wait_for_active_window(conn, window, kTimeout));
+    REQUIRE(wait_for_property_cardinal(conn.get(), window, net_wm_desktop, 0, kTimeout));
+
+    set_window_title(conn, window, "move-me");
+
+    REQUIRE(wait_for_property_cardinal(conn.get(), window, net_wm_desktop, 1, kTimeout));
+    REQUIRE(wait_for_property_cardinal(conn.get(), conn.root(), net_current_desktop, 0, kTimeout));
 
     destroy_window(conn, window);
 }

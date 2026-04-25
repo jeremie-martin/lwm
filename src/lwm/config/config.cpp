@@ -493,6 +493,15 @@ void erase_matching_bindings(
     }
 }
 
+bool action_is_workspace_group(Action const& action, std::string_view action_name)
+{
+    if (action_name == "switch_workspace")
+        return std::holds_alternative<SwitchWorkspaceAction>(action);
+    if (action_name == "move_to_workspace")
+        return std::holds_alternative<MoveToWorkspaceAction>(action);
+    return false;
+}
+
 constexpr std::array<std::string_view, 18> BIND_ACTION_KEYS = {
     "spawn",
     "kill",
@@ -548,8 +557,10 @@ ParseVoid parse_workspace_binding_action(
 {
     LWM_TRYV(workspace, expect_integer(node, context + "." + std::string(action_name)));
     LWM_TRY(validate_workspace_index(workspace, config.workspaces.count, context + "." + std::string(action_name)));
-    keybind.action = std::string(action_name);
-    keybind.workspace = static_cast<int>(workspace);
+    if (action_name == "switch_workspace")
+        keybind.action = SwitchWorkspaceAction { static_cast<size_t>(workspace) };
+    else
+        keybind.action = MoveToWorkspaceAction { static_cast<size_t>(workspace) };
     return {};
 }
 
@@ -563,8 +574,10 @@ ParseVoid parse_direction_binding_action(
     LWM_TRYV(direction, expect_integer(node, context + "." + std::string(action_name)));
     if (direction != -1 && direction != 1)
         return std::unexpected(context + "." + std::string(action_name) + " must be -1 or 1");
-    keybind.action = std::string(action_name);
-    keybind.direction = static_cast<int>(direction);
+    if (action_name == "focus_monitor")
+        keybind.action = FocusMonitorAction { static_cast<int>(direction) };
+    else
+        keybind.action = MoveToMonitorAction { static_cast<int>(direction) };
     return {};
 }
 
@@ -576,7 +589,30 @@ ParseVoid parse_enabled_binding_action(
 )
 {
     LWM_TRY(expect_enabled_flag(node, context + "." + std::string(action_name)));
-    keybind.action = std::string(action_name);
+    if (action_name == "kill")
+        keybind.action = KillAction {};
+    else if (action_name == "reload_config")
+        keybind.action = ReloadConfigAction {};
+    else if (action_name == "restart")
+        keybind.action = RestartAction {};
+    else if (action_name == "toggle_workspace")
+        keybind.action = ToggleWorkspaceAction {};
+    else if (action_name == "toggle_fullscreen")
+        keybind.action = ToggleFullscreenAction {};
+    else if (action_name == "toggle_float")
+        keybind.action = ToggleFloatAction {};
+    else if (action_name == "focus_next")
+        keybind.action = FocusNextAction {};
+    else if (action_name == "focus_prev")
+        keybind.action = FocusPrevAction {};
+    else if (action_name == "ratio_grow")
+        keybind.action = RatioGrowAction {};
+    else if (action_name == "ratio_shrink")
+        keybind.action = RatioShrinkAction {};
+    else if (action_name == "scratchpad_stash")
+        keybind.action = ScratchpadStashAction {};
+    else if (action_name == "scratchpad_cycle")
+        keybind.action = ScratchpadCycleAction {};
     return {};
 }
 
@@ -590,8 +626,7 @@ ParseVoid parse_scratchpad_binding_action(
     LWM_TRYV(scratchpad, expect_string(node, context + ".toggle_scratchpad"));
     if (!has_scratchpad_name(config, scratchpad))
         return std::unexpected(context + ".toggle_scratchpad points to unknown scratchpad '" + scratchpad + "'");
-    keybind.action = "toggle_scratchpad";
-    keybind.target = std::move(scratchpad);
+    keybind.action = ToggleScratchpadAction { std::move(scratchpad) };
     return {};
 }
 
@@ -602,9 +637,8 @@ ParseVoid parse_bind_action(toml::table const& table, std::string const& context
 
     if (auto const* node = table.get("spawn"))
     {
-        keybind.action = "spawn";
         LWM_TRYV(command, parse_command_config(*node, context + ".spawn", config.commands, true));
-        keybind.command = std::move(command);
+        keybind.action = SpawnAction { std::move(command) };
         return {};
     }
     if (auto const* node = table.get("kill"))
@@ -865,8 +899,7 @@ std::vector<KeybindConfig> build_default_keybinds(Config const& config)
         KeybindConfig keybind;
         keybind.mod = std::move(mod);
         keybind.key = std::move(key);
-        keybind.action = "spawn";
-        keybind.command = it->second;
+        keybind.action = SpawnAction { it->second };
         keybinds.push_back(std::move(keybind));
     };
 
@@ -878,8 +911,10 @@ std::vector<KeybindConfig> build_default_keybinds(Config const& config)
             KeybindConfig keybind;
             keybind.mod = mod;
             keybind.key = keys[i];
-            keybind.action = std::string(action);
-            keybind.workspace = static_cast<int>(i);
+            if (action == "switch_workspace")
+                keybind.action = SwitchWorkspaceAction { i };
+            else
+                keybind.action = MoveToWorkspaceAction { i };
             keybinds.push_back(std::move(keybind));
         }
     };
@@ -887,7 +922,7 @@ std::vector<KeybindConfig> build_default_keybinds(Config const& config)
     add_spawn("super", "Return", "terminal");
     add_spawn("super", "d", "launcher");
 
-    keybinds.push_back({ .mod = "super", .key = "q", .action = "kill" });
+    keybinds.push_back({ .mod = "super", .key = "q", .action = KillAction {} });
     add_workspace_binds(
         "super",
         { "ampersand", "eacute", "quotedbl", "apostrophe", "parenleft", "minus", "egrave", "underscore", "ccedilla", "agrave" },
@@ -901,16 +936,16 @@ std::vector<KeybindConfig> build_default_keybinds(Config const& config)
     );
     add_workspace_binds("super+shift", { "1", "2", "3", "4", "5", "6", "7", "8", "9", "0" }, "move_to_workspace");
 
-    keybinds.push_back({ .mod = "super", .key = "Left", .action = "focus_monitor", .direction = -1 });
-    keybinds.push_back({ .mod = "super", .key = "Right", .action = "focus_monitor", .direction = 1 });
-    keybinds.push_back({ .mod = "super+shift", .key = "Left", .action = "move_to_monitor", .direction = -1 });
-    keybinds.push_back({ .mod = "super+shift", .key = "Right", .action = "move_to_monitor", .direction = 1 });
-    keybinds.push_back({ .mod = "super", .key = "f", .action = "toggle_fullscreen" });
-    keybinds.push_back({ .mod = "super+shift", .key = "f", .action = "toggle_float" });
-    keybinds.push_back({ .mod = "super", .key = "j", .action = "focus_next" });
-    keybinds.push_back({ .mod = "super", .key = "k", .action = "focus_prev" });
-    keybinds.push_back({ .mod = "super", .key = "h", .action = "ratio_shrink" });
-    keybinds.push_back({ .mod = "super", .key = "l", .action = "ratio_grow" });
+    keybinds.push_back({ .mod = "super", .key = "Left", .action = FocusMonitorAction { -1 } });
+    keybinds.push_back({ .mod = "super", .key = "Right", .action = FocusMonitorAction { 1 } });
+    keybinds.push_back({ .mod = "super+shift", .key = "Left", .action = MoveToMonitorAction { -1 } });
+    keybinds.push_back({ .mod = "super+shift", .key = "Right", .action = MoveToMonitorAction { 1 } });
+    keybinds.push_back({ .mod = "super", .key = "f", .action = ToggleFullscreenAction {} });
+    keybinds.push_back({ .mod = "super+shift", .key = "f", .action = ToggleFloatAction {} });
+    keybinds.push_back({ .mod = "super", .key = "j", .action = FocusNextAction {} });
+    keybinds.push_back({ .mod = "super", .key = "k", .action = FocusPrevAction {} });
+    keybinds.push_back({ .mod = "super", .key = "h", .action = RatioShrinkAction {} });
+    keybinds.push_back({ .mod = "super", .key = "l", .action = RatioGrowAction {} });
 
     return keybinds;
 }
@@ -1244,7 +1279,7 @@ ConfigLoadResult load_config_result(std::string const& path)
                             cfg.keybinds,
                             seen_bindings,
                             [&](KeybindConfig const& existing)
-                            { return existing.mod == mod && existing.action == action; }
+                            { return existing.mod == mod && action_is_workspace_group(existing.action, action); }
                         );
                     }
                 }
@@ -1261,8 +1296,10 @@ ConfigLoadResult load_config_result(std::string const& path)
                     KeybindConfig keybind;
                     keybind.mod = mod;
                     keybind.key = keys[workspace];
-                    keybind.action = action;
-                    keybind.workspace = static_cast<int>(workspace);
+                    if (action == "switch_workspace")
+                        keybind.action = SwitchWorkspaceAction { workspace };
+                    else
+                        keybind.action = MoveToWorkspaceAction { workspace };
                     LWM_TRY(add_binding(
                         cfg.keybinds,
                         seen_bindings,

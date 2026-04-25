@@ -29,7 +29,6 @@ FetchContent_MakeAvailable(Catch2)
     test_integration_workspace.cpp
     test_floating_policy.cpp
     test_keybind_policy.cpp
-    test_layout_policy.cpp
     test_split_tree.cpp
     test_window_rules.cpp
     test_monitor_hotplug.cpp

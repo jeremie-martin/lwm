@@ -1,6 +1,7 @@
 #pragma once
 
 #include "lwm/core/command.hpp"
+#include "lwm/core/types.hpp"
 #include <cstddef>
 #include <cstdint>
 #include <expected>
@@ -51,11 +52,7 @@ struct KeybindConfig
 {
     std::string mod;
     std::string key;
-    std::string action;
-    std::optional<CommandConfig> command;
-    std::string target;
-    int workspace = -1;
-    int direction = 0;
+    Action action;
 };
 
 struct MousebindConfig
