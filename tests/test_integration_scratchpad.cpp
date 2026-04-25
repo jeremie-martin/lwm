@@ -476,6 +476,49 @@ TEST_CASE("Integration: scratchpad cycle keeps pooled windows in rotation", "[in
     destroy_window(conn, first);
 }
 
+TEST_CASE("Integration: visible scratchpad pool window keeps cycling after restart", "[integration][scratchpad]")
+{
+    auto test_env = TestEnvironment::create(scratchpad_match_config());
+    if (!test_env)
+        SKIP("Test environment not available");
+
+    auto& conn = test_env->conn;
+    auto socket_path = wait_for_ipc_socket_path(conn);
+    REQUIRE(socket_path.has_value());
+
+    xcb_window_t pooled = create_window(conn, 10, 10, 300, 220);
+    set_window_wm_class(conn, pooled, "pool-visible", "PoolWindow");
+    map_window(conn, pooled);
+    REQUIRE(wait_for_active_window(conn, pooled, kTimeout));
+
+    auto stash = send_ipc_command(*socket_path, "scratchpad stash");
+    REQUIRE(stash.has_value());
+    REQUIRE(*stash == "ok");
+    REQUIRE(wait_for_condition([&]() { return is_hidden_offscreen(conn, pooled); }, kTimeout));
+
+    auto show = send_ipc_command(*socket_path, "scratchpad cycle");
+    REQUIRE(show.has_value());
+    REQUIRE(*show == "ok");
+    REQUIRE(wait_for_active_window(conn, pooled, kTimeout));
+    REQUIRE(wait_for_condition([&]() { return !is_hidden_offscreen(conn, pooled); }, kTimeout));
+
+    auto restart_result = send_ipc_command(*socket_path, "restart");
+    (void)restart_result;
+
+    REQUIRE(wait_for_wm_ready(conn, std::chrono::seconds(5)));
+    REQUIRE(wait_for_active_window(conn, pooled, kTimeout));
+    REQUIRE(wait_for_condition([&]() { return !is_hidden_offscreen(conn, pooled); }, kTimeout));
+
+    auto restarted_socket_path = wait_for_ipc_socket_path(conn);
+    REQUIRE(restarted_socket_path.has_value());
+    auto hide = send_ipc_command(*restarted_socket_path, "scratchpad cycle");
+    REQUIRE(hide.has_value());
+    REQUIRE(*hide == "ok");
+    REQUIRE(wait_for_condition([&]() { return is_hidden_offscreen(conn, pooled); }, kTimeout));
+
+    destroy_window(conn, pooled);
+}
+
 TEST_CASE("Integration: hidden scratchpad stays hidden across restart", "[integration][scratchpad]")
 {
     auto test_env = TestEnvironment::create(scratchpad_match_config());

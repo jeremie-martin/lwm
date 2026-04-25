@@ -17,6 +17,8 @@
 #include "wm.hpp"
 #include <algorithm>
 #include <cstring>
+#include <type_traits>
+#include <variant>
 #include <xcb/xcb.h>
 
 namespace lwm {
@@ -68,6 +70,28 @@ std::optional<Geometry> unpack_optional_geometry(uint32_t const* data)
     if (data[0] == 0)
         return std::nullopt;
     return unpack_geometry(data + 1);
+}
+
+template<typename ClientT>
+void restore_visible_pool_scratchpad_membership(ClientT& client)
+{
+    if constexpr (requires { client.scratchpad; })
+    {
+        if (!client.scratchpad)
+        {
+            // Derive the variant alternative instead of naming it so this
+            // restart fix also builds before the scratchpad state refactor.
+            using ScratchpadMembershipT = std::remove_cvref_t<decltype(*client.scratchpad)>;
+            using VisiblePoolMembershipT = std::variant_alternative_t<1, ScratchpadMembershipT>;
+            client.scratchpad = VisiblePoolMembershipT {};
+        }
+    }
+    else if (!client.in_scratchpad && !client.scratchpad_name.has_value())
+    {
+        client.scratchpad_name.reset();
+        client.scratchpad_restore_kind.reset();
+        client.scratchpad_restore_geometry.reset();
+    }
 }
 
 } // namespace
@@ -570,8 +594,12 @@ void WindowManager::restore_window_ordering()
         for (size_t i = 0; i < pool_len; ++i)
         {
             xcb_window_t w = static_cast<xcb_window_t>(pool_data[i]);
-            if (get_client(w))
+            auto* client = get_client(w);
+            if (client)
+            {
+                restore_visible_pool_scratchpad_membership(*client);
                 scratchpad_pool_.push_back(w);
+            }
         }
     }
     free(pool_reply);
