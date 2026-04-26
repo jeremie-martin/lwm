@@ -295,10 +295,8 @@ void WindowManager::apply_initial_state_flags(Client& client, WindowRuleResult c
 {
     if (rule.layer == WindowLayer::Overlay)
         set_window_layer(client, WindowLayer::Overlay);
-    else if (rule.above.has_value() && *rule.above)
-        set_window_layer_hint(client, LayerHint::Above);
-    if (rule.below.has_value() && *rule.below)
-        set_window_layer_hint(client, LayerHint::Below);
+    else if (rule.layer_hint.has_value() && *rule.layer_hint != LayerHint::Normal)
+        set_window_layer_hint(client, *rule.layer_hint);
     if (rule.sticky.has_value() && *rule.sticky)
         set_window_sticky(client, true);
     if (rule.layer != WindowLayer::Overlay && rule.fullscreen.has_value() && *rule.fullscreen)

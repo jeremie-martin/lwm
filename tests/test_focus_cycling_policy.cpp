@@ -10,6 +10,8 @@ focus_policy::FocusCycleCandidate make_tiled(xcb_window_t id) { return { id, fal
 
 focus_policy::FocusCycleCandidate make_floating(xcb_window_t id) { return { id, true }; }
 
+constexpr auto kNoMru = [](xcb_window_t) -> uint64_t { return 0; };
+
 } // namespace
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -144,7 +146,7 @@ TEST_CASE("Build candidates includes eligible tiled windows", "[focus][cycling]"
     std::unordered_set<xcb_window_t> eligible_set = { 0x1000, 0x3000 };
     auto is_eligible = [&](xcb_window_t w) { return eligible_set.contains(w); };
 
-    auto candidates = focus_policy::build_cycle_candidates(tiled, floating, 0, 0, is_eligible);
+    auto candidates = focus_policy::build_cycle_candidates(tiled, floating, 0, 0, is_eligible, kNoMru);
 
     REQUIRE(candidates.size() == 2);
     REQUIRE(candidates[0].id == 0x1000);
@@ -161,7 +163,7 @@ TEST_CASE("Build candidates includes floating on same workspace", "[focus][cycli
 
     auto is_eligible = [](xcb_window_t) { return true; };
 
-    auto candidates = focus_policy::build_cycle_candidates(tiled, floating, 0, 0, is_eligible);
+    auto candidates = focus_policy::build_cycle_candidates(tiled, floating, 0, 0, is_eligible, kNoMru);
 
     REQUIRE(candidates.size() == 2);
     REQUIRE(candidates[0].id == 0x1000);
@@ -178,7 +180,7 @@ TEST_CASE("Build candidates excludes floating on different monitor", "[focus][cy
 
     auto is_eligible = [](xcb_window_t) { return true; };
 
-    auto candidates = focus_policy::build_cycle_candidates(tiled, floating, 0, 0, is_eligible);
+    auto candidates = focus_policy::build_cycle_candidates(tiled, floating, 0, 0, is_eligible, kNoMru);
 
     REQUIRE(candidates.size() == 1);
     REQUIRE(candidates[0].id == 0x1000);
@@ -193,7 +195,7 @@ TEST_CASE("Build candidates includes sticky floating on different workspace", "[
 
     auto is_eligible = [](xcb_window_t) { return true; };
 
-    auto candidates = focus_policy::build_cycle_candidates(tiled, floating, 0, 0, is_eligible);
+    auto candidates = focus_policy::build_cycle_candidates(tiled, floating, 0, 0, is_eligible, kNoMru);
 
     REQUIRE(candidates.size() == 1);
     REQUIRE(candidates[0].id == 0x1000);
@@ -209,7 +211,7 @@ TEST_CASE("Build candidates excludes sticky floating on different monitor", "[fo
 
     auto is_eligible = [](xcb_window_t) { return true; };
 
-    auto candidates = focus_policy::build_cycle_candidates(tiled, floating, 0, 0, is_eligible);
+    auto candidates = focus_policy::build_cycle_candidates(tiled, floating, 0, 0, is_eligible, kNoMru);
 
     REQUIRE(candidates.empty());
 }
@@ -224,7 +226,7 @@ TEST_CASE("Build candidates preserves tiled-then-floating order", "[focus][cycli
 
     auto is_eligible = [](xcb_window_t) { return true; };
 
-    auto candidates = focus_policy::build_cycle_candidates(tiled, floating, 0, 0, is_eligible);
+    auto candidates = focus_policy::build_cycle_candidates(tiled, floating, 0, 0, is_eligible, kNoMru);
 
     REQUIRE(candidates.size() == 4);
     REQUIRE(candidates[0].id == 0x1000);
@@ -246,7 +248,7 @@ TEST_CASE("Build candidates returns empty when all ineligible", "[focus][cycling
 
     auto is_eligible = [](xcb_window_t) { return false; };
 
-    auto candidates = focus_policy::build_cycle_candidates(tiled, floating, 0, 0, is_eligible);
+    auto candidates = focus_policy::build_cycle_candidates(tiled, floating, 0, 0, is_eligible, kNoMru);
 
     REQUIRE(candidates.empty());
 }
@@ -263,7 +265,7 @@ TEST_CASE("Full cycle through mixed tiled and floating in both directions", "[fo
     };
 
     auto is_eligible = [](xcb_window_t) { return true; };
-    auto candidates = focus_policy::build_cycle_candidates(tiled, floating, 0, 0, is_eligible);
+    auto candidates = focus_policy::build_cycle_candidates(tiled, floating, 0, 0, is_eligible, kNoMru);
     REQUIRE(candidates.size() == 3);
 
     // Forward cycle: 0x1000 -> 0x2000 -> 0x3000 -> 0x1000

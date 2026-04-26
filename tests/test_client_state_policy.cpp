@@ -132,19 +132,15 @@ TEST_CASE("Client kind can be set to all valid types", "[client][state]")
 {
     Client tiled = make_client(0x1000, Client::Kind::Tiled);
     REQUIRE(tiled.kind == Client::Kind::Tiled);
-    REQUIRE(is_user_window(tiled));
 
     Client floating = make_client(0x2000, Client::Kind::Floating);
     REQUIRE(floating.kind == Client::Kind::Floating);
-    REQUIRE(is_user_window(floating));
 
     Client dock = make_client(0x3000, Client::Kind::Dock);
     REQUIRE(dock.kind == Client::Kind::Dock);
-    REQUIRE_FALSE(is_user_window(dock));
 
     Client desktop = make_client(0x4000, Client::Kind::Desktop);
     REQUIRE(desktop.kind == Client::Kind::Desktop);
-    REQUIRE_FALSE(is_user_window(desktop));
 }
 
 TEST_CASE("Tiling state carries only tiled restore data for tiled clients", "[client][state][tiling]")
@@ -320,8 +316,7 @@ TEST_CASE("compute_desired_state enforces above/below mutual exclusion", "[clien
         in.app_above = true;
         in.ewmh_below = true;
         auto out = classification_policy::compute_desired_state(in);
-        REQUIRE(out.above);
-        REQUIRE_FALSE(out.below);
+        REQUIRE(out.layer_hint == LayerHint::Above);
     }
 
     SECTION("Only below takes effect alone")
@@ -329,8 +324,7 @@ TEST_CASE("compute_desired_state enforces above/below mutual exclusion", "[clien
         classification_policy::DesiredStateInputs in{};
         in.ewmh_below = true;
         auto out = classification_policy::compute_desired_state(in);
-        REQUIRE_FALSE(out.above);
-        REQUIRE(out.below);
+        REQUIRE(out.layer_hint == LayerHint::Below);
     }
 }
 
@@ -416,7 +410,7 @@ TEST_CASE("Modal suppresses explicit above in desired state", "[client][state][c
         in.app_above = true;
         auto out = classification_policy::compute_desired_state(in);
         REQUIRE(out.modal);
-        REQUIRE_FALSE(out.above);
+        REQUIRE(out.layer_hint == LayerHint::Normal);
     }
 
     SECTION("Modal suppresses classification above")
@@ -426,7 +420,7 @@ TEST_CASE("Modal suppresses explicit above in desired state", "[client][state][c
         in.classification_above = true;
         auto out = classification_policy::compute_desired_state(in);
         REQUIRE(out.modal);
-        REQUIRE_FALSE(out.above);
+        REQUIRE(out.layer_hint == LayerHint::Normal);
     }
 
     SECTION("Without modal, classification above works")
@@ -435,17 +429,17 @@ TEST_CASE("Modal suppresses explicit above in desired state", "[client][state][c
         in.classification_above = true;
         auto out = classification_policy::compute_desired_state(in);
         REQUIRE_FALSE(out.modal);
-        REQUIRE(out.above);
+        REQUIRE(out.layer_hint == LayerHint::Above);
     }
 
-    SECTION("rule_above overrides modal suppression")
+    SECTION("rule layer_hint overrides modal suppression")
     {
         classification_policy::DesiredStateInputs in{};
         in.ewmh_modal = true;
-        in.rule_above = true;
+        in.rule_layer_hint = LayerHint::Above;
         auto out = classification_policy::compute_desired_state(in);
         REQUIRE(out.modal);
-        REQUIRE(out.above);
+        REQUIRE(out.layer_hint == LayerHint::Above);
     }
 }
 
@@ -462,8 +456,7 @@ TEST_CASE("compute_desired_state defaults are all false", "[policy][classificati
     REQUIRE_FALSE(out.skip_pager);
     REQUIRE_FALSE(out.sticky);
     REQUIRE_FALSE(out.modal);
-    REQUIRE_FALSE(out.above);
-    REQUIRE_FALSE(out.below);
+    REQUIRE(out.layer_hint == LayerHint::Normal);
     REQUIRE_FALSE(out.borderless);
 }
 
@@ -555,8 +548,7 @@ TEST_CASE("compute_desired_state: overlay layer forces skip, sticky, borderless,
     REQUIRE(out.skip_pager);
     REQUIRE(out.sticky);
     REQUIRE(out.borderless);
-    REQUIRE_FALSE(out.above);
-    REQUIRE_FALSE(out.below);
+    REQUIRE(out.layer_hint == LayerHint::Normal);
 }
 
 TEST_CASE("compute_desired_state: modal clears below", "[policy][classification]")
@@ -567,46 +559,46 @@ TEST_CASE("compute_desired_state: modal clears below", "[policy][classification]
     auto out = classification_policy::compute_desired_state(in);
 
     REQUIRE(out.modal);
-    REQUIRE_FALSE(out.below);
+    REQUIRE(out.layer_hint == LayerHint::Normal);
 }
 
-TEST_CASE("compute_desired_state: rule_below overrides ewmh", "[policy][classification]")
+TEST_CASE("compute_desired_state: rule layer_hint overrides ewmh below", "[policy][classification]")
 {
-    SECTION("Rule suppresses ewmh below")
+    SECTION("Rule clears ewmh below")
     {
         classification_policy::DesiredStateInputs in{};
         in.ewmh_below = true;
-        in.rule_below = false;
+        in.rule_layer_hint = LayerHint::Normal;
         auto out = classification_policy::compute_desired_state(in);
-        REQUIRE_FALSE(out.below);
+        REQUIRE(out.layer_hint == LayerHint::Normal);
     }
 
     SECTION("Rule forces below on")
     {
         classification_policy::DesiredStateInputs in{};
-        in.rule_below = true;
+        in.rule_layer_hint = LayerHint::Below;
         auto out = classification_policy::compute_desired_state(in);
-        REQUIRE(out.below);
+        REQUIRE(out.layer_hint == LayerHint::Below);
     }
 }
 
-TEST_CASE("compute_desired_state: rule_above overrides classification", "[policy][classification]")
+TEST_CASE("compute_desired_state: rule layer_hint overrides classification", "[policy][classification]")
 {
     SECTION("Rule forces above off despite classification")
     {
         classification_policy::DesiredStateInputs in{};
         in.classification_above = true;
-        in.rule_above = false;
+        in.rule_layer_hint = LayerHint::Normal;
         auto out = classification_policy::compute_desired_state(in);
-        REQUIRE_FALSE(out.above);
+        REQUIRE(out.layer_hint == LayerHint::Normal);
     }
 
     SECTION("Rule forces above on without classification")
     {
         classification_policy::DesiredStateInputs in{};
-        in.rule_above = true;
+        in.rule_layer_hint = LayerHint::Above;
         auto out = classification_policy::compute_desired_state(in);
-        REQUIRE(out.above);
+        REQUIRE(out.layer_hint == LayerHint::Above);
     }
 }
 

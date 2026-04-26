@@ -2,7 +2,7 @@
 
 ## Project Structure & Module Organization
 
-LWM is a C++23 X11 window manager. Core code lives in `src/lwm/`: `wm.cpp` owns major state transitions, `wm_events.cpp` handles X events, `wm_focus.cpp` covers focus/fallback, `wm_workspace.cpp` and `wm_floating.cpp` handle moves and geometry, and `src/lwm/core/` contains shared types and policy helpers. Tests live in `tests/`. Runtime/config assets live in `config/`, `config.toml.example`, and `scripts/preview.sh`. Treat `build/` and `build-worker/` as generated output.
+LWM is a C++23 X11 window manager. Core code lives in `src/lwm/`: `wm.cpp` owns major state transitions, `wm_events.cpp` handles X events, `wm_focus.cpp` covers focus/fallback, `wm_workspace.cpp` and `wm_floating.cpp` handle moves and geometry, `wm_scratchpad.cpp` runs named scratchpads and the generic pool, and `src/lwm/core/` contains shared types and policy helpers. Tests live in `tests/`. Runtime/config assets live in `config/`, `config.toml.example`, and `scripts/preview.sh`. Treat `build/` and `build-worker/` as generated output.
 
 Start with `ARCHITECTURE.md` before changing visibility, focus, fullscreen, or stacking logic. Use `COMPLIANCE.md` for ICCCM/EWMH-facing behavior and `CONTRIBUTING.md` for workflow details.
 

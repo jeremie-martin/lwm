@@ -16,6 +16,7 @@
  */
 
 #include "log.hpp"
+#include "policy.hpp"
 #include "types.hpp"
 #include <unordered_map>
 #include <unordered_set>
@@ -297,9 +298,9 @@ inline void assert_visibility_consistency(
         if (client.monitor >= monitors.size())
             continue;
 
-        bool should_be_visible = !showing_desktop && !client.iconic;
-        if (should_be_visible && !client.sticky)
-            should_be_visible = (client.workspace == monitors[client.monitor].current_workspace);
+        bool should_be_visible = visibility_policy::is_window_visible(
+            showing_desktop, client.iconic, client.sticky,
+            client.monitor, client.workspace, monitors);
 
         if (should_be_visible && client.hidden)
         {

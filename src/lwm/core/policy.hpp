@@ -218,21 +218,6 @@ inline std::vector<FocusCycleCandidate> build_cycle_candidates(
     return result;
 }
 
-/// Backward-compatible overload without MRU ordering (tiled-first, then floating).
-inline std::vector<FocusCycleCandidate> build_cycle_candidates(
-    std::span<xcb_window_t const> tiled_windows,
-    std::span<FloatingCandidate const> floating_windows,
-    size_t monitor_idx,
-    size_t workspace_idx,
-    std::function<bool(xcb_window_t)> const& is_eligible
-)
-{
-    return build_cycle_candidates(
-        tiled_windows, floating_windows, monitor_idx, workspace_idx, is_eligible,
-        [](xcb_window_t) -> uint64_t { return 0; }
-    );
-}
-
 /// Find the next window in focus cycle order.
 /// Returns nullopt if no candidates or cycling not possible.
 inline std::optional<FocusCycleCandidate>
@@ -418,8 +403,7 @@ struct DesiredWindowState
     bool skip_pager = false;
     bool sticky = false;
     bool modal = false;
-    bool above = false;
-    bool below = false;
+    LayerHint layer_hint = LayerHint::Normal;
     bool borderless = false;
 };
 
@@ -439,8 +423,7 @@ struct DesiredStateInputs
     std::optional<bool> rule_skip_taskbar;
     std::optional<bool> rule_skip_pager;
     std::optional<bool> rule_sticky;
-    std::optional<bool> rule_above;
-    std::optional<bool> rule_below;
+    std::optional<LayerHint> rule_layer_hint;
     std::optional<bool> rule_borderless;
 
     bool has_transient = false;
@@ -472,23 +455,21 @@ inline DesiredWindowState compute_desired_state(DesiredStateInputs const& in)
 
     out.modal = in.ewmh_modal;
 
-    out.above = !out.modal && (in.classification_above || in.app_above);
-    if (in.rule_above.has_value())
-        out.above = *in.rule_above;
-
-    out.below = in.ewmh_below;
-    if (in.rule_below.has_value())
-        out.below = *in.rule_below;
-
+    LayerHint hint = LayerHint::Normal;
+    if (!out.modal)
+    {
+        if (in.classification_above || in.app_above)
+            hint = LayerHint::Above;
+        else if (in.ewmh_below)
+            hint = LayerHint::Below;
+    }
+    if (in.rule_layer_hint.has_value())
+        hint = *in.rule_layer_hint;
     if (in.layer == WindowLayer::Overlay)
-    {
-        out.above = false;
-        out.below = false;
-    }
-    else if (out.modal || out.above)
-    {
-        out.below = false;
-    }
+        hint = LayerHint::Normal;
+    else if (out.modal && hint == LayerHint::Below)
+        hint = LayerHint::Normal;
+    out.layer_hint = hint;
 
     out.borderless = in.rule_borderless.value_or(false) || in.layer == WindowLayer::Overlay;
 

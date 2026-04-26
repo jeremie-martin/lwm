@@ -218,6 +218,14 @@ Notification popup windows (`_NET_WM_WINDOW_TYPE_NOTIFICATION`) remain unmanaged
 
 Tools that know their source X11 window can explicitly request attention with `lwmctl notify-attention window=<xid>`. The helper `scripts/lwm-notify.sh` shows the normal desktop notification with `notify-send` and then calls that IPC command with `$WINDOWID`, which is the robust path for terminal-hosted agents. LWM only accepts a managed tiled/floating source window, skips the currently focused window, and clears attention on focus.
 
+### Scratchpad Visibility
+
+Scratchpads come in two flavors, both modeled as variants of `Client::scratchpad`. Named scratchpads are bound to a config-declared name with a matcher; the WM remembers the last claimed window per name. The generic pool is an MRU-ordered set of stash-tagged windows that the user cycles through. Both are managed clients that live in `clients_` like any other window.
+
+When a scratchpad is hidden, the client stays in `clients_` with `iconic = true` and is moved off-screen by the normal visibility funnel — the same off-screen mechanism used for inactive workspaces. A hidden scratchpad is not focus-eligible (focus fallback skips iconic clients) and is not part of any workspace's tiled membership. Showing a scratchpad is a re-host: the funnel reassigns the client to the focused monitor's current workspace, restores tiled membership or floating geometry from the saved variant payload, and routes the show through `finalize_visibility_on_monitor` so fullscreen ownership and stacking stay coherent.
+
+Restart preserves the visible scratchpad pool window and named-scratchpad claims via the `LWM_RESTART_SCRATCHPAD_*` atoms — same mechanism the rest of the WM uses for graceful exec restart.
+
 ## 8. Hotplug Contract
 
 RANDR changes are handled as a structural rebuild, not as a small patch to old monitor indices.

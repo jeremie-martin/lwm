@@ -282,31 +282,6 @@ struct Client
     std::optional<ScratchpadMembership> scratchpad; ///< Named or generic scratchpad membership
 };
 
-inline bool is_tiled(Client const& client)
-{
-    return client.kind == Client::Kind::Tiled;
-}
-
-inline bool is_floating(Client const& client)
-{
-    return client.kind == Client::Kind::Floating;
-}
-
-inline bool is_dock(Client const& client)
-{
-    return client.kind == Client::Kind::Dock;
-}
-
-inline bool is_desktop(Client const& client)
-{
-    return client.kind == Client::Kind::Desktop;
-}
-
-inline bool is_user_window(Client const& client)
-{
-    return is_tiled(client) || is_floating(client);
-}
-
 inline TiledState* tiled_state(Client& client)
 {
     return std::get_if<TiledState>(&client.tiling_state);

@@ -283,7 +283,7 @@ void WindowManager::focus_or_fallback(Monitor& monitor, bool record_user_time)
             continue;
         for (xcb_window_t window : monitor.workspaces[w].windows)
         {
-            if (auto const* client = get_client(window); client && client->sticky)
+            if (require_client(window).sticky)
                 sticky_tiled_candidates.push_back(window);
         }
     }

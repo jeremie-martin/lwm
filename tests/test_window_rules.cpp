@@ -527,8 +527,8 @@ TEST_CASE("State flags are preserved", "[rules]")
     REQUIRE(result.matched);
     REQUIRE(result.fullscreen.has_value());
     REQUIRE(*result.fullscreen == true);
-    REQUIRE(result.above.has_value());
-    REQUIRE(*result.above == true);
+    REQUIRE(result.layer_hint.has_value());
+    REQUIRE(*result.layer_hint == LayerHint::Above);
     REQUIRE(result.sticky.has_value());
     REQUIRE(*result.sticky == true);
     REQUIRE(result.skip_taskbar.has_value());

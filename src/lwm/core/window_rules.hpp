@@ -35,8 +35,7 @@ struct CompiledWindowRule
     std::optional<int> monitor;
     std::optional<std::string> monitor_name;
     std::optional<bool> fullscreen;
-    std::optional<bool> above;
-    std::optional<bool> below;
+    std::optional<LayerHint> layer_hint;
     std::optional<bool> sticky;
     std::optional<bool> skip_taskbar;
     std::optional<bool> skip_pager;
@@ -83,8 +82,7 @@ struct WindowRuleResult
 
     // State flags
     std::optional<bool> fullscreen;
-    std::optional<bool> above;
-    std::optional<bool> below;
+    std::optional<LayerHint> layer_hint;
     std::optional<bool> sticky;
     std::optional<bool> skip_taskbar;
     std::optional<bool> skip_pager;

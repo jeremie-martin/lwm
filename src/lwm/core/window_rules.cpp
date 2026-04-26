@@ -161,8 +161,12 @@ void WindowRules::load_rules(std::vector<WindowRuleConfig> const& configs)
         rule.monitor = cfg.monitor;
         rule.monitor_name = cfg.monitor_name;
         rule.fullscreen = cfg.fullscreen;
-        rule.above = cfg.above;
-        rule.below = cfg.below;
+        if (cfg.above.has_value() && *cfg.above)
+            rule.layer_hint = LayerHint::Above;
+        else if (cfg.below.has_value() && *cfg.below)
+            rule.layer_hint = LayerHint::Below;
+        else if (cfg.above.has_value() || cfg.below.has_value())
+            rule.layer_hint = LayerHint::Normal;
         rule.sticky = cfg.sticky;
         rule.skip_taskbar = cfg.skip_taskbar;
         rule.skip_pager = cfg.skip_pager;
@@ -308,8 +312,7 @@ WindowRuleResult WindowRules::match(
         result.target_workspace = resolve_workspace(rule.workspace, rule.workspace_name, workspace_names);
 
         result.fullscreen = rule.fullscreen;
-        result.above = rule.above;
-        result.below = rule.below;
+        result.layer_hint = rule.layer_hint;
         result.sticky = rule.sticky;
         result.skip_taskbar = rule.skip_taskbar;
         result.skip_pager = rule.skip_pager;

@@ -299,11 +299,8 @@ void WindowManager::show_named_scratchpad_window(xcb_window_t window, Scratchpad
     client->iconic = false;
     set_iconic_state(window, false);
 
-    sync_visibility_for_monitor(target_monitor);
     apply_floating_geometry(*client);
-    if (was_tiled)
-        rearrange_monitor(monitors_[target_monitor]);
-    restack_monitor_layers(target_monitor);
+    finalize_visibility_on_monitor(target_monitor);
 
     if (old_monitor != target_monitor)
         finalize_visibility_on_monitor(old_monitor);
@@ -369,14 +366,9 @@ void WindowManager::show_pool_scratchpad_window(xcb_window_t window)
         }
     }
 
-    sync_visibility_for_monitor(target_monitor);
-    if (client->kind == Client::Kind::Tiled)
-        rearrange_monitor(monitors_[target_monitor]);
-    else
-    {
+    if (client->kind != Client::Kind::Tiled)
         apply_floating_geometry(*client);
-        restack_monitor_layers(target_monitor);
-    }
+    finalize_visibility_on_monitor(target_monitor);
 
     focus_any_window(window);
     flush_and_drain_crossing();

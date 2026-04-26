@@ -1263,21 +1263,8 @@ void WindowManager::apply_rule_result_to_window(xcb_window_t window, WindowRuleR
         if (!refresh_client())
             return;
     }
-    if (rule_result.above.has_value() || rule_result.below.has_value())
-    {
-        LayerHint desired_hint = client->layer_hint;
-        if (rule_result.above.value_or(false))
-            desired_hint = LayerHint::Above;
-        else if (rule_result.below.value_or(false))
-            desired_hint = LayerHint::Below;
-        else if ((rule_result.above.has_value() && client->layer_hint == LayerHint::Above)
-            || (rule_result.below.has_value() && client->layer_hint == LayerHint::Below))
-        {
-            desired_hint = LayerHint::Normal;
-        }
-        if (desired_hint != client->layer_hint)
-            set_window_layer_hint(*client, desired_hint);
-    }
+    if (rule_result.layer_hint.has_value() && *rule_result.layer_hint != client->layer_hint)
+        set_window_layer_hint(*client, *rule_result.layer_hint);
     if (rule_result.fullscreen.has_value() && *rule_result.fullscreen)
     {
         set_fullscreen(*client, true);
@@ -1805,7 +1792,7 @@ ClassificationResult WindowManager::classify_managed_window(xcb_window_t window)
             classification.skip_taskbar = *rule_result.skip_taskbar;
         if (rule_result.skip_pager.has_value())
             classification.skip_pager = *rule_result.skip_pager;
-        if (rule_result.above.has_value() && *rule_result.above)
+        if (rule_result.layer_hint == LayerHint::Above)
             classification.above = true;
         if (rule_result.layer == WindowLayer::Overlay)
         {
@@ -1942,8 +1929,7 @@ void WindowManager::apply_classification_state(
         .rule_skip_taskbar = rule_result.skip_taskbar,
         .rule_skip_pager = rule_result.skip_pager,
         .rule_sticky = rule_result.sticky,
-        .rule_above = rule_result.above,
-        .rule_below = rule_result.below,
+        .rule_layer_hint = rule_result.layer_hint,
         .rule_borderless = rule_result.borderless,
         .has_transient = has_transient,
         .is_sticky_desktop = is_sticky_desktop(window),
@@ -1958,11 +1944,8 @@ void WindowManager::apply_classification_state(
         set_window_sticky(*client, desired.sticky);
     if (client->modal != desired.modal)
         set_window_modal(*client, desired.modal);
-    LayerHint desired_hint = desired.above   ? LayerHint::Above
-                            : desired.below  ? LayerHint::Below
-                                             : LayerHint::Normal;
-    if (client->layer_hint != desired_hint)
-        set_window_layer_hint(*client, desired_hint);
+    if (client->layer_hint != desired.layer_hint)
+        set_window_layer_hint(*client, desired.layer_hint);
     if (client->borderless != desired.borderless)
         set_window_borderless(*client, desired.borderless);
 
@@ -2486,15 +2469,7 @@ void WindowManager::set_window_sticky(Client& client, bool enabled)
         ewmh_.set_window_desktop(client.id, desktop);
     }
 
-    if (client.monitor < monitors_.size())
-    {
-        update_fullscreen_owner_after_visibility_change(client.monitor);
-        sync_visibility_for_monitor(client.monitor);
-        if (client.kind == Client::Kind::Tiled)
-            rearrange_monitor(monitors_[client.monitor]);
-        else
-            restack_monitor_layers(client.monitor);
-    }
+    finalize_visibility_on_monitor(client.monitor);
 
     flush_and_drain_crossing();
 }
@@ -2833,16 +2808,8 @@ void WindowManager::iconify_window(xcb_window_t window)
     client->iconic = true;
     set_iconic_state(window, true);
 
-    if (client->monitor < monitors_.size())
-    {
-        release_fullscreen_owner(*client);
-        update_fullscreen_owner_after_visibility_change(client->monitor);
-        sync_visibility_for_monitor(client->monitor);
-        if (client->kind == Client::Kind::Tiled)
-            rearrange_monitor(monitors_[client->monitor]);
-        else
-            restack_monitor_layers(client->monitor);
-    }
+    release_fullscreen_owner(*client);
+    finalize_visibility_on_monitor(client->monitor);
 
     if (active_window_ == window)
     {
@@ -2871,20 +2838,9 @@ void WindowManager::deiconify_window(xcb_window_t window, bool focus)
     client->iconic = false;
     set_iconic_state(window, false);
 
-    if (client->monitor < monitors_.size())
-    {
-        if (client->fullscreen)
-            claim_fullscreen_owner(*client);
-        else
-        {
-            update_fullscreen_owner_after_visibility_change(client->monitor);
-        }
-        sync_visibility_for_monitor(client->monitor);
-        if (client->kind == Client::Kind::Tiled)
-            rearrange_monitor(monitors_[client->monitor]);
-        else
-            restack_monitor_layers(client->monitor);
-    }
+    if (client->fullscreen)
+        claim_fullscreen_owner(*client);
+    finalize_visibility_on_monitor(client->monitor);
 
     if ((focus || client->fullscreen) && client->monitor == focused_monitor_ && should_be_visible(*client))
     {
@@ -3957,19 +3913,9 @@ bool WindowManager::move_floating_client_to_workspace(
 
     assign_window_workspace(client, target_monitor, target_workspace);
 
-    if (source_monitor < monitors_.size())
-    {
-        update_fullscreen_owner_after_visibility_change(source_monitor);
-        if (monitor_changed)
-        {
-            sync_visibility_for_monitor(source_monitor);
-            restack_monitor_layers(source_monitor);
-        }
-    }
-
-    update_fullscreen_owner_after_visibility_change(target_monitor);
-    sync_visibility_for_monitor(target_monitor);
-    restack_monitor_layers(target_monitor);
+    if (monitor_changed)
+        finalize_visibility_on_monitor(source_monitor);
+    finalize_visibility_on_monitor(target_monitor);
 
     LWM_ASSERT_INVARIANTS(clients_, monitors_);
     return true;
