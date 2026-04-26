@@ -1734,24 +1734,6 @@ void WindowManager::handle_randr_screen_change()
             if (client.workspace >= ws_count)
                 client.workspace = monitors_[new_monitor].current_workspace;
         }
-
-        // Establishes the post-hotplug invariant relied on by downstream code:
-        // every Tiled/Floating client has a valid (monitor, workspace).
-        for (auto& [id, client] : clients_)
-        {
-            if (client.kind != Client::Kind::Tiled && client.kind != Client::Kind::Floating)
-                continue;
-            bool monitor_ok = client.monitor < monitors_.size();
-            bool workspace_ok = monitor_ok && client.workspace < monitors_[client.monitor].workspaces.size();
-            if (monitor_ok && workspace_ok)
-                continue;
-
-            LOG_WARN("hotplug: residual stale indices for window {:#x} (monitor={} workspace={}), "
-                     "rebinding to monitor 0", id, client.monitor, client.workspace);
-            client.monitor = 0;
-            if (client.workspace >= monitors_[0].workspaces.size())
-                client.workspace = monitors_[0].current_workspace;
-        }
     }
 
     // Update EWMH for new monitor configuration
@@ -1780,6 +1762,7 @@ void WindowManager::handle_randr_screen_change()
     }
 
     flush_and_drain_crossing();
+    LWM_ASSERT_INVARIANTS(clients_, monitors_);
 }
 
 } // namespace lwm

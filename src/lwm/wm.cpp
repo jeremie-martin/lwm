@@ -2541,8 +2541,6 @@ void WindowManager::apply_maximized_geometry(Client& client)
 {
     if (client.kind != Client::Kind::Floating)
         return;
-    if (client.monitor >= monitors_.size())
-        return;
 
     Geometry base = floating_geometry(client);
     if (client.maximize_restore)
@@ -3295,8 +3293,6 @@ bool WindowManager::is_suppressed_by_fullscreen(Client const& client) const
         return false;
     if (client.layer == WindowLayer::Overlay)
         return false;
-    if (client.monitor >= monitors_.size())
-        return false;
     if (client.iconic || !should_be_visible(client))
         return false;
 
@@ -3900,8 +3896,6 @@ bool WindowManager::move_tiled_client_to_workspace(
     xcb_window_t window = client.id;
     size_t source_monitor = client.monitor;
     size_t source_workspace = client.workspace;
-    if (source_monitor >= monitors_.size() || source_workspace >= monitors_[source_monitor].workspaces.size())
-        return false;
     if (source_monitor == target_monitor && source_workspace == target_workspace && !insert_index.has_value())
         return true;
 
