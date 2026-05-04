@@ -2012,14 +2012,10 @@ void WindowManager::sync_managed_window_classification(xcb_window_t window, Clas
     bool workspace_changed = previous_workspace != client->workspace;
     bool kind_changed = previous_kind != client->kind;
 
-    // Sync visibility on all affected monitors
-    update_fullscreen_owner_after_visibility_change(previous_monitor);
+    // Sync visibility on all affected monitors.
     sync_visibility_for_monitor(previous_monitor);
     if (monitor_changed)
-    {
-        update_fullscreen_owner_after_visibility_change(current_monitor);
         sync_visibility_for_monitor(current_monitor);
-    }
 
     // Rearrange/restack previous monitor if window moved away
     if (monitor_changed || workspace_changed || kind_changed)
@@ -2257,8 +2253,6 @@ void WindowManager::unmanage_window(xcb_window_t window)
     // Tracking state that remains outside Client
     pending_kills_.erase(window);
 
-    release_fullscreen_owner(*client);
-
     size_t mon_idx = client->monitor;
     size_t ws_idx = client->workspace;
     bool was_active = (active_window_ == window);
@@ -2266,26 +2260,13 @@ void WindowManager::unmanage_window(xcb_window_t window)
     if (mon_idx < monitors_.size() && ws_idx < monitors_[mon_idx].workspaces.size())
     {
         auto& monitor = monitors_[mon_idx];
+        bool const focus_fallback_if_active = ws_idx == monitor.current_workspace && mon_idx == focused_monitor_;
         workspace_policy::remove_tiled_window(
             monitor.workspaces[ws_idx], window, [this](xcb_window_t w) { return window_is_iconic(w); });
         clients_.erase(window);
-        LWM_ASSERT_INVARIANTS(clients_, monitors_);
         update_ewmh_client_list();
-        finalize_visibility_on_monitor(mon_idx);
 
-        if (was_active)
-        {
-            if (ws_idx == monitor.current_workspace && mon_idx == focused_monitor_)
-            {
-                focus_or_fallback(monitor);
-            }
-            else
-            {
-                clear_focus();
-            }
-        }
-
-        flush_and_drain_crossing();
+        finalize_removed_window_after_unmanage(mon_idx, was_active, focus_fallback_if_active);
         return;
     }
 
@@ -2299,8 +2280,6 @@ void WindowManager::clear_fullscreen_state(Client& client)
 
     client.fullscreen = false;
     ewmh_.set_window_state(client.id, ewmh_.get()->_NET_WM_STATE_FULLSCREEN, false);
-
-    release_fullscreen_owner(client);
 
     if (client.kind == Client::Kind::Floating && client.fullscreen_restore)
         floating_geometry(client) = *client.fullscreen_restore;
@@ -2329,6 +2308,15 @@ void WindowManager::set_fullscreen(Client& client, bool enabled)
         return;
     }
 
+    if (!enabled && !client.fullscreen)
+        return;
+
+    if (client.kind != Client::Kind::Tiled && client.kind != Client::Kind::Floating)
+    {
+        LOG_WARN("set_fullscreen({:#x}): rejected invalid client state", client.id);
+        return;
+    }
+
     if (enabled)
     {
         if (!client.fullscreen && client.kind == Client::Kind::Floating)
@@ -2351,28 +2339,19 @@ void WindowManager::set_fullscreen(Client& client, bool enabled)
         }
 
         ewmh_.set_window_state(client.id, ewmh_.get()->_NET_WM_STATE_FULLSCREEN, true);
-
-        claim_fullscreen_owner(client);
     }
     else
     {
-        if (!client.fullscreen)
-            return;
-
         clear_fullscreen_state(client);
     }
 
-    if (client.monitor < monitors_.size())
-    {
-        // Funnel: refreshes fullscreen ownership (so a new owner is picked when
-        // disabling), syncs visibility, and re-tiles.
-        finalize_visibility_on_monitor(client.monitor);
+    finalize_visibility_on_monitor(client.monitor, enabled ? client.id : XCB_NONE);
 
-        auto const* active = get_client(active_window_);
-        bool active_blocks_focus = active_window_ == XCB_NONE || (active && is_suppressed_by_fullscreen(*active));
-        if (client.monitor == focused_monitor_ && active_blocks_focus)
-            focus_or_fallback(monitors_[client.monitor], false);
-    }
+    auto const* active = get_client(active_window_);
+    bool const active_blocks_focus = active_window_ == XCB_NONE || (active && is_suppressed_by_fullscreen(*active));
+    if (client.monitor < monitors_.size() && client.monitor == focused_monitor_ && active_blocks_focus)
+        focus_or_fallback(monitors_[client.monitor], false);
+
     flush_and_drain_crossing();
 }
 
@@ -2671,6 +2650,7 @@ void WindowManager::apply_fullscreen_if_needed(Client& client)
         LOG_DEBUG("apply_fullscreen_if_needed({:#x}): invalid monitor_idx, returning early", client.id);
         return;
     }
+
     if (!client.sticky && client.workspace != monitors_[client.monitor].current_workspace)
     {
         LOG_DEBUG(
@@ -2805,25 +2785,24 @@ void WindowManager::iconify_window(xcb_window_t window)
     if (client->iconic)
         return;
 
+    if (client->kind != Client::Kind::Tiled && client->kind != Client::Kind::Floating)
+    {
+        LOG_WARN("iconify_window({:#x}): rejected invalid client state", window);
+        return;
+    }
+
+    bool const was_visible = should_be_visible(*client);
     client->iconic = true;
     set_iconic_state(window, true);
 
-    release_fullscreen_owner(*client);
     finalize_visibility_on_monitor(client->monitor);
 
     if (active_window_ == window)
     {
-        bool was_visible = visibility_policy::is_window_visible(
-            showing_desktop_, false, client->sticky, client->monitor, client->workspace, monitors_
-        );
         if (client->monitor == focused_monitor_ && was_visible)
-        {
             focus_or_fallback(monitors_[client->monitor]);
-        }
         else
-        {
             clear_focus();
-        }
     }
 
     flush_and_drain_crossing();
@@ -2835,17 +2814,19 @@ void WindowManager::deiconify_window(xcb_window_t window, bool focus)
     if (!client)
         return;
 
+    if (client->kind != Client::Kind::Tiled && client->kind != Client::Kind::Floating)
+    {
+        LOG_WARN("deiconify_window({:#x}): rejected invalid client state", window);
+        return;
+    }
+
     client->iconic = false;
     set_iconic_state(window, false);
 
-    if (client->fullscreen)
-        claim_fullscreen_owner(*client);
-    finalize_visibility_on_monitor(client->monitor);
+    finalize_visibility_on_monitor(client->monitor, client->fullscreen ? window : XCB_NONE);
 
     if ((focus || client->fullscreen) && client->monitor == focused_monitor_ && should_be_visible(*client))
-    {
         focus_any_window(window);
-    }
 
     apply_fullscreen_if_needed(*client);
     flush_and_drain_crossing();
@@ -2899,9 +2880,9 @@ void WindowManager::rearrange_monitor(Monitor& monitor, bool geometry_only)
         monitor.current().windows.size()
     );
 
-    // Build the visible tiled window set by reading client.hidden — the
-    // authoritative hidden flag is maintained by sync_visibility_for_monitor,
-    // which must be called BEFORE rearrange_monitor at every call site.
+    // Build the visible tiled window set by reading client.hidden. The
+    // authoritative hidden flag is maintained by the visibility reconciliation
+    // transition, which must run BEFORE rearrange_monitor at every call site.
     std::vector<xcb_window_t> visible_windows;
     visible_windows.reserve(monitor.current().windows.size());
     std::vector<xcb_window_t> visible_fullscreen_windows;
@@ -3006,11 +2987,11 @@ void WindowManager::rearrange_monitor(Monitor& monitor, bool geometry_only)
 
 void WindowManager::rearrange_all_monitors()
 {
-    sync_visibility_all();
-    for (auto& monitor : monitors_)
-    {
-        rearrange_monitor(monitor);
-    }
+    for (size_t monitor_idx = 0; monitor_idx < monitors_.size(); ++monitor_idx)
+        reconcile_visibility_for_monitor(monitor_idx);
+
+    for (size_t monitor_idx = 0; monitor_idx < monitors_.size(); ++monitor_idx)
+        rearrange_monitor(monitors_[monitor_idx]);
 }
 
 void WindowManager::launch_program(CommandConfig const& command)
@@ -3193,37 +3174,12 @@ bool WindowManager::is_physically_visible(Client const& client) const
     );
 }
 
-void WindowManager::release_fullscreen_owner(Client const& client)
+xcb_window_t WindowManager::select_fullscreen_owner_for_monitor(
+    size_t monitor_idx,
+    xcb_window_t preferred_owner) const
 {
-    if (client.monitor >= monitors_.size())
-        return;
-    auto& monitor = monitors_[client.monitor];
-    if (monitor.fullscreen_owner == client.id)
-        monitor.fullscreen_owner = XCB_NONE;
-}
-
-void WindowManager::claim_fullscreen_owner(Client const& client)
-{
-    if (client.monitor >= monitors_.size())
-        return;
-    auto& monitor = monitors_[client.monitor];
-    // Do NOT clear_fullscreen_state on the old owner — just reassign ownership.
-    // The old owner keeps its fullscreen flag and EWMH property, and will be
-    // suppressed (hidden off-screen) by is_suppressed_by_fullscreen() + sync_visibility.
-    monitor.fullscreen_owner = client.id;
-}
-
-void WindowManager::update_fullscreen_owner_after_visibility_change(size_t monitor_idx)
-{
-    if (monitor_idx >= monitors_.size())
-        return;
-    auto& monitor = monitors_[monitor_idx];
-
-    if (showing_desktop_)
-    {
-        monitor.fullscreen_owner = XCB_NONE;
-        return;
-    }
+    if (monitor_idx >= monitors_.size() || showing_desktop_)
+        return XCB_NONE;
 
     std::vector<fullscreen_policy::FullscreenCandidate> candidates;
     candidates.reserve(clients_.size());
@@ -3240,7 +3196,16 @@ void WindowManager::update_fullscreen_owner_after_visibility_change(size_t monit
         });
     }
 
-    monitor.fullscreen_owner = fullscreen_policy::select_owner(monitor.fullscreen_owner, candidates);
+    if (preferred_owner != XCB_NONE)
+    {
+        for (auto const& candidate : candidates)
+        {
+            if (candidate.window == preferred_owner && candidate.eligible)
+                return preferred_owner;
+        }
+    }
+
+    return fullscreen_policy::select_owner(monitors_[monitor_idx].fullscreen_owner, candidates);
 }
 
 bool WindowManager::is_suppressed_by_fullscreen(Client const& client) const
@@ -3249,16 +3214,16 @@ bool WindowManager::is_suppressed_by_fullscreen(Client const& client) const
         return false;
     if (client.layer == WindowLayer::Overlay)
         return false;
+    if (client.monitor >= monitors_.size())
+        return false;
     if (client.iconic || !should_be_visible(client))
         return false;
 
-    xcb_window_t owner = monitors_[client.monitor].fullscreen_owner;
+    xcb_window_t const owner = monitors_[client.monitor].fullscreen_owner;
     if (owner == XCB_NONE || owner == client.id)
         return false;
-
     if (client.transient_for == owner)
         return false;
-
     return true;
 }
 
@@ -3819,15 +3784,10 @@ void WindowManager::unmanage_desktop_window(xcb_window_t window)
 
 void WindowManager::assign_window_workspace(Client& client, size_t monitor_idx, size_t workspace_idx)
 {
-    // Drop stale fullscreen ownership on the previous monitor when moving across monitors.
-    if (client.fullscreen && client.monitor != monitor_idx)
+    if (monitor_idx >= monitors_.size() || workspace_idx >= monitors_[monitor_idx].workspaces.size())
     {
-        if (client.monitor < monitors_.size())
-        {
-            auto& source_monitor = monitors_[client.monitor];
-            if (source_monitor.fullscreen_owner == client.id)
-                source_monitor.fullscreen_owner = XCB_NONE;
-        }
+        LOG_WARN("assign_window_workspace: invalid indices monitor={} workspace={}", monitor_idx, workspace_idx);
+        return;
     }
 
     client.monitor = monitor_idx;
@@ -3876,9 +3836,7 @@ bool WindowManager::move_tiled_client_to_workspace(
     target_index = std::min(target_index, target_ws.windows.size());
     target_ws.windows.insert(target_ws.windows.begin() + static_cast<std::ptrdiff_t>(target_index), window);
 
-    finalize_visibility_on_monitor(source_monitor);
-    if (source_monitor != target_monitor)
-        finalize_visibility_on_monitor(target_monitor);
+    finalize_move_visibility(source_monitor, target_monitor);
 
     LWM_ASSERT_INVARIANTS(clients_, monitors_);
     return true;
@@ -3913,9 +3871,7 @@ bool WindowManager::move_floating_client_to_workspace(
 
     assign_window_workspace(client, target_monitor, target_workspace);
 
-    if (monitor_changed)
-        finalize_visibility_on_monitor(source_monitor);
-    finalize_visibility_on_monitor(target_monitor);
+    finalize_move_visibility(source_monitor, target_monitor);
 
     LWM_ASSERT_INVARIANTS(clients_, monitors_);
     return true;
@@ -4052,23 +4008,66 @@ void WindowManager::cache_focus_hints(xcb_window_t window)
         cache_focus_hints_into(*client);
 }
 
-void WindowManager::sync_visibility_for_monitor(size_t monitor_idx)
+void WindowManager::finalize_move_visibility(size_t source_monitor, size_t target_monitor)
 {
-    if (monitor_idx >= monitors_.size())
+    if (source_monitor >= monitors_.size() || target_monitor >= monitors_.size())
     {
-        LOG_WARN("sync_visibility_for_monitor: invalid monitor_idx {}", monitor_idx);
+        LOG_WARN(
+            "finalize_move_visibility: invalid source={} target={} monitor_count={}",
+            source_monitor,
+            target_monitor,
+            monitors_.size()
+        );
         return;
     }
 
+    reconcile_visibility_for_monitor(source_monitor);
+    if (target_monitor != source_monitor)
+        reconcile_visibility_for_monitor(target_monitor);
+
+    rearrange_monitor(monitors_[source_monitor]);
+    if (target_monitor != source_monitor)
+        rearrange_monitor(monitors_[target_monitor]);
+}
+
+void WindowManager::finalize_removed_window_after_unmanage(
+    size_t monitor_idx,
+    bool removed_active_window,
+    bool focus_fallback_if_active)
+{
+    if (monitor_idx < monitors_.size())
+        finalize_visibility_on_monitor(monitor_idx);
+
+    if (removed_active_window)
+    {
+        if (focus_fallback_if_active && monitor_idx == focused_monitor_ && monitor_idx < monitors_.size())
+            focus_or_fallback(monitors_[monitor_idx]);
+        else
+            clear_focus();
+    }
+
+    flush_and_drain_crossing();
+}
+
+void WindowManager::reconcile_visibility_for_monitor(size_t monitor_idx, xcb_window_t preferred_owner)
+{
+    if (monitor_idx >= monitors_.size())
+    {
+        LOG_WARN("reconcile_visibility_for_monitor: invalid monitor_idx {}", monitor_idx);
+        return;
+    }
+
+    monitors_[monitor_idx].fullscreen_owner = select_fullscreen_owner_for_monitor(monitor_idx, preferred_owner);
+
     for (auto& [id, client] : clients_)
     {
+        (void)id;
         if (client.kind != Client::Kind::Tiled && client.kind != Client::Kind::Floating)
             continue;
         if (client.monitor != monitor_idx)
             continue;
 
-        bool suppressed = is_suppressed_by_fullscreen(client);
-        bool should_show = should_be_visible(client) && !suppressed;
+        bool const should_show = should_be_visible(client) && !is_suppressed_by_fullscreen(client);
 
         if (should_show && client.hidden)
         {
@@ -4085,7 +4084,6 @@ void WindowManager::sync_visibility_for_monitor(size_t monitor_idx)
                 if (client.transient_for != XCB_NONE)
                     restack_transients(client.transient_for);
             }
-            // Tiled geometry is handled by rearrange_monitor / layout_.arrange
         }
         else if (!should_show && !client.hidden)
         {
@@ -4093,25 +4091,24 @@ void WindowManager::sync_visibility_for_monitor(size_t monitor_idx)
         }
     }
 
-    // Mark stacking dirty so the EWMH property gets updated on the next
-    // event-loop iteration.  Callers that need actual X restacking must call
-    // restack_monitor_layers explicitly (or rely on a following rearrange_monitor
-    // which already restacks).
     stacking_dirty_ = true;
+    LWM_ASSERT_INVARIANTS(clients_, monitors_);
 }
 
-void WindowManager::sync_visibility_all()
+void WindowManager::sync_visibility_for_monitor(size_t monitor_idx)
 {
-    for (size_t i = 0; i < monitors_.size(); ++i)
-        sync_visibility_for_monitor(i);
+    reconcile_visibility_for_monitor(monitor_idx);
 }
 
-void WindowManager::finalize_visibility_on_monitor(size_t monitor_idx)
+void WindowManager::finalize_visibility_on_monitor(size_t monitor_idx, xcb_window_t preferred_fullscreen_owner)
 {
     if (monitor_idx >= monitors_.size())
+    {
+        LOG_WARN("finalize_visibility_on_monitor: invalid monitor_idx {}", monitor_idx);
         return;
-    update_fullscreen_owner_after_visibility_change(monitor_idx);
-    sync_visibility_for_monitor(monitor_idx);
+    }
+
+    reconcile_visibility_for_monitor(monitor_idx, preferred_fullscreen_owner);
     rearrange_monitor(monitors_[monitor_idx]);
 }
 

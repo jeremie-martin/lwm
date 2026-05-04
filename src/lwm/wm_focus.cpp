@@ -65,14 +65,14 @@ void WindowManager::focus_any_window(xcb_window_t window, bool record_user_time)
         auto& monitor = monitors_[client->monitor];
         if (!is_sticky)
         {
-            if (auto ctx = WorkspaceSwitchContext::validate(client->monitor, monitor, client->workspace))
+            size_t old_workspace = monitor.current_workspace;
+            if (apply_workspace_switch(client->monitor, client->workspace))
             {
                 LOG_DEBUG(
                     "focus_any_window({:#x}): WORKSPACE SWITCH TRIGGERED by focus! "
                     "old_ws={} new_ws={}",
-                    window, ctx->old_workspace(), ctx->new_workspace()
+                    window, old_workspace, client->workspace
                 );
-                perform_workspace_switch(*ctx);
                 if (is_suppressed_by_fullscreen(*client))
                 {
                     focus_or_fallback(monitors_[client->monitor], false);
@@ -118,13 +118,13 @@ void WindowManager::focus_any_window(xcb_window_t window, bool record_user_time)
         auto& monitor = monitors_[client->monitor];
         if (!is_sticky)
         {
-            if (auto ctx = WorkspaceSwitchContext::validate(client->monitor, monitor, client->workspace))
+            size_t old_workspace = monitor.current_workspace;
+            if (apply_workspace_switch(client->monitor, client->workspace))
             {
                 LOG_DEBUG(
                     "focus_any_window: WORKSPACE SWITCH TRIGGERED by focus! old_ws={} new_ws={}",
-                    ctx->old_workspace(), ctx->new_workspace()
+                    old_workspace, client->workspace
                 );
-                perform_workspace_switch(*ctx);
                 // After the workspace switch a sticky fullscreen owner may now suppress the target.
                 if (is_suppressed_by_fullscreen(*client))
                 {

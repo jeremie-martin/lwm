@@ -392,29 +392,12 @@ private:
     void rearrange_monitor(Monitor& monitor, bool geometry_only = false);
     void rearrange_all_monitors();
 
-    /// Validated input for perform_workspace_switch. Construct via validate() — the
-    /// private constructor prevents callers from passing a no-op or out-of-range
-    /// switch, so perform_workspace_switch can act without re-checking.
-    class WorkspaceSwitchContext
-    {
-    public:
-        /// Returns nullopt if target_workspace equals current or is out of range.
-        static std::optional<WorkspaceSwitchContext>
-        validate(size_t monitor_idx, Monitor const& monitor, size_t target_workspace);
-
-        size_t monitor_idx() const { return monitor_idx_; }
-        size_t old_workspace() const { return old_workspace_; }
-        size_t new_workspace() const { return new_workspace_; }
-
-    private:
-        WorkspaceSwitchContext(size_t monitor_idx, size_t old_workspace, size_t new_workspace)
-            : monitor_idx_(monitor_idx), old_workspace_(old_workspace), new_workspace_(new_workspace) {}
-        size_t monitor_idx_;
-        size_t old_workspace_;
-        size_t new_workspace_;
-    };
-
-    void perform_workspace_switch(WorkspaceSwitchContext const& ctx);
+    bool apply_workspace_switch(size_t monitor_idx, size_t target_workspace);
+    void finalize_move_visibility(size_t source_monitor, size_t target_monitor);
+    void finalize_removed_window_after_unmanage(
+        size_t monitor_idx,
+        bool removed_active_window,
+        bool focus_fallback_if_active);
     void switch_workspace(size_t ws);
     void toggle_workspace();
     void move_window_to_workspace(size_t ws);
@@ -485,9 +468,10 @@ private:
     bool is_physically_visible(Client const& client) const;
     bool is_suppressed_by_fullscreen(Client const& client) const;
     int compute_stack_layer(Client const& client) const;
-    void release_fullscreen_owner(Client const& client);
-    void claim_fullscreen_owner(Client const& client);
-    void update_fullscreen_owner_after_visibility_change(size_t monitor_idx);
+    xcb_window_t select_fullscreen_owner_for_monitor(
+        size_t monitor_idx,
+        xcb_window_t preferred_owner = XCB_NONE) const;
+    void reconcile_visibility_for_monitor(size_t monitor_idx, xcb_window_t preferred_owner = XCB_NONE);
     void finalize_after_desktop_move(
         xcb_window_t window, bool was_active, size_t target_monitor, size_t target_workspace);
     void restack_transients(xcb_window_t parent);
@@ -545,7 +529,9 @@ private:
     void unmanage_dock_window(xcb_window_t window);
     void unmanage_desktop_window(xcb_window_t window);
 
-    // Window workspace helper (atomically update client fields + EWMH desktop)
+    // Low-level client location write: updates client fields + EWMH desktop.
+    // Use only inside movement/hotplug funnels that reconcile source/target
+    // visibility before returning.
     void assign_window_workspace(Client& client, size_t monitor_idx, size_t workspace_idx);
 
     bool move_tiled_client_to_workspace(
@@ -570,11 +556,9 @@ private:
 
     // Derived visibility: sync physical visibility to match policy state
     void sync_visibility_for_monitor(size_t monitor_idx);
-    void sync_visibility_all();
 
     // Funnel: refresh fullscreen ownership, sync visibility, then re-tile.
-    // Use at any unconditional site that previously called these three in order.
-    void finalize_visibility_on_monitor(size_t monitor_idx);
+    void finalize_visibility_on_monitor(size_t monitor_idx, xcb_window_t preferred_fullscreen_owner = XCB_NONE);
 
     void setup_ewmh();
     void update_ewmh_desktops();

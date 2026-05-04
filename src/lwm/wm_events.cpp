@@ -1349,13 +1349,11 @@ void WindowManager::handle_showing_desktop(xcb_client_message_event_t const& e)
 
     if (showing_desktop_)
     {
-        sync_visibility_all();
+        rearrange_all_monitors();
         clear_focus();
     }
     else
     {
-        for (size_t i = 0; i < monitors_.size(); ++i)
-            update_fullscreen_owner_after_visibility_change(i);
         rearrange_all_monitors();
         if (!monitors_.empty())
         {
@@ -1737,12 +1735,6 @@ void WindowManager::handle_randr_screen_change()
     // Update EWMH for new monitor configuration
     update_ewmh_desktops();
     update_ewmh_current_desktop();
-
-    // Rebuild per-monitor fullscreen owners from client state
-    for (size_t i = 0; i < monitors_.size(); ++i)
-        monitors_[i].fullscreen_owner = XCB_NONE;
-    for (size_t i = 0; i < monitors_.size(); ++i)
-        update_fullscreen_owner_after_visibility_change(i);
 
     rearrange_all_monitors();
 

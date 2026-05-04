@@ -4,6 +4,7 @@
 #include <catch2/catch_test_macros.hpp>
 #include <chrono>
 #include <optional>
+#include <xcb/randr.h>
 #include <xcb/xcb_keysyms.h>
 #include <xcb/xtest.h>
 
@@ -193,11 +194,42 @@ bool property_has_atom(xcb_connection_t* conn, xcb_window_t window, xcb_atom_t p
     return present;
 }
 
-bool xtest_available(X11Connection& conn)
+bool set_randr_screen_size(X11Connection& conn, uint16_t width, uint16_t height)
 {
-    auto* extension = xcb_get_extension_data(conn.get(), &xcb_test_id);
-    return extension && extension->present;
+    uint32_t const width_mm = std::max<uint16_t>(conn.screen()->width_in_millimeters, 1);
+    uint32_t const height_mm = std::max<uint16_t>(conn.screen()->height_in_millimeters, 1);
+    auto cookie = xcb_randr_set_screen_size_checked(conn.get(), conn.root(), width, height, width_mm, height_mm);
+    auto* error = xcb_request_check(conn.get(), cookie);
+    if (error)
+    {
+        free(error);
+        return false;
+    }
+
+    xcb_flush(conn.get());
+    return wait_for_condition(
+        [&]()
+        {
+            auto geometry = get_window_geometry(conn, conn.root());
+            return geometry && geometry->width == width && geometry->height == height;
+        },
+        kTimeout
+    );
 }
+
+struct RandrScreenSizeGuard
+{
+    X11Connection& conn;
+    uint16_t width = 0;
+    uint16_t height = 0;
+    bool restore = false;
+
+    ~RandrScreenSizeGuard()
+    {
+        if (restore)
+            (void)set_randr_screen_size(conn, width, height);
+    }
+};
 
 std::optional<xcb_keycode_t> first_keycode_for_keysym(X11Connection& conn, xcb_keysym_t keysym)
 {
@@ -460,7 +492,7 @@ TEST_CASE(
 
     auto& conn = test_env->conn;
 
-    if (!xtest_available(conn))
+    if (!extension_available(conn, &xcb_test_id))
         SKIP("XTEST extension not available");
 
     xcb_atom_t net_wm_allowed_actions = intern_atom(conn.get(), "_NET_WM_ALLOWED_ACTIONS");
@@ -1263,7 +1295,7 @@ TEST_CASE(
 }
 
 TEST_CASE(
-    "Integration: exiting showing desktop restores fullscreen owner",
+    "Integration: exiting showing desktop restores fullscreen owner and suppression",
     "[integration][focus][fullscreen][showdesktop]"
 )
 {
@@ -1291,13 +1323,132 @@ TEST_CASE(
     xcb_window_t w2 = create_window(conn, 80, 80, 320, 180);
     map_window(conn, w2);
     REQUIRE(wait_for_active_window(conn, w1, kTimeout));
+    REQUIRE(wait_for_condition([&]() { return is_hidden_offscreen(conn, w2); }, kTimeout));
 
     send_client_message(conn, conn.root(), net_showing_desktop, 1);
     std::this_thread::sleep_for(std::chrono::milliseconds(100));
     send_client_message(conn, conn.root(), net_showing_desktop, 0);
 
     REQUIRE(wait_for_active_window(conn, w1, kTimeout));
+    REQUIRE(wait_for_condition(
+        [&]()
+        {
+            return has_state(conn, w1, net_wm_state_fullscreen)
+                && !is_hidden_offscreen(conn, w1)
+                && is_hidden_offscreen(conn, w2);
+        },
+        kTimeout
+    ));
+
+    destroy_window(conn, w2);
+    destroy_window(conn, w1);
+}
+
+TEST_CASE(
+    "Integration: entering showing desktop arranges sticky tiled windows unsuppressed by fullscreen",
+    "[integration][focus][fullscreen][showdesktop][sticky]"
+)
+{
+    auto test_env = TestEnvironment::create();
+    if (!test_env)
+        SKIP("Test environment not available");
+
+    auto& conn = test_env->conn;
+
+    xcb_atom_t net_wm_state = intern_atom(conn.get(), "_NET_WM_STATE");
+    xcb_atom_t net_wm_state_fullscreen = intern_atom(conn.get(), "_NET_WM_STATE_FULLSCREEN");
+    xcb_atom_t net_wm_state_sticky = intern_atom(conn.get(), "_NET_WM_STATE_STICKY");
+    xcb_atom_t net_showing_desktop = intern_atom(conn.get(), "_NET_SHOWING_DESKTOP");
+    if (net_wm_state == XCB_NONE || net_wm_state_fullscreen == XCB_NONE
+        || net_wm_state_sticky == XCB_NONE || net_showing_desktop == XCB_NONE)
+    {
+        WARN("Failed to intern EWMH atoms.");
+        return;
+    }
+
+    xcb_window_t owner = create_window(conn, 10, 10, 640, 360);
+    map_window(conn, owner);
+    REQUIRE(wait_for_active_window(conn, owner, kTimeout));
+    send_client_message(conn, owner, net_wm_state, 1, net_wm_state_fullscreen, 0, 0, 0);
+    REQUIRE(wait_for_condition([&]() { return has_state(conn, owner, net_wm_state_fullscreen); }, kTimeout));
+
+    xcb_window_t sticky = create_window(conn, 80, 80, 320, 180);
+    map_window(conn, sticky);
+    send_client_message(conn, sticky, net_wm_state, 1, net_wm_state_sticky, 0, 0, 0);
+    REQUIRE(wait_for_condition([&]() { return has_state(conn, sticky, net_wm_state_sticky); }, kTimeout));
+    REQUIRE(wait_for_active_window(conn, owner, kTimeout));
+    REQUIRE(wait_for_condition([&]() { return is_hidden_offscreen(conn, sticky); }, kTimeout));
+
+    send_client_message(conn, conn.root(), net_showing_desktop, 1);
+
+    REQUIRE(wait_for_condition([&]() { return !is_hidden_offscreen(conn, sticky); }, kTimeout));
+
+    destroy_window(conn, sticky);
+    destroy_window(conn, owner);
+}
+
+TEST_CASE(
+    "Integration: RandR rebuild restores fullscreen owner and suppression",
+    "[integration][focus][fullscreen][randr]"
+)
+{
+    auto test_env = TestEnvironment::create();
+    if (!test_env)
+        SKIP("Test environment not available");
+    if (!test_env->x11_env.owns_display())
+        SKIP("RandR screen-size mutation is only safe on the owned Xvfb display.");
+
+    auto& conn = test_env->conn;
+    if (!extension_available(conn, &xcb_randr_id))
+        SKIP("RandR extension not available.");
+
+    auto original_geometry = get_window_geometry(conn, conn.root());
+    if (!original_geometry || original_geometry->width <= 1)
+        SKIP("Root window geometry is not suitable for RandR resize test.");
+
+    RandrScreenSizeGuard screen_guard {
+        .conn = conn,
+        .width = original_geometry->width,
+        .height = original_geometry->height,
+    };
+
+    xcb_atom_t net_wm_state = intern_atom(conn.get(), "_NET_WM_STATE");
+    xcb_atom_t net_wm_state_fullscreen = intern_atom(conn.get(), "_NET_WM_STATE_FULLSCREEN");
+    if (net_wm_state == XCB_NONE || net_wm_state_fullscreen == XCB_NONE)
+    {
+        WARN("Failed to intern EWMH atoms.");
+        return;
+    }
+
+    xcb_window_t w1 = create_window(conn, 10, 10, 640, 360);
+    map_window(conn, w1);
+    REQUIRE(wait_for_active_window(conn, w1, kTimeout));
+    send_client_message(conn, w1, net_wm_state, 1, net_wm_state_fullscreen, 0, 0, 0);
     REQUIRE(wait_for_condition([&]() { return has_state(conn, w1, net_wm_state_fullscreen); }, kTimeout));
+
+    xcb_window_t w2 = create_window(conn, 80, 80, 320, 180);
+    map_window(conn, w2);
+    REQUIRE(wait_for_active_window(conn, w1, kTimeout));
+    REQUIRE(wait_for_condition([&]() { return is_hidden_offscreen(conn, w2); }, kTimeout));
+
+    uint16_t const target_width = static_cast<uint16_t>(original_geometry->width - 1);
+    if (!set_randr_screen_size(conn, target_width, original_geometry->height))
+        SKIP("RandR screen-size change not supported by this X server.");
+    screen_guard.restore = true;
+
+    REQUIRE(wait_for_active_window(conn, w1, kTimeout));
+    REQUIRE(wait_for_condition(
+        [&]()
+        {
+            return has_state(conn, w1, net_wm_state_fullscreen)
+                && !is_hidden_offscreen(conn, w1)
+                && is_hidden_offscreen(conn, w2);
+        },
+        kTimeout
+    ));
+
+    REQUIRE(set_randr_screen_size(conn, screen_guard.width, screen_guard.height));
+    screen_guard.restore = false;
 
     destroy_window(conn, w2);
     destroy_window(conn, w1);

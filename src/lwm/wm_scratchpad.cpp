@@ -154,18 +154,10 @@ void WindowManager::stash_to_scratchpad(xcb_window_t window)
         client->scratchpad = HiddenFloatingScratchpadPoolMembership { floating_geometry(*client) };
     }
 
-    client->iconic = true;
-    set_iconic_state(window, true);
-
     std::erase(scratchpad_pool_, window);
     scratchpad_pool_.push_back(window);
 
-    finalize_visibility_on_monitor(client->monitor);
-
-    if (active_window_ == window && focused_monitor_ < monitors_.size())
-        focus_or_fallback(monitors_[focused_monitor_]);
-
-    flush_and_drain_crossing();
+    iconify_window(window);
 }
 
 xcb_window_t WindowManager::find_visible_pool_window() const
@@ -257,15 +249,7 @@ void WindowManager::hide_scratchpad_window(xcb_window_t window)
         client->scratchpad = HiddenFloatingScratchpadPoolMembership { floating_geometry(*client) };
     }
 
-    client->iconic = true;
-    set_iconic_state(window, true);
-
-    finalize_visibility_on_monitor(client->monitor);
-
-    if (active_window_ == window && focused_monitor_ < monitors_.size())
-        focus_or_fallback(monitors_[focused_monitor_]);
-
-    flush_and_drain_crossing();
+    iconify_window(window);
 }
 
 void WindowManager::show_named_scratchpad_window(xcb_window_t window, ScratchpadConfig const& config)
@@ -276,7 +260,6 @@ void WindowManager::show_named_scratchpad_window(xcb_window_t window, Scratchpad
 
     LOG_DEBUG("Showing named scratchpad '{}' window {:#x}", config.name, window);
 
-    size_t old_monitor = client->monitor;
     size_t target_monitor = focused_monitor_;
     size_t target_workspace = monitors_[target_monitor].current_workspace;
 
@@ -294,19 +277,9 @@ void WindowManager::show_named_scratchpad_window(xcb_window_t window, Scratchpad
     int16_t y = static_cast<int16_t>(wa.y + (wa.height - h) / 2);
     floating_geometry(*client) = { x, y, w, h };
 
-    assign_window_workspace(*client, target_monitor, target_workspace);
+    move_floating_client_to_workspace(*client, target_monitor, target_workspace, false);
 
-    client->iconic = false;
-    set_iconic_state(window, false);
-
-    apply_floating_geometry(*client);
-    finalize_visibility_on_monitor(target_monitor);
-
-    if (old_monitor != target_monitor)
-        finalize_visibility_on_monitor(old_monitor);
-
-    focus_any_window(window);
-    flush_and_drain_crossing();
+    deiconify_window(window, true);
 }
 
 void WindowManager::show_pool_scratchpad_window(xcb_window_t window)
@@ -332,16 +305,13 @@ void WindowManager::show_pool_scratchpad_window(xcb_window_t window)
         restore_geometry = hidden_floating->restore_geometry;
     }
 
-    assign_window_workspace(*client, target_monitor, target_workspace);
-
-    client->iconic = false;
     client->scratchpad = VisibleScratchpadPoolMembership {};
-    set_iconic_state(window, false);
 
     if (restore_tiled)
     {
         set_tiled_state(*client, restore_prior_floating);
         add_tiled_to_workspace(*client, target_monitor, target_workspace);
+        finalize_move_visibility(old_monitor, target_monitor);
     }
     else
     {
@@ -364,14 +334,10 @@ void WindowManager::show_pool_scratchpad_window(xcb_window_t window)
             }
             floating_geometry(*client) = restored_geometry;
         }
+        move_floating_client_to_workspace(*client, target_monitor, target_workspace, false);
     }
 
-    if (client->kind != Client::Kind::Tiled)
-        apply_floating_geometry(*client);
-    finalize_visibility_on_monitor(target_monitor);
-
-    focus_any_window(window);
-    flush_and_drain_crossing();
+    deiconify_window(window, true);
 }
 
 // ---------------------------------------------------------------------------

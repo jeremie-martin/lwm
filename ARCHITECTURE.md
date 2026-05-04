@@ -66,7 +66,10 @@ Consequences:
 
 Primary visibility funnels:
 
-- `sync_visibility_for_monitor(...)`: applies the visible-scope decision for one monitor, including floating geometry restore for newly shown floating windows
+- `reconcile_visibility_for_monitor(...)`: selects fullscreen ownership, updates physical hide/show state, and restores floating geometry for newly shown floating windows
+- `sync_visibility_for_monitor(...)`: visibility reconciliation without arranging
+- `finalize_visibility_on_monitor(...)`: visibility reconciliation plus arrange; callers may pass a preferred fullscreen owner
+- `finalize_move_visibility(...)`: reconciles and arranges the source and target monitors after a client move
 - `rearrange_monitor(...)`: computes tiling geometry for the monitor's visible tiled set and keeps fullscreen windows out of normal layout
 
 Do not reintroduce WM-driven unmap/map for normal workspace visibility without a deliberate design change.
@@ -116,12 +119,12 @@ Visible scope means:
 - the monitor's current workspace
 - plus sticky windows on that same monitor
 - excluding iconified windows
-- disabled entirely when showing-desktop mode is active
+- during showing-desktop, non-sticky windows are hidden but sticky non-iconic windows remain visible
 
 Fullscreen ownership rules:
 
 - at most one managed tiled or floating fullscreen owner is effective on a monitor's visible scope, tracked in `Monitor::fullscreen_owner`
-- `update_fullscreen_owner_after_visibility_change(...)` selects the effective owner from visible fullscreen clients on the monitor, preserving the current owner when valid and otherwise choosing the highest-order visible candidate
+- `select_fullscreen_owner_for_monitor(...)` selects the effective owner from visible fullscreen clients on the monitor, preserving the current owner when valid and otherwise choosing the highest-order visible candidate
 - when multiple visible fullscreen windows conflict, one owner is elected and the other visible fullscreen windows are suppressed
 - hidden or off-workspace fullscreen windows may keep their fullscreen state until they re-enter visible scope
 
@@ -147,37 +150,60 @@ Important limit:
 
 The goal is not to let every caller mutate monitor/workspace state ad hoc. State changes should pass through a small number of funnels.
 
-Primary transition funnels:
+Primary transition funnels and authorities:
 
-- `perform_workspace_switch(...)`
-- `focus_any_window(...)`
-- `update_fullscreen_owner_after_visibility_change(...)`
-- `sync_visibility_for_monitor(...)`
-- `update_floating_monitor_for_geometry(...)`
-- `restack_monitor_layers(...)`
-- `flush_and_drain_crossing(...)` (crossing-event drain after visibility changes)
+- `workspace_policy::validate_workspace_switch(...)` validates monitor-local
+  workspace switches without mutating live monitor state
+- `WindowManager::apply_workspace_switch(...)` applies that switch, updates
+  EWMH desktop projection, reconciles visibility, arranges the monitor, emits
+  the workspace-switch event, and syncs urgent non-active clients
+- user-facing `switch_workspace(...)` adds focus fallback and crossing-event
+  drain after the raw switch funnel
+- focus-triggered and EWMH-triggered workspace switches call the raw funnel and
+  keep their own caller-specific focus/drain behavior
+- `select_fullscreen_owner_for_monitor(...)` owns fullscreen-owner selection
+- `reconcile_visibility_for_monitor(...)` is the normal live writer of
+  `Monitor::fullscreen_owner` and `Client::hidden`
+- `sync_visibility_for_monitor(...)`, `finalize_visibility_on_monitor(...)`,
+  `finalize_move_visibility(...)`, and `rearrange_all_monitors(...)` are narrow
+  live wrappers around visibility reconciliation
+- `focus_any_window(...)`, `restack_monitor_layers(...)`, and
+  `flush_and_drain_crossing(...)` remain concrete X-visible behavior authorities
 
-`perform_workspace_switch(...)` takes a validated `WorkspaceSwitchContext`. The context
-is constructed via `WorkspaceSwitchContext::validate(monitor_idx, monitor, target_workspace)`,
-which returns `nullopt` for no-op switches (target equals current) and out-of-range targets.
-The private constructor prevents callers from passing an invalid switch, so the funnel
-itself does not re-validate.
+Workspace switch contract:
 
-Funnel contract:
+1. validate target workspace with `workspace_policy::validate_workspace_switch(...)`
+2. update only `previous_workspace` and `current_workspace`
+3. update `_NET_CURRENT_DESKTOP` from the focused monitor
+4. reconcile visibility for the switched monitor
+5. arrange the monitor and emit the workspace switch event
+6. sync urgent non-active clients
+7. user-facing switches then restore focus and drain crossing events
 
-1. update monitor current and previous workspace
-2. update `_NET_CURRENT_DESKTOP`
-3. select fullscreen owner for the new visible scope via `update_fullscreen_owner_after_visibility_change(...)`
-4. sync visibility for the monitor
-5. rearrange tiled layout for the monitor
-6. restore focus in the caller
-7. drain crossing events via `flush_and_drain_crossing(...)`
+Fullscreen ownership contract:
+
+- fullscreen enable and fullscreen deiconify request ownership with
+  `preferred_fullscreen_owner`
+- iconify, unmanage, monitor moves, and hotplug do not clear owners directly;
+  reconciliation drops stale owners when the previous owner is no longer an
+  eligible candidate
+- live `Monitor::fullscreen_owner` assignment is confined to visibility
+  reconciliation
+- ownership reviews should grep for direct `fullscreen_owner` writes; new writes
+  outside `WindowManager::reconcile_visibility_for_monitor(...)` are a
+  design regression unless the ownership model is deliberately changed first
 
 Window movement rules:
 
 - moving a window to another workspace must update membership, visibility, and focus fallback
 - moving a window to another monitor must update both source and destination monitor state
 - floating monitor changes triggered by geometry or drag must run the same ownership and visibility reconciliation as explicit monitor-move commands
+- `Workspace::windows` remains the live membership authority; move helpers
+  reconcile only the post-move source/target monitor visibility and fullscreen
+  ownership
+- direct `client.monitor` / `client.workspace` writes are limited to manage,
+  hotplug, and movement funnels; ordinary workspace moves use helpers that
+  reconcile source/target visibility before returning
 
 ## 7. Window Lifecycle and Property Changes
 
@@ -222,7 +248,7 @@ Tools that know their source X11 window can explicitly request attention with `l
 
 Scratchpads come in two flavors, both modeled as variants of `Client::scratchpad`. Named scratchpads are bound to a config-declared name with a matcher; the WM remembers the last claimed window per name. The generic pool is an MRU-ordered set of stash-tagged windows that the user cycles through. Both are managed clients that live in `clients_` like any other window.
 
-When a scratchpad is hidden, the client stays in `clients_` with `iconic = true` and is moved off-screen by the normal visibility funnel — the same off-screen mechanism used for inactive workspaces. A hidden scratchpad is not focus-eligible (focus fallback skips iconic clients) and is not part of any workspace's tiled membership. Showing a scratchpad is a re-host: the funnel reassigns the client to the focused monitor's current workspace, restores tiled membership or floating geometry from the saved variant payload, and routes the show through `finalize_visibility_on_monitor` so fullscreen ownership and stacking stay coherent.
+When a scratchpad is hidden, the client stays in `clients_` with `iconic = true` and is moved off-screen by the normal visibility funnel — the same off-screen mechanism used for inactive workspaces. A hidden scratchpad is not focus-eligible (focus fallback skips iconic clients) and is not part of any workspace's tiled membership. Showing a scratchpad is a re-host: the funnel reassigns the client to the focused monitor's current workspace, restores tiled membership or floating geometry from the saved variant payload, then routes the iconic-state aftermath through `deiconify_window(...)` so fullscreen ownership, visibility, focus, and crossing-event drain stay on the same transition path as normal windows.
 
 Restart preserves the visible scratchpad pool window and named-scratchpad claims via the `LWM_RESTART_SCRATCHPAD_*` atoms — same mechanism the rest of the WM uses for graceful exec restart.
 

@@ -67,6 +67,7 @@ public:
     }
 
     bool available() const { return available_; }
+    bool owns_display() const { return owns_display_; }
     std::string const& display() const { return display_; }
 
 private:
@@ -257,6 +258,12 @@ private:
     xcb_connection_t* conn_;
     xcb_screen_t* screen_;
 };
+
+inline bool extension_available(X11Connection& conn, xcb_extension_t* extension_id)
+{
+    auto* extension = xcb_get_extension_data(conn.get(), extension_id);
+    return extension && extension->present;
+}
 
 inline xcb_atom_t intern_atom(xcb_connection_t* conn, char const* name)
 {

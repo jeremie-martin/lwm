@@ -1,51 +1,35 @@
-#include "lwm/core/floating.hpp"
 #include "lwm/core/log.hpp"
 #include "lwm/core/policy.hpp"
 #include "wm.hpp"
 
 namespace lwm {
 
-std::optional<WindowManager::WorkspaceSwitchContext>
-WindowManager::WorkspaceSwitchContext::validate(size_t monitor_idx, Monitor const& monitor, size_t target_workspace)
+bool WindowManager::apply_workspace_switch(size_t monitor_idx, size_t target_workspace)
 {
+    if (monitor_idx >= monitors_.size())
+    {
+        LOG_TRACE("workspace switch rejected: invalid-monitor");
+        return false;
+    }
+
+    auto& monitor = monitors_[monitor_idx];
     auto result = workspace_policy::validate_workspace_switch(monitor, target_workspace);
     if (!result)
-        return std::nullopt;
-    return WorkspaceSwitchContext{ monitor_idx, result->old_workspace, result->new_workspace };
-}
+    {
+        LOG_TRACE("workspace switch rejected");
+        return false;
+    }
 
-void WindowManager::perform_workspace_switch(WorkspaceSwitchContext const& ctx)
-{
-    auto& monitor = monitors_[ctx.monitor_idx()];
-    LOG_DEBUG(
-        "perform_workspace_switch: monitor={} old_ws={} new_ws={}",
-        ctx.monitor_idx(),
-        ctx.old_workspace(),
-        ctx.new_workspace()
-    );
+    monitor.previous_workspace = result->old_workspace;
+    monitor.current_workspace = result->new_workspace;
 
-    // 1. Mutate workspace state. Must happen first; subsequent steps read it.
-    monitor.previous_workspace = ctx.old_workspace();
-    monitor.current_workspace = ctx.new_workspace();
-
-    // 2. EWMH _NET_CURRENT_DESKTOP — reads monitor.current_workspace set above.
     update_ewmh_current_desktop();
-
-    // 3. Recompute fullscreen ownership, sync per-window visibility against the
-    //    new workspace, then re-tile. Order is load-bearing: see CONTRIBUTING.md
-    //    "Design Principles" — sync_visibility_for_monitor maintains the
-    //    authoritative `hidden` flag that rearrange_monitor reads.
-    finalize_visibility_on_monitor(ctx.monitor_idx());
-
+    finalize_visibility_on_monitor(monitor_idx);
     emit_event(Event_WorkspaceSwitch,
-        "{\"event\":\"workspace_switch\",\"monitor\":" + std::to_string(ctx.monitor_idx())
-        + ",\"from\":" + std::to_string(ctx.old_workspace())
-        + ",\"to\":" + std::to_string(ctx.new_workspace()) + "}");
+        "{\"event\":\"workspace_switch\",\"monitor\":" + std::to_string(monitor_idx)
+        + ",\"from\":" + std::to_string(result->old_workspace)
+        + ",\"to\":" + std::to_string(result->new_workspace) + "}");
 
-    // Re-sync WM_HINTS urgency for windows that still have active urgency.
-    // Apps may have cleared their own WM_HINTS urgency on focus (standard ICCCM
-    // behavior), but the WM considers them still urgent (set via notify-attention).
-    // Re-assert so panels checking WM_HINTS (e.g. polybar) see the urgency.
     for (auto& [wid, client] : clients_)
     {
         if (!client.urgency.active() || wid == active_window_)
@@ -54,12 +38,18 @@ void WindowManager::perform_workspace_switch(WorkspaceSwitchContext const& ctx)
     }
 
     LWM_ASSERT_INVARIANTS(clients_, monitors_);
-    LOG_TRACE("perform_workspace_switch: DONE");
+    return true;
 }
 
 void WindowManager::switch_workspace(size_t ws)
 {
-    auto& monitor = focused_monitor();
+    if (focused_monitor_ >= monitors_.size())
+    {
+        LOG_TRACE("switch_workspace({}) called with invalid focused_monitor={}", ws, focused_monitor_);
+        return;
+    }
+
+    auto const& monitor = focused_monitor();
     LOG_TRACE(
         "switch_workspace({}) called, current={} previous={}",
         ws,
@@ -67,21 +57,19 @@ void WindowManager::switch_workspace(size_t ws)
         monitor.previous_workspace
     );
 
-    auto ctx = WorkspaceSwitchContext::validate(focused_monitor_, monitor, ws);
-    if (!ctx)
+    if (!apply_workspace_switch(focused_monitor_, ws))
     {
-        LOG_TRACE("switch_workspace: policy rejected switch");
+        LOG_TRACE("switch_workspace: transition rejected switch");
         return;
     }
 
-    perform_workspace_switch(*ctx);
-    focus_or_fallback(monitor);
+    focus_or_fallback(focused_monitor());
     flush_and_drain_crossing();
 
     LOG_TRACE(
         "switch_workspace: DONE, now current={} previous={}",
-        monitor.current_workspace,
-        monitor.previous_workspace
+        focused_monitor().current_workspace,
+        focused_monitor().previous_workspace
     );
 }
 

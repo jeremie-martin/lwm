@@ -182,12 +182,6 @@ std::optional<std::string> send_ipc_command(std::string const& socket_path, std:
     return response;
 }
 
-bool xtest_available(X11Connection& conn)
-{
-    auto* extension = xcb_get_extension_data(conn.get(), &xcb_test_id);
-    return extension && extension->present;
-}
-
 std::optional<xcb_keycode_t> first_keycode_for_keysym(X11Connection& conn, xcb_keysym_t keysym)
 {
     xcb_key_symbols_t* key_symbols = xcb_key_symbols_alloc(conn.get());
@@ -532,7 +526,7 @@ TEST_CASE(
         SKIP("Test environment not available");
 
     auto& conn = test_env->conn;
-    if (!xtest_available(conn))
+    if (!extension_available(conn, &xcb_test_id))
         SKIP("XTEST extension not available");
 
     auto socket_path = wait_for_ipc_socket_path(conn);

@@ -142,11 +142,13 @@ void WindowManager::flush_stacking_list()
 void WindowManager::update_ewmh_current_desktop()
 {
     // Per-monitor workspaces: report the active monitor's current workspace only.
-    uint32_t desktop = get_ewmh_desktop_index(focused_monitor_, focused_monitor().current_workspace);
+    size_t const monitor_idx = focused_monitor_;
+    size_t const workspace_idx = focused_monitor().current_workspace;
+    uint32_t const desktop = get_ewmh_desktop_index(monitor_idx, workspace_idx);
     LOG_TRACE(
-        "update_ewmh_current_desktop: focused_monitor_={} current_ws={} desktop={}",
-        focused_monitor_,
-        focused_monitor().current_workspace,
+        "update_ewmh_current_desktop: monitor={} workspace={} desktop={}",
+        monitor_idx,
+        workspace_idx,
         desktop
     );
     ewmh_.set_current_desktop(desktop);
@@ -225,13 +227,9 @@ void WindowManager::switch_to_ewmh_desktop(uint32_t desktop)
     );
 
     focused_monitor_ = monitor_idx;
-    if (auto ctx = WorkspaceSwitchContext::validate(monitor_idx, monitor, workspace_idx))
+    if (!apply_workspace_switch(monitor_idx, workspace_idx))
     {
-        perform_workspace_switch(*ctx);
-    }
-    else
-    {
-        // Only monitor changed (or no-op), no workspace switch needed
+        // Only monitor changed (or no-op), no workspace switch needed.
         update_ewmh_current_desktop();
     }
     focus_or_fallback(monitor);

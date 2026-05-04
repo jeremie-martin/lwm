@@ -113,12 +113,6 @@ bool wait_for_process_exit(pid_t pid, std::chrono::milliseconds timeout, int& st
     );
 }
 
-bool xtest_available(X11Connection& conn)
-{
-    auto* extension = xcb_get_extension_data(conn.get(), &xcb_test_id);
-    return extension && extension->present;
-}
-
 std::optional<xcb_keycode_t> first_keycode_for_keysym(X11Connection& conn, xcb_keysym_t keysym)
 {
     xcb_key_symbols_t* key_symbols = xcb_key_symbols_alloc(conn.get());
@@ -260,7 +254,7 @@ TEST_CASE(
     auto& conn = test_env->conn;
     auto& wm = test_env->wm;
 
-    if (!xtest_available(conn))
+    if (!extension_available(conn, &xcb_test_id))
         SKIP("XTEST extension not available");
 
     int stdout_pipe[2] = { -1, -1 };

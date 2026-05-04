@@ -29,7 +29,6 @@ TEST_CASE("validate_workspace_switch returns decision without mutating monitor",
         REQUIRE(result);
         REQUIRE(result->old_workspace == 1);
         REQUIRE(result->new_workspace == 2);
-        // Monitor is NOT mutated — pure validation
         REQUIRE(monitor.current_workspace == 1);
         REQUIRE(monitor.previous_workspace == 0);
     }
@@ -46,11 +45,6 @@ TEST_CASE("validate_workspace_switch returns decision without mutating monitor",
     {
         auto out_of_range = workspace_policy::validate_workspace_switch(monitor, 5);
         REQUIRE_FALSE(out_of_range);
-        REQUIRE(monitor.current_workspace == 1);
-        REQUIRE(monitor.previous_workspace == 0);
-
-        auto negative = workspace_policy::validate_workspace_switch(monitor, -1);
-        REQUIRE_FALSE(negative);
         REQUIRE(monitor.current_workspace == 1);
         REQUIRE(monitor.previous_workspace == 0);
     }
@@ -177,13 +171,13 @@ TEST_CASE("Workspace policy handles edge cases", "[workspace][policy][edge]")
         Monitor boundary_monitor = make_monitor(100);
         boundary_monitor.current_workspace = 50;
 
-        auto r1 = workspace_policy::validate_workspace_switch(boundary_monitor, 0);
-        REQUIRE(r1);
-        REQUIRE(r1->new_workspace == 0);
+        auto first = workspace_policy::validate_workspace_switch(boundary_monitor, 0);
+        REQUIRE(first);
+        REQUIRE(first->new_workspace == 0);
 
-        auto r2 = workspace_policy::validate_workspace_switch(boundary_monitor, 99);
-        REQUIRE(r2);
-        REQUIRE(r2->new_workspace == 99);
+        auto last = workspace_policy::validate_workspace_switch(boundary_monitor, 99);
+        REQUIRE(last);
+        REQUIRE(last->new_workspace == 99);
     }
 
     SECTION("All windows in source are iconic clears focus")

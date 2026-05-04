@@ -234,27 +234,12 @@ void WindowManager::unmanage_floating_window(xcb_window_t window)
     monitor_idx = client->monitor;
 
     bool was_active = (active_window_ == window);
-    release_fullscreen_owner(*client);
 
     // Remove from unified Client registry (handles all client state including order)
     clients_.erase(window);
 
     update_ewmh_client_list();
-    update_fullscreen_owner_after_visibility_change(monitor_idx);
-
-    if (was_active)
-    {
-        if (monitor_idx == focused_monitor_)
-        {
-            focus_or_fallback(monitors_[monitor_idx]);
-        }
-        else
-        {
-            clear_focus();
-        }
-    }
-
-    flush_and_drain_crossing();
+    finalize_removed_window_after_unmanage(monitor_idx, was_active, monitor_idx == focused_monitor_);
 }
 
 bool WindowManager::is_floating_window(xcb_window_t window) const
