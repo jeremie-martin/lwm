@@ -38,15 +38,6 @@ constexpr auto KILL_TIMEOUT = std::chrono::seconds(5);
 constexpr size_t IPC_MAX_REQUEST_SIZE = 4096;
 constexpr auto IPC_CLIENT_TIMEOUT = std::chrono::milliseconds(500);
 
-enum class StackLayer
-{
-    Below = 0,
-    Normal = 1,
-    Above = 2,
-    Fullscreen = 3,
-    Overlay = 4
-};
-
 std::string trim_ascii(std::string_view value)
 {
     size_t start = 0;
@@ -1154,7 +1145,7 @@ void WindowManager::toggle_window_float(xcb_window_t window)
                 apply_maximized_geometry(*client);
             else
                 apply_floating_geometry(*client);
-            restack_monitor_layers(client->monitor);
+            apply_stacking();
         }
     }
     flush_and_drain_crossing();
@@ -1975,10 +1966,7 @@ void WindowManager::sync_managed_window_classification(xcb_window_t window, Clas
     if (desired_kind != WindowClassification::Kind::Tiled && desired_kind != WindowClassification::Kind::Floating)
     {
         if (previous_transient_for != client->transient_for)
-        {
-            restack_transients(previous_transient_for);
-            restack_transients(client->transient_for);
-        }
+            stacking_dirty_ = true;
         return;
     }
 
@@ -2001,10 +1989,7 @@ void WindowManager::sync_managed_window_classification(xcb_window_t window, Clas
         set_fullscreen(*client, true);
 
     if (previous_transient_for != client->transient_for)
-    {
-        restack_transients(previous_transient_for);
-        restack_transients(client->transient_for);
-    }
+        stacking_dirty_ = true;
 
     // --- Phase 4: Sync visibility and layout for affected monitors ---
     size_t current_monitor = client->monitor;
@@ -2023,7 +2008,7 @@ void WindowManager::sync_managed_window_classification(xcb_window_t window, Clas
         if (previous_kind == Client::Kind::Tiled)
             rearrange_monitor(monitors_[previous_monitor]);
         else if (monitor_changed)
-            restack_monitor_layers(previous_monitor);
+            apply_stacking();
     }
 
     // Rearrange/apply geometry on current monitor
@@ -2043,7 +2028,7 @@ void WindowManager::sync_managed_window_classification(xcb_window_t window, Clas
             else
                 apply_floating_geometry(*client);
         }
-        restack_monitor_layers(current_monitor);
+        apply_stacking();
     }
 
     if (window == active_window_ && !is_focus_eligible(*client))
@@ -2386,8 +2371,7 @@ void WindowManager::set_window_layer(Client& client, WindowLayer layer)
 
     if (client.kind == Client::Kind::Floating && !client.hidden)
         apply_floating_geometry(client);
-    if (client.monitor < monitors_.size())
-        restack_monitor_layers(client.monitor);
+    apply_stacking();
     conn_.flush();
 }
 
@@ -2427,8 +2411,8 @@ void WindowManager::set_window_layer_hint(Client& client, LayerHint hint)
     else if (wants_below)
         ewmh_.set_window_state(client.id, ewmh->_NET_WM_STATE_BELOW, true);
 
-    if (old != hint && client.monitor < monitors_.size())
-        restack_monitor_layers(client.monitor);
+    if (old != hint)
+        apply_stacking();
     conn_.flush();
 }
 
@@ -2979,7 +2963,7 @@ void WindowManager::rearrange_monitor(Monitor& monitor, bool geometry_only)
     }
 
     if (!geometry_only)
-        restack_monitor_layers(monitor_idx);
+        apply_stacking();
     conn_.flush();
 
     LOG_TRACE("rearrange_monitor: DONE");
@@ -3227,19 +3211,28 @@ bool WindowManager::is_suppressed_by_fullscreen(Client const& client) const
     return true;
 }
 
-int WindowManager::compute_stack_layer(Client const& client) const
+stacking_policy::Tier WindowManager::compute_stack_tier(Client const& client) const
 {
-    if (client.layer == WindowLayer::Overlay)
-        return static_cast<int>(StackLayer::Overlay);
-    if (is_suppressed_by_fullscreen(client))
-        return static_cast<int>(StackLayer::Below);
-    if (client.fullscreen)
-        return static_cast<int>(StackLayer::Fullscreen);
-    if (client.layer_hint == LayerHint::Above || client.modal)
-        return static_cast<int>(StackLayer::Above);
-    if (client.layer_hint == LayerHint::Below)
-        return static_cast<int>(StackLayer::Below);
-    return static_cast<int>(StackLayer::Normal);
+    return stacking_policy::compute_tier(
+        client.layer == WindowLayer::Overlay,
+        is_suppressed_by_fullscreen(client),
+        client.fullscreen,
+        client.layer_hint == LayerHint::Above,
+        client.layer_hint == LayerHint::Below,
+        client.modal);
+}
+
+stacking_policy::ClientStackInputs WindowManager::stack_inputs_of(Client const& client) const
+{
+    bool managed = client.kind == Client::Kind::Tiled || client.kind == Client::Kind::Floating;
+    return stacking_policy::ClientStackInputs{
+        client.id,
+        managed && should_be_visible(client),
+        compute_stack_tier(client),
+        client.kind == Client::Kind::Floating,
+        client.id == active_window_,
+        client.order,
+    };
 }
 
 Geometry WindowManager::overlay_geometry_for_client(Client const& client) const
@@ -3253,112 +3246,74 @@ Geometry WindowManager::overlay_geometry_for_client(Client const& client) const
     return monitors_[0].geometry();
 }
 
-void WindowManager::restack_transients(xcb_window_t parent)
+void WindowManager::apply_stacking()
 {
-    if (parent == XCB_NONE)
-        return;
-    auto const* parent_client = get_client(parent);
-    if (!parent_client)
-        return;
-    if (!is_physically_visible(*parent_client))
-        return;
-    if (is_suppressed_by_fullscreen(*parent_client))
-        return;
+    stacking_dirty_ = false;
 
-    for (auto const& [fw, client] : clients_)
-    {
-        if (client.kind != Client::Kind::Floating || client.transient_for != parent)
-            continue;
-        if (!is_physically_visible(client))
-            continue;
-        if (is_suppressed_by_fullscreen(client))
-            continue;
-
-        uint32_t values[2];
-        values[0] = parent;
-        values[1] = XCB_STACK_MODE_ABOVE;
-        uint16_t mask = XCB_CONFIG_WINDOW_SIBLING | XCB_CONFIG_WINDOW_STACK_MODE;
-        xcb_configure_window(conn_.get(), fw, mask, values);
-    }
-}
-
-void WindowManager::restack_monitor_layers(size_t monitor_idx)
-{
-    if (monitor_idx >= monitors_.size())
-        return;
-
-    std::vector<xcb_window_t> visible_windows;
-    visible_windows.reserve(clients_.size());
+    std::vector<stacking_policy::ClientStackInputs> inputs;
+    inputs.reserve(clients_.size());
     for (auto const& [window, client] : clients_)
-    {
-        if (client.monitor != monitor_idx)
-            continue;
-        if (client.kind != Client::Kind::Tiled && client.kind != Client::Kind::Floating)
-            continue;
-        if (!should_be_visible(client))
-            continue;
-        visible_windows.push_back(window);
-    }
+        inputs.push_back(stack_inputs_of(client));
 
-    std::stable_sort(
-        visible_windows.begin(),
-        visible_windows.end(),
-        [this](xcb_window_t lhs, xcb_window_t rhs)
-        {
-            auto lit = clients_.find(lhs);
-            auto rit = clients_.find(rhs);
-            if (lit == clients_.end() || rit == clients_.end())
-                return lit != clients_.end();
-            auto const& left = lit->second;
-            auto const& right = rit->second;
-            auto left_key = std::tuple{
-                compute_stack_layer(left),
-                left.kind == Client::Kind::Floating ? 1 : 0,
-                lhs == active_window_ ? 1 : 0,
-                static_cast<long long>(left.order)
-            };
-            auto right_key = std::tuple{
-                compute_stack_layer(right),
-                right.kind == Client::Kind::Floating ? 1 : 0,
-                rhs == active_window_ ? 1 : 0,
-                static_cast<long long>(right.order)
-            };
-            return left_key < right_key;
-        }
-    );
+    auto order = stacking_policy::compute_order(inputs);
 
-    for (size_t i = 1; i < visible_windows.size(); ++i)
-    {
-        uint32_t values[2];
-        values[0] = visible_windows[i - 1];
-        values[1] = XCB_STACK_MODE_ABOVE;
+    if (order == cached_stacking_order_)
+        return;
+
+    auto stack_above_sibling = [this](xcb_window_t window, xcb_window_t sibling) {
+        uint32_t values[2] = { sibling, XCB_STACK_MODE_ABOVE };
         uint16_t mask = XCB_CONFIG_WINDOW_SIBLING | XCB_CONFIG_WINDOW_STACK_MODE;
-        xcb_configure_window(conn_.get(), visible_windows[i], mask, values);
-    }
+        xcb_configure_window(conn_.get(), window, mask, values);
+    };
 
-    for (xcb_window_t window : visible_windows)
+    // Suppressed-by-fullscreen siblings ride along at the Below tier so the
+    // pairwise pass keeps them under the fullscreen owner.
+    xcb_window_t prev_visible = XCB_NONE;
+    for (xcb_window_t window : order)
     {
         auto const* client = get_client(window);
-        if (!client || client->transient_for != XCB_NONE)
+        if (!client || (client->kind != Client::Kind::Tiled && client->kind != Client::Kind::Floating))
             continue;
-        restack_transients(window);
+        if (!should_be_visible(*client))
+            continue;
+
+        if (prev_visible != XCB_NONE)
+            stack_above_sibling(window, prev_visible);
+        prev_visible = window;
     }
 
-    // Raise overlay windows to the absolute top of the global X stacking order.
-    // Per-monitor restacking only orders windows relative to same-monitor siblings,
-    // so a newly mapped window on another monitor could end up above the overlay
-    // in the global stack.  This final pass guarantees overlays stay on top.
-    for (xcb_window_t window : visible_windows)
+    // A floating transient must sit above its parent even when the parent
+    // holds focus (active=1) and would outrank a non-active transient on the
+    // order key.  Only fire when the global order didn't already place it
+    // above — an unconditional ABOVE-sibling drags the transient down on top
+    // of the parent and undoes legitimate intermediate windows.
+    auto position_of = [&order](xcb_window_t w) -> std::optional<size_t> {
+        for (size_t i = 0; i < order.size(); ++i)
+            if (order[i] == w) return i;
+        return std::nullopt;
+    };
+
+    for (xcb_window_t window : order)
     {
         auto const* client = get_client(window);
-        if (client && client->layer == WindowLayer::Overlay)
-        {
-            uint32_t values[] = { XCB_STACK_MODE_ABOVE };
-            xcb_configure_window(conn_.get(), window, XCB_CONFIG_WINDOW_STACK_MODE, values);
-        }
+        if (!client || client->kind != Client::Kind::Floating || client->transient_for == XCB_NONE)
+            continue;
+        if (!is_physically_visible(*client) || is_suppressed_by_fullscreen(*client))
+            continue;
+        auto const* parent = get_client(client->transient_for);
+        if (!parent || !is_physically_visible(*parent) || is_suppressed_by_fullscreen(*parent))
+            continue;
+
+        auto pw = position_of(window);
+        auto pp = position_of(client->transient_for);
+        if (pw && pp && *pw > *pp)
+            continue;
+
+        stack_above_sibling(window, client->transient_for);
     }
 
-    stacking_dirty_ = true;
+    ewmh_.update_client_list_stacking(order);
+    cached_stacking_order_ = std::move(order);
 }
 
 bool WindowManager::is_override_redirect_window(xcb_window_t window) const
@@ -4080,9 +4035,6 @@ void WindowManager::reconcile_visibility_for_monitor(size_t monitor_idx, xcb_win
                     apply_maximized_geometry(client);
                 else
                     apply_floating_geometry(client);
-
-                if (client.transient_for != XCB_NONE)
-                    restack_transients(client.transient_for);
             }
         }
         else if (!should_show && !client.hidden)

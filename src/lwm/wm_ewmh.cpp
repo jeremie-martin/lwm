@@ -92,51 +92,8 @@ void WindowManager::update_ewmh_client_list()
 
 void WindowManager::flush_stacking_list()
 {
-    if (!stacking_dirty_)
-        return;
-    stacking_dirty_ = false;
-
-    // Build stacking order from internal state, matching the sort key used
-    // Precompute sort keys to avoid hash lookups during sort.
-    // Hidden windows go first (bottom of stack),
-    // visible windows are ordered by (layer, floating, active, order).
-    struct StackEntry
-    {
-        xcb_window_t window;
-        bool visible;
-        int layer;
-        int floating;
-        int active;
-        long long order;
-    };
-
-    std::vector<StackEntry> entries;
-    entries.reserve(clients_.size());
-    for (auto const& [window, client] : clients_)
-    {
-        entries.push_back({
-            window,
-            !client.hidden,
-            compute_stack_layer(client),
-            client.kind == Client::Kind::Floating ? 1 : 0,
-            window == active_window_ ? 1 : 0,
-            static_cast<long long>(client.order)
-        });
-    }
-
-    std::stable_sort(entries.begin(), entries.end(), [](StackEntry const& a, StackEntry const& b)
-    {
-        if (a.visible != b.visible)
-            return !a.visible;
-        return std::tie(a.layer, a.floating, a.active, a.order) < std::tie(b.layer, b.floating, b.active, b.order);
-    });
-
-    cached_stacking_order_.clear();
-    cached_stacking_order_.reserve(entries.size());
-    for (auto const& entry : entries)
-        cached_stacking_order_.push_back(entry.window);
-
-    ewmh_.update_client_list_stacking(cached_stacking_order_);
+    if (stacking_dirty_)
+        apply_stacking();
 }
 
 void WindowManager::update_ewmh_current_desktop()

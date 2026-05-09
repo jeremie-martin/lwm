@@ -409,7 +409,7 @@ void WindowManager::map_floating_window(
         else
             apply_floating_geometry(client);
     }
-    restack_monitor_layers(client.monitor);
+    apply_stacking();
 
     flush_and_drain_crossing();
 }
@@ -1043,7 +1043,7 @@ void WindowManager::handle_restack_message(xcb_client_message_event_t const& e)
     if (auto const* client = get_client(e.window);
         client && (client->kind == Client::Kind::Tiled || client->kind == Client::Kind::Floating))
     {
-        restack_monitor_layers(client->monitor);
+        apply_stacking();
         conn_.flush();
         return;
     }

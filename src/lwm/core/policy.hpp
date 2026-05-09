@@ -585,3 +585,81 @@ inline HotplugPlan plan_hotplug(
 }
 
 } // namespace lwm::hotplug_policy
+
+namespace lwm::stacking_policy {
+
+/// Stacking tier: defines coarse layering across monitors.
+/// Higher tier = visually on top.  Within a tier, ordering falls back to
+/// (kind_floating, active, order).
+enum class Tier : int
+{
+    Below = 0,      ///< _NET_WM_STATE_BELOW or suppressed by another window's fullscreen
+    Normal = 1,     ///< Default tier for tiled and floating windows
+    Above = 2,      ///< _NET_WM_STATE_ABOVE or modal
+    Fullscreen = 3, ///< Fullscreen owner of its monitor
+    Overlay = 4,    ///< WM-classified overlay (always-on-top)
+};
+
+/// Inputs the policy needs to rank a single client.  Caller-side concerns
+/// (kind, transient_for, etc.) are resolved before building these.
+struct ClientStackInputs
+{
+    xcb_window_t id = XCB_NONE;
+    bool visible = true;     ///< Policy-visible (not iconic, on current workspace)
+    Tier tier = Tier::Normal;
+    bool is_floating = false;
+    bool is_active = false;
+    uint64_t order = 0;
+};
+
+/// Decide which tier a client belongs to.  `is_suppressed_by_fullscreen`
+/// overrides every state except overlay — a window occluded by another
+/// window's fullscreen on its monitor sinks to Below regardless of its own
+/// hint, so a non-overlay sibling can never cover the fullscreen owner.
+inline Tier compute_tier(
+    bool is_overlay,
+    bool is_suppressed_by_fullscreen,
+    bool is_fullscreen,
+    bool is_above_hint,
+    bool is_below_hint,
+    bool is_modal)
+{
+    if (is_overlay)
+        return Tier::Overlay;
+    if (is_suppressed_by_fullscreen)
+        return Tier::Below;
+    if (is_fullscreen)
+        return Tier::Fullscreen;
+    if (is_above_hint || is_modal)
+        return Tier::Above;
+    if (is_below_hint)
+        return Tier::Below;
+    return Tier::Normal;
+}
+
+/// Compute the global stacking order: bottom-up, hidden first, visible last.
+/// Stable on `order` so equal keys never reshuffle.
+inline std::vector<xcb_window_t> compute_order(std::span<ClientStackInputs const> inputs)
+{
+    auto sort_key = [](ClientStackInputs const& in) {
+        return std::tuple{
+            in.visible ? 1 : 0,
+            static_cast<int>(in.tier),
+            in.is_floating ? 1 : 0,
+            in.is_active ? 1 : 0,
+            static_cast<long long>(in.order),
+        };
+    };
+
+    std::vector<ClientStackInputs> ranked(inputs.begin(), inputs.end());
+    std::stable_sort(ranked.begin(), ranked.end(),
+        [&](auto const& a, auto const& b) { return sort_key(a) < sort_key(b); });
+
+    std::vector<xcb_window_t> result;
+    result.reserve(ranked.size());
+    for (auto const& in : ranked)
+        result.push_back(in.id);
+    return result;
+}
+
+} // namespace lwm::stacking_policy

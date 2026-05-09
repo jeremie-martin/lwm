@@ -467,15 +467,18 @@ private:
     bool should_be_visible(Client const& client) const;
     bool is_physically_visible(Client const& client) const;
     bool is_suppressed_by_fullscreen(Client const& client) const;
-    int compute_stack_layer(Client const& client) const;
+    stacking_policy::Tier compute_stack_tier(Client const& client) const;
+    stacking_policy::ClientStackInputs stack_inputs_of(Client const& client) const;
     xcb_window_t select_fullscreen_owner_for_monitor(
         size_t monitor_idx,
         xcb_window_t preferred_owner = XCB_NONE) const;
     void reconcile_visibility_for_monitor(size_t monitor_idx, xcb_window_t preferred_owner = XCB_NONE);
     void finalize_after_desktop_move(
         xcb_window_t window, bool was_active, size_t target_monitor, size_t target_workspace);
-    void restack_transients(xcb_window_t parent);
-    void restack_monitor_layers(size_t monitor_idx);
+    /// Realize stacking_policy onto X and EWMH _NET_CLIENT_LIST_STACKING in
+    /// one global pass.  X stacking is a single global order — a per-monitor
+    /// pass cannot enforce cross-monitor invariants like floating-above-tile.
+    void apply_stacking();
     bool is_override_redirect_window(xcb_window_t window) const;
     bool is_workspace_visible(size_t monitor_idx, size_t workspace_idx) const;
     void update_floating_monitor_for_geometry(Client& client);

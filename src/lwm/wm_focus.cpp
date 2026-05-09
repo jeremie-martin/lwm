@@ -187,9 +187,7 @@ void WindowManager::focus_any_window(xcb_window_t window, bool record_user_time)
     // a well-behaved Globally Active client can still redirect via WM_TAKE_FOCUS.
     xcb_set_input_focus(conn_.get(), XCB_INPUT_FOCUS_POINTER_ROOT, window, focus_time);
 
-    if (previous_monitor && *previous_monitor != client->monitor)
-        restack_monitor_layers(*previous_monitor);
-    restack_monitor_layers(client->monitor);
+    apply_stacking();
 
     if (client->urgency.active())
         clear_client_urgency(*client);
@@ -205,8 +203,6 @@ void WindowManager::focus_any_window(xcb_window_t window, bool record_user_time)
 
     if (record_user_time)
         client->user_time = last_event_time_;
-
-    restack_transients(window);
 
     conn_.flush();
 
@@ -243,7 +239,7 @@ void WindowManager::clear_focus()
         }
     }
     if (previous_monitor)
-        restack_monitor_layers(*previous_monitor);
+        apply_stacking();
 
     conn_.flush();
 }

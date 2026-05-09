@@ -414,6 +414,54 @@ TEST_CASE("Integration: focused tiled window does not restack above floating dia
 }
 
 TEST_CASE(
+    "Integration: tiled window mapped after a floating dialog stays below it",
+    "[integration][focus][stacking][regression]"
+)
+{
+    // Regression test for the floating-behind-tile bug:
+    // when a fresh tiled window is mapped while a floating dialog already
+    // exists, the X server places the new window at the top of the stack by
+    // default.  The WM must restack so the dialog ends up above the new tile.
+    auto test_env = TestEnvironment::create();
+    if (!test_env)
+        SKIP("Test environment not available");
+
+    auto& conn = test_env->conn;
+
+    xcb_atom_t dialog_type = intern_atom(conn.get(), "_NET_WM_WINDOW_TYPE_DIALOG");
+    if (dialog_type == XCB_NONE)
+    {
+        WARN("Failed to intern _NET_WM_WINDOW_TYPE_DIALOG.");
+        return;
+    }
+
+    xcb_window_t parent_tile = create_window(conn, 10, 10, 200, 150);
+    map_window(conn, parent_tile);
+    REQUIRE(wait_for_active_window(conn, parent_tile, kTimeout));
+
+    xcb_window_t floating = create_window(conn, 60, 60, 180, 120);
+    set_window_type(conn, floating, dialog_type);
+    set_transient_for(conn, floating, parent_tile);
+    map_window(conn, floating);
+    REQUIRE(wait_for_active_window(conn, floating, kTimeout));
+    REQUIRE(wait_for_condition([&]() { return is_stacked_above(conn, floating, parent_tile); }, kTimeout));
+
+    // Map a second tile.  Without global stacking, this freshly mapped X
+    // window would sit at the top of the stack and obscure the floating
+    // dialog.
+    xcb_window_t intruder_tile = create_window(conn, 30, 30, 220, 170);
+    map_window(conn, intruder_tile);
+    REQUIRE(wait_for_active_window(conn, intruder_tile, kTimeout));
+
+    REQUIRE(wait_for_condition([&]() { return is_stacked_above(conn, floating, intruder_tile); }, kTimeout));
+    REQUIRE(wait_for_condition([&]() { return is_stacked_above(conn, floating, parent_tile); }, kTimeout));
+
+    destroy_window(conn, intruder_tile);
+    destroy_window(conn, floating);
+    destroy_window(conn, parent_tile);
+}
+
+TEST_CASE(
     "Integration: _NET_RESTACK_WINDOW on tiled window does not rise above floating dialog",
     "[integration][focus][stacking]"
 )

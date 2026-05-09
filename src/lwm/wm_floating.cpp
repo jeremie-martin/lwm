@@ -206,7 +206,7 @@ void WindowManager::manage_floating_window(xcb_window_t window, bool start_iconi
 
     // Sync visibility decides whether to hide or show (and applies floating geometry)
     sync_visibility_for_monitor(*monitor_idx);
-    restack_monitor_layers(*monitor_idx);
+    apply_stacking();
 
     if (!start_iconic && !suppress_focus_ && *monitor_idx == focused_monitor_ && should_be_visible(client))
         focus_any_window(window);
