@@ -15,3 +15,8 @@ Deeper X11 work:
 
 Infrastructure:
 - More window rules — auto-move to workspace, auto-float by size, opacity rules.
+
+Review follow-ups from the three-week correctness sweep:
+- Validate or reject out-of-range rule geometry before narrowing into `Geometry`.
+- Reconcile `ARCHITECTURE.md` with the current stacking and hotplug authorities.
+- Add a real multi-output integration harness for cross-monitor moves, floating geometry, and hotplug rebind coverage.

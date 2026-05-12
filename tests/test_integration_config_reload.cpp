@@ -228,6 +228,18 @@ bool wait_for_window_geometry(
     );
 }
 
+bool is_hidden_offscreen(X11Connection& conn, xcb_window_t window)
+{
+    auto cookie = xcb_get_geometry(conn.get(), window);
+    auto* reply = xcb_get_geometry_reply(conn.get(), cookie, nullptr);
+    if (!reply)
+        return false;
+
+    bool hidden = reply->x < 0;
+    free(reply);
+    return hidden;
+}
+
 } // namespace
 
 TEST_CASE("Integration: reload-config updates desktop names and keeps failed reload atomic", "[integration][ipc][reload]")
@@ -373,6 +385,10 @@ TEST_CASE("Integration: reload-config reapplies workspace rules to existing wind
     REQUIRE(net_current_desktop != XCB_NONE);
     REQUIRE(net_wm_desktop != XCB_NONE);
 
+    xcb_window_t fallback = create_window(env->conn, 10, 10, 120, 90);
+    map_window(env->conn, fallback);
+    REQUIRE(wait_for_active_window(env->conn, fallback, kTimeout));
+
     xcb_window_t window = create_window(env->conn, 40, 40, 120, 90);
     set_window_title(env->conn, window, "reload-move");
     map_window(env->conn, window);
@@ -391,6 +407,9 @@ apply = { workspace = 1 }
     REQUIRE(reload_result->exit_code == 0);
     REQUIRE(wait_for_property_cardinal(env->conn.get(), window, net_wm_desktop, 1, kTimeout));
     REQUIRE(wait_for_property_cardinal(env->conn.get(), env->conn.root(), net_current_desktop, 0, kTimeout));
+    REQUIRE(wait_for_condition([&]() { return is_hidden_offscreen(env->conn, window); }, kTimeout));
+    REQUIRE(wait_for_active_window(env->conn, fallback, kTimeout));
 
     destroy_window(env->conn, window);
+    destroy_window(env->conn, fallback);
 }

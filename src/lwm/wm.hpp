@@ -344,7 +344,7 @@ private:
     Geometry current_window_geometry(xcb_window_t window) const;
 
     void manage_window(xcb_window_t window, bool start_iconic = false);
-    void manage_floating_window(xcb_window_t window, bool start_iconic = false);
+    void manage_floating_window(xcb_window_t window, bool start_iconic = false, bool allow_focus = true);
     /// Populate accepts_input / supports_take_focus on a client struct from X11 properties.
     /// The _into form takes a reference so it can be called before the client is inserted
     /// into clients_; the window-keyed wrapper is for event-handler use after insert.
@@ -369,7 +369,7 @@ private:
 
     void unmanage_window(xcb_window_t window);
     void unmanage_floating_window(xcb_window_t window);
-    void focus_any_window(xcb_window_t window, bool record_user_time = true);
+    void focus_any_window(xcb_window_t window, bool record_user_time = true, uint32_t focus_timestamp = 0);
     void cycle_focus(bool forward);
     void set_fullscreen(Client& client, bool enabled);
     void clear_fullscreen_state(Client& client);
@@ -440,6 +440,7 @@ private:
     size_t wrap_monitor_index(int idx) const;
     void warp_to_monitor(Monitor const& monitor);
     void focus_or_fallback(Monitor& monitor, bool record_user_time = true);
+    void repair_focus_after_visibility_change(size_t preferred_monitor, bool record_user_time = false);
     std::vector<focus_policy::FloatingCandidate> build_floating_candidates() const;
     Monitor* monitor_at_point(int16_t x, int16_t y);
     bool is_floating_window(xcb_window_t window) const;
@@ -483,6 +484,7 @@ private:
     bool is_workspace_visible(size_t monitor_idx, size_t workspace_idx) const;
     void update_floating_monitor_for_geometry(Client& client);
     void apply_floating_geometry(Client& client);
+    void apply_visible_floating_geometry(Client& client);
     Geometry overlay_geometry_for_client(Client const& client) const;
     uint32_t border_width_for_client(Client const& client) const;
     uint32_t border_color_for_client(Client const& client) const;

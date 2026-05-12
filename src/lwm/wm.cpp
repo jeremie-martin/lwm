@@ -890,30 +890,7 @@ std::expected<void, std::string> WindowManager::apply_config_reload(Config confi
     reapply_rules_to_existing_windows();
     rearrange_all_monitors();
 
-    if (!monitors_.empty())
-    {
-        if (auto* active = get_client(active_window_); active && active->monitor < monitors_.size()
-            && is_focus_eligible(*active) && is_physically_visible(*active))
-        {
-            focused_monitor_ = active->monitor;
-            if (active->kind == Client::Kind::Tiled && active->workspace < monitors_[active->monitor].workspaces.size())
-            {
-                workspace_policy::set_workspace_focus(
-                    monitors_[active->monitor].workspaces[active->workspace], active_window_);
-            }
-            update_ewmh_current_desktop();
-        }
-        else
-        {
-            if (focused_monitor_ >= monitors_.size())
-                focused_monitor_ = 0;
-            focus_or_fallback(monitors_[focused_monitor_]);
-        }
-    }
-    else
-    {
-        clear_focus();
-    }
+    repair_focus_after_visibility_change(focused_monitor_);
 
     apply_appearance_reload();
     conn_.flush();
@@ -2031,18 +2008,8 @@ void WindowManager::sync_managed_window_classification(xcb_window_t window, Clas
         apply_stacking();
     }
 
-    if (window == active_window_ && !is_focus_eligible(*client))
-    {
-        if (current_monitor == focused_monitor_
-            && (client->sticky || client->workspace == monitors_[current_monitor].current_workspace))
-        {
-            focus_or_fallback(monitors_[current_monitor], false);
-        }
-        else
-        {
-            clear_focus();
-        }
-    }
+    if (window == active_window_ && (!is_focus_eligible(*client) || !is_physically_visible(*client)))
+        repair_focus_after_visibility_change(previous_monitor, false);
 
     flush_and_drain_crossing();
 }
@@ -2432,7 +2399,11 @@ void WindowManager::set_window_sticky(Client& client, bool enabled)
         ewmh_.set_window_desktop(client.id, desktop);
     }
 
+    size_t preferred_monitor = client.monitor;
     finalize_visibility_on_monitor(client.monitor);
+
+    if (client.id == active_window_)
+        repair_focus_after_visibility_change(preferred_monitor, false);
 
     flush_and_drain_crossing();
 }
@@ -3213,6 +3184,11 @@ bool WindowManager::is_suppressed_by_fullscreen(Client const& client) const
 
 stacking_policy::Tier WindowManager::compute_stack_tier(Client const& client) const
 {
+    if (client.kind == Client::Kind::Desktop)
+        return stacking_policy::Tier::Below;
+    if (client.kind == Client::Kind::Dock)
+        return stacking_policy::Tier::Above;
+
     return stacking_policy::compute_tier(
         client.layer == WindowLayer::Overlay,
         is_suppressed_by_fullscreen(client),
@@ -3224,10 +3200,12 @@ stacking_policy::Tier WindowManager::compute_stack_tier(Client const& client) co
 
 stacking_policy::ClientStackInputs WindowManager::stack_inputs_of(Client const& client) const
 {
-    bool managed = client.kind == Client::Kind::Tiled || client.kind == Client::Kind::Floating;
+    bool policy_visible = client.kind == Client::Kind::Tiled || client.kind == Client::Kind::Floating
+        ? should_be_visible(client)
+        : true;
     return stacking_policy::ClientStackInputs{
         client.id,
-        managed && should_be_visible(client),
+        policy_visible,
         compute_stack_tier(client),
         client.kind == Client::Kind::Floating,
         client.id == active_window_,
@@ -3257,6 +3235,48 @@ void WindowManager::apply_stacking()
 
     auto order = stacking_policy::compute_order(inputs);
 
+    auto position_of = [&order](xcb_window_t w) -> std::optional<size_t> {
+        for (size_t i = 0; i < order.size(); ++i)
+            if (order[i] == w) return i;
+        return std::nullopt;
+    };
+
+    auto transient_can_stack = [this](Client const& client) {
+        if (client.kind != Client::Kind::Floating || client.transient_for == XCB_NONE)
+            return false;
+        if (!is_physically_visible(client) || is_suppressed_by_fullscreen(client))
+            return false;
+        auto const* parent = get_client(client.transient_for);
+        return parent && is_physically_visible(*parent) && !is_suppressed_by_fullscreen(*parent);
+    };
+
+    for (size_t pass = 0; pass < order.size(); ++pass)
+    {
+        bool changed = false;
+        auto snapshot = order;
+        for (xcb_window_t window : snapshot)
+        {
+            auto const* client = get_client(window);
+            if (!client || !transient_can_stack(*client))
+                continue;
+
+            auto child_pos = position_of(window);
+            auto parent_pos = position_of(client->transient_for);
+            if (!child_pos || !parent_pos || *child_pos > *parent_pos)
+                continue;
+
+            xcb_window_t child = order[*child_pos];
+            order.erase(order.begin() + static_cast<std::ptrdiff_t>(*child_pos));
+            parent_pos = position_of(client->transient_for);
+            if (!parent_pos)
+                continue;
+            order.insert(order.begin() + static_cast<std::ptrdiff_t>(*parent_pos + 1), child);
+            changed = true;
+        }
+        if (!changed)
+            break;
+    }
+
     if (order == cached_stacking_order_)
         return;
 
@@ -3266,50 +3286,18 @@ void WindowManager::apply_stacking()
         xcb_configure_window(conn_.get(), window, mask, values);
     };
 
-    // Suppressed-by-fullscreen siblings ride along at the Below tier so the
-    // pairwise pass keeps them under the fullscreen owner.
     xcb_window_t prev_visible = XCB_NONE;
     for (xcb_window_t window : order)
     {
         auto const* client = get_client(window);
-        if (!client || (client->kind != Client::Kind::Tiled && client->kind != Client::Kind::Floating))
+        if (!client)
             continue;
-        if (!should_be_visible(*client))
+        if (!stack_inputs_of(*client).visible)
             continue;
 
         if (prev_visible != XCB_NONE)
             stack_above_sibling(window, prev_visible);
         prev_visible = window;
-    }
-
-    // A floating transient must sit above its parent even when the parent
-    // holds focus (active=1) and would outrank a non-active transient on the
-    // order key.  Only fire when the global order didn't already place it
-    // above — an unconditional ABOVE-sibling drags the transient down on top
-    // of the parent and undoes legitimate intermediate windows.
-    auto position_of = [&order](xcb_window_t w) -> std::optional<size_t> {
-        for (size_t i = 0; i < order.size(); ++i)
-            if (order[i] == w) return i;
-        return std::nullopt;
-    };
-
-    for (xcb_window_t window : order)
-    {
-        auto const* client = get_client(window);
-        if (!client || client->kind != Client::Kind::Floating || client->transient_for == XCB_NONE)
-            continue;
-        if (!is_physically_visible(*client) || is_suppressed_by_fullscreen(*client))
-            continue;
-        auto const* parent = get_client(client->transient_for);
-        if (!parent || !is_physically_visible(*parent) || is_suppressed_by_fullscreen(*parent))
-            continue;
-
-        auto pw = position_of(window);
-        auto pp = position_of(client->transient_for);
-        if (pw && pp && *pw > *pp)
-            continue;
-
-        stack_above_sibling(window, client->transient_for);
     }
 
     ewmh_.update_client_list_stacking(order);
@@ -3827,6 +3815,7 @@ bool WindowManager::move_floating_client_to_workspace(
     assign_window_workspace(client, target_monitor, target_workspace);
 
     finalize_move_visibility(source_monitor, target_monitor);
+    apply_visible_floating_geometry(client);
 
     LWM_ASSERT_INVARIANTS(clients_, monitors_);
     return true;

@@ -33,7 +33,7 @@ struct TestEnvironment
 
     bool ok() const { return conn.ok() && wm.running(); }
 
-    static std::optional<TestEnvironment> create()
+    static std::optional<TestEnvironment> create(std::string const& config = {})
     {
         auto& env = X11TestEnvironment::instance();
         if (!env.available())
@@ -49,7 +49,7 @@ struct TestEnvironment
             return std::nullopt;
         }
 
-        LwmProcess wm(env.display());
+        LwmProcess wm(env.display(), config);
         if (!wm.running())
         {
             WARN("Failed to start lwm.");
@@ -192,6 +192,29 @@ bool property_has_atom(xcb_connection_t* conn, xcb_window_t window, xcb_atom_t p
     }
     free(reply);
     return present;
+}
+
+void set_wm_hints_urgency(X11Connection& conn, xcb_window_t window)
+{
+    constexpr uint32_t XUrgencyHint = 256;
+    xcb_icccm_wm_hints_t hints = {};
+    hints.flags = XCB_ICCCM_WM_HINT_INPUT | XUrgencyHint;
+    hints.input = 1;
+    xcb_icccm_set_wm_hints(conn.get(), window, &hints);
+    xcb_flush(conn.get());
+}
+
+std::string floating_hidden_workspace_rule_config()
+{
+    return R"(
+[workspaces]
+count = 2
+names = ["one", "two"]
+
+[[rules]]
+match = { class = "FloatHidden" }
+apply = { floating = true, workspace = 1 }
+)";
 }
 
 bool set_randr_screen_size(X11Connection& conn, uint16_t width, uint16_t height)
@@ -526,6 +549,73 @@ TEST_CASE("Integration: floating window grabs focus and yields on destroy", "[in
     destroy_window(conn, floating);
     REQUIRE(wait_for_active_window(conn, tiled, kTimeout));
 
+    destroy_window(conn, tiled);
+}
+
+TEST_CASE(
+    "Integration: floating workspace rule does not focus a hidden mapped window",
+    "[integration][focus][floating][rules][workspace]"
+)
+{
+    auto test_env = TestEnvironment::create(floating_hidden_workspace_rule_config());
+    if (!test_env)
+        SKIP("Test environment not available");
+
+    auto& conn = test_env->conn;
+
+    xcb_atom_t net_current_desktop = intern_atom(conn.get(), "_NET_CURRENT_DESKTOP");
+    xcb_atom_t net_wm_desktop = intern_atom(conn.get(), "_NET_WM_DESKTOP");
+    REQUIRE(net_current_desktop != XCB_NONE);
+    REQUIRE(net_wm_desktop != XCB_NONE);
+
+    xcb_window_t fallback = create_window(conn, 10, 10, 220, 160);
+    map_window(conn, fallback);
+    REQUIRE(wait_for_active_window(conn, fallback, kTimeout));
+
+    xcb_window_t floating = create_window(conn, 60, 60, 220, 160);
+    set_window_wm_class(conn, floating, "float-hidden", "FloatHidden");
+    map_window(conn, floating);
+
+    REQUIRE(wait_for_property_cardinal(conn.get(), floating, net_wm_desktop, 1, kTimeout));
+    REQUIRE(wait_for_property_cardinal(conn.get(), conn.root(), net_current_desktop, 0, kTimeout));
+    REQUIRE(wait_for_condition([&]() { return is_hidden_offscreen(conn, floating); }, kTimeout));
+    REQUIRE(wait_for_active_window(conn, fallback, kTimeout));
+
+    destroy_window(conn, floating);
+    destroy_window(conn, fallback);
+}
+
+TEST_CASE("Integration: focused initially urgent floating window clears urgency", "[integration][focus][floating][urgent]")
+{
+    auto test_env = TestEnvironment::create();
+    if (!test_env)
+        SKIP("Test environment not available");
+
+    auto& conn = test_env->conn;
+
+    xcb_atom_t dialog_type = intern_atom(conn.get(), "_NET_WM_WINDOW_TYPE_DIALOG");
+    xcb_atom_t net_wm_state = intern_atom(conn.get(), "_NET_WM_STATE");
+    xcb_atom_t demands_attention = intern_atom(conn.get(), "_NET_WM_STATE_DEMANDS_ATTENTION");
+    REQUIRE(dialog_type != XCB_NONE);
+    REQUIRE(net_wm_state != XCB_NONE);
+    REQUIRE(demands_attention != XCB_NONE);
+
+    xcb_window_t tiled = create_window(conn, 10, 10, 220, 160);
+    map_window(conn, tiled);
+    REQUIRE(wait_for_active_window(conn, tiled, kTimeout));
+
+    xcb_window_t floating = create_window(conn, 60, 60, 220, 160);
+    set_window_type(conn, floating, dialog_type);
+    set_wm_hints_urgency(conn, floating);
+    map_window(conn, floating);
+
+    REQUIRE(wait_for_active_window(conn, floating, kTimeout));
+    REQUIRE(wait_for_condition(
+        [&]() { return !property_has_atom(conn.get(), floating, net_wm_state, demands_attention); },
+        kTimeout
+    ));
+
+    destroy_window(conn, floating);
     destroy_window(conn, tiled);
 }
 
@@ -1089,6 +1179,50 @@ TEST_CASE("Integration: iconifying a visible sticky window restores focus fallba
     send_client_message(conn, sticky, net_wm_state, 1, net_wm_state_hidden, 0, 0, 0);
 
     REQUIRE(wait_for_condition([&]() { return has_state(conn, sticky, net_wm_state_hidden); }, kTimeout));
+    REQUIRE(wait_for_active_window(conn, fallback, kTimeout));
+
+    destroy_window(conn, sticky);
+    destroy_window(conn, fallback);
+}
+
+TEST_CASE("Integration: removing sticky from off-workspace active window restores focus fallback", "[integration][focus][sticky]")
+{
+    auto test_env = TestEnvironment::create();
+    if (!test_env)
+        SKIP("Test environment not available");
+
+    auto& conn = test_env->conn;
+
+    xcb_atom_t net_wm_state = intern_atom(conn.get(), "_NET_WM_STATE");
+    xcb_atom_t net_wm_desktop = intern_atom(conn.get(), "_NET_WM_DESKTOP");
+    xcb_atom_t net_wm_state_sticky = intern_atom(conn.get(), "_NET_WM_STATE_STICKY");
+    xcb_atom_t net_active_window = intern_atom(conn.get(), "_NET_ACTIVE_WINDOW");
+    REQUIRE(net_wm_state != XCB_NONE);
+    REQUIRE(net_wm_desktop != XCB_NONE);
+    REQUIRE(net_wm_state_sticky != XCB_NONE);
+    REQUIRE(net_active_window != XCB_NONE);
+
+    xcb_window_t fallback = create_window(conn, 10, 10, 220, 160);
+    map_window(conn, fallback);
+    REQUIRE(wait_for_active_window(conn, fallback, kTimeout));
+
+    xcb_window_t sticky = create_window(conn, 40, 40, 220, 160);
+    map_window(conn, sticky);
+    REQUIRE(wait_for_active_window(conn, sticky, kTimeout));
+
+    send_client_message(conn, sticky, net_wm_desktop, 1);
+    REQUIRE(wait_for_property_cardinal(conn.get(), sticky, net_wm_desktop, 1, kTimeout));
+    REQUIRE(wait_for_active_window(conn, fallback, kTimeout));
+
+    send_client_message(conn, sticky, net_wm_state, 1, net_wm_state_sticky, 0, 0, 0);
+    REQUIRE(wait_for_condition([&]() { return has_state(conn, sticky, net_wm_state_sticky); }, kTimeout));
+    send_client_message(conn, sticky, net_active_window, 2, XCB_CURRENT_TIME, 0, 0, 0);
+    REQUIRE(wait_for_active_window(conn, sticky, kTimeout));
+
+    send_client_message(conn, sticky, net_wm_state, 0, net_wm_state_sticky, 0, 0, 0);
+
+    REQUIRE(wait_for_condition([&]() { return !has_state(conn, sticky, net_wm_state_sticky); }, kTimeout));
+    REQUIRE(wait_for_condition([&]() { return is_hidden_offscreen(conn, sticky); }, kTimeout));
     REQUIRE(wait_for_active_window(conn, fallback, kTimeout));
 
     destroy_window(conn, sticky);

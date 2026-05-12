@@ -6,7 +6,7 @@
 
 namespace lwm {
 
-void WindowManager::manage_floating_window(xcb_window_t window, bool start_iconic)
+void WindowManager::manage_floating_window(xcb_window_t window, bool start_iconic, bool allow_focus)
 {
     auto transient = transient_for_window(window);
     std::optional<size_t> monitor_idx;
@@ -208,7 +208,7 @@ void WindowManager::manage_floating_window(xcb_window_t window, bool start_iconi
     sync_visibility_for_monitor(*monitor_idx);
     apply_stacking();
 
-    if (!start_iconic && !suppress_focus_ && *monitor_idx == focused_monitor_ && should_be_visible(client))
+    if (allow_focus && !start_iconic && !suppress_focus_ && *monitor_idx == focused_monitor_ && should_be_visible(client))
         focus_any_window(window);
 
     // AFTER mapping: Apply non-geometry states
@@ -310,6 +310,19 @@ void WindowManager::apply_floating_geometry(Client& client)
     ev.override_redirect = 0;
 
     xcb_send_event(conn_.get(), 0, window, XCB_EVENT_MASK_STRUCTURE_NOTIFY, reinterpret_cast<char*>(&ev));
+}
+
+void WindowManager::apply_visible_floating_geometry(Client& client)
+{
+    if (client.kind != Client::Kind::Floating || client.hidden || !should_be_visible(client))
+        return;
+
+    if (client.fullscreen)
+        apply_fullscreen_if_needed(client);
+    else if (client.maximized_horz || client.maximized_vert)
+        apply_maximized_geometry(client);
+    else
+        apply_floating_geometry(client);
 }
 
 } // namespace lwm

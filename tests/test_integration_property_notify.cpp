@@ -69,6 +69,21 @@ std::vector<xcb_atom_t> get_window_property_atoms(xcb_connection_t* conn, xcb_wi
     return result;
 }
 
+std::vector<xcb_window_t> get_window_property_windows(xcb_connection_t* conn, xcb_window_t window, xcb_atom_t atom)
+{
+    auto cookie = xcb_get_property(conn, 0, window, atom, XCB_ATOM_WINDOW, 0, 64);
+    auto* reply = xcb_get_property_reply(conn, cookie, nullptr);
+    if (!reply)
+        return {};
+
+    std::vector<xcb_window_t> result;
+    auto* windows = static_cast<xcb_window_t*>(xcb_get_property_value(reply));
+    int len = xcb_get_property_value_length(reply) / 4;
+    result.assign(windows, windows + len);
+    free(reply);
+    return result;
+}
+
 bool property_has_atom(xcb_connection_t* conn, xcb_window_t window, xcb_atom_t property, xcb_atom_t atom)
 {
     auto atoms = get_window_property_atoms(conn, window, property);
@@ -104,6 +119,12 @@ std::optional<WindowGeometry> get_window_geometry(X11Connection& conn, xcb_windo
     return result;
 }
 
+bool is_hidden_offscreen(X11Connection& conn, xcb_window_t window)
+{
+    auto geometry = get_window_geometry(conn, window);
+    return geometry.has_value() && geometry->x < 0;
+}
+
 bool is_active_window(X11Connection& conn, xcb_window_t expected)
 {
     xcb_atom_t active = intern_atom(conn.get(), "_NET_ACTIVE_WINDOW");
@@ -128,6 +149,18 @@ bool is_stacked_above(X11Connection& conn, xcb_window_t upper, xcb_window_t lowe
     bool result = upper_it != children + len && lower_it != children + len && upper_it > lower_it;
     free(reply);
     return result;
+}
+
+bool is_listed_above(X11Connection& conn, xcb_window_t upper, xcb_window_t lower)
+{
+    xcb_atom_t stacking = intern_atom(conn.get(), "_NET_CLIENT_LIST_STACKING");
+    if (stacking == XCB_NONE)
+        return false;
+
+    auto windows = get_window_property_windows(conn.get(), conn.root(), stacking);
+    auto upper_it = std::ranges::find(windows, upper);
+    auto lower_it = std::ranges::find(windows, lower);
+    return upper_it != windows.end() && lower_it != windows.end() && upper_it > lower_it;
 }
 
 void set_transient_for(X11Connection& conn, xcb_window_t window, xcb_window_t parent)
@@ -156,6 +189,27 @@ void set_wm_input_hint(X11Connection& conn, xcb_window_t window, bool input)
     hints.flags = XCB_ICCCM_WM_HINT_INPUT;
     hints.input = input ? 1 : 0;
     xcb_icccm_set_wm_hints(conn.get(), window, &hints);
+    xcb_flush(conn.get());
+}
+
+void set_wm_protocols_take_focus(X11Connection& conn, xcb_window_t window)
+{
+    xcb_atom_t wm_protocols = intern_atom(conn.get(), "WM_PROTOCOLS");
+    xcb_atom_t wm_take_focus = intern_atom(conn.get(), "WM_TAKE_FOCUS");
+    if (wm_protocols == XCB_NONE || wm_take_focus == XCB_NONE)
+        return;
+
+    xcb_change_property(conn.get(), XCB_PROP_MODE_REPLACE, window, wm_protocols, XCB_ATOM_ATOM, 32, 1, &wm_take_focus);
+    xcb_flush(conn.get());
+}
+
+void clear_wm_protocols(X11Connection& conn, xcb_window_t window)
+{
+    xcb_atom_t wm_protocols = intern_atom(conn.get(), "WM_PROTOCOLS");
+    if (wm_protocols == XCB_NONE)
+        return;
+
+    xcb_delete_property(conn.get(), window, wm_protocols);
     xcb_flush(conn.get());
 }
 
@@ -242,6 +296,19 @@ apply = { workspace = 1 }
 )";
 }
 
+std::string type_rule_workspace_config()
+{
+    return R"(
+[workspaces]
+count = 2
+names = ["one", "two"]
+
+[[rules]]
+match = { type = "utility" }
+apply = { workspace = 1 }
+)";
+}
+
 } // namespace
 
 TEST_CASE("Integration: _NET_WM_WINDOW_TYPE changes reclassify managed windows", "[integration][property][ewmh]")
@@ -317,6 +384,44 @@ TEST_CASE("Integration: _NET_WM_WINDOW_TYPE changes reclassify managed windows",
 
     destroy_window(conn, sibling);
     destroy_window(conn, window);
+}
+
+TEST_CASE(
+    "Integration: _NET_WM_WINDOW_TYPE changes reapply type-based workspace rules",
+    "[integration][property][ewmh][rules][workspace]"
+)
+{
+    auto test_env = TestEnvironment::create(type_rule_workspace_config());
+    if (!test_env)
+        SKIP("Test environment not available");
+
+    auto& conn = test_env->conn;
+
+    xcb_atom_t type_utility = intern_atom(conn.get(), "_NET_WM_WINDOW_TYPE_UTILITY");
+    xcb_atom_t net_current_desktop = intern_atom(conn.get(), "_NET_CURRENT_DESKTOP");
+    xcb_atom_t net_wm_desktop = intern_atom(conn.get(), "_NET_WM_DESKTOP");
+    REQUIRE(type_utility != XCB_NONE);
+    REQUIRE(net_current_desktop != XCB_NONE);
+    REQUIRE(net_wm_desktop != XCB_NONE);
+
+    xcb_window_t fallback = create_window(conn, 10, 10, 220, 160);
+    map_window(conn, fallback);
+    REQUIRE(wait_for_active_window(conn, fallback, kTimeout));
+
+    xcb_window_t window = create_window(conn, 60, 60, 220, 160);
+    map_window(conn, window);
+    REQUIRE(wait_for_active_window(conn, window, kTimeout));
+    REQUIRE(wait_for_property_cardinal(conn.get(), window, net_wm_desktop, 0, kTimeout));
+
+    set_window_type(conn, window, type_utility);
+
+    REQUIRE(wait_for_property_cardinal(conn.get(), window, net_wm_desktop, 1, kTimeout));
+    REQUIRE(wait_for_property_cardinal(conn.get(), conn.root(), net_current_desktop, 0, kTimeout));
+    REQUIRE(wait_for_condition([&]() { return is_hidden_offscreen(conn, window); }, kTimeout));
+    REQUIRE(wait_for_active_window(conn, fallback, kTimeout));
+
+    destroy_window(conn, window);
+    destroy_window(conn, fallback);
 }
 
 TEST_CASE(
@@ -452,6 +557,45 @@ TEST_CASE("Integration: WM_TRANSIENT_FOR changes reclassify managed windows", "[
 }
 
 TEST_CASE(
+    "Integration: runtime transient restacking updates X stack and client-list stacking",
+    "[integration][property][transient][stacking]"
+)
+{
+    auto test_env = TestEnvironment::create();
+    if (!test_env)
+        SKIP("Test environment not available");
+
+    auto& conn = test_env->conn;
+
+    xcb_atom_t type_dialog = intern_atom(conn.get(), "_NET_WM_WINDOW_TYPE_DIALOG");
+    xcb_atom_t net_active_window = intern_atom(conn.get(), "_NET_ACTIVE_WINDOW");
+    REQUIRE(type_dialog != XCB_NONE);
+    REQUIRE(net_active_window != XCB_NONE);
+
+    xcb_window_t parent = create_window(conn, 10, 10, 260, 180);
+    set_window_type(conn, parent, type_dialog);
+    map_window(conn, parent);
+    REQUIRE(wait_for_active_window(conn, parent, kTimeout));
+
+    xcb_window_t child = create_window(conn, 60, 60, 220, 160);
+    set_window_type(conn, child, type_dialog);
+    map_window(conn, child);
+    REQUIRE(wait_for_active_window(conn, child, kTimeout));
+
+    send_client_message(conn, parent, net_active_window, 2, XCB_CURRENT_TIME, 0, 0, 0);
+    REQUIRE(wait_for_active_window(conn, parent, kTimeout));
+    REQUIRE(wait_for_condition([&]() { return is_stacked_above(conn, parent, child); }, kTimeout));
+
+    set_transient_for(conn, child, parent);
+
+    REQUIRE(wait_for_condition([&]() { return is_stacked_above(conn, child, parent); }, kTimeout));
+    REQUIRE(wait_for_condition([&]() { return is_listed_above(conn, child, parent); }, kTimeout));
+
+    destroy_window(conn, child);
+    destroy_window(conn, parent);
+}
+
+TEST_CASE(
     "Integration: _NET_WM_USER_TIME_WINDOW changes after manage update focus-stealing checks",
     "[integration][property][focus][user_time]"
 )
@@ -574,6 +718,35 @@ TEST_CASE("Integration: WM_HINTS.input changes can revoke focus eligibility", "[
 }
 
 TEST_CASE(
+    "Integration: WM_PROTOCOLS changes can revoke active focus eligibility",
+    "[integration][property][focus][wm_protocols]"
+)
+{
+    auto test_env = TestEnvironment::create();
+    if (!test_env)
+        SKIP("Test environment not available");
+
+    auto& conn = test_env->conn;
+
+    xcb_window_t fallback = create_window(conn, 10, 10, 220, 160);
+    map_window(conn, fallback);
+    REQUIRE(wait_for_active_window(conn, fallback, kTimeout));
+
+    xcb_window_t window = create_window(conn, 60, 60, 220, 160);
+    set_wm_input_hint(conn, window, false);
+    set_wm_protocols_take_focus(conn, window);
+    map_window(conn, window);
+    REQUIRE(wait_for_active_window(conn, window, kTimeout));
+
+    clear_wm_protocols(conn, window);
+
+    REQUIRE(wait_for_active_window(conn, fallback, kTimeout));
+
+    destroy_window(conn, window);
+    destroy_window(conn, fallback);
+}
+
+TEST_CASE(
     "Integration: title rule geometry applies when title matches before map",
     "[integration][property][title][rules][map]"
 )
@@ -666,6 +839,10 @@ TEST_CASE(
     REQUIRE(net_current_desktop != XCB_NONE);
     REQUIRE(net_wm_desktop != XCB_NONE);
 
+    xcb_window_t fallback = create_window(conn, 10, 10, 220, 160);
+    map_window(conn, fallback);
+    REQUIRE(wait_for_active_window(conn, fallback, kTimeout));
+
     xcb_window_t window = create_window(conn, 60, 60, 220, 160);
     map_window(conn, window);
     REQUIRE(wait_for_active_window(conn, window, kTimeout));
@@ -675,8 +852,11 @@ TEST_CASE(
 
     REQUIRE(wait_for_property_cardinal(conn.get(), window, net_wm_desktop, 1, kTimeout));
     REQUIRE(wait_for_property_cardinal(conn.get(), conn.root(), net_current_desktop, 0, kTimeout));
+    REQUIRE(wait_for_condition([&]() { return is_hidden_offscreen(conn, window); }, kTimeout));
+    REQUIRE(wait_for_active_window(conn, fallback, kTimeout));
 
     destroy_window(conn, window);
+    destroy_window(conn, fallback);
 }
 
 TEST_CASE("Integration: _NET_SUPPORTED does not overclaim visible-name atoms", "[integration][ewmh][root]")

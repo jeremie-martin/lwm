@@ -50,6 +50,32 @@ struct TestEnvironment
     }
 };
 
+bool has_state(X11Connection& conn, xcb_window_t window, xcb_atom_t state)
+{
+    xcb_atom_t net_wm_state = intern_atom(conn.get(), "_NET_WM_STATE");
+    if (net_wm_state == XCB_NONE)
+        return false;
+
+    auto cookie = xcb_get_property(conn.get(), 0, window, net_wm_state, XCB_ATOM_ATOM, 0, 16);
+    auto* reply = xcb_get_property_reply(conn.get(), cookie, nullptr);
+    if (!reply)
+        return false;
+
+    bool present = false;
+    auto* atoms = static_cast<xcb_atom_t*>(xcb_get_property_value(reply));
+    int len = xcb_get_property_value_length(reply) / 4;
+    for (int i = 0; i < len; ++i)
+    {
+        if (atoms[i] == state)
+        {
+            present = true;
+            break;
+        }
+    }
+    free(reply);
+    return present;
+}
+
 } // namespace
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -431,4 +457,120 @@ TEST_CASE(
     destroy_window(conn, w2);
     destroy_window(conn, w1);
     destroy_window(conn, user_time_window);
+}
+
+TEST_CASE(
+    "Integration: _NET_ACTIVE_WINDOW source-1 timestamp zero is denied with attention",
+    "[integration][client_message][focus][user_time]"
+)
+{
+    auto test_env = TestEnvironment::create();
+    if (!test_env)
+        SKIP("Test environment not available");
+
+    auto& conn = test_env->conn;
+
+    xcb_atom_t net_active_window = intern_atom(conn.get(), "_NET_ACTIVE_WINDOW");
+    xcb_atom_t demands_attention = intern_atom(conn.get(), "_NET_WM_STATE_DEMANDS_ATTENTION");
+    REQUIRE(net_active_window != XCB_NONE);
+    REQUIRE(demands_attention != XCB_NONE);
+
+    xcb_window_t w1 = create_window(conn, 10, 10, 220, 160);
+    map_window(conn, w1);
+    REQUIRE(wait_for_active_window(conn, w1, kTimeout));
+
+    xcb_window_t w2 = create_window(conn, 60, 60, 220, 160);
+    map_window(conn, w2);
+    REQUIRE(wait_for_active_window(conn, w2, kTimeout));
+
+    send_client_message(conn, w1, net_active_window, 1, 0, 0, 0, 0);
+
+    REQUIRE(wait_for_active_window(conn, w2, kTimeout));
+    REQUIRE(wait_for_condition([&]() { return has_state(conn, w1, demands_attention); }, kTimeout));
+
+    destroy_window(conn, w2);
+    destroy_window(conn, w1);
+}
+
+TEST_CASE(
+    "Integration: accepted _NET_ACTIVE_WINDOW timestamp advances focus stealing user time",
+    "[integration][client_message][focus][user_time]"
+)
+{
+    auto test_env = TestEnvironment::create();
+    if (!test_env)
+        SKIP("Test environment not available");
+
+    auto& conn = test_env->conn;
+
+    xcb_atom_t net_active_window = intern_atom(conn.get(), "_NET_ACTIVE_WINDOW");
+    xcb_atom_t demands_attention = intern_atom(conn.get(), "_NET_WM_STATE_DEMANDS_ATTENTION");
+    REQUIRE(net_active_window != XCB_NONE);
+    REQUIRE(demands_attention != XCB_NONE);
+
+    xcb_window_t w1 = create_window(conn, 10, 10, 220, 160);
+    map_window(conn, w1);
+    REQUIRE(wait_for_active_window(conn, w1, kTimeout));
+
+    xcb_window_t w2 = create_window(conn, 60, 60, 220, 160);
+    map_window(conn, w2);
+    REQUIRE(wait_for_active_window(conn, w2, kTimeout));
+
+    uint32_t accepted_time = 0xFFFFFF80u;
+    uint32_t stale_time = 0xFFFFFF00u;
+    send_client_message(conn, w1, net_active_window, 1, accepted_time, 0, 0, 0);
+    REQUIRE(wait_for_active_window(conn, w1, kTimeout));
+
+    send_client_message(conn, w2, net_active_window, 1, stale_time, 0, 0, 0);
+
+    REQUIRE(wait_for_active_window(conn, w1, kTimeout));
+    REQUIRE(wait_for_condition([&]() { return has_state(conn, w2, demands_attention); }, kTimeout));
+
+    destroy_window(conn, w2);
+    destroy_window(conn, w1);
+}
+
+TEST_CASE(
+    "Integration: _NET_ACTIVE_WINDOW on iconic fullscreen-suppressed client sets attention",
+    "[integration][client_message][focus][fullscreen][user_time]"
+)
+{
+    auto test_env = TestEnvironment::create();
+    if (!test_env)
+        SKIP("Test environment not available");
+
+    auto& conn = test_env->conn;
+
+    xcb_atom_t net_active_window = intern_atom(conn.get(), "_NET_ACTIVE_WINDOW");
+    xcb_atom_t net_wm_state = intern_atom(conn.get(), "_NET_WM_STATE");
+    xcb_atom_t fullscreen = intern_atom(conn.get(), "_NET_WM_STATE_FULLSCREEN");
+    xcb_atom_t hidden = intern_atom(conn.get(), "_NET_WM_STATE_HIDDEN");
+    xcb_atom_t demands_attention = intern_atom(conn.get(), "_NET_WM_STATE_DEMANDS_ATTENTION");
+    REQUIRE(net_active_window != XCB_NONE);
+    REQUIRE(net_wm_state != XCB_NONE);
+    REQUIRE(fullscreen != XCB_NONE);
+    REQUIRE(hidden != XCB_NONE);
+    REQUIRE(demands_attention != XCB_NONE);
+
+    xcb_window_t owner = create_window(conn, 10, 10, 640, 360);
+    map_window(conn, owner);
+    REQUIRE(wait_for_active_window(conn, owner, kTimeout));
+    send_client_message(conn, owner, net_wm_state, 1, fullscreen, 0, 0, 0);
+    REQUIRE(wait_for_condition([&]() { return has_state(conn, owner, fullscreen); }, kTimeout));
+
+    xcb_window_t suppressed = create_window(conn, 80, 80, 320, 180);
+    map_window(conn, suppressed);
+    REQUIRE(wait_for_active_window(conn, owner, kTimeout));
+
+    send_client_message(conn, suppressed, net_wm_state, 1, hidden, 0, 0, 0);
+    REQUIRE(wait_for_condition([&]() { return has_state(conn, suppressed, hidden); }, kTimeout));
+
+    send_client_message(conn, suppressed, net_active_window, 1, 0xFFFFFF80u, 0, 0, 0);
+
+    REQUIRE(wait_for_active_window(conn, owner, kTimeout));
+    REQUIRE(wait_for_condition([&]() { return has_state(conn, suppressed, demands_attention); }, kTimeout));
+    REQUIRE(wait_for_condition([&]() { return has_state(conn, suppressed, hidden); }, kTimeout));
+
+    destroy_window(conn, suppressed);
+    destroy_window(conn, owner);
 }

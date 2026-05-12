@@ -7,7 +7,7 @@
 
 namespace lwm {
 
-void WindowManager::focus_any_window(xcb_window_t window, bool record_user_time)
+void WindowManager::focus_any_window(xcb_window_t window, bool record_user_time, uint32_t focus_timestamp)
 {
     LOG_TRACE(
         "focus_any_window({:#x}) called, active_window_={:#x}, showing_desktop_={}",
@@ -178,7 +178,8 @@ void WindowManager::focus_any_window(xcb_window_t window, bool record_user_time)
         LOG_TRACE("focus_any_window: skipped focus border visuals (fullscreen/borderless)");
     }
 
-    xcb_timestamp_t focus_time = last_event_time_ ? last_event_time_ : XCB_CURRENT_TIME;
+    xcb_timestamp_t focus_time =
+        focus_timestamp ? focus_timestamp : (last_event_time_ ? last_event_time_ : XCB_CURRENT_TIME);
     send_wm_take_focus(*client, focus_time);
     // Always set input focus directly on the target window.  ICCCM prescribes
     // root-focus for "Globally Active" windows (accepts_input=false), but doing
@@ -202,7 +203,7 @@ void WindowManager::focus_any_window(xcb_window_t window, bool record_user_time)
     }
 
     if (record_user_time)
-        client->user_time = last_event_time_;
+        client->user_time = focus_timestamp ? focus_timestamp : last_event_time_;
 
     conn_.flush();
 
@@ -313,10 +314,37 @@ void WindowManager::focus_or_fallback(Monitor& monitor, bool record_user_time)
     LOG_TRACE("focus_or_fallback: DONE");
 }
 
+void WindowManager::repair_focus_after_visibility_change(size_t preferred_monitor, bool record_user_time)
+{
+    if (monitors_.empty())
+    {
+        clear_focus();
+        return;
+    }
+
+    if (auto* active = get_client(active_window_);
+        active && active->monitor < monitors_.size() && is_focus_eligible(*active) && is_physically_visible(*active))
+    {
+        focused_monitor_ = active->monitor;
+        if (active->kind == Client::Kind::Tiled && active->workspace < monitors_[active->monitor].workspaces.size())
+            workspace_policy::set_workspace_focus(monitors_[active->monitor].workspaces[active->workspace], active->id);
+        update_ewmh_current_desktop();
+        return;
+    }
+
+    size_t target_monitor = preferred_monitor;
+    if (target_monitor >= monitors_.size())
+        target_monitor = focused_monitor_ < monitors_.size() ? focused_monitor_ : 0;
+    focus_or_fallback(monitors_[target_monitor], record_user_time);
+}
+
 bool WindowManager::is_focus_eligible(Client const& client) const
 {
-    if (client.kind == Client::Kind::Dock || client.kind == Client::Kind::Desktop)
+    if (client.kind == Client::Kind::Dock || client.kind == Client::Kind::Desktop
+        || client.layer == WindowLayer::Overlay)
+    {
         return false;
+    }
     if (is_suppressed_by_fullscreen(client))
         return false;
     return focus_policy::is_focus_eligible(client.accepts_input, client.supports_take_focus);
