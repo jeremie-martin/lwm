@@ -12,6 +12,7 @@
 #include "lwm/layout/layout.hpp"
 #include <cassert>
 #include <chrono>
+#include <deque>
 #include <expected>
 #include <memory>
 #include <optional>
@@ -213,6 +214,7 @@ private:
 
     bool stacking_dirty_ = false;
     std::vector<xcb_window_t> cached_stacking_order_;
+    std::deque<xcb_generic_event_t> deferred_events_;
 
     // Scratchpad state
     struct NamedScratchpadState

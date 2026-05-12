@@ -116,6 +116,7 @@ struct AppPreferences
     bool skip_taskbar = false;
     bool skip_pager = false;
     bool above = false;
+    bool below = false;
 };
 
 enum class UrgencySource : uint8_t
@@ -267,6 +268,7 @@ struct Client
     bool suppress_next_configure_request = false; ///< Preserve WM-chosen startup placement against one client resize/move request
 
     std::optional<Geometry> fullscreen_restore;            ///< Geometry before fullscreen
+    std::optional<LayerHint> fullscreen_restore_layer_hint; ///< Layer hint before fullscreen
     std::optional<Geometry> maximize_restore;              ///< Geometry before maximize
     std::optional<FullscreenMonitors> fullscreen_monitors; ///< Multi-monitor fullscreen
 

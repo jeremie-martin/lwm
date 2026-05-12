@@ -73,6 +73,7 @@ TEST_CASE("Client has sensible defaults", "[client][state]")
     REQUIRE_FALSE(c.app_prefs.skip_taskbar);
     REQUIRE_FALSE(c.app_prefs.skip_pager);
     REQUIRE_FALSE(c.app_prefs.above);
+    REQUIRE_FALSE(c.app_prefs.below);
     REQUIRE_FALSE(c.urgency.active());
     REQUIRE_FALSE(c.urgency.has(UrgencySource::App));
     REQUIRE_FALSE(c.urgency.has(UrgencySource::WmInitiated));
@@ -314,7 +315,7 @@ TEST_CASE("compute_desired_state enforces above/below mutual exclusion", "[clien
     {
         classification_policy::DesiredStateInputs in{};
         in.app_above = true;
-        in.ewmh_below = true;
+        in.app_below = true;
         auto out = classification_policy::compute_desired_state(in);
         REQUIRE(out.layer_hint == LayerHint::Above);
     }
@@ -322,7 +323,7 @@ TEST_CASE("compute_desired_state enforces above/below mutual exclusion", "[clien
     SECTION("Only below takes effect alone")
     {
         classification_policy::DesiredStateInputs in{};
-        in.ewmh_below = true;
+        in.app_below = true;
         auto out = classification_policy::compute_desired_state(in);
         REQUIRE(out.layer_hint == LayerHint::Below);
     }
@@ -541,7 +542,7 @@ TEST_CASE("compute_desired_state: overlay layer forces skip, sticky, borderless,
     classification_policy::DesiredStateInputs in{};
     in.layer = WindowLayer::Overlay;
     in.app_above = true;
-    in.ewmh_below = true;
+    in.app_below = true;
     auto out = classification_policy::compute_desired_state(in);
 
     REQUIRE(out.skip_taskbar);
@@ -555,7 +556,7 @@ TEST_CASE("compute_desired_state: modal clears below", "[policy][classification]
 {
     classification_policy::DesiredStateInputs in{};
     in.ewmh_modal = true;
-    in.ewmh_below = true;
+    in.app_below = true;
     auto out = classification_policy::compute_desired_state(in);
 
     REQUIRE(out.modal);
@@ -567,7 +568,7 @@ TEST_CASE("compute_desired_state: rule layer_hint overrides ewmh below", "[polic
     SECTION("Rule clears ewmh below")
     {
         classification_policy::DesiredStateInputs in{};
-        in.ewmh_below = true;
+        in.app_below = true;
         in.rule_layer_hint = LayerHint::Normal;
         auto out = classification_policy::compute_desired_state(in);
         REQUIRE(out.layer_hint == LayerHint::Normal);

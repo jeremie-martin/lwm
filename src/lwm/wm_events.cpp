@@ -1063,7 +1063,6 @@ void WindowManager::handle_restack_message(xcb_client_message_event_t const& e)
     }
 
     xcb_configure_window(conn_.get(), e.window, mask, values);
-    stacking_dirty_ = true;
     conn_.flush();
 }
 
@@ -1097,13 +1096,16 @@ void WindowManager::handle_wm_state_change(xcb_client_message_event_t const& e)
         }
         else if (state == ewmh->_NET_WM_STATE_ABOVE)
         {
-            client->app_prefs.above = compute_enable(client->layer_hint == LayerHint::Above);
+            bool enable = compute_enable(client->app_prefs.above);
+            client->app_prefs.above = enable;
+            if (enable)
+                client->app_prefs.below = false;
             reevaluate_managed_window(e.window);
         }
         else if (state == ewmh->_NET_WM_STATE_BELOW)
         {
-            bool enable = compute_enable(client->layer_hint == LayerHint::Below);
-            ewmh_.set_window_state(client->id, ewmh->_NET_WM_STATE_BELOW, enable);
+            bool enable = compute_enable(client->app_prefs.below);
+            client->app_prefs.below = enable;
             if (enable)
                 client->app_prefs.above = false;
             reevaluate_managed_window(e.window);
@@ -1245,6 +1247,15 @@ void WindowManager::handle_desktop_change(xcb_client_message_event_t const& e)
         return;
     }
 
+    size_t workspaces_per_monitor = config_.workspaces.count;
+    if (workspaces_per_monitor == 0)
+        return;
+    size_t target_monitor = desktop / workspaces_per_monitor;
+    size_t target_workspace = desktop % workspaces_per_monitor;
+
+    if (target_monitor >= monitors_.size() || target_workspace >= monitors_[target_monitor].workspaces.size())
+        return;
+
     if (client->sticky)
     {
         set_window_sticky(*client, false);
@@ -1252,15 +1263,6 @@ void WindowManager::handle_desktop_change(xcb_client_message_event_t const& e)
         if (!client)
             return;
     }
-
-    size_t workspaces_per_monitor = config_.workspaces.count;
-    if (workspaces_per_monitor == 0)
-        return;
-    size_t target_monitor = desktop / workspaces_per_monitor;
-    size_t target_workspace = desktop % workspaces_per_monitor;
-
-    if (target_monitor >= monitors_.size())
-        return;
 
     bool was_active = (active_window_ == e.window);
 
@@ -1319,8 +1321,15 @@ void WindowManager::handle_moveresize_window(xcb_client_message_event_t const& e
     if (has_height)
         geom.height = static_cast<uint16_t>(std::max<int32_t>(1, e.data.data32[4]));
 
-    update_floating_monitor_for_geometry(*client);
-    if (should_be_visible(*client) && !client->hidden && !client->fullscreen)
+    bool visible = !client->hidden && should_be_visible(*client);
+    if (visible)
+        update_floating_monitor_for_geometry(*client);
+    if (visible && active_window_ == e.window)
+    {
+        focused_monitor_ = client->monitor;
+        update_ewmh_current_desktop();
+    }
+    if (visible && !client->fullscreen)
     {
         apply_floating_geometry(*client);
     }
@@ -1413,6 +1422,54 @@ void WindowManager::handle_configure_request(xcb_configure_request_event_t const
         return;
     }
 
+    if (is_floating)
+    {
+        uint16_t geometry_mask = XCB_CONFIG_WINDOW_X | XCB_CONFIG_WINDOW_Y | XCB_CONFIG_WINDOW_WIDTH
+            | XCB_CONFIG_WINDOW_HEIGHT;
+        if (client->suppress_next_configure_request && (mask & geometry_mask) != 0)
+        {
+            client->suppress_next_configure_request = false;
+            if (!client->hidden && should_be_visible(*client))
+                apply_floating_geometry(*client);
+            send_configure_notify(*client);
+            conn_.flush();
+            return;
+        }
+
+        auto& geom = floating_geometry(*client);
+        if (mask & XCB_CONFIG_WINDOW_X)
+            geom.x = e.x;
+        if (mask & XCB_CONFIG_WINDOW_Y)
+            geom.y = e.y;
+        if (mask & XCB_CONFIG_WINDOW_WIDTH)
+            geom.width = std::max<uint16_t>(1, e.width);
+        if (mask & XCB_CONFIG_WINDOW_HEIGHT)
+            geom.height = std::max<uint16_t>(1, e.height);
+
+        uint32_t hinted_width = geom.width;
+        uint32_t hinted_height = geom.height;
+        layout_.apply_size_hints(e.window, hinted_width, hinted_height);
+        geom.width = static_cast<uint16_t>(std::max<uint32_t>(1, hinted_width));
+        geom.height = static_cast<uint16_t>(std::max<uint32_t>(1, hinted_height));
+
+        bool visible = !client->hidden && should_be_visible(*client);
+        if (visible)
+            update_floating_monitor_for_geometry(*client);
+        if (visible && active_window_ == e.window)
+        {
+            focused_monitor_ = client->monitor;
+            update_ewmh_current_desktop();
+        }
+
+        if (visible)
+            apply_floating_geometry(*client);
+        else
+            send_configure_notify(*client);
+
+        conn_.flush();
+        return;
+    }
+
     uint32_t values[7];
     size_t index = 0;
 
@@ -1432,50 +1489,6 @@ void WindowManager::handle_configure_request(xcb_configure_request_event_t const
         values[index++] = static_cast<uint32_t>(e.stack_mode);
 
     xcb_configure_window(conn_.get(), e.window, mask, values);
-
-    if (is_floating)
-    {
-        uint16_t geometry_mask = XCB_CONFIG_WINDOW_X | XCB_CONFIG_WINDOW_Y | XCB_CONFIG_WINDOW_WIDTH
-            | XCB_CONFIG_WINDOW_HEIGHT;
-        if (client->suppress_next_configure_request && (mask & geometry_mask) != 0)
-        {
-            client->suppress_next_configure_request = false;
-            apply_floating_geometry(*client);
-            send_configure_notify(*client);
-            conn_.flush();
-            return;
-        }
-
-        auto& geom = floating_geometry(*client);
-        if (mask & XCB_CONFIG_WINDOW_X)
-            geom.x = e.x;
-        if (mask & XCB_CONFIG_WINDOW_Y)
-            geom.y = e.y;
-        if (mask & XCB_CONFIG_WINDOW_WIDTH)
-            geom.width = std::max<uint16_t>(1, e.width);
-        if (mask & XCB_CONFIG_WINDOW_HEIGHT)
-            geom.height = std::max<uint16_t>(1, e.height);
-
-        uint16_t requested_width = geom.width;
-        uint16_t requested_height = geom.height;
-        uint32_t hinted_width = requested_width;
-        uint32_t hinted_height = requested_height;
-        layout_.apply_size_hints(e.window, hinted_width, hinted_height);
-        geom.width = static_cast<uint16_t>(std::max<uint32_t>(1, hinted_width));
-        geom.height = static_cast<uint16_t>(std::max<uint32_t>(1, hinted_height));
-
-        if (requested_width != geom.width || requested_height != geom.height)
-        {
-            apply_floating_geometry(*client);
-        }
-
-        update_floating_monitor_for_geometry(*client);
-        if (active_window_ == e.window)
-        {
-            focused_monitor_ = client->monitor;
-            update_ewmh_current_desktop();
-        }
-    }
 
     conn_.flush();
 }

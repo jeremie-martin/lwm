@@ -585,6 +585,62 @@ TEST_CASE(
     destroy_window(conn, fallback);
 }
 
+TEST_CASE(
+    "Integration: hidden floating configure request stays off-screen until shown",
+    "[integration][focus][floating][rules][workspace][configure]"
+)
+{
+    auto test_env = TestEnvironment::create(floating_hidden_workspace_rule_config());
+    if (!test_env)
+        SKIP("Test environment not available");
+
+    auto& conn = test_env->conn;
+
+    xcb_atom_t net_current_desktop = intern_atom(conn.get(), "_NET_CURRENT_DESKTOP");
+    xcb_atom_t net_wm_desktop = intern_atom(conn.get(), "_NET_WM_DESKTOP");
+    REQUIRE(net_current_desktop != XCB_NONE);
+    REQUIRE(net_wm_desktop != XCB_NONE);
+
+    xcb_window_t fallback = create_window(conn, 10, 10, 220, 160);
+    map_window(conn, fallback);
+    REQUIRE(wait_for_active_window(conn, fallback, kTimeout));
+
+    xcb_window_t floating = create_window(conn, 60, 60, 220, 160);
+    set_window_wm_class(conn, floating, "float-hidden", "FloatHidden");
+    map_window(conn, floating);
+
+    REQUIRE(wait_for_property_cardinal(conn.get(), floating, net_wm_desktop, 1, kTimeout));
+    REQUIRE(wait_for_condition([&]() { return is_hidden_offscreen(conn, floating); }, kTimeout));
+
+    uint32_t values[] = { 100, 110, 260, 180 };
+    xcb_configure_window(
+        conn.get(),
+        floating,
+        XCB_CONFIG_WINDOW_X | XCB_CONFIG_WINDOW_Y | XCB_CONFIG_WINDOW_WIDTH | XCB_CONFIG_WINDOW_HEIGHT,
+        values
+    );
+    xcb_flush(conn.get());
+
+    std::this_thread::sleep_for(std::chrono::milliseconds(100));
+    REQUIRE(is_hidden_offscreen(conn, floating));
+    REQUIRE(wait_for_active_window(conn, fallback, kTimeout));
+
+    send_client_message(conn, conn.root(), net_current_desktop, 1);
+    REQUIRE(wait_for_property_cardinal(conn.get(), conn.root(), net_current_desktop, 1, kTimeout));
+    REQUIRE(wait_for_condition(
+        [&]()
+        {
+            auto geometry = get_window_geometry(conn, floating);
+            return geometry.has_value() && geometry->x == 100 && geometry->y == 110
+                && geometry->width == 260 && geometry->height == 180;
+        },
+        kTimeout
+    ));
+
+    destroy_window(conn, floating);
+    destroy_window(conn, fallback);
+}
+
 TEST_CASE("Integration: focused initially urgent floating window clears urgency", "[integration][focus][floating][urgent]")
 {
     auto test_env = TestEnvironment::create();
@@ -751,20 +807,10 @@ TEST_CASE(
 
     xcb_atom_t net_wm_state = intern_atom(conn.get(), "_NET_WM_STATE");
     xcb_atom_t net_wm_state_fullscreen = intern_atom(conn.get(), "_NET_WM_STATE_FULLSCREEN");
-    xcb_atom_t net_current_desktop = intern_atom(conn.get(), "_NET_CURRENT_DESKTOP");
-    xcb_atom_t net_number_of_desktops = intern_atom(conn.get(), "_NET_NUMBER_OF_DESKTOPS");
     xcb_atom_t dialog_type = intern_atom(conn.get(), "_NET_WM_WINDOW_TYPE_DIALOG");
-    if (net_wm_state == XCB_NONE || net_wm_state_fullscreen == XCB_NONE
-        || net_current_desktop == XCB_NONE || net_number_of_desktops == XCB_NONE || dialog_type == XCB_NONE)
+    if (net_wm_state == XCB_NONE || net_wm_state_fullscreen == XCB_NONE || dialog_type == XCB_NONE)
     {
         WARN("Failed to intern EWMH atoms.");
-        return;
-    }
-
-    uint32_t num_desktops = get_window_property_cardinal(conn.get(), conn.root(), net_number_of_desktops).value_or(0);
-    if (num_desktops < 2)
-    {
-        WARN("Need at least 2 workspaces for this test.");
         return;
     }
 
@@ -780,12 +826,7 @@ TEST_CASE(
     send_client_message(conn, window, net_wm_state, 1, net_wm_state_fullscreen, 0, 0, 0);
     REQUIRE(wait_for_condition([&]() { return has_state(conn, window, net_wm_state_fullscreen); }, kTimeout));
 
-    // Floating fullscreen geometry is applied when the window is shown again.
-    send_client_message(conn, conn.root(), net_current_desktop, 1);
-    REQUIRE(wait_for_property_cardinal(conn.get(), conn.root(), net_current_desktop, 1, kTimeout));
-    send_client_message(conn, conn.root(), net_current_desktop, 0);
-    REQUIRE(wait_for_property_cardinal(conn.get(), conn.root(), net_current_desktop, 0, kTimeout));
-
+    // Floating fullscreen geometry is applied immediately, not only after hide/show.
     REQUIRE(wait_for_condition(
         [&]()
         {
@@ -812,6 +853,43 @@ TEST_CASE(
         },
         kTimeout
     ));
+
+    destroy_window(conn, window);
+}
+
+TEST_CASE(
+    "Integration: fullscreen round-trip preserves below layer request",
+    "[integration][focus][fullscreen][stacking]"
+)
+{
+    auto test_env = TestEnvironment::create();
+    if (!test_env)
+        SKIP("Test environment not available");
+
+    auto& conn = test_env->conn;
+
+    xcb_atom_t net_wm_state = intern_atom(conn.get(), "_NET_WM_STATE");
+    xcb_atom_t net_wm_state_fullscreen = intern_atom(conn.get(), "_NET_WM_STATE_FULLSCREEN");
+    xcb_atom_t net_wm_state_below = intern_atom(conn.get(), "_NET_WM_STATE_BELOW");
+    if (net_wm_state == XCB_NONE || net_wm_state_fullscreen == XCB_NONE || net_wm_state_below == XCB_NONE)
+    {
+        WARN("Failed to intern EWMH atoms.");
+        return;
+    }
+
+    xcb_window_t window = create_window(conn, 10, 10, 360, 240);
+    map_window(conn, window);
+    REQUIRE(wait_for_active_window(conn, window, kTimeout));
+
+    send_client_message(conn, window, net_wm_state, 1, net_wm_state_below, 0, 0, 0);
+    REQUIRE(wait_for_condition([&]() { return has_state(conn, window, net_wm_state_below); }, kTimeout));
+
+    send_client_message(conn, window, net_wm_state, 1, net_wm_state_fullscreen, 0, 0, 0);
+    REQUIRE(wait_for_condition([&]() { return has_state(conn, window, net_wm_state_fullscreen); }, kTimeout));
+
+    send_client_message(conn, window, net_wm_state, 0, net_wm_state_fullscreen, 0, 0, 0);
+    REQUIRE(wait_for_condition([&]() { return !has_state(conn, window, net_wm_state_fullscreen); }, kTimeout));
+    REQUIRE(wait_for_condition([&]() { return has_state(conn, window, net_wm_state_below); }, kTimeout));
 
     destroy_window(conn, window);
 }

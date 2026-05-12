@@ -309,6 +309,8 @@ RunResult WindowManager::run()
                 timeout_ms = static_cast<int>(delta.count());
             }
         }
+        if (!deferred_events_.empty())
+            timeout_ms = 0;
 
         // Build poll array: X fd, signal pipe, IPC listener, pending client, subscribers
         poll_fds.clear();
@@ -357,11 +359,25 @@ RunResult WindowManager::run()
             }
             cleanup_dead_subscribers();
 
+            while (!deferred_events_.empty())
+            {
+                auto event = deferred_events_.front();
+                deferred_events_.pop_front();
+                handle_event(event);
+            }
+
             while (auto event = xcb_poll_for_event(conn_.get()))
             {
                 std::unique_ptr<xcb_generic_event_t, decltype(&free)> eventPtr(event, free);
                 handle_event(*eventPtr);
             }
+        }
+
+        while (!deferred_events_.empty())
+        {
+            auto event = deferred_events_.front();
+            deferred_events_.pop_front();
+            handle_event(event);
         }
 
         // Check IPC client deadline
@@ -1691,7 +1707,10 @@ void WindowManager::parse_initial_ewmh_state(Client& client)
                 client.app_prefs.above = true;
             }
             else if (state == ewmh->_NET_WM_STATE_BELOW)
+            {
                 client.layer_hint = LayerHint::Below;
+                client.app_prefs.below = true;
+            }
             else if (state == ewmh->_NET_WM_STATE_STICKY)
                 client.sticky = true;
             else if (state == ewmh->_NET_WM_STATE_MODAL)
@@ -1711,6 +1730,8 @@ void WindowManager::parse_initial_ewmh_state(Client& client)
             else if (state == ewmh->_NET_WM_STATE_DEMANDS_ATTENTION)
                 client.urgency.add(UrgencySource::App);
         }
+        if (client.app_prefs.above && client.app_prefs.below)
+            client.app_prefs.below = false;
         xcb_ewmh_get_atoms_reply_wipe(&initial_state);
     }
 }
@@ -1893,7 +1914,7 @@ void WindowManager::apply_classification_state(
         .ewmh_sticky = state_flags.sticky,
         .ewmh_modal = state_flags.modal,
         .app_above = !client->fullscreen && client->app_prefs.above,
-        .ewmh_below = state_flags.below,
+        .app_below = !client->fullscreen && client->app_prefs.below,
         .rule_skip_taskbar = rule_result.skip_taskbar,
         .rule_skip_pager = rule_result.skip_pager,
         .rule_sticky = rule_result.sticky,
@@ -2237,12 +2258,18 @@ void WindowManager::clear_fullscreen_state(Client& client)
         floating_geometry(client) = *client.fullscreen_restore;
 
     client.fullscreen_restore = std::nullopt;
+    LayerHint restore_layer_hint = client.fullscreen_restore_layer_hint.value_or(LayerHint::Normal);
+    client.fullscreen_restore_layer_hint = std::nullopt;
     uint32_t border_width = border_width_for_client(client);
     xcb_configure_window(conn_.get(), client.id, XCB_CONFIG_WINDOW_BORDER_WIDTH, &border_width);
 
-    // Fullscreen entry forced layer_hint to Normal; restore the user's Above preference.
-    if (client.app_prefs.above && client.layer != WindowLayer::Overlay && client.layer_hint != LayerHint::Above)
-        set_window_layer_hint(client, LayerHint::Above);
+    if (client.app_prefs.above)
+        restore_layer_hint = LayerHint::Above;
+    else if (client.app_prefs.below)
+        restore_layer_hint = LayerHint::Below;
+
+    if (client.layer != WindowLayer::Overlay && client.layer_hint != restore_layer_hint)
+        set_window_layer_hint(client, restore_layer_hint);
 
     if (client.kind == Client::Kind::Floating && should_be_visible(client)
         && !client.hidden && !is_suppressed_by_fullscreen(client))
@@ -2275,6 +2302,8 @@ void WindowManager::set_fullscreen(Client& client, bool enabled)
         {
             client.fullscreen_restore = floating_geometry(client);
         }
+        if (!client.fullscreen)
+            client.fullscreen_restore_layer_hint = client.layer_hint;
 
         client.fullscreen = true;
 
@@ -2298,6 +2327,8 @@ void WindowManager::set_fullscreen(Client& client, bool enabled)
     }
 
     finalize_visibility_on_monitor(client.monitor, enabled ? client.id : XCB_NONE);
+    if (client.kind == Client::Kind::Floating)
+        apply_visible_floating_geometry(client);
 
     auto const* active = get_client(active_window_);
     bool const active_blocks_focus = active_window_ == XCB_NONE || (active && is_suppressed_by_fullscreen(*active));
@@ -3829,10 +3860,7 @@ void WindowManager::add_tiled_to_workspace(Client& client, size_t monitor_idx, s
         return;
     }
     monitors_[monitor_idx].workspaces[workspace_idx].windows.push_back(client.id);
-    client.monitor = monitor_idx;
-    client.workspace = workspace_idx;
-    uint32_t desktop = get_ewmh_desktop_index(monitor_idx, workspace_idx);
-    ewmh_.set_window_desktop(client.id, desktop);
+    assign_window_workspace(client, monitor_idx, workspace_idx);
 }
 
 void WindowManager::remove_tiled_from_workspace(Client const& client, size_t monitor_idx, size_t workspace_idx)
@@ -3920,6 +3948,8 @@ void WindowManager::flush_and_drain_crossing()
     // windows on/off-screen).  Without this, the next event-loop iteration
     // would see EnterNotify/MotionNotify for whichever window now sits under
     // the cursor, overriding the focus we just set via focus_or_fallback().
+    // Other events are deferred to the top-level event loop so transition
+    // helpers do not re-enter arbitrary handlers while holding Client refs.
     while (auto* event = xcb_poll_for_event(conn_.get()))
     {
         uint8_t type = event->response_type & ~0x80;
@@ -3928,8 +3958,8 @@ void WindowManager::flush_and_drain_crossing()
             free(event);
             continue;
         }
-        std::unique_ptr<xcb_generic_event_t, decltype(&free)> eventPtr(event, free);
-        handle_event(*event);
+        deferred_events_.push_back(*event);
+        free(event);
     }
 }
 

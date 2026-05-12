@@ -418,7 +418,7 @@ struct DesiredStateInputs
     bool ewmh_sticky = false;
     bool ewmh_modal = false;
     bool app_above = false;
-    bool ewmh_below = false;
+    bool app_below = false;
 
     std::optional<bool> rule_skip_taskbar;
     std::optional<bool> rule_skip_pager;
@@ -460,7 +460,7 @@ inline DesiredWindowState compute_desired_state(DesiredStateInputs const& in)
     {
         if (in.classification_above || in.app_above)
             hint = LayerHint::Above;
-        else if (in.ewmh_below)
+        else if (in.app_below)
             hint = LayerHint::Below;
     }
     if (in.rule_layer_hint.has_value())

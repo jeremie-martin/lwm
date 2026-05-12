@@ -351,6 +351,38 @@ TEST_CASE(
 }
 
 TEST_CASE(
+    "Integration: invalid desktop request preserves sticky state",
+    "[integration][client_message][workspace][sticky][edge]"
+)
+{
+    auto test_env = TestEnvironment::create();
+    if (!test_env)
+        SKIP("Test environment not available");
+
+    auto& conn = test_env->conn;
+
+    xcb_atom_t net_wm_desktop = intern_atom(conn.get(), "_NET_WM_DESKTOP");
+    xcb_atom_t net_wm_state_sticky = intern_atom(conn.get(), "_NET_WM_STATE_STICKY");
+    REQUIRE(net_wm_desktop != XCB_NONE);
+    REQUIRE(net_wm_state_sticky != XCB_NONE);
+
+    xcb_window_t window = create_window(conn, 10, 10, 200, 150);
+    map_window(conn, window);
+    REQUIRE(wait_for_active_window(conn, window, kTimeout));
+
+    send_net_wm_desktop(conn, window, 0xFFFFFFFF);
+    REQUIRE(wait_for_property_cardinal(conn.get(), window, net_wm_desktop, 0xFFFFFFFF, kTimeout));
+    REQUIRE(wait_for_condition([&]() { return has_state(conn, window, net_wm_state_sticky); }, kTimeout));
+
+    send_net_wm_desktop(conn, window, 99);
+    std::this_thread::sleep_for(std::chrono::milliseconds(100));
+    REQUIRE(get_window_property_cardinal(conn.get(), window, net_wm_desktop).value_or(0) == 0xFFFFFFFF);
+    REQUIRE(has_state(conn, window, net_wm_state_sticky));
+
+    destroy_window(conn, window);
+}
+
+TEST_CASE(
     "Integration: _NET_ACTIVE_WINDOW honors _NET_WM_USER_TIME_WINDOW updates",
     "[integration][client_message][focus][user_time]"
 )
