@@ -124,7 +124,7 @@ DISPLAY=:100 xterm
 - [`ARCHITECTURE.md`](ARCHITECTURE.md): runtime model, invariants, state ownership, and transition funnels
 - [`COMPLIANCE.md`](COMPLIANCE.md): ICCCM/EWMH surface, protocol behavior, and known limits
 - [`CONTRIBUTING.md`](CONTRIBUTING.md): build/test workflow, code map, and change checklist
-- [`FEATURE_IDEAS.md`](FEATURE_IDEAS.md): backlog only
+- [`ROADMAP.md`](ROADMAP.md): open work and open questions
 
 ## License
 

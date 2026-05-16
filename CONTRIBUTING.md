@@ -37,6 +37,10 @@ ctest --test-dir build --output-on-failure
 
 Start with [`ARCHITECTURE.md`](ARCHITECTURE.md) before editing any of the state-transition code.
 
+## Coding Style
+
+4-space indentation, braces on their own lines, concise comments only where logic is non-obvious. `PascalCase` for types, `snake_case` for functions and files, uppercase for compile-time constants and macros. No formatter or linter is enforced in-tree, so consistency with nearby code is the rule.
+
 ## Design Principles
 
 Two rules to apply when changing the core:
@@ -59,7 +63,7 @@ When you find yourself writing `auto* c = get_client(w); if (!c) return;` in cod
 
 ## Test Map
 
-Use the smallest relevant suite first, then run the broader suite before finishing.
+Tests use Catch2. File names follow `tests/test_<area>.cpp`. Integration cases use `TEST_CASE("Integration: ...", "[integration]...")` so they group cleanly in filtered runs. Use the smallest relevant suite first, then run the broader suite before finishing.
 
 - focus, fullscreen, stacking, activation: `tests/test_integration_focus.cpp`
 - focus-follows-mouse and input models: `tests/test_integration_focus_input.cpp`
@@ -89,7 +93,7 @@ Doc ownership:
 - [`README.md`](README.md): setup, install, run, and a short mental model
 - [`ARCHITECTURE.md`](ARCHITECTURE.md): runtime model, invariants, and transition funnels
 - [`COMPLIANCE.md`](COMPLIANCE.md): ICCCM/EWMH behavior and limits
-- [`FEATURE_IDEAS.md`](FEATURE_IDEAS.md): backlog only
+- [`ROADMAP.md`](ROADMAP.md): open work and open questions
 
 ## Common Change Recipes
 
@@ -114,3 +118,7 @@ Doc ownership:
 - `LWM_ASSERT_INVARIANTS(...)` in debug builds
 
 Use the existing funnels and assertions before introducing new ad hoc state transitions.
+
+## Commits & PRs
+
+Short imperative subjects (`Stabilize fullscreen focus and restacking`); `docs:` prefix for doc-only changes. Keep commits focused by subsystem. A PR should describe the problem, the behavior impact, the exact test commands run, and Xephyr reproduction steps for window-management changes.
