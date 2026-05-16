@@ -5,10 +5,7 @@ Audited against `git log` and `src/` on 2026-05-16.
 
 ## Layout
 
-- More layout strategies in `src/lwm/layout/strategy.cpp` — `build_layout_tree` currently returns master-stack regardless of the selected strategy. Candidates: monocle/tabbed, dwindle/spiral, columns, centered-master.
-- Per-workspace layout switching — `lwmctl layout set` already parses; needs the strategies above wired.
-- Keyboard window swap/nudge (e.g. `Super+Shift+J/K`). The reorder drag already moves tiled windows; keyboard equivalent is missing.
-- Master ratio grow/shrink at runtime.
+- More layout strategies in `src/lwm/layout/strategy.cpp` — master-stack and monocle exist today. Candidates: tabbed, dwindle/spiral, columns, centered-master.
 - Per-monitor layout parameters (ratio, gaps).
 
 ## Multi-monitor

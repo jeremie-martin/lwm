@@ -414,7 +414,8 @@ using SplitRatioMap = std::map<SplitAddress, double>;
 /// Layout strategy for a workspace's tiling algorithm.
 enum class LayoutStrategy
 {
-    MasterStack
+    MasterStack,
+    Monocle ///< All tiled windows occupy the full content rect; stacking elects the visible one.
 };
 
 struct Workspace
@@ -499,6 +500,8 @@ struct FocusNextAction {};
 struct FocusPrevAction {};
 struct RatioGrowAction {};
 struct RatioShrinkAction {};
+struct SwapNextAction {};
+struct SwapPrevAction {};
 struct ScratchpadStashAction {};
 struct ScratchpadCycleAction {};
 
@@ -543,6 +546,8 @@ using Action = std::variant<
     FocusPrevAction,
     RatioGrowAction,
     RatioShrinkAction,
+    SwapNextAction,
+    SwapPrevAction,
     ScratchpadStashAction,
     ScratchpadCycleAction,
     SpawnAction,

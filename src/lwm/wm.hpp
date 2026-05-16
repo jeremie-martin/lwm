@@ -409,6 +409,7 @@ private:
 
     void launch_program(CommandConfig const& command);
     void adjust_master_ratio(double delta);
+    void swap_focused_tiled(int offset);
 
     /// Lookup: nullable handle for X event boundaries where the window may not be managed.
     Client* get_client(xcb_window_t window);

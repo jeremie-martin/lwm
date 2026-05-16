@@ -76,6 +76,8 @@ std::string key_action_event_name(Action const& action)
         [](FocusPrevAction const&) { return std::string("focus_prev"); },
         [](RatioGrowAction const&) { return std::string("ratio_grow"); },
         [](RatioShrinkAction const&) { return std::string("ratio_shrink"); },
+        [](SwapNextAction const&) { return std::string("swap_next"); },
+        [](SwapPrevAction const&) { return std::string("swap_prev"); },
         [](ScratchpadStashAction const&) { return std::string("scratchpad_stash"); },
         [](ScratchpadCycleAction const&) { return std::string("scratchpad_cycle"); },
         [](SpawnAction const&) { return std::string("spawn"); },
@@ -889,6 +891,18 @@ void WindowManager::handle_key_press(xcb_key_press_event_t const& e)
         {
             adjust_master_ratio(-0.05);
             emit_event(Event_LayoutChange, "{\"event\":\"layout_change\",\"action\":\"ratio_shrink\"}");
+            return true;
+        },
+        [&](SwapNextAction const&)
+        {
+            swap_focused_tiled(1);
+            emit_event(Event_LayoutChange, "{\"event\":\"layout_change\",\"action\":\"swap_next\"}");
+            return true;
+        },
+        [&](SwapPrevAction const&)
+        {
+            swap_focused_tiled(-1);
+            emit_event(Event_LayoutChange, "{\"event\":\"layout_change\",\"action\":\"swap_prev\"}");
             return true;
         },
         [&](ScratchpadStashAction const&)

@@ -1,6 +1,7 @@
 #include "x11_test_harness.hpp"
 #include <catch2/catch_test_macros.hpp>
 #include <chrono>
+#include <filesystem>
 #include <optional>
 
 using namespace lwm::test;
@@ -8,6 +9,48 @@ using namespace lwm::test;
 namespace {
 
 constexpr auto kTimeout = std::chrono::seconds(2);
+
+struct WindowGeometry
+{
+    int16_t x;
+    int16_t y;
+    uint16_t width;
+    uint16_t height;
+    bool operator==(WindowGeometry const&) const = default;
+};
+
+std::optional<WindowGeometry> get_window_geometry(X11Connection& conn, xcb_window_t window)
+{
+    auto cookie = xcb_get_geometry(conn.get(), window);
+    auto* reply = xcb_get_geometry_reply(conn.get(), cookie, nullptr);
+    if (!reply)
+        return std::nullopt;
+    WindowGeometry g { reply->x, reply->y, reply->width, reply->height };
+    free(reply);
+    return g;
+}
+
+std::optional<std::string> wait_for_ipc_socket_path(X11Connection& conn)
+{
+    xcb_atom_t socket_atom = intern_atom(conn.get(), "_LWM_IPC_SOCKET");
+    if (socket_atom == XCB_NONE)
+        return std::nullopt;
+    bool ready = wait_for_condition(
+        [&conn, socket_atom]()
+        {
+            auto value = get_window_property_string(conn.get(), conn.root(), socket_atom);
+            return value && !value->empty();
+        },
+        kTimeout);
+    if (!ready)
+        return std::nullopt;
+    return get_window_property_string(conn.get(), conn.root(), socket_atom);
+}
+
+bool lwmctl_available()
+{
+    return std::filesystem::exists(lwmctl_executable_path());
+}
 
 struct TestEnvironment
 {
@@ -286,6 +329,69 @@ TEST_CASE(
     // Verify w2 was actually moved
     CHECK(wait_for_property_cardinal(conn.get(), w2, net_wm_desktop, 1, kTimeout));
 
+    destroy_window(conn, w2);
+    destroy_window(conn, w1);
+}
+
+// =============================================================================
+// Monocle layout: every tiled window should occupy the same content rect after
+// `lwmctl layout set monocle`. Stacking decides which is visible on top.
+// =============================================================================
+TEST_CASE("Integration: monocle layout assigns identical geometries", "[integration][layout][monocle]")
+{
+    auto test_env = TestEnvironment::create();
+    if (!test_env)
+        SKIP("Test environment not available");
+    if (!lwmctl_available())
+        SKIP("lwmctl binary not available");
+
+    auto& conn = test_env->conn;
+    auto socket_path = wait_for_ipc_socket_path(conn);
+    REQUIRE(socket_path.has_value());
+
+    xcb_window_t w1 = create_window(conn, 10, 10, 200, 150);
+    map_window(conn, w1);
+    REQUIRE(wait_for_active_window(conn, w1, kTimeout));
+
+    xcb_window_t w2 = create_window(conn, 40, 40, 200, 150);
+    map_window(conn, w2);
+    REQUIRE(wait_for_active_window(conn, w2, kTimeout));
+
+    xcb_window_t w3 = create_window(conn, 70, 70, 200, 150);
+    map_window(conn, w3);
+    REQUIRE(wait_for_active_window(conn, w3, kTimeout));
+
+    // Under master-stack, at least two of the three windows must have differing geometries.
+    auto g1 = get_window_geometry(conn, w1);
+    auto g2 = get_window_geometry(conn, w2);
+    auto g3 = get_window_geometry(conn, w3);
+    REQUIRE(g1.has_value());
+    REQUIRE(g2.has_value());
+    REQUIRE(g3.has_value());
+    bool all_equal_master_stack = (*g1 == *g2) && (*g2 == *g3);
+    REQUIRE_FALSE(all_equal_master_stack);
+
+    auto result = run_lwmctl(test_env->wm, { "layout", "set", "monocle" }, *socket_path);
+    REQUIRE(result.has_value());
+    REQUIRE(result->exit_code == 0);
+
+    // After the switch all three managed windows share the content rect.
+    bool ok = wait_for_condition(
+        [&]()
+        {
+            auto a = get_window_geometry(conn, w1);
+            auto b = get_window_geometry(conn, w2);
+            auto c = get_window_geometry(conn, w3);
+            return a && b && c && *a == *b && *b == *c;
+        },
+        kTimeout);
+    REQUIRE(ok);
+
+    auto restore = run_lwmctl(test_env->wm, { "layout", "set", "master-stack" }, *socket_path);
+    REQUIRE(restore.has_value());
+    REQUIRE(restore->exit_code == 0);
+
+    destroy_window(conn, w3);
     destroy_window(conn, w2);
     destroy_window(conn, w1);
 }

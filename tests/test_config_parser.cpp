@@ -121,6 +121,32 @@ apply = { floating = true, scratchpad = "term", center = true }
     REQUIRE(cfg.rules[0].scratchpad == "term");
 }
 
+TEST_CASE("Config parser recognizes swap_next and swap_prev actions", "[config][keybind]")
+{
+    auto loaded = load_from_string(R"(
+[[binds]]
+key = "super+shift+j"
+swap_next = true
+
+[[binds]]
+key = "super+shift+k"
+swap_prev = true
+)");
+
+    REQUIRE(loaded.has_value());
+    bool saw_next = false;
+    bool saw_prev = false;
+    for (auto const& kb : loaded->keybinds)
+    {
+        if (action_as<SwapNextAction>(kb.action))
+            saw_next = true;
+        else if (action_as<SwapPrevAction>(kb.action))
+            saw_prev = true;
+    }
+    REQUIRE(saw_next);
+    REQUIRE(saw_prev);
+}
+
 TEST_CASE("Config parser rejects unknown keys", "[config]")
 {
     auto loaded = load_from_string(R"(

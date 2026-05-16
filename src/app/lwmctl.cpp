@@ -39,7 +39,7 @@ void print_usage()
               << "  reload-config            reload configuration\n"
               << "  restart                  restart WM\n"
               << "  exec PATH               restart WM with a different binary\n"
-              << "  layout set NAME          set layout strategy (master-stack)\n"
+              << "  layout set NAME          set layout strategy (master-stack, monocle)\n"
               << "  ratio set VALUE          set master split ratio (0.1-0.9)\n"
               << "  ratio reset              reset all split ratios to defaults\n"
               << "  ratio adjust DELTA       adjust master ratio by delta (e.g. +0.05)\n"

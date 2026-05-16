@@ -695,6 +695,13 @@ std::optional<std::string> WindowManager::run_ipc_command(std::string const& com
                 emit_event(Event_LayoutChange, "{\"event\":\"layout_change\",\"action\":\"layout_set\",\"value\":\"master-stack\"}");
                 return ok_reply("layout set to master-stack");
             }
+            if (name == "monocle")
+            {
+                focused_monitor().current().layout_strategy = LayoutStrategy::Monocle;
+                rearrange_monitor(focused_monitor(), true);
+                emit_event(Event_LayoutChange, "{\"event\":\"layout_change\",\"action\":\"layout_set\",\"value\":\"monocle\"}");
+                return ok_reply("layout set to monocle");
+            }
             return error_reply("unknown layout: " + name);
         }
     }
@@ -1560,6 +1567,8 @@ void WindowManager::init_monitor_workspaces(Monitor& monitor)
     // Apply configured layout strategy
     if (config_.layout.strategy == "master-stack")
         ws_template.layout_strategy = LayoutStrategy::MasterStack;
+    else if (config_.layout.strategy == "monocle")
+        ws_template.layout_strategy = LayoutStrategy::Monocle;
 
     monitor.workspaces.assign(config_.workspaces.count, ws_template);
     monitor.current_workspace = 0;
@@ -3020,6 +3029,29 @@ void WindowManager::adjust_master_ratio(double delta)
     double clamped = std::clamp(current + delta, min_ratio, 1.0 - min_ratio);
     ws.split_ratios[root_addr] = clamped;
 
+    rearrange_monitor(focused_monitor(), true);
+}
+
+void WindowManager::swap_focused_tiled(int offset)
+{
+    auto& ws = focused_monitor().current();
+    auto it = ws.find_window(ws.focused_window);
+    if (it == ws.windows.end())
+        return;
+
+    size_t n = ws.windows.size();
+    if (n < 2)
+        return;
+
+    size_t idx = static_cast<size_t>(std::distance(ws.windows.begin(), it));
+    int wrapped = static_cast<int>(idx) + offset;
+    int signed_n = static_cast<int>(n);
+    int other_signed = ((wrapped % signed_n) + signed_n) % signed_n;
+    size_t other = static_cast<size_t>(other_signed);
+    if (other == idx)
+        return;
+
+    std::swap(ws.windows[idx], ws.windows[other]);
     rearrange_monitor(focused_monitor(), true);
 }
 

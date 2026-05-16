@@ -65,9 +65,18 @@ std::vector<Geometry> Layout::arrange(
     if (windows.empty())
         return {};
 
-    auto tree = prepare_tree(strategy, windows.size(), ratios);
     auto cr = content_rect(geometry);
-    auto slots = compute_geometries(tree, cr, appearance_.padding, appearance_.border_width);
+    std::vector<Geometry> slots;
+    if (strategy == LayoutStrategy::Monocle)
+    {
+        // Every tiled window occupies the full content rect. Stacking decides which is on top.
+        slots.assign(windows.size(), cr);
+    }
+    else
+    {
+        auto tree = prepare_tree(strategy, windows.size(), ratios);
+        slots = compute_geometries(tree, cr, appearance_.padding, appearance_.border_width);
+    }
 
     // Apply to X windows (skip unchanged geometries when old_geometries is provided)
     for (size_t i = 0; i < windows.size() && i < slots.size(); ++i)
@@ -101,6 +110,8 @@ Layout::drop_target_index(
 {
     if (count == 0)
         return 0;
+    if (strategy == LayoutStrategy::Monocle)
+        return 0; // No spatial split — drop always lands at the front.
 
     auto tree = prepare_tree(strategy, count, ratios);
     auto cr = content_rect(geometry);
@@ -118,6 +129,8 @@ std::optional<SplitHitResult> Layout::hit_test(
 {
     if (window_count < 2)
         return std::nullopt;
+    if (strategy == LayoutStrategy::Monocle)
+        return std::nullopt; // No splits to grab in monocle.
 
     auto tree = prepare_tree(strategy, window_count, ratios);
     auto cr = content_rect(working_area);

@@ -31,6 +31,10 @@ TreeNode build_layout_tree(LayoutStrategy strategy, size_t window_count, double 
     {
     case LayoutStrategy::MasterStack:
         return build_master_stack(window_count, default_ratio);
+    case LayoutStrategy::Monocle:
+        // Monocle is special-cased in Layout::arrange; the tree is unused but
+        // a valid placeholder keeps prepare_tree/overlay_ratios well-defined.
+        return make_leaf(0);
     }
     return build_master_stack(window_count, default_ratio);
 }

@@ -502,7 +502,7 @@ bool action_is_workspace_group(Action const& action, std::string_view action_nam
     return false;
 }
 
-constexpr std::array<std::string_view, 18> BIND_ACTION_KEYS = {
+constexpr std::array<std::string_view, 20> BIND_ACTION_KEYS = {
     "spawn",
     "kill",
     "reload_config",
@@ -518,6 +518,8 @@ constexpr std::array<std::string_view, 18> BIND_ACTION_KEYS = {
     "focus_prev",
     "ratio_grow",
     "ratio_shrink",
+    "swap_next",
+    "swap_prev",
     "toggle_scratchpad",
     "scratchpad_stash",
     "scratchpad_cycle",
@@ -609,6 +611,10 @@ ParseVoid parse_enabled_binding_action(
         keybind.action = RatioGrowAction {};
     else if (action_name == "ratio_shrink")
         keybind.action = RatioShrinkAction {};
+    else if (action_name == "swap_next")
+        keybind.action = SwapNextAction {};
+    else if (action_name == "swap_prev")
+        keybind.action = SwapPrevAction {};
     else if (action_name == "scratchpad_stash")
         keybind.action = ScratchpadStashAction {};
     else if (action_name == "scratchpad_cycle")
@@ -669,6 +675,10 @@ ParseVoid parse_bind_action(toml::table const& table, std::string const& context
         return parse_enabled_binding_action(*node, context, "ratio_grow", keybind);
     if (auto const* node = table.get("ratio_shrink"))
         return parse_enabled_binding_action(*node, context, "ratio_shrink", keybind);
+    if (auto const* node = table.get("swap_next"))
+        return parse_enabled_binding_action(*node, context, "swap_next", keybind);
+    if (auto const* node = table.get("swap_prev"))
+        return parse_enabled_binding_action(*node, context, "swap_prev", keybind);
     if (auto const* node = table.get("toggle_scratchpad"))
         return parse_scratchpad_binding_action(*node, context, config, keybind);
     if (auto const* node = table.get("scratchpad_stash"))

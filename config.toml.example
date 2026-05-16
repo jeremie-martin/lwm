@@ -8,7 +8,9 @@ border_color = 0xFF0000
 urgent_border_color = 0xFFA500
 
 [layout]
-# Layout strategy: "master-stack" (more strategies may be added later)
+# Layout strategy: "master-stack" (default tiling) or "monocle" (every tiled
+# window fills the workspace; stacking determines what is on top). Live switch
+# at runtime via `lwmctl layout set <name>`.
 strategy = "master-stack"
 default_ratio = 0.5
 min_ratio = 0.1
@@ -109,6 +111,14 @@ ratio_shrink = true
 [[binds]]
 key = "super+l"
 ratio_grow = true
+
+[[binds]]
+key = "super+shift+j"
+swap_next = true
+
+[[binds]]
+key = "super+shift+k"
+swap_prev = true
 
 [[binds]]
 key = "Print"

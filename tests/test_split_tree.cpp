@@ -17,6 +17,19 @@ Geometry make_area(int16_t x, int16_t y, uint16_t w, uint16_t h)
 
 // ── Strategy construction ──────────────────────────────────────────────
 
+TEST_CASE("Monocle strategy returns a leaf placeholder", "[split_tree][strategy]")
+{
+    // Monocle is special-cased by Layout::arrange (every window gets the full
+    // content rect). The tree returned by build_layout_tree is unused in that
+    // path but must be a valid TreeNode so callers can still overlay ratios
+    // and call hit-testing helpers without crashing.
+    for (size_t n : { size_t(1), size_t(2), size_t(5) })
+    {
+        auto tree = build_layout_tree(LayoutStrategy::Monocle, n);
+        REQUIRE(std::holds_alternative<LeafNode>(tree));
+    }
+}
+
 TEST_CASE("Master-stack strategy builds single leaf for 1 window", "[split_tree][strategy]")
 {
     auto tree = build_master_stack(1);
