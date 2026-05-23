@@ -1077,6 +1077,10 @@ void WindowManager::handle_restack_message(xcb_client_message_event_t const& e)
     }
 
     xcb_configure_window(conn_.get(), e.window, mask, values);
+    // The raw restack of an unmanaged window perturbs X's stacking order
+    // outside our funnel; schedule a recompute so apply_stacking re-asserts
+    // overlay topness and refreshes _NET_CLIENT_LIST_STACKING.
+    stacking_dirty_ = true;
     conn_.flush();
 }
 
@@ -1115,6 +1119,14 @@ void WindowManager::handle_wm_state_change(xcb_client_message_event_t const& e)
             if (enable)
                 client->app_prefs.below = false;
             reevaluate_managed_window(e.window);
+            // Rule-set layer_hint can override app_prefs (see
+            // compute_desired_state). Echo the *effective* state so the client
+            // sees an authoritative reply even when its request was overridden.
+            if (auto* c = get_client(e.window))
+            {
+                ewmh_.set_window_state(c->id, ewmh->_NET_WM_STATE_ABOVE, c->layer_hint == LayerHint::Above);
+                ewmh_.set_window_state(c->id, ewmh->_NET_WM_STATE_BELOW, c->layer_hint == LayerHint::Below);
+            }
         }
         else if (state == ewmh->_NET_WM_STATE_BELOW)
         {
@@ -1123,6 +1135,11 @@ void WindowManager::handle_wm_state_change(xcb_client_message_event_t const& e)
             if (enable)
                 client->app_prefs.above = false;
             reevaluate_managed_window(e.window);
+            if (auto* c = get_client(e.window))
+            {
+                ewmh_.set_window_state(c->id, ewmh->_NET_WM_STATE_ABOVE, c->layer_hint == LayerHint::Above);
+                ewmh_.set_window_state(c->id, ewmh->_NET_WM_STATE_BELOW, c->layer_hint == LayerHint::Below);
+            }
         }
         else if (state == ewmh->_NET_WM_STATE_SKIP_TASKBAR)
         {
@@ -1239,9 +1256,22 @@ void WindowManager::finalize_after_desktop_move(
     xcb_window_t window, bool was_active, size_t target_monitor, size_t target_workspace)
 {
     (void)window;
-    (void)target_workspace;
     if (was_active)
-        repair_focus_after_visibility_change(target_monitor, false);
+    {
+        // Keep focus on the source monitor when the destination workspace is
+        // not currently visible — repair_focus_after_visibility_change would
+        // otherwise reassign focused_monitor_ to target_monitor and jump the
+        // user's focus to a screen they are not interacting with.
+        bool target_visible = target_monitor < monitors_.size()
+            && !showing_desktop_
+            && target_workspace == monitors_[target_monitor].current_workspace;
+        if (target_visible)
+            repair_focus_after_visibility_change(target_monitor, false);
+        else if (focused_monitor_ < monitors_.size())
+            focus_or_fallback(monitors_[focused_monitor_]);
+        else
+            clear_focus();
+    }
 
     flush_and_drain_crossing();
 }
@@ -1335,9 +1365,8 @@ void WindowManager::handle_moveresize_window(xcb_client_message_event_t const& e
     if (has_height)
         geom.height = static_cast<uint16_t>(std::max<int32_t>(1, e.data.data32[4]));
 
+    update_floating_monitor_for_geometry(*client);
     bool visible = !client->hidden && should_be_visible(*client);
-    if (visible)
-        update_floating_monitor_for_geometry(*client);
     if (visible && active_window_ == e.window)
     {
         focused_monitor_ = client->monitor;
@@ -1466,9 +1495,8 @@ void WindowManager::handle_configure_request(xcb_configure_request_event_t const
         geom.width = static_cast<uint16_t>(std::max<uint32_t>(1, hinted_width));
         geom.height = static_cast<uint16_t>(std::max<uint32_t>(1, hinted_height));
 
+        update_floating_monitor_for_geometry(*client);
         bool visible = !client->hidden && should_be_visible(*client);
-        if (visible)
-            update_floating_monitor_for_geometry(*client);
         if (visible && active_window_ == e.window)
         {
             focused_monitor_ = client->monitor;

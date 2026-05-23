@@ -202,8 +202,11 @@ void WindowManager::focus_any_window(xcb_window_t window, bool record_user_time,
         ewmh_.set_window_state(window, net_wm_state_focused_, true);
     }
 
-    if (record_user_time)
-        client->user_time = focus_timestamp ? focus_timestamp : last_event_time_;
+    // Only persist a user-driven timestamp into user_time, and never let it
+    // regress — focus-stealing prevention (see handle_active_window_request)
+    // relies on user_time being monotonic and non-zero.
+    if (record_user_time && focus_timestamp != 0 && focus_timestamp >= client->user_time)
+        client->user_time = focus_timestamp;
 
     conn_.flush();
 

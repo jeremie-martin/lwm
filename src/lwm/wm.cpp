@@ -2252,7 +2252,12 @@ void WindowManager::unmanage_window(xcb_window_t window)
         return;
     }
 
+    // Orphan path: client had stale monitor/workspace indices (e.g. after a
+    // RandR shrink between manage and destroy). Still refresh EWMH so pagers
+    // drop the dead window, and clear focus if the orphan was active.
     clients_.erase(window);
+    update_ewmh_client_list();
+    finalize_removed_window_after_unmanage(mon_idx, was_active, /*focus_fallback_if_active=*/false);
 }
 
 void WindowManager::clear_fullscreen_state(Client& client)
@@ -2302,6 +2307,11 @@ void WindowManager::set_fullscreen(Client& client, bool enabled)
     if (client.kind != Client::Kind::Tiled && client.kind != Client::Kind::Floating)
     {
         LOG_WARN("set_fullscreen({:#x}): rejected invalid client state", client.id);
+        // Echo the effective state so the requesting client receives a
+        // PropertyNotify reflecting reality, rather than silently dropping
+        // the _NET_WM_STATE request.
+        ewmh_.set_window_state(client.id, ewmh_.get()->_NET_WM_STATE_FULLSCREEN, client.fullscreen);
+        conn_.flush();
         return;
     }
 
@@ -3034,6 +3044,8 @@ void WindowManager::adjust_master_ratio(double delta)
 
 void WindowManager::swap_focused_tiled(int offset)
 {
+    if (focused_monitor_ >= monitors_.size())
+        return;
     auto& ws = focused_monitor().current();
     auto it = ws.find_window(ws.focused_window);
     if (it == ws.windows.end())
@@ -3050,6 +3062,15 @@ void WindowManager::swap_focused_tiled(int offset)
     size_t other = static_cast<size_t>(other_signed);
     if (other == idx)
         return;
+
+    // In Monocle every slot has the same content rect, so swapping positions
+    // produces no visible change; cycle focus instead so the swap target
+    // surfaces as the visible window.
+    if (ws.layout_strategy == LayoutStrategy::Monocle)
+    {
+        cycle_focus(offset > 0);
+        return;
+    }
 
     std::swap(ws.windows[idx], ws.windows[other]);
     rearrange_monitor(focused_monitor(), true);
@@ -3340,9 +3361,9 @@ void WindowManager::apply_stacking()
             break;
     }
 
-    if (order == cached_stacking_order_)
-        return;
-
+    // Always restack: external perturbations (override-redirect popups, other
+    // clients calling XRaiseWindow) can desynchronize X from our cached order,
+    // and the sibling-chain pass below is what guarantees overlay topness.
     auto stack_above_sibling = [this](xcb_window_t window, xcb_window_t sibling) {
         uint32_t values[2] = { sibling, XCB_STACK_MODE_ABOVE };
         uint16_t mask = XCB_CONFIG_WINDOW_SIBLING | XCB_CONFIG_WINDOW_STACK_MODE;
