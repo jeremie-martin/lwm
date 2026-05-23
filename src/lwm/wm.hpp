@@ -171,6 +171,7 @@ private:
     xcb_atom_t lwm_restart_tiled_order_ = XCB_NONE;
     xcb_atom_t lwm_restart_floating_order_ = XCB_NONE;
     xcb_atom_t lwm_restart_ratios_ = XCB_NONE;
+    xcb_atom_t lwm_window_class_ = XCB_NONE;
     bool restarting_ = false;
     bool is_restart_ = false;
     std::string restart_binary_;
@@ -336,6 +337,10 @@ private:
     void regrab_all_keys();
     void apply_appearance_reload();
     void update_allowed_actions(Client const& client);
+    /// Publish `_LWM_WINDOW_CLASS` as a UTF8_STRING with value "tiled" / "floating"
+    /// / "dock" / "desktop". Lets external compositors (picom) key visual rules
+    /// off LWM's window classification rather than just EWMH window types.
+    void publish_lwm_window_class(Client const& client);
     void reapply_rules_to_existing_windows();
     void apply_rule_result_to_window(xcb_window_t window, WindowRuleResult const& rule_result);
     void apply_rule_target_location(xcb_window_t window, WindowRuleResult const& rule_result);

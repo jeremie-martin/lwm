@@ -322,6 +322,8 @@ void WindowManager::map_desktop_window(xcb_window_t window)
         client.order = next_client_order_++;
         clients_[window] = std::move(client);
     }
+    if (auto* c = get_client(window))
+        publish_lwm_window_class(*c);
     update_ewmh_client_list();
     conn_.flush();
 }
@@ -342,6 +344,8 @@ void WindowManager::map_dock_window(xcb_window_t window)
         client.order = next_client_order_++;
         clients_[window] = std::move(client);
     }
+    if (auto* c = get_client(window))
+        publish_lwm_window_class(*c);
     update_struts();
     rearrange_all_monitors();
     update_ewmh_client_list();

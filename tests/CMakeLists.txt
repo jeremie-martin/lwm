@@ -20,6 +20,7 @@ FetchContent_MakeAvailable(Catch2)
     test_integration_client_message.cpp
     test_integration_focus.cpp
     test_integration_focus_input.cpp
+    test_integration_lwm_window_class.cpp
     test_integration_notify_attention.cpp
     test_integration_overlay.cpp
     test_integration_property_notify.cpp

@@ -185,12 +185,15 @@ WindowManager::WindowManager(Config config, std::string config_path)
     lwm_restart_ratios_ = intern_atom("_LWM_RESTART_RATIOS");
     lwm_restart_scratchpad_name_ = intern_atom("_LWM_RESTART_SCRATCHPAD_NAME");
     lwm_restart_scratchpad_pool_ = intern_atom("_LWM_RESTART_SCRATCHPAD_POOL");
+    lwm_window_class_ = intern_atom("_LWM_WINDOW_CLASS");
     {
         std::vector<xcb_atom_t> extra;
         if (net_wm_user_time_window_ != XCB_NONE)
             extra.push_back(net_wm_user_time_window_);
         if (net_wm_state_focused_ != XCB_NONE)
             extra.push_back(net_wm_state_focused_);
+        if (lwm_window_class_ != XCB_NONE)
+            extra.push_back(lwm_window_class_);
         if (!extra.empty())
             ewmh_.set_extra_supported_atoms(extra);
     }
@@ -1004,6 +1007,32 @@ void WindowManager::update_allowed_actions(Client const& client)
     }
 
     ewmh_.set_allowed_actions(client.id, actions);
+    publish_lwm_window_class(client);
+}
+
+void WindowManager::publish_lwm_window_class(Client const& client)
+{
+    if (lwm_window_class_ == XCB_NONE)
+        return;
+    char const* value;
+    switch (client.kind)
+    {
+        case Client::Kind::Tiled:    value = "tiled";    break;
+        case Client::Kind::Floating: value = "floating"; break;
+        case Client::Kind::Dock:     value = "dock";     break;
+        case Client::Kind::Desktop:  value = "desktop";  break;
+    }
+    xcb_atom_t string_type = (utf8_string_ != XCB_NONE) ? utf8_string_ : XCB_ATOM_STRING;
+    xcb_change_property(
+        conn_.get(),
+        XCB_PROP_MODE_REPLACE,
+        client.id,
+        lwm_window_class_,
+        string_type,
+        8,
+        static_cast<uint32_t>(std::strlen(value)),
+        value
+    );
 }
 
 Geometry WindowManager::current_window_geometry(xcb_window_t window) const

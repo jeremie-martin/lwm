@@ -121,6 +121,7 @@ LWM writes:
 - `_NET_WM_STATE`
 - `_NET_WM_ALLOWED_ACTIONS`
 - `_NET_FRAME_EXTENTS` (undecorated windows use zero extents)
+- `_LWM_WINDOW_CLASS` — LWM-specific. UTF8_STRING with value `tiled`, `floating`, `dock`, or `desktop`, reflecting LWM's internal `Client::Kind`. Updated on classification change. Intended for compositors (e.g. picom) that need to distinguish user-floated windows from tiled ones beyond what `_NET_WM_WINDOW_TYPE` alone reveals. Not part of EWMH; treat as a stable LWM extension.
 
 ## 6. EWMH Client Messages
 
