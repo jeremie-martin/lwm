@@ -35,6 +35,16 @@ void WindowManager::focus_any_window(xcb_window_t window, bool record_user_time,
         return;
     }
 
+    // Stale monitor/workspace indices are reachable after a RandR shrink (see the
+    // orphan path in unmanage_window); every path below indexes monitors_[client->monitor]
+    // and workspaces[client->workspace] directly, so reject out-of-range clients up front.
+    if (client->monitor >= monitors_.size()
+        || client->workspace >= monitors_[client->monitor].workspaces.size())
+    {
+        LOG_TRACE("focus_any_window: rejected (stale monitor/workspace index)");
+        return;
+    }
+
     bool is_floating = (client->kind == Client::Kind::Floating);
 
     if (client->iconic)
@@ -374,7 +384,7 @@ void WindowManager::send_wm_take_focus(Client const& client, uint32_t timestamp)
 
 void WindowManager::cycle_focus(bool forward)
 {
-    if (monitors_.empty())
+    if (focused_monitor_ >= monitors_.size())
         return;
 
     auto& monitor = focused_monitor();

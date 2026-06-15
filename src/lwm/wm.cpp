@@ -691,6 +691,8 @@ std::optional<std::string> WindowManager::run_ipc_command(std::string const& com
         if (trimmed.starts_with(layout_set_prefix))
         {
             std::string name = trim_ascii(trimmed.substr(layout_set_prefix.size()));
+            if (focused_monitor_ >= monitors_.size())
+                return error_reply("no focused monitor");
             if (name == "master-stack")
             {
                 focused_monitor().current().layout_strategy = LayoutStrategy::MasterStack;
@@ -726,6 +728,8 @@ std::optional<std::string> WindowManager::run_ipc_command(std::string const& com
             double min_r = config_.layout.min_ratio;
             if (val < min_r || val > 1.0 - min_r)
                 return error_reply("ratio out of range [" + std::to_string(min_r) + ", " + std::to_string(1.0 - min_r) + "]");
+            if (focused_monitor_ >= monitors_.size())
+                return error_reply("no focused monitor");
             focused_monitor().current().split_ratios[SplitAddress { 0, 0 }] = val;
             rearrange_monitor(focused_monitor(), true);
             emit_event(Event_LayoutChange, "{\"event\":\"layout_change\",\"action\":\"ratio_set\",\"value\":" + std::to_string(val) + "}");
@@ -735,6 +739,8 @@ std::optional<std::string> WindowManager::run_ipc_command(std::string const& com
 
     if (trimmed == "ratio reset")
     {
+        if (focused_monitor_ >= monitors_.size())
+            return error_reply("no focused monitor");
         focused_monitor().current().split_ratios.clear();
         rearrange_monitor(focused_monitor(), true);
         emit_event(Event_LayoutChange, "{\"event\":\"layout_change\",\"action\":\"ratio_reset\"}");
@@ -778,6 +784,170 @@ std::optional<std::string> WindowManager::run_ipc_command(std::string const& com
 
             return handle_notification_attention(*window);
         }
+    }
+
+    {
+        constexpr std::string_view ws_switch_prefix = "workspace switch ";
+        if (trimmed.starts_with(ws_switch_prefix))
+        {
+            std::string arg = trim_ascii(trimmed.substr(ws_switch_prefix.size()));
+            if (arg.empty() || arg.find_first_of(" \t\r\n") != std::string::npos)
+                return error_reply("usage: workspace switch <index>");
+
+            size_t target = 0;
+            auto [ptr, ec] = std::from_chars(arg.data(), arg.data() + arg.size(), target);
+            if (ec != std::errc {} || ptr != arg.data() + arg.size())
+                return error_reply("invalid workspace index: " + arg);
+
+            if (focused_monitor_ >= monitors_.size())
+                return error_reply("no focused monitor");
+            if (target >= focused_monitor().workspaces.size())
+                return error_reply("workspace out of range");
+
+            switch_workspace(target);
+            return ok_reply(std::to_string(target));
+        }
+    }
+
+    if (trimmed == "workspace next" || trimmed == "workspace prev")
+    {
+        if (focused_monitor_ >= monitors_.size())
+            return error_reply("no focused monitor");
+        size_t count = focused_monitor().workspaces.size();
+        if (count == 0)
+            return error_reply("no workspaces");
+        size_t current = focused_monitor().current_workspace;
+        size_t target = (trimmed == "workspace next")
+            ? (current + 1) % count
+            : (current + count - 1) % count;
+        switch_workspace(target);
+        return ok_reply(std::to_string(target));
+    }
+
+    if (trimmed == "workspace list")
+    {
+        auto workspace_name = [this](size_t idx) -> std::string {
+            if (idx < config_.workspaces.names.size())
+                return config_.workspaces.names[idx];
+            return std::to_string(idx + 1);
+        };
+        auto layout_name = [](LayoutStrategy s) -> char const* {
+            switch (s)
+            {
+                case LayoutStrategy::MasterStack: return "master-stack";
+                case LayoutStrategy::Monocle:    return "monocle";
+            }
+            return "unknown";
+        };
+
+        std::string json = "{\"focused_monitor\":" + std::to_string(focused_monitor_)
+            + ",\"monitors\":[";
+        for (size_t m = 0; m < monitors_.size(); ++m)
+        {
+            auto const& monitor = monitors_[m];
+            if (m > 0)
+                json += ",";
+            json += "{\"index\":" + std::to_string(m)
+                + ",\"name\":\"" + json_escape(monitor.name) + "\""
+                + ",\"current_workspace\":" + std::to_string(monitor.current_workspace)
+                + ",\"workspaces\":[";
+            for (size_t w = 0; w < monitor.workspaces.size(); ++w)
+            {
+                auto const& ws = monitor.workspaces[w];
+                if (w > 0)
+                    json += ",";
+                json += "{\"index\":" + std::to_string(w)
+                    + ",\"name\":\"" + json_escape(workspace_name(w)) + "\""
+                    + ",\"current\":" + (w == monitor.current_workspace ? "true" : "false")
+                    + ",\"window_count\":" + std::to_string(ws.windows.size())
+                    + ",\"layout\":\"" + layout_name(ws.layout_strategy) + "\"}";
+            }
+            json += "]}";
+        }
+        json += "]}";
+        return json;
+    }
+
+    if (trimmed == "focus next" || trimmed == "focus prev")
+    {
+        cycle_focus(trimmed == "focus next");
+        return ok_reply(std::to_string(active_window_));
+    }
+
+    {
+        constexpr std::string_view window_prefix = "window=";
+        if (trimmed.starts_with("focus "))
+        {
+            std::string arg = trim_ascii(trimmed.substr(std::string_view("focus").size()));
+            if (!arg.starts_with(window_prefix) || arg.find_first_of(" \t\r\n") != std::string::npos)
+                return error_reply("usage: focus <next|prev|window=<xid>>");
+
+            std::string_view value = std::string_view(arg).substr(window_prefix.size());
+            auto window = parse_window_id(value);
+            if (!window)
+                return error_reply("invalid window id: " + std::string(value));
+
+            auto* client = get_client(*window);
+            if (!client)
+                return error_reply("unknown window");
+            if (!is_focus_eligible(*client))
+                return error_reply("window not focusable");
+
+            focus_any_window(*window);
+            if (active_window_ != *window)
+                return error_reply("focus request refused");
+            return ok_reply(std::to_string(*window));
+        }
+    }
+
+    if (trimmed == "window list")
+    {
+        auto kind_name = [](Client::Kind k) -> char const* {
+            switch (k)
+            {
+                case Client::Kind::Tiled:    return "tiled";
+                case Client::Kind::Floating: return "floating";
+                case Client::Kind::Dock:     return "dock";
+                case Client::Kind::Desktop:  return "desktop";
+            }
+            return "unknown";
+        };
+
+        std::vector<std::pair<uint64_t, xcb_window_t>> ordered;
+        ordered.reserve(clients_.size());
+        for (auto const& [id, client] : clients_)
+        {
+            if (client.kind == Client::Kind::Dock || client.kind == Client::Kind::Desktop)
+                continue;
+            ordered.push_back({ client.order, id });
+        }
+        std::sort(ordered.begin(), ordered.end(), [](auto const& a, auto const& b) { return a.first < b.first; });
+
+        std::string json = "{\"focused\":" + std::to_string(active_window_) + ",\"windows\":[";
+        bool first = true;
+        for (auto const& [order, id] : ordered)
+        {
+            auto const* client = get_client(id);
+            if (!client)
+                continue;
+            if (!first)
+                json += ",";
+            first = false;
+            json += "{\"id\":" + std::to_string(id)
+                + ",\"monitor\":" + std::to_string(client->monitor)
+                + ",\"workspace\":" + std::to_string(client->workspace)
+                + ",\"kind\":\"" + kind_name(client->kind) + "\""
+                + ",\"class\":\"" + json_escape(client->wm_class) + "\""
+                + ",\"instance\":\"" + json_escape(client->wm_class_name) + "\""
+                + ",\"title\":\"" + json_escape(client->name) + "\""
+                + ",\"focused\":" + (id == active_window_ ? "true" : "false")
+                + ",\"fullscreen\":" + (client->fullscreen ? "true" : "false")
+                + ",\"urgent\":" + (client->urgency.active() ? "true" : "false")
+                + ",\"sticky\":" + (client->sticky ? "true" : "false")
+                + ",\"iconic\":" + (client->iconic ? "true" : "false") + "}";
+        }
+        json += "]}";
+        return json;
     }
 
     if (trimmed == "scratchpad stash")
@@ -1059,7 +1229,7 @@ Geometry WindowManager::current_window_geometry(xcb_window_t window) const
 void WindowManager::convert_window_to_floating(xcb_window_t window)
 {
     auto* client = get_client(window);
-    if (!client || client->kind != Client::Kind::Tiled)
+    if (!client || client->kind != Client::Kind::Tiled || client->monitor >= monitors_.size())
         return;
 
     std::optional<Geometry> prior_floating = prior_floating_geometry(*client);
@@ -1095,7 +1265,7 @@ void WindowManager::convert_window_to_floating(xcb_window_t window)
 void WindowManager::convert_window_to_tiled(xcb_window_t window, std::optional<Geometry> prior_floating)
 {
     auto* client = get_client(window);
-    if (!client || client->kind != Client::Kind::Floating)
+    if (!client || client->kind != Client::Kind::Floating || client->monitor >= monitors_.size())
         return;
 
     auto saved_position = saved_tiled_pos(*client);
@@ -2527,7 +2697,7 @@ void WindowManager::set_window_maximized(Client& client, bool horiz, bool vert)
 
 void WindowManager::apply_maximized_geometry(Client& client)
 {
-    if (client.kind != Client::Kind::Floating)
+    if (client.kind != Client::Kind::Floating || client.monitor >= monitors_.size())
         return;
 
     Geometry base = floating_geometry(client);
@@ -2587,6 +2757,8 @@ void WindowManager::sync_client_urgency_state(Client& client)
 {
     bool const enabled = client.urgency.active();
     ewmh_.set_window_state(client.id, ewmh_.get()->_NET_WM_STATE_DEMANDS_ATTENTION, enabled);
+    if (!enabled)
+        client.ignore_next_wm_hints_urgency_echo = false;
 
     // Our own WM_HINTS write echoes back as PropertyNotify. If WM is the sole
     // source, suppress that echo so it isn't reclassified as app-originated.

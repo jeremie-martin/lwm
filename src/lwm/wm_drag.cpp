@@ -224,6 +224,10 @@ void WindowManager::update_drag(int16_t root_x, int16_t root_y)
 
         // Motion compression: drain all queued motion events, use the latest position.
         // This prevents redundant rearranges when events queue up faster than we process them.
+        // A non-motion event drained here is dispatched via handle_event(), which can rebuild
+        // monitors_ (RandR) or reassign drag_state_ — so `tr` may be stale/dangling afterwards.
+        // Re-fetch the live variant and re-validate before any further use.
+        TiledResize* live_ptr = &tr;
         {
             xcb_generic_event_t* ev;
             while ((ev = xcb_poll_for_queued_event(conn_.get())) != nullptr)
@@ -246,34 +250,46 @@ void WindowManager::update_drag(int16_t root_x, int16_t root_y)
                 free(ev);
                 if (!std::holds_alternative<TiledResize>(drag_state_))
                     return; // drag was cancelled by the handled event
+                // drag_state_ may have been reassigned in place; re-bind to the live variant.
+                live_ptr = std::get_if<TiledResize>(&drag_state_);
                 break;
             }
 
-            auto* live_resize = std::get_if<TiledResize>(&drag_state_);
-            if (!live_resize)
+            if (!live_ptr)
                 return;
-            auto& live = *live_resize;
-            // Recompute delta with compressed coordinates
-            if (live.direction == SplitDirection::Horizontal)
-                pixel_delta = static_cast<int32_t>(root_x) - static_cast<int32_t>(live.start_root_x);
-            else
-                pixel_delta = static_cast<int32_t>(root_y) - static_cast<int32_t>(live.start_root_y);
         }
 
-        double ratio_delta = static_cast<double>(pixel_delta) / static_cast<double>(tr.available_extent);
-        double min_r = config_.layout.min_ratio;
-        double new_ratio = std::clamp(tr.start_ratio + ratio_delta, min_r, 1.0 - min_r);
+        auto& live = *live_ptr;
+        // handle_event may have shrunk monitors_ or switched workspace; re-validate.
+        if (live.monitor_idx >= monitors_.size()
+            || monitors_[live.monitor_idx].current_workspace != live.workspace_idx)
+        {
+            abort_drag = true;
+            return;
+        }
+        // Recompute delta with compressed coordinates against the live variant.
+        if (live.direction == SplitDirection::Horizontal)
+            pixel_delta = static_cast<int32_t>(root_x) - static_cast<int32_t>(live.start_root_x);
+        else
+            pixel_delta = static_cast<int32_t>(root_y) - static_cast<int32_t>(live.start_root_y);
 
-        auto& ws = monitors_[tr.monitor_idx].current();
-        auto it = ws.split_ratios.find(tr.address);
+        if (live.available_extent <= 0)
+            return;
+
+        double ratio_delta = static_cast<double>(pixel_delta) / static_cast<double>(live.available_extent);
+        double min_r = config_.layout.min_ratio;
+        double new_ratio = std::clamp(live.start_ratio + ratio_delta, min_r, 1.0 - min_r);
+
+        auto& ws = monitors_[live.monitor_idx].current();
+        auto it = ws.split_ratios.find(live.address);
         if (it != ws.split_ratios.end() && it->second == new_ratio)
             return;
 
         // Server grab prevents clients from repainting between window configures,
         // eliminating flicker when multiple tiled windows resize simultaneously.
         xcb_grab_server(conn_.get());
-        ws.split_ratios[tr.address] = new_ratio;
-        rearrange_monitor(monitors_[tr.monitor_idx], true);
+        ws.split_ratios[live.address] = new_ratio;
+        rearrange_monitor(monitors_[live.monitor_idx], true);
         xcb_ungrab_server(conn_.get());
         conn_.flush();
         return;

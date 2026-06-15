@@ -1085,6 +1085,59 @@ TEST_CASE(
 }
 
 TEST_CASE(
+    "Integration: lwmctl focus reports redirected focus as failure",
+    "[integration][focus][fullscreen][ipc]"
+)
+{
+    auto test_env = TestEnvironment::create("[workspaces]\ncount = 2\n");
+    if (!test_env)
+        SKIP("Test environment not available");
+
+    auto& conn = test_env->conn;
+
+    xcb_atom_t net_current_desktop = intern_atom(conn.get(), "_NET_CURRENT_DESKTOP");
+    xcb_atom_t net_wm_desktop = intern_atom(conn.get(), "_NET_WM_DESKTOP");
+    xcb_atom_t net_wm_state = intern_atom(conn.get(), "_NET_WM_STATE");
+    xcb_atom_t net_wm_state_fullscreen = intern_atom(conn.get(), "_NET_WM_STATE_FULLSCREEN");
+    xcb_atom_t net_wm_state_sticky = intern_atom(conn.get(), "_NET_WM_STATE_STICKY");
+    if (net_current_desktop == XCB_NONE || net_wm_desktop == XCB_NONE || net_wm_state == XCB_NONE
+        || net_wm_state_fullscreen == XCB_NONE || net_wm_state_sticky == XCB_NONE)
+    {
+        WARN("Failed to intern EWMH atoms.");
+        return;
+    }
+
+    xcb_window_t owner = create_window(conn, 10, 10, 640, 360);
+    map_window(conn, owner);
+    REQUIRE(wait_for_active_window(conn, owner, kTimeout));
+
+    send_client_message(conn, owner, net_wm_state, 1, net_wm_state_fullscreen, 0, 0, 0);
+    send_client_message(conn, owner, net_wm_state, 1, net_wm_state_sticky, 0, 0, 0);
+    REQUIRE(wait_for_condition([&]() { return has_state(conn, owner, net_wm_state_fullscreen); }, kTimeout));
+    REQUIRE(wait_for_condition([&]() { return has_state(conn, owner, net_wm_state_sticky); }, kTimeout));
+
+    xcb_window_t target = create_window(conn, 80, 80, 320, 180);
+    map_window(conn, target);
+    REQUIRE(wait_for_active_window(conn, owner, kTimeout));
+
+    send_client_message(conn, target, net_wm_desktop, 1);
+    REQUIRE(wait_for_property_cardinal(conn.get(), target, net_wm_desktop, 1, kTimeout));
+    REQUIRE(wait_for_active_window(conn, owner, kTimeout));
+
+    auto result = run_lwmctl(test_env->wm, { "focus", "window=" + std::to_string(target) });
+    if (!result)
+        SKIP("lwmctl binary not available");
+
+    REQUIRE(result->exit_code != 0);
+    REQUIRE(result->stderr_text.find("focus request refused") != std::string::npos);
+    REQUIRE(wait_for_property_cardinal(conn.get(), conn.root(), net_current_desktop, 1, kTimeout));
+    REQUIRE(wait_for_active_window(conn, owner, kTimeout));
+
+    destroy_window(conn, target);
+    destroy_window(conn, owner);
+}
+
+TEST_CASE(
     "Integration: fullscreen suppression stays scoped to the visible workspace",
     "[integration][focus][fullscreen][workspace]"
 )

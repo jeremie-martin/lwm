@@ -1603,7 +1603,8 @@ void WindowManager::handle_property_notify(xcb_property_notify_event_t const& e)
                 }
                 else
                 {
-                    client->ignore_next_wm_hints_urgency_echo = false;
+                    if (!client->urgency.active())
+                        client->ignore_next_wm_hints_urgency_echo = false;
                     if (e.window != active_window_)
                     {
                         // If App was set, removing it re-syncs (and re-asserts WM_HINTS

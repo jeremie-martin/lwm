@@ -45,6 +45,14 @@ void print_usage()
               << "  ratio adjust DELTA       adjust master ratio by delta (e.g. +0.05)\n"
               << "  notify-attention window=<xid>\n"
               << "                           mark a managed window as needing attention\n"
+              << "  workspace switch N       switch focused monitor to workspace N (0-based)\n"
+              << "  workspace next           switch to next workspace (wraps)\n"
+              << "  workspace prev           switch to previous workspace (wraps)\n"
+              << "  workspace list           list workspaces as JSON\n"
+              << "  focus window=<xid>       focus a window by X11 ID (jumps to its workspace)\n"
+              << "  focus next               focus next window in MRU cycle\n"
+              << "  focus prev               focus previous window in MRU cycle\n"
+              << "  window list              list managed windows as JSON\n"
               << "  subscribe [FILTER]       stream events as JSON lines\n"
               << "                           filter: comma-separated event types\n"
               << "                           (window_map,window_unmap,focus_change,\n"
@@ -342,6 +350,34 @@ int main(int argc, char* argv[])
         }
         std::string ipc_cmd = "notify-attention " + args[1];
         return run_command(socket_path, ipc_cmd);
+    }
+
+    if (command == "workspace")
+    {
+        if (args.size() == 2 && (args[1] == "list" || args[1] == "next" || args[1] == "prev"))
+            return run_command(socket_path, "workspace " + args[1]);
+        if (args.size() == 3 && args[1] == "switch")
+            return run_command(socket_path, "workspace switch " + args[2]);
+        std::cerr << "usage: lwmctl workspace <switch N|next|prev|list>\n";
+        return 1;
+    }
+
+    if (command == "focus")
+    {
+        if (args.size() == 2 && (args[1] == "next" || args[1] == "prev"))
+            return run_command(socket_path, "focus " + args[1]);
+        if (args.size() == 2 && args[1].rfind("window=", 0) == 0)
+            return run_command(socket_path, "focus " + args[1]);
+        std::cerr << "usage: lwmctl focus <next|prev|window=<xid>>\n";
+        return 1;
+    }
+
+    if (command == "window")
+    {
+        if (args.size() == 2 && args[1] == "list")
+            return run_command(socket_path, "window list");
+        std::cerr << "usage: lwmctl window list\n";
+        return 1;
     }
 
     if (command == "subscribe")
