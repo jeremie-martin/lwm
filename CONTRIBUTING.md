@@ -8,6 +8,8 @@ This file is the operational guide for changing LWM safely.
 make          # release build
 make debug    # debug build
 make test     # build and run the full test suite
+make install
+make uninstall # currently removes /usr/local/bin/lwm only
 make clean
 ```
 
@@ -18,6 +20,8 @@ ctest --test-dir build --output-on-failure
 ./build/tests/lwm_tests "focus"
 ./scripts/preview.sh
 ```
+
+Tests require `xcb-xtest` in addition to the runtime XCB dependencies.
 
 ## Code Map
 
@@ -30,9 +34,13 @@ ctest --test-dir build --output-on-failure
 - `src/lwm/wm_ewmh.cpp`: desktop, workarea, client-list, and root-property updates
 - `src/lwm/wm_restart.cpp`: state serialization, restore, and graceful restart
 - `src/lwm/wm_scratchpad.cpp`: named scratchpads and generic scratchpad pool (show/hide/cycle, restart preservation)
+- `src/lwm/core/events.hpp`: IPC subscription event names, masks, and JSON escaping helpers
+- `src/lwm/core/ipc.hpp`: IPC socket path helpers and root-property discovery helpers
 - `src/lwm/core/types.hpp`: `Client`, `Workspace`, and `Monitor`
 - `src/lwm/core/policy.hpp`: pure policy functions (focus selection, workspace manipulation, visibility, classification, hotplug)
 - `src/lwm/core/invariants.hpp`: debug-build invariant assertions
+- `src/app/lwmctl.cpp`: user-facing command-line wrapper around the IPC socket
+- `scripts/lwm-notify.sh`: notification helper installed as `lwm-notify`
 - `config.toml.example`: user-facing config surface
 
 Start with [`ARCHITECTURE.md`](ARCHITECTURE.md) before editing any of the state-transition code.
@@ -69,14 +77,22 @@ Tests use Catch2. File names follow `tests/test_<area>.cpp`. Integration cases u
 - focus-follows-mouse and input models: `tests/test_integration_focus_input.cpp`
 - focus fallback selection and cycling: `tests/test_focus_policy.cpp`, `tests/test_focus_cycling_policy.cpp`, `tests/test_focus_restoration_policy.cpp`
 - workspace visibility and monitor/workspace moves: `tests/test_integration_workspace.cpp`
+- config parsing and live reload: `tests/test_config_parser.cpp`, `tests/test_integration_config_reload.cpp`
 - workspace policy (focus history, tiled membership): `tests/test_workspace_policy.cpp`
 - WM_STATE transitions (manage, iconify, unmanage): `tests/test_integration_wm_state.cpp`
 - overlay windows above fullscreen: `tests/test_integration_overlay.cpp`
+- scratchpads: `tests/test_integration_scratchpad.cpp`
 - monitor hotplug and window relocation: `tests/test_monitor_hotplug.cpp`
 - property-driven reclassification and hint changes: `tests/test_integration_property_notify.cpp`
 - keybind behavior and config parsing: `tests/test_keybind_policy.cpp`
+- split-tree layout and ratio math: `tests/test_split_tree.cpp`
+- floating and stacking pure policy: `tests/test_floating_policy.cpp`, `tests/test_stacking_policy.cpp`
+- LWM-specific compositor classification property: `tests/test_integration_lwm_window_class.cpp`
+- notification attention helper path: `tests/test_integration_notify_attention.cpp`
+- IPC event subscriptions and `lwmctl subscribe`: `tests/test_integration_subscribe.cpp`
 - EWMH/root-property behavior: `tests/test_ewmh_policy.cpp`, `tests/test_ewmh_classification.cpp`, `tests/test_integration_client_message.cpp`
 - client state and window rules: `tests/test_client_state_policy.cpp`, `tests/test_window_rules.cpp`
+- basic workspace data structure behavior: `tests/test_workspace.cpp`
 
 When a change crosses visibility, focus, and fullscreen boundaries, treat it as integration work and add or update an integration test.
 
@@ -93,6 +109,7 @@ Doc ownership:
 - [`README.md`](README.md): setup, install, run, and a short mental model
 - [`ARCHITECTURE.md`](ARCHITECTURE.md): runtime model, invariants, and transition funnels
 - [`COMPLIANCE.md`](COMPLIANCE.md): ICCCM/EWMH behavior and limits
+- [`SHADERS.md`](SHADERS.md): compositor-facing visual recipes and LWM-specific properties useful to compositors
 - [`ROADMAP.md`](ROADMAP.md): open work and open questions
 
 ## Common Change Recipes
@@ -110,6 +127,15 @@ Doc ownership:
   - add atom wiring in `src/lwm/core/ewmh.hpp` and `src/lwm/core/ewmh.cpp`
   - handle the message/property in the relevant WM path
   - document support and limits in `COMPLIANCE.md`
+- New IPC or `lwmctl` command:
+  - implement the WM command in `WindowManager::run_ipc_command`
+  - expose the CLI shape in `src/app/lwmctl.cpp`
+  - add integration coverage when the command affects real WM state
+  - update `README.md` if it is user-facing
+- New compositor-facing `_LWM_*` property:
+  - publish it from the authoritative state owner
+  - add integration coverage that reads the X property
+  - document stability and intended use in `COMPLIANCE.md` and `SHADERS.md`
 
 ## Debugging Hooks
 

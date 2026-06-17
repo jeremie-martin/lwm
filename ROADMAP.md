@@ -1,7 +1,7 @@
 # Roadmap
 
 Open work only. Closed items live in commit history.
-Audited against `git log` and `src/` on 2026-05-16.
+Audited against `git log` and `src/` on 2026-06-17.
 
 ## Layout
 
@@ -10,8 +10,6 @@ Audited against `git log` and `src/` on 2026-05-16.
 
 ## Multi-monitor
 
-- Cursor warp on focus-monitor-left/right (config flag exists; verify wiring).
-- Seamless drag of floating windows across monitor boundaries.
 - Multi-output integration harness covering cross-monitor moves, floating geometry, and hotplug rebind. `test_monitor_hotplug.cpp` covers hotplug only.
 
 ## Protocol / X11
@@ -22,14 +20,18 @@ Audited against `git log` and `src/` on 2026-05-16.
 
 ## Rules & config
 
-- Auto-move-to-workspace / auto-float-by-size / opacity in window rules.
+- Auto-float-by-size and opacity in window rules.
 - Validate or reject out-of-range rule geometry before narrowing into `Geometry`.
 - Config flag for "focus new windows" behavior.
 - User-facing workspace rename action (the `_NET_DESKTOP_NAMES` write path already exists).
 
-## Doc debt
+## IPC / CLI
 
-- Reconcile `ARCHITECTURE.md` with the current stacking and hotplug authorities — last touched before the recent correctness sweep.
+- Add `lwmctl` CLI parity for internal scratchpad IPC commands (`scratchpad stash`, `scratchpad cycle`, `scratchpad toggle <name>`, `scratchpad list`).
+
+## Build / install
+
+- Make `make uninstall` remove every installed binary (`lwm`, `lwmctl`, and `lwm-notify`), not just `lwm`.
 
 ## Needs design first
 

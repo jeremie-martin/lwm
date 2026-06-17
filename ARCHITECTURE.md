@@ -8,6 +8,8 @@ Use the docs as follows:
 - `ARCHITECTURE.md`: model, invariants, and high-value event flow
 - [`COMPLIANCE.md`](COMPLIANCE.md): ICCCM/EWMH surface and limits
 - [`CONTRIBUTING.md`](CONTRIBUTING.md): workflow, code map, tests, and debugging
+- [`SHADERS.md`](SHADERS.md): compositor/shader recipes and LWM-specific compositor properties
+- [`ROADMAP.md`](ROADMAP.md): open work and design questions
 
 ## 1. Core Model
 

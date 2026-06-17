@@ -22,6 +22,7 @@ LWM reads and uses:
 - `WM_HINTS` (`input`, `initial_state`, urgency)
 - `WM_NORMAL_HINTS` (initial and runtime size/position hints)
 - `WM_TRANSIENT_FOR`
+- `_NET_WM_USER_TIME`
 - `_NET_WM_USER_TIME_WINDOW`
 - `WM_PROTOCOLS` (`WM_DELETE_WINDOW`, `WM_TAKE_FOCUS`, `_NET_WM_PING`, `_NET_WM_SYNC_REQUEST` when present)
 
@@ -123,6 +124,11 @@ LWM writes:
 - `_NET_FRAME_EXTENTS` (undecorated windows use zero extents)
 - `_LWM_WINDOW_CLASS` — LWM-specific. UTF8_STRING with value `tiled`, `floating`, `dock`, or `desktop`, reflecting LWM's internal `Client::Kind`. Updated on classification change. Intended for compositors (e.g. picom) that need to distinguish user-floated windows from tiled ones beyond what `_NET_WM_WINDOW_TYPE` alone reveals. Not part of EWMH; treat as a stable LWM extension.
 
+LWM-specific root/private properties:
+
+- `_LWM_IPC_SOCKET` — root-window UTF8_STRING containing the active IPC socket path for `lwmctl` discovery. Removed on normal shutdown.
+- `_LWM_RESTART_CLIENT`, `_LWM_RESTART_STATE`, `_LWM_RESTART_TILED_ORDER`, `_LWM_RESTART_FLOATING_ORDER`, `_LWM_RESTART_RATIOS`, `_LWM_RESTART_SCRATCHPAD_NAME`, `_LWM_RESTART_SCRATCHPAD_POOL` — private restart handoff atoms. They are implementation details, not public client API.
+
 ## 6. EWMH Client Messages
 
 Handled client messages:
@@ -175,6 +181,16 @@ Handled client messages:
 
 - `_NET_WM_PING`: LWM tracks replies and may force-kill an unresponsive client after timeout when close was requested
 - `_NET_WM_SYNC_REQUEST`: sync requests are sent before WM-driven resize operations without blocking the event loop
+
+### 6.3 Window State Application Ordering
+
+During manage, LWM applies geometry-affecting state before the first map where possible:
+
+- initial fullscreen state is applied before mapping
+- initial maximize state is applied before mapping; geometry changes affect floating windows only
+- `WM_STATE=IconicState` and `_NET_WM_STATE_HIDDEN` are set before mapping for initially iconic clients
+
+After mapping, LWM applies non-geometry state such as sticky, above/below, overlay layer, modal, skip-taskbar, and skip-pager. This keeps first-frame geometry stable while preserving the normal stacking and visibility funnels.
 
 ## 7. Known Limits and Intentional Simplifications
 

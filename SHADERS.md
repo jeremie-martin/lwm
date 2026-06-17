@@ -19,11 +19,24 @@ authoritative and current, which is enough to drive most visual rules:
 - `_NET_WM_WINDOW_TYPE` — `DIALOG`, `DOCK`, `DESKTOP`, `UTILITY`, etc.
 - `_NET_CLIENT_LIST_STACKING` — Z order
 - `WM_CLASS`, `WM_NAME` — for per-application targeting
+- `_LWM_WINDOW_CLASS` — LWM-specific UTF8 string with value `tiled`,
+  `floating`, `dock`, or `desktop`
 
 What LWM does **not** currently publish, and that picom therefore cannot key
-off of: tiled-vs-floating, layout role (master/stack), focused monitor, or
-workspace transitions. If you want shaders that react to those, that is the
-job of a future LWM-specific property extension; see the end of this doc.
+off of: layout role (master/stack), focused monitor, or workspace transitions.
+If you want shaders that react to those, that is the job of a future
+LWM-specific property extension; see the end of this doc.
+
+`_LWM_WINDOW_CLASS` is intentionally outside EWMH. Use `xprop` to inspect it:
+
+```bash
+xprop _LWM_WINDOW_CLASS
+```
+
+Picom condition support for custom UTF8 properties depends on the picom build
+and rule syntax in use. Standard predicates such as `focused`, `class_g`, and
+`window_type` are the portable baseline; `_LWM_WINDOW_CLASS` is available for
+rule engines that can match custom X properties.
 
 ## Install
 
@@ -176,8 +189,10 @@ vec4 window_shader() {
 
 ### Other ideas worth trying
 
-- **Frosted glass on floating windows**: picom's built-in `blur-background`
-  plus a tint pass. Matches well with semi-transparent terminal themes.
+- **Frosted glass on floating windows**: use `_LWM_WINDOW_CLASS = floating`
+  when your compositor rule syntax can match custom properties, then combine
+  picom's built-in `blur-background` with a tint pass. Matches well with
+  semi-transparent terminal themes.
 - **Sepia on `class_g = 'zathura'`**: a reading-mode look for PDFs.
 - **Red-shift on `_NET_WM_STATE_DEMANDS_ATTENTION`**: visual urgency cue
   that costs nothing in LWM.
@@ -202,5 +217,5 @@ expressible with picom alone:
 Adding any of these is a separate piece of work: LWM would expose extra
 `_LWM_*` properties (e.g. `_LWM_LAYOUT_ROLE`, `_LWM_FOCUSED_MONITOR`,
 `_LWM_TRANSITION`) and picom rules or a small companion daemon would read
-them. That extension is not implemented today; this document covers only
-what works against current LWM.
+them. `_LWM_WINDOW_CLASS` exists today; the layout-role, focused-monitor, and
+transition properties do not.
