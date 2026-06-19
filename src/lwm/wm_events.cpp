@@ -407,8 +407,12 @@ void WindowManager::map_floating_window(
     apply_visible_floating_geometry(client);
     apply_stacking();
 
+    // Overlay-layer windows are focus-*eligible* (focus-follows-mouse, cycling
+    // and the kill keybind can reach them) but must not *grab* focus merely by
+    // mapping — they sit over a running app and should not steal its focus just
+    // by appearing.
     if (!start_iconic && !suppress_focus_ && client.monitor == focused_monitor_ && is_physically_visible(client)
-        && is_focus_eligible(client))
+        && is_focus_eligible(client) && client.layer != WindowLayer::Overlay)
     {
         focus_any_window(window);
     }

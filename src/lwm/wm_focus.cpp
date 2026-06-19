@@ -353,8 +353,11 @@ void WindowManager::repair_focus_after_visibility_change(size_t preferred_monito
 
 bool WindowManager::is_focus_eligible(Client const& client) const
 {
-    if (client.kind == Client::Kind::Dock || client.kind == Client::Kind::Desktop
-        || client.layer == WindowLayer::Overlay)
+    // Dock/Desktop windows never take focus (EWMH). The overlay *layer* is a
+    // stacking concern, not a focusability one: an ordinary app placed in the
+    // overlay layer (e.g. a fullscreen companion overlay) must stay focusable
+    // and therefore killable, otherwise the keyboard cannot dismiss it.
+    if (client.kind == Client::Kind::Dock || client.kind == Client::Kind::Desktop)
     {
         return false;
     }
