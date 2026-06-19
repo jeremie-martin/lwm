@@ -42,18 +42,6 @@ uint32_t extract_event_time(uint8_t response_type, xcb_generic_event_t const& ev
     }
 }
 
-char const* client_kind_str(Client::Kind kind)
-{
-    switch (kind)
-    {
-        case Client::Kind::Tiled: return "tiled";
-        case Client::Kind::Floating: return "floating";
-        case Client::Kind::Dock: return "dock";
-        case Client::Kind::Desktop: return "desktop";
-    }
-    return "unknown";
-}
-
 template<class... Ts>
 struct Overloaded : Ts...
 {
@@ -412,7 +400,7 @@ void WindowManager::map_floating_window(
     // mapping — they sit over a running app and should not steal its focus just
     // by appearing.
     if (!start_iconic && !suppress_focus_ && client.monitor == focused_monitor_ && is_physically_visible(client)
-        && is_focus_eligible(client) && client.layer != WindowLayer::Overlay)
+        && should_grab_focus_on_map(client))
     {
         focus_any_window(window);
     }
@@ -469,7 +457,11 @@ void WindowManager::map_tiled_window(
         apply_initial_state_flags(client, rule_result);
     }
 
-    if (!start_iconic && client.monitor == focused_monitor_ && should_be_visible(client))
+    // A rule can lift a tiled-classified window into the overlay layer (which
+    // converts it to floating); like map_floating_window, such a window stays
+    // focusable on demand but must not grab focus just by mapping.
+    if (!start_iconic && client.monitor == focused_monitor_ && should_be_visible(client)
+        && should_grab_focus_on_map(client))
     {
         focus_any_window(window);
     }

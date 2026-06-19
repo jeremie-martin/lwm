@@ -902,17 +902,6 @@ std::optional<std::string> WindowManager::run_ipc_command(std::string const& com
 
     if (trimmed == "window list")
     {
-        auto kind_name = [](Client::Kind k) -> char const* {
-            switch (k)
-            {
-                case Client::Kind::Tiled:    return "tiled";
-                case Client::Kind::Floating: return "floating";
-                case Client::Kind::Dock:     return "dock";
-                case Client::Kind::Desktop:  return "desktop";
-            }
-            return "unknown";
-        };
-
         std::vector<std::pair<uint64_t, xcb_window_t>> ordered;
         ordered.reserve(clients_.size());
         for (auto const& [id, client] : clients_)
@@ -936,7 +925,7 @@ std::optional<std::string> WindowManager::run_ipc_command(std::string const& com
             json += "{\"id\":" + std::to_string(id)
                 + ",\"monitor\":" + std::to_string(client->monitor)
                 + ",\"workspace\":" + std::to_string(client->workspace)
-                + ",\"kind\":\"" + kind_name(client->kind) + "\""
+                + ",\"kind\":\"" + client_kind_str(client->kind) + "\""
                 + ",\"class\":\"" + json_escape(client->wm_class) + "\""
                 + ",\"instance\":\"" + json_escape(client->wm_class_name) + "\""
                 + ",\"title\":\"" + json_escape(client->name) + "\""
@@ -1184,14 +1173,7 @@ void WindowManager::publish_lwm_window_class(Client const& client)
 {
     if (lwm_window_class_ == XCB_NONE)
         return;
-    char const* value;
-    switch (client.kind)
-    {
-        case Client::Kind::Tiled:    value = "tiled";    break;
-        case Client::Kind::Floating: value = "floating"; break;
-        case Client::Kind::Dock:     value = "dock";     break;
-        case Client::Kind::Desktop:  value = "desktop";  break;
-    }
+    char const* value = client_kind_str(client.kind);
     xcb_atom_t string_type = (utf8_string_ != XCB_NONE) ? utf8_string_ : XCB_ATOM_STRING;
     xcb_change_property(
         conn_.get(),
@@ -3586,7 +3568,6 @@ void WindowManager::apply_stacking()
     }
 
     ewmh_.update_client_list_stacking(order);
-    cached_stacking_order_ = std::move(order);
 }
 
 bool WindowManager::is_override_redirect_window(xcb_window_t window) const

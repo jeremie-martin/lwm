@@ -214,7 +214,6 @@ private:
     static constexpr size_t MAX_SUBSCRIBERS = 8;
 
     bool stacking_dirty_ = false;
-    std::vector<xcb_window_t> cached_stacking_order_;
     std::deque<xcb_generic_event_t> deferred_events_;
 
     // Scratchpad state
@@ -521,6 +520,14 @@ private:
     MouseBinding const* resolve_mouse_binding(uint16_t state, uint8_t button) const;
     bool supports_protocol(xcb_window_t window, xcb_atom_t protocol) const;
     bool is_focus_eligible(Client const& client) const;
+    /// Whether a freshly mapped window should *grab* focus. Splits "can be
+    /// focused" (is_focus_eligible) from "should steal focus by appearing":
+    /// overlay-layer windows stay focus-eligible but must not grab focus on map,
+    /// so they sit over a running app without stealing its focus.
+    bool should_grab_focus_on_map(Client const& client) const
+    {
+        return is_focus_eligible(client) && client.layer != WindowLayer::Overlay;
+    }
     bool is_focus_candidate(xcb_window_t window) const
     {
         auto const* c = get_client(window);

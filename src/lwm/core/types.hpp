@@ -284,6 +284,20 @@ struct Client
     std::optional<ScratchpadMembership> scratchpad; ///< Named or generic scratchpad membership
 };
 
+/// Stable lowercase name for a client kind. Single source of truth for IPC
+/// JSON, the `_LWM_WINDOW_CLASS` property, and any other kind-to-string use.
+inline char const* client_kind_str(Client::Kind kind)
+{
+    switch (kind)
+    {
+        case Client::Kind::Tiled: return "tiled";
+        case Client::Kind::Floating: return "floating";
+        case Client::Kind::Dock: return "dock";
+        case Client::Kind::Desktop: return "desktop";
+    }
+    return "unknown";
+}
+
 inline TiledState* tiled_state(Client& client)
 {
     return std::get_if<TiledState>(&client.tiling_state);
