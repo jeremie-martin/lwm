@@ -72,6 +72,19 @@ Geometry place_floating(Geometry area, uint16_t width, uint16_t height, std::opt
     return result;
 }
 
+bool hint_targets_monitor(Geometry monitor, int16_t x, int16_t y, uint16_t width, uint16_t height)
+{
+    int32_t center_x = static_cast<int32_t>(x) + static_cast<int32_t>(width) / 2;
+    int32_t center_y = static_cast<int32_t>(y) + static_cast<int32_t>(height) / 2;
+
+    int32_t left = monitor.x;
+    int32_t right = static_cast<int32_t>(monitor.x) + static_cast<int32_t>(monitor.width);
+    int32_t top = monitor.y;
+    int32_t bottom = static_cast<int32_t>(monitor.y) + static_cast<int32_t>(monitor.height);
+
+    return center_x >= left && center_x < right && center_y >= top && center_y < bottom;
+}
+
 Geometry clamp_to_area(Geometry area, Geometry geometry)
 {
     return clamp_geometry(area, geometry);

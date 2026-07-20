@@ -217,9 +217,12 @@ void WindowManager::focus_any_window(xcb_window_t window, bool record_user_time,
     // user_time being monotonic and non-zero. Mouse/keyboard focus paths pass
     // focus_timestamp == 0; fall back to the latest input time so those
     // user-driven focuses still protect the window from later focus-steal.
+    // last_input_time_ (not last_event_time_) — PropertyNotify churn must not
+    // inflate user_time on auto-focus paths, or genuine older activation
+    // timestamps get refused by handle_active_window_request.
     if (record_user_time)
     {
-        uint32_t candidate = focus_timestamp != 0 ? focus_timestamp : last_event_time_;
+        uint32_t candidate = focus_timestamp != 0 ? focus_timestamp : last_input_time_;
         if (candidate != 0 && candidate >= client->user_time)
             client->user_time = candidate;
     }
@@ -287,7 +290,15 @@ void WindowManager::focus_or_fallback(Monitor& monitor, bool record_user_time)
         return;
     }
 
-    auto eligible = [this](xcb_window_t window) { return is_focus_candidate(window); };
+    // Overlays are focusable on-demand (focus-follows-mouse, cycling, kill)
+    // but must not win automatic fallback selection: a freshly mapped overlay
+    // holds the newest mru_order without ever being focused, and would capture
+    // focus whenever the active window closes over a floating-only workspace.
+    auto eligible = [this](xcb_window_t window)
+    {
+        auto const* c = get_client(window);
+        return c && c->layer != WindowLayer::Overlay && is_focus_candidate(window);
+    };
 
     auto floating_candidates = build_floating_candidates();
 
@@ -391,10 +402,10 @@ void WindowManager::send_wm_take_focus(Client const& client, uint32_t timestamp)
     xcb_send_event(conn_.get(), 0, client.id, XCB_EVENT_MASK_NO_EVENT, reinterpret_cast<char*>(&ev));
 }
 
-void WindowManager::cycle_focus(bool forward)
+bool WindowManager::cycle_focus(bool forward)
 {
     if (focused_monitor_ >= monitors_.size())
-        return;
+        return false;
 
     auto& monitor = focused_monitor();
     auto& ws = monitor.current();
@@ -420,9 +431,10 @@ void WindowManager::cycle_focus(bool forward)
     auto target = forward ? focus_policy::cycle_focus_next(candidates, active_window_)
                           : focus_policy::cycle_focus_prev(candidates, active_window_);
     if (!target)
-        return;
+        return false;
 
     focus_any_window(target->id);
+    return true;
 }
 
 std::vector<focus_policy::FloatingCandidate> WindowManager::build_floating_candidates() const

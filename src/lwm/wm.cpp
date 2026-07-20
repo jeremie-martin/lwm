@@ -693,21 +693,15 @@ std::optional<std::string> WindowManager::run_ipc_command(std::string const& com
             std::string name = trim_ascii(trimmed.substr(layout_set_prefix.size()));
             if (focused_monitor_ >= monitors_.size())
                 return error_reply("no focused monitor");
-            if (name == "master-stack")
-            {
-                focused_monitor().current().layout_strategy = LayoutStrategy::MasterStack;
-                rearrange_monitor(focused_monitor(), true);
-                emit_event(Event_LayoutChange, "{\"event\":\"layout_change\",\"action\":\"layout_set\",\"value\":\"master-stack\"}");
-                return ok_reply("layout set to master-stack");
-            }
-            if (name == "monocle")
-            {
-                focused_monitor().current().layout_strategy = LayoutStrategy::Monocle;
-                rearrange_monitor(focused_monitor(), true);
-                emit_event(Event_LayoutChange, "{\"event\":\"layout_change\",\"action\":\"layout_set\",\"value\":\"monocle\"}");
-                return ok_reply("layout set to monocle");
-            }
-            return error_reply("unknown layout: " + name);
+            auto strategy = parse_layout_strategy(name);
+            if (!strategy)
+                return error_reply("unknown layout: " + name);
+            focused_monitor().current().layout_strategy = *strategy;
+            rearrange_monitor(focused_monitor(), true);
+            std::string strategy_name = layout_strategy_str(*strategy);
+            emit_event(Event_LayoutChange,
+                "{\"event\":\"layout_change\",\"action\":\"layout_set\",\"value\":\"" + strategy_name + "\"}");
+            return ok_reply("layout set to " + strategy_name);
         }
     }
 
@@ -761,7 +755,10 @@ std::optional<std::string> WindowManager::run_ipc_command(std::string const& com
             {
                 return error_reply("invalid delta value: " + delta_str);
             }
-            adjust_master_ratio(delta);
+            if (focused_monitor_ >= monitors_.size())
+                return error_reply("no focused monitor");
+            if (!adjust_master_ratio(delta))
+                return ok_reply("ratio unchanged");
             emit_event(Event_LayoutChange, "{\"event\":\"layout_change\",\"action\":\"ratio_adjust\",\"delta\":" + std::to_string(delta) + "}");
             return ok_reply("ratio adjusted");
         }
@@ -826,20 +823,6 @@ std::optional<std::string> WindowManager::run_ipc_command(std::string const& com
 
     if (trimmed == "workspace list")
     {
-        auto workspace_name = [this](size_t idx) -> std::string {
-            if (idx < config_.workspaces.names.size())
-                return config_.workspaces.names[idx];
-            return std::to_string(idx + 1);
-        };
-        auto layout_name = [](LayoutStrategy s) -> char const* {
-            switch (s)
-            {
-                case LayoutStrategy::MasterStack: return "master-stack";
-                case LayoutStrategy::Monocle:    return "monocle";
-            }
-            return "unknown";
-        };
-
         std::string json = "{\"focused_monitor\":" + std::to_string(focused_monitor_)
             + ",\"monitors\":[";
         for (size_t m = 0; m < monitors_.size(); ++m)
@@ -857,10 +840,10 @@ std::optional<std::string> WindowManager::run_ipc_command(std::string const& com
                 if (w > 0)
                     json += ",";
                 json += "{\"index\":" + std::to_string(w)
-                    + ",\"name\":\"" + json_escape(workspace_name(w)) + "\""
+                    + ",\"name\":\"" + json_escape(config_.workspaces.display_name(w)) + "\""
                     + ",\"current\":" + (w == monitor.current_workspace ? "true" : "false")
                     + ",\"window_count\":" + std::to_string(ws.windows.size())
-                    + ",\"layout\":\"" + layout_name(ws.layout_strategy) + "\"}";
+                    + ",\"layout\":\"" + layout_strategy_str(ws.layout_strategy) + "\"}";
             }
             json += "]}";
         }
@@ -870,7 +853,10 @@ std::optional<std::string> WindowManager::run_ipc_command(std::string const& com
 
     if (trimmed == "focus next" || trimmed == "focus prev")
     {
-        cycle_focus(trimmed == "focus next");
+        if (focused_monitor_ >= monitors_.size())
+            return error_reply("no focused monitor");
+        if (!cycle_focus(trimmed == "focus next"))
+            return error_reply("no focus candidates");
         return ok_reply(std::to_string(active_window_));
     }
 
@@ -902,34 +888,31 @@ std::optional<std::string> WindowManager::run_ipc_command(std::string const& com
 
     if (trimmed == "window list")
     {
-        std::vector<std::pair<uint64_t, xcb_window_t>> ordered;
+        std::vector<std::pair<uint64_t, Client const*>> ordered;
         ordered.reserve(clients_.size());
         for (auto const& [id, client] : clients_)
         {
             if (client.kind == Client::Kind::Dock || client.kind == Client::Kind::Desktop)
                 continue;
-            ordered.push_back({ client.order, id });
+            ordered.push_back({ client.order, &client });
         }
         std::sort(ordered.begin(), ordered.end(), [](auto const& a, auto const& b) { return a.first < b.first; });
 
         std::string json = "{\"focused\":" + std::to_string(active_window_) + ",\"windows\":[";
         bool first = true;
-        for (auto const& [order, id] : ordered)
+        for (auto const& [order, client] : ordered)
         {
-            auto const* client = get_client(id);
-            if (!client)
-                continue;
             if (!first)
                 json += ",";
             first = false;
-            json += "{\"id\":" + std::to_string(id)
+            json += "{\"id\":" + std::to_string(client->id)
                 + ",\"monitor\":" + std::to_string(client->monitor)
                 + ",\"workspace\":" + std::to_string(client->workspace)
                 + ",\"kind\":\"" + client_kind_str(client->kind) + "\""
                 + ",\"class\":\"" + json_escape(client->wm_class) + "\""
                 + ",\"instance\":\"" + json_escape(client->wm_class_name) + "\""
                 + ",\"title\":\"" + json_escape(client->name) + "\""
-                + ",\"focused\":" + (id == active_window_ ? "true" : "false")
+                + ",\"focused\":" + (client->id == active_window_ ? "true" : "false")
                 + ",\"fullscreen\":" + (client->fullscreen ? "true" : "false")
                 + ",\"urgent\":" + (client->urgency.active() ? "true" : "false")
                 + ",\"sticky\":" + (client->sticky ? "true" : "false")
@@ -1745,11 +1728,8 @@ void WindowManager::create_fallback_monitor()
 void WindowManager::init_monitor_workspaces(Monitor& monitor)
 {
     Workspace ws_template {};
-    // Apply configured layout strategy
-    if (config_.layout.strategy == "master-stack")
-        ws_template.layout_strategy = LayoutStrategy::MasterStack;
-    else if (config_.layout.strategy == "monocle")
-        ws_template.layout_strategy = LayoutStrategy::Monocle;
+    if (auto strategy = parse_layout_strategy(config_.layout.strategy))
+        ws_template.layout_strategy = *strategy;
 
     monitor.workspaces.assign(config_.workspaces.count, ws_template);
     monitor.current_workspace = 0;
@@ -3207,8 +3187,11 @@ void WindowManager::launch_program(CommandConfig const& command)
     }
 }
 
-void WindowManager::adjust_master_ratio(double delta)
+bool WindowManager::adjust_master_ratio(double delta)
 {
+    if (focused_monitor_ >= monitors_.size())
+        return false;
+
     auto& ws = focused_monitor().current();
     double min_ratio = config_.layout.min_ratio;
 
@@ -3220,9 +3203,12 @@ void WindowManager::adjust_master_ratio(double delta)
         current = it->second;
 
     double clamped = std::clamp(current + delta, min_ratio, 1.0 - min_ratio);
+    if (clamped == current)
+        return false;
     ws.split_ratios[root_addr] = clamped;
 
     rearrange_monitor(focused_monitor(), true);
+    return true;
 }
 
 void WindowManager::swap_focused_tiled(int offset)

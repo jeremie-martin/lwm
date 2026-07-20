@@ -7,6 +7,7 @@
 #include <map>
 #include <optional>
 #include <string>
+#include <string_view>
 #include <variant>
 #include <vector>
 #include <xcb/randr.h>
@@ -431,6 +432,27 @@ enum class LayoutStrategy
     MasterStack,
     Monocle ///< All tiled windows occupy the full content rect; stacking elects the visible one.
 };
+
+/// Stable name for a layout strategy. Single source of truth for IPC JSON,
+/// config parsing, and command replies.
+inline char const* layout_strategy_str(LayoutStrategy strategy)
+{
+    switch (strategy)
+    {
+        case LayoutStrategy::MasterStack: return "master-stack";
+        case LayoutStrategy::Monocle: return "monocle";
+    }
+    return "unknown";
+}
+
+inline std::optional<LayoutStrategy> parse_layout_strategy(std::string_view name)
+{
+    if (name == "master-stack")
+        return LayoutStrategy::MasterStack;
+    if (name == "monocle")
+        return LayoutStrategy::Monocle;
+    return std::nullopt;
+}
 
 struct Workspace
 {

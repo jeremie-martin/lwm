@@ -177,6 +177,10 @@ private:
     std::string restart_binary_;
     bool suppress_focus_ = false;
     uint32_t last_event_time_ = XCB_CURRENT_TIME;
+    // Latest timestamp from an actual input event (key/button/motion/crossing).
+    // Unlike last_event_time_, never fed by PropertyNotify — user_time stamping
+    // must reflect user interaction, not property churn.
+    uint32_t last_input_time_ = XCB_CURRENT_TIME;
     xcb_keysym_t last_toggle_keysym_ = XCB_NO_SYMBOL;
     xcb_timestamp_t last_toggle_release_time_ = 0;
     DragState drag_state_;
@@ -376,7 +380,9 @@ private:
     void unmanage_window(xcb_window_t window);
     void unmanage_floating_window(xcb_window_t window);
     void focus_any_window(xcb_window_t window, bool record_user_time = true, uint32_t focus_timestamp = 0);
-    void cycle_focus(bool forward);
+    /// Returns true when a target was focused; false when there is no focused
+    /// monitor or no cycle candidates.
+    bool cycle_focus(bool forward);
     void set_fullscreen(Client& client, bool enabled);
     void clear_fullscreen_state(Client& client);
     void set_window_layer(Client& client, WindowLayer layer);
@@ -412,7 +418,9 @@ private:
     void move_window_to_monitor(int direction);
 
     void launch_program(CommandConfig const& command);
-    void adjust_master_ratio(double delta);
+    /// Returns true when the ratio actually changed (false: no focused
+    /// monitor, or already clamped at the bound).
+    bool adjust_master_ratio(double delta);
     void swap_focused_tiled(int offset);
 
     /// Lookup: nullable handle for X event boundaries where the window may not be managed.

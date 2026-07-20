@@ -206,28 +206,11 @@ void WindowManager::update_drag(int16_t root_x, int16_t root_y)
     {
         tr.last_root_x = root_x;
         tr.last_root_y = root_y;
-        if (tr.monitor_idx >= monitors_.size()
-            || monitors_[tr.monitor_idx].current_workspace != tr.workspace_idx)
-        {
-            abort_drag = true;
-            return;
-        }
-
-        int32_t pixel_delta;
-        if (tr.direction == SplitDirection::Horizontal)
-            pixel_delta = static_cast<int32_t>(root_x) - static_cast<int32_t>(tr.start_root_x);
-        else
-            pixel_delta = static_cast<int32_t>(root_y) - static_cast<int32_t>(tr.start_root_y);
-
-        if (tr.available_extent <= 0)
-            return;
 
         // Motion compression: drain all queued motion events, use the latest position.
         // This prevents redundant rearranges when events queue up faster than we process them.
         // A non-motion event drained here is dispatched via handle_event(), which can rebuild
         // monitors_ (RandR) or reassign drag_state_ — so `tr` may be stale/dangling afterwards.
-        // Re-fetch the live variant and re-validate before any further use.
-        TiledResize* live_ptr = &tr;
         {
             xcb_generic_event_t* ev;
             while ((ev = xcb_poll_for_queued_event(conn_.get())) != nullptr)
@@ -248,26 +231,25 @@ void WindowManager::update_drag(int16_t root_x, int16_t root_y)
                 // We must handle this event now to avoid losing it.
                 handle_event(*ev);
                 free(ev);
-                if (!std::holds_alternative<TiledResize>(drag_state_))
-                    return; // drag was cancelled by the handled event
-                // drag_state_ may have been reassigned in place; re-bind to the live variant.
-                live_ptr = std::get_if<TiledResize>(&drag_state_);
                 break;
             }
-
-            if (!live_ptr)
-                return;
         }
 
+        // Single validate-and-compute pass against the live variant: `tr` may be
+        // stale after handle_event, so re-bind (get_if is null if the drag was
+        // cancelled) and re-check monitor/workspace before touching layout.
+        auto* live_ptr = std::get_if<TiledResize>(&drag_state_);
+        if (!live_ptr)
+            return;
         auto& live = *live_ptr;
-        // handle_event may have shrunk monitors_ or switched workspace; re-validate.
         if (live.monitor_idx >= monitors_.size()
             || monitors_[live.monitor_idx].current_workspace != live.workspace_idx)
         {
             abort_drag = true;
             return;
         }
-        // Recompute delta with compressed coordinates against the live variant.
+
+        int32_t pixel_delta;
         if (live.direction == SplitDirection::Horizontal)
             pixel_delta = static_cast<int32_t>(root_x) - static_cast<int32_t>(live.start_root_x);
         else

@@ -31,6 +31,7 @@ void WindowManager::manage_floating_window(xcb_window_t window, bool start_iconi
         }
     }
 
+    bool desktop_pinned = false;
     if (!monitor_idx || !workspace_idx)
     {
         auto target = resolve_window_desktop(window);
@@ -40,6 +41,7 @@ void WindowManager::manage_floating_window(xcb_window_t window, bool start_iconi
         {
             monitor_idx = target.monitor;
             workspace_idx = target.workspace;
+            desktop_pinned = true;
         }
     }
 
@@ -107,8 +109,32 @@ void WindowManager::manage_floating_window(xcb_window_t window, bool start_iconi
         height = 200;
     layout_.apply_size_hints(window, width, height);
 
+    // A position hint may legitimately target a different monitor than the one
+    // chosen above (e.g. `xterm -geometry +2400+100` while another monitor is
+    // focused). For windows not anchored elsewhere — no transient parent, no
+    // _NET_WM_DESKTOP — the hint decides the monitor, so the guard below only
+    // rejects hints that land on no monitor at all.
+    if (has_position_hint && !transient && !desktop_pinned)
+    {
+        int32_t center_x = static_cast<int32_t>(hinted_x) + static_cast<int32_t>(width) / 2;
+        int32_t center_y = static_cast<int32_t>(hinted_y) + static_cast<int32_t>(height) / 2;
+        if (auto hinted_monitor = focus::monitor_index_at_point(
+                monitors_, static_cast<int16_t>(center_x), static_cast<int16_t>(center_y)))
+        {
+            monitor_idx = *hinted_monitor;
+            workspace_idx = monitors_[*hinted_monitor].current_workspace;
+        }
+    }
+
     Geometry placement;
-    if (has_position_hint)
+    if (has_position_hint
+        && floating::hint_targets_monitor(
+            monitors_[*monitor_idx].geometry(),
+            hinted_x,
+            hinted_y,
+            static_cast<uint16_t>(width),
+            static_cast<uint16_t>(height)
+        ))
     {
         placement.x = hinted_x;
         placement.y = hinted_y;

@@ -31,6 +31,7 @@ Intentional limits:
 - `WM_NORMAL_HINTS.min_width` / `min_height` are not enforced
 - `WM_NORMAL_HINTS.width_inc` / `height_inc` are not enforced
 - `WM_NORMAL_HINTS` aspect/gravity hints do not override layout policy
+- floating position hints (`US_POSITION`/`P_POSITION`) choose the monitor whose geometry contains the hinted center, unless the window is anchored by `WM_TRANSIENT_FOR` or `_NET_WM_DESKTOP`; a hint whose center lands on no monitor (or off the anchored monitor) is discarded and the window is placed by the floating placement policy instead
 - runtime changes to `WM_HINTS`, `WM_NORMAL_HINTS`, and `WM_TRANSIENT_FOR` are re-evaluated for managed tiled/floating windows
 - `_NET_WM_USER_TIME_WINDOW` indirection is respected, and changes after manage are re-read so activation time can follow the helper window
 

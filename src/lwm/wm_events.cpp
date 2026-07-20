@@ -99,7 +99,11 @@ void WindowManager::handle_event(xcb_generic_event_t const& event)
     uint8_t response_type = event.response_type & ~0x80;
     uint32_t event_time = extract_event_time(response_type, event);
     if (event_time != 0)
+    {
         last_event_time_ = event_time;
+        if (response_type != XCB_PROPERTY_NOTIFY)
+            last_input_time_ = event_time;
+    }
 
     if (conn_.has_randr() && response_type == conn_.randr_event_base() + XCB_RANDR_SCREEN_CHANGE_NOTIFY)
     {

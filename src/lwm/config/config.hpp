@@ -79,6 +79,13 @@ struct WorkspacesConfig
 {
     size_t count = 10;
     std::vector<std::string> names;
+
+    /// Display name for a per-monitor workspace index: configured name, or the
+    /// 1-based index as fallback. Shared by _NET_DESKTOP_NAMES and IPC JSON.
+    std::string display_name(size_t index) const
+    {
+        return index < names.size() ? names[index] : std::to_string(index + 1);
+    }
 };
 
 struct LayoutConfig
