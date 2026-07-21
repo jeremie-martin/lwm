@@ -1,8 +1,11 @@
 #include "x11_test_harness.hpp"
+#include <X11/Xlib.h>
 #include <catch2/catch_test_macros.hpp>
 #include <chrono>
 #include <filesystem>
 #include <optional>
+#include <xcb/xcb_keysyms.h>
+#include <xcb/xtest.h>
 
 using namespace lwm::test;
 
@@ -60,7 +63,7 @@ struct TestEnvironment
 
     bool ok() const { return conn.ok() && wm.running(); }
 
-    static std::optional<TestEnvironment> create()
+    static std::optional<TestEnvironment> create(std::string config = "[workspaces]\ncount = 2\n")
     {
         auto& env = X11TestEnvironment::instance();
         if (!env.available())
@@ -76,7 +79,7 @@ struct TestEnvironment
             return std::nullopt;
         }
 
-        LwmProcess wm(env.display(), "[workspaces]\ncount = 2\n");
+        LwmProcess wm(env.display(), std::move(config));
         if (!wm.running())
         {
             WARN("Failed to start lwm.");
@@ -92,6 +95,37 @@ struct TestEnvironment
         return TestEnvironment{ env, std::move(conn), std::move(wm) };
     }
 };
+
+std::optional<xcb_keycode_t> first_keycode_for_keysym(X11Connection& conn, xcb_keysym_t keysym)
+{
+    xcb_key_symbols_t* key_symbols = xcb_key_symbols_alloc(conn.get());
+    if (!key_symbols)
+        return std::nullopt;
+
+    xcb_keycode_t* keycodes = xcb_key_symbols_get_keycode(key_symbols, keysym);
+    std::optional<xcb_keycode_t> result;
+    if (keycodes && keycodes[0] != XCB_NO_SYMBOL)
+        result = keycodes[0];
+
+    free(keycodes);
+    xcb_key_symbols_free(key_symbols);
+    return result;
+}
+
+bool send_key_chord(X11Connection& conn, xcb_keysym_t modifier, xcb_keysym_t key)
+{
+    auto modifier_code = first_keycode_for_keysym(conn, modifier);
+    auto key_code = first_keycode_for_keysym(conn, key);
+    if (!modifier_code || !key_code)
+        return false;
+
+    xcb_test_fake_input(conn.get(), XCB_KEY_PRESS, *modifier_code, XCB_CURRENT_TIME, conn.root(), 0, 0, 0);
+    xcb_test_fake_input(conn.get(), XCB_KEY_PRESS, *key_code, XCB_CURRENT_TIME, conn.root(), 0, 0, 0);
+    xcb_test_fake_input(conn.get(), XCB_KEY_RELEASE, *key_code, XCB_CURRENT_TIME, conn.root(), 0, 0, 0);
+    xcb_test_fake_input(conn.get(), XCB_KEY_RELEASE, *modifier_code, XCB_CURRENT_TIME, conn.root(), 0, 0, 0);
+    xcb_flush(conn.get());
+    return true;
+}
 
 } // namespace
 
@@ -391,6 +425,130 @@ TEST_CASE("Integration: monocle layout assigns identical geometries", "[integrat
     REQUIRE(restore.has_value());
     REQUIRE(restore->exit_code == 0);
 
+    destroy_window(conn, w3);
+    destroy_window(conn, w2);
+    destroy_window(conn, w1);
+}
+
+TEST_CASE("Integration: monocle layout survives exec restart", "[integration][layout][monocle][restart]")
+{
+    auto test_env = TestEnvironment::create();
+    if (!test_env)
+        SKIP("Test environment not available");
+    if (!lwmctl_available())
+        SKIP("lwmctl binary not available");
+
+    auto& conn = test_env->conn;
+    auto socket_path = wait_for_ipc_socket_path(conn);
+    REQUIRE(socket_path.has_value());
+
+    xcb_window_t w1 = create_window(conn, 10, 10, 200, 150);
+    map_window(conn, w1);
+    REQUIRE(wait_for_active_window(conn, w1, kTimeout));
+    xcb_window_t w2 = create_window(conn, 40, 40, 200, 150);
+    map_window(conn, w2);
+    REQUIRE(wait_for_active_window(conn, w2, kTimeout));
+
+    auto set_layout = run_lwmctl(test_env->wm, { "layout", "set", "monocle" }, *socket_path);
+    REQUIRE(set_layout.has_value());
+    REQUIRE(set_layout->exit_code == 0);
+    REQUIRE(wait_for_condition(
+        [&]()
+        {
+            auto first = get_window_geometry(conn, w1);
+            auto second = get_window_geometry(conn, w2);
+            return first && second && *first == *second;
+        },
+        kTimeout
+    ));
+
+    xcb_atom_t supporting = intern_atom(conn.get(), "_NET_SUPPORTING_WM_CHECK");
+    auto old_supporting = get_window_property_window(conn.get(), conn.root(), supporting);
+    REQUIRE(old_supporting.has_value());
+
+    auto restart = run_lwmctl(test_env->wm, { "restart" }, *socket_path);
+    REQUIRE(restart.has_value());
+    REQUIRE(restart->exit_code == 0);
+    REQUIRE(wait_for_condition(
+        [&]()
+        {
+            auto current = get_window_property_window(conn.get(), conn.root(), supporting);
+            return current && *current != XCB_NONE && *current != *old_supporting;
+        },
+        std::chrono::seconds(5)
+    ));
+
+    REQUIRE(wait_for_condition(
+        [&]()
+        {
+            auto first = get_window_geometry(conn, w1);
+            auto second = get_window_geometry(conn, w2);
+            return first && second && *first == *second;
+        },
+        kTimeout
+    ));
+    auto list = run_lwmctl(test_env->wm, { "workspace", "list" });
+    REQUIRE(list.has_value());
+    REQUIRE(list->exit_code == 0);
+    REQUIRE(list->stdout_text.find("\"layout\":\"monocle\"") != std::string::npos);
+
+    destroy_window(conn, w2);
+    destroy_window(conn, w1);
+}
+
+TEST_CASE("Integration: monocle swap focuses adjacent tiled window", "[integration][layout][monocle][swap]")
+{
+    auto test_env = TestEnvironment::create(R"(
+[workspaces]
+count = 2
+
+[[binds]]
+key = "super+j"
+swap_next = true
+)");
+    if (!test_env)
+        SKIP("Test environment not available");
+    if (!lwmctl_available())
+        SKIP("lwmctl binary not available");
+
+    auto& conn = test_env->conn;
+    auto socket_path = wait_for_ipc_socket_path(conn);
+    REQUIRE(socket_path.has_value());
+
+    xcb_window_t w1 = create_window(conn, 10, 10, 200, 150);
+    map_window(conn, w1);
+    REQUIRE(wait_for_active_window(conn, w1, kTimeout));
+    xcb_window_t w2 = create_window(conn, 40, 40, 200, 150);
+    map_window(conn, w2);
+    REQUIRE(wait_for_active_window(conn, w2, kTimeout));
+    xcb_window_t w3 = create_window(conn, 70, 70, 200, 150);
+    map_window(conn, w3);
+    REQUIRE(wait_for_active_window(conn, w3, kTimeout));
+
+    xcb_atom_t dialog = intern_atom(conn.get(), "_NET_WM_WINDOW_TYPE_DIALOG");
+    REQUIRE(dialog != XCB_NONE);
+    xcb_window_t floating = create_window(conn, 100, 100, 180, 120);
+    set_window_type(conn, floating, dialog);
+    map_window(conn, floating);
+    REQUIRE(wait_for_active_window(conn, floating, kTimeout));
+
+    auto set_layout = run_lwmctl(test_env->wm, { "layout", "set", "monocle" }, *socket_path);
+    REQUIRE(set_layout.has_value());
+    REQUIRE(set_layout->exit_code == 0);
+
+    auto focus = run_lwmctl(
+        test_env->wm,
+        { "focus", "window=" + std::to_string(w1) },
+        *socket_path
+    );
+    REQUIRE(focus.has_value());
+    REQUIRE(focus->exit_code == 0);
+    REQUIRE(wait_for_active_window(conn, w1, kTimeout));
+
+    REQUIRE(send_key_chord(conn, XStringToKeysym("Super_L"), XStringToKeysym("j")));
+    REQUIRE(wait_for_active_window(conn, w2, kTimeout));
+
+    destroy_window(conn, floating);
     destroy_window(conn, w3);
     destroy_window(conn, w2);
     destroy_window(conn, w1);

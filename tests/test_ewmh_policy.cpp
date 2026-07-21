@@ -3,6 +3,17 @@
 
 using namespace lwm;
 
+TEST_CASE("X timestamp ordering handles 32-bit wraparound", "[ewmh][policy][timestamp]")
+{
+    REQUIRE(ewmh_policy::timestamp_is_before(100, 200));
+    REQUIRE_FALSE(ewmh_policy::timestamp_is_before(200, 100));
+    REQUIRE_FALSE(ewmh_policy::timestamp_is_before(200, 200));
+
+    // A small post-wrap timestamp follows a timestamp near UINT32_MAX.
+    REQUIRE_FALSE(ewmh_policy::timestamp_is_before(0x00000020U, 0xFFFFFFF0U));
+    REQUIRE(ewmh_policy::timestamp_is_before(0xFFFFFFF0U, 0x00000020U));
+}
+
 // ─────────────────────────────────────────────────────────────────────────────
 // Desktop index encoding tests
 // ─────────────────────────────────────────────────────────────────────────────

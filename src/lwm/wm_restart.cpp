@@ -24,7 +24,7 @@ namespace lwm {
 namespace {
 
 constexpr uint32_t RESTART_STATE_VERSION = 3;
-constexpr uint32_t RESTART_RATIO_STATE_VERSION = 2;
+constexpr uint32_t RESTART_RATIO_STATE_VERSION = 3;
 constexpr size_t CLIENT_PROP_BASE_COUNT = 24; // v3: +kind
 constexpr size_t CLIENT_PROP_URGENCY_COUNT = 25; // v4: +urgency ownership
 constexpr size_t CLIENT_PROP_APP_PREF_COUNT = 26; // v5: +app preference bits
@@ -259,8 +259,9 @@ void WindowManager::serialize_restart_state()
         floating_order.data()
     );
 
-    // Split ratios per workspace: [version, num_monitors, for each monitor: [num_workspaces,
-    //   for each workspace: [num_entries, for each entry: [depth, path, ratio_lo, ratio_hi]]]]
+    // Layout strategy and split ratios per workspace: [version, num_monitors,
+    //   for each monitor: [num_workspaces, for each workspace:
+    //   [layout_strategy, num_entries, for each entry: [depth, path, ratio_lo, ratio_hi]]]]
     // Ratio stored as uint64_t bit pattern split into two uint32_t values.
     {
         std::vector<uint32_t> ratio_data;
@@ -271,6 +272,7 @@ void WindowManager::serialize_restart_state()
             ratio_data.push_back(static_cast<uint32_t>(monitor.workspaces.size()));
             for (auto const& workspace : monitor.workspaces)
             {
+                ratio_data.push_back(static_cast<uint32_t>(workspace.layout_strategy));
                 ratio_data.push_back(static_cast<uint32_t>(workspace.split_ratios.size()));
                 for (auto const& [addr, ratio] : workspace.split_ratios)
                 {
@@ -366,7 +368,7 @@ bool WindowManager::restore_global_restart_state()
             auto* rdata = static_cast<uint32_t const*>(xcb_get_property_value(ratio_reply));
             size_t pos = 0;
 
-            if (rlen >= 2 && (rdata[0] == 1 || rdata[0] == RESTART_RATIO_STATE_VERSION))
+            if (rlen >= 2 && rdata[0] >= 1 && rdata[0] <= RESTART_RATIO_STATE_VERSION)
             {
                 uint32_t ratio_version = rdata[0];
                 pos = 1;
@@ -376,8 +378,19 @@ bool WindowManager::restore_global_restart_state()
                     uint32_t num_ws = rdata[pos++];
                     for (uint32_t wi = 0; wi < num_ws && pos < rlen; ++wi)
                     {
+                        std::optional<LayoutStrategy> layout_strategy;
+                        if (ratio_version >= 3)
+                        {
+                            uint32_t serialized_strategy = rdata[pos++];
+                            if (serialized_strategy <= static_cast<uint32_t>(LayoutStrategy::Monocle))
+                                layout_strategy = static_cast<LayoutStrategy>(serialized_strategy);
+                            if (pos >= rlen)
+                                break;
+                        }
                         uint32_t num_entries = rdata[pos++];
                         bool can_apply = mi < monitors_.size() && wi < monitors_[mi].workspaces.size();
+                        if (can_apply && layout_strategy)
+                            monitors_[mi].workspaces[wi].layout_strategy = *layout_strategy;
                         for (uint32_t ei = 0; ei < num_entries; ++ei)
                         {
                             std::optional<SplitAddress> addr;

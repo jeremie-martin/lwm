@@ -336,6 +336,29 @@ TEST_CASE("plan_hotplug: workspace count decrease clamps indices", "[hotplug][po
     REQUIRE(plan.workspace_previous[0].second == 3); // Clamped from 8 to 3
 }
 
+TEST_CASE("plan_hotplug: layout strategies survive monitor rebuilds", "[hotplug][policy][layout]")
+{
+    std::vector<Monitor> new_monitors = {
+        make_monitor("HDMI-0", 0, 0, 1920, 1080, 3),
+    };
+    std::unordered_map<std::string, hotplug_policy::SavedWorkspaceState> ws_state = {
+        { "HDMI-0", { 1, 0, {
+            LayoutStrategy::Monocle,
+            LayoutStrategy::MasterStack,
+            LayoutStrategy::Monocle,
+        } } },
+    };
+
+    auto plan = hotplug_policy::plan_hotplug(new_monitors, {}, {}, ws_state, "HDMI-0");
+
+    REQUIRE(plan.workspace_layouts.size() == 3);
+    REQUIRE(plan.workspace_layouts[0].monitor == 0);
+    REQUIRE(plan.workspace_layouts[0].workspace == 0);
+    REQUIRE(plan.workspace_layouts[0].strategy == LayoutStrategy::Monocle);
+    REQUIRE(plan.workspace_layouts[1].strategy == LayoutStrategy::MasterStack);
+    REQUIRE(plan.workspace_layouts[2].strategy == LayoutStrategy::Monocle);
+}
+
 TEST_CASE("plan_hotplug: focused monitor recovery by name", "[hotplug][policy]")
 {
     std::vector<Monitor> new_monitors;

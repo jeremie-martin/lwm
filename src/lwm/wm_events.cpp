@@ -1218,7 +1218,8 @@ void WindowManager::handle_active_window_request(xcb_client_message_event_t cons
         }
 
         auto* active_client = get_client(active_window_);
-        if (active_client && active_client->user_time != 0 && timestamp < active_client->user_time)
+        if (active_client && active_client->user_time != 0
+            && ewmh_policy::timestamp_is_before(timestamp, active_client->user_time))
         {
             LOG_DEBUG("Focus stealing prevented, setting demands attention");
             deny_with_attention();
@@ -1741,7 +1742,15 @@ void WindowManager::handle_randr_screen_change()
     std::unordered_map<std::string, hotplug_policy::SavedWorkspaceState> saved_workspace_state;
     for (auto const& monitor : monitors_)
     {
-        saved_workspace_state[monitor.name] = { monitor.current_workspace, monitor.previous_workspace };
+        std::vector<LayoutStrategy> layout_strategies;
+        layout_strategies.reserve(monitor.workspaces.size());
+        for (auto const& workspace : monitor.workspaces)
+            layout_strategies.push_back(workspace.layout_strategy);
+        saved_workspace_state[monitor.name] = {
+            monitor.current_workspace,
+            monitor.previous_workspace,
+            std::move(layout_strategies),
+        };
     }
 
     // Save focused monitor name for restoration
@@ -1766,6 +1775,14 @@ void WindowManager::handle_randr_screen_change()
     {
         if (mi < monitors_.size())
             monitors_[mi].previous_workspace = ws;
+    }
+    for (auto const& restore : plan.workspace_layouts)
+    {
+        if (restore.monitor < monitors_.size()
+            && restore.workspace < monitors_[restore.monitor].workspaces.size())
+        {
+            monitors_[restore.monitor].workspaces[restore.workspace].layout_strategy = restore.strategy;
+        }
     }
 
     if (!monitors_.empty())

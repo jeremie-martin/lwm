@@ -120,7 +120,68 @@ bool matches_root_geometry(X11Connection& conn, xcb_window_t window)
     return match;
 }
 
+xcb_window_t create_override_redirect_window(X11Connection& conn)
+{
+    xcb_window_t window = xcb_generate_id(conn.get());
+    uint32_t override_redirect = 1;
+    xcb_create_window(
+        conn.get(),
+        XCB_COPY_FROM_PARENT,
+        window,
+        conn.root(),
+        50,
+        50,
+        160,
+        100,
+        0,
+        XCB_WINDOW_CLASS_INPUT_OUTPUT,
+        conn.screen()->root_visual,
+        XCB_CW_OVERRIDE_REDIRECT,
+        &override_redirect
+    );
+    return window;
+}
+
 } // namespace
+
+TEST_CASE("Integration: overlay restacking rises above unmanaged windows", "[integration][overlay][stacking]")
+{
+    auto test_env = TestEnvironment::create(overlay_config());
+    if (!test_env)
+        SKIP("Test environment not available");
+
+    auto& conn = test_env->conn;
+    xcb_atom_t utility = intern_atom(conn.get(), "_NET_WM_WINDOW_TYPE_UTILITY");
+    xcb_atom_t restack = intern_atom(conn.get(), "_NET_RESTACK_WINDOW");
+    REQUIRE(utility != XCB_NONE);
+    REQUIRE(restack != XCB_NONE);
+
+    // A single managed overlay exercises the case where the sibling chain has
+    // no relative restack request to issue.
+    xcb_window_t overlay = create_window(conn, 20, 20, 200, 120);
+    set_window_type(conn, overlay, utility);
+    map_window(conn, overlay);
+    REQUIRE(wait_for_condition([&]() { return matches_root_geometry(conn, overlay); }, kTimeout));
+
+    xcb_window_t unmanaged = create_override_redirect_window(conn);
+    xcb_map_window(conn.get(), unmanaged);
+    xcb_flush(conn.get());
+    REQUIRE(wait_for_condition([&]() { return is_stacked_above(conn, unmanaged, overlay); }, kTimeout));
+
+    send_client_message(conn, overlay, restack, 2, XCB_NONE, XCB_STACK_MODE_ABOVE, 0, 0);
+    REQUIRE(wait_for_condition([&]() { return is_stacked_above(conn, overlay, unmanaged); }, kTimeout));
+
+    uint32_t stack_mode = XCB_STACK_MODE_ABOVE;
+    xcb_configure_window(conn.get(), unmanaged, XCB_CONFIG_WINDOW_STACK_MODE, &stack_mode);
+    xcb_flush(conn.get());
+    REQUIRE(wait_for_condition([&]() { return is_stacked_above(conn, unmanaged, overlay); }, kTimeout));
+
+    send_client_message(conn, overlay, restack, 2, XCB_NONE, XCB_STACK_MODE_ABOVE, 0, 0);
+    REQUIRE(wait_for_condition([&]() { return is_stacked_above(conn, overlay, unmanaged); }, kTimeout));
+
+    destroy_window(conn, unmanaged);
+    destroy_window(conn, overlay);
+}
 
 TEST_CASE("Integration: overlay layer stays above fullscreen windows and remains borderless", "[integration][overlay]")
 {

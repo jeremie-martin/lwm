@@ -698,6 +698,7 @@ std::optional<std::string> WindowManager::run_ipc_command(std::string const& com
                 return error_reply("unknown layout: " + name);
             focused_monitor().current().layout_strategy = *strategy;
             rearrange_monitor(focused_monitor(), true);
+            flush_and_drain_crossing();
             std::string strategy_name = layout_strategy_str(*strategy);
             emit_event(Event_LayoutChange,
                 "{\"event\":\"layout_change\",\"action\":\"layout_set\",\"value\":\"" + strategy_name + "\"}");
@@ -3233,11 +3234,12 @@ void WindowManager::swap_focused_tiled(int offset)
         return;
 
     // In Monocle every slot has the same content rect, so swapping positions
-    // produces no visible change; cycle focus instead so the swap target
-    // surfaces as the visible window.
+    // produces no visible change. Focus the adjacent tiled slot directly so
+    // floating windows and MRU ordering cannot alter the requested target.
     if (ws.layout_strategy == LayoutStrategy::Monocle)
     {
-        cycle_focus(offset > 0);
+        xcb_window_t target = ws.windows[other];
+        focus_any_window(target);
         return;
     }
 
@@ -3551,6 +3553,19 @@ void WindowManager::apply_stacking()
         if (prev_visible != XCB_NONE)
             stack_above_sibling(window, prev_visible);
         prev_visible = window;
+    }
+
+    // Sibling-relative requests only order managed windows among themselves.
+    // Absolutely raise the top overlay so an unmanaged override-redirect
+    // window cannot remain above it after an external stacking perturbation.
+    if (prev_visible != XCB_NONE)
+    {
+        auto const* top = get_client(prev_visible);
+        if (top && compute_stack_tier(*top) == stacking_policy::Tier::Overlay)
+        {
+            uint32_t stack_mode = XCB_STACK_MODE_ABOVE;
+            xcb_configure_window(conn_.get(), prev_visible, XCB_CONFIG_WINDOW_STACK_MODE, &stack_mode);
+        }
     }
 
     ewmh_.update_client_list_stacking(order);

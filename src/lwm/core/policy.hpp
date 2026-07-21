@@ -9,6 +9,13 @@
 
 namespace lwm::ewmh_policy {
 
+/// X timestamps are 32-bit millisecond counters and comparisons must treat
+/// subtraction as a signed delta so ordering remains correct across wraparound.
+inline bool timestamp_is_before(uint32_t timestamp, uint32_t reference)
+{
+    return timestamp != reference && timestamp - reference >= 0x80000000U;
+}
+
 inline uint32_t desktop_index(size_t monitor_idx, size_t workspace_idx, size_t workspaces_per_monitor)
 {
     return static_cast<uint32_t>(monitor_idx * workspaces_per_monitor + workspace_idx);
@@ -491,6 +498,14 @@ struct SavedWorkspaceState
 {
     size_t current_workspace = 0;
     size_t previous_workspace = 0;
+    std::vector<LayoutStrategy> layout_strategies;
+};
+
+struct WorkspaceLayoutRestore
+{
+    size_t monitor = 0;
+    size_t workspace = 0;
+    LayoutStrategy strategy = LayoutStrategy::MasterStack;
 };
 
 struct WindowRelocation
@@ -509,6 +524,7 @@ struct HotplugPlan
     // Per-monitor workspace indices to restore (monitor_idx -> {current, previous})
     std::vector<std::pair<size_t, size_t>> workspace_current;
     std::vector<std::pair<size_t, size_t>> workspace_previous;
+    std::vector<WorkspaceLayoutRestore> workspace_layouts;
 };
 
 /// Pure function: compute a relocation plan for windows after a monitor configuration change.
@@ -544,6 +560,11 @@ inline HotplugPlan plan_hotplug(
         {
             plan.workspace_current.push_back({ i, std::min(it->second.current_workspace, ws_count - 1) });
             plan.workspace_previous.push_back({ i, std::min(it->second.previous_workspace, ws_count - 1) });
+            size_t layout_count = std::min(it->second.layout_strategies.size(), mon.workspaces.size());
+            for (size_t workspace = 0; workspace < layout_count; ++workspace)
+            {
+                plan.workspace_layouts.push_back({ i, workspace, it->second.layout_strategies[workspace] });
+            }
         }
     }
 

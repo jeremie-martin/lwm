@@ -223,8 +223,11 @@ void WindowManager::focus_any_window(xcb_window_t window, bool record_user_time,
     if (record_user_time)
     {
         uint32_t candidate = focus_timestamp != 0 ? focus_timestamp : last_input_time_;
-        if (candidate != 0 && candidate >= client->user_time)
+        if (candidate != 0
+            && (client->user_time == 0 || !ewmh_policy::timestamp_is_before(candidate, client->user_time)))
+        {
             client->user_time = candidate;
+        }
     }
 
     conn_.flush();

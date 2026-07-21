@@ -563,6 +563,53 @@ TEST_CASE(
 }
 
 TEST_CASE(
+    "Integration: _NET_ACTIVE_WINDOW timestamps remain ordered across wraparound",
+    "[integration][client_message][focus][user_time][wraparound]"
+)
+{
+    auto test_env = TestEnvironment::create();
+    if (!test_env)
+        SKIP("Test environment not available");
+
+    auto& conn = test_env->conn;
+    xcb_atom_t net_active_window = intern_atom(conn.get(), "_NET_ACTIVE_WINDOW");
+    xcb_atom_t net_wm_user_time = intern_atom(conn.get(), "_NET_WM_USER_TIME");
+    xcb_atom_t demands_attention = intern_atom(conn.get(), "_NET_WM_STATE_DEMANDS_ATTENTION");
+    REQUIRE(net_active_window != XCB_NONE);
+    REQUIRE(net_wm_user_time != XCB_NONE);
+    REQUIRE(demands_attention != XCB_NONE);
+
+    xcb_window_t w1 = create_window(conn, 10, 10, 220, 160);
+    map_window(conn, w1);
+    REQUIRE(wait_for_active_window(conn, w1, kTimeout));
+
+    xcb_window_t w2 = create_window(conn, 60, 60, 220, 160);
+    uint32_t initial_time = 0xFFFFFFD0U;
+    xcb_change_property(
+        conn.get(), XCB_PROP_MODE_REPLACE, w2, net_wm_user_time,
+        XCB_ATOM_CARDINAL, 32, 1, &initial_time
+    );
+    map_window(conn, w2);
+    REQUIRE(wait_for_active_window(conn, w2, kTimeout));
+
+    send_client_message(conn, w1, net_active_window, 1, 0xFFFFFFF0U, 0, 0, 0);
+    REQUIRE(wait_for_active_window(conn, w1, kTimeout));
+
+    // 0x20 is later than 0xfffffff0 in X's signed-delta ordering.
+    send_client_message(conn, w2, net_active_window, 1, 0x00000020U, 0, 0, 0);
+    REQUIRE(wait_for_active_window(conn, w2, kTimeout));
+
+    // The accepted post-wrap timestamp must also have advanced w2's fallback
+    // user_time, making an older post-wrap request stale.
+    send_client_message(conn, w1, net_active_window, 1, 0x00000010U, 0, 0, 0);
+    REQUIRE(wait_for_active_window(conn, w2, kTimeout));
+    REQUIRE(wait_for_condition([&]() { return has_state(conn, w1, demands_attention); }, kTimeout));
+
+    destroy_window(conn, w2);
+    destroy_window(conn, w1);
+}
+
+TEST_CASE(
     "Integration: _NET_ACTIVE_WINDOW on iconic fullscreen-suppressed client sets attention",
     "[integration][client_message][focus][fullscreen][user_time]"
 )
