@@ -64,7 +64,7 @@ Main binary paths: `build/src/app/lwm` and `build/src/app/lwmctl`
 ## Install
 
 ```bash
-make install
+sudo make install
 ```
 
 Default install paths: `/usr/local/bin/lwm`, `/usr/local/bin/lwmctl`, and `/usr/local/bin/lwm-notify`.
@@ -92,30 +92,34 @@ lwm /path/to/config.toml
 LWM exposes a local control socket and ships `lwmctl` for explicit runtime commands:
 
 ```bash
+lwmctl --help
 lwmctl ping
 lwmctl version
 lwmctl reload-config
 lwmctl restart
+lwmctl exec /path/to/lwm
 lwmctl layout set monocle
 lwmctl layout set master-stack
 lwmctl ratio set 0.60
 lwmctl ratio adjust -0.05
 lwmctl ratio reset
-lwmctl workspace switch 2
+lwmctl workspace switch 2   # workspace indices are 0-based
 lwmctl workspace next
+lwmctl workspace prev
 lwmctl workspace list
 lwmctl focus next
+lwmctl focus prev
 lwmctl focus window=0x3600007
 lwmctl window list
 lwmctl subscribe focus_change,workspace_switch
 lwmctl notify-attention window=0x3600007
 ```
 
-`workspace list` and `window list` return JSON. `subscribe` streams JSON lines; an empty filter subscribes to all event types, while a comma-separated filter may include `window_map`, `window_unmap`, `focus_change`, `workspace_switch`, `layout_change`, `config_reload`, and `key_action`.
+`lwmctl --help` is the complete CLI reference. `workspace list` and `window list` return JSON. `subscribe` streams JSON lines; an empty filter subscribes to all event types, while a comma-separated filter may include `window_map`, `window_unmap`, `focus_change`, `workspace_switch`, `layout_change`, `config_reload`, and `key_action`.
 
 `lwmctl` discovers the socket via `--socket`, `LWM_SOCKET`, the root-window `_LWM_IPC_SOCKET` property, then the default runtime path.
 
-Config reload is explicit by design. LWM does not watch the config file automatically. Reload can update appearance, key and mouse bindings, rules, commands, autostart entries, layout defaults, and focus settings; changing `[workspaces].count` still requires a restart.
+Config reload is explicit by design. LWM does not watch the config file automatically. Reload applies appearance, key and mouse bindings, rules, commands, scratchpad definitions, layout defaults, and focus settings. It does not rerun autostart commands; changing `[workspaces].count` still requires a restart.
 
 ## Run in Xephyr
 
@@ -145,8 +149,11 @@ DISPLAY=:100 xterm
 - [`ARCHITECTURE.md`](ARCHITECTURE.md): runtime model, invariants, state ownership, and transition funnels
 - [`COMPLIANCE.md`](COMPLIANCE.md): ICCCM/EWMH surface, protocol behavior, and known limits
 - [`CONTRIBUTING.md`](CONTRIBUTING.md): build/test workflow, code map, and change checklist
+- [`config.toml.example`](config.toml.example): commented configuration reference and working starter file
 - [`SHADERS.md`](SHADERS.md): using picom + GLSL shaders on top of LWM
 - [`ROADMAP.md`](ROADMAP.md): open work and open questions
+
+`CLAUDE.md` is an agent-only reading order, not part of the public user documentation.
 
 ## License
 

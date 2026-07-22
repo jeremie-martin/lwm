@@ -8,8 +8,8 @@ This file is the operational guide for changing LWM safely.
 make          # release build
 make debug    # debug build
 make test     # build and run the full test suite
-make install
-make uninstall # currently removes /usr/local/bin/lwm only
+sudo make install
+sudo make uninstall # currently removes /usr/local/bin/lwm only
 make clean
 ```
 
@@ -103,13 +103,7 @@ If you change behavior:
 2. update `config.toml.example` if the config surface changed
 3. update the docs that own the changed behavior
 
-Doc ownership:
-
-- [`README.md`](README.md): setup, install, run, and a short mental model
-- [`ARCHITECTURE.md`](ARCHITECTURE.md): runtime model, invariants, and transition funnels
-- [`COMPLIANCE.md`](COMPLIANCE.md): ICCCM/EWMH behavior and limits
-- [`SHADERS.md`](SHADERS.md): compositor-facing visual recipes and LWM-specific properties useful to compositors
-- [`ROADMAP.md`](ROADMAP.md): open work and open questions
+The documentation map and audience entry points are maintained in the `Documentation` section of [`README.md`](README.md). Update the document that owns the changed behavior, plus `config.toml.example` for user-facing configuration changes.
 
 ## Common Change Recipes
 

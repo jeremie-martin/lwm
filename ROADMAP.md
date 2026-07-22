@@ -1,12 +1,12 @@
 # Roadmap
 
 Open work only. Closed items live in commit history.
-Audited against `git log` and `src/` on 2026-06-17.
+Audited against `git log` and `src/` on 2026-07-22.
 
 ## Layout
 
 - More layout strategies in `src/lwm/layout/strategy.cpp` — master-stack and monocle exist today. Candidates: tabbed, dwindle/spiral, columns, centered-master.
-- Per-monitor layout parameters (ratio, gaps).
+- Per-monitor layout parameters such as gaps; split ratios already exist per workspace.
 
 ## Multi-monitor
 

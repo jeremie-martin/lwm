@@ -27,7 +27,8 @@ launcher = { argv = ["dmenu_run"] }
 [workspaces]
 # Number of workspaces per monitor (must be >= 1).
 count = 10
-# Optional names exposed through EWMH and the internal bar.
+# Workspace indices used by rules, keybinds, IPC, and EWMH are 0-based.
+# Names are display labels exposed through EWMH and the internal bar.
 names = ["1", "2", "3", "4", "5", "6", "7", "8", "9", "10"]
 
 # Commands run once when LWM starts. Use:
@@ -124,7 +125,8 @@ swap_prev = true
 key = "Print"
 spawn = { shell = "~/.local/bin/screenshot --mode selection" }
 
-# Generated workspace binding groups
+# Generated workspace binding groups. Each group replaces the built-in group
+# with the same mode and modifier.
 # mode:
 #   "switch" => focus workspace N
 #   "move"   => send focused window to workspace N
@@ -139,7 +141,8 @@ mode = "move"
 mod = "super+shift"
 keys = ["ampersand", "eacute", "quotedbl", "apostrophe", "parenleft", "minus", "egrave", "underscore", "ccedilla", "agrave"]
 
-# Optional QWERTY workspace groups:
+# Optional QWERTY workspace groups. Replace the corresponding groups above;
+# do not enable both groups with the same mode and modifier.
 # [[workspace_binds]]
 # mode = "switch"
 # mod = "super"
@@ -163,7 +166,7 @@ keys = ["ampersand", "eacute", "quotedbl", "apostrophe", "parenleft", "minus", "
 #   borderless = true
 #   center = true
 #   geometry = { x = 100, y = 100, width = 800, height = 600 }
-#   workspace = 1
+#   workspace = 1           # zero-based; use workspace_name when possible
 #   monitor = 0
 #   workspace_name = "dev"   # optional if you prefer names
 #   monitor_name = "HDMI-1"  # optional if you prefer names

@@ -2,14 +2,7 @@
 
 This is the maintainer-oriented source of truth for how LWM is supposed to work. It explains the model, the state authority boundaries, and the transition funnels that should stay authoritative when behavior changes.
 
-Use the docs as follows:
-
-- [`README.md`](README.md): build, install, run, configure
-- `ARCHITECTURE.md`: model, invariants, and high-value event flow
-- [`COMPLIANCE.md`](COMPLIANCE.md): ICCCM/EWMH surface and limits
-- [`CONTRIBUTING.md`](CONTRIBUTING.md): workflow, code map, tests, and debugging
-- [`SHADERS.md`](SHADERS.md): compositor/shader recipes and LWM-specific compositor properties
-- [`ROADMAP.md`](ROADMAP.md): open work and design questions
+The public documentation map is maintained in [`README.md`](README.md). This document is the maintainer reference for runtime behavior.
 
 ## 1. Core Model
 

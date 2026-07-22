@@ -7,6 +7,10 @@ windows and keys its rules off the EWMH state LWM already maintains.
 
 This document is a recipe, not a feature of LWM itself.
 
+Picom's shader configuration is compositor-version-sensitive. LWM does not
+vendor or test picom; verify the example against the picom build installed on
+your system before wiring it into a session.
+
 ## What LWM gives the compositor
 
 Picom rules can match on standard X/EWMH state. LWM keeps the following

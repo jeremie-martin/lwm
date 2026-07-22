@@ -39,6 +39,7 @@ WM_PID=$!
 sleep 0.5
 
 # Launch Polybar (if available)
+POLYBAR_PID=""
 if command -v polybar &> /dev/null; then
     echo "Launching Polybar..."
     DISPLAY=:100 polybar --config="$CONFIG_DIR/polybar.ini" main &
@@ -55,7 +56,9 @@ read -p "Press Enter to exit..."
 
 # Clean up
 echo "Cleaning up..."
-kill $POLYBAR_PID 2>/dev/null || true
+if [ -n "$POLYBAR_PID" ]; then
+    kill "$POLYBAR_PID" 2>/dev/null || true
+fi
 kill $WM_PID 2>/dev/null || true
 kill $XEPHYR_PID 2>/dev/null || true
 
