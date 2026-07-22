@@ -134,7 +134,6 @@ Suppression rules while an owner exists:
 
 - non-owner managed tiled/floating siblings in that visible scope are suppressed from focus, fallback, normal layout, and managed restacking
 - suppressed managed windows are physically hidden through the normal visibility path
-- overlay-layer windows are exempt
 - managed transients whose `transient_for` points to the owner are exempt
 
 Stack authority rules:

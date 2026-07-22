@@ -160,7 +160,6 @@ keys = ["ampersand", "eacute", "quotedbl", "apostrophe", "parenleft", "minus", "
 #
 # apply keys:
 #   floating, fullscreen, above, below, sticky, skip_taskbar, skip_pager
-#   layer = "overlay"
 #   borderless = true
 #   center = true
 #   geometry = { x = 100, y = 100, width = 800, height = 600 }
@@ -179,11 +178,6 @@ keys = ["ampersand", "eacute", "quotedbl", "apostrophe", "parenleft", "minus", "
 # [[rules]]
 # match = { class = "Slack" }
 # apply = { monitor_name = "HDMI-1", workspace_name = "chat" }
-
-# Example: managed overlay above fullscreen
-# [[rules]]
-# match = { type = "utility" }
-# apply = { layer = "overlay" }
 
 # Named scratchpads
 # Toggle with:

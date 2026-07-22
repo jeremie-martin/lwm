@@ -369,7 +369,7 @@ private:
     void refresh_user_time_tracking(xcb_window_t window);
     void reevaluate_managed_window(xcb_window_t window);
     void sync_managed_window_classification(xcb_window_t window, ClassificationResult const& result);
-    bool sync_kind_and_layer(xcb_window_t window, WindowClassification::Kind desired_kind, WindowRuleResult const& rule_result);
+    bool sync_kind(xcb_window_t window, WindowClassification::Kind desired_kind);
     void relocate_to_transient_parent(xcb_window_t window, xcb_window_t previous_transient_for);
     void apply_classification_state(
         xcb_window_t window,
@@ -385,7 +385,6 @@ private:
     bool cycle_focus(bool forward);
     void set_fullscreen(Client& client, bool enabled);
     void clear_fullscreen_state(Client& client);
-    void set_window_layer(Client& client, WindowLayer layer);
     void set_window_borderless(Client& client, bool enabled);
     void set_window_layer_hint(Client& client, LayerHint hint);
     void set_window_sticky(Client& client, bool enabled);
@@ -500,7 +499,6 @@ private:
     void update_floating_monitor_for_geometry(Client& client);
     void apply_floating_geometry(Client& client);
     void apply_visible_floating_geometry(Client& client);
-    Geometry overlay_geometry_for_client(Client const& client) const;
     uint32_t border_width_for_client(Client const& client) const;
     uint32_t border_color_for_client(Client const& client) const;
     bool should_apply_focus_border(Client const& client) const;
@@ -528,14 +526,6 @@ private:
     MouseBinding const* resolve_mouse_binding(uint16_t state, uint8_t button) const;
     bool supports_protocol(xcb_window_t window, xcb_atom_t protocol) const;
     bool is_focus_eligible(Client const& client) const;
-    /// Whether a freshly mapped window should *grab* focus. Splits "can be
-    /// focused" (is_focus_eligible) from "should steal focus by appearing":
-    /// overlay-layer windows stay focus-eligible but must not grab focus on map,
-    /// so they sit over a running app without stealing its focus.
-    bool should_grab_focus_on_map(Client const& client) const
-    {
-        return is_focus_eligible(client) && client.layer != WindowLayer::Overlay;
-    }
     bool is_focus_candidate(xcb_window_t window) const
     {
         auto const* c = get_client(window);

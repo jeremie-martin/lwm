@@ -74,12 +74,6 @@ struct FullscreenMonitors
     uint32_t right = 0;
 };
 
-enum class WindowLayer
-{
-    Normal,
-    Overlay
-};
-
 /// EWMH layer preference (`_NET_WM_STATE_ABOVE` / `_BELOW`).
 /// Tri-state by construction — making "both above and below" unrepresentable.
 enum class LayerHint
@@ -255,8 +249,6 @@ struct Client
     Urgency urgency;                ///< _NET_WM_STATE_DEMANDS_ATTENTION provenance
     bool ignore_next_wm_hints_urgency_echo = false; ///< Skip the PropertyNotify from our own WM_HINTS write
     bool borderless = false;        ///< WM-managed zero-border window
-    WindowLayer layer = WindowLayer::Normal;
-
     WindowType ewmh_type = WindowType::Normal; ///< Cached EWMH window type
     bool accepts_input = true;       ///< Cached WM_HINTS input field (ICCCM default: true)
     bool supports_take_focus = false; ///< Cached: WM_PROTOCOLS contains WM_TAKE_FOCUS

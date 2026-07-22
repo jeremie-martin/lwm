@@ -28,23 +28,20 @@ ClientStackInputs make(
 
 TEST_CASE("compute_tier respects layer precedence", "[stacking][policy]")
 {
-    REQUIRE(compute_tier(false, false, false, false, false, false) == Tier::Normal);
+    REQUIRE(compute_tier(false, false, false, false, false) == Tier::Normal);
 
     // Below hint sinks to Below.
-    REQUIRE(compute_tier(false, false, false, false, true, false) == Tier::Below);
+    REQUIRE(compute_tier(false, false, false, true, false) == Tier::Below);
 
     // Above hint or modal lifts to Above.
-    REQUIRE(compute_tier(false, false, false, true, false, false) == Tier::Above);
-    REQUIRE(compute_tier(false, false, false, false, false, true) == Tier::Above);
+    REQUIRE(compute_tier(false, false, true, false, false) == Tier::Above);
+    REQUIRE(compute_tier(false, false, false, false, true) == Tier::Above);
 
     // Fullscreen wins over Above/Below.
-    REQUIRE(compute_tier(false, false, true, true, true, true) == Tier::Fullscreen);
+    REQUIRE(compute_tier(false, true, true, true, true) == Tier::Fullscreen);
 
     // A window suppressed by another's fullscreen sinks to Below regardless of its own hints.
-    REQUIRE(compute_tier(false, true, false, true, false, true) == Tier::Below);
-
-    // Overlay overrides everything else (including suppression and fullscreen).
-    REQUIRE(compute_tier(true, true, true, true, true, true) == Tier::Overlay);
+    REQUIRE(compute_tier(true, false, true, false, true) == Tier::Below);
 }
 
 TEST_CASE("compute_order: floating ranks above tiled in the same tier", "[stacking][policy]")
@@ -99,32 +96,29 @@ TEST_CASE("compute_order: tiers strictly dominate kind/active/order", "[stacking
         make(0x20, Tier::Above,   true,  false, 1),
         // Fullscreen tile
         make(0x30, Tier::Fullscreen, false, false, 2),
-        // Overlay
-        make(0x40, Tier::Overlay, true,  false, 0),
         // Normal tile
         make(0x50, Tier::Normal,  false, false, 50),
     };
 
     auto order = compute_order(inputs);
-    REQUIRE(order.size() == 5);
+    REQUIRE(order.size() == 4);
 
-    // Bottom up: Below, Normal, Above, Fullscreen, Overlay.
+    // Bottom up: Below, Normal, Above, Fullscreen.
     REQUIRE(order[0] == 0x10);
     REQUIRE(order[1] == 0x50);
     REQUIRE(order[2] == 0x20);
     REQUIRE(order[3] == 0x30);
-    REQUIRE(order[4] == 0x40);
 }
 
 TEST_CASE("compute_order: hidden windows sink below visible ones", "[stacking][policy]")
 {
     std::vector<ClientStackInputs> inputs = {
-        make(0xA, Tier::Overlay, true,  false, 0, /*visible=*/false),
+        make(0xA, Tier::Fullscreen, true,  false, 0, /*visible=*/false),
         make(0xB, Tier::Below,   false, false, 0, /*visible=*/true),
     };
     auto order = compute_order(inputs);
     REQUIRE(order.size() == 2);
-    REQUIRE(order.front() == 0xA); // hidden, regardless of overlay tier
+    REQUIRE(order.front() == 0xA); // hidden, regardless of fullscreen tier
     REQUIRE(order.back() == 0xB);  // visible, regardless of below tier
 }
 

@@ -276,9 +276,6 @@ bool WindowManager::is_floating_window(xcb_window_t window) const
 
 void WindowManager::update_floating_monitor_for_geometry(Client& client)
 {
-    if (client.layer == WindowLayer::Overlay)
-        return;
-
     auto const& geom = floating_geometry(client);
     int32_t center_x = static_cast<int32_t>(geom.x) + static_cast<int32_t>(geom.width) / 2;
     int32_t center_y = static_cast<int32_t>(geom.y) + static_cast<int32_t>(geom.height) / 2;
@@ -301,16 +298,10 @@ void WindowManager::apply_floating_geometry(Client& client)
     xcb_window_t window = client.id;
 
     Geometry geom = floating_geometry(client);
-    if (client.layer == WindowLayer::Overlay)
-    {
-        geom = overlay_geometry_for_client(client);
-        floating_geometry(client) = geom;
-    }
 
     uint32_t width = geom.width;
     uint32_t height = geom.height;
-    if (client.layer != WindowLayer::Overlay)
-        layout_.apply_size_hints(window, width, height);
+    layout_.apply_size_hints(window, width, height);
 
     send_sync_request(client, last_event_time_);
 

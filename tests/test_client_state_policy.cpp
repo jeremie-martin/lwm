@@ -79,7 +79,6 @@ TEST_CASE("Client has sensible defaults", "[client][state]")
     REQUIRE_FALSE(c.urgency.has(UrgencySource::WmInitiated));
     REQUIRE_FALSE(c.ignore_next_wm_hints_urgency_echo);
     REQUIRE_FALSE(c.borderless);
-    REQUIRE(c.layer == WindowLayer::Normal);
 
     // Restore geometries should be empty
     REQUIRE(tiled_state(c) != nullptr);
@@ -537,21 +536,6 @@ TEST_CASE("compute_desired_state: sticky merges desktop flag, ewmh, and rules", 
     }
 }
 
-TEST_CASE("compute_desired_state: overlay layer forces skip, sticky, borderless, clears above/below", "[policy][classification]")
-{
-    classification_policy::DesiredStateInputs in{};
-    in.layer = WindowLayer::Overlay;
-    in.app_above = true;
-    in.app_below = true;
-    auto out = classification_policy::compute_desired_state(in);
-
-    REQUIRE(out.skip_taskbar);
-    REQUIRE(out.skip_pager);
-    REQUIRE(out.sticky);
-    REQUIRE(out.borderless);
-    REQUIRE(out.layer_hint == LayerHint::Normal);
-}
-
 TEST_CASE("compute_desired_state: modal clears below", "[policy][classification]")
 {
     classification_policy::DesiredStateInputs in{};
@@ -603,22 +587,10 @@ TEST_CASE("compute_desired_state: rule layer_hint overrides classification", "[p
     }
 }
 
-TEST_CASE("compute_desired_state: borderless only from rule or overlay", "[policy][classification]")
+TEST_CASE("compute_desired_state: borderless follows the window rule", "[policy][classification]")
 {
-    SECTION("Rule sets borderless")
-    {
-        classification_policy::DesiredStateInputs in{};
-        in.rule_borderless = true;
-        auto out = classification_policy::compute_desired_state(in);
-        REQUIRE(out.borderless);
-    }
-
-    SECTION("Overlay forces borderless regardless of rule")
-    {
-        classification_policy::DesiredStateInputs in{};
-        in.layer = WindowLayer::Overlay;
-        in.rule_borderless = false;
-        auto out = classification_policy::compute_desired_state(in);
-        REQUIRE(out.borderless);
-    }
+    classification_policy::DesiredStateInputs in{};
+    in.rule_borderless = true;
+    auto out = classification_policy::compute_desired_state(in);
+    REQUIRE(out.borderless);
 }

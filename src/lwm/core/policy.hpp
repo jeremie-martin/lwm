@@ -435,7 +435,6 @@ struct DesiredStateInputs
 
     bool has_transient = false;
     bool is_sticky_desktop = false;
-    WindowLayer layer = WindowLayer::Normal;
 };
 
 inline DesiredWindowState compute_desired_state(DesiredStateInputs const& in)
@@ -445,20 +444,14 @@ inline DesiredWindowState compute_desired_state(DesiredStateInputs const& in)
     out.skip_taskbar = in.has_transient || in.classification_skip_taskbar || in.app_skip_taskbar;
     if (in.rule_skip_taskbar.has_value())
         out.skip_taskbar = *in.rule_skip_taskbar;
-    if (in.layer == WindowLayer::Overlay)
-        out.skip_taskbar = true;
 
     out.skip_pager = in.has_transient || in.classification_skip_pager || in.app_skip_pager;
     if (in.rule_skip_pager.has_value())
         out.skip_pager = *in.rule_skip_pager;
-    if (in.layer == WindowLayer::Overlay)
-        out.skip_pager = true;
 
     out.sticky = in.is_sticky_desktop || in.ewmh_sticky;
     if (in.rule_sticky.has_value())
         out.sticky = *in.rule_sticky;
-    if (in.layer == WindowLayer::Overlay)
-        out.sticky = true;
 
     out.modal = in.ewmh_modal;
 
@@ -472,13 +465,11 @@ inline DesiredWindowState compute_desired_state(DesiredStateInputs const& in)
     }
     if (in.rule_layer_hint.has_value())
         hint = *in.rule_layer_hint;
-    if (in.layer == WindowLayer::Overlay)
-        hint = LayerHint::Normal;
-    else if (out.modal && hint == LayerHint::Below)
+    if (out.modal && hint == LayerHint::Below)
         hint = LayerHint::Normal;
     out.layer_hint = hint;
 
-    out.borderless = in.rule_borderless.value_or(false) || in.layer == WindowLayer::Overlay;
+    out.borderless = in.rule_borderless.value_or(false);
 
     return out;
 }
@@ -618,7 +609,6 @@ enum class Tier : int
     Normal = 1,     ///< Default tier for tiled and floating windows
     Above = 2,      ///< _NET_WM_STATE_ABOVE or modal
     Fullscreen = 3, ///< Fullscreen owner of its monitor
-    Overlay = 4,    ///< WM-classified overlay (always-on-top)
 };
 
 /// Inputs the policy needs to rank a single client.  Caller-side concerns
@@ -634,19 +624,15 @@ struct ClientStackInputs
 };
 
 /// Decide which tier a client belongs to.  `is_suppressed_by_fullscreen`
-/// overrides every state except overlay — a window occluded by another
-/// window's fullscreen on its monitor sinks to Below regardless of its own
-/// hint, so a non-overlay sibling can never cover the fullscreen owner.
+/// overrides every other state — a window occluded by another fullscreen
+/// owner sinks to Below regardless of its own layer hint.
 inline Tier compute_tier(
-    bool is_overlay,
     bool is_suppressed_by_fullscreen,
     bool is_fullscreen,
     bool is_above_hint,
     bool is_below_hint,
     bool is_modal)
 {
-    if (is_overlay)
-        return Tier::Overlay;
     if (is_suppressed_by_fullscreen)
         return Tier::Below;
     if (is_fullscreen)

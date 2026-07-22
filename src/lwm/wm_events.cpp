@@ -287,13 +287,11 @@ void WindowManager::handle_map_request(xcb_map_request_event_t const& e)
 
 void WindowManager::apply_initial_state_flags(Client& client, WindowRuleResult const& rule)
 {
-    if (rule.layer == WindowLayer::Overlay)
-        set_window_layer(client, WindowLayer::Overlay);
-    else if (rule.layer_hint.has_value() && *rule.layer_hint != LayerHint::Normal)
+    if (rule.layer_hint.has_value() && *rule.layer_hint != LayerHint::Normal)
         set_window_layer_hint(client, *rule.layer_hint);
     if (rule.sticky.has_value() && *rule.sticky)
         set_window_sticky(client, true);
-    if (rule.layer != WindowLayer::Overlay && rule.fullscreen.has_value() && *rule.fullscreen)
+    if (rule.fullscreen.has_value() && *rule.fullscreen)
         set_fullscreen(client, true);
 }
 
@@ -399,12 +397,8 @@ void WindowManager::map_floating_window(
     apply_visible_floating_geometry(client);
     apply_stacking();
 
-    // Overlay-layer windows are focus-*eligible* (focus-follows-mouse, cycling
-    // and the kill keybind can reach them) but must not *grab* focus merely by
-    // mapping — they sit over a running app and should not steal its focus just
-    // by appearing.
     if (!start_iconic && !suppress_focus_ && client.monitor == focused_monitor_ && is_physically_visible(client)
-        && should_grab_focus_on_map(client))
+        && is_focus_eligible(client))
     {
         focus_any_window(window);
     }
@@ -461,11 +455,8 @@ void WindowManager::map_tiled_window(
         apply_initial_state_flags(client, rule_result);
     }
 
-    // A rule can lift a tiled-classified window into the overlay layer (which
-    // converts it to floating); like map_floating_window, such a window stays
-    // focusable on demand but must not grab focus just by mapping.
     if (!start_iconic && client.monitor == focused_monitor_ && should_be_visible(client)
-        && should_grab_focus_on_map(client))
+        && is_focus_eligible(client))
     {
         focus_any_window(window);
     }
@@ -690,7 +681,7 @@ void WindowManager::handle_button_press(xcb_button_press_event_t const& e)
             // Fallback: convert tiled to floating and resize
             if (is_tiled)
             {
-                if (client->fullscreen || client->iconic || client->layer == WindowLayer::Overlay || showing_desktop_)
+                if (client->fullscreen || client->iconic || showing_desktop_)
                     return true;
 
                 size_t monitor_idx = client->monitor;
@@ -1083,7 +1074,7 @@ void WindowManager::handle_restack_message(xcb_client_message_event_t const& e)
     xcb_configure_window(conn_.get(), e.window, mask, values);
     // The raw restack of an unmanaged window perturbs X's stacking order
     // outside our funnel; schedule a recompute so apply_stacking re-asserts
-    // overlay topness and refreshes _NET_CLIENT_LIST_STACKING.
+    // managed ordering and refreshes _NET_CLIENT_LIST_STACKING.
     stacking_dirty_ = true;
     conn_.flush();
 }
@@ -1451,13 +1442,6 @@ void WindowManager::handle_configure_request(xcb_configure_request_event_t const
         return;
     }
 
-    if (client && client->layer == WindowLayer::Overlay)
-    {
-        apply_floating_geometry(*client);
-        send_configure_notify(*client);
-        return;
-    }
-
     bool is_floating = client && client->kind == Client::Kind::Floating;
     uint16_t mask = e.value_mask;
     if (is_floating)
@@ -1560,15 +1544,12 @@ void WindowManager::handle_property_notify(xcb_property_notify_event_t const& e)
     {
         if (auto* client = get_client(e.window); client && client->kind == Client::Kind::Floating)
         {
-            if (client->layer != WindowLayer::Overlay)
-            {
-                auto& geom = floating_geometry(*client);
-                uint32_t hinted_width = geom.width;
-                uint32_t hinted_height = geom.height;
-                layout_.apply_size_hints(e.window, hinted_width, hinted_height);
-                geom.width = static_cast<uint16_t>(std::max<uint32_t>(1, hinted_width));
-                geom.height = static_cast<uint16_t>(std::max<uint32_t>(1, hinted_height));
-            }
+            auto& geom = floating_geometry(*client);
+            uint32_t hinted_width = geom.width;
+            uint32_t hinted_height = geom.height;
+            layout_.apply_size_hints(e.window, hinted_width, hinted_height);
+            geom.width = static_cast<uint16_t>(std::max<uint32_t>(1, hinted_width));
+            geom.height = static_cast<uint16_t>(std::max<uint32_t>(1, hinted_height));
             if (should_be_visible(*client) && !client->hidden && !client->fullscreen)
             {
                 apply_floating_geometry(*client);

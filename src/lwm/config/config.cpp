@@ -258,15 +258,6 @@ ParseVoid validate_rule_type(std::string const& type, std::string const& context
     return std::unexpected(context + " has unknown window type '" + type + "'");
 }
 
-ParseVoid validate_layer(std::string const& layer, std::string const& context)
-{
-    std::string lowered = layer;
-    std::ranges::transform(lowered, lowered.begin(), [](unsigned char ch) { return static_cast<char>(std::tolower(ch)); });
-    if (lowered == "overlay")
-        return {};
-    return std::unexpected(context + " has unknown layer '" + layer + "'");
-}
-
 template<typename T>
 ParseVoid parse_regex_matchers(toml::table const& table, std::string const& context, T& target)
 {
@@ -771,7 +762,6 @@ ParseVoid parse_rule_apply_table(
             "sticky",
             "skip_taskbar",
             "skip_pager",
-            "layer",
             "borderless",
             "geometry",
             "center",
@@ -854,13 +844,6 @@ ParseVoid parse_rule_apply_table(
     if (skip_pager)
     {
         rule.skip_pager = *skip_pager;
-        has_action = true;
-    }
-    LWM_TRYV(layer, parse_optional_string(table, "layer", context));
-    if (layer)
-    {
-        LWM_TRY(validate_layer(*layer, context + ".layer"));
-        rule.layer = std::move(*layer);
         has_action = true;
     }
     LWM_TRYV(borderless, parse_optional_bool(table, "borderless", context));

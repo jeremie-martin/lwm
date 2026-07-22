@@ -80,7 +80,6 @@ Tests use Catch2. File names follow `tests/test_<area>.cpp`. Integration cases u
 - config parsing and live reload: `tests/test_config_parser.cpp`, `tests/test_integration_config_reload.cpp`
 - workspace policy (focus history, tiled membership): `tests/test_workspace_policy.cpp`
 - WM_STATE transitions (manage, iconify, unmanage): `tests/test_integration_wm_state.cpp`
-- overlay windows above fullscreen: `tests/test_integration_overlay.cpp`
 - scratchpads: `tests/test_integration_scratchpad.cpp`
 - monitor hotplug and window relocation: `tests/test_monitor_hotplug.cpp`
 - property-driven reclassification and hint changes: `tests/test_integration_property_notify.cpp`

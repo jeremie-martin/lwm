@@ -293,15 +293,7 @@ void WindowManager::focus_or_fallback(Monitor& monitor, bool record_user_time)
         return;
     }
 
-    // Overlays are focusable on-demand (focus-follows-mouse, cycling, kill)
-    // but must not win automatic fallback selection: a freshly mapped overlay
-    // holds the newest mru_order without ever being focused, and would capture
-    // focus whenever the active window closes over a floating-only workspace.
-    auto eligible = [this](xcb_window_t window)
-    {
-        auto const* c = get_client(window);
-        return c && c->layer != WindowLayer::Overlay && is_focus_candidate(window);
-    };
+    auto eligible = [this](xcb_window_t window) { return is_focus_candidate(window); };
 
     auto floating_candidates = build_floating_candidates();
 
@@ -373,10 +365,7 @@ void WindowManager::repair_focus_after_visibility_change(size_t preferred_monito
 
 bool WindowManager::is_focus_eligible(Client const& client) const
 {
-    // Dock/Desktop windows never take focus (EWMH). The overlay *layer* is a
-    // stacking concern, not a focusability one: an ordinary app placed in the
-    // overlay layer (e.g. a fullscreen companion overlay) must stay focusable
-    // and therefore killable, otherwise the keyboard cannot dismiss it.
+    // Dock/Desktop windows never take focus (EWMH).
     if (client.kind == Client::Kind::Dock || client.kind == Client::Kind::Desktop)
     {
         return false;

@@ -1,5 +1,6 @@
 #include "x11_test_harness.hpp"
 #include <X11/Xlib.h>
+#include <array>
 #include <catch2/catch_test_macros.hpp>
 #include <chrono>
 #include <filesystem>
@@ -494,6 +495,87 @@ TEST_CASE("Integration: monocle layout survives exec restart", "[integration][la
 
     destroy_window(conn, w2);
     destroy_window(conn, w1);
+}
+
+TEST_CASE("Integration: version 3 restart handoff survives overlay removal", "[integration][restart][upgrade]")
+{
+    auto& env = X11TestEnvironment::instance();
+    if (!env.available())
+        SKIP("Test environment not available");
+    if (!lwmctl_available())
+        SKIP("lwmctl binary not available");
+
+    X11Connection conn;
+    REQUIRE(conn.ok());
+
+    xcb_window_t window = create_window(conn, 10, 10, 200, 150);
+    map_window(conn, window);
+
+    xcb_atom_t restart_state = intern_atom(conn.get(), "_LWM_RESTART_STATE");
+    xcb_atom_t restart_client = intern_atom(conn.get(), "_LWM_RESTART_CLIENT");
+    REQUIRE(restart_state != XCB_NONE);
+    REQUIRE(restart_client != XCB_NONE);
+
+    // Reproduce the properties emitted by the pre-removal version-3 binary.
+    // Its 27-word client payload starts with the retired overlay flag.
+    std::array<uint32_t, 27> client_state {};
+    client_state[0] = 1;
+    client_state[2] = 120;
+    client_state[3] = 130;
+    client_state[4] = 410;
+    client_state[5] = 260;
+    client_state[23] = 2; // Floating
+    xcb_change_property(
+        conn.get(),
+        XCB_PROP_MODE_REPLACE,
+        window,
+        restart_client,
+        XCB_ATOM_CARDINAL,
+        32,
+        client_state.size(),
+        client_state.data()
+    );
+
+    std::array<uint32_t, 7> global_state {
+        3, // Version
+        0, // Focused monitor
+        window,
+        0, // Showing desktop
+        1, // Monitor count
+        1, // Current workspace
+        0, // Previous workspace
+    };
+    xcb_change_property(
+        conn.get(),
+        XCB_PROP_MODE_REPLACE,
+        conn.root(),
+        restart_state,
+        XCB_ATOM_CARDINAL,
+        32,
+        global_state.size(),
+        global_state.data()
+    );
+    xcb_flush(conn.get());
+
+    LwmProcess wm(env.display(), "[workspaces]\ncount = 2\n");
+    REQUIRE(wm.running());
+    REQUIRE(wait_for_wm_ready(conn, kTimeout));
+
+    REQUIRE(wait_for_condition(
+        [&]()
+        {
+            auto geometry = get_window_geometry(conn, window);
+            return geometry && *geometry == WindowGeometry { 120, 130, 410, 260 };
+        },
+        kTimeout
+    ));
+
+    auto workspaces = run_lwmctl(wm, { "workspace", "list" });
+    REQUIRE(workspaces.has_value());
+    REQUIRE(workspaces->exit_code == 0);
+    REQUIRE(workspaces->stdout_text.find("\"current_workspace\":1") != std::string::npos);
+
+    destroy_window(conn, window);
 }
 
 TEST_CASE("Integration: monocle swap focuses adjacent tiled window", "[integration][layout][monocle][swap]")

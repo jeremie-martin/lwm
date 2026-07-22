@@ -7,7 +7,7 @@
  * binary replacement without losing window state.
  *
  * Private atoms used:
- *   _LWM_RESTART_CLIENT  — per-window state (kind, layer, geometry, etc.)
+ *   _LWM_RESTART_CLIENT  — per-window state (kind, geometry, etc.)
  *   _LWM_RESTART_STATE   — global state (monitor workspaces, focus, etc.)
  *   _LWM_RESTART_TILED_ORDER   — tiled window ordering across workspaces
  *   _LWM_RESTART_FLOATING_ORDER — floating window MRU ordering
@@ -23,12 +23,12 @@ namespace lwm {
 
 namespace {
 
+// Keep the version-3 wire layout so a running pre-removal binary can exec this
+// binary without dropping its restart handoff. Retired fields remain reserved
+// and carry no runtime semantics.
 constexpr uint32_t RESTART_STATE_VERSION = 3;
 constexpr uint32_t RESTART_RATIO_STATE_VERSION = 3;
-constexpr size_t CLIENT_PROP_BASE_COUNT = 24; // v3: +kind
-constexpr size_t CLIENT_PROP_URGENCY_COUNT = 25; // v4: +urgency ownership
-constexpr size_t CLIENT_PROP_APP_PREF_COUNT = 26; // v5: +app preference bits
-constexpr size_t CLIENT_PROP_COUNT = 27; // v6: +fullscreen layer-hint restore
+constexpr size_t CLIENT_PROP_COUNT = 27;
 
 constexpr uint32_t APP_PREF_SKIP_TASKBAR = 1U << 0;
 constexpr uint32_t APP_PREF_SKIP_PAGER = 1U << 1;
@@ -106,8 +106,9 @@ void WindowManager::serialize_restart_state()
         if (client.kind != Client::Kind::Tiled && client.kind != Client::Kind::Floating)
             continue;
 
-        uint32_t data[CLIENT_PROP_COUNT];
-        data[0] = (client.layer == WindowLayer::Overlay) ? 1 : 0;
+        uint32_t data[CLIENT_PROP_COUNT] {};
+        // Version 3 reserved this slot for the removed managed-overlay flag.
+        data[0] = 0;
         data[1] = client.borderless ? 1 : 0;
         std::optional<Geometry> prior_floating;
         if (client.kind == Client::Kind::Tiled)
@@ -120,7 +121,8 @@ void WindowManager::serialize_restart_state()
         pack_optional_geometry(data + 6, client.fullscreen_restore);
         pack_optional_geometry(data + 11, client.maximize_restore);
         pack_optional_geometry(data + 16, prior_floating);
-        data[21] = ((scratchpad_named(client) && client.iconic) || is_hidden_pool_scratchpad(client)) ? 1 : 0;
+        // Version 3 reserved this slot for an obsolete scratchpad marker.
+        data[21] = 0;
         // 0=none, 1=Tiled, 2=Floating
         if (is_hidden_tiled_pool_scratchpad(client))
             data[22] = 1;
@@ -128,9 +130,8 @@ void WindowManager::serialize_restart_state()
             data[22] = 2;
         else
             data[22] = 0;
-        // v3: current kind (1=Tiled, 2=Floating)
+        // Current kind (1=Tiled, 2=Floating).
         data[23] = (client.kind == Client::Kind::Tiled) ? 1 : 2;
-        // v4/v5: urgency source mask. Bit 0 remains WM-initiated for v4 compatibility.
         data[24] = client.urgency.sources;
         data[25] = (client.app_prefs.skip_taskbar ? APP_PREF_SKIP_TASKBAR : 0)
             | (client.app_prefs.skip_pager ? APP_PREF_SKIP_PAGER : 0)
@@ -458,7 +459,7 @@ void WindowManager::apply_restart_client_state(xcb_window_t window)
         return;
 
     size_t len = xcb_get_property_value_length(reply) / 4;
-    if (reply->type != XCB_ATOM_CARDINAL || len < CLIENT_PROP_BASE_COUNT)
+    if (reply->type != XCB_ATOM_CARDINAL || len != CLIENT_PROP_COUNT)
     {
         free(reply);
         return;
@@ -472,50 +473,38 @@ void WindowManager::apply_restart_client_state(xcb_window_t window)
         return;
     }
 
-    client->layer = (data[0] == 1) ? WindowLayer::Overlay : WindowLayer::Normal;
+    // data[0] was the managed-overlay flag. It is intentionally ignored.
     client->borderless = data[1] != 0;
     Geometry saved_floating_geometry = unpack_geometry(data + 2);
     client->fullscreen_restore = unpack_optional_geometry(data + 6);
     client->maximize_restore = unpack_optional_geometry(data + 11);
     std::optional<Geometry> saved_prior_floating = unpack_optional_geometry(data + 16);
 
-    // v2 scratchpad fields
-    if (len >= 23)
-    {
-        if (data[22] == 1)
-            client->scratchpad = HiddenTiledScratchpadPoolMembership { saved_prior_floating };
-        else if (data[22] == 2)
-            client->scratchpad = HiddenFloatingScratchpadPoolMembership { saved_floating_geometry };
-    }
+    // data[21] is an obsolete scratchpad marker and remains ignored.
+    if (data[22] == 1)
+        client->scratchpad = HiddenTiledScratchpadPoolMembership { saved_prior_floating };
+    else if (data[22] == 2)
+        client->scratchpad = HiddenFloatingScratchpadPoolMembership { saved_floating_geometry };
 
-    // v3: restore window kind — scan_existing_windows reclassifies from scratch,
-    // which can turn floating scratchpads into tiled windows.
+    // scan_existing_windows reclassifies from scratch, which can turn floating
+    // scratchpads into tiled windows; restore the serialized kind afterward.
     std::optional<Client::Kind> saved_kind;
-    if (len >= 24)
-        saved_kind = (data[23] == 1) ? Client::Kind::Tiled : Client::Kind::Floating;
-    if (len >= CLIENT_PROP_APP_PREF_COUNT)
-    {
-        client->urgency.sources = static_cast<uint8_t>(data[24]) & KNOWN_URGENCY_SOURCES;
+    if (data[23] == 1)
+        saved_kind = Client::Kind::Tiled;
+    else if (data[23] == 2)
+        saved_kind = Client::Kind::Floating;
 
-        uint32_t const app_pref_bits = data[25];
-        client->app_prefs.skip_taskbar = (app_pref_bits & APP_PREF_SKIP_TASKBAR) != 0;
-        client->app_prefs.skip_pager = (app_pref_bits & APP_PREF_SKIP_PAGER) != 0;
-        client->app_prefs.above = (app_pref_bits & APP_PREF_ABOVE) != 0;
-        client->app_prefs.below = (app_pref_bits & APP_PREF_BELOW) != 0;
-        if (client->app_prefs.above && client->app_prefs.below)
-            client->app_prefs.below = false;
-        if (len >= CLIENT_PROP_COUNT && data[26] > 0 && data[26] <= static_cast<uint32_t>(LayerHint::Below) + 1U)
-            client->fullscreen_restore_layer_hint = static_cast<LayerHint>(data[26] - 1U);
-    }
-    else if (len >= CLIENT_PROP_URGENCY_COUNT)
-    {
-        if (data[24] != 0)
-            client->urgency.sources = static_cast<uint8_t>(UrgencySource::WmInitiated);
-    }
-    else if (client->urgency.active() && window != active_window_)
-    {
-        client->urgency.add(UrgencySource::WmInitiated);
-    }
+    client->urgency.sources = static_cast<uint8_t>(data[24]) & KNOWN_URGENCY_SOURCES;
+
+    uint32_t const app_pref_bits = data[25];
+    client->app_prefs.skip_taskbar = (app_pref_bits & APP_PREF_SKIP_TASKBAR) != 0;
+    client->app_prefs.skip_pager = (app_pref_bits & APP_PREF_SKIP_PAGER) != 0;
+    client->app_prefs.above = (app_pref_bits & APP_PREF_ABOVE) != 0;
+    client->app_prefs.below = (app_pref_bits & APP_PREF_BELOW) != 0;
+    if (client->app_prefs.above && client->app_prefs.below)
+        client->app_prefs.below = false;
+    if (data[26] > 0 && data[26] <= static_cast<uint32_t>(LayerHint::Below) + 1U)
+        client->fullscreen_restore_layer_hint = static_cast<LayerHint>(data[26] - 1U);
 
     free(reply);
 

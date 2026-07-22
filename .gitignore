@@ -14,7 +14,6 @@ test-config/
 
 # Debug/logs
 *.log
-repro/overlay-kill-noop/ghost_overlay
 
 # Editor
 .vscode/

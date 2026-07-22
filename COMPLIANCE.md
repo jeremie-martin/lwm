@@ -191,7 +191,7 @@ During manage, LWM applies geometry-affecting state before the first map where p
 - initial maximize state is applied before mapping; geometry changes affect floating windows only
 - `WM_STATE=IconicState` and `_NET_WM_STATE_HIDDEN` are set before mapping for initially iconic clients
 
-After mapping, LWM applies non-geometry state such as sticky, above/below, overlay layer, modal, skip-taskbar, and skip-pager. This keeps first-frame geometry stable while preserving the normal stacking and visibility funnels.
+After mapping, LWM applies non-geometry state such as sticky, above/below, modal, skip-taskbar, and skip-pager. This keeps first-frame geometry stable while preserving the normal stacking and visibility funnels.
 
 ## 7. Known Limits and Intentional Simplifications
 

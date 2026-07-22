@@ -16,7 +16,6 @@ It is intentionally small, but it is not policy-free. The codebase has a specifi
 - monocle layout and live master-ratio adjustment
 - per-monitor workspaces
 - sticky windows scoped to a single monitor
-- managed overlay windows above fullscreen
 - focus-follows-mouse
 - Unix-socket IPC via `lwmctl`
 - RANDR hotplug handling
@@ -138,7 +137,7 @@ DISPLAY=:100 xterm
 - Workspace visibility is implemented by moving managed windows off-screen, not by unmapping them.
 - Sticky means "visible on every workspace of this monitor", not "visible on all monitors".
 - Fullscreen is exclusive within a monitor's visible scope. One visible managed fullscreen owner wins; other visible managed siblings on that monitor are suppressed.
-- Overlay windows and owner-owned transients are the normal exceptions above fullscreen.
+- Owner-owned transients are the normal exception above fullscreen.
 - Scratchpads are managed clients. Hidden scratchpads are iconified and moved off-screen through the same visibility machinery as ordinary hidden windows.
 
 ## Documentation

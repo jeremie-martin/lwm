@@ -234,7 +234,6 @@ WindowManager::WindowManager(Config config, std::string config_path)
     if (is_restart_)
     {
         restore_window_ordering();
-        clean_restart_properties();
         // Restore focus to the previously active window
         if (active_window_ != XCB_NONE && is_managed(active_window_))
         {
@@ -250,6 +249,9 @@ WindowManager::WindowManager(Config config, std::string config_path)
     {
         run_autostart();
     }
+    // Restart properties are single-use. Clear them after both compatible
+    // restores and fresh scans so stale state from an older schema cannot linger.
+    clean_restart_properties();
     keybinds_.grab_keys(conn_.screen()->root);
     update_ewmh_client_list();
     conn_.flush();
@@ -1088,7 +1090,7 @@ void WindowManager::regrab_all_keys()
 
 uint32_t WindowManager::border_width_for_client(Client const& client) const
 {
-    if (client.fullscreen || client.borderless || client.layer == WindowLayer::Overlay)
+    if (client.fullscreen || client.borderless)
         return 0U;
     return config_.appearance.border_width;
 }
@@ -1134,16 +1136,13 @@ void WindowManager::update_allowed_actions(Client const& client)
         ewmh->_NET_WM_ACTION_STICK,
     };
 
-    if (client.layer != WindowLayer::Overlay)
-    {
-        actions.push_back(ewmh->_NET_WM_ACTION_FULLSCREEN);
-        actions.push_back(ewmh->_NET_WM_ACTION_ABOVE);
-        actions.push_back(ewmh->_NET_WM_ACTION_BELOW);
-        actions.push_back(ewmh->_NET_WM_ACTION_MAXIMIZE_VERT);
-        actions.push_back(ewmh->_NET_WM_ACTION_MAXIMIZE_HORZ);
-    }
+    actions.push_back(ewmh->_NET_WM_ACTION_FULLSCREEN);
+    actions.push_back(ewmh->_NET_WM_ACTION_ABOVE);
+    actions.push_back(ewmh->_NET_WM_ACTION_BELOW);
+    actions.push_back(ewmh->_NET_WM_ACTION_MAXIMIZE_VERT);
+    actions.push_back(ewmh->_NET_WM_ACTION_MAXIMIZE_HORZ);
 
-    if (client.kind == Client::Kind::Floating && client.layer != WindowLayer::Overlay)
+    if (client.kind == Client::Kind::Floating)
     {
         actions.push_back(ewmh->_NET_WM_ACTION_MOVE);
         actions.push_back(ewmh->_NET_WM_ACTION_RESIZE);
@@ -1263,7 +1262,7 @@ void WindowManager::toggle_window_float(xcb_window_t window)
     auto* client = get_client(window);
     if (!client)
         return;
-    if (client->fullscreen || client->iconic || client->layer == WindowLayer::Overlay)
+    if (client->fullscreen || client->iconic)
         return;
     if (client->kind != Client::Kind::Tiled && client->kind != Client::Kind::Floating)
         return;
@@ -1352,10 +1351,8 @@ void WindowManager::apply_rule_target_location(xcb_window_t window, WindowRuleRe
 void WindowManager::apply_rule_floating_placement(xcb_window_t window, WindowRuleResult const& rule_result)
 {
     auto* client = get_client(window);
-    if (!client || client->kind != Client::Kind::Floating || rule_result.layer == WindowLayer::Overlay)
-    {
+    if (!client || client->kind != Client::Kind::Floating)
         return;
-    }
 
     if (rule_result.geometry.has_value())
         floating_geometry(*client) = *rule_result.geometry;
@@ -1389,10 +1386,9 @@ void WindowManager::apply_rule_result_to_window(xcb_window_t window, WindowRuleR
             return;
     }
 
-    bool wants_overlay = rule_result.layer == WindowLayer::Overlay;
-    if (wants_overlay || rule_result.floating.has_value())
+    if (rule_result.floating.has_value())
     {
-        if (wants_overlay || *rule_result.floating)
+        if (*rule_result.floating)
             convert_window_to_floating(window);
         else
             convert_window_to_tiled(window);
@@ -1407,12 +1403,6 @@ void WindowManager::apply_rule_result_to_window(xcb_window_t window, WindowRuleR
         set_client_skip_pager(*client, *rule_result.skip_pager);
     if (rule_result.borderless.has_value())
         set_window_borderless(*client, *rule_result.borderless);
-    if (rule_result.layer.has_value())
-    {
-        set_window_layer(*client, *rule_result.layer);
-        if (!refresh_client())
-            return;
-    }
     if (rule_result.sticky.has_value())
     {
         set_window_sticky(*client, *rule_result.sticky);
@@ -1954,13 +1944,6 @@ ClassificationResult WindowManager::classify_managed_window(xcb_window_t window)
             classification.skip_pager = *rule_result.skip_pager;
         if (rule_result.layer_hint == LayerHint::Above)
             classification.above = true;
-        if (rule_result.layer == WindowLayer::Overlay)
-        {
-            classification.kind = WindowClassification::Kind::Floating;
-            classification.skip_taskbar = true;
-            classification.skip_pager = true;
-            classification.above = false;
-        }
     }
 
     return { classification, rule_result };
@@ -2001,34 +1984,18 @@ void WindowManager::refresh_user_time_tracking(xcb_window_t window)
 }
 
 
-bool WindowManager::sync_kind_and_layer(
-    xcb_window_t window,
-    WindowClassification::Kind desired_kind,
-    WindowRuleResult const& rule_result)
+bool WindowManager::sync_kind(xcb_window_t window, WindowClassification::Kind desired_kind)
 {
     auto* client = get_client(window);
     if (!client)
         return false;
 
-    WindowLayer desired_layer = rule_result.layer.value_or(WindowLayer::Normal);
-    if (desired_layer == WindowLayer::Overlay)
-    {
-        if (client->kind != Client::Kind::Floating)
-            convert_window_to_floating(window);
-        set_window_layer(*client, WindowLayer::Overlay);
-    }
-    else
-    {
-        if (client->layer == WindowLayer::Overlay)
-            set_window_layer(*client, WindowLayer::Normal);
+    if (desired_kind == WindowClassification::Kind::Floating && client->kind == Client::Kind::Tiled)
+        convert_window_to_floating(window);
+    else if (desired_kind == WindowClassification::Kind::Tiled && client->kind == Client::Kind::Floating)
+        convert_window_to_tiled(window);
 
-        if (desired_kind == WindowClassification::Kind::Floating && client->kind == Client::Kind::Tiled)
-            convert_window_to_floating(window);
-        else if (desired_kind == WindowClassification::Kind::Tiled && client->kind == Client::Kind::Floating)
-            convert_window_to_tiled(window);
-    }
-
-    return true;
+    return get_client(window) != nullptr;
 }
 
 void WindowManager::relocate_to_transient_parent(xcb_window_t window, xcb_window_t previous_transient_for)
@@ -2093,7 +2060,6 @@ void WindowManager::apply_classification_state(
         .rule_borderless = rule_result.borderless,
         .has_transient = has_transient,
         .is_sticky_desktop = is_sticky_desktop(window),
-        .layer = client->layer,
     });
 
     if (client->skip_taskbar != desired.skip_taskbar)
@@ -2139,8 +2105,8 @@ void WindowManager::sync_managed_window_classification(xcb_window_t window, Clas
         return;
     }
 
-    // --- Phase 3: Apply kind, layer, and state flag changes ---
-    if (!sync_kind_and_layer(window, desired_kind, rule_result))
+    // --- Phase 3: Apply kind and state flag changes ---
+    if (!sync_kind(window, desired_kind))
         return;
     relocate_to_transient_parent(window, previous_transient_for);
     apply_classification_state(window, classification, rule_result, has_transient);
@@ -2444,7 +2410,7 @@ void WindowManager::clear_fullscreen_state(Client& client)
     else if (client.app_prefs.below)
         restore_layer_hint = LayerHint::Below;
 
-    if (client.layer != WindowLayer::Overlay && client.layer_hint != restore_layer_hint)
+    if (client.layer_hint != restore_layer_hint)
         set_window_layer_hint(client, restore_layer_hint);
 
     if (client.kind == Client::Kind::Floating && should_be_visible(client)
@@ -2456,13 +2422,6 @@ void WindowManager::clear_fullscreen_state(Client& client)
 
 void WindowManager::set_fullscreen(Client& client, bool enabled)
 {
-    if (enabled && client.layer == WindowLayer::Overlay)
-    {
-        ewmh_.set_window_state(client.id, ewmh_.get()->_NET_WM_STATE_FULLSCREEN, false);
-        conn_.flush();
-        return;
-    }
-
     if (!enabled && !client.fullscreen)
         return;
 
@@ -2519,41 +2478,6 @@ void WindowManager::set_fullscreen(Client& client, bool enabled)
     flush_and_drain_crossing();
 }
 
-void WindowManager::set_window_layer(Client& client, WindowLayer layer)
-{
-    if (layer == WindowLayer::Overlay && client.kind != Client::Kind::Floating)
-    {
-        convert_window_to_floating(client.id);
-    }
-
-    client.layer = layer;
-
-    if (layer == WindowLayer::Overlay)
-    {
-        if (client.fullscreen)
-            set_fullscreen(client, false);
-
-        client.maximized_horz = false;
-        client.maximized_vert = false;
-        client.maximize_restore = std::nullopt;
-        ewmh_.set_window_state(client.id, ewmh_.get()->_NET_WM_STATE_MAXIMIZED_HORZ, false);
-        ewmh_.set_window_state(client.id, ewmh_.get()->_NET_WM_STATE_MAXIMIZED_VERT, false);
-        set_window_layer_hint(client, LayerHint::Normal);
-        set_client_skip_taskbar(client, true);
-        set_client_skip_pager(client, true);
-        set_window_borderless(client, true);
-        if (!client.sticky)
-            set_window_sticky(client, true);
-    }
-
-    update_allowed_actions(client);
-
-    if (client.kind == Client::Kind::Floating && !client.hidden)
-        apply_floating_geometry(client);
-    apply_stacking();
-    conn_.flush();
-}
-
 void WindowManager::set_window_borderless(Client& client, bool enabled)
 {
     client.borderless = enabled;
@@ -2568,11 +2492,6 @@ void WindowManager::set_window_borderless(Client& client, bool enabled)
 void WindowManager::set_window_layer_hint(Client& client, LayerHint hint)
 {
     auto* ewmh = ewmh_.get();
-
-    // Overlay classification suppresses EWMH layer hints — overlays are
-    // always-on-top by WM policy regardless of what the app requests.
-    if (client.layer == WindowLayer::Overlay)
-        hint = LayerHint::Normal;
 
     LayerHint old = client.layer_hint;
     bool wants_above = hint == LayerHint::Above;
@@ -3422,8 +3341,6 @@ bool WindowManager::is_suppressed_by_fullscreen(Client const& client) const
 {
     if (client.kind != Client::Kind::Tiled && client.kind != Client::Kind::Floating)
         return false;
-    if (client.layer == WindowLayer::Overlay)
-        return false;
     if (client.monitor >= monitors_.size())
         return false;
     if (client.iconic || !should_be_visible(client))
@@ -3445,7 +3362,6 @@ stacking_policy::Tier WindowManager::compute_stack_tier(Client const& client) co
         return stacking_policy::Tier::Above;
 
     return stacking_policy::compute_tier(
-        client.layer == WindowLayer::Overlay,
         is_suppressed_by_fullscreen(client),
         client.fullscreen,
         client.layer_hint == LayerHint::Above,
@@ -3466,17 +3382,6 @@ stacking_policy::ClientStackInputs WindowManager::stack_inputs_of(Client const& 
         client.id == active_window_,
         client.order,
     };
-}
-
-Geometry WindowManager::overlay_geometry_for_client(Client const& client) const
-{
-    if (monitors_.empty())
-        return {};
-
-    if (client.monitor < monitors_.size())
-        return monitors_[client.monitor].geometry();
-
-    return monitors_[0].geometry();
 }
 
 void WindowManager::apply_stacking()
@@ -3532,9 +3437,8 @@ void WindowManager::apply_stacking()
             break;
     }
 
-    // Always restack: external perturbations (override-redirect popups, other
-    // clients calling XRaiseWindow) can desynchronize X from our cached order,
-    // and the sibling-chain pass below is what guarantees overlay topness.
+    // Always restack: other clients can perturb the X stack independently of
+    // our policy, so replay the sibling chain whenever stacking is reconciled.
     auto stack_above_sibling = [this](xcb_window_t window, xcb_window_t sibling) {
         uint32_t values[2] = { sibling, XCB_STACK_MODE_ABOVE };
         uint16_t mask = XCB_CONFIG_WINDOW_SIBLING | XCB_CONFIG_WINDOW_STACK_MODE;
@@ -3553,19 +3457,6 @@ void WindowManager::apply_stacking()
         if (prev_visible != XCB_NONE)
             stack_above_sibling(window, prev_visible);
         prev_visible = window;
-    }
-
-    // Sibling-relative requests only order managed windows among themselves.
-    // Absolutely raise the top overlay so an unmanaged override-redirect
-    // window cannot remain above it after an external stacking perturbation.
-    if (prev_visible != XCB_NONE)
-    {
-        auto const* top = get_client(prev_visible);
-        if (top && compute_stack_tier(*top) == stacking_policy::Tier::Overlay)
-        {
-            uint32_t stack_mode = XCB_STACK_MODE_ABOVE;
-            xcb_configure_window(conn_.get(), prev_visible, XCB_CONFIG_WINDOW_STACK_MODE, &stack_mode);
-        }
     }
 
     ewmh_.update_client_list_stacking(order);
@@ -3924,9 +3815,8 @@ void WindowManager::update_window_title(xcb_window_t window)
     std::string previous_name = client->name;
     client->name = name;
 
-    // Re-evaluate window rules when the title changes, so that title-based
-    // rules (e.g. overlay layer) are applied even when the client sets the
-    // title after the initial MapRequest (common with Electron apps).
+    // Re-evaluate window rules when the title changes so title-based placement
+    // rules apply even when the client sets its title after MapRequest.
     if (name != previous_name)
     {
         reevaluate_managed_window(window);
