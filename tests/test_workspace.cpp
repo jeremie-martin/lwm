@@ -22,21 +22,16 @@ TEST_CASE("Windows persist across workspace switches", "[workspace][critical]")
     mon.height = 1080;
     init_workspaces(mon);
 
-    // Add window to workspace 0
     mon.workspaces[0].windows.push_back(0x1000);
     mon.workspaces[0].focused_window = 0x1000;
 
-    // "Switch" to workspace 1 (data structure operation only)
     mon.current_workspace = 1;
 
-    // Verify window still exists in workspace 0
     REQUIRE(mon.workspaces[0].windows.size() == 1);
     REQUIRE(mon.workspaces[0].windows[0] == 0x1000);
 
-    // "Switch" back to workspace 0
     mon.current_workspace = 0;
 
-    // Window should still be there
     REQUIRE(mon.current().windows.size() == 1);
     REQUIRE(mon.current().windows[0] == 0x1000);
 }
@@ -52,7 +47,6 @@ TEST_CASE("Removing focused window falls back via policy (skips iconic)", "[work
     bool removed = workspace_policy::remove_tiled_window(ws, 0x3000, is_iconic);
 
     REQUIRE(removed);
-    // Should skip iconic 0x2000 and fall back to 0x1000
     REQUIRE(ws.focused_window == 0x1000);
     REQUIRE(ws.windows == std::vector<xcb_window_t>{ 0x1000, 0x2000 });
 }
@@ -63,17 +57,14 @@ TEST_CASE("Window can be found across workspaces", "[workspace]")
     mon.name = "test";
     init_workspaces(mon);
 
-    // Add windows to different workspaces
     mon.workspaces[0].windows.push_back(0x1000);
     mon.workspaces[3].windows.push_back(0x2000);
     mon.workspaces[7].windows.push_back(0x3000);
 
-    // Should find windows in their respective workspaces
     REQUIRE(mon.workspaces[0].find_window(0x1000) != mon.workspaces[0].windows.end());
     REQUIRE(mon.workspaces[3].find_window(0x2000) != mon.workspaces[3].windows.end());
     REQUIRE(mon.workspaces[7].find_window(0x3000) != mon.workspaces[7].windows.end());
 
-    // Should NOT find windows in wrong workspaces
     REQUIRE(mon.workspaces[0].find_window(0x2000) == mon.workspaces[0].windows.end());
     REQUIRE(mon.workspaces[1].find_window(0x1000) == mon.workspaces[1].windows.end());
 }
@@ -272,14 +263,10 @@ TEST_CASE("Switching to empty workspace", "[workspace][edge]")
     mon.height = 1080;
     init_workspaces(mon);
 
-    // Populate workspace 0
     mon.workspaces[0].windows.push_back(0x1000);
     mon.workspaces[0].windows.push_back(0x2000);
     mon.workspaces[0].focused_window = 0x1000;
 
-    // Workspace 1 stays empty (default-constructed)
-
-    // Switch to empty workspace 1
     mon.current_workspace = 1;
 
     REQUIRE(mon.current().windows.empty());
@@ -299,7 +286,6 @@ TEST_CASE("Removing all windows then adding one", "[workspace][edge]")
     REQUIRE(ws.windows.empty());
     REQUIRE(ws.focused_window == XCB_NONE);
 
-    // Add a new window
     ws.windows.push_back(0x3000);
     ws.focused_window = 0x3000;
 

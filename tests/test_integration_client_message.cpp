@@ -141,10 +141,8 @@ TEST_CASE(
     // Move w1 to workspace 1 (desktop index 1)
     send_net_wm_desktop(conn, w1, 1);
 
-    // Verify w1's desktop property is updated
     REQUIRE(wait_for_property_cardinal(conn.get(), w1, net_wm_desktop, 1, kTimeout));
 
-    // Verify w2's desktop property is unchanged
     w2_desktop = get_window_property_cardinal(conn.get(), w2, net_wm_desktop).value_or(0);
     REQUIRE(w2_desktop == 0);
 
@@ -153,14 +151,12 @@ TEST_CASE(
     send_client_message(conn, conn.root(), net_current_desktop, 1);
     REQUIRE(wait_for_property_cardinal(conn.get(), conn.root(), net_current_desktop, 1, kTimeout));
 
-    // w1 should be active on workspace 1
     REQUIRE(wait_for_active_window(conn, w1, kTimeout));
 
     // Switch back to workspace 0 to verify w2 is there
     send_client_message(conn, conn.root(), net_current_desktop, 0);
     REQUIRE(wait_for_property_cardinal(conn.get(), conn.root(), net_current_desktop, 0, kTimeout));
 
-    // w2 should be active on workspace 0
     REQUIRE(wait_for_active_window(conn, w2, kTimeout));
 
     destroy_window(conn, w2);
@@ -205,11 +201,9 @@ TEST_CASE(
     // Wait a bit to ensure the message is processed
     std::this_thread::sleep_for(std::chrono::milliseconds(100));
 
-    // Desktop property should remain unchanged (move rejected)
     uint32_t final_desktop = get_window_property_cardinal(conn.get(), w1, net_wm_desktop).value_or(0);
     REQUIRE(final_desktop == initial_desktop);
 
-    // Window should still be accessible/focusable
     REQUIRE(wait_for_active_window(conn, w1, kTimeout));
 
     destroy_window(conn, w1);
@@ -232,12 +226,10 @@ TEST_CASE("Integration: client message to invalid window ID is ignored", "[integ
 
     xcb_atom_t net_wm_desktop = intern_atom(conn.get(), "_NET_WM_DESKTOP");
 
-    // Send client message to non-existent window - should be ignored without crash
     send_net_wm_desktop(conn, 0xDEADBEEF, 1);
 
     std::this_thread::sleep_for(std::chrono::milliseconds(100));
 
-    // Real window should still be active and unaffected
     REQUIRE(wait_for_active_window(conn, w1, kTimeout));
 
     destroy_window(conn, w1);
@@ -275,7 +267,6 @@ TEST_CASE(
     // Wait for desktop property update
     REQUIRE(wait_for_property_cardinal(conn.get(), w2, net_wm_desktop, 1, kTimeout));
 
-    // w1 should become active on workspace 0
     REQUIRE(wait_for_property_window(conn.get(), conn.root(), net_active_window, w1, kTimeout));
 
     // Switch to workspace 1 to verify w2 is there
@@ -283,7 +274,6 @@ TEST_CASE(
     send_client_message(conn, conn.root(), net_current_desktop, 1);
     REQUIRE(wait_for_property_cardinal(conn.get(), conn.root(), net_current_desktop, 1, kTimeout));
 
-    // w2 should be active on workspace 1
     REQUIRE(wait_for_active_window(conn, w2, kTimeout));
 
     destroy_window(conn, w2);

@@ -140,28 +140,16 @@ public:
 private:
     std::vector<CompiledWindowRule> rules_;
 
-    /**
-     * @brief Convert type string to WindowType enum
-     */
     static std::optional<WindowType> parse_window_type(std::optional<std::string> const& type_str);
 
-    /**
-     * @brief Check if a single rule matches
-     */
     bool matches_rule(CompiledWindowRule const& rule, WindowMatchInfo const& info) const;
 
-    /**
-     * @brief Resolve monitor name to index
-     */
     static std::optional<size_t> resolve_monitor(
         std::optional<int> index,
         std::optional<std::string> const& name,
         std::span<Monitor const> monitors
     );
 
-    /**
-     * @brief Resolve workspace name to index
-     */
     static std::optional<size_t> resolve_workspace(
         std::optional<int> index,
         std::optional<std::string> const& name,

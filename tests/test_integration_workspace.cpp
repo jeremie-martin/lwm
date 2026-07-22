@@ -291,7 +291,6 @@ TEST_CASE(
     send_client_message(conn, conn.root(), net_current_desktop, initial_desktop);
     REQUIRE(wait_for_property_cardinal(conn.get(), conn.root(), net_current_desktop, initial_desktop, kTimeout));
 
-    // Window should still be active and fullscreen
     REQUIRE(wait_for_active_window(conn, w1, kTimeout));
     REQUIRE(check_fullscreen());
 
@@ -299,7 +298,6 @@ TEST_CASE(
     values[0] = 0;
     send_client_message(conn, w1, net_wm_state, values[0], values[1], values[2], values[3], values[4]);
 
-    // Verify fullscreen state is cleared
     auto check_not_fullscreen = [&]()
     {
         auto cookie = xcb_get_property(conn.get(), 0, w1, net_wm_state, XCB_ATOM_ATOM, 0, 10);
@@ -358,10 +356,8 @@ TEST_CASE(
     // Move w2 to desktop 1 (currently on desktop 0)
     send_client_message(conn, w2, net_wm_desktop, 1);
 
-    // w2 is now on a hidden workspace — focus should fall back to w1
     CHECK(wait_for_active_window(conn, w1, kTimeout));
 
-    // Verify w2 was actually moved
     CHECK(wait_for_property_cardinal(conn.get(), w2, net_wm_desktop, 1, kTimeout));
 
     destroy_window(conn, w2);
@@ -396,7 +392,6 @@ TEST_CASE("Integration: monocle layout assigns identical geometries", "[integrat
     map_window(conn, w3);
     REQUIRE(wait_for_active_window(conn, w3, kTimeout));
 
-    // Under master-stack, at least two of the three windows must have differing geometries.
     auto g1 = get_window_geometry(conn, w1);
     auto g2 = get_window_geometry(conn, w2);
     auto g3 = get_window_geometry(conn, w3);
@@ -410,7 +405,6 @@ TEST_CASE("Integration: monocle layout assigns identical geometries", "[integrat
     REQUIRE(result.has_value());
     REQUIRE(result->exit_code == 0);
 
-    // After the switch all three managed windows share the content rect.
     bool ok = wait_for_condition(
         [&]()
         {

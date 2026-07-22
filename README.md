@@ -117,6 +117,8 @@ lwmctl notify-attention window=0x3600007
 
 `lwmctl --help` is the complete CLI reference. `workspace list` and `window list` return JSON. `subscribe` streams JSON lines; an empty filter subscribes to all event types, while a comma-separated filter may include `window_map`, `window_unmap`, `focus_change`, `workspace_switch`, `layout_change`, `config_reload`, and `key_action`.
 
+See [`IPC.md`](IPC.md) for response shapes and event payloads.
+
 `lwmctl` discovers the socket via `--socket`, `LWM_SOCKET`, the root-window `_LWM_IPC_SOCKET` property, then the default runtime path.
 
 Config reload is explicit by design. LWM does not watch the config file automatically. Reload applies appearance, key and mouse bindings, rules, commands, scratchpad definitions, layout defaults, and focus settings. It does not rerun autostart commands; changing `[workspaces].count` still requires a restart.
@@ -148,10 +150,12 @@ DISPLAY=:100 xterm
 
 - [`ARCHITECTURE.md`](ARCHITECTURE.md): runtime model, invariants, state ownership, and transition funnels
 - [`COMPLIANCE.md`](COMPLIANCE.md): ICCCM/EWMH surface, protocol behavior, and known limits
+- [`IPC.md`](IPC.md): local socket discovery, replies, JSON output, and events
 - [`CONTRIBUTING.md`](CONTRIBUTING.md): build/test workflow, code map, and change checklist
 - [`config.toml.example`](config.toml.example): commented configuration reference and working starter file
 - [`SHADERS.md`](SHADERS.md): using picom + GLSL shaders on top of LWM
 - [`ROADMAP.md`](ROADMAP.md): open work and open questions
+- [`LICENSE`](LICENSE): MIT license text
 
 `CLAUDE.md` is an agent-only reading order, not part of the public user documentation.
 

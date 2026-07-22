@@ -34,7 +34,7 @@ enum class WindowType
     Normal
 };
 
-/// Off-screen X coordinate for hidden windows (DWM-style visibility management)
+/// X coordinate used when hiding a window off-screen.
 constexpr int16_t OFF_SCREEN_X = -20000;
 
 /// ICCCM WM_STATE values
@@ -182,29 +182,11 @@ struct FloatingState
 using TilingState = std::variant<TiledState, FloatingState>;
 
 /**
- * @brief Unified client record representing any managed window.
+ * @brief Unified authoritative record for a managed window.
  *
- * This struct is the authoritative source of truth for all per-window state.
- * It replaces the scattered unordered_set and unordered_map structures that
- * were previously used (fullscreen caches, iconic windows, etc.).
- *
- * Design rationale:
- * - Single authoritative source: all state for a window is in one place
- * - O(1) lookup for any window property via the clients_ map
- * - Eliminates state synchronization bugs between multiple data structures
- * - Simplifies invariant reasoning and debugging
- * - Unifies tiled and floating window handling for state management
- *
- * State flags managed here:
- * - fullscreen, iconic, sticky, layer_hint (Above/Below as a tri-state)
- * - maximized_horz, maximized_vert, modal
- * - skip_taskbar
- *
- * Restore geometries:
- * - fullscreen_restore: geometry before entering fullscreen
- * - maximize_restore: geometry before maximizing
- *
- * @see WindowManager::clients_ for the central registry
+ * It contains the window's classification, placement, protocol state, and
+ * restore geometry. Kind-specific data is held by `tiled_state` or
+ * `floating_state`; `WindowManager::clients_` is the central registry.
  */
 struct Client
 {

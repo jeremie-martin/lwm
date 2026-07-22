@@ -107,7 +107,7 @@ void WindowManager::serialize_restart_state()
             continue;
 
         uint32_t data[CLIENT_PROP_COUNT] {};
-        // Version 3 reserved this slot for the removed managed-overlay flag.
+        // Keep retired version-3 fields reserved for restart compatibility.
         data[0] = 0;
         data[1] = client.borderless ? 1 : 0;
         std::optional<Geometry> prior_floating;
@@ -121,7 +121,6 @@ void WindowManager::serialize_restart_state()
         pack_optional_geometry(data + 6, client.fullscreen_restore);
         pack_optional_geometry(data + 11, client.maximize_restore);
         pack_optional_geometry(data + 16, prior_floating);
-        // Version 3 reserved this slot for an obsolete scratchpad marker.
         data[21] = 0;
         // 0=none, 1=Tiled, 2=Floating
         if (is_hidden_tiled_pool_scratchpad(client))
@@ -473,14 +472,13 @@ void WindowManager::apply_restart_client_state(xcb_window_t window)
         return;
     }
 
-    // data[0] was the managed-overlay flag. It is intentionally ignored.
+    // Retired version-3 fields at data[0] and data[21] remain reserved.
     client->borderless = data[1] != 0;
     Geometry saved_floating_geometry = unpack_geometry(data + 2);
     client->fullscreen_restore = unpack_optional_geometry(data + 6);
     client->maximize_restore = unpack_optional_geometry(data + 11);
     std::optional<Geometry> saved_prior_floating = unpack_optional_geometry(data + 16);
 
-    // data[21] is an obsolete scratchpad marker and remains ignored.
     if (data[22] == 1)
         client->scratchpad = HiddenTiledScratchpadPoolMembership { saved_prior_floating };
     else if (data[22] == 2)

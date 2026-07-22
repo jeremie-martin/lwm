@@ -4,7 +4,8 @@
  *
  * Implements named scratchpads (pre-configured, always floating, auto-launch)
  * and a generic scratchpad pool (ad-hoc stash/recall with original kind preserved).
- * Both are global: windows follow the user across workspaces and monitors.
+ * Both can be recalled from any workspace; showing one targets the focused
+ * monitor's current workspace.
  */
 
 #include "lwm/core/floating.hpp"

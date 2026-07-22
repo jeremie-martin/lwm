@@ -45,6 +45,15 @@ Tests require `xcb-xtest` in addition to the runtime XCB dependencies.
 
 Start with [`ARCHITECTURE.md`](ARCHITECTURE.md) before editing any of the state-transition code.
 
+## Documentation Boundaries
+
+- User-facing behavior lives in [`README.md`](README.md), `config.toml.example`, and the CLI help.
+- The local socket contract lives in [`IPC.md`](IPC.md); ICCCM/EWMH behavior and limits live in [`COMPLIANCE.md`](COMPLIANCE.md).
+- The runtime model and state ownership live in [`ARCHITECTURE.md`](ARCHITECTURE.md).
+- Source comments explain non-obvious rationale or invariants; tests are the executable specification for expected behavior.
+
+When behavior changes, update the owning surface and its tests. Avoid duplicating the same rule in several documents.
+
 ## Coding Style
 
 4-space indentation, braces on their own lines, concise comments only where logic is non-obvious. `PascalCase` for types, `snake_case` for functions and files, uppercase for compile-time constants and macros. No formatter or linter is enforced in-tree, so consistency with nearby code is the rule.
@@ -124,7 +133,7 @@ The documentation map and audience entry points are maintained in the `Documenta
   - implement the WM command in `WindowManager::run_ipc_command`
   - expose the CLI shape in `src/app/lwmctl.cpp`
   - add integration coverage when the command affects real WM state
-  - update `README.md` if it is user-facing
+  - update `README.md` and [`IPC.md`](IPC.md) if it changes the public command or wire surface
 - New compositor-facing `_LWM_*` property:
   - publish it from the authoritative state owner
   - add integration coverage that reads the X property

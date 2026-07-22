@@ -177,13 +177,8 @@ void Layout::set_sync_request_callback(std::function<void(xcb_window_t)> callbac
 
 void Layout::apply_size_hints(xcb_window_t window, uint32_t& width, uint32_t& height) const
 {
-    // For tiled windows, we intentionally ignore ALL size hints including minimum size.
-    // The WM controls tiled window geometry completely. If a window specifies a minimum
-    // size larger than its allocated slot, honoring it causes overlap with other windows.
-    // This matches the behavior of other tiling WMs (DWM, i3, bspwm).
-    //
-    // Applications should handle being smaller than their preferred size gracefully.
-    // Most modern toolkits (Qt, GTK) do this by scrolling, truncating, or adapting layout.
+    // Tiling owns the allocated geometry. Honoring a larger client minimum would
+    // make tiled windows overlap, so size hints are intentionally ignored here.
     (void)window; // Unused - kept for potential future per-window logic
 
     width = std::max<uint32_t>(1, width);

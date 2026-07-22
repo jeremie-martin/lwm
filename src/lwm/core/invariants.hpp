@@ -4,15 +4,11 @@
  * @file invariants.hpp
  * @brief Debug assertions for window manager invariants
  *
- * These assertions verify critical invariants that must hold at all times.
- * They are enabled in debug builds and can be disabled in release for performance.
+ * These debug-only checks inspect the in-memory model. EWMH property values
+ * are covered by integration tests rather than by these assertions.
  *
- * Key invariants:
- * 1. If `clients_` contains id then window is managed
- * 2. If client.iconic => WM_STATE Iconic and `_NET_WM_STATE` contains HIDDEN
- * 3. If focused window exists => `_NET_ACTIVE_WINDOW` equals it; else None
- * 4. Desktop indices valid or 0xFFFFFFFF
- * 5. Client state flags match EWMH `_NET_WM_STATE` atoms
+ * They verify managed placement, workspace membership, focus references,
+ * client-kind storage, and mutually exclusive model state.
  */
 
 #include "log.hpp"
@@ -70,9 +66,7 @@ inline void assert_client_managed(
 /**
  * @brief Assert focus consistency
  *
- * Verifies:
- * - If active_window_ != XCB_NONE, it must be in clients_
- * - The active window must be visible and focus-eligible
+ * Verifies that an active window is managed and not iconic.
  */
 inline void
 assert_focus_consistency(std::unordered_map<xcb_window_t, Client> const& clients, xcb_window_t active_window)

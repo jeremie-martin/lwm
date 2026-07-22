@@ -191,11 +191,10 @@ void WindowManager::focus_any_window(xcb_window_t window, bool record_user_time,
     xcb_timestamp_t focus_time =
         focus_timestamp ? focus_timestamp : (last_event_time_ ? last_event_time_ : XCB_CURRENT_TIME);
     send_wm_take_focus(*client, focus_time);
-    // Always set input focus directly on the target window.  ICCCM prescribes
-    // root-focus for "Globally Active" windows (accepts_input=false), but doing
-    // so leaves keyboard input stranded on root until the client responds to
-    // WM_TAKE_FOCUS.  Following dwm/i3 convention we always focus the window;
-    // a well-behaved Globally Active client can still redirect via WM_TAKE_FOCUS.
+    // Always set input focus directly on the target window. ICCCM prescribes
+    // root focus for "Globally Active" windows, but waiting for WM_TAKE_FOCUS
+    // can leave keyboard input stranded on the root window. Such clients can
+    // still redirect focus after receiving the protocol message above.
     xcb_set_input_focus(conn_.get(), XCB_INPUT_FOCUS_POINTER_ROOT, window, focus_time);
 
     apply_stacking();

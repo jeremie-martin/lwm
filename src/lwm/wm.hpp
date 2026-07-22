@@ -567,7 +567,7 @@ private:
     void add_tiled_to_workspace(Client& client, size_t monitor_idx, size_t workspace_idx);
     void remove_tiled_from_workspace(Client const& client, size_t monitor_idx, size_t workspace_idx);
 
-    // Off-screen visibility management (DWM-style)
+    // Off-screen visibility management
     void hide_window(Client& client);
     void show_window(Client& client);
     void flush_and_drain_crossing();

@@ -105,7 +105,6 @@ TEST_CASE("Single window gets full content rect", "[split_tree][geometry]")
     auto geoms = compute_geometries(tree, content, padding, border);
 
     REQUIRE(geoms.size() == 1);
-    // Single window gets the full content rect
     CHECK(geoms[0].x == content.x);
     CHECK(geoms[0].y == content.y);
     CHECK(geoms[0].width == content.width);
@@ -123,13 +122,9 @@ TEST_CASE("Two windows split evenly with default 0.5 ratio", "[split_tree][geome
     auto geoms = compute_geometries(tree, content, padding, border);
 
     REQUIRE(geoms.size() == 2);
-    // Both windows should have the same height
     CHECK(geoms[0].height == geoms[1].height);
-    // Left window starts at content rect origin
     CHECK(geoms[0].x == content.x);
-    // Right window is offset
     CHECK(geoms[1].x > geoms[0].x + geoms[0].width);
-    // Widths should be approximately equal
     CHECK(std::abs(static_cast<int>(geoms[0].width) - static_cast<int>(geoms[1].width)) <= 1);
 }
 
@@ -149,9 +144,7 @@ TEST_CASE("Ratio overlay changes geometry proportions", "[split_tree][geometry]"
     auto geoms = compute_geometries(tree, content, padding, border);
 
     REQUIRE(geoms.size() == 2);
-    // Master (left) should be significantly wider than stack (right)
     CHECK(geoms[0].width > geoms[1].width);
-    // Master should be roughly 70% of available
     double ratio = static_cast<double>(geoms[0].width) / static_cast<double>(geoms[0].width + geoms[1].width);
     CHECK_THAT(ratio, Catch::Matchers::WithinAbs(0.7, 0.05));
 }
@@ -167,13 +160,9 @@ TEST_CASE("Three windows: stack windows split vertically", "[split_tree][geometr
     auto geoms = compute_geometries(tree, content, padding, border);
 
     REQUIRE(geoms.size() == 3);
-    // Master takes full height
     CHECK(geoms[0].height == content.height);
-    // Stack windows share the right side
     CHECK(geoms[1].x == geoms[2].x);
-    // Stack windows should be approximately equal height
     CHECK(std::abs(static_cast<int>(geoms[1].height) - static_cast<int>(geoms[2].height)) <= 1);
-    // Stack windows are stacked vertically (win2 above win3)
     CHECK(geoms[2].y > geoms[1].y);
 }
 
@@ -188,7 +177,6 @@ TEST_CASE("Hit test detects horizontal split border", "[split_tree][hit_test]")
 
     auto content = working_area_to_content_rect(area, padding, border);
 
-    // The split border should be roughly at x = 500
     auto hit = hit_test_split(tree, content, padding, border, 500, 250, 20);
     REQUIRE(hit.has_value());
     CHECK(hit->direction == SplitDirection::Horizontal);
@@ -204,7 +192,6 @@ TEST_CASE("Hit test returns nullopt far from borders", "[split_tree][hit_test]")
 
     auto content = working_area_to_content_rect(area, padding, border);
 
-    // Far from the split border
     auto hit = hit_test_split(tree, content, padding, border, 100, 250, 8);
     CHECK(!hit.has_value());
 }
@@ -218,7 +205,6 @@ TEST_CASE("Hit test detects vertical split in stack", "[split_tree][hit_test]")
 
     auto content = working_area_to_content_rect(area, padding, border);
 
-    // The vertical stack split should be roughly at y = 500, x = 750 (right half)
     auto hit = hit_test_split(tree, content, padding, border, 750, 500, 20);
     REQUIRE(hit.has_value());
     CHECK(hit->direction == SplitDirection::Vertical);

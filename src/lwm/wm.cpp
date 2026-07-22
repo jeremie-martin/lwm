@@ -2762,8 +2762,7 @@ void WindowManager::apply_fullscreen_if_needed(Client& client)
         | XCB_CONFIG_WINDOW_BORDER_WIDTH;
     xcb_configure_window(conn_.get(), client.id, mask, values);
 
-    // Send synthetic ConfigureNotify so client knows its geometry immediately
-    // This is critical for Electron/Chrome apps that need to know their size when fullscreened
+    // Send synthetic ConfigureNotify so the client learns its geometry immediately.
     xcb_configure_notify_event_t ev = {};
     ev.response_type = XCB_CONFIGURE_NOTIFY;
     ev.event = client.id;
@@ -4003,18 +4002,10 @@ void WindowManager::remove_tiled_from_workspace(Client const& client, size_t mon
 }
 
 /**
- * @brief Hide a window by moving it off-screen (DWM-style visibility).
+ * @brief Hide a window by moving it off-screen while keeping it mapped.
  *
- * This replaces the previous unmap-based approach. Windows stay mapped at all times
- * but are moved to x=-20000 when hidden. This resolves GPU-accelerated app redraw
- * issues (Chromium, Qt, Electron) that occur after unmap/remap cycles.
- *
- * Benefits:
- * - No UnmapNotify/MapNotify events, simplifying ICCCM compliance
- * - GPU-accelerated apps continue rendering and don't need reactivation
- * - Faster workspace switching (no window recreation overhead)
- *
- * @param window The window to hide
+ * Keeping the window mapped avoids unmap/remap side effects for clients and
+ * preserves the WM's visibility model.
  */
 void WindowManager::hide_window(Client& client)
 {

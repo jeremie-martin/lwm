@@ -1,5 +1,13 @@
 #pragma once
 
+/**
+ * @file policy.hpp
+ * @brief Pure policy functions for the window manager's state model.
+ *
+ * These functions are the executable form of the policies summarized in
+ * `ARCHITECTURE.md`; keep behavior changes covered by the corresponding tests.
+ */
+
 #include "lwm/core/types.hpp"
 #include <algorithm>
 #include <functional>
