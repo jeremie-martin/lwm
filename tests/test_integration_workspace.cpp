@@ -500,7 +500,11 @@ TEST_CASE("Integration: version 3 restart handoff survives overlay removal", "[i
         SKIP("lwmctl binary not available");
 
     X11Connection conn;
-    REQUIRE(conn.ok());
+    if (!conn.ok())
+    {
+        WARN("Failed to connect to X server.");
+        SKIP("Test environment not available");
+    }
 
     xcb_window_t window = create_window(conn, 10, 10, 200, 150);
     map_window(conn, window);
@@ -510,9 +514,9 @@ TEST_CASE("Integration: version 3 restart handoff survives overlay removal", "[i
     REQUIRE(restart_state != XCB_NONE);
     REQUIRE(restart_client != XCB_NONE);
 
-    // Reproduce the properties emitted by the pre-removal version-3 binary.
-    // Its 27-word client payload starts with the retired overlay flag.
-    std::array<uint32_t, 27> client_state {};
+    // Reproduce the shortest supported payload emitted by an older version-3
+    // binary. Its client state starts with the retired overlay flag.
+    std::array<uint32_t, 24> client_state{ };
     client_state[0] = 1;
     client_state[2] = 120;
     client_state[3] = 130;

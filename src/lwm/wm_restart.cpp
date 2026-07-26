@@ -28,7 +28,10 @@ namespace {
 // and carry no runtime semantics.
 constexpr uint32_t RESTART_STATE_VERSION = 3;
 constexpr uint32_t RESTART_RATIO_STATE_VERSION = 3;
-constexpr size_t CLIENT_PROP_COUNT = 27;
+constexpr size_t CLIENT_PROP_BASE_COUNT = 24;     // +kind
+constexpr size_t CLIENT_PROP_URGENCY_COUNT = 25;  // +legacy WM-initiated urgency
+constexpr size_t CLIENT_PROP_APP_PREF_COUNT = 26; // +urgency sources and app preferences
+constexpr size_t CLIENT_PROP_COUNT = 27;          // +fullscreen restore-layer hint
 
 constexpr uint32_t APP_PREF_SKIP_TASKBAR = 1U << 0;
 constexpr uint32_t APP_PREF_SKIP_PAGER = 1U << 1;
@@ -458,7 +461,7 @@ void WindowManager::apply_restart_client_state(xcb_window_t window)
         return;
 
     size_t len = xcb_get_property_value_length(reply) / 4;
-    if (reply->type != XCB_ATOM_CARDINAL || len != CLIENT_PROP_COUNT)
+    if (reply->type != XCB_ATOM_CARDINAL || len < CLIENT_PROP_BASE_COUNT)
     {
         free(reply);
         return;
@@ -492,17 +495,32 @@ void WindowManager::apply_restart_client_state(xcb_window_t window)
     else if (data[23] == 2)
         saved_kind = Client::Kind::Floating;
 
-    client->urgency.sources = static_cast<uint8_t>(data[24]) & KNOWN_URGENCY_SOURCES;
+    if (len >= CLIENT_PROP_APP_PREF_COUNT)
+    {
+        client->urgency.sources = static_cast<uint8_t>(data[24]) & KNOWN_URGENCY_SOURCES;
 
-    uint32_t const app_pref_bits = data[25];
-    client->app_prefs.skip_taskbar = (app_pref_bits & APP_PREF_SKIP_TASKBAR) != 0;
-    client->app_prefs.skip_pager = (app_pref_bits & APP_PREF_SKIP_PAGER) != 0;
-    client->app_prefs.above = (app_pref_bits & APP_PREF_ABOVE) != 0;
-    client->app_prefs.below = (app_pref_bits & APP_PREF_BELOW) != 0;
-    if (client->app_prefs.above && client->app_prefs.below)
-        client->app_prefs.below = false;
-    if (data[26] > 0 && data[26] <= static_cast<uint32_t>(LayerHint::Below) + 1U)
-        client->fullscreen_restore_layer_hint = static_cast<LayerHint>(data[26] - 1U);
+        uint32_t const app_pref_bits = data[25];
+        client->app_prefs.skip_taskbar = (app_pref_bits & APP_PREF_SKIP_TASKBAR) != 0;
+        client->app_prefs.skip_pager = (app_pref_bits & APP_PREF_SKIP_PAGER) != 0;
+        client->app_prefs.above = (app_pref_bits & APP_PREF_ABOVE) != 0;
+        client->app_prefs.below = (app_pref_bits & APP_PREF_BELOW) != 0;
+        if (client->app_prefs.above && client->app_prefs.below)
+            client->app_prefs.below = false;
+
+        if (len >= CLIENT_PROP_COUNT && data[26] > 0 && data[26] <= static_cast<uint32_t>(LayerHint::Below) + 1U)
+        {
+            client->fullscreen_restore_layer_hint = static_cast<LayerHint>(data[26] - 1U);
+        }
+    }
+    else if (len >= CLIENT_PROP_URGENCY_COUNT)
+    {
+        if (data[24] != 0)
+            client->urgency.sources = static_cast<uint8_t>(UrgencySource::WmInitiated);
+    }
+    else if (client->urgency.active() && window != active_window_)
+    {
+        client->urgency.add(UrgencySource::WmInitiated);
+    }
 
     free(reply);
 
