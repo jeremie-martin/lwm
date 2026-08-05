@@ -1,10 +1,12 @@
 #include "x11_test_harness.hpp"
 #include <X11/Xlib.h>
+#include <algorithm>
 #include <array>
 #include <catch2/catch_test_macros.hpp>
 #include <chrono>
 #include <filesystem>
 #include <optional>
+#include <vector>
 #include <xcb/xcb_keysyms.h>
 #include <xcb/xtest.h>
 
@@ -32,6 +34,129 @@ std::optional<WindowGeometry> get_window_geometry(X11Connection& conn, xcb_windo
     WindowGeometry g { reply->x, reply->y, reply->width, reply->height };
     free(reply);
     return g;
+}
+
+bool intersects_root(X11Connection& conn, WindowGeometry const& geometry)
+{
+    int32_t const left = std::max<int32_t>(0, geometry.x);
+    int32_t const top = std::max<int32_t>(0, geometry.y);
+    int32_t const right = std::min<int32_t>(conn.screen()->width_in_pixels, geometry.x + geometry.width);
+    int32_t const bottom = std::min<int32_t>(conn.screen()->height_in_pixels, geometry.y + geometry.height);
+    return left < right && top < bottom;
+}
+
+bool window_is_viewable(X11Connection& conn, xcb_window_t window)
+{
+    auto cookie = xcb_get_window_attributes(conn.get(), window);
+    auto* reply = xcb_get_window_attributes_reply(conn.get(), cookie, nullptr);
+    if (!reply)
+        return false;
+    bool const result = reply->map_state == XCB_MAP_STATE_VIEWABLE;
+    free(reply);
+    return result;
+}
+
+std::optional<xcb_window_t> get_input_focus(X11Connection& conn)
+{
+    auto cookie = xcb_get_input_focus(conn.get());
+    auto* reply = xcb_get_input_focus_reply(conn.get(), cookie, nullptr);
+    if (!reply)
+        return std::nullopt;
+    xcb_window_t const result = reply->focus;
+    free(reply);
+    return result;
+}
+
+void synchronize_x_server(X11Connection& conn)
+{
+    auto cookie = xcb_get_input_focus(conn.get());
+    auto* reply = xcb_get_input_focus_reply(conn.get(), cookie, nullptr);
+    free(reply);
+}
+
+bool drain_window_visibility_events(X11Connection& conn, xcb_window_t window)
+{
+    bool observed = false;
+    while (auto* event = xcb_poll_for_event(conn.get()))
+    {
+        uint8_t const response_type = event->response_type & 0x7f;
+        if (response_type == XCB_MAP_NOTIFY)
+        {
+            auto* map = reinterpret_cast<xcb_map_notify_event_t*>(event);
+            observed = observed || map->window == window;
+        }
+        else if (response_type == XCB_UNMAP_NOTIFY)
+        {
+            auto* unmap = reinterpret_cast<xcb_unmap_notify_event_t*>(event);
+            observed = observed || unmap->window == window;
+        }
+        free(event);
+    }
+    return observed;
+}
+
+std::optional<uint32_t> get_wm_state(X11Connection& conn, xcb_window_t window, xcb_atom_t wm_state)
+{
+    auto cookie = xcb_get_property(conn.get(), 0, window, wm_state, wm_state, 0, 2);
+    auto* reply = xcb_get_property_reply(conn.get(), cookie, nullptr);
+    if (!reply || reply->type != wm_state || reply->format != 32 || xcb_get_property_value_length(reply) < 8)
+    {
+        free(reply);
+        return std::nullopt;
+    }
+
+    uint32_t const result = static_cast<uint32_t*>(xcb_get_property_value(reply))[0];
+    free(reply);
+    return result;
+}
+
+std::optional<bool> property_contains_atom(
+    X11Connection& conn,
+    xcb_window_t window,
+    xcb_atom_t property,
+    xcb_atom_t expected
+)
+{
+    auto cookie = xcb_get_property(conn.get(), 0, window, property, XCB_ATOM_ATOM, 0, 64);
+    auto* reply = xcb_get_property_reply(conn.get(), cookie, nullptr);
+    if (!reply)
+        return std::nullopt;
+    if (reply->type == XCB_ATOM_NONE && reply->format == 0 && xcb_get_property_value_length(reply) == 0)
+    {
+        free(reply);
+        return false;
+    }
+    if (reply->type != XCB_ATOM_ATOM || reply->format != 32)
+    {
+        free(reply);
+        return std::nullopt;
+    }
+
+    bool result = false;
+    auto* atoms = static_cast<xcb_atom_t*>(xcb_get_property_value(reply));
+    int const count = xcb_get_property_value_length(reply) / 4;
+    for (int i = 0; i < count; ++i)
+        result = result || atoms[i] == expected;
+    free(reply);
+    return result;
+}
+
+std::optional<std::vector<xcb_window_t>> get_client_list(X11Connection& conn, xcb_atom_t client_list)
+{
+    auto cookie = xcb_get_property(conn.get(), 0, conn.root(), client_list, XCB_ATOM_WINDOW, 0, 4096);
+    auto* reply = xcb_get_property_reply(conn.get(), cookie, nullptr);
+    if (!reply || reply->type != XCB_ATOM_WINDOW || reply->format != 32)
+    {
+        free(reply);
+        return std::nullopt;
+    }
+
+    int const count = xcb_get_property_value_length(reply) / 4;
+    auto* windows = static_cast<xcb_window_t*>(xcb_get_property_value(reply));
+    std::vector<xcb_window_t> result(windows, windows + count);
+    std::sort(result.begin(), result.end());
+    free(reply);
+    return result;
 }
 
 std::optional<std::string> wait_for_ipc_socket_path(X11Connection& conn)
@@ -326,8 +451,8 @@ TEST_CASE(
 // _NET_WM_DESKTOP should transfer focus to a remaining window.
 // =============================================================================
 TEST_CASE(
-    "Integration: moving focused window to hidden workspace transfers focus",
-    "[integration][workspace][focus]"
+    "Integration: moving focused window to hidden workspace preserves normal mapped state",
+    "[integration][workspace][focus][visibility]"
 )
 {
     auto test_env = TestEnvironment::create();
@@ -336,10 +461,22 @@ TEST_CASE(
 
     auto& conn = test_env->conn;
 
+    xcb_atom_t net_current_desktop = intern_atom(conn.get(), "_NET_CURRENT_DESKTOP");
     xcb_atom_t net_wm_desktop = intern_atom(conn.get(), "_NET_WM_DESKTOP");
     xcb_atom_t net_number_of_desktops = intern_atom(conn.get(), "_NET_NUMBER_OF_DESKTOPS");
+    xcb_atom_t net_active_window = intern_atom(conn.get(), "_NET_ACTIVE_WINDOW");
+    xcb_atom_t net_client_list = intern_atom(conn.get(), "_NET_CLIENT_LIST");
+    xcb_atom_t net_wm_state = intern_atom(conn.get(), "_NET_WM_STATE");
+    xcb_atom_t net_wm_state_hidden = intern_atom(conn.get(), "_NET_WM_STATE_HIDDEN");
+    xcb_atom_t wm_state = intern_atom(conn.get(), "WM_STATE");
+    REQUIRE(net_current_desktop != XCB_NONE);
     REQUIRE(net_wm_desktop != XCB_NONE);
     REQUIRE(net_number_of_desktops != XCB_NONE);
+    REQUIRE(net_active_window != XCB_NONE);
+    REQUIRE(net_client_list != XCB_NONE);
+    REQUIRE(net_wm_state != XCB_NONE);
+    REQUIRE(net_wm_state_hidden != XCB_NONE);
+    REQUIRE(wm_state != XCB_NONE);
 
     uint32_t num_desktops = get_window_property_cardinal(conn.get(), conn.root(), net_number_of_desktops).value_or(0);
     if (num_desktops < 2)
@@ -350,15 +487,81 @@ TEST_CASE(
     REQUIRE(wait_for_active_window(conn, w1, kTimeout));
 
     xcb_window_t w2 = create_window(conn, 40, 40, 200, 150);
+    uint32_t event_mask = XCB_EVENT_MASK_PROPERTY_CHANGE | XCB_EVENT_MASK_STRUCTURE_NOTIFY;
+    xcb_change_window_attributes(conn.get(), w2, XCB_CW_EVENT_MASK, &event_mask);
+    xcb_flush(conn.get());
     map_window(conn, w2);
     REQUIRE(wait_for_active_window(conn, w2, kTimeout));
+    REQUIRE(wait_for_condition(
+        [&]()
+        {
+            auto focus = get_input_focus(conn);
+            return focus && *focus == w2;
+        },
+        kTimeout
+    ));
+    synchronize_x_server(conn);
+    drain_window_visibility_events(conn, w2);
 
-    // Move w2 to desktop 1 (currently on desktop 0)
+    auto client_list_before = get_client_list(conn, net_client_list);
+    REQUIRE(client_list_before.has_value());
+    REQUIRE(std::binary_search(client_list_before->begin(), client_list_before->end(), w1));
+    REQUIRE(std::binary_search(client_list_before->begin(), client_list_before->end(), w2));
+    REQUIRE(get_wm_state(conn, w2, wm_state) == XCB_ICCCM_WM_STATE_NORMAL);
+
+    // Move w2 to desktop 1 while desktop 0 remains current.
     send_client_message(conn, w2, net_wm_desktop, 1);
+    REQUIRE(wait_for_property_cardinal(conn.get(), w2, net_wm_desktop, 1, kTimeout));
+    REQUIRE(wait_for_condition(
+        [&]()
+        {
+            auto current = get_window_property_cardinal(conn.get(), conn.root(), net_current_desktop);
+            auto geometry = get_window_geometry(conn, w2);
+            return current && *current == 0 && geometry && !intersects_root(conn, *geometry);
+        },
+        kTimeout
+    ));
+    REQUIRE(wait_for_condition(
+        [&]()
+        {
+            auto hidden = property_contains_atom(conn, w2, net_wm_state, net_wm_state_hidden);
+            auto state = get_wm_state(conn, w2, wm_state);
+            auto client_list = get_client_list(conn, net_client_list);
+            auto active = get_window_property_window(conn.get(), conn.root(), net_active_window);
+            auto focus = get_input_focus(conn);
+            return window_is_viewable(conn, w2) && state && *state == XCB_ICCCM_WM_STATE_NORMAL && hidden && !*hidden
+                && client_list && *client_list == *client_list_before && active && *active == w1 && focus && *focus == w1;
+        },
+        kTimeout
+    ));
+    synchronize_x_server(conn);
+    CHECK_FALSE(drain_window_visibility_events(conn, w2));
 
-    CHECK(wait_for_active_window(conn, w1, kTimeout));
-
-    CHECK(wait_for_property_cardinal(conn.get(), w2, net_wm_desktop, 1, kTimeout));
+    send_client_message(conn, conn.root(), net_current_desktop, 1);
+    REQUIRE(wait_for_property_cardinal(conn.get(), conn.root(), net_current_desktop, 1, kTimeout));
+    REQUIRE(wait_for_condition(
+        [&]()
+        {
+            auto geometry = get_window_geometry(conn, w2);
+            return geometry && intersects_root(conn, *geometry);
+        },
+        kTimeout
+    ));
+    REQUIRE(wait_for_condition(
+        [&]()
+        {
+            auto hidden = property_contains_atom(conn, w2, net_wm_state, net_wm_state_hidden);
+            auto state = get_wm_state(conn, w2, wm_state);
+            auto client_list = get_client_list(conn, net_client_list);
+            auto active = get_window_property_window(conn.get(), conn.root(), net_active_window);
+            auto focus = get_input_focus(conn);
+            return window_is_viewable(conn, w2) && state && *state == XCB_ICCCM_WM_STATE_NORMAL && hidden && !*hidden
+                && client_list && *client_list == *client_list_before && active && *active == w2 && focus && *focus == w2;
+        },
+        kTimeout
+    ));
+    synchronize_x_server(conn);
+    CHECK_FALSE(drain_window_visibility_events(conn, w2));
 
     destroy_window(conn, w2);
     destroy_window(conn, w1);
