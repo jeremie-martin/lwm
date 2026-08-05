@@ -3289,17 +3289,7 @@ bool WindowManager::should_be_visible(Client const& client) const
 
 bool WindowManager::is_physically_visible(Client const& client) const
 {
-    // Off-screen windows are not visible regardless of workspace state
-    if (client.hidden)
-        return false;
-    return visibility_policy::is_window_visible(
-        showing_desktop_,
-        client.iconic,
-        client.sticky,
-        client.monitor,
-        client.workspace,
-        monitors_
-    );
+    return !client.hidden && should_be_visible(client);
 }
 
 xcb_window_t WindowManager::select_fullscreen_owner_for_monitor(
