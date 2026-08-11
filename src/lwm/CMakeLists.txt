@@ -1,5 +1,6 @@
 add_library(liblwm STATIC
     core/connection.cpp
+    core/log.cpp
     core/ewmh.cpp
     core/floating.cpp
     core/focus.cpp
@@ -32,13 +33,17 @@ target_link_libraries(liblwm PUBLIC
     spdlog::spdlog_header_only
 )
 
-# Set spdlog active level based on build type (compile-time filtering for zero-cost in release)
-# SPDLOG_LEVEL_TRACE=0, DEBUG=1, INFO=2, WARN=3, ERROR=4, CRITICAL=5, OFF=6
+# Keep every logging call available in every build; the owned logger applies runtime gates.
 target_compile_definitions(liblwm PUBLIC
     LWM_VERSION="${PROJECT_VERSION}"
-    $<$<CONFIG:Debug>:SPDLOG_ACTIVE_LEVEL=SPDLOG_LEVEL_TRACE>
-    $<$<CONFIG:Release>:SPDLOG_ACTIVE_LEVEL=SPDLOG_LEVEL_INFO>
-    $<$<CONFIG:RelWithDebInfo>:SPDLOG_ACTIVE_LEVEL=SPDLOG_LEVEL_DEBUG>
+    SPDLOG_ACTIVE_LEVEL=SPDLOG_LEVEL_TRACE
+    SPDLOG_PREVENT_CHILD_FD
 )
+
+if(LWM_HAS_STD_FORMAT)
+    # Clang 22 rejects spdlog 1.15's bundled fmt consteval checks. Use the
+    # C++23 backend when the standard library provides the required format API.
+    target_compile_definitions(liblwm PUBLIC SPDLOG_USE_STD_FORMAT)
+endif()
 
 set_target_properties(liblwm PROPERTIES OUTPUT_NAME lwm)

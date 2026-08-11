@@ -44,7 +44,8 @@ constexpr uint32_t kManagedWindowEventMask =
 enum class RunResult
 {
     Exit,
-    Restart
+    Restart,
+    Failed
 };
 
 struct ClassificationResult

@@ -691,7 +691,11 @@ inline std::optional<CommandResult> run_command(
 class LwmProcess
 {
 public:
-    explicit LwmProcess(std::string display, std::string config_contents = {})
+    explicit LwmProcess(
+        std::string display,
+        std::string config_contents = {},
+        std::vector<std::string> startup_args = {}
+    )
         : display_(std::move(display))
         , config_home_(make_temp_dir())
         , runtime_dir_(make_temp_dir())
@@ -712,7 +716,17 @@ public:
                 setenv("XDG_CONFIG_HOME", config_home_.c_str(), 1);
             if (!runtime_dir_.empty())
                 setenv("XDG_RUNTIME_DIR", runtime_dir_.c_str(), 1);
-            execl(executable.c_str(), executable.c_str(), nullptr);
+
+            std::vector<std::string> owned_args;
+            owned_args.reserve(startup_args.size() + 1);
+            owned_args.push_back(executable.string());
+            owned_args.insert(owned_args.end(), startup_args.begin(), startup_args.end());
+            std::vector<char*> argv;
+            argv.reserve(owned_args.size() + 1);
+            for (std::string& arg : owned_args)
+                argv.push_back(arg.data());
+            argv.push_back(nullptr);
+            execv(executable.c_str(), argv.data());
             _exit(127);
         }
         if (pid_ < 0)
@@ -777,6 +791,7 @@ public:
     }
 
     bool running() const { return pid_ > 0; }
+    pid_t pid() const { return pid_; }
     std::filesystem::path config_path() const
     {
         return std::filesystem::path(config_home_) / "lwm" / "config.toml";

@@ -79,13 +79,26 @@ mkdir -p "$XDG_CONFIG_HOME/lwm"
 cp config.toml.example "$XDG_CONFIG_HOME/lwm/config.toml"
 ```
 
-LWM reads `$XDG_CONFIG_HOME/lwm/config.toml` when `XDG_CONFIG_HOME` is set. You can also pass an explicit config path:
+LWM reads `$XDG_CONFIG_HOME/lwm/config.toml` when `XDG_CONFIG_HOME` is set. You can also pass an explicit config path with the compatibility bare path or `-c`/`--config`:
 
 ```bash
 lwm /path/to/config.toml
+lwm -c /path/to/config.toml
 ```
 
-`config.toml.example` is the reference for binding syntax, workspace names, commands, autostart, layout settings, focus settings, rules, scratchpads, and action syntax.
+`config.toml.example` is the reference for binding syntax, workspace names, commands, autostart, layout settings, focus settings, rules, scratchpads, and action syntax. An explicitly selected config path must exist and parse successfully; only an absent implicit XDG config falls back to defaults.
+
+## Logging
+
+LWM writes routine records to stderr and keeps stdout untouched. Records use an ISO-like timestamp, uppercase severity, source-derived category, and message, for example:
+
+```text
+[2026-08-11T12:34:56.789] [WARN] [wm_events] Config reload failed
+```
+
+By default, WARN-and-higher records also go to a private rotating file at `$XDG_RUNTIME_DIR/lwm/lwm-<pid>.log` (or `/tmp/lwm-<pid>.log` when the runtime directory is unavailable). The PID-specific path isolates concurrent LWM instances and remains unchanged across an exec restart because the PID is unchanged; after a failed exec, LWM attempts to restore the prior logging options. If restoration fails, it reports a diagnostic and keeps stderr-only logging active. The file is mode `0600`, limited to 1 MiB plus three backups, and includes the source filename and line. An explicit `--log-file /tmp/lwm.log` retains a fixed path when needed; `--no-log-file` disables the file sink.
+
+Logging policy is startup-only and is not part of TOML reloads or runtime IPC. Use `--log-level info|debug|trace`, `-V`/`--verbose`, `-d all`/`--debug`, and `--log-color auto|always|never` to select verbosity and terminal colors. `-v`/`--version` prints the installed LWM version without connecting to X. An explicit file that cannot be opened is a controlled startup error; an implicit private-file failure falls back to stderr with a diagnostic.
 
 ## Runtime Control
 

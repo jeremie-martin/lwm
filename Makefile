@@ -28,6 +28,7 @@ test:
 	@$(CMAKE) -S . -B $(BUILD_DIR) -DBUILD_TESTS=ON
 	@$(MAKE) -C $(BUILD_DIR) -j$(NPROC)
 	@$(BUILD_DIR)/tests/lwm_tests
+	@$(BUILD_DIR)/tests/lwm_logging_tests
 
 # Install to system (requires sudo)
 install: build

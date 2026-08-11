@@ -22,7 +22,17 @@ Managed window classes:
 - `Dock`: managed, strut-reserving, always visible, not normal-focus eligible
 - `Desktop`: managed, bottom layer, not normal-focus eligible
 
-## 2. State Authority
+## 2. Logging Ownership and Process Boundaries
+
+The logger is an owned facade in `src/lwm/core/log.*`, not a spdlog default logger. Before startup initialization and after shutdown it uses a stderr-only fallback; initialization builds all sinks first and swaps the active named logger only after the candidate is complete. Tests and `liblwm` therefore do not mutate spdlog's global registry or call `spdlog::shutdown`.
+
+The console sink defaults to INFO and stderr. The optional private rotating sink receives WARN and above, is mode `0600`, and uses 1 MiB plus three backups. Its implicit path is `$XDG_RUNTIME_DIR/lwm/lwm-<pid>.log` (or `/tmp/lwm-<pid>.log`), isolating concurrent instances and remaining unchanged across an exec restart because the PID is unchanged; after a failed exec, LWM attempts to restore the prior logging options. If restoration fails, it reports a diagnostic and keeps stderr-only logging active. CLI options establish the policy at startup; TOML reload and runtime IPC do not change it. An implicit file failure falls back to stderr, while an explicitly requested path fails startup in a controlled way.
+
+Log macros preserve source locations and derive a stable category from the source filename. `LOG_CRITICAL` is a record level and does not abort. TRACE is compiled into every build and filtered by the runtime logger level so Release builds honor `--debug`.
+
+Before a restart exec, LWM flushes the active logger and temporarily selects the fallback; a failed parent exec restores the saved options. Forked autostart children perform the same child-only cleanup so file descriptors are not inherited while stderr remains usable. Signal handlers remain notification-only and never log. No logging state is serialized through restart properties.
+
+## 3. State Authority
 
 The single most important rule in this codebase is that different pieces of state have different owners.
 
@@ -43,7 +53,7 @@ High-value distinctions:
 
 That distinction matters because LWM uses off-screen hiding rather than unmap/remap for normal workspace visibility.
 
-## 3. Visibility Model
+## 4. Visibility Model
 
 LWM hides managed windows by moving them off-screen, not by unmapping them.
 
@@ -69,7 +79,7 @@ Primary visibility funnels:
 
 Do not reintroduce WM-driven unmap/map for normal workspace visibility without a deliberate design change.
 
-## 4. Focus and Activation
+## 5. Focus and Activation
 
 `focus_any_window(...)` is the only normal entry point for assigning focus to a managed window.
 
@@ -105,7 +115,7 @@ Important nuance:
 - hidden, iconified, suppressed, dock, and desktop windows are not focus-eligible
 - after any transition that changes window visibility (workspace switch, manage/unmanage, fullscreen, iconify), the WM calls `flush_and_drain_crossing()` — this flushes pending X requests, performs a server round-trip, and discards stale `EnterNotify`/`LeaveNotify`/`MotionNotify` events to prevent focus-follows-mouse from overriding the programmatic focus assignment
 
-## 5. Fullscreen, Suppression, and Stacking
+## 6. Fullscreen, Suppression, and Stacking
 
 LWM treats fullscreen as an exclusive visible mode within one monitor's visible scope.
 
@@ -140,7 +150,7 @@ Important limit:
 
 - `_NET_WM_FULLSCREEN_MONITORS` is currently geometry-only; it does not create a multi-monitor fullscreen ownership model
 
-## 6. Workspace and Monitor Transitions
+## 7. Workspace and Monitor Transitions
 
 The goal is not to let every caller mutate monitor/workspace state ad hoc. State changes should pass through a small number of funnels.
 
@@ -199,7 +209,7 @@ Window movement rules:
   hotplug, and movement funnels; ordinary workspace moves use helpers that
   reconcile source/target visibility before returning
 
-## 7. Window Lifecycle and Property Changes
+## 8. Window Lifecycle and Property Changes
 
 Nominal manage path:
 
@@ -246,7 +256,7 @@ When a scratchpad is hidden, the client stays in `clients_` with `iconic = true`
 
 Restart preserves the visible scratchpad pool window and named-scratchpad claims via the `LWM_RESTART_SCRATCHPAD_*` atoms — same mechanism the rest of the WM uses for graceful exec restart.
 
-## 8. Hotplug Contract
+## 9. Hotplug Contract
 
 RANDR changes are handled as a structural rebuild, not as a small patch to old monitor indices.
 
@@ -264,7 +274,7 @@ The rebind is **comprehensive**: every entry in `clients_` is reassigned to a va
 
 **Post-rebind invariant**: for every Tiled and Floating client, `client.monitor < monitors_.size()` and `client.workspace < monitors_[client.monitor].workspaces.size()`. Downstream code reads these fields without bounds-checking. Dock/Desktop clients are rebound on a best-effort basis by name; their indices are not part of the invariant (consistent with `core/invariants.hpp` `assert_client_managed`).
 
-## 9. Common Regression Traps
+## 10. Common Regression Traps
 
 - Treating sticky as global across all monitors.
 - Updating `_NET_CLIENT_LIST` on workspace switch instead of on manage/unmanage.

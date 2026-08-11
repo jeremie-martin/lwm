@@ -6,11 +6,11 @@
 #include "lwm/core/policy.hpp"
 #include <algorithm>
 #include <cstddef>
+#include <signal.h>
 #include <cerrno>
 #include <cctype>
 #include <charconv>
 #include <chrono>
-#include <csignal>
 #include <cstdlib>
 #include <cstring>
 #include <fcntl.h>
@@ -276,13 +276,13 @@ RunResult WindowManager::run()
     int xfd = xcb_get_file_descriptor(conn_.get());
 
     // Poll fd index constants for fixed entries
-    constexpr size_t POLL_X = 0;
     constexpr size_t POLL_SIGNAL = 1;
     constexpr size_t POLL_IPC_LISTENER = 2;
     constexpr size_t POLL_IPC_CLIENT = 3;
     constexpr size_t POLL_SUBSCRIBERS = 4;
 
     std::vector<pollfd> poll_fds;
+    bool connection_failed = false;
 
     while (running_)
     {
@@ -397,11 +397,14 @@ RunResult WindowManager::run()
 
         if (xcb_connection_has_error(conn_.get()))
         {
-            LOG_ERROR("X connection error, shutting down");
+            LOG_CRITICAL("X connection error, shutting down");
+            connection_failed = true;
             break;
         }
     }
 
+    if (connection_failed)
+        return RunResult::Failed;
     if (restarting_)
         return RunResult::Restart;
     return RunResult::Exit;
@@ -3085,6 +3088,9 @@ void WindowManager::launch_program(CommandConfig const& command)
 {
     if (fork() == 0)
     {
+        // Child processes must not retain the rotating file sink or its descriptor.
+        // stderr remains inherited so the command can still report startup errors.
+        lwm::log::prepare_exec();
         setsid();
 
         if (command.kind == CommandConfig::Kind::Shell)

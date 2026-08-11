@@ -34,6 +34,27 @@ FetchContent_Declare(
     GIT_TAG v1.15.0
 )
 
+include(CheckCXXSourceCompiles)
+check_cxx_source_compiles([=[
+#include <format>
+#if !defined(__cpp_lib_format) || __cpp_lib_format < 202207L
+#error "C++23 std::format is unavailable"
+#endif
+
+int main()
+{
+    auto formatted = std::format("{}", 1);
+    return formatted.empty();
+}
+]=] LWM_HAS_STD_FORMAT)
+
+# Configure spdlog's own targets with the same format backend before they are
+# created.  This matters for the default all-target build, which also builds
+# spdlog's non-header-only target.
+if(LWM_HAS_STD_FORMAT)
+    set(SPDLOG_USE_STD_FORMAT ON CACHE BOOL "Use std::format in spdlog" FORCE)
+endif()
+
 FetchContent_MakeAvailable(tomlplusplus spdlog)
 
 add_subdirectory(src)

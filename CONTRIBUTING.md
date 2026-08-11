@@ -18,10 +18,11 @@ Useful direct invocations:
 ```bash
 ctest --test-dir build --output-on-failure
 ./build/tests/lwm_tests "focus"
+./build/tests/lwm_logging_tests
 ./scripts/preview.sh
 ```
 
-Tests require `xcb-xtest` in addition to the runtime XCB dependencies.
+Logging coverage is process-isolated: `tests/lwm_log_probe` emits all levels and exercises fallback, rotation, and prepare/restore lifecycle paths without touching spdlog global state. Run `cmake --build build --target lwm_log_probe lwm_logging_tests && ./build/tests/lwm_logging_tests` for focused checks; this executes every discovered logging case. Build both Debug and Release so TRACE remains available in each configuration. Tests require `xcb-xtest` in addition to the runtime XCB dependencies.
 
 ## Code Map
 
@@ -34,6 +35,8 @@ Tests require `xcb-xtest` in addition to the runtime XCB dependencies.
 - `src/lwm/wm_ewmh.cpp`: desktop, workarea, client-list, and root-property updates
 - `src/lwm/wm_restart.cpp`: state serialization, restore, and graceful restart
 - `src/lwm/wm_scratchpad.cpp`: named scratchpads and generic scratchpad pool (show/hide/cycle, restart preservation)
+- `src/lwm/core/log.*`: owned logger facade, fallback lifecycle, secure rotating sinks, and source-derived records
+- `src/app/cli.*`: deterministic startup option parsing and restart argv preservation
 - `src/lwm/core/events.hpp`: IPC subscription event names, masks, and JSON escaping helpers
 - `src/lwm/core/ipc.hpp`: IPC socket path helpers and root-property discovery helpers
 - `src/lwm/core/types.hpp`: `Client`, `Workspace`, and `Monitor`
@@ -87,6 +90,7 @@ Tests use Catch2. File names follow `tests/test_<area>.cpp`. Integration cases u
 - focus fallback selection and cycling: `tests/test_focus_policy.cpp`, `tests/test_focus_cycling_policy.cpp`, `tests/test_focus_restoration_policy.cpp`
 - workspace visibility and monitor/workspace moves: `tests/test_integration_workspace.cpp`
 - config parsing and live reload: `tests/test_config_parser.cpp`, `tests/test_integration_config_reload.cpp`
+- logger routing, lifecycle, rotation, and CLI startup controls: `tests/test_logging.cpp`, `tests/log_probe.cpp`
 - workspace policy (focus history, tiled membership): `tests/test_workspace_policy.cpp`
 - WM_STATE transitions (manage, iconify, unmanage): `tests/test_integration_wm_state.cpp`
 - scratchpads: `tests/test_integration_scratchpad.cpp`
