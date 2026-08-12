@@ -1,3 +1,4 @@
+#include "lwm/core/floating.hpp"
 #include "lwm/core/policy.hpp"
 #include "lwm/core/types.hpp"
 #include <catch2/catch_test_macros.hpp>
@@ -79,6 +80,7 @@ TEST_CASE("Client has sensible defaults", "[client][state]")
     REQUIRE_FALSE(c.urgency.has(UrgencySource::WmInitiated));
     REQUIRE_FALSE(c.ignore_next_wm_hints_urgency_echo);
     REQUIRE_FALSE(c.borderless);
+    REQUIRE_FALSE(c.desktop_pinned);
 
     // Restore geometries should be empty
     REQUIRE(tiled_state(c) != nullptr);
@@ -302,6 +304,59 @@ TEST_CASE("Maximized states can be set independently", "[client][state][maximize
     c.maximized_horz = true;
     REQUIRE(c.maximized_horz);
     REQUIRE(c.maximized_vert);
+}
+
+TEST_CASE("Runtime normal hints target restore geometry for realized states", "[client][state][floating]")
+{
+    Client c = make_client(0x1000, Client::Kind::Floating);
+    floating_geometry(c) = Geometry{ 0, 0, 1920, 1080 };
+
+    auto require_displayed_geometry_unchanged = [&]()
+    {
+        REQUIRE(floating_geometry(c).x == 0);
+        REQUIRE(floating_geometry(c).y == 0);
+        REQUIRE(floating_geometry(c).width == 1920);
+        REQUIRE(floating_geometry(c).height == 1080);
+    };
+
+    SECTION("Maximized windows update maximize restore geometry")
+    {
+        c.maximized_horz = true;
+        c.maximized_vert = true;
+        c.maximize_restore = Geometry{ 100, 120, 500, 360 };
+
+        floating::runtime_hints_geometry(c) = Geometry{ 2000, 140, 420, 280 };
+
+        require_displayed_geometry_unchanged();
+        REQUIRE(c.maximize_restore->x == 2000);
+        REQUIRE(c.maximize_restore->y == 140);
+        REQUIRE(c.maximize_restore->width == 420);
+        REQUIRE(c.maximize_restore->height == 280);
+    }
+
+    SECTION("Fullscreen windows update fullscreen restore geometry")
+    {
+        c.fullscreen = true;
+        c.fullscreen_restore = Geometry{ 100, 120, 500, 360 };
+
+        floating::runtime_hints_geometry(c) = Geometry{ 2000, 140, 420, 280 };
+
+        require_displayed_geometry_unchanged();
+        REQUIRE(c.fullscreen_restore->x == 2000);
+        REQUIRE(c.fullscreen_restore->y == 140);
+        REQUIRE(c.fullscreen_restore->width == 420);
+        REQUIRE(c.fullscreen_restore->height == 280);
+    }
+
+    SECTION("Ordinary floating windows update displayed geometry")
+    {
+        floating::runtime_hints_geometry(c) = Geometry{ 2000, 140, 420, 280 };
+
+        REQUIRE(floating_geometry(c).x == 2000);
+        REQUIRE(floating_geometry(c).y == 140);
+        REQUIRE(floating_geometry(c).width == 420);
+        REQUIRE(floating_geometry(c).height == 280);
+    }
 }
 
 // ─────────────────────────────────────────────────────────────────────────────

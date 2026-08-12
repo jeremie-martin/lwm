@@ -125,6 +125,30 @@ swap_prev = true
 key = "Print"
 spawn = { shell = "~/.local/bin/screenshot --mode selection" }
 
+# Action reference (exactly one action per [[binds]] entry):
+# | action syntax | required value type |
+# |---------------|---------------------|
+# | spawn = { ref = "command" } (or an argv/shell table) | table |
+# | kill = true | boolean true |
+# | reload_config = true | boolean true |
+# | restart = true | boolean true |
+# | switch_workspace = 0 | integer workspace index (0-based) |
+# | toggle_workspace = true | boolean true |
+# | move_to_workspace = 0 | integer workspace index (0-based) |
+# | focus_monitor = -1 (or 1) | integer direction (-1 or 1) |
+# | move_to_monitor = -1 (or 1) | integer direction (-1 or 1) |
+# | toggle_fullscreen = true | boolean true |
+# | toggle_float = true | boolean true |
+# | focus_next = true | boolean true |
+# | focus_prev = true | boolean true |
+# | ratio_grow = true | boolean true |
+# | ratio_shrink = true | boolean true |
+# | swap_next = true | boolean true |
+# | swap_prev = true | boolean true |
+# | toggle_scratchpad = "terminal" | string named scratchpad |
+# | scratchpad_stash = true | boolean true |
+# | scratchpad_cycle = true | boolean true |
+
 # Generated workspace binding groups. Each group replaces the built-in group
 # with the same mode and modifier.
 # mode:

@@ -234,6 +234,7 @@ struct Client
     WindowType ewmh_type = WindowType::Normal; ///< Cached EWMH window type
     bool accepts_input = true;       ///< Cached WM_HINTS input field (ICCCM default: true)
     bool supports_take_focus = false; ///< Cached: WM_PROTOCOLS contains WM_TAKE_FOCUS
+    bool desktop_pinned = false;      ///< Client supplied a concrete _NET_WM_DESKTOP assignment
 
     using SavedTilePos = lwm::SavedTilePos;
 

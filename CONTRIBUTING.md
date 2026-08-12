@@ -88,11 +88,11 @@ Tests use Catch2. File names follow `tests/test_<area>.cpp`. Integration cases u
 - focus, fullscreen, stacking, activation: `tests/test_integration_focus.cpp`
 - focus-follows-mouse and input models: `tests/test_integration_focus_input.cpp`
 - focus fallback selection and cycling: `tests/test_focus_policy.cpp`, `tests/test_focus_cycling_policy.cpp`, `tests/test_focus_restoration_policy.cpp`
-- workspace visibility and monitor/workspace moves: `tests/test_integration_workspace.cpp`
+- workspace visibility and monitor/workspace moves, including WM_STATE preservation during workspace moves: `tests/test_integration_workspace.cpp`
 - config parsing and live reload: `tests/test_config_parser.cpp`, `tests/test_integration_config_reload.cpp`
 - logger routing, lifecycle, rotation, and CLI startup controls: `tests/test_logging.cpp`, `tests/log_probe.cpp`
 - workspace policy (focus history, tiled membership): `tests/test_workspace_policy.cpp`
-- WM_STATE transitions (manage, iconify, unmanage): `tests/test_integration_wm_state.cpp`
+- EWMH `_NET_WM_STATE` client-message handling and WM_STATE lifecycle coverage: `tests/test_integration_wm_state.cpp`
 - scratchpads: `tests/test_integration_scratchpad.cpp`
 - monitor hotplug and window relocation: `tests/test_monitor_hotplug.cpp`
 - property-driven reclassification and hint changes: `tests/test_integration_property_notify.cpp`

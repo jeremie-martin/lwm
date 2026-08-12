@@ -94,6 +94,21 @@ void send_wm_state_change(
     send_client_message(conn, window, net_wm_state, action, state1, state2);
 }
 
+std::optional<uint32_t> get_wm_state(X11Connection& conn, xcb_window_t window, xcb_atom_t wm_state)
+{
+    auto cookie = xcb_get_property(conn.get(), 0, window, wm_state, wm_state, 0, 2);
+    auto* reply = xcb_get_property_reply(conn.get(), cookie, nullptr);
+    if (!reply || reply->type != wm_state || reply->format != 32 || xcb_get_property_value_length(reply) < 8)
+    {
+        free(reply);
+        return std::nullopt;
+    }
+
+    uint32_t result = static_cast<uint32_t*>(xcb_get_property_value(reply))[0];
+    free(reply);
+    return result;
+}
+
 } // namespace
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -118,6 +133,51 @@ TEST_CASE("Integration: _NET_WM_STATE add above sets state atom", "[integration]
     REQUIRE(wait_for_condition([&]() { return has_state(conn, w, state_above); }, kTimeout));
 
     destroy_window(conn, w);
+}
+
+TEST_CASE("Integration: dock and desktop clients receive WM_STATE lifecycle", "[integration][wm_state][special]")
+{
+    auto test_env = TestEnvironment::create();
+    if (!test_env)
+        SKIP("Test environment not available");
+
+    auto& conn = test_env->conn;
+    xcb_atom_t wm_state = intern_atom(conn.get(), "WM_STATE");
+    xcb_atom_t dock_type = intern_atom(conn.get(), "_NET_WM_WINDOW_TYPE_DOCK");
+    xcb_atom_t desktop_type = intern_atom(conn.get(), "_NET_WM_WINDOW_TYPE_DESKTOP");
+    REQUIRE(wm_state != XCB_NONE);
+    REQUIRE(dock_type != XCB_NONE);
+    REQUIRE(desktop_type != XCB_NONE);
+
+    xcb_window_t dock = create_window(conn, 0, 0, 200, 30);
+    set_window_type(conn, dock, dock_type);
+    map_window(conn, dock);
+    REQUIRE(wait_for_condition(
+        [&]() { return get_wm_state(conn, dock, wm_state) == XCB_ICCCM_WM_STATE_NORMAL; },
+        kTimeout
+    ));
+
+    xcb_unmap_window(conn.get(), dock);
+    xcb_flush(conn.get());
+    REQUIRE(wait_for_condition(
+        [&]() { return get_wm_state(conn, dock, wm_state) == XCB_ICCCM_WM_STATE_WITHDRAWN; },
+        kTimeout
+    ));
+
+    xcb_window_t desktop = create_window(conn, 0, 0, 1280, 720);
+    set_window_type(conn, desktop, desktop_type);
+    map_window(conn, desktop);
+    REQUIRE(wait_for_condition(
+        [&]() { return get_wm_state(conn, desktop, wm_state) == XCB_ICCCM_WM_STATE_NORMAL; },
+        kTimeout
+    ));
+
+    xcb_unmap_window(conn.get(), desktop);
+    xcb_flush(conn.get());
+    REQUIRE(wait_for_condition(
+        [&]() { return get_wm_state(conn, desktop, wm_state) == XCB_ICCCM_WM_STATE_WITHDRAWN; },
+        kTimeout
+    ));
 }
 
 TEST_CASE("Integration: _NET_WM_STATE add below sets state atom", "[integration][wm_state][below]")

@@ -1,8 +1,14 @@
 #include "x11_test_harness.hpp"
 #include <catch2/catch_test_macros.hpp>
+#include <cerrno>
 #include <chrono>
+#include <cstring>
 #include <filesystem>
+#include <optional>
 #include <sstream>
+#include <sys/socket.h>
+#include <sys/un.h>
+#include <unistd.h>
 
 using namespace lwm::test;
 
@@ -126,6 +132,58 @@ std::optional<std::string> wait_for_ipc_socket_path(X11Connection& conn)
     return get_window_property_string(conn.get(), conn.root(), socket_atom);
 }
 
+std::optional<std::string> send_ipc_command(std::string const& socket_path, std::string const& command)
+{
+    if (socket_path.size() >= sizeof(sockaddr_un::sun_path))
+        return std::nullopt;
+
+    int fd = socket(AF_UNIX, SOCK_STREAM, 0);
+    if (fd < 0)
+        return std::nullopt;
+
+    sockaddr_un addr = {};
+    addr.sun_family = AF_UNIX;
+    std::strncpy(addr.sun_path, socket_path.c_str(), sizeof(addr.sun_path) - 1);
+
+    if (connect(fd, reinterpret_cast<sockaddr*>(&addr), sizeof(addr)) < 0)
+    {
+        close(fd);
+        return std::nullopt;
+    }
+
+    std::string request = command;
+    request.push_back('\n');
+    if (send(fd, request.data(), request.size(), 0) < 0)
+    {
+        close(fd);
+        return std::nullopt;
+    }
+
+    shutdown(fd, SHUT_WR);
+
+    std::string response;
+    char buffer[1024];
+    while (true)
+    {
+        ssize_t bytes_read = recv(fd, buffer, sizeof(buffer), 0);
+        if (bytes_read < 0)
+        {
+            close(fd);
+            return std::nullopt;
+        }
+        if (bytes_read == 0)
+            break;
+        response.append(buffer, static_cast<size_t>(bytes_read));
+    }
+
+    close(fd);
+
+    while (!response.empty() && (response.back() == '\n' || response.back() == '\r' || response.back() == ' '))
+        response.pop_back();
+
+    return response;
+}
+
 std::vector<std::string> desktop_names(X11Connection& conn)
 {
     xcb_atom_t names_atom = intern_atom(conn.get(), "_NET_DESKTOP_NAMES");
@@ -238,6 +296,21 @@ bool is_hidden_offscreen(X11Connection& conn, xcb_window_t window)
     bool hidden = reply->x < 0;
     free(reply);
     return hidden;
+}
+
+std::optional<std::pair<int16_t, int16_t>> window_center(X11Connection& conn, xcb_window_t window)
+{
+    auto cookie = xcb_get_geometry(conn.get(), window);
+    auto* reply = xcb_get_geometry_reply(conn.get(), cookie, nullptr);
+    if (!reply)
+        return std::nullopt;
+
+    auto center = std::pair<int16_t, int16_t>{
+        static_cast<int16_t>(reply->x + reply->width / 2),
+        static_cast<int16_t>(reply->y + reply->height / 2),
+    };
+    free(reply);
+    return center;
 }
 
 } // namespace
@@ -411,5 +484,73 @@ apply = { workspace = 1 }
     REQUIRE(wait_for_active_window(env->conn, fallback, kTimeout));
 
     destroy_window(env->conn, window);
+    destroy_window(env->conn, fallback);
+}
+
+TEST_CASE(
+    "Integration: reload-config keeps fallback focus when removing a hidden scratchpad",
+    "[integration][ipc][reload][scratchpad][focus]"
+)
+{
+    std::string scratchpad = R"(
+[[scratchpads]]
+name = "scratchpad"
+spawn = { argv = ["/bin/true"] }
+match = { class = "ScratchpadClass", instance = "scratchpad-instance" }
+size = { width = 0.8, height = 0.6 }
+)";
+    auto env = TestEnvironment::create(make_config("one", "two", 2, {}, scratchpad));
+    if (!env || !ensure_lwmctl_available())
+        SKIP("Test environment or lwmctl not available");
+
+    auto socket_path = wait_for_ipc_socket_path(env->conn);
+    REQUIRE(socket_path.has_value());
+
+    xcb_window_t fallback = create_window(env->conn, 10, 10, 400, 300);
+    set_window_wm_class(env->conn, fallback, "fallback-instance", "FallbackClass");
+    map_window(env->conn, fallback);
+    REQUIRE(wait_for_active_window(env->conn, fallback, kTimeout));
+
+    auto show_result = send_ipc_command(*socket_path, "scratchpad toggle scratchpad");
+    REQUIRE(show_result.has_value());
+    REQUIRE(*show_result == "ok");
+
+    xcb_window_t scratchpad_window = create_window(env->conn, 10, 10, 240, 160);
+    set_window_wm_class(env->conn, scratchpad_window, "scratchpad-instance", "ScratchpadClass");
+    map_window(env->conn, scratchpad_window);
+    REQUIRE(wait_for_active_window(env->conn, scratchpad_window, kTimeout));
+    REQUIRE(wait_for_condition([&]() { return !is_hidden_offscreen(env->conn, scratchpad_window); }, kTimeout));
+
+    auto saved_center = window_center(env->conn, scratchpad_window);
+    REQUIRE(saved_center.has_value());
+
+    auto hide_result = send_ipc_command(*socket_path, "scratchpad toggle scratchpad");
+    REQUIRE(hide_result.has_value());
+    REQUIRE(*hide_result == "ok");
+    REQUIRE(wait_for_condition([&]() { return is_hidden_offscreen(env->conn, scratchpad_window); }, kTimeout));
+    REQUIRE(wait_for_active_window(env->conn, fallback, kTimeout));
+
+    xcb_warp_pointer(
+        env->conn.get(),
+        XCB_NONE,
+        env->conn.root(),
+        0,
+        0,
+        0,
+        0,
+        saved_center->first,
+        saved_center->second
+    );
+    xcb_flush(env->conn.get());
+    REQUIRE(wait_for_active_window(env->conn, fallback, kTimeout));
+
+    REQUIRE(env->wm.write_config(make_config("one", "two")));
+    auto reload_result = run_lwmctl(env->wm, { "reload-config" }, *socket_path);
+    REQUIRE(reload_result.has_value());
+    REQUIRE(reload_result->exit_code == 0);
+    REQUIRE(wait_for_condition([&]() { return !is_hidden_offscreen(env->conn, scratchpad_window); }, kTimeout));
+    REQUIRE(wait_for_active_window(env->conn, fallback, kTimeout));
+
+    destroy_window(env->conn, scratchpad_window);
     destroy_window(env->conn, fallback);
 }

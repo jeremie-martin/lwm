@@ -141,7 +141,7 @@ Suppression rules while an owner exists:
 
 Stack authority rules:
 
-- `restack_monitor_layers(...)` is the normal managed stacking authority
+- `apply_stacking()` is the normal managed stacking authority
 - `apply_fullscreen_if_needed(...)` is geometry-only; it should not make independent stacking decisions
 - within each stack layer, floating windows are sorted above tiled windows (matching conventional tiling WM behavior); the active-window preference is applied within each kind
 - transient restacking happens relative to visible, unsuppressed parents
@@ -171,7 +171,7 @@ Primary transition funnels and authorities:
 - `sync_visibility_for_monitor(...)`, `finalize_visibility_on_monitor(...)`,
   `finalize_move_visibility(...)`, and `rearrange_all_monitors(...)` are narrow
   live wrappers around visibility reconciliation
-- `focus_any_window(...)`, `restack_monitor_layers(...)`, and
+- `focus_any_window(...)`, `apply_stacking()`, and
   `flush_and_drain_crossing(...)` remain concrete X-visible behavior authorities
 
 Workspace switch contract:
@@ -222,7 +222,7 @@ Nominal manage path:
 7. compute initial geometry / placement
 8. map the window
 9. hide it off-screen if it is not currently supposed to be visible
-10. apply post-map state such as fullscreen, maximize, above/below, sticky, and EWMH bookkeeping
+10. apply post-map state such as above/below, sticky, and EWMH bookkeeping; client-provided initial fullscreen state is applied before mapping, while rule-driven fullscreen is applied after `manage_*` has mapped the window; maximize is applied before mapping for floating clients and after mapping for tiled clients
 
 Unmanage path:
 
@@ -262,7 +262,7 @@ RANDR changes are handled as a structural rebuild, not as a small patch to old m
 
 Required behavior:
 
-- clear fullscreen state before monitor-graph rebuild so stale geometry does not survive topology changes
+- reset the cached `Client::fullscreen_monitors` geometry hint before rebuilding the monitor graph, preserve ordinary fullscreen state, and reselect fullscreen owners and reapply fullscreen geometry after the rebuild
 - remap windows by monitor name, not old index
 - fall back to monitor `0` when a previous monitor name disappears
 - recompute struts and workareas
@@ -270,9 +270,9 @@ Required behavior:
 
 Using monitor names rather than indices is what prevents unplug/replug index churn from turning into workspace placement bugs.
 
-The rebind is **comprehensive**: every entry in `clients_` is reassigned to a valid `(monitor, workspace)` before `handle_randr_screen_change` returns. `plan_hotplug` covers tiled and floating windows by name; dock/desktop clients are rebound by name in the same pass; a final sweep walks `clients_` and clamps any residual stale indices to monitor `0` (logging a warning).
+The rebind is **comprehensive by construction**: `plan_hotplug` derives Tiled entries from workspace membership and Floating entries from `clients_`, then the handler explicitly rebinds Dock/Desktop clients from `clients_`, all by monitor name. These per-kind paths cover every managed client before `handle_randr_screen_change` returns.
 
-**Post-rebind invariant**: for every Tiled and Floating client, `client.monitor < monitors_.size()` and `client.workspace < monitors_[client.monitor].workspaces.size()`. Downstream code reads these fields without bounds-checking. Dock/Desktop clients are rebound on a best-effort basis by name; their indices are not part of the invariant (consistent with `core/invariants.hpp` `assert_client_managed`).
+**Post-rebind invariant**: for every Tiled and Floating client, `client.monitor < monitors_.size()` and `client.workspace < monitors_[client.monitor].workspaces.size()`. Downstream code reads these fields without bounds-checking. Dock/Desktop clients are rebound by name; their indices are not part of the Tiled/Floating bounds invariant. `LWM_ASSERT_INVARIANTS` is a debug-only check covering workspace membership, floating bounds, and containers, and is compiled out under `NDEBUG`.
 
 ## 10. Common Regression Traps
 
@@ -280,7 +280,7 @@ The rebind is **comprehensive**: every entry in `clients_` is reassigned to a va
 - Updating `_NET_CLIENT_LIST` on workspace switch instead of on manage/unmanage.
 - Applying `ConfigureRequest` geometry directly to tiled windows.
 - Reintroducing WM-driven unmap/map for normal workspace visibility.
-- Letting a stack mutation bypass `restack_monitor_layers(...)`.
+- Letting a stack mutation bypass `apply_stacking()`.
 - Letting focus be finalized after a nested workspace/fullscreen transition has already redirected it.
 - Forgetting that visible-scope decisions and physical visibility are different things.
 - Adding new state transitions without routing them through the existing visibility, fullscreen, and focus funnels.

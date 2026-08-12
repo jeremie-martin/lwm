@@ -119,6 +119,21 @@ std::optional<WindowGeometry> get_window_geometry(X11Connection& conn, xcb_windo
     return result;
 }
 
+std::optional<uint32_t> get_wm_state(X11Connection& conn, xcb_window_t window, xcb_atom_t wm_state)
+{
+    auto cookie = xcb_get_property(conn.get(), 0, window, wm_state, wm_state, 0, 2);
+    auto* reply = xcb_get_property_reply(conn.get(), cookie, nullptr);
+    if (!reply || reply->type != wm_state || reply->format != 32 || xcb_get_property_value_length(reply) < 8)
+    {
+        free(reply);
+        return std::nullopt;
+    }
+
+    uint32_t result = static_cast<uint32_t*>(xcb_get_property_value(reply))[0];
+    free(reply);
+    return result;
+}
+
 bool is_hidden_offscreen(X11Connection& conn, xcb_window_t window)
 {
     auto geometry = get_window_geometry(conn, window);
@@ -189,6 +204,45 @@ void set_wm_input_hint(X11Connection& conn, xcb_window_t window, bool input)
     hints.flags = XCB_ICCCM_WM_HINT_INPUT;
     hints.input = input ? 1 : 0;
     xcb_icccm_set_wm_hints(conn.get(), window, &hints);
+    xcb_flush(conn.get());
+}
+
+void set_wm_initial_state_and_urgency(X11Connection& conn, xcb_window_t window, uint32_t initial_state)
+{
+    constexpr uint32_t urgency_hint = 256;
+    xcb_icccm_wm_hints_t hints = {};
+    hints.flags = XCB_ICCCM_WM_HINT_STATE | urgency_hint;
+    hints.initial_state = initial_state;
+    xcb_icccm_set_wm_hints(conn.get(), window, &hints);
+    xcb_flush(conn.get());
+}
+
+void set_wm_normal_hints(
+    X11Connection& conn,
+    xcb_window_t window,
+    int32_t x,
+    int32_t y,
+    uint32_t width,
+    uint32_t height
+)
+{
+    xcb_size_hints_t hints = {};
+    hints.flags = XCB_ICCCM_SIZE_HINT_US_POSITION | XCB_ICCCM_SIZE_HINT_US_SIZE;
+    hints.x = x;
+    hints.y = y;
+    hints.width = width;
+    hints.height = height;
+    xcb_icccm_set_wm_normal_hints(conn.get(), window, &hints);
+    xcb_flush(conn.get());
+}
+
+void set_window_desktop(X11Connection& conn, xcb_window_t window, uint32_t desktop)
+{
+    xcb_atom_t net_wm_desktop = intern_atom(conn.get(), "_NET_WM_DESKTOP");
+    if (net_wm_desktop == XCB_NONE)
+        return;
+
+    xcb_change_property(conn.get(), XCB_PROP_MODE_REPLACE, window, net_wm_desktop, XCB_ATOM_CARDINAL, 32, 1, &desktop);
     xcb_flush(conn.get());
 }
 
@@ -715,6 +769,178 @@ TEST_CASE("Integration: WM_HINTS.input changes can revoke focus eligibility", "[
 
     destroy_window(conn, w2);
     destroy_window(conn, w1);
+}
+
+TEST_CASE(
+    "Integration: WM_HINTS rewrite does not restore a user-iconified window",
+    "[integration][property][wm_hints][wm_state]"
+)
+{
+    auto test_env = TestEnvironment::create();
+    if (!test_env)
+        SKIP("Test environment not available");
+
+    auto& conn = test_env->conn;
+    xcb_atom_t wm_state = intern_atom(conn.get(), "WM_STATE");
+    xcb_atom_t wm_change_state = intern_atom(conn.get(), "WM_CHANGE_STATE");
+    xcb_atom_t net_wm_state = intern_atom(conn.get(), "_NET_WM_STATE");
+    xcb_atom_t net_wm_state_hidden = intern_atom(conn.get(), "_NET_WM_STATE_HIDDEN");
+    REQUIRE(wm_state != XCB_NONE);
+    REQUIRE(wm_change_state != XCB_NONE);
+    REQUIRE(net_wm_state != XCB_NONE);
+    REQUIRE(net_wm_state_hidden != XCB_NONE);
+
+    xcb_window_t window = create_window(conn, 10, 10, 220, 160);
+    map_window(conn, window);
+    REQUIRE(wait_for_active_window(conn, window, kTimeout));
+    REQUIRE(get_wm_state(conn, window, wm_state) == XCB_ICCCM_WM_STATE_NORMAL);
+
+    send_client_message(conn, window, wm_change_state, XCB_ICCCM_WM_STATE_ICONIC);
+    REQUIRE(wait_for_condition(
+        [&]()
+        {
+            return get_wm_state(conn, window, wm_state) == XCB_ICCCM_WM_STATE_ICONIC
+                && property_has_atom(conn.get(), window, net_wm_state, net_wm_state_hidden)
+                && is_hidden_offscreen(conn, window);
+        },
+        kTimeout
+    ));
+
+    set_wm_initial_state_and_urgency(conn, window, XCB_ICCCM_WM_STATE_NORMAL);
+    REQUIRE(wait_for_condition(
+        [&]()
+        {
+            return get_wm_state(conn, window, wm_state) == XCB_ICCCM_WM_STATE_ICONIC
+                && property_has_atom(conn.get(), window, net_wm_state, net_wm_state_hidden)
+                && is_hidden_offscreen(conn, window);
+        },
+        kTimeout
+    ));
+
+    destroy_window(conn, window);
+}
+
+TEST_CASE(
+    "Integration: runtime WM_NORMAL_HINTS changes floating geometry and rejects invalid positions",
+    "[integration][property][wm_normal_hints]"
+)
+{
+    auto test_env = TestEnvironment::create();
+    if (!test_env)
+        SKIP("Test environment not available");
+
+    auto& conn = test_env->conn;
+    xcb_atom_t dialog = intern_atom(conn.get(), "_NET_WM_WINDOW_TYPE_DIALOG");
+    REQUIRE(dialog != XCB_NONE);
+
+    xcb_window_t window = create_window(conn, 10, 10, 220, 160);
+    set_window_type(conn, window, dialog);
+    map_window(conn, window);
+    REQUIRE(wait_for_active_window(conn, window, kTimeout));
+
+    set_wm_normal_hints(conn, window, 140, 120, 410, 260);
+    REQUIRE(wait_for_window_geometry(conn, window, 140, 120, 410, 260));
+
+    set_wm_normal_hints(conn, window, 2000, 100, 410, 260);
+    REQUIRE(wait_for_window_geometry(
+        conn,
+        window,
+        static_cast<int16_t>((conn.screen()->width_in_pixels - 410) / 2),
+        static_cast<int16_t>((conn.screen()->height_in_pixels - 260) / 2),
+        410,
+        260
+    ));
+
+    set_window_desktop(conn, window, 0);
+    REQUIRE(wait_for_property_cardinal(conn.get(), window, intern_atom(conn.get(), "_NET_WM_DESKTOP"), 0, kTimeout));
+
+    set_wm_normal_hints(conn, window, 2000, 100, 410, 260);
+    REQUIRE(wait_for_window_geometry(
+        conn,
+        window,
+        static_cast<int16_t>((conn.screen()->width_in_pixels - 410) / 2),
+        static_cast<int16_t>((conn.screen()->height_in_pixels - 260) / 2),
+        410,
+        260
+    ));
+
+    destroy_window(conn, window);
+}
+
+TEST_CASE(
+    "Integration: runtime WM_NORMAL_HINTS preserves maximize and fullscreen realization",
+    "[integration][property][wm_normal_hints][wm_state]"
+)
+{
+    auto test_env = TestEnvironment::create();
+    if (!test_env)
+        SKIP("Test environment not available");
+
+    auto& conn = test_env->conn;
+    xcb_atom_t dialog = intern_atom(conn.get(), "_NET_WM_WINDOW_TYPE_DIALOG");
+    xcb_atom_t net_wm_state = intern_atom(conn.get(), "_NET_WM_STATE");
+    xcb_atom_t maximized_horz = intern_atom(conn.get(), "_NET_WM_STATE_MAXIMIZED_HORZ");
+    xcb_atom_t maximized_vert = intern_atom(conn.get(), "_NET_WM_STATE_MAXIMIZED_VERT");
+    xcb_atom_t fullscreen = intern_atom(conn.get(), "_NET_WM_STATE_FULLSCREEN");
+    REQUIRE(dialog != XCB_NONE);
+    REQUIRE(net_wm_state != XCB_NONE);
+    REQUIRE(maximized_horz != XCB_NONE);
+    REQUIRE(maximized_vert != XCB_NONE);
+    REQUIRE(fullscreen != XCB_NONE);
+
+    xcb_window_t window = create_window(conn, 100, 90, 320, 220);
+    auto require_realized_state_geometry = [&]()
+    {
+        REQUIRE(wait_for_window_geometry(
+            conn,
+            window,
+            0,
+            0,
+            conn.screen()->width_in_pixels,
+            conn.screen()->height_in_pixels
+        ));
+    };
+
+    set_window_type(conn, window, dialog);
+    set_wm_normal_hints(conn, window, 100, 90, 320, 220);
+    map_window(conn, window);
+    REQUIRE(wait_for_active_window(conn, window, kTimeout));
+    REQUIRE(wait_for_window_geometry(conn, window, 100, 90, 320, 220));
+
+    send_client_message(conn, window, net_wm_state, 1, maximized_horz, maximized_vert);
+    REQUIRE(wait_for_condition(
+        [&]()
+        {
+            return property_has_atom(conn.get(), window, net_wm_state, maximized_horz)
+                && property_has_atom(conn.get(), window, net_wm_state, maximized_vert);
+        },
+        kTimeout
+    ));
+    require_realized_state_geometry();
+
+    set_wm_normal_hints(conn, window, 140, 120, 410, 260);
+    require_realized_state_geometry();
+    REQUIRE(property_has_atom(conn.get(), window, net_wm_state, maximized_horz));
+    REQUIRE(property_has_atom(conn.get(), window, net_wm_state, maximized_vert));
+
+    send_client_message(conn, window, net_wm_state, 0, maximized_horz, maximized_vert);
+    REQUIRE(wait_for_window_geometry(conn, window, 140, 120, 410, 260));
+
+    send_client_message(conn, window, net_wm_state, 1, fullscreen);
+    REQUIRE(wait_for_condition(
+        [&]() { return property_has_atom(conn.get(), window, net_wm_state, fullscreen); },
+        kTimeout
+    ));
+    require_realized_state_geometry();
+
+    set_wm_normal_hints(conn, window, 180, 150, 430, 290);
+    require_realized_state_geometry();
+    REQUIRE(property_has_atom(conn.get(), window, net_wm_state, fullscreen));
+
+    send_client_message(conn, window, net_wm_state, 0, fullscreen);
+    REQUIRE(wait_for_window_geometry(conn, window, 180, 150, 430, 290));
+
+    destroy_window(conn, window);
 }
 
 TEST_CASE(

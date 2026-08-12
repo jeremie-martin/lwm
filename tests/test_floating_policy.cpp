@@ -284,3 +284,36 @@ TEST_CASE("Position hint guard respects non-zero monitor origin", "[floating]")
         REQUIRE_FALSE(floating::hint_targets_monitor(monitor, 100, 100, 300, 200));
     }
 }
+
+TEST_CASE("Runtime position hints distinguish assigned desktops from WM publication", "[floating][monitor]")
+{
+    Monitor left;
+    left.x = 0;
+    left.y = 0;
+    left.width = 1920;
+    left.height = 1080;
+
+    Monitor right = left;
+    right.x = 1920;
+
+    std::vector<Monitor> monitors{ left, right };
+    Geometry hinted{ 2200, 100, 400, 300 };
+    Client client;
+    set_floating_state(client, Geometry{ 100, 100, 400, 300 });
+    client.monitor = 0;
+
+    SECTION("An ordinary client may follow its hint to another monitor")
+    {
+        auto target = floating::resolve_position_hint(monitors, client.monitor, client.desktop_pinned, hinted);
+        REQUIRE(target.accepted);
+        REQUIRE(target.monitor == 1);
+    }
+
+    SECTION("A client-authored desktop pin constrains the hint to its assigned monitor")
+    {
+        client.desktop_pinned = true;
+        auto target = floating::resolve_position_hint(monitors, client.monitor, client.desktop_pinned, hinted);
+        REQUIRE_FALSE(target.accepted);
+        REQUIRE(target.monitor == 0);
+    }
+}

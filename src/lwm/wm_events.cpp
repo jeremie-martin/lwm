@@ -299,6 +299,11 @@ void WindowManager::map_desktop_window(xcb_window_t window)
 {
     uint32_t values[] = { XCB_EVENT_MASK_PROPERTY_CHANGE };
     xcb_change_window_attributes(conn_.get(), window, XCB_CW_EVENT_MASK, values);
+    if (wm_state_ != XCB_NONE)
+    {
+        uint32_t data[] = { WM_STATE_NORMAL, 0 };
+        xcb_change_property(conn_.get(), XCB_PROP_MODE_REPLACE, window, wm_state_, wm_state_, 32, 2, data);
+    }
     xcb_map_window(conn_.get(), window);
     uint32_t stack_mode = XCB_STACK_MODE_BELOW;
     xcb_configure_window(conn_.get(), window, XCB_CONFIG_WINDOW_STACK_MODE, &stack_mode);
@@ -323,6 +328,11 @@ void WindowManager::map_dock_window(xcb_window_t window)
     uint32_t values[] = { XCB_EVENT_MASK_ENTER_WINDOW | XCB_EVENT_MASK_POINTER_MOTION
                           | XCB_EVENT_MASK_PROPERTY_CHANGE };
     xcb_change_window_attributes(conn_.get(), window, XCB_CW_EVENT_MASK, values);
+    if (wm_state_ != XCB_NONE)
+    {
+        uint32_t data[] = { WM_STATE_NORMAL, 0 };
+        xcb_change_property(conn_.get(), XCB_PROP_MODE_REPLACE, window, wm_state_, wm_state_, 32, 2, data);
+    }
     xcb_map_window(conn_.get(), window);
     if (!clients_.contains(window))
     {
@@ -1322,6 +1332,8 @@ void WindowManager::handle_desktop_change(xcb_client_message_event_t const& e)
         if (!move_tiled_client_to_workspace(*client, target_monitor, target_workspace))
             return;
 
+        client->desktop_pinned = true;
+
         bool target_ws_visible = !showing_desktop_ && target_workspace == monitors_[target_monitor].current_workspace;
         if (!target_ws_visible || was_active)
         {
@@ -1335,6 +1347,7 @@ void WindowManager::handle_desktop_change(xcb_client_message_event_t const& e)
         if (!move_floating_client_to_workspace(*client, target_monitor, target_workspace, true))
             return;
 
+        client->desktop_pinned = true;
         finalize_after_desktop_move(e.window, was_active, target_monitor, target_workspace);
     }
 }
@@ -1544,16 +1557,68 @@ void WindowManager::handle_property_notify(xcb_property_notify_event_t const& e)
     {
         if (auto* client = get_client(e.window); client && client->kind == Client::Kind::Floating)
         {
-            auto& geom = floating_geometry(*client);
-            uint32_t hinted_width = geom.width;
-            uint32_t hinted_height = geom.height;
-            layout_.apply_size_hints(e.window, hinted_width, hinted_height);
-            geom.width = static_cast<uint16_t>(std::max<uint32_t>(1, hinted_width));
-            geom.height = static_cast<uint16_t>(std::max<uint32_t>(1, hinted_height));
-            if (should_be_visible(*client) && !client->hidden && !client->fullscreen)
+            auto& geom = floating::runtime_hints_geometry(*client);
+            xcb_size_hints_t hints;
+            if (xcb_icccm_get_wm_normal_hints_reply(
+                    conn_.get(),
+                    xcb_icccm_get_wm_normal_hints(conn_.get(), e.window),
+                    &hints,
+                    nullptr
+                ))
             {
-                apply_floating_geometry(*client);
+                if (hints.flags & (XCB_ICCCM_SIZE_HINT_US_SIZE | XCB_ICCCM_SIZE_HINT_P_SIZE))
+                {
+                    uint32_t hinted_width = hints.width > 0 ? static_cast<uint32_t>(hints.width) : geom.width;
+                    uint32_t hinted_height = hints.height > 0 ? static_cast<uint32_t>(hints.height) : geom.height;
+                    layout_.apply_size_hints(e.window, hinted_width, hinted_height);
+                    geom.width = static_cast<uint16_t>(std::max<uint32_t>(1, hinted_width));
+                    geom.height = static_cast<uint16_t>(std::max<uint32_t>(1, hinted_height));
+                }
+                bool transient_anchored = client->transient_for != XCB_NONE;
+                bool has_position_hint = (hints.flags & XCB_ICCCM_SIZE_HINT_US_POSITION)
+                    || ((hints.flags & XCB_ICCCM_SIZE_HINT_P_POSITION) && !transient_anchored);
+                if (has_position_hint)
+                {
+                    int16_t hinted_x = static_cast<int16_t>(hints.x);
+                    int16_t hinted_y = static_cast<int16_t>(hints.y);
+                    bool desktop_pinned = !transient_anchored && client->desktop_pinned;
+                    auto target = floating::resolve_position_hint(
+                        monitors_,
+                        client->monitor,
+                        transient_anchored || desktop_pinned,
+                        Geometry{ hinted_x, hinted_y, geom.width, geom.height }
+                    );
+
+                    if (target.accepted)
+                    {
+                        geom.x = hinted_x;
+                        geom.y = hinted_y;
+                    }
+                    else
+                    {
+                        std::optional<Geometry> parent_geometry;
+                        if (transient_anchored)
+                            parent_geometry = current_window_geometry(client->transient_for);
+
+                        geom = floating::place_floating(
+                            monitors_[target.monitor].working_area(),
+                            geom.width,
+                            geom.height,
+                            parent_geometry
+                        );
+                    }
+                }
             }
+            update_floating_monitor_for_geometry(*client, geom);
+            bool visible = should_be_visible(*client) && !client->hidden;
+            if (visible && active_window_ == e.window)
+            {
+                focused_monitor_ = client->monitor;
+                update_ewmh_current_desktop();
+            }
+            if (visible)
+                apply_visible_floating_geometry(*client);
+            conn_.flush();
         }
         else if (auto const* client = get_client(e.window))
         {

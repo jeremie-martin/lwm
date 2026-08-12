@@ -1040,7 +1040,16 @@ ConfigLoadResult load_config_result(std::string const& path)
 
             LWM_TRYV(strategy, parse_optional_string(*layout, "strategy", "[layout]"));
             if (strategy)
+            {
+                if (!parse_layout_strategy(*strategy))
+                {
+                    return std::unexpected(
+                        "[layout].strategy has unknown value '" + *strategy
+                        + "' (expected 'master-stack' or 'monocle')"
+                    );
+                }
                 cfg.layout.strategy = std::move(*strategy);
+            }
             LWM_TRYV(min_ratio, parse_optional_number(*layout, "min_ratio", "[layout]"));
             if (min_ratio)
             {

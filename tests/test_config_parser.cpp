@@ -147,6 +147,17 @@ swap_prev = true
     REQUIRE(saw_prev);
 }
 
+TEST_CASE("Config parser rejects unknown layout strategies", "[config][layout]")
+{
+    auto loaded = load_from_string(R"(
+[layout]
+strategy = "not-a-strategy"
+)");
+
+    REQUIRE_FALSE(loaded.has_value());
+    REQUIRE(loaded.error().find("[layout].strategy") != std::string::npos);
+}
+
 TEST_CASE("Config parser rejects unknown keys", "[config]")
 {
     auto loaded = load_from_string(R"(

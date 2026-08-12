@@ -19,8 +19,9 @@ LWM reads and uses:
 
 - `WM_NAME` / `_NET_WM_NAME`
 - `WM_CLASS`
-- `WM_HINTS` (`input`, `initial_state`, urgency)
+- `WM_HINTS` (`input` and urgency at runtime; `initial_state` at map time)
 - `WM_NORMAL_HINTS` (initial and runtime size/position hints)
+- `_NET_WM_WINDOW_TYPE` (client-provided type used for classification)
 - `WM_TRANSIENT_FOR`
 - `_NET_WM_USER_TIME`
 - `_NET_WM_USER_TIME_WINDOW`
@@ -32,8 +33,14 @@ Intentional limits:
 - `WM_NORMAL_HINTS.width_inc` / `height_inc` are not enforced
 - `WM_NORMAL_HINTS` aspect/gravity hints do not override layout policy
 - floating position hints (`US_POSITION`/`P_POSITION`) choose the monitor whose geometry contains the hinted center, unless the window is anchored by `WM_TRANSIENT_FOR` or `_NET_WM_DESKTOP`; a hint whose center lands on no monitor (or off the anchored monitor) is discarded and the window is placed by the floating placement policy instead
-- runtime changes to `WM_HINTS`, `WM_NORMAL_HINTS`, and `WM_TRANSIENT_FOR` are re-evaluated for managed tiled/floating windows
+- runtime changes to `WM_HINTS.input` and urgency, `WM_NORMAL_HINTS` size/position hints, and `WM_TRANSIENT_FOR` are re-evaluated for managed tiled/floating windows; post-map iconic-state requests use `WM_CHANGE_STATE(IconicState)` or `_NET_WM_STATE_HIDDEN`
 - `_NET_WM_USER_TIME_WINDOW` indirection is respected, and changes after manage are re-read so activation time can follow the helper window
+
+#### 1.2.1 Focus Eligibility
+
+- The input/focus eligibility predicate is `accepts_input || supports_take_focus`; `accepts_input` defaults to true when `WM_HINTS.input` is absent, and `supports_take_focus` is true when `WM_TAKE_FOCUS` is advertised in `WM_PROTOCOLS`
+- LWM initializes both cached values at manage time and refreshes the corresponding value when `WM_HINTS` or `WM_PROTOCOLS` changes
+- When focusing a client, LWM sends `WM_TAKE_FOCUS` when advertised and then directly calls `xcb_set_input_focus` on the client window, including for globally-active clients (`WM_HINTS.input=false` with `WM_TAKE_FOCUS`)
 
 ### 1.3 `WM_STATE`
 
@@ -188,7 +195,7 @@ Handled client messages:
 During manage, LWM applies geometry-affecting state before the first map where possible:
 
 - initial fullscreen state is applied before mapping
-- initial maximize state is applied before mapping; geometry changes affect floating windows only
+- initial maximize state is applied before mapping for floating clients and after mapping for tiled clients; geometry changes affect floating clients only
 - `WM_STATE=IconicState` and `_NET_WM_STATE_HIDDEN` are set before mapping for initially iconic clients
 
 After mapping, LWM applies non-geometry state such as sticky, above/below, modal, skip-taskbar, and skip-pager. This keeps first-frame geometry stable while preserving the normal stacking and visibility funnels.

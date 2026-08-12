@@ -6,6 +6,9 @@
 #include <chrono>
 #include <filesystem>
 #include <optional>
+#include <sys/socket.h>
+#include <sys/un.h>
+#include <unistd.h>
 #include <vector>
 #include <xcb/xcb_keysyms.h>
 #include <xcb/xtest.h>
@@ -174,6 +177,50 @@ std::optional<std::string> wait_for_ipc_socket_path(X11Connection& conn)
     if (!ready)
         return std::nullopt;
     return get_window_property_string(conn.get(), conn.root(), socket_atom);
+}
+
+std::optional<std::string> send_raw_ipc(std::string const& socket_path, std::string const& command)
+{
+    if (socket_path.size() >= sizeof(sockaddr_un::sun_path))
+        return std::nullopt;
+
+    int fd = socket(AF_UNIX, SOCK_STREAM, 0);
+    if (fd < 0)
+        return std::nullopt;
+
+    sockaddr_un address{};
+    address.sun_family = AF_UNIX;
+    std::strncpy(address.sun_path, socket_path.c_str(), sizeof(address.sun_path) - 1);
+    if (connect(fd, reinterpret_cast<sockaddr*>(&address), sizeof(address)) != 0)
+    {
+        close(fd);
+        return std::nullopt;
+    }
+
+    std::string request = command + "\n";
+    if (send(fd, request.data(), request.size(), 0) != static_cast<ssize_t>(request.size()))
+    {
+        close(fd);
+        return std::nullopt;
+    }
+    shutdown(fd, SHUT_WR);
+
+    std::string response;
+    std::array<char, 1024> buffer{};
+    while (true)
+    {
+        ssize_t received = recv(fd, buffer.data(), buffer.size(), 0);
+        if (received < 0)
+        {
+            close(fd);
+            return std::nullopt;
+        }
+        if (received == 0)
+            break;
+        response.append(buffer.data(), static_cast<size_t>(received));
+    }
+    close(fd);
+    return response;
 }
 
 bool lwmctl_available()
@@ -626,6 +673,32 @@ TEST_CASE("Integration: monocle layout assigns identical geometries", "[integrat
     destroy_window(conn, w3);
     destroy_window(conn, w2);
     destroy_window(conn, w1);
+}
+
+TEST_CASE("Integration: JSON list IPC replies use the ok envelope", "[integration][ipc][json]")
+{
+    auto test_env = TestEnvironment::create();
+    if (!test_env)
+        SKIP("Test environment not available");
+
+    auto& conn = test_env->conn;
+    auto socket_path = wait_for_ipc_socket_path(conn);
+    REQUIRE(socket_path.has_value());
+
+    auto workspaces = send_raw_ipc(*socket_path, "workspace list");
+    REQUIRE(workspaces.has_value());
+    REQUIRE(workspaces->starts_with("ok {"));
+    REQUIRE(workspaces->back() == '\n');
+
+    auto windows = send_raw_ipc(*socket_path, "window list");
+    REQUIRE(windows.has_value());
+    REQUIRE(windows->starts_with("ok {"));
+    REQUIRE(windows->back() == '\n');
+
+    auto scratchpads = send_raw_ipc(*socket_path, "scratchpad list");
+    REQUIRE(scratchpads.has_value());
+    REQUIRE(scratchpads->starts_with("ok {"));
+    REQUIRE(scratchpads->back() == '\n');
 }
 
 TEST_CASE("Integration: monocle layout survives exec restart", "[integration][layout][monocle][restart]")

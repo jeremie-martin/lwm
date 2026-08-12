@@ -498,6 +498,7 @@ private:
     bool is_override_redirect_window(xcb_window_t window) const;
     bool is_workspace_visible(size_t monitor_idx, size_t workspace_idx) const;
     void update_floating_monitor_for_geometry(Client& client);
+    void update_floating_monitor_for_geometry(Client& client, Geometry const& geometry);
     void apply_floating_geometry(Client& client);
     void apply_visible_floating_geometry(Client& client);
     uint32_t border_width_for_client(Client const& client) const;

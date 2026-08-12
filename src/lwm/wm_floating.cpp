@@ -31,17 +31,16 @@ void WindowManager::manage_floating_window(xcb_window_t window, bool start_iconi
         }
     }
 
-    bool desktop_pinned = false;
+    auto desktop_target = resolve_window_desktop(window);
+    bool desktop_pinned = desktop_target.kind == WindowManager::DesktopResolution::Resolved;
     if (!monitor_idx || !workspace_idx)
     {
-        auto target = resolve_window_desktop(window);
-        if (target.kind == WindowManager::DesktopResolution::OutOfRange)
+        if (desktop_target.kind == WindowManager::DesktopResolution::OutOfRange)
             LOG_WARN("manage_floating_window({:#x}): _NET_WM_DESKTOP out of range, ignoring hint", window);
-        else if (target.kind == WindowManager::DesktopResolution::Resolved)
+        else if (desktop_pinned)
         {
-            monitor_idx = target.monitor;
-            workspace_idx = target.workspace;
-            desktop_pinned = true;
+            monitor_idx = desktop_target.monitor;
+            workspace_idx = desktop_target.workspace;
         }
     }
 
@@ -162,6 +161,7 @@ void WindowManager::manage_floating_window(xcb_window_t window, bool start_iconi
         client.wm_class = class_name;
         client.wm_class_name = instance_name;
         client.transient_for = transient.value_or(XCB_NONE);
+        client.desktop_pinned = desktop_pinned;
         client.order = next_client_order_++;
         client.mru_order = next_mru_order_++;
         client.iconic = start_iconic;
@@ -276,7 +276,11 @@ bool WindowManager::is_floating_window(xcb_window_t window) const
 
 void WindowManager::update_floating_monitor_for_geometry(Client& client)
 {
-    auto const& geom = floating_geometry(client);
+    update_floating_monitor_for_geometry(client, floating_geometry(client));
+}
+
+void WindowManager::update_floating_monitor_for_geometry(Client& client, Geometry const& geom)
+{
     int32_t center_x = static_cast<int32_t>(geom.x) + static_cast<int32_t>(geom.width) / 2;
     int32_t center_y = static_cast<int32_t>(geom.y) + static_cast<int32_t>(geom.height) / 2;
     auto new_monitor =

@@ -635,9 +635,20 @@ TEST_CASE(
     ));
     REQUIRE(wait_for_condition([&]() { return has_wm_hints_urgency(conn.get(), w1); }, kTimeout));
 
+    xcb_atom_t supporting = intern_atom(conn.get(), "_NET_SUPPORTING_WM_CHECK");
+    auto old_supporting = get_window_property_window(conn.get(), conn.root(), supporting);
+    REQUIRE(old_supporting.has_value());
+
     auto restart_result = run_lwmctl(wm, {"restart"});
     (void)restart_result;
-    REQUIRE(wait_for_wm_ready(conn, std::chrono::seconds(5)));
+    REQUIRE(wait_for_condition(
+        [&]()
+        {
+            auto current = get_window_property_window(conn.get(), conn.root(), supporting);
+            return current && *current != XCB_NONE && *current != *old_supporting;
+        },
+        std::chrono::seconds(5)
+    ));
 
     REQUIRE(wait_for_condition(
         [&]() { return property_has_atom(conn.get(), w1, net_wm_state, net_wm_state_demands_attention); },

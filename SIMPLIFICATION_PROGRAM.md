@@ -26,13 +26,13 @@ This report was produced from independent architecture, implementation, test, an
 
 This is supporting work, not a runtime refactor. It should be kept separate from code changes so documentation corrections cannot be mistaken for behavior changes.
 
-**Current concrete complexity.** The authoritative documentation currently makes several searches and ownership decisions harder than necessary:
+**Current concrete complexity.** The alignment pass has already corrected the stacking-authority and initial maximize-ordering descriptions; those corrected facts remain recorded here. One remaining documentation mismatch makes searches and ownership decisions harder than necessary:
 
-- `ARCHITECTURE.md` names `restack_monitor_layers(...)`, while the implementation's global authority is `apply_stacking()` (`ARCHITECTURE.md:134-137,164-165,271-274`; `src/lwm/wm.cpp:3386-3462`).
-- `COMPLIANCE.md` describes initial maximize ordering generally, while tiled and floating manage paths intentionally differ (`COMPLIANCE.md:186-194`; `src/lwm/wm.cpp:2322-2347`; `src/lwm/wm_floating.cpp:216-242`).
+- `ARCHITECTURE.md` now names `apply_stacking()` as the implementation's global stacking authority (`ARCHITECTURE.md:144,174,283`; `src/lwm/wm.cpp:3382-3458`).
+- `COMPLIANCE.md` now matches the implementation's initial maximize ordering: floating clients apply it before mapping, while tiled clients apply it after mapping and let geometry changes affect floating clients only (`COMPLIANCE.md:193-201`; `src/lwm/wm.cpp:2325-2350`; `src/lwm/wm_floating.cpp:216-242`).
 - `mru_order` is documented as floating-only even though focus cycling updates and ranks tiled and floating clients; only floating ordering is serialized for restart (`src/lwm/core/types.hpp:253-258`; `src/lwm/wm_focus.cpp:94-125`; `src/lwm/core/policy.hpp:193-227`; `src/lwm/wm_restart.cpp:240-245`).
 
-**Simpler design.** Correct those descriptions in place: name `apply_stacking()` as the global stacking authority; state that fullscreen is pre-map for both kinds, floating maximize is pre-map, tiled maximize is post-map because layout owns tiled geometry; and describe `mru_order` as in-memory focus recency with floating-specific restart persistence.
+**Simpler design.** Preserve the corrected stacking and initial-state descriptions, and correct the remaining `mru_order` wording in place: describe it as in-memory focus recency for tiled and floating clients, with floating-specific restart persistence.
 
 **Observable behavior to preserve.** None changes. These edits must not rename implementation symbols, change ordering, or alter restart atoms.
 
@@ -40,15 +40,15 @@ This is supporting work, not a runtime refactor. It should be kept separate from
 
 **Tests/checks required before changing it.** Run:
 
-- `git grep -n 'restack_monitor_layers' -- '*.md' 'src' 'tests'` and verify only intended stale references exist before editing;
+- `rg -n 'apply_stacking|mru_order' --glob '*.md' --glob 'src/**' --glob 'tests/**'` and verify references use the current stacking authority and MRU semantics after editing;
 - the stacking and focus-policy subsets;
-- initial fullscreen/maximize integration cases under an owned Xvfb if available.
+- initial fullscreen/maximize integration cases under an owned Xvfb if available when validating the already-corrected ordering description.
 
-**Risks and documentation implications.** Do not fold the hotplug contract into this documentation slice. `ARCHITECTURE.md` currently promises a comprehensive final stale-index sweep, while the implementation resets monitor-indexed fullscreen geometry, performs named rebinds, reconciles, and relies on debug invariants without that release-path sweep (`ARCHITECTURE.md:251-265`; `src/lwm/wm_events.cpp:1683-1687,1741-1856`; `src/lwm/core/invariants.hpp:25-30`). Deciding whether to restore that behavior or intentionally revise the invariant is a separate design decision, not a factual wording cleanup.
+**Risks and documentation implications.** Do not fold the now-aligned hotplug contract into this documentation slice. `ARCHITECTURE.md` describes the rebind as comprehensive by construction: `plan_hotplug` handles Tiled/Floating entries by name, the handler explicitly rebinds Dock/Desktop clients by name, and the per-kind paths cover every managed client before return. It also states that `LWM_ASSERT_INVARIANTS` is a debug-only check (`ARCHITECTURE.md:259-275`; `src/lwm/wm_events.cpp:1755-1908,1915-1926`; `src/lwm/core/invariants.hpp:25-30`). The remaining `mru_order` wording is a separate factual cleanup, not a reason to reopen that hotplug contract.
 
 ### 1. Derive physical visibility from the canonical scope predicate — **recommended first code slice**
 
-**Current concrete complexity.** `should_be_visible()` delegates to `visibility_policy::is_window_visible()`. `is_physically_visible()` separately checks `hidden` and repeats the complete policy call (`src/lwm/wm.cpp:3278-3303`). This duplicates the visible-scope decision and creates two bodies that can drift.
+**Current concrete complexity.** `should_be_visible()` delegates to `visibility_policy::is_window_visible()`. `is_physically_visible()` separately checks `hidden` and repeats the complete policy call (`src/lwm/wm.cpp:3284-3299`). This duplicates the visible-scope decision and creates two bodies that can drift.
 
 **Simpler design.** Keep the hidden check first and express the predicate directly:
 
@@ -71,11 +71,11 @@ return !client.hidden && should_be_visible(client);
 
 If the integration environment is unavailable, record that as an unavailable behavioral baseline rather than treating skipped cases as passing coverage.
 
-**Risks and documentation implications.** The risk is scope creep: do not replace every manual `!hidden && should_be_visible` or policy-only guard in the same change. Map-request and reconciliation paths intentionally distinguish desired visibility from physical visibility (`ARCHITECTURE.md:37-70`; `src/lwm/wm.cpp:4143-4184`; `src/lwm/wm_events.cpp:1365-1499`). No public documentation change is required.
+**Risks and documentation implications.** The risk is scope creep: do not replace every manual `!hidden && should_be_visible` or policy-only guard in the same change. Map-request, geometry-request, and reconciliation paths intentionally distinguish desired visibility from physical visibility (`ARCHITECTURE.md:49-70`; `src/lwm/wm_events.cpp:192-224,1353-1500`; `src/lwm/wm.cpp:4149-4184`). No public documentation change is required.
 
 ### 2. Make visible floating geometry realization one authoritative funnel
 
-**Current concrete complexity.** `apply_visible_floating_geometry()` already contains the correct guard and priority (`src/lwm/wm_floating.cpp:332-343`), but equivalent fullscreen/maximize/ordinary-floating branches remain in restart scanning, rule application, classification re-evaluation, and visibility reconciliation (`src/lwm/wm.cpp:1421-1441,1730-1752,2150-2166,4163-4174`). The same decision is consequently maintained in several places.
+**Current concrete complexity.** `apply_visible_floating_geometry()` already contains the correct guard and priority (`src/lwm/wm_floating.cpp:332-343`), but equivalent fullscreen/maximize/ordinary-floating branches remain in restart scanning, rule application, classification re-evaluation, and visibility reconciliation (`src/lwm/wm.cpp:1424-1443,1743-1754,2152-2167,4162-4179`). The same decision is consequently maintained in several places.
 
 **Simpler design.** Replace only those realization branches with calls to `apply_visible_floating_geometry(Client&)`. Keep state mutation (`set_fullscreen()`, maximize state, kind conversion, restore geometry) in its current owners. Keep tiled geometry and tiled fullscreen handling in `rearrange_monitor()`; the floating helper should only realize a decision for a policy-visible, non-hidden floating client.
 
@@ -89,7 +89,7 @@ If the integration environment is unavailable, record that as an unavailable beh
 
 ### 3. Centralize runtime ABOVE/BELOW preference transitions
 
-**Current concrete complexity.** `handle_wm_state_change()` has nearly identical ABOVE and BELOW branches (`src/lwm/wm_events.cpp:1110-1137`). Each computes ADD/REMOVE/TOGGLE, mutates one preference and clears the opposite, calls `reevaluate_managed_window()`, reacquires the client, and publishes effective atoms.
+**Current concrete complexity.** `handle_wm_state_change()` has nearly identical ABOVE and BELOW branches (`src/lwm/wm_events.cpp:1109-1148`). Each computes ADD/REMOVE/TOGGLE, mutates one preference and clears the opposite, calls `reevaluate_managed_window()`, reacquires the client, and publishes effective atoms.
 
 **Simpler design.** Add one small helper parameterized by the requested layer atom. It should update mutually exclusive `app_prefs`, invoke the existing re-evaluation funnel, reacquire the client afterward, and echo effective `layer_hint`. Keep `app_prefs` (requested application state) separate from `layer_hint` (effective policy state), and process two atoms in the existing order.
 
@@ -103,7 +103,7 @@ If the integration environment is unavailable, record that as an unavailable beh
 
 ### 4. Remove the uncalled `workspace_policy::move_tiled_window`
 
-**Current concrete complexity.** `workspace_policy::move_tiled_window()` is implemented and substantially unit-tested (`src/lwm/core/policy.hpp:387-409`; `tests/test_workspace_policy.cpp:53-200`) but has no production caller. The live authority is `WindowManager::move_tiled_client_to_workspace()` (`src/lwm/wm.cpp:3900-3942`), which additionally handles EWMH desktop projection, insertion, focus-history repair, cross-monitor movement, and visibility finalization. The repository therefore has a second, narrower movement implementation that looks authoritative but is not runtime behavior.
+**Current concrete complexity.** `workspace_policy::move_tiled_window()` is implemented and substantially unit-tested (`src/lwm/core/policy.hpp:387-409`; `tests/test_workspace_policy.cpp:53-200`) but has no production caller. The live authority is `WindowManager::move_tiled_client_to_workspace()` (`src/lwm/wm.cpp:3906-3948`), which additionally handles EWMH desktop projection, insertion, focus-history repair, cross-monitor movement, and visibility finalization. The repository therefore has a second, narrower movement implementation that looks authoritative but is not runtime behavior.
 
 **Simpler design.** After a production-reference check, delete only the uncalled policy function and its dedicated tests. Retain `remove_tiled_window()`, `fixup_workspace_focus()`, and the live `WindowManager` movement path. Do not replace the live path with the narrower helper.
 
@@ -117,7 +117,7 @@ If the integration environment is unavailable, record that as an unavailable beh
 
 ### 5. Share only the pure hotplug monitor-name resolver — conditional later slice
 
-**Current concrete complexity.** `hotplug_policy::plan_hotplug()` creates a monitor-name map and fallback resolver, while `handle_randr_screen_change()` creates another map and fallback for dock/desktop rebinding (`src/lwm/core/policy.hpp:533-604`; `src/lwm/wm_events.cpp:1812-1827`). The relocation records must remain different, but the name-to-index rule is duplicated.
+**Current concrete complexity.** `hotplug_policy::plan_hotplug()` creates a monitor-name map and fallback resolver, while `handle_randr_screen_change()` creates another map and fallback for dock/desktop rebinding (`src/lwm/core/policy.hpp:533-604`; `src/lwm/wm_events.cpp:1893-1908`). The relocation records must remain different, but the name-to-index rule is duplicated.
 
 **Simpler design.** Extract a tiny pure resolver or shared name-map utility that preserves last-entry-wins duplicate semantics and fallback to monitor zero. Reuse it only for lookup; keep tiled/floating relocation planning, dock/desktop rebinding, workspace clamping, and geometry application separate.
 
@@ -127,11 +127,11 @@ If the integration environment is unavailable, record that as an unavailable beh
 
 **Tests required before changing it.** Add pure cases for duplicate names, missing names, empty monitor sets, and empty names. Add an X11/RandR integration check that dock and desktop clients retain their kinds, client-list membership, and valid rebinding. Do not make this a justification for a broader hotplug transaction.
 
-**Risks and documentation implications.** This is optional because a very small shared utility can cost more conceptual surface than the two duplicated maps. Do not combine the relocation data structures or revise the unresolved hotplug contract in the same change. `ARCHITECTURE.md` remains the contract authority until the separate release-safety decision is made.
+**Risks and documentation implications.** This is optional because a very small shared utility can cost more conceptual surface than the two duplicated maps. Do not combine the relocation data structures or reopen the now-aligned hotplug contract in the same change. `ARCHITECTURE.md` remains the contract authority for that separate release-safety decision.
 
 ### 6. Narrow dock/desktop registration helper — conditional later slice
 
-**Current concrete complexity.** `map_desktop_window()` and `map_dock_window()` duplicate absent-client construction, kind assignment, skip-taskbar/pager defaults, order allocation, and class publication (`src/lwm/wm_events.cpp:298-343`). Their genuinely different event masks, mapping, stacking, strut, arrangement, and flushing behavior is interleaved with that common registry work.
+**Current concrete complexity.** `map_desktop_window()` and `map_dock_window()` duplicate absent-client construction, kind assignment, skip-taskbar/pager defaults, order allocation, and class publication (`src/lwm/wm_events.cpp:299-354`). Their genuinely different event masks, mapping, stacking, strut, arrangement, and flushing behavior is interleaved with that common registry work.
 
 **Simpler design.** Add a deliberately narrow helper for constructing and registering an absent container `Client`, assigning its kind/defaults/order, and publishing `_LWM_WINDOW_CLASS`. Leave event-mask selection, map and stack operations, `update_struts()`, arrangement, `_NET_CLIENT_LIST` refresh, and flushing at the existing kind-specific call sites so order remains visible.
 
@@ -145,13 +145,13 @@ If the integration environment is unavailable, record that as an unavailable beh
 
 ### 7. Conditional lifecycle bootstrap extraction — not an initial refactor
 
-**Current concrete complexity.** Tiled and floating management paths duplicate `Client` construction, initial property reads, event-mask and passive-grab setup, ICCCM/EWMH publication, client-list updates, key grabs, and mapping (`src/lwm/wm.cpp:2243-2348`; `src/lwm/wm_floating.cpp:9-242`). Their geometry, transient placement, initial-state ordering, visibility, urgency, and focus timing differ. Teardown has similar-looking tails, but `WM_STATE=Withdrawn`, membership removal, and focus fallback have observable ordering constraints.
+**Current concrete complexity.** Tiled and floating management paths duplicate `Client` construction, initial property reads, event-mask and passive-grab setup, ICCCM/EWMH publication, client-list updates, key grabs, and mapping (`src/lwm/wm.cpp:2246-2350`; `src/lwm/wm_floating.cpp:9-242`). Their geometry, transient placement, initial-state ordering, visibility, urgency, and focus timing differ. Teardown has similar-looking tails, but `WM_STATE=Withdrawn`, membership removal, and focus fallback have observable ordering constraints.
 
 **Simpler design if justified later.** First characterize the lifecycle. Then consider only two explicit common phases: a record factory for common metadata/property reads, and a narrowly specified registration phase for common bookkeeping. Leave mapping, classification, rule placement, tiled membership, floating geometry, focus, IPC events, and visibility finalization in their existing paths. Do not build a mode-flagged lifecycle framework or combine teardown into the first extraction.
 
-**Observable behavior to preserve.** The documented manage order (`ARCHITECTURE.md:202-223`), floating-versus-tiled fullscreen/maximize ordering (`COMPLIANCE.md:186-194`), transient placement, `_NET_WM_DESKTOP`, initial `WM_STATE`/hidden state, `_NET_CLIENT_LIST`, `_LWM_WINDOW_CLASS`, passive grabs, startup/restart focus suppression, map/unmap events, and destruction fallback must remain identical.
+**Observable behavior to preserve.** The documented manage order (`ARCHITECTURE.md:214-225`), floating-versus-tiled fullscreen/maximize ordering (`COMPLIANCE.md:193-201`), transient placement, `_NET_WM_DESKTOP`, initial `WM_STATE`/hidden state, `_NET_CLIENT_LIST`, `_LWM_WINDOW_CLASS`, passive grabs, startup/restart focus suppression, map/unmap events, and destruction fallback must remain identical.
 
-**Is existing behavioral integration coverage sufficient?** No. Existing focus, state, workspace, property, class, and restart tests do not form a lifecycle matrix covering event masks, passive grabs, initial iconic state, client-list publication/removal, first-map geometry, and map/unmap payloads. The file named `test_integration_wm_state.cpp` primarily tests `_NET_WM_STATE`, not ICCCM `WM_STATE` values.
+**Is existing behavioral integration coverage sufficient?** No. Existing focus, state, workspace, property, class, and restart tests do not form a lifecycle matrix covering event masks, passive grabs, initial iconic state, client-list publication/removal, first-map geometry, and map/unmap payloads. The file named `tests/test_integration_wm_state.cpp` now covers both `_NET_WM_STATE` handling and dock/desktop ICCCM `WM_STATE` lifecycle values, but it does not by itself provide the full matrix.
 
 **Tests required before changing it.** Before any extraction, add real-X cases for normal tiled, dialog/floating, transient, initially iconic, fullscreen, and maximized clients. Check `WM_STATE`, `_NET_WM_STATE`, `_NET_WM_DESKTOP`, `_NET_CLIENT_LIST`, `_LWM_WINDOW_CLASS`, allowed actions, focus, geometry, and map/unmap subscription events. Add explicit withdrawal and list-removal checks. Only then extract a phase whose inputs and ordering can be stated without mode flags.
 
@@ -161,21 +161,21 @@ If the integration environment is unavailable, record that as an unavailable beh
 
 The challenge pass rejected the following as broad churn, moved complexity, or insufficiently characterized behavior:
 
-- A `ClientLocation`/`MoveResult` transaction: tiled membership, floating placement, rule moves, transient rehosting, hotplug, and caller-specific focus/warp/drain semantics are intentionally different; the existing `assign_window_workspace()` already owns the common location write (`src/lwm/wm.cpp:3884-3977`).
-- A typed restart codec: the positional arrays are a private compatibility wire format; a second representation would add risk before fixtures cover payload lengths, truncation, signed geometry, unknown bits, and legacy versions (`src/lwm/src/lwm/wm_restart.cpp:26-85,102-155,453-576`; `tests/test_integration_workspace.cpp:494-577`; `tests/test_integration_scratchpad.cpp:404-686`).
+- A `ClientLocation`/`MoveResult` transaction: tiled membership, floating placement, rule moves, transient rehosting, hotplug, and caller-specific focus/warp/drain semantics are intentionally different; the existing `assign_window_workspace()` already owns the common location write (`src/lwm/wm.cpp:3890-3904`).
+- A typed restart codec: the positional arrays are a private compatibility wire format; a second representation would add risk before fixtures cover payload lengths, truncation, signed geometry, unknown bits, and legacy versions (`src/lwm/wm_restart.cpp:26-85,102-155,453-576`; `tests/test_integration_workspace.cpp:770-850`; `tests/test_integration_scratchpad.cpp:404-686`).
 - An `InitialWindowState` snapshot: pre-map, post-map, rule, and restart reads are intentionally staged; a snapshot could change timing or make state stale.
 - A single four-way `Client` discriminant replacing `Client::Kind` plus the tiled/floating variant: it touches nearly every branch, invariant, restart path, fixture, and container path, and is a representation migration rather than a small cleanup.
-- Batch affected-monitor finalization: `finalize_move_visibility()` already preserves reconcile-before-arrange ordering and same-monitor handling (`src/lwm/wm.cpp:4102-4122`); a collection abstraction adds indirection before true two-output integration exists.
+- Batch affected-monitor finalization: `finalize_move_visibility()` already preserves reconcile-before-arrange ordering and same-monitor handling (`src/lwm/wm.cpp:4108-4127`); a collection abstraction adds indirection before true two-output integration exists.
 - Broad replacement of all manual visibility guards: it would erase the deliberate desired-versus-actual distinction and alter map-request/iconify ordering.
-- Removing `sync_visibility_for_monitor()`: it is an exact forwarding wrapper, but its name documents the no-arrange phase alongside `reconcile_visibility_for_monitor()` and `finalize_visibility_on_monitor()` (`src/lwm/wm.cpp:4143-4201`; `src/lwm/wm.hpp:487-496`; `ARCHITECTURE.md:62-68`). Keep it unless the phase vocabulary is intentionally revised as a separate documentation/API cleanup.
+- Removing `sync_visibility_for_monitor()`: it is an exact forwarding wrapper, but its name documents the no-arrange phase alongside `reconcile_visibility_for_monitor()` and `finalize_visibility_on_monitor()` (`src/lwm/wm.cpp:4149-4205`; `src/lwm/wm.hpp:571-580`; `ARCHITECTURE.md:72-78`). Keep it unless the phase vocabulary is intentionally revised as a separate documentation/API cleanup.
 - A shared integration session or global required-X11 gate: the fixture duplication is real, but per-test configuration, `owns_display`, specialized atom setup, and raw subscribe/socket behavior differ. CI skip policy is infrastructure work, not a runtime simplification program.
-- A hotplug contract rewrite: the documentation/code mismatch requires an explicit release-safety decision; do not silently weaken a normative invariant while “correcting” prose.
+- A hotplug contract rewrite: the documentation now matches the implementation's per-kind name-based rebind and debug-only invariant check; a broader release-safety change remains a separate design decision, not part of factual cleanup.
 
 ## Recommended first slice
 
 1. Capture the clean baseline under an owned Xvfb; record unavailable integration prerequisites explicitly.
 2. Make only the `is_physically_visible()` body the conjunction of `!client.hidden` and `should_be_visible(client)`.
 3. Rerun the policy suite, focused visibility/focus/fullscreen/scratchpad/property integration cases, and the full CTest suite.
-4. Land the three factual documentation corrections separately: `apply_stacking()` authority, per-kind initial maximize ordering, and `mru_order`'s dual focus use.
+4. Land the remaining factual documentation correction separately: `mru_order`'s dual focus use; the `apply_stacking()` authority and per-kind initial maximize ordering are already aligned.
 
 This first slice removes duplicated policy knowledge while preserving all existing transition funnels and observable X11/IPC behavior. Do not combine it with floating realization, lifecycle, movement, restart, or test-harness changes.

@@ -854,7 +854,7 @@ std::optional<std::string> WindowManager::run_ipc_command(std::string const& com
             json += "]}";
         }
         json += "]}";
-        return json;
+        return ok_reply(json);
     }
 
     if (trimmed == "focus next" || trimmed == "focus prev")
@@ -925,7 +925,7 @@ std::optional<std::string> WindowManager::run_ipc_command(std::string const& com
                 + ",\"iconic\":" + (client->iconic ? "true" : "false") + "}";
         }
         json += "]}";
-        return json;
+        return ok_reply(json);
     }
 
     if (trimmed == "scratchpad stash")
@@ -963,7 +963,7 @@ std::optional<std::string> WindowManager::run_ipc_command(std::string const& com
             json += std::to_string(scratchpad_pool_[i]);
         }
         json += "]}";
-        return json;
+        return ok_reply(json);
     }
 
     return error_reply("unknown command");
@@ -1067,7 +1067,7 @@ std::expected<void, std::string> WindowManager::apply_config_reload(Config confi
     repair_focus_after_visibility_change(focused_monitor_);
 
     apply_appearance_reload();
-    conn_.flush();
+    flush_and_drain_crossing();
     return {};
 }
 
@@ -2268,6 +2268,7 @@ void WindowManager::manage_window(xcb_window_t window, bool start_iconic)
         client.ewmh_type = ewmh_.get_window_type_enum(window);
         parse_initial_ewmh_state(client);
         client.transient_for = transient_for_window(window).value_or(XCB_NONE);
+        client.desktop_pinned = resolved;
 
         clients_[window] = std::move(client);
     }
@@ -2521,6 +2522,7 @@ void WindowManager::set_window_sticky(Client& client, bool enabled)
 {
     if (enabled)
     {
+        client.desktop_pinned = false;
         client.sticky = true;
         ewmh_.set_window_state(client.id, ewmh_.get()->_NET_WM_STATE_STICKY, true);
         ewmh_.set_window_desktop(client.id, 0xFFFFFFFF);
@@ -3860,6 +3862,11 @@ void WindowManager::unmanage_dock_window(xcb_window_t window)
     auto it = clients_.find(window);
     if (it != clients_.end() && it->second.kind == Client::Kind::Dock)
     {
+        if (wm_state_ != XCB_NONE)
+        {
+            uint32_t data[] = { WM_STATE_WITHDRAWN, 0 };
+            xcb_change_property(conn_.get(), XCB_PROP_MODE_REPLACE, window, wm_state_, wm_state_, 32, 2, data);
+        }
         clients_.erase(it);
         update_struts();
         rearrange_all_monitors();
@@ -3872,6 +3879,11 @@ void WindowManager::unmanage_desktop_window(xcb_window_t window)
     auto it = clients_.find(window);
     if (it != clients_.end() && it->second.kind == Client::Kind::Desktop)
     {
+        if (wm_state_ != XCB_NONE)
+        {
+            uint32_t data[] = { WM_STATE_WITHDRAWN, 0 };
+            xcb_change_property(conn_.get(), XCB_PROP_MODE_REPLACE, window, wm_state_, wm_state_, 32, 2, data);
+        }
         clients_.erase(it);
         update_ewmh_client_list();
     }

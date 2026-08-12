@@ -31,7 +31,7 @@ recognized names is rejected.
 
 ## JSON commands
 
-`workspace list` returns:
+`workspace list` returns the following JSON value to `lwmctl`; the raw socket reply is `ok <JSON>`:
 
 ```json
 {
@@ -49,7 +49,7 @@ recognized names is rejected.
 }
 ```
 
-`window list` returns the currently managed non-dock/non-desktop windows:
+`window list` returns the following JSON value to `lwmctl` for the currently managed non-dock/non-desktop windows; the raw socket reply is `ok <JSON>`:
 
 ```json
 {

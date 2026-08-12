@@ -13,18 +13,24 @@ your system before wiring it into a session.
 
 ## What LWM gives the compositor
 
-Picom rules can match on standard X/EWMH state. LWM keeps the following
-authoritative and current, which is enough to drive most visual rules:
+Picom rules can match on standard X/EWMH state. LWM keeps its WM-maintained
+properties authoritative and current, which is enough to drive most visual
+rules:
 
 - `_NET_ACTIVE_WINDOW` — the focused window
 - `_NET_CURRENT_DESKTOP` — current workspace on the focused monitor
 - `_NET_WM_STATE` — including `FULLSCREEN`, `HIDDEN`, `FOCUSED`, `STICKY`,
   `ABOVE`, `BELOW`, `DEMANDS_ATTENTION`
-- `_NET_WM_WINDOW_TYPE` — `DIALOG`, `DOCK`, `DESKTOP`, `UTILITY`, etc.
 - `_NET_CLIENT_LIST_STACKING` — Z order
-- `WM_CLASS`, `WM_NAME` — for per-application targeting
 - `_LWM_WINDOW_CLASS` — LWM-specific UTF8 string with value `tiled`,
   `floating`, `dock`, or `desktop`
+
+Client-provided properties are also available for compositor matching:
+
+- `_NET_WM_WINDOW_TYPE` — read and consumed by LWM for classification;
+  clients remain authoritative for its value (`DIALOG`, `DOCK`, `DESKTOP`,
+  `UTILITY`, etc.)
+- `WM_CLASS`, `WM_NAME` — for per-application targeting
 
 What LWM does **not** currently publish, and that picom therefore cannot key
 off of: layout role (master/stack), focused monitor, or workspace transitions.

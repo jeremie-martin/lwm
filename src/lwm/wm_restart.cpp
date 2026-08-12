@@ -31,7 +31,8 @@ constexpr uint32_t RESTART_RATIO_STATE_VERSION = 3;
 constexpr size_t CLIENT_PROP_BASE_COUNT = 24;     // +kind
 constexpr size_t CLIENT_PROP_URGENCY_COUNT = 25;  // +legacy WM-initiated urgency
 constexpr size_t CLIENT_PROP_APP_PREF_COUNT = 26; // +urgency sources and app preferences
-constexpr size_t CLIENT_PROP_COUNT = 27;          // +fullscreen restore-layer hint
+constexpr size_t CLIENT_PROP_RESTORE_LAYER_COUNT = 27; // +fullscreen restore-layer hint
+constexpr size_t CLIENT_PROP_COUNT = 28;               // +client-authored desktop pin
 
 constexpr uint32_t APP_PREF_SKIP_TASKBAR = 1U << 0;
 constexpr uint32_t APP_PREF_SKIP_PAGER = 1U << 1;
@@ -142,6 +143,7 @@ void WindowManager::serialize_restart_state()
         data[26] = client.fullscreen_restore_layer_hint
             ? static_cast<uint32_t>(*client.fullscreen_restore_layer_hint) + 1U
             : 0U;
+        data[27] = client.desktop_pinned ? 1U : 0U;
 
         xcb_change_property(
             conn_.get(),
@@ -507,7 +509,8 @@ void WindowManager::apply_restart_client_state(xcb_window_t window)
         if (client->app_prefs.above && client->app_prefs.below)
             client->app_prefs.below = false;
 
-        if (len >= CLIENT_PROP_COUNT && data[26] > 0 && data[26] <= static_cast<uint32_t>(LayerHint::Below) + 1U)
+        if (len >= CLIENT_PROP_RESTORE_LAYER_COUNT
+            && data[26] > 0 && data[26] <= static_cast<uint32_t>(LayerHint::Below) + 1U)
         {
             client->fullscreen_restore_layer_hint = static_cast<LayerHint>(data[26] - 1U);
         }
@@ -521,6 +524,10 @@ void WindowManager::apply_restart_client_state(xcb_window_t window)
     {
         client->urgency.add(UrgencySource::WmInitiated);
     }
+
+    // Management publishes _NET_WM_DESKTOP before restart state is applied,
+    // so only the serialized bit can distinguish a client pin from that echo.
+    client->desktop_pinned = len >= CLIENT_PROP_COUNT && data[27] != 0;
 
     free(reply);
 
