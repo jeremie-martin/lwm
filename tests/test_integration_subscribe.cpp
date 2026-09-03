@@ -8,6 +8,7 @@
 #include <optional>
 #include <poll.h>
 #include <string>
+#include <string_view>
 #include <thread>
 #include <sys/wait.h>
 #include <unistd.h>
@@ -144,6 +145,126 @@ bool send_key_chord(X11Connection& conn, xcb_keysym_t modifier, xcb_keysym_t key
     return true;
 }
 
+void set_window_title(X11Connection& conn, xcb_window_t window, std::string const& title)
+{
+    xcb_atom_t net_wm_name = intern_atom(conn.get(), "_NET_WM_NAME");
+    xcb_atom_t utf8_string = intern_atom(conn.get(), "UTF8_STRING");
+    if (net_wm_name != XCB_NONE && utf8_string != XCB_NONE)
+    {
+        xcb_change_property(
+            conn.get(),
+            XCB_PROP_MODE_REPLACE,
+            window,
+            net_wm_name,
+            utf8_string,
+            8,
+            static_cast<uint32_t>(title.size()),
+            title.data()
+        );
+    }
+
+    xcb_change_property(
+        conn.get(),
+        XCB_PROP_MODE_REPLACE,
+        window,
+        XCB_ATOM_WM_NAME,
+        XCB_ATOM_STRING,
+        8,
+        static_cast<uint32_t>(title.size()),
+        title.data()
+    );
+    xcb_flush(conn.get());
+}
+
+struct FocusChangeEvent
+{
+    std::string event;
+    xcb_window_t window = XCB_NONE;
+    std::string class_name;
+    std::string title;
+};
+
+std::optional<std::string> parse_json_string(std::string_view line, size_t& position)
+{
+    if (position >= line.size() || line[position++] != '"')
+        return std::nullopt;
+    std::string result;
+    while (position < line.size())
+    {
+        char ch = line[position++];
+        if (ch == '"')
+            return result;
+        if (static_cast<unsigned char>(ch) < 0x20)
+            return std::nullopt;
+        if (ch != '\\')
+        {
+            result += ch;
+            continue;
+        }
+        if (position >= line.size())
+            return std::nullopt;
+        char escaped = line[position++];
+        switch (escaped)
+        {
+            case '"': result += '"'; break;
+            case '\\': result += '\\'; break;
+            case 'b': result += '\b'; break;
+            case 'f': result += '\f'; break;
+            case 'n': result += '\n'; break;
+            case 'r': result += '\r'; break;
+            case 't': result += '\t'; break;
+            default: return std::nullopt;
+        }
+    }
+    return std::nullopt;
+}
+
+std::optional<FocusChangeEvent> parse_focus_change_event(std::string_view line)
+{
+    if (line.empty() || line.back() != '\n')
+        return std::nullopt;
+    line.remove_suffix(1);
+    size_t position = 0;
+    auto consume = [&](char expected)
+    {
+        return position < line.size() && line[position++] == expected;
+    };
+    auto key = [&](std::string_view expected)
+    {
+        auto value = parse_json_string(line, position);
+        return value && *value == expected && consume(':');
+    };
+    auto number = [&]() -> std::optional<xcb_window_t>
+    {
+        if (position >= line.size() || line[position] < '0' || line[position] > '9')
+            return std::nullopt;
+        uint64_t value = 0;
+        while (position < line.size() && line[position] >= '0' && line[position] <= '9')
+        {
+            value = value * 10 + static_cast<uint64_t>(line[position++] - '0');
+            if (value > UINT32_MAX)
+                return std::nullopt;
+        }
+        return static_cast<xcb_window_t>(value);
+    };
+
+    if (!consume('{') || !key("event"))
+        return std::nullopt;
+    auto event = parse_json_string(line, position);
+    if (!event || !consume(',') || !key("window"))
+        return std::nullopt;
+    auto window = number();
+    if (!window || !consume(',') || !key("class"))
+        return std::nullopt;
+    auto class_name = parse_json_string(line, position);
+    if (!class_name || !consume(',') || !key("title"))
+        return std::nullopt;
+    auto title = parse_json_string(line, position);
+    if (!title || !consume('}') || position != line.size())
+        return std::nullopt;
+    return FocusChangeEvent { std::move(*event), *window, std::move(*class_name), std::move(*title) };
+}
+
 } // namespace
 
 TEST_CASE(
@@ -240,6 +361,69 @@ TEST_CASE(
 
     destroy_window(conn, w2);
     destroy_window(conn, w1);
+}
+
+TEST_CASE(
+    "Integration: subscribe decodes escaped focus change fields",
+    "[integration][subscribe][json]"
+)
+{
+    auto test_env = TestEnvironment::create();
+    if (!test_env)
+        SKIP("Test environment not available");
+
+    auto& conn = test_env->conn;
+    auto& wm = test_env->wm;
+
+    int stdout_pipe[2] = { -1, -1 };
+    REQUIRE(pipe(stdout_pipe) == 0);
+
+    pid_t pid = fork();
+    REQUIRE(pid >= 0);
+
+    if (pid == 0)
+    {
+        dup2(stdout_pipe[1], STDOUT_FILENO);
+        close(stdout_pipe[0]);
+        close(stdout_pipe[1]);
+        setenv("DISPLAY", wm.display().c_str(), 1);
+        setenv("XDG_RUNTIME_DIR", wm.runtime_dir().c_str(), 1);
+
+        std::filesystem::path executable = lwmctl_executable_path();
+        execl(executable.c_str(), executable.c_str(), "subscribe", "focus_change", nullptr);
+        _exit(127);
+    }
+
+    close(stdout_pipe[1]);
+    stdout_pipe[1] = -1;
+    std::this_thread::sleep_for(std::chrono::milliseconds(100));
+
+    xcb_window_t window = create_window(conn, 10, 10, 200, 150);
+    set_window_wm_class(conn, window, "escaped-instance", "escaped-class");
+    std::string title = "quote \" and slash \\ line\n tab\t";
+    set_window_title(conn, window, title);
+    map_window(conn, window);
+
+    auto event_line = read_line_with_timeout(stdout_pipe[0], kTimeout);
+    REQUIRE(event_line.has_value());
+    auto event = parse_focus_change_event(*event_line);
+    REQUIRE(event.has_value());
+    CHECK(event->event == "focus_change");
+    CHECK(event->window == window);
+    CHECK(event->class_name == "escaped-class");
+    CHECK(event->title == title);
+
+    close(stdout_pipe[0]);
+    stdout_pipe[0] = -1;
+    int status = 0;
+    if (!wait_for_process_exit(pid, std::chrono::milliseconds(200), status))
+    {
+        kill(pid, SIGKILL);
+        waitpid(pid, &status, 0);
+    }
+    pid = -1;
+
+    destroy_window(conn, window);
 }
 
 TEST_CASE(

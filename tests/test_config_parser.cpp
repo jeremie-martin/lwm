@@ -163,11 +163,11 @@ TEST_CASE("Config parser rejects unknown keys", "[config]")
     auto loaded = load_from_string(R"(
 [appearance]
 padding = 10
-enable_internal_bar = true
+retired_overlay = true
 )");
 
     REQUIRE_FALSE(loaded.has_value());
-    REQUIRE(loaded.error().find("unknown key 'enable_internal_bar'") != std::string::npos);
+    REQUIRE(loaded.error().find("unknown key 'retired_overlay'") != std::string::npos);
 }
 
 TEST_CASE("Config parser rejects wrong top-level section types", "[config]")

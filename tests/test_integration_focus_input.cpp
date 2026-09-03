@@ -168,6 +168,19 @@ TEST_CASE(
     // The WM should set _NET_ACTIVE_WINDOW to w1
     REQUIRE(wait_for_active_window(conn, w1, kTimeout));
 
+    xcb_atom_t wm_hints = intern_atom(conn.get(), "WM_HINTS");
+    REQUIRE(wm_hints != XCB_NONE);
+    auto hints_cookie = xcb_get_property(conn.get(), 0, w1, wm_hints, wm_hints, 0, 9);
+    auto* hints_reply = xcb_get_property_reply(conn.get(), hints_cookie, nullptr);
+    REQUIRE(hints_reply != nullptr);
+    REQUIRE(hints_reply->type == wm_hints);
+    REQUIRE(hints_reply->format == 32);
+    REQUIRE(xcb_get_property_value_length(hints_reply) >= 8);
+    auto* hints = static_cast<uint32_t*>(xcb_get_property_value(hints_reply));
+    REQUIRE((hints[0] & 1u) != 0);
+    REQUIRE(hints[1] == 0);
+    free(hints_reply);
+
     // The actual X input focus should also be on w1 (not on root).
     // Before the fix, the WM sets focus to root for globally active windows.
     CHECK(wait_for_x_input_focus(conn, w1, kTimeout));

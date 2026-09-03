@@ -92,6 +92,23 @@ bool has_state(X11Connection& conn, xcb_window_t window, xcb_atom_t state)
     return present;
 }
 
+bool wait_for_x_input_focus(X11Connection& conn, xcb_window_t expected, std::chrono::milliseconds timeout)
+{
+    return wait_for_condition(
+        [&conn, expected]()
+        {
+            auto cookie = xcb_get_input_focus(conn.get());
+            auto* reply = xcb_get_input_focus_reply(conn.get(), cookie, nullptr);
+            if (!reply)
+                return false;
+            bool result = reply->focus == expected;
+            free(reply);
+            return result;
+        },
+        timeout
+    );
+}
+
 void set_initial_window_state(X11Connection& conn, xcb_window_t window, std::initializer_list<xcb_atom_t> states)
 {
     xcb_atom_t net_wm_state = intern_atom(conn.get(), "_NET_WM_STATE");
@@ -304,10 +321,12 @@ TEST_CASE("Integration: tiled windows take focus in map order", "[integration][f
     xcb_window_t w1 = create_window(conn, 10, 10, 200, 150);
     map_window(conn, w1);
     REQUIRE(wait_for_active_window(conn, w1, kTimeout));
+    REQUIRE(wait_for_x_input_focus(conn, w1, kTimeout));
 
     xcb_window_t w2 = create_window(conn, 40, 40, 200, 150);
     map_window(conn, w2);
     REQUIRE(wait_for_active_window(conn, w2, kTimeout));
+    REQUIRE(wait_for_x_input_focus(conn, w2, kTimeout));
 
     destroy_window(conn, w2);
     destroy_window(conn, w1);
@@ -344,11 +363,7 @@ TEST_CASE("Integration: tiled focus change restacks active window above sibling"
     auto& conn = test_env->conn;
 
     xcb_atom_t net_active_window = intern_atom(conn.get(), "_NET_ACTIVE_WINDOW");
-    if (net_active_window == XCB_NONE)
-    {
-        WARN("Failed to intern _NET_ACTIVE_WINDOW.");
-        return;
-    }
+    REQUIRE(net_active_window != XCB_NONE);
 
     xcb_window_t w1 = create_window(conn, 10, 10, 200, 150);
     map_window(conn, w1);
@@ -534,17 +549,15 @@ TEST_CASE("Integration: floating window grabs focus and yields on destroy", "[in
     REQUIRE(wait_for_active_window(conn, tiled, kTimeout));
 
     xcb_atom_t dialog_type = intern_atom(conn.get(), "_NET_WM_WINDOW_TYPE_DIALOG");
-    if (dialog_type == XCB_NONE)
-    {
-        WARN("Failed to intern _NET_WM_WINDOW_TYPE_DIALOG.");
-        destroy_window(conn, tiled);
-        return;
-    }
+    xcb_atom_t lwm_window_class = intern_atom(conn.get(), "_LWM_WINDOW_CLASS");
+    REQUIRE(dialog_type != XCB_NONE);
+    REQUIRE(lwm_window_class != XCB_NONE);
 
     xcb_window_t floating = create_window(conn, 60, 60, 180, 120);
-    set_window_type(conn, floating, dialog_type);
+    REQUIRE(set_window_type(conn, floating, dialog_type));
     map_window(conn, floating);
     REQUIRE(wait_for_active_window(conn, floating, kTimeout));
+    REQUIRE(wait_for_property_strings(conn.get(), floating, lwm_window_class, { "floating" }, kTimeout));
 
     destroy_window(conn, floating);
     REQUIRE(wait_for_active_window(conn, tiled, kTimeout));

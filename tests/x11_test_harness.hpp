@@ -359,12 +359,13 @@ inline xcb_window_t create_window(X11Connection& conn, int16_t x, int16_t y, uin
     return window;
 }
 
-inline void set_window_type(X11Connection& conn, xcb_window_t window, xcb_atom_t type_atom)
+inline bool set_window_type(X11Connection& conn, xcb_window_t window, xcb_atom_t type_atom)
 {
     xcb_atom_t type = intern_atom(conn.get(), "_NET_WM_WINDOW_TYPE");
     if (type == XCB_NONE)
-        return;
+        return false;
     xcb_change_property(conn.get(), XCB_PROP_MODE_REPLACE, window, type, XCB_ATOM_ATOM, 32, 1, &type_atom);
+    return true;
 }
 
 inline void map_window(X11Connection& conn, xcb_window_t window)

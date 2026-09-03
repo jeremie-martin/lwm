@@ -230,6 +230,10 @@ TEST_CASE("Integration: client message to invalid window ID is ignored", "[integ
 
     std::this_thread::sleep_for(std::chrono::milliseconds(100));
 
+    auto ping = run_lwmctl(wm, { "ping" });
+    REQUIRE(ping.has_value());
+    REQUIRE(ping->exit_code == 0);
+
     REQUIRE(wait_for_active_window(conn, w1, kTimeout));
 
     destroy_window(conn, w1);

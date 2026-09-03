@@ -146,7 +146,7 @@ TEST_CASE("Ratio overlay changes geometry proportions", "[split_tree][geometry]"
     REQUIRE(geoms.size() == 2);
     CHECK(geoms[0].width > geoms[1].width);
     double ratio = static_cast<double>(geoms[0].width) / static_cast<double>(geoms[0].width + geoms[1].width);
-    CHECK_THAT(ratio, Catch::Matchers::WithinAbs(0.7, 0.05));
+    CHECK_THAT(ratio, Catch::Matchers::WithinAbs(0.7, 0.01));
 }
 
 TEST_CASE("Three windows: stack windows split vertically", "[split_tree][geometry]")

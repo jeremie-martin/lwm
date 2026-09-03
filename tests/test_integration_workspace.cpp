@@ -4,8 +4,11 @@
 #include <array>
 #include <catch2/catch_test_macros.hpp>
 #include <chrono>
+#include <initializer_list>
+#include <map>
 #include <filesystem>
 #include <optional>
+#include <string_view>
 #include <sys/socket.h>
 #include <sys/un.h>
 #include <unistd.h>
@@ -18,6 +21,377 @@ using namespace lwm::test;
 namespace {
 
 constexpr auto kTimeout = std::chrono::seconds(2);
+
+struct JsonValue
+{
+    enum class Type
+    {
+        Object,
+        Array,
+        String,
+        Number,
+        Boolean,
+        Null,
+    };
+
+    Type type = Type::Null;
+    std::map<std::string, JsonValue> object;
+    std::vector<JsonValue> array;
+};
+
+class JsonParser
+{
+public:
+    explicit JsonParser(std::string_view input)
+        : input_(input)
+    {
+    }
+
+    std::optional<JsonValue> parse()
+    {
+        auto value = parse_value();
+        skip_whitespace();
+        if (!value || position_ != input_.size())
+            return std::nullopt;
+        return value;
+    }
+
+private:
+    void skip_whitespace()
+    {
+        while (position_ < input_.size()
+            && (input_[position_] == ' ' || input_[position_] == '\n' || input_[position_] == '\r'
+                || input_[position_] == '\t'))
+        {
+            ++position_;
+        }
+    }
+
+    bool consume(char expected)
+    {
+        if (position_ >= input_.size() || input_[position_] != expected)
+            return false;
+        ++position_;
+        return true;
+    }
+
+    std::optional<std::string> parse_string()
+    {
+        if (!consume('"'))
+            return std::nullopt;
+
+        std::string result;
+        while (position_ < input_.size())
+        {
+            char ch = input_[position_++];
+            if (ch == '"')
+                return result;
+            if (static_cast<unsigned char>(ch) < 0x20)
+                return std::nullopt;
+            if (ch != '\\')
+            {
+                result += ch;
+                continue;
+            }
+
+            if (position_ >= input_.size())
+                return std::nullopt;
+            char escaped = input_[position_++];
+            switch (escaped)
+            {
+                case '"': result += '"'; break;
+                case '\\': result += '\\'; break;
+                case '/': result += '/'; break;
+                case 'b': result += '\b'; break;
+                case 'f': result += '\f'; break;
+                case 'n': result += '\n'; break;
+                case 'r': result += '\r'; break;
+                case 't': result += '\t'; break;
+                case 'u':
+                    if (position_ + 4 > input_.size())
+                        return std::nullopt;
+                    for (size_t i = 0; i < 4; ++i)
+                    {
+                        char digit = input_[position_ + i];
+                        bool hex = (digit >= '0' && digit <= '9') || (digit >= 'a' && digit <= 'f')
+                            || (digit >= 'A' && digit <= 'F');
+                        if (!hex)
+                            return std::nullopt;
+                    }
+                    position_ += 4;
+                    result += '?';
+                    break;
+                default: return std::nullopt;
+            }
+        }
+        return std::nullopt;
+    }
+
+    bool parse_number()
+    {
+        size_t start = position_;
+        if (position_ < input_.size() && input_[position_] == '-')
+            ++position_;
+
+        if (position_ >= input_.size())
+            return false;
+        if (input_[position_] == '0')
+            ++position_;
+        else if (input_[position_] >= '1' && input_[position_] <= '9')
+        {
+            while (position_ < input_.size() && input_[position_] >= '0' && input_[position_] <= '9')
+                ++position_;
+        }
+        else
+        {
+            return false;
+        }
+
+        if (position_ < input_.size() && input_[position_] == '.')
+        {
+            ++position_;
+            size_t fraction_start = position_;
+            while (position_ < input_.size() && input_[position_] >= '0' && input_[position_] <= '9')
+                ++position_;
+            if (position_ == fraction_start)
+                return false;
+        }
+
+        if (position_ < input_.size() && (input_[position_] == 'e' || input_[position_] == 'E'))
+        {
+            ++position_;
+            if (position_ < input_.size() && (input_[position_] == '+' || input_[position_] == '-'))
+                ++position_;
+            size_t exponent_start = position_;
+            while (position_ < input_.size() && input_[position_] >= '0' && input_[position_] <= '9')
+                ++position_;
+            if (position_ == exponent_start)
+                return false;
+        }
+
+        return position_ > start;
+    }
+
+    std::optional<JsonValue> parse_value()
+    {
+        skip_whitespace();
+        if (position_ >= input_.size())
+            return std::nullopt;
+
+        if (input_[position_] == '{')
+            return parse_object();
+        if (input_[position_] == '[')
+            return parse_array();
+        if (input_[position_] == '"')
+        {
+            if (!parse_string())
+                return std::nullopt;
+            JsonValue value;
+            value.type = JsonValue::Type::String;
+            return value;
+        }
+        if (input_.substr(position_, 4) == "true")
+        {
+            position_ += 4;
+            JsonValue value;
+            value.type = JsonValue::Type::Boolean;
+            return value;
+        }
+        if (input_.substr(position_, 5) == "false")
+        {
+            position_ += 5;
+            JsonValue value;
+            value.type = JsonValue::Type::Boolean;
+            return value;
+        }
+        if (input_.substr(position_, 4) == "null")
+        {
+            position_ += 4;
+            JsonValue value;
+            value.type = JsonValue::Type::Null;
+            return value;
+        }
+        if (parse_number())
+        {
+            JsonValue value;
+            value.type = JsonValue::Type::Number;
+            return value;
+        }
+        return std::nullopt;
+    }
+
+    std::optional<JsonValue> parse_object()
+    {
+        if (!consume('{'))
+            return std::nullopt;
+        JsonValue value;
+        value.type = JsonValue::Type::Object;
+        skip_whitespace();
+        if (consume('}'))
+            return value;
+
+        while (true)
+        {
+            auto key = parse_string();
+            if (!key)
+                return std::nullopt;
+            skip_whitespace();
+            if (!consume(':'))
+                return std::nullopt;
+            auto child = parse_value();
+            if (!child || !value.object.emplace(std::move(*key), std::move(*child)).second)
+                return std::nullopt;
+            skip_whitespace();
+            if (consume('}'))
+                return value;
+            if (!consume(','))
+                return std::nullopt;
+            skip_whitespace();
+        }
+    }
+
+    std::optional<JsonValue> parse_array()
+    {
+        if (!consume('['))
+            return std::nullopt;
+        JsonValue value;
+        value.type = JsonValue::Type::Array;
+        skip_whitespace();
+        if (consume(']'))
+            return value;
+
+        while (true)
+        {
+            auto child = parse_value();
+            if (!child)
+                return std::nullopt;
+            value.array.push_back(std::move(*child));
+            skip_whitespace();
+            if (consume(']'))
+                return value;
+            if (!consume(','))
+                return std::nullopt;
+            skip_whitespace();
+        }
+    }
+
+    std::string_view input_;
+    size_t position_ = 0;
+};
+
+std::optional<JsonValue> parse_ok_json(std::string const& reply)
+{
+    if (!reply.starts_with("ok ") || reply.size() < 5 || reply.back() != '\n')
+        return std::nullopt;
+    return JsonParser(std::string_view(reply).substr(3, reply.size() - 4)).parse();
+}
+
+JsonValue const* json_member(JsonValue const& value, std::string_view name)
+{
+    if (value.type != JsonValue::Type::Object)
+        return nullptr;
+    auto it = value.object.find(std::string(name));
+    return it == value.object.end() ? nullptr : &it->second;
+}
+
+bool has_json_fields(
+    JsonValue const& value,
+    std::initializer_list<std::pair<std::string_view, JsonValue::Type>> fields
+)
+{
+    for (auto const& [name, type] : fields)
+    {
+        auto const* member = json_member(value, name);
+        if (!member || member->type != type)
+            return false;
+    }
+    return true;
+}
+
+bool has_object_array_fields(
+    JsonValue const& value,
+    std::string_view array_name,
+    std::initializer_list<std::pair<std::string_view, JsonValue::Type>> fields
+)
+{
+    auto const* array = json_member(value, array_name);
+    if (!array || array->type != JsonValue::Type::Array || array->array.empty())
+        return false;
+    for (auto const& item : array->array)
+    {
+        if (!has_json_fields(item, fields))
+            return false;
+    }
+    return true;
+}
+
+bool has_typed_array(JsonValue const& value, std::string_view array_name, JsonValue::Type item_type)
+{
+    auto const* array = json_member(value, array_name);
+    if (!array || array->type != JsonValue::Type::Array || array->array.empty())
+        return false;
+    return std::all_of(array->array.begin(), array->array.end(), [item_type](JsonValue const& item)
+        { return item.type == item_type; });
+}
+
+bool workspace_list_has_documented_shape(JsonValue const& value)
+{
+    if (!has_json_fields(value, { { "focused_monitor", JsonValue::Type::Number }, { "monitors", JsonValue::Type::Array } }))
+        return false;
+    auto const* monitors = json_member(value, "monitors");
+    if (!monitors || monitors->array.empty())
+        return false;
+    for (auto const& monitor : monitors->array)
+    {
+        if (!has_json_fields(monitor, {
+                { "index", JsonValue::Type::Number },
+                { "name", JsonValue::Type::String },
+                { "current_workspace", JsonValue::Type::Number },
+                { "workspaces", JsonValue::Type::Array },
+            })
+            || !has_object_array_fields(monitor, "workspaces", {
+                { "index", JsonValue::Type::Number },
+                { "name", JsonValue::Type::String },
+                { "current", JsonValue::Type::Boolean },
+                { "window_count", JsonValue::Type::Number },
+                { "layout", JsonValue::Type::String },
+            }))
+        {
+            return false;
+        }
+    }
+    return true;
+}
+
+bool window_list_has_documented_shape(JsonValue const& value)
+{
+    return has_json_fields(value, { { "focused", JsonValue::Type::Number }, { "windows", JsonValue::Type::Array } })
+        && has_object_array_fields(value, "windows", {
+            { "id", JsonValue::Type::Number },
+            { "monitor", JsonValue::Type::Number },
+            { "workspace", JsonValue::Type::Number },
+            { "kind", JsonValue::Type::String },
+            { "class", JsonValue::Type::String },
+            { "instance", JsonValue::Type::String },
+            { "title", JsonValue::Type::String },
+            { "focused", JsonValue::Type::Boolean },
+            { "fullscreen", JsonValue::Type::Boolean },
+            { "urgent", JsonValue::Type::Boolean },
+            { "sticky", JsonValue::Type::Boolean },
+            { "iconic", JsonValue::Type::Boolean },
+        });
+}
+
+bool scratchpad_list_has_documented_shape(JsonValue const& value)
+{
+    return has_json_fields(value, { { "named", JsonValue::Type::Array }, { "pool", JsonValue::Type::Array } })
+        && has_object_array_fields(value, "named", {
+            { "name", JsonValue::Type::String },
+            { "window", JsonValue::Type::Number },
+            { "pending", JsonValue::Type::Boolean },
+        })
+        && has_typed_array(value, "pool", JsonValue::Type::Number);
+}
 
 struct WindowGeometry
 {
@@ -37,6 +411,34 @@ std::optional<WindowGeometry> get_window_geometry(X11Connection& conn, xcb_windo
     WindowGeometry g { reply->x, reply->y, reply->width, reply->height };
     free(reply);
     return g;
+}
+
+std::optional<std::array<uint32_t, 4>> get_frame_extents(X11Connection& conn, xcb_window_t window, xcb_atom_t atom)
+{
+    auto cookie = xcb_get_property(conn.get(), 0, window, atom, XCB_ATOM_CARDINAL, 0, 4);
+    auto* reply = xcb_get_property_reply(conn.get(), cookie, nullptr);
+    if (!reply || reply->type != XCB_ATOM_CARDINAL || reply->format != 32
+        || xcb_get_property_value_length(reply) != 4 * static_cast<int>(sizeof(uint32_t)))
+    {
+        free(reply);
+        return std::nullopt;
+    }
+
+    auto* values = static_cast<uint32_t*>(xcb_get_property_value(reply));
+    std::array<uint32_t, 4> result { values[0], values[1], values[2], values[3] };
+    free(reply);
+    return result;
+}
+
+std::optional<uint16_t> get_window_border_width(X11Connection& conn, xcb_window_t window)
+{
+    auto cookie = xcb_get_geometry(conn.get(), window);
+    auto* reply = xcb_get_geometry_reply(conn.get(), cookie, nullptr);
+    if (!reply)
+        return std::nullopt;
+    uint16_t result = reply->border_width;
+    free(reply);
+    return result;
 }
 
 bool intersects_root(X11Connection& conn, WindowGeometry const& geometry)
@@ -675,9 +1077,20 @@ TEST_CASE("Integration: monocle layout assigns identical geometries", "[integrat
     destroy_window(conn, w1);
 }
 
-TEST_CASE("Integration: JSON list IPC replies use the ok envelope", "[integration][ipc][json]")
+TEST_CASE("Integration: JSON list IPC replies match the documented schema", "[integration][ipc][json]")
 {
-    auto test_env = TestEnvironment::create();
+    auto test_env = TestEnvironment::create(R"(
+[commands]
+terminal = { argv = ["/bin/true"] }
+
+[workspaces]
+count = 2
+
+[[scratchpads]]
+name = "terminal"
+spawn = { ref = "terminal" }
+match = { class = "ScratchpadClass" }
+)");
     if (!test_env)
         SKIP("Test environment not available");
 
@@ -685,20 +1098,58 @@ TEST_CASE("Integration: JSON list IPC replies use the ok envelope", "[integratio
     auto socket_path = wait_for_ipc_socket_path(conn);
     REQUIRE(socket_path.has_value());
 
+    xcb_window_t window = create_window(conn, 10, 10, 200, 150);
+    map_window(conn, window);
+    REQUIRE(wait_for_active_window(conn, window, kTimeout));
+
+    auto stash = send_raw_ipc(*socket_path, "scratchpad stash");
+    REQUIRE(stash.has_value());
+    REQUIRE(stash->starts_with("ok"));
+
     auto workspaces = send_raw_ipc(*socket_path, "workspace list");
     REQUIRE(workspaces.has_value());
-    REQUIRE(workspaces->starts_with("ok {"));
-    REQUIRE(workspaces->back() == '\n');
+    auto workspace_json = parse_ok_json(*workspaces);
+    REQUIRE(workspace_json.has_value());
+    REQUIRE(workspace_list_has_documented_shape(*workspace_json));
 
     auto windows = send_raw_ipc(*socket_path, "window list");
     REQUIRE(windows.has_value());
-    REQUIRE(windows->starts_with("ok {"));
-    REQUIRE(windows->back() == '\n');
+    auto window_json = parse_ok_json(*windows);
+    REQUIRE(window_json.has_value());
+    REQUIRE(window_list_has_documented_shape(*window_json));
 
     auto scratchpads = send_raw_ipc(*socket_path, "scratchpad list");
     REQUIRE(scratchpads.has_value());
-    REQUIRE(scratchpads->starts_with("ok {"));
-    REQUIRE(scratchpads->back() == '\n');
+    auto scratchpad_json = parse_ok_json(*scratchpads);
+    REQUIRE(scratchpad_json.has_value());
+    REQUIRE(scratchpad_list_has_documented_shape(*scratchpad_json));
+
+    destroy_window(conn, window);
+}
+
+TEST_CASE("Integration: managed windows publish zero frame extents", "[integration][ewmh][frame_extents]")
+{
+    auto test_env = TestEnvironment::create();
+    if (!test_env)
+        SKIP("Test environment not available");
+
+    auto& conn = test_env->conn;
+    xcb_atom_t frame_extents = intern_atom(conn.get(), "_NET_FRAME_EXTENTS");
+    REQUIRE(frame_extents != XCB_NONE);
+
+    xcb_window_t window = create_window(conn, 10, 10, 200, 150);
+    map_window(conn, window);
+    REQUIRE(wait_for_active_window(conn, window, kTimeout));
+    REQUIRE(wait_for_condition(
+        [&]() { return get_frame_extents(conn, window, frame_extents).has_value(); },
+        kTimeout
+    ));
+
+    auto extents = get_frame_extents(conn, window, frame_extents);
+    REQUIRE(extents.has_value());
+    CHECK(*extents == std::array<uint32_t, 4> { 0, 0, 0, 0 });
+
+    destroy_window(conn, window);
 }
 
 TEST_CASE("Integration: monocle layout survives exec restart", "[integration][layout][monocle][restart]")
@@ -831,7 +1282,7 @@ TEST_CASE("Integration: version 3 restart handoff survives overlay removal", "[i
     );
     xcb_flush(conn.get());
 
-    LwmProcess wm(env.display(), "[workspaces]\ncount = 2\n");
+    LwmProcess wm(env.display(), "[workspaces]\ncount = 2\n[appearance]\nborder_width = 2\n");
     REQUIRE(wm.running());
     REQUIRE(wait_for_wm_ready(conn, kTimeout));
 
@@ -843,6 +1294,9 @@ TEST_CASE("Integration: version 3 restart handoff survives overlay removal", "[i
         },
         kTimeout
     ));
+    auto border_width = get_window_border_width(conn, window);
+    REQUIRE(border_width.has_value());
+    CHECK(*border_width == 2);
 
     auto workspaces = run_lwmctl(wm, { "workspace", "list" });
     REQUIRE(workspaces.has_value());

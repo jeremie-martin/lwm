@@ -216,7 +216,7 @@ TEST_CASE("Build candidates excludes sticky floating on different monitor", "[fo
     REQUIRE(candidates.empty());
 }
 
-TEST_CASE("Build candidates preserves tiled-then-floating order", "[focus][cycling]")
+TEST_CASE("Build candidates order by MRU with stable ties", "[focus][cycling]")
 {
     std::vector<xcb_window_t> tiled = { 0x1000, 0x2000 };
     std::vector<focus_policy::FloatingCandidate> floating = {
@@ -226,17 +226,19 @@ TEST_CASE("Build candidates preserves tiled-then-floating order", "[focus][cycli
 
     auto is_eligible = [](xcb_window_t) { return true; };
 
-    auto candidates = focus_policy::build_cycle_candidates(tiled, floating, 0, 0, is_eligible, kNoMru);
+    // 0x3000 is most recent, 0x1000 and 0x4000 tie, and 0x2000 has no MRU.
+    std::unordered_map<xcb_window_t, uint64_t> mru = {
+        { 0x1000, 2 }, { 0x2000, 0 }, { 0x3000, 4 }, { 0x4000, 2 }
+    };
+    auto get_mru = [&](xcb_window_t w) { return mru.at(w); };
+
+    auto candidates = focus_policy::build_cycle_candidates(tiled, floating, 0, 0, is_eligible, get_mru);
 
     REQUIRE(candidates.size() == 4);
-    REQUIRE(candidates[0].id == 0x1000);
-    REQUIRE_FALSE(candidates[0].is_floating);
-    REQUIRE(candidates[1].id == 0x2000);
-    REQUIRE_FALSE(candidates[1].is_floating);
-    REQUIRE(candidates[2].id == 0x3000);
-    REQUIRE(candidates[2].is_floating);
-    REQUIRE(candidates[3].id == 0x4000);
-    REQUIRE(candidates[3].is_floating);
+    REQUIRE(candidates[0].id == 0x3000);
+    REQUIRE(candidates[1].id == 0x1000);
+    REQUIRE(candidates[2].id == 0x4000);
+    REQUIRE(candidates[3].id == 0x2000);
 }
 
 TEST_CASE("Build candidates returns empty when all ineligible", "[focus][cycling]")
