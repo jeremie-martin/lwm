@@ -1,287 +1,202 @@
-# LWM Architecture
-
-This is the maintainer-oriented source of truth for how LWM is supposed to work. It explains the model, the state authority boundaries, and the transition funnels that should stay authoritative when behavior changes.
-
-The public documentation map is maintained in [`README.md`](README.md). This document is the maintainer reference for runtime behavior.
-
-## 1. Core Model
-
-LWM manages one or more monitors. Each monitor owns its own workspace set, and exactly one workspace per monitor is current at any time.
-
-Important scope rules:
-
-- `focused monitor` is the command target
-- workspace switching is per monitor, not global
-- sticky windows are sticky within their owning monitor, not across all monitors
-- popup and ephemeral X11 window types are mapped directly and are not part of the normal workspace/layout model
-
-Managed window classes:
-
-- `Tiled`: belongs to one workspace layout
-- `Floating`: keeps independent geometry but still belongs to one monitor/workspace. Managed transients live here too; they prefer parent monitor/workspace and may use parent geometry for initial placement.
-- `Dock`: managed, strut-reserving, always visible, not normal-focus eligible
-- `Desktop`: managed, bottom layer, not normal-focus eligible
-
-## 2. Logging Ownership and Process Boundaries
-
-The logger is an owned facade in `src/lwm/core/log.*`, not a spdlog default logger. Before startup initialization and after shutdown it uses a stderr-only fallback; initialization builds all sinks first and swaps the active named logger only after the candidate is complete. Tests and `liblwm` therefore do not mutate spdlog's global registry or call `spdlog::shutdown`.
-
-The console sink defaults to INFO and stderr. The optional private rotating sink receives WARN and above, is mode `0600`, and uses 1 MiB plus three backups. Its implicit path is `$XDG_RUNTIME_DIR/lwm/lwm-<pid>.log` (or `/tmp/lwm-<pid>.log`), isolating concurrent instances and remaining unchanged across an exec restart because the PID is unchanged; after a failed exec, LWM attempts to restore the prior logging options. If restoration fails, it reports a diagnostic and keeps stderr-only logging active. CLI options establish the policy at startup; TOML reload and runtime IPC do not change it. An implicit file failure falls back to stderr, while an explicitly requested path fails startup in a controlled way.
-
-Log macros preserve source locations and derive a stable category from the source filename. `LOG_CRITICAL` is a record level and does not abort. TRACE is compiled into every build and filtered by the runtime logger level so Release builds honor `--debug`.
-
-Before a restart exec, LWM flushes the active logger and temporarily selects the fallback; a failed parent exec restores the saved options. Forked autostart children perform the same child-only cleanup so file descriptors are not inherited while stderr remains usable. Signal handlers remain notification-only and never log. No logging state is serialized through restart properties.
-
-## 3. State Authority
-
-The single most important rule in this codebase is that different pieces of state have different owners.
-
-- `Client` is the authoritative per-window runtime state.
-- `clients_` is the unified managed-window registry for all kinds (tiled, floating, dock, desktop). There are no parallel per-kind containers; `Client::kind` distinguishes them, and `Client::mru_order` provides floating MRU ordering.
-- `Workspace::windows` is the authoritative tiled membership for that workspace.
-- `active_window_` is the current focused managed window.
-- `focused_monitor_` is the command target monitor.
-- `Workspace::focused_window` is remembered focus for fallback on that workspace; it is not itself proof of current X focus.
-- `Workspace::focus_history` is a bounded MRU stack (back = most recent, max 16 entries) used by the fallback algorithm before it resorts to scanning `Workspace::windows`.
-
-High-value distinctions:
-
-- `hidden` means the WM has physically moved the window off-screen.
-- `iconic` means the window is logically minimized.
-- `visible scope` means "should belong to the current monitor/workspace view" based on workspace, sticky, iconify, and showing-desktop policy.
-- `actually visible` means "in visible scope and not physically hidden."
-
-That distinction matters because LWM uses off-screen hiding rather than unmap/remap for normal workspace visibility.
-
-## 4. Visibility Model
-
-LWM hides managed windows by moving them off-screen, not by unmapping them.
-
-Why this exists:
-
-- avoids redraw issues seen with some GPU-heavy applications after unmap/remap
-- keeps workspace switching immediate
-- avoids turning routine workspace visibility changes into ICCCM map-state churn
-
-Consequences:
-
-- workspace changes usually mutate `hidden`, not `WM_STATE`
-- received `UnmapNotify` is treated as client withdrawal, not as part of normal visibility control
-- handlers must distinguish "in visible scope" from "already shown on screen"
-
-Primary visibility funnels:
-
-- `reconcile_visibility_for_monitor(...)`: selects fullscreen ownership, updates physical hide/show state, and restores floating geometry for newly shown floating windows
-- `sync_visibility_for_monitor(...)`: visibility reconciliation without arranging
-- `finalize_visibility_on_monitor(...)`: visibility reconciliation plus arrange; callers may pass a preferred fullscreen owner
-- `finalize_move_visibility(...)`: reconciles and arranges the source and target monitors after a client move
-- `rearrange_monitor(...)`: computes tiling geometry for the monitor's visible tiled set and keeps fullscreen windows out of normal layout
-
-Do not reintroduce WM-driven unmap/map for normal workspace visibility without a deliberate design change.
-
-## 5. Focus and Activation
-
-`focus_any_window(...)` is the only normal entry point for assigning focus to a managed window.
-
-What it is allowed to do before final focus assignment:
-
-- reject focus during showing-desktop mode
-- reject windows that are not focus-eligible
-- deiconify the target first
-- switch workspaces if the target belongs to another visible workspace on its monitor
-- promote floating windows in MRU order
-- abort stale finalization if a nested transition redirected focus elsewhere
-
-Focus sources converge on the same policy:
-
-- pointer enter and motion
-- button press before drag/move operations
-- `_NET_ACTIVE_WINDOW`
-- explicit fallback after workspace, monitor, iconify, unmanage, or fullscreen transitions
-
-Fallback order (`focus_or_fallback(...)`, implemented via `focus_policy::select_focus_candidate`):
-
-1. `Workspace::focused_window` if still in the workspace and eligible
-2. first eligible window from `Workspace::focus_history` (MRU, back = most recent)
-3. last eligible tiled window in `Workspace::windows`
-4. eligible sticky tiled window from another workspace on the same monitor
-5. eligible floating window on the monitor in MRU order (`Client::mru_order`)
-6. clear focus
-
-Important nuance:
-
-- `active_window_` and X input focus must stay aligned
-- focus changes may need to restack both the old and new monitor, not just the newly focused one
-- hidden, iconified, suppressed, dock, and desktop windows are not focus-eligible
-- after any transition that changes window visibility (workspace switch, manage/unmanage, fullscreen, iconify), the WM calls `flush_and_drain_crossing()` — this flushes pending X requests, performs a server round-trip, and discards stale `EnterNotify`/`LeaveNotify`/`MotionNotify` events to prevent focus-follows-mouse from overriding the programmatic focus assignment
-
-## 6. Fullscreen, Suppression, and Stacking
-
-LWM treats fullscreen as an exclusive visible mode within one monitor's visible scope.
-
-Visible scope means:
-
-- the monitor's current workspace
-- plus sticky windows on that same monitor
-- excluding iconified windows
-- during showing-desktop, non-sticky windows are hidden but sticky non-iconic windows remain visible
-
-Fullscreen ownership rules:
-
-- at most one managed tiled or floating fullscreen owner is effective on a monitor's visible scope, tracked in `Monitor::fullscreen_owner`
-- `select_fullscreen_owner_for_monitor(...)` selects the effective owner from visible fullscreen clients on the monitor, preserving the current owner when valid and otherwise choosing the highest-order visible candidate
-- when multiple visible fullscreen windows conflict, one owner is elected and the other visible fullscreen windows are suppressed
-- hidden or off-workspace fullscreen windows may keep their fullscreen state until they re-enter visible scope
-
-Suppression rules while an owner exists:
-
-- non-owner managed tiled/floating siblings in that visible scope are suppressed from focus, fallback, normal layout, and managed restacking
-- suppressed managed windows are physically hidden through the normal visibility path
-- managed transients whose `transient_for` points to the owner are exempt
-
-Stack authority rules:
-
-- `apply_stacking()` is the normal managed stacking authority
-- `apply_fullscreen_if_needed(...)` is geometry-only; it should not make independent stacking decisions
-- within each stack layer, floating windows are sorted above tiled windows (matching conventional tiling WM behavior); the active-window preference is applied within each kind
-- transient restacking happens relative to visible, unsuppressed parents
-
-Important limit:
-
-- `_NET_WM_FULLSCREEN_MONITORS` is currently geometry-only; it does not create a multi-monitor fullscreen ownership model
-
-## 7. Workspace and Monitor Transitions
-
-The goal is not to let every caller mutate monitor/workspace state ad hoc. State changes should pass through a small number of funnels.
-
-Primary transition funnels and authorities:
-
-- `workspace_policy::validate_workspace_switch(...)` validates monitor-local
-  workspace switches without mutating live monitor state
-- `WindowManager::apply_workspace_switch(...)` applies that switch, updates
-  EWMH desktop projection, reconciles visibility, arranges the monitor, emits
-  the workspace-switch event, and syncs urgent non-active clients
-- user-facing `switch_workspace(...)` adds focus fallback and crossing-event
-  drain after the raw switch funnel
-- focus-triggered and EWMH-triggered workspace switches call the raw funnel and
-  keep their own caller-specific focus/drain behavior
-- `select_fullscreen_owner_for_monitor(...)` owns fullscreen-owner selection
-- `reconcile_visibility_for_monitor(...)` is the normal live writer of
-  `Monitor::fullscreen_owner` and `Client::hidden`
-- `sync_visibility_for_monitor(...)`, `finalize_visibility_on_monitor(...)`,
-  `finalize_move_visibility(...)`, and `rearrange_all_monitors(...)` are narrow
-  live wrappers around visibility reconciliation
-- `focus_any_window(...)`, `apply_stacking()`, and
-  `flush_and_drain_crossing(...)` remain concrete X-visible behavior authorities
-
-Workspace switch contract:
-
-1. validate target workspace with `workspace_policy::validate_workspace_switch(...)`
-2. update only `previous_workspace` and `current_workspace`
-3. update `_NET_CURRENT_DESKTOP` from the focused monitor
-4. reconcile visibility for the switched monitor
-5. arrange the monitor and emit the workspace switch event
-6. sync urgent non-active clients
-7. user-facing switches then restore focus and drain crossing events
-
-Fullscreen ownership contract:
-
-- fullscreen enable and fullscreen deiconify request ownership with
-  `preferred_fullscreen_owner`
-- iconify, unmanage, monitor moves, and hotplug do not clear owners directly;
-  reconciliation drops stale owners when the previous owner is no longer an
-  eligible candidate
-- live `Monitor::fullscreen_owner` assignment is confined to visibility
-  reconciliation
-- ownership reviews should grep for direct `fullscreen_owner` writes; new writes
-  outside `WindowManager::reconcile_visibility_for_monitor(...)` are a
-  design regression unless the ownership model is deliberately changed first
-
-Window movement rules:
-
-- moving a window to another workspace must update membership, visibility, and focus fallback
-- moving a window to another monitor must update both source and destination monitor state
-- floating monitor changes triggered by geometry or drag must run the same ownership and visibility reconciliation as explicit monitor-move commands
-- `Workspace::windows` remains the live membership authority; move helpers
-  reconcile only the post-move source/target monitor visibility and fullscreen
-  ownership
-- direct `client.monitor` / `client.workspace` writes are limited to manage,
-  hotplug, and movement funnels; ordinary workspace moves use helpers that
-  reconcile source/target visibility before returning
-
-## 8. Window Lifecycle and Property Changes
-
-Nominal manage path:
-
-1. receive `MapRequest`
-2. ignore override-redirect windows
-3. classify the window type
-4. apply rules
-5. create `Client`
-6. read initial state from properties and hints
-7. compute initial geometry / placement
-8. map the window
-9. hide it off-screen if it is not currently supposed to be visible
-10. apply post-map state such as above/below, sticky, and EWMH bookkeeping; client-provided initial fullscreen state is applied before mapping, while rule-driven fullscreen is applied after `manage_*` has mapped the window; maximize is applied before mapping for floating clients and after mapping for tiled clients
-
-Unmanage path:
-
-- write `WM_STATE=Withdrawn`
-- remove the client from all authoritative containers
-- reconcile focus and visibility
-- update EWMH lists
-
-Property changes that matter at runtime:
-
-- `_NET_WM_WINDOW_TYPE`
-- `WM_TRANSIENT_FOR`
-- `WM_HINTS`
-- `WM_NORMAL_HINTS`
-- `_NET_WM_USER_TIME_WINDOW`
-- strut-related properties for dock windows
-
-Those updates are easy to regress because they can change classification, focus eligibility, stacking exceptions, geometry policy, or workarea computation after manage-time.
-
-### Notification Attention
-
-Notification popup windows (`_NET_WM_WINDOW_TYPE_NOTIFICATION`) remain unmanaged popups. LWM does not infer a source client from D-Bus notification metadata, app names, desktop entries, PIDs, titles, MRU order, or process lineage. Those values identify applications or processes, not the exact window that caused a notification.
-
-Tools that know their source X11 window can explicitly request attention with `lwmctl notify-attention window=<xid>`. The helper `scripts/lwm-notify.sh` shows the normal desktop notification with `notify-send` and then calls that IPC command with `$WINDOWID`, which is the robust path for terminal-hosted agents. LWM only accepts a managed tiled/floating source window, skips the currently focused window, and clears attention on focus.
-
-### Scratchpad Visibility
-
-Scratchpads come in two flavors, both modeled as variants of `Client::scratchpad`. Named scratchpads are bound to a config-declared name with a matcher; the WM remembers the last claimed window per name. The generic pool is an MRU-ordered set of stash-tagged windows that the user cycles through. Both are managed clients that live in `clients_` like any other window.
-
-When a scratchpad is hidden, the client stays in `clients_` with `iconic = true` and is moved off-screen by the normal visibility funnel — the same off-screen mechanism used for inactive workspaces. A hidden scratchpad is not focus-eligible (focus fallback skips iconic clients) and is not part of any workspace's tiled membership. Showing a scratchpad is a re-host: the funnel reassigns the client to the focused monitor's current workspace, restores tiled membership or floating geometry from the saved variant payload, then routes the iconic-state aftermath through `deiconify_window(...)` so fullscreen ownership, visibility, focus, and crossing-event drain stay on the same transition path as normal windows.
-
-Restart preserves the visible scratchpad pool window and named-scratchpad claims via the `LWM_RESTART_SCRATCHPAD_*` atoms — same mechanism the rest of the WM uses for graceful exec restart.
-
-## 9. Hotplug Contract
-
-RANDR changes are handled as a structural rebuild, not as a small patch to old monitor indices.
-
-Required behavior:
-
-- reset the cached `Client::fullscreen_monitors` geometry hint before rebuilding the monitor graph, preserve ordinary fullscreen state, and reselect fullscreen owners and reapply fullscreen geometry after the rebuild
-- remap windows by monitor name, not old index
-- fall back to monitor `0` when a previous monitor name disappears
-- recompute struts and workareas
-- restore focus target and rearrange all monitors
-
-Using monitor names rather than indices is what prevents unplug/replug index churn from turning into workspace placement bugs.
-
-The rebind is **comprehensive by construction**: `plan_hotplug` derives Tiled entries from workspace membership and Floating entries from `clients_`, then the handler explicitly rebinds Dock/Desktop clients from `clients_`, all by monitor name. These per-kind paths cover every managed client before `handle_randr_screen_change` returns.
-
-**Post-rebind invariant**: for every Tiled and Floating client, `client.monitor < monitors_.size()` and `client.workspace < monitors_[client.monitor].workspaces.size()`. Downstream code reads these fields without bounds-checking. Dock/Desktop clients are rebound by name; their indices are not part of the Tiled/Floating bounds invariant. `LWM_ASSERT_INVARIANTS` is a debug-only check covering workspace membership, floating bounds, and containers, and is compiled out under `NDEBUG`.
-
-## 10. Common Regression Traps
-
-- Treating sticky as global across all monitors.
-- Updating `_NET_CLIENT_LIST` on workspace switch instead of on manage/unmanage.
-- Applying `ConfigureRequest` geometry directly to tiled windows.
-- Reintroducing WM-driven unmap/map for normal workspace visibility.
-- Letting a stack mutation bypass `apply_stacking()`.
-- Letting focus be finalized after a nested workspace/fullscreen transition has already redirected it.
-- Forgetting that visible-scope decisions and physical visibility are different things.
-- Adding new state transitions without routing them through the existing visibility, fullscreen, and focus funnels.
-- Forgetting to call `flush_and_drain_crossing()` after a visibility change that precedes a programmatic focus assignment. Stale crossing events will cause focus-follows-mouse to immediately override the intended focus target.
+# Architecture
+
+This document defines LWM's internal runtime model and the ownership boundaries
+maintainers should preserve. User setup belongs in [README.md](README.md);
+external X11 behavior belongs in [X11.md](X11.md); the local wire contract
+belongs in [IPC.md](IPC.md).
+
+## Components
+
+| Area | Responsibility |
+| --- | --- |
+| `src/app/main.cpp`, `cli.*` | process startup, config selection, logging options, exec restart |
+| `src/app/lwmctl.cpp` | supported command-line IPC client |
+| `src/lwm/config/` | strict TOML parsing and built-in defaults |
+| `src/lwm/keybind/` | key binding normalization, grabs, and lookup |
+| `src/lwm/layout/` | master-stack and monocle geometry, split ratios, hit testing |
+| `src/lwm/core/log.*` | owned logger, secure rotating sink, process-boundary lifecycle |
+| `src/lwm/core/types.hpp` | domain state: clients, monitors, workspaces, geometry |
+| `src/lwm/core/policy.hpp` | pure visibility, focus, workspace, fullscreen, and hotplug decisions |
+| `src/lwm/core/ewmh.*` | EWMH atoms, classification, and property I/O |
+| `src/lwm/wm.cpp` | construction, IPC, client lifecycle, rules, visibility, stacking, layout |
+| `src/lwm/wm_ewmh.cpp` | root properties, client lists, workareas, EWMH desktop projection |
+| `src/lwm/wm_events.cpp` | X event dispatch, client messages, property changes, RANDR |
+| `src/lwm/wm_focus.cpp` | focus assignment, fallback, and cycling |
+| `src/lwm/wm_workspace.cpp` | workspace and monitor commands |
+| `src/lwm/wm_floating.cpp`, `wm_drag.cpp` | floating geometry and pointer-driven move/resize/reorder |
+| `src/lwm/wm_restart.cpp`, `wm_scratchpad.cpp` | exec handoff and scratchpad state |
+
+`WindowManager` owns one event loop. It polls the X connection, the SIGHUP
+self-pipe, the IPC listener, one pending request, and subscription connections.
+State mutation is single-threaded.
+
+Logging is an owned service rather than spdlog global state. A non-null
+stderr fallback exists before initialization and after shutdown; the configured
+logger is swapped in only after every sink is ready. Exec restart and forked
+children flush and return to the fallback before crossing the process boundary,
+which prevents log-file descriptor inheritance. Logging policy is fixed by
+startup options and is not reloaded from TOML.
+
+## State model
+
+Each RANDR monitor owns a fixed-size vector of workspaces and identifies one as
+current. The same configured workspace names are repeated per monitor. EWMH
+projects this model into a flat, monitor-major desktop list:
+
+```text
+desktop = monitor_index * workspaces_per_monitor + workspace_index
+```
+
+`focused_monitor_` is the target for commands. It usually follows the focused
+window or pointer but is distinct from X input focus.
+
+`clients_` is the registry for every managed window. `Client::kind` separates:
+
+- `Tiled`: present in exactly one `Workspace::windows` vector.
+- `Floating`: independently positioned and absent from tiled membership.
+- `Dock`: outside normal focus/layout, contributes a strut, and uses the Above
+  stacking tier.
+- `Desktop`: outside normal focus/layout and uses the Below stacking tier.
+
+Popup-only window types are mapped directly and never enter `clients_`.
+
+The important authorities are:
+
+- `Client`: placement, classification, geometry restore data, protocol state,
+  urgency, and scratchpad membership.
+- `Workspace::windows`: tiled membership and layout order.
+- `Workspace::focused_window` and `focus_history`: remembered tiled focus.
+- `Client::mru_order`: in-memory focus recency for tiled and floating clients;
+  only floating order is persisted across an exec restart.
+- `active_window_`: the focused managed window.
+- `Monitor::fullscreen_owner`: the effective fullscreen owner for one monitor.
+
+Application requests and effective policy are intentionally separate where they
+can disagree. For example, `Client::app_prefs` retains requested above/below and
+skip states while rules and modal/fullscreen policy determine the effective
+state published back to X.
+
+## Visibility
+
+LWM maps a normal client once, then hides it by moving it to
+`OFF_SCREEN_X`. Three terms must remain distinct:
+
+- `iconic`: the client is logically minimized; ICCCM `WM_STATE` is
+  `IconicState` and EWMH includes `_NET_WM_STATE_HIDDEN`.
+- policy-visible: the client is non-iconic and is sticky or belongs to the
+  current workspace on its monitor. Showing-desktop hides non-sticky clients.
+- `hidden`: LWM has physically moved the client off-screen.
+
+A policy-visible client can still be hidden when another window owns fullscreen.
+Normal workspace changes therefore update `hidden`, not `WM_STATE`, and an
+incoming `UnmapNotify` means client withdrawal rather than a workspace change.
+
+`reconcile_visibility_for_monitor()` is the authority for fullscreen-owner
+selection and physical hide/show state. Its wrappers add only the next required
+phase:
+
+- `sync_visibility_for_monitor()`: reconciliation only.
+- `finalize_visibility_on_monitor()`: reconciliation, then layout.
+- `finalize_move_visibility()`: reconciliation and layout for source and
+  destination monitors.
+- `rearrange_all_monitors()`: reconcile every monitor before arranging any.
+
+`rearrange_monitor()` consumes reconciled state. It lays out visible tiled
+clients, applies fullscreen geometry, then normally delegates global ordering to
+`apply_stacking()`.
+
+## Fullscreen and stacking
+
+At most one non-iconic, policy-visible tiled or floating client owns fullscreen
+on a monitor. Reconciliation keeps the existing owner when still valid, honors
+an explicitly preferred new owner, otherwise chooses the newest eligible
+managed client. Other policy-visible tiled/floating clients on that monitor are
+suppressed and hidden. A managed transient whose `transient_for` is the owner
+is exempt.
+
+Fullscreen state may remain set on iconified or off-workspace clients; ownership
+is effective only when they return to visible scope. Showing-desktop removes
+fullscreen ownership while active. `_NET_WM_FULLSCREEN_MONITORS` changes
+geometry only and does not create cross-monitor ownership.
+
+`apply_stacking()` is the single global stacking authority. It computes the X
+order and `_NET_CLIENT_LIST_STACKING` together. Physically hidden clients sort
+before visible clients. Desktop clients use the Below tier and docks use the
+Above tier; tiled and floating clients use Below, Normal, Above, or Fullscreen
+according to effective state. Within a tier, floating clients are above
+non-floating clients, active preference is applied within each kind, and
+visible transients are placed above visible parents.
+
+## Focus
+
+`focus_any_window()` is the normal focus funnel. It validates eligibility,
+deiconifies when necessary, switches the target monitor's workspace when
+necessary, updates focus memory and recency, sends `WM_TAKE_FOCUS` when
+advertised, sets X input focus, restacks, updates EWMH focus state, clears
+urgency, and emits the IPC event.
+
+Docks, desktops, iconic clients, and fullscreen-suppressed clients are not
+focus candidates. A managed client accepts focus when `WM_HINTS.input` is true
+or it advertises `WM_TAKE_FOCUS`.
+
+Fallback selection prefers the workspace's remembered focus, its bounded focus
+history, reverse tiled order, sticky tiled clients on the monitor, then visible
+floating clients by recency. Focus cycling instead builds one recency-ranked
+list of eligible tiled and floating clients.
+
+Visibility-changing transitions finish with `flush_and_drain_crossing()`
+before relying on programmatic focus. This round-trip discards stale crossing
+and motion events that could otherwise overwrite the intended focus under
+focus-follows-mouse.
+
+## Lifecycle and transitions
+
+The normal map path classifies the X window, matches the first applicable rule,
+creates the client record, reads initial hints/state, establishes placement and
+protocol properties, maps once, then reconciles visibility, geometry, stacking,
+and focus. Docks and desktops use dedicated registration paths; popup-only
+types are only mapped.
+
+Client removal writes `WM_STATE=WithdrawnState`, removes every authoritative
+membership, repairs visibility/focus, and refreshes EWMH lists. Movement helpers
+update both client placement and tiled membership before reconciling the source
+and destination monitors. Direct monitor/workspace writes belong only in
+manage, movement, restart, and hotplug paths.
+
+Config loading is strict and atomic. Reload replaces the parsed configuration,
+rebuilds input and scratchpad state, updates EWMH workspace metadata, and
+reapplies currently matching rules. The user-visible reload limits are recorded
+in [README.md](README.md).
+
+Graceful restart serializes global, workspace, client, ordering, ratio, and
+scratchpad state into private X properties, execs the selected binary, restores
+that state during the next scan, then removes the handoff properties. Autostart
+is skipped during this handoff. These properties are private implementation
+details, not a compatibility API.
+
+RANDR changes rebuild the monitor graph. Tiled and floating clients are rebound
+by monitor name, missing names fall back to monitor 0, workspace indices are
+clamped, dock/desktop clients are rebound separately, workareas are recomputed,
+and visibility, fullscreen geometry, layout, and focus are restored. Fullscreen
+monitor-index hints are cleared because their indices may no longer be valid.
+
+Named and generic scratchpads remain ordinary managed clients. Hidden
+scratchpads are iconic and off-screen. Showing one rehosts it on the focused
+monitor's current workspace and restores its tiled membership or floating
+geometry through the normal visibility and focus funnels.
+
+## Invariants
+
+Every completed transition must preserve:
+
+- each tiled client appears in exactly one workspace and each workspace entry
+  resolves to a tiled client;
+- tiled/floating client monitor and workspace indices are valid;
+- kind-specific state matches `Client::kind`;
+- active and remembered focus never point at an iconic or absent client;
+- above and below are mutually exclusive;
+- fullscreen ownership and `hidden` are written by visibility reconciliation;
+- managed X stacking and `_NET_CLIENT_LIST_STACKING` come from the same order.
+
+`LWM_ASSERT_INVARIANTS` checks the in-memory subset in debug builds. X
+properties and observable ordering require integration tests.

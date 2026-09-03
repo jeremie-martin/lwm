@@ -1,13 +1,21 @@
-# CLAUDE.md
+# Repository instructions
 
-Entry point for Claude Code and similar repository-aware agents. Read these in order:
+Start with [README.md](README.md), then load only the reference that owns the
+task:
 
-1. [`README.md`](README.md) — project overview, build, install, configure, runtime control
-2. [`CONTRIBUTING.md`](CONTRIBUTING.md) — workflow, code map, coding style, change checklist
-3. [`ARCHITECTURE.md`](ARCHITECTURE.md) — runtime model, invariants, transition funnels
-4. [`COMPLIANCE.md`](COMPLIANCE.md) — ICCCM/EWMH behavior and limits
-5. [`IPC.md`](IPC.md) — local socket commands, JSON output, and events
-6. [`SHADERS.md`](SHADERS.md) — compositor/shader recipes and LWM-specific compositor properties
-7. [`ROADMAP.md`](ROADMAP.md) — open work and open questions
+- For build, test, style, or review work, read
+  [CONTRIBUTING.md](CONTRIBUTING.md).
+- Before changing client state, visibility, focus, fullscreen, stacking,
+  workspaces, restart, scratchpads, or hotplug behavior, read
+  [ARCHITECTURE.md](ARCHITECTURE.md).
+- Before changing ICCCM, EWMH, classification, hints, client messages, or
+  `_LWM_*` properties, read [X11.md](X11.md).
+- Before changing socket commands, JSON, discovery, or events, read
+  [IPC.md](IPC.md).
+- Before changing configuration parsing or defaults, read and update
+  [config.toml.example](config.toml.example).
 
-Start with `ARCHITECTURE.md` before touching visibility, focus, fullscreen, or stacking.
+Use the existing state-transition funnels and add tests through the real
+boundary. Follow the documentation ownership table in
+[CONTRIBUTING.md](CONTRIBUTING.md); update one authoritative explanation rather
+than copying behavior between files.

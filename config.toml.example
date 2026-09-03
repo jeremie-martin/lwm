@@ -1,5 +1,7 @@
-# LWM Configuration File
-# Autoload path: $XDG_CONFIG_HOME/lwm/config.toml (when XDG_CONFIG_HOME is set)
+# LWM configuration reference and starter file.
+# Unknown sections and keys are errors. With no explicit --config path, this
+# file is loaded from $XDG_CONFIG_HOME/lwm/config.toml only when
+# XDG_CONFIG_HOME is set; otherwise LWM uses built-in defaults.
 
 [appearance]
 padding = 10
@@ -9,37 +11,42 @@ urgent_border_color = 0xFFA500
 
 [layout]
 # Layout strategy: "master-stack" (default tiling) or "monocle" (every tiled
-# window fills the workspace; stacking determines what is on top). Live switch
-# at runtime via `lwmctl layout set <name>`.
+# window fills the workspace; stacking determines what is on top).
 strategy = "master-stack"
+# min_ratio must be 0.05..0.45. default_ratio must be within
+# [min_ratio, 1 - min_ratio].
 default_ratio = 0.5
 min_ratio = 0.1
+# Pointer distance in pixels for grabbing an internal tiled split (1..100).
 resize_grab_threshold = 8
 
 [focus]
 warp_cursor_on_monitor_change = false
 
 [commands]
+# Adjust these programs for the installed desktop environment. Each command is
+# exactly one of { argv = [...] } or { shell = "..." }. Command references are
+# allowed only at use sites such as binds, autostart, and scratchpads.
 terminal = { argv = ["/usr/local/bin/st"] }
-browser = { argv = ["/usr/bin/firefox"] }
 launcher = { argv = ["dmenu_run"] }
 
 [workspaces]
 # Number of workspaces per monitor (must be >= 1).
 count = 10
 # Workspace indices used by rules, keybinds, IPC, and EWMH are 0-based.
-# Names are display labels exposed through EWMH and the internal bar.
+# Names are display labels exposed to EWMH bars and pagers.
 names = ["1", "2", "3", "4", "5", "6", "7", "8", "9", "10"]
 
 # Commands run once when LWM starts. Use:
 # - { ref = "name" } to reuse an entry from [commands]
 # - { argv = ["cmd", "--flag"] } for structured execution without a shell
-# - { shell = "cd ~/proj && make run" } for explicit shell commands
+# - { shell = "cd ~/proj && make run" } for explicit /bin/sh -c execution
 [autostart]
 commands = [
 ]
 
-# Mouse bindings
+# Mouse bindings. Defining any [[mousebinds]] replaces all built-in mouse
+# bindings.
 # mod: modifiers only ("super", "super+shift", "ctrl", ...)
 # button: X11 mouse button number (1 = left, 2 = middle, 3 = right)
 # action: "drag_window", "resize_floating", "toggle_float"
@@ -61,6 +68,8 @@ action = "toggle_float"
 # Explicit bindings
 # key: one combo string, e.g. "super+Return", "super+shift+Left", "Print"
 # Exactly one action field is allowed in each [[binds]] entry.
+# Defining any [[binds]] starts from an empty key-binding set; list every
+# non-workspace binding to retain. The workspace groups below are then added.
 [[binds]]
 key = "super+Return"
 spawn = { ref = "terminal" }
@@ -122,8 +131,8 @@ key = "super+shift+k"
 swap_prev = true
 
 [[binds]]
-key = "Print"
-spawn = { shell = "~/.local/bin/screenshot --mode selection" }
+key = "super+shift+r"
+reload_config = true
 
 # Action reference (exactly one action per [[binds]] entry):
 # | action syntax | required value type |
@@ -149,8 +158,10 @@ spawn = { shell = "~/.local/bin/screenshot --mode selection" }
 # | scratchpad_stash = true | boolean true |
 # | scratchpad_cycle = true | boolean true |
 
-# Generated workspace binding groups. Each group replaces the built-in group
-# with the same mode and modifier.
+# Generated workspace binding groups. If [[binds]] is absent, the first group
+# for a mode/modifier pair replaces that built-in group. If [[binds]] is
+# present, groups add bindings to the explicit set. Multiple groups with the
+# same mode/modifier may coexist, as below for AZERTY and QWERTY symbols.
 # mode:
 #   "switch" => focus workspace N
 #   "move"   => send focused window to workspace N
@@ -158,32 +169,40 @@ spawn = { shell = "~/.local/bin/screenshot --mode selection" }
 [[workspace_binds]]
 mode = "switch"
 mod = "super"
-keys = ["ampersand", "eacute", "quotedbl", "apostrophe", "parenleft", "minus", "egrave", "underscore", "ccedilla", "agrave"]
+keys = [
+  "ampersand", "eacute", "quotedbl", "apostrophe", "parenleft",
+  "minus", "egrave", "underscore", "ccedilla", "agrave",
+]
 
 [[workspace_binds]]
 mode = "move"
 mod = "super+shift"
-keys = ["ampersand", "eacute", "quotedbl", "apostrophe", "parenleft", "minus", "egrave", "underscore", "ccedilla", "agrave"]
+keys = [
+  "ampersand", "eacute", "quotedbl", "apostrophe", "parenleft",
+  "minus", "egrave", "underscore", "ccedilla", "agrave",
+]
 
-# Optional QWERTY workspace groups. Replace the corresponding groups above;
-# do not enable both groups with the same mode and modifier.
-# [[workspace_binds]]
-# mode = "switch"
-# mod = "super"
-# keys = ["1", "2", "3", "4", "5", "6", "7", "8", "9", "0"]
-#
-# [[workspace_binds]]
-# mode = "move"
-# mod = "super+shift"
-# keys = ["1", "2", "3", "4", "5", "6", "7", "8", "9", "0"]
+[[workspace_binds]]
+mode = "switch"
+mod = "super"
+keys = ["1", "2", "3", "4", "5", "6", "7", "8", "9", "0"]
+
+[[workspace_binds]]
+mode = "move"
+mod = "super+shift"
+keys = ["1", "2", "3", "4", "5", "6", "7", "8", "9", "0"]
 
 # Window rules
-# Rules are evaluated in order. First match wins.
+# Rules are evaluated in order; the first match wins. All specified match
+# fields must match. Regexes use ECMAScript syntax, are case-sensitive, and
+# must match the whole value. A rule with no match fields matches every window.
 #
 # match keys:
 #   class, instance, title  => regex
 #   type                    => EWMH type string
 #   transient               => true/false
+# type: normal, desktop, dock, toolbar, menu, utility, splash, dialog,
+#       dropdown_menu, popup_menu, tooltip, notification, combo, or dnd
 #
 # apply keys:
 #   floating, fullscreen, above, below, sticky, skip_taskbar, skip_pager
@@ -195,6 +214,15 @@ keys = ["ampersand", "eacute", "quotedbl", "apostrophe", "parenleft", "minus", "
 #   workspace_name = "dev"   # optional if you prefer names
 #   monitor_name = "HDMI-1"  # optional if you prefer names
 #   scratchpad = "music"
+#
+# Rules affect only tiled/floating clients; they cannot convert desktop, dock,
+# or direct-mapped popup types. geometry and center affect floating clients.
+# Keep geometry inside X11 int16/uint16 ranges: the parser currently validates
+# positive sizes but does not reject every value that would narrow.
+#
+# Current implementation gap: borderless and false-valued overrides of initial
+# client state may not take effect on the first map. A later property
+# reevaluation or config reload applies the matching rule. See ROADMAP.md.
 
 # Example: float and center dialog windows
 # [[rules]]
@@ -207,6 +235,9 @@ keys = ["ampersand", "eacute", "quotedbl", "apostrophe", "parenleft", "minus", "
 # apply = { monitor_name = "HDMI-1", workspace_name = "chat" }
 
 # Named scratchpads
+# Each entry requires a unique name, a spawn command, and at least one
+# class/instance/title regex. Size values are fractions from 0.1 through 1.0
+# of the focused monitor's working area.
 # Toggle with:
 #   [[binds]]
 #   key = "super+u"

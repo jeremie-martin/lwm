@@ -1,51 +1,36 @@
 # Roadmap
 
-Open work only. Closed items live in commit history.
-Audited against `git log` and `src/` on 2026-07-22.
+This file records verified gaps in the current implementation. It is not a
+release promise; completed work belongs in Git history.
 
-## Layout
+## Correctness and consistency
 
-- More layout strategies in `src/lwm/layout/strategy.cpp` — master-stack and monocle exist today. Candidates: tabbed, dwindle/spiral, columns, centered-master.
-- Per-monitor layout parameters such as gaps; split ratios already exist per workspace.
+- Make initial rule application use the same state computation as runtime
+  reevaluation. Today `borderless` and false-valued overrides of some
+  client-provided state may not take effect until a property change or config
+  reload.
+- Decide whether config reload should restore state left by a removed or
+  no-longer-matching rule. Current reload applies the first rule that now
+  matches but does not undo earlier rule effects when nothing matches.
+- Reject rule geometry that cannot be represented by X11's signed position and
+  unsigned size fields instead of narrowing it.
+- Align or remove the unused `LWM_ASSERT_CLIENT_STATE` check: it treats an
+  iconic fullscreen client as invalid even though fullscreen state
+  intentionally persists while a client is iconic.
+- Make `make uninstall` remove `lwmctl` and `lwm-notify` as well as `lwm`.
 
-## Multi-monitor
+## Protocol and tooling
 
-- Multi-output integration harness covering cross-monitor moves, floating geometry, and hotplug rebind. `test_monitor_hotplug.cpp` covers hotplug only.
+- Expose the existing raw scratchpad commands through `lwmctl`.
+- Model `_NET_WM_STRUT_PARTIAL` coordinate ranges instead of using edge extents
+  only.
+- Decide and document a policy for tiled-window `_NET_WM_MOVERESIZE` requests;
+  tiled geometry is currently layout-owned and these requests are ignored.
+- Upgrade `_NET_WM_SYNC_REQUEST` from notification-only behavior if waiting on
+  client counters can be made safe without blocking the event loop.
 
-## Protocol / X11
+## Test coverage
 
-- XSync resize — upgrade fire-and-forget to blocking sync with timeout for slow clients.
-- `_NET_WM_WINDOW_OPACITY` so opacity rules cooperate with picom/compton.
-- EWMH partial-strut handling for panels that reserve space on only part of an edge.
-
-## Rules & config
-
-- Auto-float-by-size and opacity in window rules.
-- Validate or reject out-of-range rule geometry before narrowing into `Geometry`.
-- Config flag for "focus new windows" behavior.
-- User-facing workspace rename action (the `_NET_DESKTOP_NAMES` write path already exists).
-
-## IPC / CLI
-
-- Add `lwmctl` CLI parity for internal scratchpad IPC commands (`scratchpad stash`, `scratchpad cycle`, `scratchpad toggle <name>`, `scratchpad list`).
-
-## Build / install
-
-- Make `make uninstall` remove every installed binary (`lwm`, `lwmctl`, and `lwm-notify`), not just `lwm`.
-
-## Needs design first
-
-- True bspwm-style split-graph layouts (binary split tree currently drives tiled resize only).
-- Global marks / bookmarks for jump and swap.
-- Policy for tiled-window client `_NET_WM_MOVERESIZE` requests.
-- Non-blocking animation system.
-
-## Open questions
-
-- Strict single-assignment workspaces vs. tag-like multi-assignment?
-- Focus-follows-mouse: global toggle, per-monitor, or both?
-- IPC surface: Unix socket only (current), or also X11 client-messages?
-
-## Out of scope
-
-Plugin system, full session-management integration, integrated panels/widgets.
+- Add real multi-output integration coverage for cross-monitor moves, floating
+  geometry, and RANDR rebind. Pure hotplug planning is covered today, while the
+  integration harness exposes a single Xvfb screen.

@@ -1,177 +1,177 @@
 # LWM
 
-LWM is a minimal tiling window manager for X11 written in C++23.
+LWM is a small tiling window manager for X11, written in C++23. It provides
+master-stack and monocle layouts, floating windows, per-monitor workspaces,
+focus-follows-mouse, scratchpads, RANDR hotplug handling, and a local IPC
+client named `lwmctl`.
 
-It is intentionally small, but it is not policy-free. The codebase has a specific runtime model:
+LWM is not a compositor, panel, launcher, or desktop session. Run those as
+separate programs, normally from `[autostart]` in the LWM configuration or from
+your X session.
 
-- per-monitor workspaces rather than one global workspace set
-- focus-follows-mouse with explicit focus-stealing checks
-- off-screen hiding for workspace visibility instead of WM-driven unmap/remap
-- managed fullscreen with a single effective owner per monitor-visible scope
-- enough ICCCM/EWMH support for normal desktop tooling
+## Runtime model
 
-## What You Get
+- Every monitor has its own workspace set and one current workspace.
+- Commands act on the focused monitor. Sticky windows remain on one monitor
+  but are visible on all of that monitor's workspaces.
+- Normal workspace changes move managed windows off-screen; LWM does not
+  unmap and remap them.
+- One tiled or floating fullscreen window can own a monitor's visible scope.
+  Other tiled and floating windows there are hidden, except transients owned by the
+  fullscreen window.
+- Docks and desktop windows are managed outside normal focus and tiling.
+  Tooltips, notifications, dropdown/pop-up menus, and other ephemeral windows
+  are mapped but otherwise unmanaged.
 
-- master/stack tiling with floating windows
-- monocle layout and live master-ratio adjustment
-- per-monitor workspaces
-- sticky windows scoped to a single monitor
-- focus-follows-mouse
-- Unix-socket IPC via `lwmctl`
-- RANDR hotplug handling
-- named and generic scratchpads
-- TOML configuration for commands, autostart, bindings, rules, scratchpads, layout, focus behavior, and workspace names
+See [ARCHITECTURE.md](ARCHITECTURE.md) for the complete maintainer model and
+[X11.md](X11.md) for the ICCCM/EWMH contract.
 
 ## Build
 
-### Dependencies
+Required tools and libraries:
 
-- `cmake` 3.20+
-- C++23 compiler
-- X11/XCB libs: `xcb`, `xcb-keysyms`, `xcb-randr`, `xcb-ewmh`, `xcb-icccm`, `xcb-sync`, `x11`
-- test-only XCB lib: `xcb-xtest`
+- CMake 3.20 or newer
+- Git and a C++23 compiler
+- `pkg-config`
+- X11/XCB modules `xcb`, `xcb-keysyms`, `xcb-randr`, `xcb-ewmh`, `xcb-icccm`,
+  `xcb-sync`, and `x11`
+- `xcb-xtest` and Xvfb for the full test suite
+
+CMake downloads pinned toml++ and spdlog sources on the first configure; test
+builds also download pinned Catch2 sources.
 
 Arch Linux:
 
-```bash
-sudo pacman -S cmake gcc libxcb xcb-util-keysyms xcb-util-ewmh xcb-util-wm libx11
+```sh
+sudo pacman -S --needed cmake gcc git pkgconf libx11 libxcb xcb-util-keysyms xcb-util-wm xorg-server-xvfb
 ```
 
-Ubuntu/Debian:
+Debian/Ubuntu:
 
-```bash
-sudo apt install cmake g++ libxcb1-dev libxcb-keysyms1-dev libxcb-ewmh-dev libxcb-icccm-dev libxcb-randr0-dev libxcb-sync0-dev libxcb-xtest0-dev libx11-dev
+```sh
+sudo apt install cmake g++ git pkg-config libx11-dev libxcb1-dev \
+  libxcb-keysyms1-dev libxcb-randr0-dev libxcb-ewmh-dev \
+  libxcb-icccm4-dev libxcb-sync-dev libxcb-xtest0-dev xvfb
 ```
 
-### Compile
+Build the release binaries or build and run all tests:
 
-```bash
-make          # release
-make debug    # debug build
-make test     # build + run tests
+```sh
+make
+make test
 ```
 
-Direct CMake is also supported:
+The binaries are written to `build/src/app/lwm` and
+`build/src/app/lwmctl`. Direct CMake use is also supported:
 
-```bash
-mkdir build && cd build
-cmake ..
-make -j"$(nproc)"
+```sh
+cmake -S . -B build -DBUILD_TESTS=ON
+cmake --build build -j
+ctest --test-dir build --output-on-failure
 ```
 
-Main binary paths: `build/src/app/lwm` and `build/src/app/lwmctl`
+## Install and start
 
-## Install
-
-```bash
+```sh
 sudo make install
 ```
 
-Default install paths: `/usr/local/bin/lwm`, `/usr/local/bin/lwmctl`, and `/usr/local/bin/lwm-notify`.
+With the default CMake prefix this installs `lwm`, `lwmctl`, and `lwm-notify`
+under `/usr/local/bin`.
 
-For X startup, prefer an explicit path in `.xinitrc` or your display-manager session entry instead of relying on `PATH`. That avoids accidentally starting a stale shadow copy from `~/.local/bin` or another earlier install location.
+`sudo make uninstall` currently removes only `/usr/local/bin/lwm`; remove
+`lwmctl` and `lwm-notify` separately until the open install-system gap is fixed.
+
+Copy the reference configuration and start LWM with an explicit path:
+
+```sh
+config_dir="${XDG_CONFIG_HOME:-$HOME/.config}/lwm"
+mkdir -p "$config_dir"
+cp config.toml.example "$config_dir/config.toml"
+/usr/local/bin/lwm --config "$config_dir/config.toml"
+```
+
+Use the same `lwm --config ...` command in `.xinitrc` or a display-manager
+session entry. An explicit path must exist and parse successfully. Without an
+explicit path, LWM reads `$XDG_CONFIG_HOME/lwm/config.toml` only when
+`XDG_CONFIG_HOME` is set; if that implicit file is absent, it uses built-in
+defaults.
+
+`lwm --help` is the source of truth for startup and logging options.
 
 ## Configure
 
-```bash
-export XDG_CONFIG_HOME="${XDG_CONFIG_HOME:-$HOME/.config}"
-mkdir -p "$XDG_CONFIG_HOME/lwm"
-cp config.toml.example "$XDG_CONFIG_HOME/lwm/config.toml"
-```
+[config.toml.example](config.toml.example) is the commented starter and
+configuration reference. It documents commands, autostart, appearance,
+layouts, focus behavior, key and mouse bindings, window rules, workspace
+names, and scratchpads. Workspace and monitor indices are zero-based.
 
-LWM reads `$XDG_CONFIG_HOME/lwm/config.toml` when `XDG_CONFIG_HOME` is set. You can also pass an explicit config path with the compatibility bare path or `-c`/`--config`:
+Reload with `lwmctl reload-config`, a configured `reload_config` binding, or
+`SIGHUP`. A successful reload updates appearance, bindings, workspace names,
+focus and layout parameters, command and scratchpad definitions, and rules
+that currently match managed tiled or floating windows.
 
-```bash
-lwm /path/to/config.toml
-lwm -c /path/to/config.toml
-```
+Reload has these limits:
 
-`config.toml.example` is the reference for binding syntax, workspace names, commands, autostart, layout settings, focus settings, rules, scratchpads, and action syntax. An explicitly selected config path must exist and parse successfully; only an absent implicit XDG config falls back to defaults.
+- `[autostart]` is not run again.
+- `[workspaces].count` changes are rejected; restart LWM instead.
+- `[layout].strategy` does not replace the strategy already stored on an
+  existing workspace; use `lwmctl layout set` for the current workspace.
+- Removing or changing a rule does not undo effects already applied by that
+  rule when the window no longer matches.
 
-## Logging
+## Runtime control
 
-LWM writes routine records to stderr and keeps stdout untouched. Records use an ISO-like timestamp, uppercase severity, source-derived category, and message, for example:
+`lwmctl --help` is the command reference. Common examples:
 
-```text
-[2026-08-11T12:34:56.789] [WARN] [wm_events] Config reload failed
-```
-
-By default, WARN-and-higher records also go to a private rotating file at `$XDG_RUNTIME_DIR/lwm/lwm-<pid>.log` (or `/tmp/lwm-<pid>.log` when the runtime directory is unavailable). The PID-specific path isolates concurrent LWM instances and remains unchanged across an exec restart because the PID is unchanged; after a failed exec, LWM attempts to restore the prior logging options. If restoration fails, it reports a diagnostic and keeps stderr-only logging active. The file is mode `0600`, limited to 1 MiB plus three backups, and includes the source filename and line. An explicit `--log-file /tmp/lwm.log` retains a fixed path when needed; `--no-log-file` disables the file sink.
-
-Logging policy is startup-only and is not part of TOML reloads or runtime IPC. Use `--log-level info|debug|trace`, `-V`/`--verbose`, `-d all`/`--debug`, and `--log-color auto|always|never` to select verbosity and terminal colors. `-v`/`--version` prints the installed LWM version without connecting to X. An explicit file that cannot be opened is a controlled startup error; an implicit private-file failure falls back to stderr with a diagnostic.
-
-## Runtime Control
-
-LWM exposes a local control socket and ships `lwmctl` for explicit runtime commands:
-
-```bash
-lwmctl --help
+```sh
 lwmctl ping
-lwmctl version
-lwmctl reload-config
-lwmctl restart
-lwmctl exec /path/to/lwm
+lwmctl workspace switch 2
 lwmctl layout set monocle
-lwmctl layout set master-stack
-lwmctl ratio set 0.60
 lwmctl ratio adjust -0.05
-lwmctl ratio reset
-lwmctl workspace switch 2   # workspace indices are 0-based
-lwmctl workspace next
-lwmctl workspace prev
-lwmctl workspace list
-lwmctl focus next
-lwmctl focus prev
-lwmctl focus window=0x3600007
 lwmctl window list
 lwmctl subscribe focus_change,workspace_switch
-lwmctl notify-attention window=0x3600007
+lwmctl reload-config
+lwmctl restart
 ```
 
-`lwmctl --help` is the complete CLI reference. `workspace list` and `window list` return JSON. `subscribe` streams JSON lines; an empty filter subscribes to all event types, while a comma-separated filter may include `window_map`, `window_unmap`, `focus_change`, `workspace_switch`, `layout_change`, `config_reload`, and `key_action`.
+`lwm-notify [notify-send arguments...]` shows a desktop notification when
+`notify-send` is installed. When the caller has a numeric `WINDOWID`, it also
+marks that exact managed source window urgent; LWM does not guess a source from
+notification metadata.
 
-See [`IPC.md`](IPC.md) for response shapes and event payloads.
+List commands return JSON and subscriptions stream JSON Lines. See
+[IPC.md](IPC.md) for discovery, the raw wire protocol, schemas, and delivery
+semantics.
 
-`lwmctl` discovers the socket via `--socket`, `LWM_SOCKET`, the root-window `_LWM_IPC_SOCKET` property, then the default runtime path.
+## Logs
 
-Config reload is explicit by design. LWM does not watch the config file automatically. Reload applies appearance, key and mouse bindings, rules, commands, scratchpad definitions, layout defaults, and focus settings. It does not rerun autostart commands; changing `[workspaces].count` still requires a restart.
+LWM writes INFO-and-higher records to stderr. By default it also writes
+WARN-and-higher records to a private rotating file at
+`$XDG_RUNTIME_DIR/lwm/lwm-<pid>.log`, falling back to `/tmp/lwm-<pid>.log`.
+The file is mode `0600`, rotates at 1 MiB, and keeps three backups. Use
+`--log-level`, `--log-file`, `--no-log-file`, and `--log-color` to change the
+startup policy.
 
-## Run in Xephyr
+## Nested preview
 
-```bash
+Install Xephyr, then run:
+
+```sh
 ./scripts/preview.sh
 ```
 
-The preview script runs LWM in Xephyr on `:100` and starts the sample polybar config when `polybar` is installed.
-
-Launch test apps into the nested server:
-
-```bash
-DISPLAY=:100 xterm
-```
-
-## Mental Model
-
-- Managed windows are usually tiled, floating, dock, or desktop. Popup and ephemeral types are mapped directly and are not part of normal workspace/layout management.
-- Workspace visibility is implemented by moving managed windows off-screen, not by unmapping them.
-- Sticky means "visible on every workspace of this monitor", not "visible on all monitors".
-- Fullscreen is exclusive within a monitor's visible scope. One visible managed fullscreen owner wins; other visible managed siblings on that monitor are suppressed.
-- Owner-owned transients are the normal exception above fullscreen.
-- Scratchpads are managed clients. Hidden scratchpads are iconified and moved off-screen through the same visibility machinery as ordinary hidden windows.
+The script builds a debug binary, starts a nested server on `:100`, and starts
+the sample Polybar configuration when Polybar is installed. Launch test
+applications with `DISPLAY=:100 <program>`.
 
 ## Documentation
 
-- [`ARCHITECTURE.md`](ARCHITECTURE.md): runtime model, invariants, state ownership, and transition funnels
-- [`COMPLIANCE.md`](COMPLIANCE.md): ICCCM/EWMH surface, protocol behavior, and known limits
-- [`IPC.md`](IPC.md): local socket discovery, replies, JSON output, and events
-- [`CONTRIBUTING.md`](CONTRIBUTING.md): build/test workflow, code map, and change checklist
-- [`config.toml.example`](config.toml.example): commented configuration reference and working starter file
-- [`SHADERS.md`](SHADERS.md): using picom + GLSL shaders on top of LWM
-- [`ROADMAP.md`](ROADMAP.md): open work and open questions
-- [`LICENSE`](LICENSE): MIT license text
+- [config.toml.example](config.toml.example): configuration syntax and examples
+- [ARCHITECTURE.md](ARCHITECTURE.md): internal state, invariants, and transition ownership
+- [X11.md](X11.md): ICCCM/EWMH behavior and limits
+- [IPC.md](IPC.md): socket protocol and event schemas
+- [CONTRIBUTING.md](CONTRIBUTING.md): development and verification workflow
+- [ROADMAP.md](ROADMAP.md): verified open work and design questions
 
-`CLAUDE.md` is an agent-only reading order, not part of the public user documentation.
-
-## License
-
-MIT
+LWM is licensed under the [MIT License](LICENSE).

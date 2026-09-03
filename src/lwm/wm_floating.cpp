@@ -213,9 +213,8 @@ void WindowManager::manage_floating_window(xcb_window_t window, bool start_iconi
 
     keybinds_.grab_keys(window);
 
-    // Before mapping: Apply geometry-affecting states so window appears at correct position
-    // (See COMPLIANCE.md "Window State Application Ordering")
-    // Fetch all EWMH state flags in a single round-trip
+    // Apply geometry-affecting state before mapping to avoid a wrong first frame.
+    // Fetch all EWMH state flags in a single round-trip.
     auto manage_state_flags = ewmh_.get_window_state_flags(window);
     if (manage_state_flags.fullscreen)
     {

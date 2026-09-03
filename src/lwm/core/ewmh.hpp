@@ -11,8 +11,8 @@ namespace lwm {
 /**
  * @brief Window classification result from EWMH type and properties
  *
- * Per COMPLIANCE.md, window types are checked in priority order:
- * DESKTOP > DOCK > TOOLBAR/MENU/UTILITY/SPLASH > DIALOG > popup types > NORMAL
+ * Classification uses the first recognized `_NET_WM_WINDOW_TYPE` atom and
+ * then applies transient status to normal windows.
  */
 struct WindowClassification
 {
@@ -93,13 +93,9 @@ public:
     /**
      * @brief Classify a window based on EWMH type and transient status
      *
-     * Follows EWMH priority order per COMPLIANCE.md:
-     * 1. DESKTOP → Kind::Desktop (skip_taskbar, skip_pager)
-     * 2. DOCK → Kind::Dock (skip_taskbar, skip_pager)
-     * 3. TOOLBAR, MENU, UTILITY, SPLASH → Kind::Floating (various flags)
-     * 4. DIALOG → Kind::Floating
-     * 5. Popup types (DROPDOWN_MENU, POPUP_MENU, TOOLTIP, etc.) → Kind::Popup
-     * 6. NORMAL or unknown → Kind::Tiled (unless transient, then Floating)
+     * Desktop and dock types are managed specially; toolbar, menu, utility,
+     * splash, and dialog types float; ephemeral types are direct-mapped
+     * popups; normal and unknown types tile unless transient.
      *
      * @param window The window to classify
      * @param is_transient Whether WM_TRANSIENT_FOR is set

@@ -255,7 +255,7 @@ struct Client
     xcb_window_t user_time_window = XCB_NONE; ///< _NET_WM_USER_TIME_WINDOW
 
     uint64_t order = 0;     ///< Mapping order for _NET_CLIENT_LIST
-    uint64_t mru_order = 0;  ///< MRU ordering for floating windows (higher = more recent)
+    uint64_t mru_order = 0; ///< Focus recency for tiled/floating clients (higher = newer)
 
     std::optional<ScratchpadMembership> scratchpad; ///< Named or generic scratchpad membership
 };

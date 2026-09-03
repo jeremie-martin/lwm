@@ -83,11 +83,7 @@ void Ewmh::create_supporting_window()
  * This list declares which EWMH features the WM supports. Per EWMH spec,
  * every atom listed here must have a working implementation.
  *
- * Notable limitations documented in COMPLIANCE.md:
- * - MAXIMIZED_* states: Only apply geometry changes to floating windows
- * - _NET_MOVERESIZE_WINDOW, _NET_WM_MOVERESIZE: Floating windows only
- * - _NET_RESTACK_WINDOW: May not update _NET_CLIENT_LIST_STACKING immediately
- * - _NET_WM_SYNC_REQUEST: Uses fire-and-forget (non-blocking)
+ * Keep this declaration aligned with the implemented contract in X11.md.
  */
 void Ewmh::set_supported_atoms()
 {
