@@ -51,7 +51,9 @@ desktop = monitor_index * workspaces_per_monitor + workspace_index
 `focused_monitor_` is the target for commands. It usually follows the focused
 window or pointer but is distinct from X input focus.
 
-`clients_` is the registry for every managed window. `Client::kind` separates:
+`clients_` is the registry for every managed window. `Client::state` holds one
+of four alternatives; `Client::kind()` derives its classification from that
+state:
 
 - `Tiled`: present in exactly one `Workspace::windows` vector.
 - `Floating`: independently positioned and absent from tiled membership.
@@ -200,11 +202,15 @@ Every completed transition must preserve:
 - each tiled client appears in exactly one workspace and each workspace entry
   resolves to a tiled client;
 - tiled/floating client monitor and workspace indices are valid;
-- kind-specific state matches `Client::kind`;
+- kind and kind-specific storage agree by construction through `ClientState`;
 - active and remembered focus never point at an iconic or absent client;
 - above and below are mutually exclusive;
 - fullscreen ownership and `hidden` are written by visibility reconciliation;
 - managed X stacking and `_NET_CLIENT_LIST_STACKING` come from the same order.
 
-`LWM_ASSERT_INVARIANTS` checks the in-memory subset in debug builds. X
-properties and observable ordering require integration tests.
+`invariants::validate()` checks registry identity, placement, tiled membership,
+workspace focus, and active focus without X calls. Debug builds run it on entry
+to the event loop and after each completed iteration, covering X events, IPC,
+signal reloads, and timeouts after their transitions settle. A violation logs the
+reason and aborts at that boundary; release builds omit these checks. X properties
+and observable ordering require integration tests.

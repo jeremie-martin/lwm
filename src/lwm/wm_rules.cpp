@@ -20,7 +20,7 @@ void WindowManager::apply_rule_target_location(xcb_window_t window, WindowRuleRe
         return;
 
     target_workspace = std::min(target_workspace, monitors_[target_monitor].workspaces.size() - 1);
-    if (movable->kind == Client::Kind::Floating)
+    if (movable->kind() == Client::Kind::Floating)
     {
         move_floating_client_to_workspace(*movable, target_monitor, target_workspace, true);
         return;
@@ -38,7 +38,7 @@ void WindowManager::apply_rule_target_location(xcb_window_t window, WindowRuleRe
 void WindowManager::apply_rule_floating_placement(xcb_window_t window, WindowRuleResult const& rule_result)
 {
     auto* client = get_client(window);
-    if (!client || client->kind != Client::Kind::Floating)
+    if (!client || client->kind() != Client::Kind::Floating)
         return;
 
     if (rule_result.geometry.has_value())
@@ -90,7 +90,7 @@ void WindowManager::reapply_rules_to_existing_windows()
 
     for (auto const& [window, client] : clients_)
     {
-        if (client.kind == Client::Kind::Tiled || client.kind == Client::Kind::Floating)
+        if (client.kind() == Client::Kind::Tiled || client.kind() == Client::Kind::Floating)
             ordered.push_back({ client.order, window });
     }
 
@@ -173,9 +173,9 @@ bool WindowManager::sync_kind(xcb_window_t window, WindowClassification::Kind de
     if (!client)
         return false;
 
-    if (desired_kind == WindowClassification::Kind::Floating && client->kind == Client::Kind::Tiled)
+    if (desired_kind == WindowClassification::Kind::Floating && client->kind() == Client::Kind::Tiled)
         convert_window_to_floating(window);
-    else if (desired_kind == WindowClassification::Kind::Tiled && client->kind == Client::Kind::Floating)
+    else if (desired_kind == WindowClassification::Kind::Tiled && client->kind() == Client::Kind::Floating)
         convert_window_to_tiled(window);
 
     return get_client(window) != nullptr;
@@ -193,7 +193,7 @@ void WindowManager::relocate_to_transient_parent(xcb_window_t window, xcb_window
     if (parent->monitor >= monitors_.size() || parent->workspace >= monitors_[parent->monitor].workspaces.size())
         return;
 
-    if (client->kind == Client::Kind::Tiled)
+    if (client->kind() == Client::Kind::Tiled)
     {
         if (!move_tiled_client_to_workspace(*client, parent->monitor, parent->workspace))
             return;
@@ -275,7 +275,7 @@ void WindowManager::sync_managed_window_classification(xcb_window_t window, Clas
     if (!client)
         return;
 
-    Client::Kind previous_kind = client->kind;
+    Client::Kind previous_kind = client->kind();
     size_t previous_monitor = client->monitor;
     size_t previous_workspace = client->workspace;
     xcb_window_t previous_transient_for = client->transient_for;
@@ -305,7 +305,7 @@ void WindowManager::sync_managed_window_classification(xcb_window_t window, Clas
     size_t current_monitor = client->monitor;
     bool monitor_changed = previous_monitor != current_monitor;
     bool workspace_changed = previous_workspace != client->workspace;
-    bool kind_changed = previous_kind != client->kind;
+    bool kind_changed = previous_kind != client->kind();
 
     // Sync visibility on all affected monitors.
     sync_visibility_for_monitor(previous_monitor);
@@ -322,7 +322,7 @@ void WindowManager::sync_managed_window_classification(xcb_window_t window, Clas
     }
 
     // Rearrange/apply geometry on current monitor
-    if (client->kind == Client::Kind::Tiled)
+    if (client->kind() == Client::Kind::Tiled)
     {
         if (kind_changed || monitor_changed || workspace_changed)
             rearrange_monitor(monitors_[current_monitor]);
@@ -345,7 +345,7 @@ void WindowManager::reevaluate_managed_window(xcb_window_t window)
     if (!client)
         return;
 
-    if (client->kind != Client::Kind::Tiled && client->kind != Client::Kind::Floating)
+    if (client->kind() != Client::Kind::Tiled && client->kind() != Client::Kind::Floating)
         return;
 
     auto result = classify_managed_window(window);

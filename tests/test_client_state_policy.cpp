@@ -37,8 +37,10 @@ Client make_client(xcb_window_t id, Client::Kind kind = Client::Kind::Tiled)
             set_floating_state(c, Geometry{ 0, 0, 300, 200 });
             break;
         case Client::Kind::Dock:
+            c.state = DockState {};
+            break;
         case Client::Kind::Desktop:
-            c.kind = kind;
+            c.state = DesktopState {};
             break;
     }
     return c;
@@ -55,7 +57,7 @@ TEST_CASE("Client has sensible defaults", "[client][state]")
     Client c;
 
     REQUIRE(c.id == XCB_NONE);
-    REQUIRE(c.kind == Client::Kind::Tiled);
+    REQUIRE(c.kind() == Client::Kind::Tiled);
     REQUIRE(c.monitor == 0);
     REQUIRE(c.workspace == 0);
 
@@ -133,16 +135,16 @@ TEST_CASE("Fullscreen owner selector preserves valid owner before falling back b
 TEST_CASE("Client kind can be set to all valid types", "[client][state]")
 {
     Client tiled = make_client(0x1000, Client::Kind::Tiled);
-    REQUIRE(tiled.kind == Client::Kind::Tiled);
+    REQUIRE(tiled.kind() == Client::Kind::Tiled);
 
     Client floating = make_client(0x2000, Client::Kind::Floating);
-    REQUIRE(floating.kind == Client::Kind::Floating);
+    REQUIRE(floating.kind() == Client::Kind::Floating);
 
     Client dock = make_client(0x3000, Client::Kind::Dock);
-    REQUIRE(dock.kind == Client::Kind::Dock);
+    REQUIRE(dock.kind() == Client::Kind::Dock);
 
     Client desktop = make_client(0x4000, Client::Kind::Desktop);
-    REQUIRE(desktop.kind == Client::Kind::Desktop);
+    REQUIRE(desktop.kind() == Client::Kind::Desktop);
 }
 
 TEST_CASE("Tiling state carries only tiled restore data for tiled clients", "[client][state][tiling]")
@@ -184,7 +186,7 @@ TEST_CASE("Tiling state transitions discard incompatible state", "[client][state
 
     set_tiled_state(c, Geometry{ 10, 20, 400, 300 });
 
-    REQUIRE(c.kind == Client::Kind::Tiled);
+    REQUIRE(c.kind() == Client::Kind::Tiled);
     REQUIRE(tiled_state(c) != nullptr);
     REQUIRE(floating_state(c) == nullptr);
     REQUIRE(prior_floating_geometry(c).has_value());
@@ -192,12 +194,33 @@ TEST_CASE("Tiling state transitions discard incompatible state", "[client][state
 
     set_floating_state(c, Geometry{ 30, 40, 500, 350 }, Client::SavedTilePos{ 4, 2, 1 });
 
-    REQUIRE(c.kind == Client::Kind::Floating);
+    REQUIRE(c.kind() == Client::Kind::Floating);
     REQUIRE(floating_state(c) != nullptr);
     REQUIRE(tiled_state(c) == nullptr);
     REQUIRE(floating_geometry(c).x == 30);
     REQUIRE(saved_tiled_pos(c).has_value());
     REQUIRE(saved_tiled_pos(c)->index == 4);
+}
+
+TEST_CASE("Container states discard tiled and floating data", "[client][state]")
+{
+    Client c;
+    set_floating_state(c, { 10, 20, 300, 200 }, SavedTilePos { 2, 1, 0 });
+    c.state = DockState {};
+    REQUIRE(c.kind() == Client::Kind::Dock);
+    REQUIRE(tiled_state(c) == nullptr);
+    REQUIRE(floating_state(c) == nullptr);
+
+    set_tiled_state(c, Geometry { 10, 20, 300, 200 });
+    c.state = DesktopState {};
+    REQUIRE(c.kind() == Client::Kind::Desktop);
+    REQUIRE(tiled_state(c) == nullptr);
+    REQUIRE(floating_state(c) == nullptr);
+
+    set_floating_state(c, { 30, 40, 500, 350 });
+    REQUIRE(c.kind() == Client::Kind::Floating);
+    REQUIRE_FALSE(saved_tiled_pos(c));
+    REQUIRE(floating_geometry(c).width == 500);
 }
 
 // ─────────────────────────────────────────────────────────────────────────────

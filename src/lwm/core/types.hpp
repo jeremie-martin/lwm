@@ -179,7 +179,10 @@ struct FloatingState
     std::optional<SavedTilePos> saved_tiled_pos;
 };
 
-using TilingState = std::variant<TiledState, FloatingState>;
+struct DockState {};
+struct DesktopState {};
+
+using ClientState = std::variant<TiledState, FloatingState, DockState, DesktopState>;
 
 /**
  * @brief Unified authoritative record for a managed window.
@@ -207,7 +210,16 @@ struct Client
         Dock,
         Desktop
     };
-    Kind kind = Kind::Tiled;
+    Kind kind() const
+    {
+        if (std::holds_alternative<TiledState>(state))
+            return Kind::Tiled;
+        if (std::holds_alternative<FloatingState>(state))
+            return Kind::Floating;
+        if (std::holds_alternative<DockState>(state))
+            return Kind::Dock;
+        return Kind::Desktop;
+    }
 
     size_t monitor = 0;
     size_t workspace = 0;
@@ -238,7 +250,7 @@ struct Client
 
     using SavedTilePos = lwm::SavedTilePos;
 
-    TilingState tiling_state = TiledState {};
+    ClientState state = TiledState {};
     Geometry tiled_geometry;             ///< Last applied tiled layout geometry (avoids X round-trip)
     xcb_window_t transient_for = XCB_NONE;
     bool suppress_next_configure_request = false; ///< Preserve WM-chosen startup placement against one client resize/move request
@@ -276,58 +288,57 @@ inline char const* client_kind_str(Client::Kind kind)
 
 inline TiledState* tiled_state(Client& client)
 {
-    return std::get_if<TiledState>(&client.tiling_state);
+    return std::get_if<TiledState>(&client.state);
 }
 
 inline TiledState const* tiled_state(Client const& client)
 {
-    return std::get_if<TiledState>(&client.tiling_state);
+    return std::get_if<TiledState>(&client.state);
 }
 
 inline FloatingState* floating_state(Client& client)
 {
-    return std::get_if<FloatingState>(&client.tiling_state);
+    return std::get_if<FloatingState>(&client.state);
 }
 
 inline FloatingState const* floating_state(Client const& client)
 {
-    return std::get_if<FloatingState>(&client.tiling_state);
+    return std::get_if<FloatingState>(&client.state);
 }
 
 inline Geometry& floating_geometry(Client& client)
 {
-    return std::get<FloatingState>(client.tiling_state).geometry;
+    return std::get<FloatingState>(client.state).geometry;
 }
 
 inline Geometry const& floating_geometry(Client const& client)
 {
-    return std::get<FloatingState>(client.tiling_state).geometry;
+    return std::get<FloatingState>(client.state).geometry;
 }
 
 inline std::optional<Geometry>& prior_floating_geometry(Client& client)
 {
-    return std::get<TiledState>(client.tiling_state).prior_floating;
+    return std::get<TiledState>(client.state).prior_floating;
 }
 
 inline std::optional<Geometry> const& prior_floating_geometry(Client const& client)
 {
-    return std::get<TiledState>(client.tiling_state).prior_floating;
+    return std::get<TiledState>(client.state).prior_floating;
 }
 
 inline std::optional<SavedTilePos>& saved_tiled_pos(Client& client)
 {
-    return std::get<FloatingState>(client.tiling_state).saved_tiled_pos;
+    return std::get<FloatingState>(client.state).saved_tiled_pos;
 }
 
 inline std::optional<SavedTilePos> const& saved_tiled_pos(Client const& client)
 {
-    return std::get<FloatingState>(client.tiling_state).saved_tiled_pos;
+    return std::get<FloatingState>(client.state).saved_tiled_pos;
 }
 
 inline void set_tiled_state(Client& client, std::optional<Geometry> prior_floating = std::nullopt)
 {
-    client.kind = Client::Kind::Tiled;
-    client.tiling_state = TiledState { prior_floating };
+    client.state = TiledState { prior_floating };
 }
 
 inline void set_floating_state(
@@ -335,8 +346,7 @@ inline void set_floating_state(
     Geometry geometry,
     std::optional<SavedTilePos> saved_position = std::nullopt)
 {
-    client.kind = Client::Kind::Floating;
-    client.tiling_state = FloatingState { geometry, saved_position };
+    client.state = FloatingState { geometry, saved_position };
 }
 
 inline NamedScratchpadMembership const* scratchpad_named(Client const& client)

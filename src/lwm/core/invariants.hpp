@@ -1,344 +1,102 @@
 #pragma once
 
-/**
- * @file invariants.hpp
- * @brief Debug assertions for window manager invariants
- *
- * These debug-only checks inspect the in-memory model. EWMH property values
- * are covered by integration tests rather than by these assertions.
- *
- * They verify managed placement, workspace membership, focus references,
- * client-kind storage, and mutually exclusive model state.
- */
-
 #include "log.hpp"
-#include "policy.hpp"
 #include "types.hpp"
+#include <cstdlib>
+#include <optional>
 #include <unordered_map>
 #include <unordered_set>
 #include <vector>
-#include <xcb/xcb.h>
-#include <xcb/xcb_ewmh.h>
 
 namespace lwm::invariants {
 
-#ifdef NDEBUG
-// Release build: no-op
-#    define LWM_ASSERT_INVARIANTS(clients, monitors)
-#    define LWM_ASSERT_CLIENT_STATE(...)
-#    define LWM_ASSERT_FOCUS_CONSISTENCY(...)
-#else
+struct Violation
+{
+    char const* message;
+    xcb_window_t window = XCB_NONE;
+};
 
-/**
- * @brief Assert that a window in clients_ is properly managed
- *
- * Verifies:
- * - Window exists in clients_ registry
- * - Window has valid monitor/workspace indices (or is dock/desktop)
- */
-inline void assert_client_managed(
+// Check relationships between authoritative records. Client kind/state consistency
+// is guaranteed by ClientState; fullscreen and iconic are deliberately independent.
+inline std::optional<Violation> validate(
     std::unordered_map<xcb_window_t, Client> const& clients,
     std::vector<Monitor> const& monitors,
-    xcb_window_t window
+    xcb_window_t active_window = XCB_NONE
 )
 {
-    auto it = clients.find(window);
-    if (it == clients.end())
-    {
-        LOG_ERROR("INVARIANT VIOLATION: Window {:#x} not in clients registry", window);
-        return;
-    }
-
-    auto const& client = it->second;
-    if (client.kind == Client::Kind::Tiled || client.kind == Client::Kind::Floating)
-    {
-        if (client.monitor >= monitors.size())
-        {
-            LOG_ERROR("INVARIANT VIOLATION: Window {:#x} has invalid monitor index {}", window, client.monitor);
-        }
-        if (client.monitor < monitors.size() && client.workspace >= monitors[client.monitor].workspaces.size())
-        {
-            LOG_ERROR("INVARIANT VIOLATION: Window {:#x} has invalid workspace index {}", window, client.workspace);
-        }
-    }
-}
-
-/**
- * @brief Assert focus consistency
- *
- * Verifies that an active window is managed and not iconic.
- */
-inline void
-assert_focus_consistency(std::unordered_map<xcb_window_t, Client> const& clients, xcb_window_t active_window)
-{
-    if (active_window == XCB_NONE)
-        return;
-
-    auto it = clients.find(active_window);
-    if (it == clients.end())
-    {
-        LOG_ERROR("INVARIANT VIOLATION: Active window {:#x} not in clients registry", active_window);
-        return;
-    }
-
-    auto const& client = it->second;
-    if (client.iconic)
-    {
-        LOG_ERROR("INVARIANT VIOLATION: Active window {:#x} is iconic (minimized)", active_window);
-    }
-}
-
-/**
- * @brief Assert client state consistency
- *
- * Verifies state flags are internally consistent:
- * - If fullscreen, should not also be iconic
- *
- * (above/below mutex is now enforced by construction via LayerHint.)
- */
-inline void assert_client_state_consistency(Client const& client)
-{
-    if (client.fullscreen && client.iconic)
-    {
-        LOG_ERROR("INVARIANT VIOLATION: Window {:#x} is both fullscreen and iconic", client.id);
-    }
-    if (client.kind == Client::Kind::Tiled && tiled_state(client) == nullptr)
-    {
-        LOG_ERROR("INVARIANT VIOLATION: Tiled window {:#x} does not hold TiledState", client.id);
-    }
-    if (client.kind == Client::Kind::Floating && floating_state(client) == nullptr)
-    {
-        LOG_ERROR("INVARIANT VIOLATION: Floating window {:#x} does not hold FloatingState", client.id);
-    }
-}
-
-/**
- * @brief Assert desktop index validity
- *
- * Verifies:
- * - Desktop index is valid OR 0xFFFFFFFF (sticky)
- */
-inline void assert_valid_desktop(uint32_t desktop, size_t num_monitors, size_t workspaces_per_monitor)
-{
-    if (desktop == 0xFFFFFFFF)
-        return; // Sticky is valid
-
-    uint32_t max_desktop = static_cast<uint32_t>(num_monitors * workspaces_per_monitor);
-    if (desktop >= max_desktop)
-    {
-        LOG_ERROR("INVARIANT VIOLATION: Desktop index {} exceeds maximum {}", desktop, (max_desktop - 1));
-    }
-}
-
-/**
- * @brief Assert workspace consistency across monitors
- *
- * Verifies:
- * - Each tiled window in workspace vectors exists in clients_
- * - Each client with Kind::Tiled appears in exactly one workspace
- */
-inline void assert_workspace_consistency(
-    std::unordered_map<xcb_window_t, Client> const& clients,
-    std::vector<Monitor> const& monitors
-)
-{
-    std::unordered_set<xcb_window_t> seen;
-
+    std::unordered_set<xcb_window_t> tiled_windows;
     for (size_t m = 0; m < monitors.size(); ++m)
     {
-        for (size_t w = 0; w < monitors[m].workspaces.size(); ++w)
-        {
-            for (xcb_window_t win : monitors[m].workspaces[w].windows)
-            {
-                if (seen.contains(win))
-                {
-                    LOG_ERROR("INVARIANT VIOLATION: Window {:#x} appears in multiple workspaces", win);
-                }
-                seen.insert(win);
+        auto const& monitor = monitors[m];
+        if (monitor.current_workspace >= monitor.workspaces.size()
+            || monitor.previous_workspace >= monitor.workspaces.size())
+            return Violation{ "Monitor has an invalid current or previous workspace" };
 
-                auto it = clients.find(win);
+        for (size_t w = 0; w < monitor.workspaces.size(); ++w)
+        {
+            auto const& workspace = monitor.workspaces[w];
+            for (auto window : workspace.windows)
+            {
+                if (!tiled_windows.insert(window).second)
+                    return Violation{ "Window has duplicate tiled membership", window };
+                auto it = clients.find(window);
                 if (it == clients.end())
-                {
-                    LOG_ERROR("INVARIANT VIOLATION: Window {:#x} in workspace but not in clients registry", win);
-                }
-                else if (it->second.kind != Client::Kind::Tiled)
-                {
-                    LOG_ERROR("INVARIANT VIOLATION: Window {:#x} in workspace but not Kind::Tiled", win);
-                }
+                    return Violation{ "Workspace contains an unmanaged window", window };
+                auto const& client = it->second;
+                if (client.kind() != Client::Kind::Tiled)
+                    return Violation{ "Workspace contains a non-tiled client", window };
+                if (client.monitor != m || client.workspace != w)
+                    return Violation{ "Tiled membership disagrees with client placement", window };
             }
-        }
-    }
 
-    // Verify all Tiled clients are in some workspace
-    for (auto const& [id, client] : clients)
-    {
-        if (client.kind == Client::Kind::Tiled && !seen.contains(id))
-        {
-            LOG_ERROR("INVARIANT VIOLATION: Tiled client {:#x} not found in any workspace", id);
-        }
-    }
-}
-
-/**
- * @brief Assert workspace focused_window validity
- *
- * Verifies for each workspace:
- * - focused_window is either XCB_NONE or present in workspace.windows
- * - focused_window is not iconic
- */
-inline void assert_workspace_focus_valid(
-    std::unordered_map<xcb_window_t, Client> const& clients,
-    std::vector<Monitor> const& monitors
-)
-{
-    for (size_t m = 0; m < monitors.size(); ++m)
-    {
-        for (size_t w = 0; w < monitors[m].workspaces.size(); ++w)
-        {
-            auto const& ws = monitors[m].workspaces[w];
-            if (ws.focused_window == XCB_NONE)
-                continue;
-
-            if (ws.find_window(ws.focused_window) == ws.windows.end())
+            if (workspace.focused_window != XCB_NONE)
             {
-                LOG_ERROR(
-                    "INVARIANT VIOLATION: Workspace [{}][{}] focused_window {:#x} not in windows list",
-                    m,
-                    w,
-                    ws.focused_window
-                );
-            }
-
-            auto it = clients.find(ws.focused_window);
-            if (it != clients.end() && it->second.iconic)
-            {
-                LOG_ERROR(
-                    "INVARIANT VIOLATION: Workspace [{}][{}] focused_window {:#x} is iconic",
-                    m,
-                    w,
-                    ws.focused_window
-                );
+                auto window = workspace.focused_window;
+                if (workspace.find_window(window) == workspace.windows.end())
+                    return Violation{ "Workspace focus is absent from tiled membership", window };
+                if (clients.at(window).iconic)
+                    return Violation{ "Workspace focus is iconic", window };
             }
         }
     }
-}
 
-/**
- * @brief Assert floating client consistency
- *
- * Verifies:
- * - Every Kind::Floating client has valid monitor/workspace indices
- */
-inline void assert_floating_consistency(
-    std::unordered_map<xcb_window_t, Client> const& clients,
-    std::vector<Monitor> const& monitors
-)
-{
     for (auto const& [id, client] : clients)
     {
-        if (client.kind != Client::Kind::Floating)
+        if (id == XCB_NONE || client.id != id)
+            return Violation{ "Client id disagrees with registry key", id };
+        if (client.kind() != Client::Kind::Tiled && client.kind() != Client::Kind::Floating)
             continue;
-        if (client.monitor >= monitors.size())
-        {
-            LOG_ERROR("INVARIANT VIOLATION: Floating client {:#x} has invalid monitor index {}", id, client.monitor);
-        }
-        if (client.monitor < monitors.size() && client.workspace >= monitors[client.monitor].workspaces.size())
-        {
-            LOG_ERROR("INVARIANT VIOLATION: Floating client {:#x} has invalid workspace index {}", id, client.workspace);
-        }
+        if (client.monitor >= monitors.size() || client.workspace >= monitors[client.monitor].workspaces.size())
+            return Violation{ "Client has invalid monitor or workspace placement", id };
+        if (client.kind() == Client::Kind::Tiled && !tiled_windows.contains(id))
+            return Violation{ "Tiled client is absent from workspace membership", id };
     }
-}
-
-/**
- * @brief Assert dock/desktop client consistency
- *
- * Verifies:
- * - Every Kind::Dock and Kind::Desktop client has valid state
- */
-inline void assert_container_consistency(
-    std::unordered_map<xcb_window_t, Client> const& clients
-)
-{
-    for (auto const& [id, client] : clients)
+    if (active_window != XCB_NONE)
     {
-        if (client.kind == Client::Kind::Dock || client.kind == Client::Kind::Desktop)
-        {
-            if (client.id != id)
-            {
-                LOG_ERROR("INVARIANT VIOLATION: {} client {:#x} has mismatched id {:#x}",
-                    client.kind == Client::Kind::Dock ? "Dock" : "Desktop", id, client.id);
-            }
-        }
+        auto it = clients.find(active_window);
+        if (it == clients.end())
+            return Violation{ "Active window is unmanaged", active_window };
+        auto const& client = it->second;
+        if (client.kind() != Client::Kind::Tiled && client.kind() != Client::Kind::Floating)
+            return Violation{ "Active window is a dock or desktop", active_window };
+        if (client.iconic || client.hidden)
+            return Violation{ "Active window is iconic or hidden", active_window };
     }
+    return std::nullopt;
 }
-
-/**
- * @brief Assert that client.hidden matches visibility policy expectations.
- *
- * For each tiled/floating client, verifies that:
- * - If policy says visible and client is hidden: mismatch
- * - If policy says not visible and client is not hidden: mismatch
- */
-inline void assert_visibility_consistency(
-    std::unordered_map<xcb_window_t, Client> const& clients,
-    std::vector<Monitor> const& monitors,
-    bool showing_desktop
-)
-{
-    for (auto const& [id, client] : clients)
-    {
-        if (client.kind != Client::Kind::Tiled && client.kind != Client::Kind::Floating)
-            continue;
-        if (client.monitor >= monitors.size())
-            continue;
-
-        bool should_be_visible = visibility_policy::is_window_visible(
-            showing_desktop, client.iconic, client.sticky,
-            client.monitor, client.workspace, monitors);
-
-        if (should_be_visible && client.hidden)
-        {
-            LOG_ERROR(
-                "VISIBILITY INVARIANT: Window {:#x} should be visible but is hidden "
-                "(sticky={} iconic={} ws={} current_ws={} showing_desktop={})",
-                id,
-                client.sticky,
-                client.iconic,
-                client.workspace,
-                monitors[client.monitor].current_workspace,
-                showing_desktop
-            );
-        }
-        else if (!should_be_visible && !client.hidden)
-        {
-            LOG_ERROR(
-                "VISIBILITY INVARIANT: Window {:#x} should be hidden but is visible "
-                "(sticky={} iconic={} ws={} current_ws={} showing_desktop={})",
-                id,
-                client.sticky,
-                client.iconic,
-                client.workspace,
-                monitors[client.monitor].current_workspace,
-                showing_desktop
-            );
-        }
-    }
-}
-
-#    define LWM_ASSERT_INVARIANTS(clients, monitors)                          \
-        do                                                                   \
-        {                                                                    \
-            lwm::invariants::assert_workspace_consistency(clients, monitors); \
-            lwm::invariants::assert_workspace_focus_valid(clients, monitors); \
-            lwm::invariants::assert_floating_consistency(clients, monitors);  \
-            lwm::invariants::assert_container_consistency(clients);           \
-        } while (0)
-
-#    define LWM_ASSERT_CLIENT_STATE(client) lwm::invariants::assert_client_state_consistency(client)
-
-#    define LWM_ASSERT_FOCUS_CONSISTENCY(clients, active_window) \
-        lwm::invariants::assert_focus_consistency(clients, active_window)
-
-#endif // NDEBUG
 
 } // namespace lwm::invariants
+
+#ifdef NDEBUG
+#    define LWM_ASSERT_INVARIANTS(clients, monitors, active_window) ((void)0)
+#else
+#    define LWM_ASSERT_INVARIANTS(clients, monitors, active_window)                                  \
+        do                                                                                           \
+        {                                                                                            \
+            if (auto violation = lwm::invariants::validate(clients, monitors, active_window))        \
+            {                                                                                        \
+                LOG_ERROR("INVARIANT VIOLATION: {} ({:#x})", violation->message, violation->window); \
+                std::abort();                                                                        \
+            }                                                                                        \
+        } while (0)
+#endif

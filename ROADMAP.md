@@ -8,9 +8,6 @@ release promise; completed work belongs in Git history.
 - Decide whether config reload should restore state left by a removed or
   no-longer-matching rule. Current reload applies the first rule that now
   matches but does not undo earlier rule effects when nothing matches.
-- Align or remove the unused `LWM_ASSERT_CLIENT_STATE` check: it treats an
-  iconic fullscreen client as invalid even though fullscreen state
-  intentionally persists while a client is iconic.
 - Make `make uninstall` remove `lwmctl` and `lwm-notify` as well as `lwm`.
 
 ## Protocol and tooling

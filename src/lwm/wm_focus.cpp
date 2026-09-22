@@ -45,7 +45,7 @@ void WindowManager::focus_any_window(xcb_window_t window, bool record_user_time,
         return;
     }
 
-    bool is_floating = (client->kind == Client::Kind::Floating);
+    bool is_floating = (client->kind() == Client::Kind::Floating);
 
     if (client->iconic)
     {
@@ -350,7 +350,7 @@ void WindowManager::repair_focus_after_visibility_change(size_t preferred_monito
         active && active->monitor < monitors_.size() && is_focus_eligible(*active) && is_physically_visible(*active))
     {
         focused_monitor_ = active->monitor;
-        if (active->kind == Client::Kind::Tiled && active->workspace < monitors_[active->monitor].workspaces.size())
+        if (active->kind() == Client::Kind::Tiled && active->workspace < monitors_[active->monitor].workspaces.size())
             workspace_policy::set_workspace_focus(monitors_[active->monitor].workspaces[active->workspace], active->id);
         update_ewmh_current_desktop();
         return;
@@ -365,7 +365,7 @@ void WindowManager::repair_focus_after_visibility_change(size_t preferred_monito
 bool WindowManager::is_focus_eligible(Client const& client) const
 {
     // Dock/Desktop windows never take focus (EWMH).
-    if (client.kind == Client::Kind::Dock || client.kind == Client::Kind::Desktop)
+    if (client.kind() == Client::Kind::Dock || client.kind() == Client::Kind::Desktop)
     {
         return false;
     }
@@ -439,7 +439,7 @@ std::vector<focus_policy::FloatingCandidate> WindowManager::build_floating_candi
     entries.reserve(clients_.size());
     for (auto const& [window, client] : clients_)
     {
-        if (client.kind != Client::Kind::Floating)
+        if (client.kind() != Client::Kind::Floating)
             continue;
         entries.push_back({ { window, client.monitor, client.workspace, client.sticky }, client.mru_order });
     }

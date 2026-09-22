@@ -16,7 +16,7 @@ void WindowManager::manage_floating_window(xcb_window_t window, bool start_iconi
     if (transient)
     {
         if (auto const* parent = get_client(*transient);
-            parent && (parent->kind == Client::Kind::Tiled || parent->kind == Client::Kind::Floating))
+            parent && (parent->kind() == Client::Kind::Tiled || parent->kind() == Client::Kind::Floating))
         {
             monitor_idx = parent->monitor;
             workspace_idx = parent->workspace;
@@ -270,7 +270,7 @@ void WindowManager::unmanage_floating_window(xcb_window_t window)
 bool WindowManager::is_floating_window(xcb_window_t window) const
 {
     auto const* client = get_client(window);
-    return client && client->kind == Client::Kind::Floating;
+    return client && client->kind() == Client::Kind::Floating;
 }
 
 void WindowManager::update_floating_monitor_for_geometry(Client& client)
@@ -334,7 +334,7 @@ void WindowManager::apply_floating_geometry(Client& client)
 
 void WindowManager::apply_visible_floating_geometry(Client& client)
 {
-    if (client.kind != Client::Kind::Floating || client.hidden || !should_be_visible(client))
+    if (client.kind() != Client::Kind::Floating || client.hidden || !should_be_visible(client))
         return;
 
     if (client.fullscreen)

@@ -301,7 +301,7 @@ void WindowManager::map_desktop_window(xcb_window_t window)
     {
         Client client;
         client.id = window;
-        client.kind = Client::Kind::Desktop;
+        client.state = DesktopState {};
         client.skip_taskbar = true;
         client.skip_pager = true;
         client.order = next_client_order_++;
@@ -328,7 +328,7 @@ void WindowManager::map_dock_window(xcb_window_t window)
     {
         Client client;
         client.id = window;
-        client.kind = Client::Kind::Dock;
+        client.state = DockState {};
         client.skip_taskbar = true;
         client.skip_pager = true;
         client.order = next_client_order_++;
@@ -410,7 +410,7 @@ void WindowManager::handle_window_removal(xcb_window_t window)
     if (!subscribers_.empty())
     {
         unmap_json = "{\"event\":\"window_unmap\",\"window\":" + std::to_string(window)
-            + ",\"kind\":\"" + client_kind_str(client->kind) + "\""
+            + ",\"kind\":\"" + client_kind_str(client->kind()) + "\""
             + ",\"monitor\":" + std::to_string(client->monitor)
             + ",\"workspace\":" + std::to_string(client->workspace) + "}";
     }
@@ -418,7 +418,7 @@ void WindowManager::handle_window_removal(xcb_window_t window)
     // Release scratchpad slot before unmanage destroys the client
     release_scratchpad_window(window);
 
-    switch (client->kind)
+    switch (client->kind())
     {
         case Client::Kind::Tiled:
             unmanage_window(window);
@@ -479,7 +479,7 @@ void WindowManager::handle_enter_notify(xcb_enter_notify_event_t const& e)
             return;
         }
 
-        if (client && (client->kind == Client::Kind::Floating || client->kind == Client::Kind::Tiled))
+        if (client && (client->kind() == Client::Kind::Floating || client->kind() == Client::Kind::Tiled))
         {
             if (e.event != active_window_)
             {
@@ -518,7 +518,7 @@ void WindowManager::handle_motion_notify(xcb_motion_notify_event_t const& e)
         if (client && client->hidden)
             return;
 
-        if (client && (client->kind == Client::Kind::Floating || client->kind == Client::Kind::Tiled))
+        if (client && (client->kind() == Client::Kind::Floating || client->kind() == Client::Kind::Tiled))
         {
             if (window_under_cursor != active_window_)
             {
@@ -576,8 +576,8 @@ void WindowManager::handle_button_press(xcb_button_press_event_t const& e)
         return;
     }
 
-    bool is_floating = client && client->kind == Client::Kind::Floating;
-    bool is_tiled = client && client->kind == Client::Kind::Tiled;
+    bool is_floating = client && client->kind() == Client::Kind::Floating;
+    bool is_tiled = client && client->kind() == Client::Kind::Tiled;
 
     auto handle_binding = [&](MouseBinding const& binding) -> bool
     {
@@ -625,12 +625,11 @@ void WindowManager::handle_button_press(xcb_button_press_event_t const& e)
 
                 convert_window_to_floating(target);
                 auto* c = get_client(target);
-                if (!c || c->kind != Client::Kind::Floating)
+                if (!c || c->kind() != Client::Kind::Floating)
                     return true;
 
                 finalize_visibility_on_monitor(monitor_idx);
                 flush_and_drain_crossing();
-                LWM_ASSERT_INVARIANTS(clients_, monitors_);
 
                 focus_any_window(target);
                 begin_floating_resize(target, e.root_x, e.root_y);
@@ -985,7 +984,7 @@ void WindowManager::handle_frame_extents_message(xcb_client_message_event_t cons
 void WindowManager::handle_restack_message(xcb_client_message_event_t const& e)
 {
     if (auto const* client = get_client(e.window);
-        client && (client->kind == Client::Kind::Tiled || client->kind == Client::Kind::Floating))
+        client && (client->kind() == Client::Kind::Tiled || client->kind() == Client::Kind::Floating))
     {
         apply_stacking();
         conn_.flush();
@@ -1177,7 +1176,7 @@ void WindowManager::handle_active_window_request(xcb_client_message_event_t cons
         if (!request_client)
             return;
     }
-    if (request_client->kind == Client::Kind::Tiled || request_client->kind == Client::Kind::Floating)
+    if (request_client->kind() == Client::Kind::Tiled || request_client->kind() == Client::Kind::Floating)
     {
         focus_any_window(window, true, source == 1 ? timestamp : 0);
     }
@@ -1241,7 +1240,7 @@ void WindowManager::handle_desktop_change(xcb_client_message_event_t const& e)
 
     bool was_active = (active_window_ == e.window);
 
-    if (client->kind == Client::Kind::Tiled)
+    if (client->kind() == Client::Kind::Tiled)
     {
         size_t source_mon_idx = client->monitor;
         size_t source_ws_idx = client->workspace;
@@ -1267,7 +1266,7 @@ void WindowManager::handle_desktop_change(xcb_client_message_event_t const& e)
 
         finalize_after_desktop_move(e.window, was_active, target_monitor, target_workspace);
     }
-    else if (client->kind == Client::Kind::Floating)
+    else if (client->kind() == Client::Kind::Floating)
     {
         if (!move_floating_client_to_workspace(*client, target_monitor, target_workspace, true))
             return;
@@ -1280,7 +1279,7 @@ void WindowManager::handle_desktop_change(xcb_client_message_event_t const& e)
 void WindowManager::handle_moveresize_window(xcb_client_message_event_t const& e)
 {
     auto* client = get_client(e.window);
-    if (!client || client->kind != Client::Kind::Floating)
+    if (!client || client->kind() != Client::Kind::Floating)
         return;
 
     uint32_t flags = e.data.data32[0];
@@ -1316,7 +1315,7 @@ void WindowManager::handle_moveresize_window(xcb_client_message_event_t const& e
 void WindowManager::handle_wm_moveresize(xcb_client_message_event_t const& e)
 {
     auto const* client = get_client(e.window);
-    if (!client || client->kind != Client::Kind::Floating)
+    if (!client || client->kind() != Client::Kind::Floating)
         return;
 
     int16_t x_root = static_cast<int16_t>(e.data.data32[0]);
@@ -1367,7 +1366,7 @@ void WindowManager::handle_showing_desktop(xcb_client_message_event_t const& e)
 void WindowManager::handle_configure_request(xcb_configure_request_event_t const& e)
 {
     auto* client = get_client(e.window);
-    if (client && client->kind == Client::Kind::Tiled)
+    if (client && client->kind() == Client::Kind::Tiled)
     {
         send_configure_notify(*client);
         return;
@@ -1380,7 +1379,7 @@ void WindowManager::handle_configure_request(xcb_configure_request_event_t const
         return;
     }
 
-    bool is_floating = client && client->kind == Client::Kind::Floating;
+    bool is_floating = client && client->kind() == Client::Kind::Floating;
     uint16_t mask = e.value_mask;
     if (is_floating)
         mask &= ~(XCB_CONFIG_WINDOW_BORDER_WIDTH | XCB_CONFIG_WINDOW_SIBLING | XCB_CONFIG_WINDOW_STACK_MODE);
@@ -1480,7 +1479,7 @@ void WindowManager::handle_property_notify(xcb_property_notify_event_t const& e)
     }
     else if (wm_normal_hints_ != XCB_NONE && e.atom == wm_normal_hints_)
     {
-        if (auto* client = get_client(e.window); client && client->kind == Client::Kind::Floating)
+        if (auto* client = get_client(e.window); client && client->kind() == Client::Kind::Floating)
         {
             auto& geom = floating::runtime_hints_geometry(*client);
             xcb_size_hints_t hints;
@@ -1547,7 +1546,7 @@ void WindowManager::handle_property_notify(xcb_property_notify_event_t const& e)
         }
         else if (auto const* client = get_client(e.window))
         {
-            if (client->kind == Client::Kind::Tiled)
+            if (client->kind() == Client::Kind::Tiled)
                 rearrange_monitor(monitors_[client->monitor]);
         }
     }
@@ -1610,7 +1609,7 @@ void WindowManager::handle_property_notify(xcb_property_notify_event_t const& e)
         }
     }
     else if (auto const* strut_client = get_client(e.window);
-             strut_client && strut_client->kind == Client::Kind::Dock
+             strut_client && strut_client->kind() == Client::Kind::Dock
              && (e.atom == ewmh_.get()->_NET_WM_STRUT || e.atom == ewmh_.get()->_NET_WM_STRUT_PARTIAL))
     {
         update_struts();
@@ -1692,7 +1691,7 @@ void WindowManager::handle_randr_screen_change()
     // Save floating window locations (geometry persists in Client)
     for (auto const& [fw, client] : clients_)
     {
-        if (client.kind != Client::Kind::Floating)
+        if (client.kind() != Client::Kind::Floating)
             continue;
         std::string monitor_name = (client.monitor < monitors_.size()) ? monitors_[client.monitor].name : "";
         floating_locations.push_back({ fw, monitor_name, client.workspace });
@@ -1703,7 +1702,7 @@ void WindowManager::handle_randr_screen_change()
     // be stale; fall back to an empty name (which resolves to monitor 0 on the apply pass).
     for (auto const& [id, client] : clients_)
     {
-        if (client.kind != Client::Kind::Dock && client.kind != Client::Kind::Desktop)
+        if (client.kind() != Client::Kind::Dock && client.kind() != Client::Kind::Desktop)
             continue;
         std::string monitor_name = (client.monitor < monitors_.size()) ? monitors_[client.monitor].name : "";
         dock_desktop_monitor_names.push_back({ id, monitor_name });
@@ -1842,7 +1841,6 @@ void WindowManager::handle_randr_screen_change()
     }
 
     flush_and_drain_crossing();
-    LWM_ASSERT_INVARIANTS(clients_, monitors_);
 }
 
 } // namespace lwm

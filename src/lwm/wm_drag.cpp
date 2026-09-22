@@ -120,7 +120,7 @@ void WindowManager::begin_floating_move(xcb_window_t window, int16_t root_x, int
         return;
     if (client->fullscreen)
         return;
-    if (client->kind != Client::Kind::Floating)
+    if (client->kind() != Client::Kind::Floating)
         return;
 
     drag_state_ = FloatingMove { window, root_x, root_y, root_x, root_y, floating_geometry(*client) };
@@ -135,7 +135,7 @@ void WindowManager::begin_floating_resize(xcb_window_t window, int16_t root_x, i
         return;
     if (client->fullscreen)
         return;
-    if (client->kind != Client::Kind::Floating)
+    if (client->kind() != Client::Kind::Floating)
         return;
 
     drag_state_ = FloatingResize { window, root_x, root_y, root_x, root_y, floating_geometry(*client) };
@@ -152,7 +152,7 @@ void WindowManager::begin_tiled_drag(xcb_window_t window, int16_t root_x, int16_
         return;
     if (client->fullscreen)
         return;
-    if (client->kind != Client::Kind::Tiled)
+    if (client->kind() != Client::Kind::Tiled)
         return;
 
     drag_state_ = TiledMove { window, root_x, root_y, root_x, root_y, client->tiled_geometry };
@@ -297,7 +297,7 @@ void WindowManager::update_drag(int16_t root_x, int16_t root_y)
         drag.last_root_y = root_y;
 
         auto* client = get_client(drag.window);
-        if (!client || client->kind != Client::Kind::Floating)
+        if (!client || client->kind() != Client::Kind::Floating)
             return;
 
         int32_t dx = static_cast<int32_t>(root_x) - static_cast<int32_t>(drag.start_root_x);
@@ -360,7 +360,7 @@ void WindowManager::end_drag()
     {
         xcb_window_t window = drag.window;
         auto* client = get_client(window);
-        if (!client || client->kind != Client::Kind::Tiled)
+        if (!client || client->kind() != Client::Kind::Tiled)
             return;
 
         size_t source_monitor_idx = client->monitor;

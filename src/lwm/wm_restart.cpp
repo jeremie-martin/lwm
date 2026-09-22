@@ -107,7 +107,7 @@ void WindowManager::serialize_restart_state()
     // Per-window: write _LWM_RESTART_CLIENT on each tiled/floating client
     for (auto const& [window, client] : clients_)
     {
-        if (client.kind != Client::Kind::Tiled && client.kind != Client::Kind::Floating)
+        if (client.kind() != Client::Kind::Tiled && client.kind() != Client::Kind::Floating)
             continue;
 
         uint32_t data[CLIENT_PROP_COUNT] {};
@@ -115,12 +115,12 @@ void WindowManager::serialize_restart_state()
         data[0] = 0;
         data[1] = client.borderless ? 1 : 0;
         std::optional<Geometry> prior_floating;
-        if (client.kind == Client::Kind::Tiled)
+        if (client.kind() == Client::Kind::Tiled)
             prior_floating = prior_floating_geometry(client);
         else if (auto const* hidden_tiled = hidden_tiled_pool_scratchpad(client))
             prior_floating = hidden_tiled->prior_floating;
         Geometry restart_floating_geometry =
-            client.kind == Client::Kind::Floating ? floating_geometry(client) : prior_floating.value_or(Geometry {});
+            client.kind() == Client::Kind::Floating ? floating_geometry(client) : prior_floating.value_or(Geometry {});
         pack_geometry(data + 2, restart_floating_geometry);
         pack_optional_geometry(data + 6, client.fullscreen_restore);
         pack_optional_geometry(data + 11, client.maximize_restore);
@@ -134,7 +134,7 @@ void WindowManager::serialize_restart_state()
         else
             data[22] = 0;
         // Current kind (1=Tiled, 2=Floating).
-        data[23] = (client.kind == Client::Kind::Tiled) ? 1 : 2;
+        data[23] = (client.kind() == Client::Kind::Tiled) ? 1 : 2;
         data[24] = client.urgency.sources;
         data[25] = (client.app_prefs.skip_taskbar ? APP_PREF_SKIP_TASKBAR : 0)
             | (client.app_prefs.skip_pager ? APP_PREF_SKIP_PAGER : 0)
@@ -243,7 +243,7 @@ void WindowManager::serialize_restart_state()
     std::vector<std::pair<uint64_t, xcb_window_t>> floating_sorted;
     for (auto const& [window, client] : clients_)
     {
-        if (client.kind == Client::Kind::Floating)
+        if (client.kind() == Client::Kind::Floating)
             floating_sorted.push_back({ client.mru_order, window });
     }
     std::sort(floating_sorted.begin(), floating_sorted.end());
@@ -531,7 +531,7 @@ void WindowManager::apply_restart_client_state(xcb_window_t window)
 
     free(reply);
 
-    if (saved_kind && *saved_kind == Client::Kind::Floating && client->kind == Client::Kind::Tiled)
+    if (saved_kind && *saved_kind == Client::Kind::Floating && client->kind() == Client::Kind::Tiled)
     {
         convert_window_to_floating(window);
         // convert_window_to_floating computes fresh geometry from the tiled position,
@@ -539,7 +539,7 @@ void WindowManager::apply_restart_client_state(xcb_window_t window)
         if (auto* c = get_client(window))
             floating_geometry(*c) = saved_floating_geometry;
     }
-    else if (saved_kind && *saved_kind == Client::Kind::Tiled && client->kind == Client::Kind::Floating)
+    else if (saved_kind && *saved_kind == Client::Kind::Tiled && client->kind() == Client::Kind::Floating)
     {
         convert_window_to_tiled(window, saved_prior_floating);
     }
@@ -638,7 +638,7 @@ void WindowManager::restore_window_ordering()
         for (size_t i = 0; i < float_len; ++i)
         {
             auto* client = get_client(static_cast<xcb_window_t>(float_data[i]));
-            if (client && client->kind == Client::Kind::Floating)
+            if (client && client->kind() == Client::Kind::Floating)
                 client->mru_order = next_mru_order_++;
         }
     }
@@ -686,7 +686,7 @@ void WindowManager::clean_restart_properties()
     // Delete per-window properties
     for (auto const& [window, client] : clients_)
     {
-        if (client.kind == Client::Kind::Tiled || client.kind == Client::Kind::Floating)
+        if (client.kind() == Client::Kind::Tiled || client.kind() == Client::Kind::Floating)
         {
             xcb_delete_property(conn_.get(), window, lwm_restart_client_);
             xcb_delete_property(conn_.get(), window, lwm_restart_scratchpad_name_);
@@ -709,10 +709,10 @@ void WindowManager::prepare_restart()
     {
         if (!client.hidden)
             continue;
-        if (client.kind != Client::Kind::Tiled && client.kind != Client::Kind::Floating)
+        if (client.kind() != Client::Kind::Tiled && client.kind() != Client::Kind::Floating)
             continue;
 
-        Geometry restore_geometry = client.kind == Client::Kind::Floating
+        Geometry restore_geometry = client.kind() == Client::Kind::Floating
             ? floating_geometry(client)
             : prior_floating_geometry(client).value_or(Geometry {});
         int16_t restore_x = restore_geometry.x;

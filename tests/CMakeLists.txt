@@ -27,6 +27,7 @@ FetchContent_MakeAvailable(Catch2)
   add_executable(lwm_tests
     test_config_parser.cpp
     test_events_policy.cpp
+    test_invariants.cpp
     test_client_state_policy.cpp
     test_ewmh_classification.cpp
     test_ewmh_policy.cpp

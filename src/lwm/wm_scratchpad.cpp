@@ -138,14 +138,14 @@ void WindowManager::stash_to_scratchpad(xcb_window_t window)
         return;
     if (client->fullscreen || client->iconic)
         return;
-    if (client->kind != Client::Kind::Tiled && client->kind != Client::Kind::Floating)
+    if (client->kind() != Client::Kind::Tiled && client->kind() != Client::Kind::Floating)
         return;
     if (drag_active())
         return;
 
     LOG_INFO("Stashing window {:#x} to scratchpad pool", window);
 
-    if (client->kind == Client::Kind::Tiled)
+    if (client->kind() == Client::Kind::Tiled)
     {
         auto prior_floating = detach_tiled_to_floating(*client);
         client->scratchpad = HiddenTiledScratchpadPoolMembership { prior_floating };
@@ -238,14 +238,14 @@ void WindowManager::hide_scratchpad_window(xcb_window_t window)
     {
         // Named scratchpads are always restored using their configured floating placement.
     }
-    else if (client->kind == Client::Kind::Tiled)
+    else if (client->kind() == Client::Kind::Tiled)
     {
         // Hidden tiled scratchpads are kept as Floating to satisfy the invariant
         // that Tiled clients live in their workspace's tiled list.
         auto prior_floating = detach_tiled_to_floating(*client);
         client->scratchpad = HiddenTiledScratchpadPoolMembership { prior_floating };
     }
-    else if (client->kind == Client::Kind::Floating)
+    else if (client->kind() == Client::Kind::Floating)
     {
         client->scratchpad = HiddenFloatingScratchpadPoolMembership { floating_geometry(*client) };
     }
@@ -264,7 +264,7 @@ void WindowManager::show_named_scratchpad_window(xcb_window_t window, Scratchpad
     size_t target_monitor = focused_monitor_;
     size_t target_workspace = monitors_[target_monitor].current_workspace;
 
-    bool was_tiled = client->kind == Client::Kind::Tiled;
+    bool was_tiled = client->kind() == Client::Kind::Tiled;
     if (was_tiled)
     {
         detach_tiled_to_floating(*client);
@@ -316,7 +316,7 @@ void WindowManager::show_pool_scratchpad_window(xcb_window_t window)
     }
     else
     {
-        if (client->kind == Client::Kind::Tiled)
+        if (client->kind() == Client::Kind::Tiled)
         {
             set_floating_state(*client, restore_geometry ? *restore_geometry : client->tiled_geometry);
             client->mru_order = next_mru_order_++;

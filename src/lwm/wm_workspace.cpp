@@ -37,7 +37,6 @@ bool WindowManager::apply_workspace_switch(size_t monitor_idx, size_t target_wor
         sync_client_urgency_state(client);
     }
 
-    LWM_ASSERT_INVARIANTS(clients_, monitors_);
     return true;
 }
 
@@ -121,7 +120,7 @@ void WindowManager::move_window_to_workspace(size_t ws)
     if (!client)
         return;
 
-    if (client->kind == Client::Kind::Floating)
+    if (client->kind() == Client::Kind::Floating)
     {
         size_t monitor_idx = client->monitor;
         if (!move_floating_client_to_workspace(*client, monitor_idx, target_ws, false))
@@ -192,7 +191,7 @@ void WindowManager::move_window_to_monitor(int direction)
     if (!client)
         return;
 
-    if (client->kind == Client::Kind::Floating)
+    if (client->kind() == Client::Kind::Floating)
     {
         size_t source_idx = client->monitor;
         size_t target_idx = wrap_monitor_index(static_cast<int>(source_idx) + direction);
