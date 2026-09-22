@@ -1114,3 +1114,97 @@ TEST_CASE("Integration: _NET_SUPPORTED does not overclaim visible-name atoms", "
 
     destroy_window(conn, window);
 }
+
+TEST_CASE("Integration: initial and runtime rules share state precedence", "[integration][rules][map]")
+{
+    bool floating = false;
+    SECTION("tiled") { floating = false; }
+    SECTION("floating") { floating = true; }
+    auto config = std::string(
+                      R"(
+[appearance]
+border_width = 4
+[[rules]]
+match = { title = "ruled" }
+apply = { borderless = true, sticky = false, fullscreen = false, above = false, skip_taskbar = false, skip_pager = false, floating = )"
+                  )
+        + (floating ? "true" : "false") + " }\n";
+    auto test_env = TestEnvironment::create(config);
+    if (!test_env)
+        SKIP("Test environment not available");
+    auto& conn = test_env->conn;
+    auto state = intern_atom(conn.get(), "_NET_WM_STATE");
+    std::vector<xcb_atom_t> requested;
+    for (auto name : { "_NET_WM_STATE_STICKY",
+                       "_NET_WM_STATE_FULLSCREEN",
+                       "_NET_WM_STATE_ABOVE",
+                       "_NET_WM_STATE_SKIP_TASKBAR",
+                       "_NET_WM_STATE_SKIP_PAGER" })
+        requested.push_back(intern_atom(conn.get(), name));
+
+    auto window = create_window(conn, 60, 60, 220, 160);
+    set_window_title(conn, window, "ruled");
+    xcb_change_property(
+        conn.get(),
+        XCB_PROP_MODE_REPLACE,
+        window,
+        state,
+        XCB_ATOM_ATOM,
+        32,
+        requested.size(),
+        requested.data()
+    );
+    map_window(conn, window);
+    REQUIRE(wait_for_active_window(conn, window, kTimeout));
+    auto correct_state = [&]()
+    {
+        auto geometry = get_window_geometry(conn, window);
+        auto atoms = get_window_property_atoms(conn.get(), window, state);
+        return geometry && geometry->border_width == 0
+            && std::ranges::none_of(
+                   requested,
+                   [&](auto atom) { return std::ranges::find(atoms, atom) != atoms.end(); }
+            );
+    };
+    REQUIRE(wait_for_condition(correct_state, kTimeout));
+    set_window_title(conn, window, "unruled");
+    REQUIRE(wait_for_condition(
+        [&]()
+        {
+            auto geometry = get_window_geometry(conn, window);
+            return geometry && geometry->border_width == 4;
+        },
+        kTimeout
+    ));
+    set_window_title(conn, window, "ruled");
+    REQUIRE(wait_for_condition(correct_state, kTimeout));
+    destroy_window(conn, window);
+}
+
+TEST_CASE("Integration: rule reload preserves unspecified effective state", "[integration][rules][reload]")
+{
+    auto test_env = TestEnvironment::create(R"(
+[[rules]]
+apply = { floating = true, borderless = true, below = true, sticky = true, skip_taskbar = true, skip_pager = true }
+)");
+    if (!test_env)
+        SKIP("Test environment not available");
+    auto& conn = test_env->conn;
+    auto window = create_window(conn, 60, 60, 220, 160);
+    map_window(conn, window);
+    REQUIRE(wait_for_active_window(conn, window, kTimeout));
+    auto state = intern_atom(conn.get(), "_NET_WM_STATE");
+    auto taskbar = intern_atom(conn.get(), "_NET_WM_STATE_SKIP_TASKBAR");
+    REQUIRE(property_has_atom(conn.get(), window, state, taskbar));
+    REQUIRE(test_env->wm.write_config("[[rules]]\napply = { skip_taskbar = false }\n"));
+    auto reload = run_lwmctl(test_env->wm, { "reload-config" });
+    REQUIRE(reload.has_value());
+    REQUIRE(reload->exit_code == 0);
+    REQUIRE_FALSE(property_has_atom(conn.get(), window, state, taskbar));
+    for (auto name : { "_NET_WM_STATE_STICKY", "_NET_WM_STATE_BELOW", "_NET_WM_STATE_SKIP_PAGER" })
+        REQUIRE(property_has_atom(conn.get(), window, state, intern_atom(conn.get(), name)));
+    auto geometry = get_window_geometry(conn, window);
+    REQUIRE(geometry.has_value());
+    REQUIRE(geometry->border_width == 0);
+    destroy_window(conn, window);
+}

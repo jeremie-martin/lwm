@@ -14,10 +14,10 @@ namespace lwm {
 
 struct RuleGeometry
 {
-    std::optional<int32_t> x;
-    std::optional<int32_t> y;
-    std::optional<uint32_t> width;
-    std::optional<uint32_t> height;
+    std::optional<int16_t> x;
+    std::optional<int16_t> y;
+    std::optional<uint16_t> width;
+    std::optional<uint16_t> height;
 };
 
 struct WindowRuleConfig

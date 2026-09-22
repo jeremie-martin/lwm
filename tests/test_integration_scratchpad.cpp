@@ -643,10 +643,11 @@ TEST_CASE("Integration: visible scratchpad pool window keeps cycling after resta
     REQUIRE(wait_for_active_window(conn, pooled, kTimeout));
     REQUIRE(wait_for_condition([&]() { return !is_hidden_offscreen(conn, pooled); }, kTimeout));
 
+    auto previous_wm = supporting_wm_window(conn);
+    REQUIRE(previous_wm.has_value());
     auto restart_result = send_ipc_command(*socket_path, "restart");
     (void)restart_result;
-
-    REQUIRE(wait_for_wm_ready(conn, std::chrono::seconds(5)));
+    REQUIRE(wait_for_wm_ready(conn, std::chrono::seconds(5), *previous_wm));
     REQUIRE(wait_for_active_window(conn, pooled, kTimeout));
     REQUIRE(wait_for_condition([&]() { return !is_hidden_offscreen(conn, pooled); }, kTimeout));
 
@@ -691,10 +692,11 @@ TEST_CASE("Integration: hidden scratchpad stays hidden across restart", "[integr
     REQUIRE(wait_for_condition([&]() { return is_hidden_offscreen(conn, sp); }, kTimeout));
     REQUIRE(wait_for_active_window(conn, tiled, kTimeout));
 
+    auto previous_wm = supporting_wm_window(conn);
+    REQUIRE(previous_wm.has_value());
     auto restart_result = send_ipc_command(*socket_path, "restart");
     (void)restart_result;
-
-    REQUIRE(wait_for_wm_ready(conn, std::chrono::seconds(5)));
+    REQUIRE(wait_for_wm_ready(conn, std::chrono::seconds(5), *previous_wm));
     REQUIRE(wait_for_condition([&]() { return is_hidden_offscreen(conn, sp); }, kTimeout));
     REQUIRE(wait_for_active_window(conn, tiled, kTimeout));
 

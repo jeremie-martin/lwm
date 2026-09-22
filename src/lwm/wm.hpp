@@ -306,8 +306,8 @@ private:
         WindowClassification const& classification,
         WindowRuleResult const& rule_result,
         bool start_iconic,
-        bool urgent);
-    void apply_initial_state_flags(Client& client, WindowRuleResult const& rule);
+        bool urgent
+    );
     void handle_window_removal(xcb_window_t window);
     void handle_enter_notify(xcb_enter_notify_event_t const& e);
     void handle_motion_notify(xcb_motion_notify_event_t const& e);
@@ -344,7 +344,11 @@ private:
     /// Publish the stable LWM classification used by external desktop tools.
     void publish_lwm_window_class(Client const& client);
     void reapply_rules_to_existing_windows();
-    void apply_rule_result_to_window(xcb_window_t window, WindowRuleResult const& rule_result);
+    void apply_rule_result_to_window(
+        xcb_window_t window,
+        WindowRuleResult const& rule_result,
+        WindowClassification const* classification = nullptr
+    );
     void apply_rule_target_location(xcb_window_t window, WindowRuleResult const& rule_result);
     void apply_rule_floating_placement(xcb_window_t window, WindowRuleResult const& rule_result);
     void convert_window_to_floating(xcb_window_t window);
@@ -372,9 +376,10 @@ private:
     void relocate_to_transient_parent(xcb_window_t window, xcb_window_t previous_transient_for);
     void apply_classification_state(
         xcb_window_t window,
-        WindowClassification const& classification,
+        WindowClassification const* classification,
         WindowRuleResult const& rule_result,
-        bool has_transient);
+        bool has_transient
+    );
 
     void unmanage_window(xcb_window_t window);
     void unmanage_floating_window(xcb_window_t window);

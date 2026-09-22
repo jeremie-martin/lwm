@@ -367,3 +367,24 @@ apply = { monitor = 0, monitor_name = "HDMI-1" }
         REQUIRE(loaded.error().find("cannot define both 'monitor' and 'monitor_name'") != std::string::npos);
     }
 }
+
+TEST_CASE("Config parser rejects rule geometry outside X11 ranges", "[config][rules]")
+{
+    for (auto field : { "x", "y", "width", "height" })
+    {
+        bool position = std::string_view(field) == "x" || std::string_view(field) == "y";
+        for (auto value : { position ? "-32769" : "0", position ? "32768" : "65536", "4294967296" })
+        {
+            INFO(field << " = " << value);
+            auto loaded =
+                load_from_string(std::string("[[rules]]\napply.geometry = { ") + field + " = " + value + " }");
+            REQUIRE_FALSE(loaded.has_value());
+        }
+    }
+    for (auto geometry :
+         { "x = -32768, y = 32767, width = 1, height = 65535", "x = 32767, y = -32768, width = 65535, height = 1" })
+    {
+        auto loaded = load_from_string(std::string("[[rules]]\napply.geometry = { ") + geometry + " }");
+        REQUIRE(loaded.has_value());
+    }
+}

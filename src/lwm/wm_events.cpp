@@ -285,16 +285,6 @@ void WindowManager::handle_map_request(xcb_map_request_event_t const& e)
     }
 }
 
-void WindowManager::apply_initial_state_flags(Client& client, WindowRuleResult const& rule)
-{
-    if (rule.layer_hint.has_value() && *rule.layer_hint != LayerHint::Normal)
-        set_window_layer_hint(client, *rule.layer_hint);
-    if (rule.sticky.has_value() && *rule.sticky)
-        set_window_sticky(client, true);
-    if (rule.fullscreen.has_value() && *rule.fullscreen)
-        set_fullscreen(client, true);
-}
-
 void WindowManager::map_desktop_window(xcb_window_t window)
 {
     uint32_t values[] = { XCB_EVENT_MASK_PROPERTY_CHANGE };
@@ -362,46 +352,9 @@ void WindowManager::map_floating_window(
     manage_floating_window(window, start_iconic, false);
     auto& client = require_client(window);
 
-    if (classification.skip_taskbar)
-        set_client_skip_taskbar(client, true);
-    if (classification.skip_pager)
-        set_client_skip_pager(client, true);
-    if (classification.above)
-        set_window_layer_hint(client, LayerHint::Above);
     if (urgent)
         client.urgency.add(UrgencySource::App);
-    if (is_sticky_desktop(window) && !client.sticky)
-        set_window_sticky(client, true);
-
-    if (rule_result.matched)
-    {
-        if (rule_result.target_monitor.has_value() || rule_result.target_workspace.has_value())
-        {
-            size_t target_mon = rule_result.target_monitor.value_or(client.monitor);
-            size_t target_ws = rule_result.target_workspace.value_or(client.workspace);
-
-            if (target_mon < monitors_.size())
-            {
-                target_ws = std::min(target_ws, monitors_[target_mon].workspaces.size() - 1);
-                move_floating_client_to_workspace(client, target_mon, target_ws, true);
-            }
-        }
-
-        if (rule_result.geometry.has_value())
-            floating_geometry(client) = *rule_result.geometry;
-
-        if (rule_result.center)
-        {
-            auto area = monitors_[client.monitor].working_area();
-            auto& geom = floating_geometry(client);
-            geom.x = area.x + static_cast<int16_t>((area.width - geom.width) / 2);
-            geom.y = area.y + static_cast<int16_t>((area.height - geom.height) / 2);
-        }
-
-        client.suppress_next_configure_request = rule_result.geometry.has_value() || rule_result.center;
-
-        apply_initial_state_flags(client, rule_result);
-    }
+    apply_rule_result_to_window(window, rule_result, &classification);
 
     sync_visibility_for_monitor(client.monitor);
     apply_visible_floating_geometry(client);
@@ -431,39 +384,11 @@ void WindowManager::map_tiled_window(
 
     auto& client = require_client(window);
 
-    if (classification.skip_taskbar)
-        set_client_skip_taskbar(client, true);
-    if (classification.skip_pager)
-        set_client_skip_pager(client, true);
-    if (classification.above)
-        set_window_layer_hint(client, LayerHint::Above);
     if (urgent)
         client.urgency.add(UrgencySource::App);
     if (client.urgency.active())
         sync_client_urgency_state(client);
-    if (is_sticky_desktop(window) && !client.sticky)
-        set_window_sticky(client, true);
-
-    if (rule_result.matched)
-    {
-        if (rule_result.target_monitor.has_value() || rule_result.target_workspace.has_value())
-        {
-            size_t source_mon = client.monitor;
-            size_t source_ws = client.workspace;
-            size_t target_mon = rule_result.target_monitor.value_or(source_mon);
-            size_t target_ws = rule_result.target_workspace.value_or(source_ws);
-
-            if (target_mon < monitors_.size())
-            {
-                target_ws = std::min(target_ws, monitors_[target_mon].workspaces.size() - 1);
-
-                if (target_mon != source_mon || target_ws != source_ws)
-                    move_tiled_client_to_workspace(client, target_mon, target_ws);
-            }
-        }
-
-        apply_initial_state_flags(client, rule_result);
-    }
+    apply_rule_result_to_window(window, rule_result, &classification);
 
     if (!start_iconic && client.monitor == focused_monitor_ && should_be_visible(client)
         && is_focus_eligible(client))

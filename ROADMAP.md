@@ -5,15 +5,9 @@ release promise; completed work belongs in Git history.
 
 ## Correctness and consistency
 
-- Make initial rule application use the same state computation as runtime
-  reevaluation. Today `borderless` and false-valued overrides of some
-  client-provided state may not take effect until a property change or config
-  reload.
 - Decide whether config reload should restore state left by a removed or
   no-longer-matching rule. Current reload applies the first rule that now
   matches but does not undo earlier rule effects when nothing matches.
-- Reject rule geometry that cannot be represented by X11's signed position and
-  unsigned size fields instead of narrowing it.
 - Align or remove the unused `LWM_ASSERT_CLIENT_STATE` check: it treats an
   iconic fullscreen client as invalid even though fullscreen state
   intentionally persists while a client is iconic.

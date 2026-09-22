@@ -357,3 +357,22 @@ TEST_CASE("push_focus_history evicts oldest entry at capacity", "[workspace][pol
     // Second entry (2) should now be the oldest
     REQUIRE(ws.focus_history.front() == 2);
 }
+
+TEST_CASE("Minimizing remembered focus repairs focus without removing tiled membership", "[workspace][policy]")
+{
+    lwm::Workspace workspace;
+    workspace.windows = { 0x1000, 0x2000, 0x3000 };
+    workspace.focused_window = 0x2000;
+    workspace.focus_history = { 0x3000, 0x1000, 0x2000 };
+    lwm::workspace_policy::fixup_workspace_focus(
+        workspace,
+        0x2000,
+        [](xcb_window_t window) { return window == 0x2000; }
+    );
+    REQUIRE(workspace.focused_window == 0x1000);
+    REQUIRE(workspace.windows == std::vector<xcb_window_t>{ 0x1000, 0x2000, 0x3000 });
+
+    lwm::workspace_policy::fixup_workspace_focus(workspace, 0x1000, [](xcb_window_t) { return true; });
+    REQUIRE(workspace.focused_window == XCB_NONE);
+    REQUIRE(workspace.windows.size() == 3);
+}

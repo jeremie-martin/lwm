@@ -306,10 +306,10 @@ WindowRuleResult WindowRules::match(
         if (rule.geometry.has_value())
         {
             Geometry geo;
-            geo.x = static_cast<int16_t>(rule.geometry->x.value_or(0));
-            geo.y = static_cast<int16_t>(rule.geometry->y.value_or(0));
-            geo.width = static_cast<uint16_t>(rule.geometry->width.value_or(800));
-            geo.height = static_cast<uint16_t>(rule.geometry->height.value_or(600));
+            geo.x = rule.geometry->x.value_or(0);
+            geo.y = rule.geometry->y.value_or(0);
+            geo.width = rule.geometry->width.value_or(800);
+            geo.height = rule.geometry->height.value_or(600);
             result.geometry = geo;
         }
 

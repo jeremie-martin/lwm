@@ -1,6 +1,7 @@
 #pragma once
 
 #include <array>
+#include <cerrno>
 #include <chrono>
 #include <csignal>
 #include <cstdlib>
@@ -10,12 +11,13 @@
 #include <functional>
 #include <iterator>
 #include <optional>
-#include <string_view>
 #include <string>
+#include <string_view>
 #include <thread>
 #include <utility>
 #include <vector>
 
+#include <poll.h>
 #include <sys/types.h>
 #include <sys/wait.h>
 #include <unistd.h>
@@ -112,59 +114,68 @@ private:
         if (previous && *previous)
             previous_display_ = std::string(previous);
 
-        for (int display_num = 99; display_num <= 120; ++display_num)
+        // Let Xvfb reserve a free display atomically and report it only when ready.
+        int ready[2];
+        if (pipe(ready) != 0)
+            return false;
+        std::string ready_fd = std::to_string(ready[1]);
+        pid_t pid = fork();
+        if (pid == 0)
         {
-            std::string display = ":" + std::to_string(display_num);
-            pid_t pid = fork();
-            if (pid == 0)
-            {
-                execl(
-                    xvfb->c_str(),
-                    "Xvfb",
-                    display.c_str(),
-                    "-screen",
-                    "0",
-                    "1280x720x24",
-                    "-nolisten",
-                    "tcp",
-                    nullptr
-                );
-                _exit(127);
-            }
-            if (pid < 0)
-                continue;
-
-            setenv("DISPLAY", display.c_str(), 1);
-            display_modified_ = true;
-            if (wait_for_x_server(std::chrono::milliseconds(1000)))
-            {
-                display_ = display;
-                xvfb_pid_ = pid;
-                owns_display_ = true;
-                return true;
-            }
-
-            kill(pid, SIGTERM);
-            waitpid(pid, nullptr, 0);
+            close(ready[0]);
+            execl(
+                xvfb->c_str(),
+                "Xvfb",
+                "-displayfd",
+                ready_fd.c_str(),
+                "-screen",
+                "0",
+                "1280x720x24",
+                "-nolisten",
+                "tcp",
+                nullptr
+            );
+            _exit(127);
+        }
+        close(ready[1]);
+        if (pid < 0)
+        {
+            close(ready[0]);
+            return false;
         }
 
-        restore_display();
-        return false;
-    }
-
-    bool wait_for_x_server(std::chrono::milliseconds timeout)
-    {
-        return wait_for_condition(
-            []()
+        xvfb_pid_ = pid;
+        owns_display_ = true;
+        std::string number;
+        auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(5);
+        while (std::chrono::steady_clock::now() < deadline && number.size() < 16)
+        {
+            pollfd fd{ ready[0], POLLIN, 0 };
+            int result = poll(&fd, 1, 100);
+            if (result < 0 && errno == EINTR)
+                continue;
+            if (result < 0)
+                break;
+            if (result == 0)
+                continue;
+            char ch;
+            if (read(ready[0], &ch, 1) != 1)
+                break;
+            if (ch == '\n' && !number.empty())
             {
-                xcb_connection_t* conn = xcb_connect(nullptr, nullptr);
-                bool ok = conn && !xcb_connection_has_error(conn);
-                if (conn)
-                    xcb_disconnect(conn);
-                return ok;
-            },
-            timeout
-        );
+                close(ready[0]);
+                display_ = ":" + number;
+                setenv("DISPLAY", display_.c_str(), 1);
+                display_modified_ = true;
+                return true;
+            }
+            if (ch < '0' || ch > '9')
+                break;
+            number += ch;
+        }
+        close(ready[0]);
+        stop_xvfb();
+        return false;
     }
 
     void stop_xvfb()
@@ -183,6 +194,7 @@ private:
             waitpid(xvfb_pid_, nullptr, 0);
         }
         xvfb_pid_ = -1;
+        owns_display_ = false;
     }
 
     void restore_display()
@@ -208,13 +220,18 @@ class X11Connection
 {
 public:
     X11Connection()
-        : conn_(xcb_connect(nullptr, nullptr))
+        : conn_(nullptr)
         , screen_(nullptr)
     {
+        // Xvfb briefly refuses connections while resetting between test cases.
+        wait_for_condition([&]() {
+            if (conn_)
+                xcb_disconnect(conn_);
+            conn_ = xcb_connect(nullptr, nullptr);
+            return conn_ && !xcb_connection_has_error(conn_);
+        }, std::chrono::seconds(1));
         if (conn_ && !xcb_connection_has_error(conn_))
-        {
             screen_ = xcb_setup_roots_iterator(xcb_get_setup(conn_)).data;
-        }
     }
 
     ~X11Connection()
@@ -328,12 +345,22 @@ inline bool wait_for_property_window_nonzero(
     );
 }
 
-inline bool wait_for_wm_ready(X11Connection& conn, std::chrono::milliseconds timeout)
+inline std::optional<xcb_window_t> supporting_wm_window(X11Connection& conn)
 {
-    xcb_atom_t supporting = intern_atom(conn.get(), "_NET_SUPPORTING_WM_CHECK");
-    if (supporting == XCB_NONE)
-        return false;
-    return wait_for_property_window_nonzero(conn.get(), conn.root(), supporting, timeout);
+    auto atom = intern_atom(conn.get(), "_NET_SUPPORTING_WM_CHECK");
+    return get_window_property_window(conn.get(), conn.root(), atom);
+}
+
+inline bool wait_for_wm_ready(X11Connection& conn, std::chrono::milliseconds timeout, xcb_window_t previous = XCB_NONE)
+{
+    return wait_for_condition(
+        [&]()
+        {
+            auto current = supporting_wm_window(conn);
+            return current && *current != XCB_NONE && *current != previous;
+        },
+        timeout
+    );
 }
 
 inline xcb_window_t create_window(X11Connection& conn, int16_t x, int16_t y, uint16_t width, uint16_t height)

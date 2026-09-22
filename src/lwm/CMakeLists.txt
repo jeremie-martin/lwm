@@ -11,6 +11,7 @@ add_library(liblwm STATIC
     layout/split_tree.cpp
     layout/strategy.cpp
     keybind/keybind.cpp
+    wm_rules.cpp
     wm_focus.cpp
     wm_floating.cpp
     wm_workspace.cpp

@@ -569,9 +569,11 @@ TEST_CASE(
         kTimeout
     ));
 
+    auto previous_wm = supporting_wm_window(conn);
+    REQUIRE(previous_wm.has_value());
     auto restart_result = run_lwmctl(wm, {"restart"});
     (void)restart_result;
-    REQUIRE(wait_for_wm_ready(conn, std::chrono::seconds(5)));
+    REQUIRE(wait_for_wm_ready(conn, std::chrono::seconds(5), *previous_wm));
     REQUIRE(wait_for_active_window(conn, w2, kTimeout));
     std::this_thread::sleep_for(std::chrono::milliseconds(100));
 

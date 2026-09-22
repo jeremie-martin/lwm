@@ -688,23 +688,31 @@ ParseResult<RuleGeometry> parse_geometry(toml::node const& node, std::string con
     RuleGeometry geometry;
     LWM_TRYV(x, parse_optional_integer(*table, "x", context));
     if (x)
-        geometry.x = static_cast<int32_t>(*x);
+    {
+        if (*x < -32768 || *x > 32767)
+            return std::unexpected(context + ".x must be between -32768 and 32767");
+        geometry.x = static_cast<int16_t>(*x);
+    }
     LWM_TRYV(y, parse_optional_integer(*table, "y", context));
     if (y)
-        geometry.y = static_cast<int32_t>(*y);
+    {
+        if (*y < -32768 || *y > 32767)
+            return std::unexpected(context + ".y must be between -32768 and 32767");
+        geometry.y = static_cast<int16_t>(*y);
+    }
     LWM_TRYV(width, parse_optional_integer(*table, "width", context));
     if (width)
     {
-        if (*width <= 0)
-            return std::unexpected(context + ".width must be positive");
-        geometry.width = static_cast<uint32_t>(*width);
+        if (*width <= 0 || *width > 65535)
+            return std::unexpected(context + ".width must be between 1 and 65535");
+        geometry.width = static_cast<uint16_t>(*width);
     }
     LWM_TRYV(height, parse_optional_integer(*table, "height", context));
     if (height)
     {
-        if (*height <= 0)
-            return std::unexpected(context + ".height must be positive");
-        geometry.height = static_cast<uint32_t>(*height);
+        if (*height <= 0 || *height > 65535)
+            return std::unexpected(context + ".height must be between 1 and 65535");
+        geometry.height = static_cast<uint16_t>(*height);
     }
 
     return geometry;

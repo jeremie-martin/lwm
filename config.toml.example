@@ -217,12 +217,9 @@ keys = ["1", "2", "3", "4", "5", "6", "7", "8", "9", "0"]
 #
 # Rules affect only tiled/floating clients; they cannot convert desktop, dock,
 # or direct-mapped popup types. geometry and center affect floating clients.
-# Keep geometry inside X11 int16/uint16 ranges: the parser currently validates
-# positive sizes but does not reject every value that would narrow.
-#
-# Current implementation gap: borderless and false-valued overrides of initial
-# client state may not take effect on the first map. A later property
-# reevaluation or config reload applies the matching rule. See ROADMAP.md.
+# Geometry x/y must be within -32768..32767 and width/height within 1..65535.
+# Explicit false state overrides and borderless apply on initial mapping as well
+# as property reevaluation and config reload.
 
 # Example: float and center dialog windows
 # [[rules]]

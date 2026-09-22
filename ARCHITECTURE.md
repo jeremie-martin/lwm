@@ -18,7 +18,8 @@ belongs in [IPC.md](IPC.md).
 | `src/lwm/core/types.hpp` | domain state: clients, monitors, workspaces, geometry |
 | `src/lwm/core/policy.hpp` | pure visibility, focus, workspace, fullscreen, and hotplug decisions |
 | `src/lwm/core/ewmh.*` | EWMH atoms, classification, and property I/O |
-| `src/lwm/wm.cpp` | construction, IPC, client lifecycle, rules, visibility, stacking, layout |
+| `src/lwm/wm.cpp` | construction, IPC, client lifecycle, visibility, stacking, layout |
+| `src/lwm/wm_rules.cpp` | classification, rule application, and runtime reevaluation |
 | `src/lwm/wm_ewmh.cpp` | root properties, client lists, workareas, EWMH desktop projection |
 | `src/lwm/wm_events.cpp` | X event dispatch, client messages, property changes, RANDR |
 | `src/lwm/wm_focus.cpp` | focus assignment, fallback, and cycling |
@@ -156,6 +157,13 @@ creates the client record, reads initial hints/state, establishes placement and
 protocol properties, maps once, then reconciles visibility, geometry, stacking,
 and focus. Docks and desktops use dedicated registration paths; popup-only
 types are only mapped.
+
+Mapping, property reevaluation, and config reload apply rule actions through
+`apply_rule_result_to_window()`. Classification and application preferences feed
+the shared desired-state policy on mapping and property changes. Reload uses the
+current effective state as its baseline, preserving unspecified state and the
+existing behavior when no rule matches. Placement and fullscreen overrides use
+the same transition helpers in all three paths.
 
 Client removal writes `WM_STATE=WithdrawnState`, removes every authoritative
 membership, repairs visibility/focus, and refreshes EWMH lists. Movement helpers
