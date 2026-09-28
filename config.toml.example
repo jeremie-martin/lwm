@@ -6,6 +6,7 @@
 # XDG_CONFIG_HOME is set; otherwise LWM uses built-in defaults.
 
 [appearance]
+# Pixel padding and border width must be in 0..65535.
 padding = 10
 border_width = 2
 border_color = 0xFF0000
@@ -33,7 +34,7 @@ terminal = { argv = ["/usr/local/bin/st"] }
 launcher = { argv = ["dmenu_run"] }
 
 [workspaces]
-# Number of workspaces per monitor (must be >= 1).
+# Number of workspaces per monitor (1..65535).
 count = 10
 # Rules, keybinds, and IPC use zero-based workspace indices within a monitor.
 # EWMH flattens all monitors' workspaces into one desktop list (see X11.md).
@@ -243,6 +244,9 @@ keys = ["1", "2", "3", "4", "5", "6", "7", "8", "9", "0"]
 # Each entry requires a unique name, a spawn command, and at least one
 # class/instance/title regex. Size values are fractions from 0.1 through 1.0
 # of the focused monitor's working area.
+# A failed exec leaves the scratchpad retryable. If a launched program never
+# creates a matching window, use `lwmctl scratchpad cancel-launch NAME` before
+# retrying. Cancellation does not terminate the program.
 # Toggle with:
 #   [[binds]]
 #   key = "super+u"

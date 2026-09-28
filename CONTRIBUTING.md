@@ -63,6 +63,20 @@ Set `LWM_TEST_XSERVER=Xephyr` to run the same integration tests in an owned
 nested Xephyr server; `DISPLAY` must point to its parent X server. This does not
 manage the parent display. The parent may itself be a private Xvfb server.
 
+For real multi-output RandR changes, install the Xorg dummy video driver
+(`xserver-xorg-video-dummy` on Debian/Ubuntu) and `xrandr`, then run:
+
+```sh
+LWM_TEST_REQUIRE_X11=1 LWM_TEST_XSERVER=Xorg ./build/tests/lwm_tests "[multioutput]"
+```
+
+This starts an owned, rootless server using `tests/xorg-dummy.conf`, without
+physical input devices or GPUs. The test enables, reorders, removes, and restores
+outputs. It is hidden from the default suite because the dummy driver is optional;
+run it for topology changes. This covers the X protocol path, not hardware/driver
+behavior. The harness uses the server binary directly on Debian to avoid its
+console-only wrapper.
+
 ## Nested preview
 
 For an interactive check, install Xephyr (`xorg-server-xephyr` on Arch Linux,

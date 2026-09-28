@@ -121,6 +121,7 @@ lwmctl workspace switch 2
 lwmctl layout set monocle
 lwmctl ratio adjust -0.05
 lwmctl window list
+lwmctl scratchpad list
 lwmctl subscribe focus_change,workspace_switch
 lwmctl reload-config
 lwmctl restart

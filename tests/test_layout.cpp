@@ -129,3 +129,23 @@ TEST_CASE("Split restart encoding preserves legacy addresses and supports large 
     CHECK_FALSE(deserialize_split_address(1, 0));
     CHECK_FALSE(deserialize_split_address(3, 0xFFFFFFFF));
 }
+
+TEST_CASE("Extreme padding and dock struts saturate instead of wrapping", "[layout][bounds]")
+{
+    Fixture f;
+    f.appearance.padding = 65535;
+    f.appearance.border_width = 65535;
+    auto slots = f.layout.arrange(3, { 100, 100, 1000, 1000 }, LayoutStrategy::MasterStack, {});
+    for (auto g : slots)
+    {
+        CHECK(g.x == 32767);
+        CHECK(g.y == 32767);
+        CHECK(g.width == 1);
+        CHECK(g.height == 1);
+    }
+    Monitor monitor;
+    monitor.width = 1000;
+    monitor.height = 800;
+    monitor.strut = { UINT32_MAX, UINT32_MAX, UINT32_MAX, UINT32_MAX };
+    CHECK(monitor.working_area() == Geometry{ 0, 0, 1, 1 });
+}

@@ -70,12 +70,17 @@ Monitor- and workspace-relative commands target the focused monitor.
 | `scratchpad stash` | move the active window to the generic pool |
 | `scratchpad cycle` | cycle the generic pool |
 | `scratchpad toggle NAME` | show, hide, or launch a named scratchpad |
+| `scratchpad cancel-launch NAME` | clear pending launch state without terminating a process |
 | `scratchpad list` | named and generic scratchpad state as JSON |
 
 Ratio values must be finite numbers with no trailing characters.
 `ratio set` rejects values outside `[min_ratio, 1 - min_ratio]` from the active
-configuration; `ratio adjust` clamps to that range. Scratchpad commands are
-currently raw-protocol commands and are not exposed by `lwmctl`.
+configuration; `ratio adjust` clamps to that range. All scratchpad commands are
+also available through `lwmctl`. A definite exec failure is logged and leaves
+the scratchpad retryable. Successful exec does not guarantee a matching window:
+`scratchpad cancel-launch NAME` clears a pending launch so the user can retry.
+It is a no-op for an empty or already claimed slot and rejects unknown names.
+It does not terminate a process; a late matching window can still be claimed.
 
 ## JSON results
 

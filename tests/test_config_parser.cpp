@@ -394,3 +394,16 @@ TEST_CASE("Numeric configuration rejects non-finite values before range checks",
         CHECK_FALSE(load_from_string("[layout]\nmin_ratio = " + value + "\n"));
     }
 }
+
+TEST_CASE("Config rejects numeric narrowing and excessive workspace allocation", "[config][bounds]")
+{
+    for (auto const* text : { "[appearance]\npadding = 4294967296",
+                              "[appearance]\nborder_width = 65536",
+                              "[workspaces]\ncount = 4294967296",
+                              "[[rules]]\nmatch = { class = 'X' }\napply = { monitor = 4294967296 }" })
+    {
+        INFO(text);
+        CHECK_FALSE(load_from_string(text));
+    }
+    CHECK(load_from_string("[appearance]\npadding = 65535\nborder_width = 65535"));
+}

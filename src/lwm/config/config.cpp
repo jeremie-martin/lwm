@@ -3,6 +3,7 @@
 #include <algorithm>
 #include <array>
 #include <cmath>
+#include <limits>
 #include <regex>
 #include <set>
 #include <sstream>
@@ -787,8 +788,8 @@ ParseVoid parse_rule_apply_table(
     LWM_TRYV(monitor, parse_optional_integer(table, "monitor", context));
     if (monitor)
     {
-        if (*monitor < 0)
-            return std::unexpected(context + ".monitor must be non-negative");
+        if (*monitor < 0 || *monitor > std::numeric_limits<int>::max())
+            return std::unexpected(context + ".monitor must fit a non-negative int");
         rule.monitor = static_cast<int>(*monitor);
         has_action = true;
     }
@@ -1024,15 +1025,15 @@ ConfigLoadResult load_config_result(std::string const& path)
             LWM_TRYV(padding, parse_optional_integer(*appearance, "padding", "[appearance]"));
             if (padding)
             {
-                if (*padding < 0)
-                    return std::unexpected("[appearance].padding must be non-negative");
+                if (*padding < 0 || *padding > 65535)
+                    return std::unexpected("[appearance].padding must be in range 0..65535");
                 cfg.appearance.padding = static_cast<uint32_t>(*padding);
             }
             LWM_TRYV(border_width, parse_optional_integer(*appearance, "border_width", "[appearance]"));
             if (border_width)
             {
-                if (*border_width < 0)
-                    return std::unexpected("[appearance].border_width must be non-negative");
+                if (*border_width < 0 || *border_width > 65535)
+                    return std::unexpected("[appearance].border_width must be in range 0..65535");
                 cfg.appearance.border_width = static_cast<uint32_t>(*border_width);
             }
             LWM_TRYV(border_color, parse_optional_integer(*appearance, "border_color", "[appearance]"));
@@ -1124,14 +1125,16 @@ ConfigLoadResult load_config_result(std::string const& path)
             LWM_TRYV(workspace_count, parse_optional_integer(*workspaces, "count", "[workspaces]"));
             if (workspace_count)
             {
-                if (*workspace_count < 1)
-                    return std::unexpected("[workspaces].count must be >= 1");
+                if (*workspace_count < 1 || *workspace_count > 65535)
+                    return std::unexpected("[workspaces].count must be in range 1..65535");
                 cfg.workspaces.count = static_cast<size_t>(*workspace_count);
                 workspaces_count_set = true;
             }
             if (auto const* names = workspaces->get("names"))
             {
                 LWM_TRYV(workspace_names, parse_string_array(*names, "[workspaces].names"));
+                if (workspace_names.size() > 65535)
+                    return std::unexpected("[workspaces].names cannot contain more than 65535 entries");
                 cfg.workspaces.names = std::move(workspace_names);
                 workspaces_names_set = true;
             }

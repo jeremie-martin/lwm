@@ -123,34 +123,29 @@ void WindowManager::reapply_rules_to_existing_windows()
 
 ClassificationResult WindowManager::classify_managed_window(xcb_window_t window)
 {
-    bool has_transient = transient_for_window(window).has_value();
-    auto classification = ewmh_.classify_window(window, has_transient);
+    xcb_window_t transient = transient_for_window(window).value_or(XCB_NONE);
+    bool has_transient = transient != XCB_NONE;
 
-    // Use cached client data when available to avoid X round-trips.
-    // On initial manage the client doesn't exist yet, so we fall back to X reads.
-    auto const* existing = get_client(window);
-    std::string instance_name, class_name, title;
-    WindowType ewmh_type;
-    if (existing)
+    // One set of property values drives classification, rules, and initial
+    // registration. Runtime callers refresh the relevant cached property first.
+    WindowMatchInfo match_info;
+    if (auto const* existing = get_client(window))
     {
-        class_name = existing->wm_class;
-        instance_name = existing->wm_class_name;
-        title = existing->name;
-        ewmh_type = existing->ewmh_type;
+        match_info.wm_class = existing->wm_class;
+        match_info.wm_class_name = existing->wm_class_name;
+        match_info.title = existing->name;
+        match_info.ewmh_type = existing->ewmh_type;
     }
     else
     {
-        auto wm_class = get_wm_class(window);
-        instance_name = wm_class.first;
-        class_name = wm_class.second;
-        title = get_window_name(window);
-        ewmh_type = ewmh_.get_window_type_enum(window);
+        auto [instance, name] = get_wm_class(window);
+        match_info.wm_class = std::move(name);
+        match_info.wm_class_name = std::move(instance);
+        match_info.title = get_window_name(window);
+        match_info.ewmh_type = ewmh_.get_window_type_enum(window);
     }
-    WindowMatchInfo match_info{ .wm_class = class_name,
-                                .wm_class_name = instance_name,
-                                .title = title,
-                                .ewmh_type = ewmh_type,
-                                .is_transient = has_transient };
+    match_info.is_transient = has_transient;
+    auto classification = classify_window_type(match_info.ewmh_type, has_transient);
     auto rule_result = window_rules_.match(match_info, monitors_, config_.workspaces.names);
 
     if (rule_result.matched && classification.kind != WindowClassification::Kind::Dock
@@ -164,7 +159,7 @@ ClassificationResult WindowManager::classify_managed_window(xcb_window_t window)
         }
     }
 
-    return { classification, rule_result };
+    return { classification, std::move(rule_result), transient, std::move(match_info) };
 }
 
 bool WindowManager::sync_kind(xcb_window_t window, WindowClassification::Kind desired_kind)
@@ -278,8 +273,7 @@ void WindowManager::sync_managed_window_classification(xcb_window_t window, Clas
     size_t previous_workspace = client->workspace;
     xcb_window_t previous_transient_for = client->transient_for;
 
-    auto transient = transient_for_window(window);
-    client->transient_for = transient.value_or(XCB_NONE);
+    client->transient_for = result.transient_for;
 
     // If classification isn't tiled/floating, only transient restacking matters
     WindowClassification::Kind desired_kind = classification.kind;
@@ -350,7 +344,7 @@ void WindowManager::reevaluate_managed_window(xcb_window_t window)
 
     if (!client->scratchpad.has_value())
     {
-        auto scratchpad_match = match_scratchpad_for_window(window, result.rule_result);
+        auto scratchpad_match = match_scratchpad_for_window(result.properties, result.rule_result);
         if (scratchpad_match)
         {
             auto* state = find_named_scratchpad(*scratchpad_match);

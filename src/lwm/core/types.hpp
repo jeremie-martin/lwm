@@ -55,6 +55,17 @@ struct Geometry
     bool operator==(Geometry const&) const = default;
 };
 
+// Saturate arithmetic at the X11 wire boundary instead of wrapping coordinates
+// or turning a large positive size into zero.
+constexpr int16_t geometry_coordinate(int64_t value)
+{
+    return static_cast<int16_t>(std::clamp<int64_t>(value, -32768, 32767));
+}
+constexpr uint16_t geometry_extent(int64_t value)
+{
+    return static_cast<uint16_t>(std::clamp<int64_t>(value, 1, 65535));
+}
+
 struct Strut
 {
     uint32_t left = 0;
@@ -453,32 +464,13 @@ struct Monitor
 
     Geometry working_area() const
     {
-        int32_t w = static_cast<int32_t>(width);
-        int32_t h = static_cast<int32_t>(height);
-        int32_t left = static_cast<int32_t>(strut.left);
-        int32_t right = static_cast<int32_t>(strut.right);
-        int32_t top = static_cast<int32_t>(strut.top);
-        int32_t bottom = static_cast<int32_t>(strut.bottom);
-
-        // Clamp total struts to monitor dimensions
-        int32_t h_strut = std::min(w, left + right);
-        int32_t v_strut = std::min(h, top + bottom);
-
-        // Calculate working area dimensions (minimum 1)
-        int32_t area_w = std::max<int32_t>(1, w - h_strut);
-        int32_t area_h = std::max<int32_t>(1, h - v_strut);
-
-        // Clamp left/top offsets: if struts exceed dimension, use no offset
-        int32_t offset_x = (left + right >= w) ? 0 : left;
-        int32_t offset_y = (top + bottom >= h) ? 0 : top;
-
-        int32_t area_x = static_cast<int32_t>(x) + offset_x;
-        int32_t area_y = static_cast<int32_t>(y) + offset_y;
-
-        return { static_cast<int16_t>(area_x),
-                 static_cast<int16_t>(area_y),
-                 static_cast<uint16_t>(area_w),
-                 static_cast<uint16_t>(area_h) };
+        uint64_t horizontal = static_cast<uint64_t>(strut.left) + strut.right;
+        uint64_t vertical = static_cast<uint64_t>(strut.top) + strut.bottom;
+        // Oversized struts consume the extent without shifting the origin.
+        return { geometry_coordinate(static_cast<int64_t>(x) + (horizontal >= width ? 0 : strut.left)),
+                 geometry_coordinate(static_cast<int64_t>(y) + (vertical >= height ? 0 : strut.top)),
+                 geometry_extent(static_cast<int64_t>(width) - std::min<uint64_t>(width, horizontal)),
+                 geometry_extent(static_cast<int64_t>(height) - std::min<uint64_t>(height, vertical)) };
     }
 };
 

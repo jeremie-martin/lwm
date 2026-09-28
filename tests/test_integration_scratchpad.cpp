@@ -210,17 +210,14 @@ TEST_CASE(
     set_window_wm_class(conn, window, "scratchpad-instance", "ScratchpadClass");
     map_window(conn, window);
 
-    REQUIRE(wait_for_condition(
-        [&]()
-        {
-            auto geometry = get_window_geometry(conn, window);
-            return geometry.has_value() && geometry->x >= 0;
-        },
-        kTimeout
-    ));
+    REQUIRE(wait_for_active_window(conn, window, kTimeout));
 
     set_window_title(conn, window, "dropdown");
-    REQUIRE(wait_for_window_geometry(conn, window, 128, 144, 1024, 432));
+    bool shown = wait_for_window_geometry(conn, window, 128, 144, 1024, 432);
+    INFO(test_env->wm.diagnostics());
+    INFO(send_ipc_command(*socket_path, "window list").value_or("no window reply"));
+    INFO(send_ipc_command(*socket_path, "scratchpad list").value_or("no scratchpad reply"));
+    REQUIRE(shown);
 
     destroy_window(conn, window);
 }
@@ -582,4 +579,83 @@ TEST_CASE("Integration: hidden scratchpad stays hidden across restart", "[integr
 
     destroy_window(conn, sp);
     destroy_window(conn, tiled);
+}
+
+TEST_CASE("Integration: scratchpad launch failure remains retryable", "[integration][scratchpad][launch]")
+{
+    auto env = TestEnvironment::create(R"(
+[[scratchpads]]
+name = "broken"
+spawn = { argv = ["/definitely/missing/lwm-test-program"] }
+match = { class = "LaunchTest" }
+)");
+    if (!env)
+        SKIP("X11 unavailable");
+    auto socket = wait_for_ipc_socket_path(env->conn);
+    REQUIRE(socket);
+    for (int i = 0; i < 2; ++i)
+    {
+        REQUIRE(send_ipc_command(*socket, "scratchpad toggle broken") == "ok");
+        auto state = send_ipc_command(*socket, "scratchpad list");
+        REQUIRE(state);
+        CHECK(state->find("\"pending\":false") != std::string::npos);
+    }
+}
+
+TEST_CASE(
+    "Integration: pending launches require explicit cancellation and late windows remain claimable",
+    "[integration][scratchpad][launch][sequence]"
+)
+{
+    auto env = TestEnvironment::create(R"(
+[[scratchpads]]
+name = "late"
+spawn = { argv = ["/bin/true"] }
+match = { class = "LaunchTest" }
+)");
+    if (!env)
+        SKIP("X11 unavailable");
+    auto socket = wait_for_ipc_socket_path(env->conn);
+    REQUIRE(socket);
+    REQUIRE(send_ipc_command(*socket, "scratchpad toggle late") == "ok");
+    REQUIRE(send_ipc_command(*socket, "scratchpad toggle late") == "ok");
+    auto state = send_ipc_command(*socket, "scratchpad list");
+    REQUIRE(state);
+    CHECK(state->find("\"pending\":true") != std::string::npos);
+    auto result = run_command(LWMCTL_BINARY_PATH, { "--socket", *socket, "scratchpad", "cancel-launch", "late" });
+    REQUIRE(result);
+    REQUIRE(result->exit_code == 0);
+    state = send_ipc_command(*socket, "scratchpad list");
+    REQUIRE(state);
+    CHECK(state->find("\"pending\":false") != std::string::npos);
+    auto window = create_window(env->conn, 10, 10, 240, 160);
+    set_window_wm_class(env->conn, window, "launch", "LaunchTest");
+    map_window(env->conn, window);
+    REQUIRE(wait_for_condition(
+        [&]
+        {
+            auto response = send_ipc_command(*socket, "scratchpad list");
+            return response && response->find("\"window\":" + std::to_string(window)) != std::string::npos;
+        },
+        kTimeout
+    ));
+    REQUIRE(send_ipc_command(*socket, "scratchpad toggle late") == "ok");
+    REQUIRE(wait_for_condition([&] { return !is_hidden_offscreen(env->conn, window); }, kTimeout));
+    destroy_window(env->conn, window);
+}
+
+TEST_CASE("Integration: spawned commands do not inherit WM descriptors", "[integration][launch]")
+{
+    auto env = TestEnvironment::create(R"(
+[autostart]
+commands = [{ shell = 'readlink /proc/$$/fd/* > "$XDG_RUNTIME_DIR/child-fds"; printf done > "$XDG_RUNTIME_DIR/child-done"' }]
+)");
+    if (!env)
+        SKIP("X11 unavailable");
+    auto runtime = std::filesystem::path(env->wm.runtime_dir());
+    REQUIRE(wait_for_condition([&] { return std::filesystem::exists(runtime / "child-done"); }, kTimeout));
+    auto descriptors = read_text_file(runtime / "child-fds");
+    REQUIRE_FALSE(descriptors.empty());
+    CHECK(descriptors.find("socket:") == std::string::npos);
+    CHECK(descriptors.find(".log") == std::string::npos);
 }

@@ -2,6 +2,7 @@
 // counts below must agree with restore; the properties are consumed after scan.
 
 #include "lwm/core/log.hpp"
+#include "lwm/core/restart.hpp"
 #include "wm.hpp"
 #include <algorithm>
 #include <cstring>
@@ -11,63 +12,26 @@ namespace lwm {
 
 namespace {
 
-// Keep the version-3 wire layout so a running pre-removal binary can exec this
-// binary without dropping its restart handoff. Retired fields remain reserved
-// and carry no runtime semantics.
-constexpr uint32_t RESTART_STATE_VERSION = 3;
-constexpr uint32_t RESTART_RATIO_STATE_VERSION = 3;
-constexpr size_t CLIENT_PROP_BASE_COUNT = 24;          // +kind
-constexpr size_t CLIENT_PROP_URGENCY_COUNT = 25;       // +legacy WM-initiated urgency
-constexpr size_t CLIENT_PROP_APP_PREF_COUNT = 26;      // +urgency sources and app preferences
-constexpr size_t CLIENT_PROP_RESTORE_LAYER_COUNT = 27; // +fullscreen restore-layer hint
-constexpr size_t CLIENT_PROP_COUNT = 28;               // +client-authored desktop pin
-
-constexpr uint32_t APP_PREF_SKIP_TASKBAR = 1U << 0;
-constexpr uint32_t APP_PREF_SKIP_PAGER = 1U << 1;
-constexpr uint32_t APP_PREF_ABOVE = 1U << 2;
-constexpr uint32_t APP_PREF_BELOW = 1U << 3;
-
-constexpr uint8_t KNOWN_URGENCY_SOURCES =
-    static_cast<uint8_t>(static_cast<uint8_t>(UrgencySource::WmInitiated) | static_cast<uint8_t>(UrgencySource::App));
-
-// Double-cast is intentional: int16_t → uint16_t reinterprets the bit pattern (e.g. -100 → 65436),
-// then uint16_t → uint32_t zero-extends, preserving the 16-bit pattern without sign-extension.
-// On unpack, uint32_t → uint16_t truncates back, then uint16_t → int16_t restores the sign.
-void pack_geometry(uint32_t* out, Geometry const& g)
+// Validate the X envelope before interpreting words. Oversized/truncated
+// properties are rejected rather than mistaken for complete records.
+std::vector<uint32_t> read_words(
+    xcb_connection_t* connection,
+    xcb_window_t window,
+    xcb_atom_t property,
+    xcb_atom_t type,
+    uint32_t limit = 65536
+)
 {
-    out[0] = static_cast<uint32_t>(static_cast<uint16_t>(g.x));
-    out[1] = static_cast<uint32_t>(static_cast<uint16_t>(g.y));
-    out[2] = static_cast<uint32_t>(g.width);
-    out[3] = static_cast<uint32_t>(g.height);
-}
-
-Geometry unpack_geometry(uint32_t const* data)
-{
-    return { static_cast<int16_t>(static_cast<uint16_t>(data[0])),
-             static_cast<int16_t>(static_cast<uint16_t>(data[1])),
-             static_cast<uint16_t>(data[2]),
-             static_cast<uint16_t>(data[3]) };
-}
-
-void pack_optional_geometry(uint32_t* out, std::optional<Geometry> const& g)
-{
-    if (g.has_value())
+    auto cookie = xcb_get_property(connection, false, window, property, type, 0, limit);
+    auto* reply = xcb_get_property_reply(connection, cookie, nullptr);
+    std::vector<uint32_t> words;
+    if (reply && reply->type == type && reply->format == 32 && reply->bytes_after == 0)
     {
-        out[0] = 1;
-        pack_geometry(out + 1, *g);
+        auto* begin = static_cast<uint32_t const*>(xcb_get_property_value(reply));
+        words.assign(begin, begin + xcb_get_property_value_length(reply) / 4);
     }
-    else
-    {
-        out[0] = 0;
-        out[1] = out[2] = out[3] = out[4] = 0;
-    }
-}
-
-std::optional<Geometry> unpack_optional_geometry(uint32_t const* data)
-{
-    if (data[0] == 0)
-        return std::nullopt;
-    return unpack_geometry(data + 1);
+    free(reply);
+    return words;
 }
 
 void restore_visible_pool_scratchpad_membership(Client& client)
@@ -95,39 +59,7 @@ void WindowManager::serialize_restart_state()
         if (client.kind() != Client::Kind::Tiled && client.kind() != Client::Kind::Floating)
             continue;
 
-        uint32_t data[CLIENT_PROP_COUNT]{};
-        // Keep retired version-3 fields reserved for restart compatibility.
-        data[0] = 0;
-        data[1] = client.borderless ? 1 : 0;
-        std::optional<Geometry> prior_floating;
-        if (client.kind() == Client::Kind::Tiled)
-            prior_floating = prior_floating_geometry(client);
-        else if (auto const* hidden_tiled = hidden_tiled_pool_scratchpad(client))
-            prior_floating = hidden_tiled->prior_floating;
-        Geometry restart_floating_geometry =
-            client.kind() == Client::Kind::Floating ? floating_geometry(client) : prior_floating.value_or(Geometry{});
-        pack_geometry(data + 2, restart_floating_geometry);
-        pack_optional_geometry(data + 6, client.fullscreen_restore);
-        pack_optional_geometry(data + 11, client.maximize_restore);
-        pack_optional_geometry(data + 16, prior_floating);
-        data[21] = 0;
-        // 0=none, 1=Tiled, 2=Floating
-        if (is_hidden_tiled_pool_scratchpad(client))
-            data[22] = 1;
-        else if (hidden_floating_pool_scratchpad(client))
-            data[22] = 2;
-        else
-            data[22] = 0;
-        // Current kind (1=Tiled, 2=Floating).
-        data[23] = (client.kind() == Client::Kind::Tiled) ? 1 : 2;
-        data[24] = client.urgency.sources;
-        data[25] = (client.app_prefs.skip_taskbar ? APP_PREF_SKIP_TASKBAR : 0)
-            | (client.app_prefs.skip_pager ? APP_PREF_SKIP_PAGER : 0) | (client.app_prefs.above ? APP_PREF_ABOVE : 0)
-            | (client.app_prefs.below ? APP_PREF_BELOW : 0);
-        data[26] = client.fullscreen_restore_layer_hint
-            ? static_cast<uint32_t>(*client.fullscreen_restore_layer_hint) + 1U
-            : 0U;
-        data[27] = client.desktop_pinned ? 1U : 0U;
+        auto data = restart::encode_client(client);
 
         xcb_change_property(
             conn_.get(),
@@ -136,8 +68,8 @@ void WindowManager::serialize_restart_state()
             lwm_restart_client_,
             XCB_ATOM_CARDINAL,
             32,
-            CLIENT_PROP_COUNT,
-            data
+            data.size(),
+            data.data()
         );
 
         // Store scratchpad name as UTF8 string property
@@ -178,7 +110,7 @@ void WindowManager::serialize_restart_state()
     // Global state on root
     size_t global_count = 5 + monitors_.size() * 2;
     std::vector<uint32_t> global(global_count);
-    global[0] = RESTART_STATE_VERSION;
+    global[0] = restart::state_version;
     global[1] = static_cast<uint32_t>(focused_monitor_);
     global[2] = static_cast<uint32_t>(active_window_);
     global[3] = showing_desktop_ ? 1 : 0;
@@ -251,7 +183,7 @@ void WindowManager::serialize_restart_state()
     // Ratio stored as uint64_t bit pattern split into two uint32_t values.
     {
         std::vector<uint32_t> ratio_data;
-        ratio_data.push_back(RESTART_RATIO_STATE_VERSION);
+        ratio_data.push_back(restart::ratio_version);
         ratio_data.push_back(static_cast<uint32_t>(monitors_.size()));
         for (auto const& monitor : monitors_)
         {
@@ -297,140 +229,28 @@ void WindowManager::serialize_restart_state()
 
 bool WindowManager::restore_global_restart_state()
 {
-    auto cookie =
-        xcb_get_property(conn_.get(), false, conn_.screen()->root, lwm_restart_state_, XCB_ATOM_CARDINAL, 0, 1024);
-    auto* reply = xcb_get_property_reply(conn_.get(), cookie, nullptr);
-    if (!reply)
+    auto words = read_words(conn_.get(), conn_.screen()->root, lwm_restart_state_, XCB_ATOM_CARDINAL);
+    auto record = restart::decode_global(words);
+    if (!record)
         return false;
-
-    size_t len = xcb_get_property_value_length(reply) / 4;
-    if (reply->type != XCB_ATOM_CARDINAL || len < 5)
+    focused_monitor_ = record->focused_monitor < monitors_.size() ? record->focused_monitor : 0;
+    active_window_ = record->active_window;
+    showing_desktop_ = record->showing_desktop;
+    for (size_t i = 0; i < std::min(monitors_.size(), record->workspaces.size()); ++i)
     {
-        free(reply);
-        return false;
+        auto& monitor = monitors_[i];
+        monitor.current_workspace = std::min(record->workspaces[i].first, monitor.workspaces.size() - 1);
+        monitor.previous_workspace = std::min(record->workspaces[i].second, monitor.workspaces.size() - 1);
     }
-
-    LOG_INFO("Restoring global restart state");
-
-    auto* data = static_cast<uint32_t const*>(xcb_get_property_value(reply));
-    uint32_t version = data[0];
-    if (version != RESTART_STATE_VERSION)
+    auto ratios = read_words(conn_.get(), conn_.screen()->root, lwm_restart_ratios_, XCB_ATOM_CARDINAL);
+    for (auto& layout : restart::decode_layouts(ratios))
     {
-        LOG_WARN("Restart state version mismatch ({} != {}), ignoring", version, RESTART_STATE_VERSION);
-        free(reply);
-        return false;
-    }
-
-    focused_monitor_ = static_cast<size_t>(data[1]);
-    active_window_ = static_cast<xcb_window_t>(data[2]);
-    showing_desktop_ = data[3] != 0;
-    uint32_t num_monitors = data[4];
-
-    // Restore per-monitor workspace selections
-    for (uint32_t i = 0; i < num_monitors && i < monitors_.size(); ++i)
-    {
-        size_t idx = 5 + i * 2;
-        if (idx + 1 >= len)
-            break;
-        size_t ws_count = monitors_[i].workspaces.size();
-        monitors_[i].current_workspace = std::min(static_cast<size_t>(data[idx]), ws_count - 1);
-        monitors_[i].previous_workspace = std::min(static_cast<size_t>(data[idx + 1]), ws_count - 1);
-    }
-
-    // Clamp focused_monitor to valid range
-    if (focused_monitor_ >= monitors_.size())
-        focused_monitor_ = 0;
-
-    free(reply);
-
-    // Restore split ratios
-    {
-        auto ratio_cookie = xcb_get_property(
-            conn_.get(),
-            false,
-            conn_.screen()->root,
-            lwm_restart_ratios_,
-            XCB_ATOM_CARDINAL,
-            0,
-            65536
-        );
-        auto* ratio_reply = xcb_get_property_reply(conn_.get(), ratio_cookie, nullptr);
-        if (ratio_reply && ratio_reply->type == XCB_ATOM_CARDINAL)
-        {
-            size_t rlen = xcb_get_property_value_length(ratio_reply) / 4;
-            auto* rdata = static_cast<uint32_t const*>(xcb_get_property_value(ratio_reply));
-            size_t pos = 0;
-
-            if (rlen >= 2 && rdata[0] >= 1 && rdata[0] <= RESTART_RATIO_STATE_VERSION)
-            {
-                uint32_t ratio_version = rdata[0];
-                pos = 1;
-                uint32_t num_monitors_r = rdata[pos++];
-                for (uint32_t mi = 0; mi < num_monitors_r && pos < rlen; ++mi)
-                {
-                    uint32_t num_ws = rdata[pos++];
-                    for (uint32_t wi = 0; wi < num_ws && pos < rlen; ++wi)
-                    {
-                        std::optional<LayoutStrategy> layout_strategy;
-                        if (ratio_version >= 3)
-                        {
-                            uint32_t serialized_strategy = rdata[pos++];
-                            if (serialized_strategy <= static_cast<uint32_t>(LayoutStrategy::Monocle))
-                                layout_strategy = static_cast<LayoutStrategy>(serialized_strategy);
-                            if (pos >= rlen)
-                                break;
-                        }
-                        uint32_t num_entries = rdata[pos++];
-                        bool can_apply = mi < monitors_.size() && wi < monitors_[mi].workspaces.size();
-                        if (can_apply && layout_strategy)
-                            monitors_[mi].workspaces[wi].layout_strategy = *layout_strategy;
-                        for (uint32_t ei = 0; ei < num_entries; ++ei)
-                        {
-                            std::optional<SplitAddress> addr;
-                            uint32_t ratio_lo;
-                            uint32_t ratio_hi;
-                            if (ratio_version == 1)
-                            {
-                                if (pos + 2 >= rlen)
-                                {
-                                    pos = rlen;
-                                    break;
-                                }
-                                uint32_t packed_addr = rdata[pos++];
-                                ratio_lo = rdata[pos++];
-                                ratio_hi = rdata[pos++];
-                                addr = deserialize_split_address(packed_addr & 0xFF, packed_addr >> 8);
-                            }
-                            else
-                            {
-                                if (pos + 3 >= rlen)
-                                {
-                                    pos = rlen;
-                                    break;
-                                }
-                                uint32_t depth = rdata[pos++];
-                                uint32_t path = rdata[pos++];
-                                ratio_lo = rdata[pos++];
-                                ratio_hi = rdata[pos++];
-                                addr = deserialize_split_address(depth, path);
-                            }
-
-                            if (!can_apply || !addr.has_value())
-                                continue;
-
-                            uint64_t ratio_bits =
-                                static_cast<uint64_t>(ratio_lo) | (static_cast<uint64_t>(ratio_hi) << 32);
-                            double ratio;
-                            std::memcpy(&ratio, &ratio_bits, sizeof(double));
-
-                            if (ratio > 0.0 && ratio < 1.0)
-                                monitors_[mi].workspaces[wi].split_ratios[*addr] = ratio;
-                        }
-                    }
-                }
-            }
-        }
-        free(ratio_reply);
+        if (layout.monitor >= monitors_.size() || layout.workspace >= monitors_[layout.monitor].workspaces.size())
+            continue;
+        auto& workspace = monitors_[layout.monitor].workspaces[layout.workspace];
+        if (layout.strategy)
+            workspace.layout_strategy = *layout.strategy;
+        workspace.split_ratios = std::move(layout.ratios);
     }
 
     LOG_INFO(
@@ -444,80 +264,31 @@ bool WindowManager::restore_global_restart_state()
 
 void WindowManager::apply_restart_client_state(xcb_window_t window)
 {
-    auto cookie =
-        xcb_get_property(conn_.get(), false, window, lwm_restart_client_, XCB_ATOM_CARDINAL, 0, CLIENT_PROP_COUNT);
-    auto* reply = xcb_get_property_reply(conn_.get(), cookie, nullptr);
-    if (!reply)
-        return;
-
-    size_t len = xcb_get_property_value_length(reply) / 4;
-    if (reply->type != XCB_ATOM_CARDINAL || len < CLIENT_PROP_BASE_COUNT)
-    {
-        free(reply);
-        return;
-    }
-
-    auto* data = static_cast<uint32_t const*>(xcb_get_property_value(reply));
+    auto words = read_words(conn_.get(), window, lwm_restart_client_, XCB_ATOM_CARDINAL, restart::client_words);
+    auto record = restart::decode_client(words);
     auto* client = get_client(window);
-    if (!client)
-    {
-        free(reply);
+    if (!record || !client)
         return;
-    }
 
-    // Retired version-3 fields at data[0] and data[21] remain reserved.
-    client->borderless = data[1] != 0;
-    Geometry saved_floating_geometry = unpack_geometry(data + 2);
-    client->fullscreen_restore = unpack_optional_geometry(data + 6);
-    client->maximize_restore = unpack_optional_geometry(data + 11);
-    std::optional<Geometry> saved_prior_floating = unpack_optional_geometry(data + 16);
-
-    if (data[22] == 1)
+    client->borderless = record->borderless;
+    client->fullscreen_restore = record->fullscreen_restore;
+    client->maximize_restore = record->maximize_restore;
+    auto saved_prior_floating = record->prior_floating;
+    auto saved_floating_geometry = record->floating;
+    auto saved_kind = record->kind;
+    if (record->hidden_pool_kind == 1)
         client->scratchpad = HiddenTiledScratchpadPoolMembership{ saved_prior_floating };
-    else if (data[22] == 2)
+    else if (record->hidden_pool_kind == 2)
         client->scratchpad = HiddenFloatingScratchpadPoolMembership{ saved_floating_geometry };
-
-    // scan_existing_windows reclassifies from scratch, which can turn floating
-    // scratchpads into tiled windows; restore the serialized kind afterward.
-    std::optional<Client::Kind> saved_kind;
-    if (data[23] == 1)
-        saved_kind = Client::Kind::Tiled;
-    else if (data[23] == 2)
-        saved_kind = Client::Kind::Floating;
-
-    if (len >= CLIENT_PROP_APP_PREF_COUNT)
-    {
-        client->urgency.sources = static_cast<uint8_t>(data[24]) & KNOWN_URGENCY_SOURCES;
-
-        uint32_t const app_pref_bits = data[25];
-        client->app_prefs.skip_taskbar = (app_pref_bits & APP_PREF_SKIP_TASKBAR) != 0;
-        client->app_prefs.skip_pager = (app_pref_bits & APP_PREF_SKIP_PAGER) != 0;
-        client->app_prefs.above = (app_pref_bits & APP_PREF_ABOVE) != 0;
-        client->app_prefs.below = (app_pref_bits & APP_PREF_BELOW) != 0;
-        if (client->app_prefs.above && client->app_prefs.below)
-            client->app_prefs.below = false;
-
-        if (len >= CLIENT_PROP_RESTORE_LAYER_COUNT && data[26] > 0
-            && data[26] <= static_cast<uint32_t>(LayerHint::Below) + 1U)
-        {
-            client->fullscreen_restore_layer_hint = static_cast<LayerHint>(data[26] - 1U);
-        }
-    }
-    else if (len >= CLIENT_PROP_URGENCY_COUNT)
-    {
-        if (data[24] != 0)
-            client->urgency.sources = static_cast<uint8_t>(UrgencySource::WmInitiated);
-    }
+    if (record->urgency)
+        client->urgency.sources = *record->urgency;
     else if (client->urgency.active() && window != active_window_)
-    {
         client->urgency.add(UrgencySource::WmInitiated);
-    }
-
-    // Management publishes _NET_WM_DESKTOP before restart state is applied,
-    // so only the serialized bit can distinguish a client pin from that echo.
-    client->desktop_pinned = len >= CLIENT_PROP_COUNT && data[27] != 0;
-
-    free(reply);
+    if (record->app_prefs)
+        client->app_prefs = *record->app_prefs;
+    if (record->restore_layer)
+        client->fullscreen_restore_layer_hint = record->restore_layer;
+    client->desktop_pinned = record->desktop_pinned;
 
     if (saved_kind && *saved_kind == Client::Kind::Floating && client->kind() == Client::Kind::Tiled)
     {
@@ -543,7 +314,8 @@ void WindowManager::apply_restart_client_state(xcb_window_t window)
     // Restore scratchpad name
     auto name_cookie = xcb_get_property(conn_.get(), false, window, lwm_restart_scratchpad_name_, utf8_string_, 0, 256);
     auto* name_reply = xcb_get_property_reply(conn_.get(), name_cookie, nullptr);
-    if (name_reply && name_reply->type == utf8_string_ && xcb_get_property_value_length(name_reply) > 0)
+    if (name_reply && name_reply->type == utf8_string_ && name_reply->format == 8 && name_reply->bytes_after == 0
+        && xcb_get_property_value_length(name_reply) > 0)
     {
         std::string scratchpad_name(
             static_cast<char const*>(xcb_get_property_value(name_reply)),
@@ -586,7 +358,8 @@ void WindowManager::restore_window_ordering()
 
     // Restore tiled ordering
     auto* tiled_reply = xcb_get_property_reply(conn_.get(), tiled_cookie, nullptr);
-    if (tiled_reply && tiled_reply->type == XCB_ATOM_WINDOW)
+    if (tiled_reply && tiled_reply->type == XCB_ATOM_WINDOW && tiled_reply->format == 32
+        && tiled_reply->bytes_after == 0)
     {
         size_t tiled_len = xcb_get_property_value_length(tiled_reply) / 4;
         auto* tiled_data = static_cast<uint32_t const*>(xcb_get_property_value(tiled_reply));
@@ -619,7 +392,8 @@ void WindowManager::restore_window_ordering()
     // Restore floating ordering by assigning mru_order from saved priority
     auto* float_reply = xcb_get_property_reply(conn_.get(), float_cookie, nullptr);
 
-    if (float_reply && float_reply->type == XCB_ATOM_WINDOW)
+    if (float_reply && float_reply->type == XCB_ATOM_WINDOW && float_reply->format == 32
+        && float_reply->bytes_after == 0)
     {
         size_t float_len = xcb_get_property_value_length(float_reply) / 4;
         auto* float_data = static_cast<uint32_t const*>(xcb_get_property_value(float_reply));
@@ -645,7 +419,7 @@ void WindowManager::restore_window_ordering()
         65536
     );
     auto* pool_reply = xcb_get_property_reply(conn_.get(), pool_cookie, nullptr);
-    if (pool_reply && pool_reply->type == XCB_ATOM_WINDOW)
+    if (pool_reply && pool_reply->type == XCB_ATOM_WINDOW && pool_reply->format == 32 && pool_reply->bytes_after == 0)
     {
         size_t pool_len = xcb_get_property_value_length(pool_reply) / 4;
         auto* pool_data = static_cast<uint32_t const*>(xcb_get_property_value(pool_reply));
@@ -655,7 +429,9 @@ void WindowManager::restore_window_ordering()
         {
             xcb_window_t w = static_cast<xcb_window_t>(pool_data[i]);
             auto* client = get_client(w);
-            if (client)
+            if (client && !scratchpad_named(*client)
+                && (client->kind() == Client::Kind::Tiled || client->kind() == Client::Kind::Floating)
+                && std::ranges::find(scratchpad_pool_, w) == scratchpad_pool_.end())
             {
                 restore_visible_pool_scratchpad_membership(*client);
                 scratchpad_pool_.push_back(w);

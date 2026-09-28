@@ -94,8 +94,8 @@ void WindowManager::toggle_named_scratchpad(std::string_view name)
             return;
         }
         LOG_INFO("Scratchpad '{}': launching '{}'", name, config->spawn.describe());
-        launch_program(config->spawn);
-        state->mark_launch_pending();
+        if (launch_program(config->spawn))
+            state->mark_launch_pending();
         return;
     }
 
@@ -273,6 +273,8 @@ void WindowManager::show_named_scratchpad_window(xcb_window_t window, Scratchpad
 
     move_floating_client_to_workspace(*client, target_monitor, target_workspace, false);
 
+    // A late title/class match may already be visible on the target workspace.
+    apply_visible_floating_geometry(*client);
     deiconify_window(window, true);
 }
 
@@ -361,8 +363,8 @@ void WindowManager::finalize_scratchpad_claim(
     }
 }
 
-std::optional<std::string> WindowManager::match_scratchpad_for_window(
-    xcb_window_t window, WindowRuleResult const& rule_result)
+std::optional<std::string>
+WindowManager::match_scratchpad_for_window(WindowMatchInfo const& properties, WindowRuleResult const& rule_result)
 {
     if (rule_result.scratchpad.has_value())
     {
@@ -371,20 +373,17 @@ std::optional<std::string> WindowManager::match_scratchpad_for_window(
             return rule_result.scratchpad;
     }
 
-    auto [wm_instance, wm_class] = get_wm_class(window);
-    std::string title = get_window_name(window);
-
     for (auto const& matcher : scratchpad_matchers_)
     {
         auto* state = find_named_scratchpad(matcher.name);
         if (!state || state->window() != XCB_NONE)
             continue;
 
-        if (matcher.class_regex.has_value() && !std::regex_match(wm_class, *matcher.class_regex))
+        if (matcher.class_regex.has_value() && !std::regex_match(properties.wm_class, *matcher.class_regex))
             continue;
-        if (matcher.instance_regex.has_value() && !std::regex_match(wm_instance, *matcher.instance_regex))
+        if (matcher.instance_regex.has_value() && !std::regex_match(properties.wm_class_name, *matcher.instance_regex))
             continue;
-        if (matcher.title_regex.has_value() && !std::regex_match(title, *matcher.title_regex))
+        if (matcher.title_regex.has_value() && !std::regex_match(properties.title, *matcher.title_regex))
             continue;
         if (!matcher.class_regex.has_value() && !matcher.instance_regex.has_value() && !matcher.title_regex.has_value())
             continue;

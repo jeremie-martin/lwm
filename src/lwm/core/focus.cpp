@@ -3,7 +3,7 @@
 
 namespace lwm::focus {
 
-std::optional<size_t> monitor_index_at_point(std::span<Monitor const> monitors, int16_t x, int16_t y)
+std::optional<size_t> monitor_index_at_point(std::span<Monitor const> monitors, int32_t x, int32_t y)
 {
     for (size_t i = 0; i < monitors.size(); ++i)
     {

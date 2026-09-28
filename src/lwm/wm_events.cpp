@@ -3,6 +3,7 @@
 #include "lwm/core/policy.hpp"
 #include "lwm/core/window_rules.hpp"
 #include "wm.hpp"
+#include <unordered_set>
 #include <xcb/xcb_icccm.h>
 
 namespace lwm {
@@ -96,7 +97,15 @@ void WindowManager::handle_event(xcb_generic_event_t const& event)
 
     if (conn_.has_randr() && response_type == conn_.randr_event_base() + XCB_RANDR_SCREEN_CHANGE_NOTIFY)
     {
-        handle_randr_screen_change();
+        monitors_dirty_ = true;
+        return;
+    }
+
+    if (conn_.has_randr() && response_type == conn_.randr_event_base() + XCB_RANDR_NOTIFY)
+    {
+        auto const& notify = reinterpret_cast<xcb_randr_notify_event_t const&>(event);
+        if (notify.subCode == XCB_RANDR_NOTIFY_CRTC_CHANGE || notify.subCode == XCB_RANDR_NOTIFY_OUTPUT_CHANGE)
+            monitors_dirty_ = true;
         return;
     }
 
@@ -197,7 +206,9 @@ void WindowManager::handle_map_request(xcb_map_request_event_t const& e)
     if (is_override_redirect_window(e.window))
         return;
 
-    auto [classification, rule_result] = classify_managed_window(e.window);
+    auto initial = classify_managed_window(e.window);
+    auto& classification = initial.classification;
+    auto const& rule_result = initial.rule_result;
 
     bool start_iconic = false;
     bool urgent = false;
@@ -217,7 +228,7 @@ void WindowManager::handle_map_request(xcb_map_request_event_t const& e)
     // If matched, force floating + iconic so it maps hidden, then finalize after.
     auto scratchpad_match = (classification.kind == WindowClassification::Kind::Tiled
                              || classification.kind == WindowClassification::Kind::Floating)
-        ? match_scratchpad_for_window(e.window, rule_result)
+        ? match_scratchpad_for_window(initial.properties, rule_result)
         : std::optional<std::string>{};
 
     if (scratchpad_match)
@@ -243,11 +254,11 @@ void WindowManager::handle_map_request(xcb_map_request_event_t const& e)
             kind_str = "popup";
             break;
         case WindowClassification::Kind::Floating:
-            map_floating_window(e.window, classification, rule_result, start_iconic, urgent);
+            map_floating_window(e.window, initial, start_iconic, urgent);
             kind_str = "floating";
             break;
         case WindowClassification::Kind::Tiled:
-            map_tiled_window(e.window, classification, rule_result, start_iconic, urgent);
+            map_tiled_window(e.window, initial, start_iconic, urgent);
             kind_str = "tiled";
             break;
     }
@@ -337,18 +348,17 @@ void WindowManager::map_dock_window(xcb_window_t window)
 
 void WindowManager::map_floating_window(
     xcb_window_t window,
-    WindowClassification const& classification,
-    WindowRuleResult const& rule_result,
+    ClassificationResult const& initial,
     bool start_iconic,
     bool urgent
 )
 {
-    manage_floating_window(window, start_iconic, false);
+    manage_floating_window(window, initial, start_iconic, false);
     auto& client = require_client(window);
 
     if (urgent)
         client.urgency.add(UrgencySource::App);
-    apply_rule_result_to_window(window, rule_result, &classification);
+    apply_rule_result_to_window(window, initial.rule_result, &initial.classification);
 
     reconcile_visibility_for_monitor(client.monitor);
     apply_visible_floating_geometry(client);
@@ -369,13 +379,12 @@ void WindowManager::map_floating_window(
 
 void WindowManager::map_tiled_window(
     xcb_window_t window,
-    WindowClassification const& classification,
-    WindowRuleResult const& rule_result,
+    ClassificationResult const& initial,
     bool start_iconic,
     bool urgent
 )
 {
-    manage_window(window, start_iconic);
+    manage_window(window, initial, start_iconic);
 
     auto& client = require_client(window);
 
@@ -383,7 +392,7 @@ void WindowManager::map_tiled_window(
         client.urgency.add(UrgencySource::App);
     if (client.urgency.active())
         sync_client_urgency_state(client);
-    apply_rule_result_to_window(window, rule_result, &classification);
+    apply_rule_result_to_window(window, initial.rule_result, &initial.classification);
 
     if (!start_iconic && client.monitor == focused_monitor_ && should_be_visible(client) && is_focus_eligible(client))
     {
@@ -1455,6 +1464,16 @@ void WindowManager::handle_property_notify(xcb_property_notify_event_t const& e)
     {
         update_window_title(e.window);
     }
+    else if (e.atom == XCB_ATOM_WM_CLASS)
+    {
+        if (auto* client = get_client(e.window))
+        {
+            auto [instance, name] = get_wm_class(e.window);
+            client->wm_class_name = std::move(instance);
+            client->wm_class = std::move(name);
+            reevaluate_managed_window(e.window);
+        }
+    }
     else if (e.atom == ewmh_.get()->_NET_WM_WINDOW_TYPE
              || (wm_transient_for_ != XCB_NONE && e.atom == wm_transient_for_))
     {
@@ -1484,16 +1503,16 @@ void WindowManager::handle_property_notify(xcb_property_notify_event_t const& e)
                     uint32_t hinted_width = hints.width > 0 ? static_cast<uint32_t>(hints.width) : geom.width;
                     uint32_t hinted_height = hints.height > 0 ? static_cast<uint32_t>(hints.height) : geom.height;
 
-                    geom.width = static_cast<uint16_t>(std::max<uint32_t>(1, hinted_width));
-                    geom.height = static_cast<uint16_t>(std::max<uint32_t>(1, hinted_height));
+                    geom.width = geometry_extent(hinted_width);
+                    geom.height = geometry_extent(hinted_height);
                 }
                 bool transient_anchored = client->transient_for != XCB_NONE;
                 bool has_position_hint = (hints.flags & XCB_ICCCM_SIZE_HINT_US_POSITION)
                     || ((hints.flags & XCB_ICCCM_SIZE_HINT_P_POSITION) && !transient_anchored);
                 if (has_position_hint)
                 {
-                    int16_t hinted_x = static_cast<int16_t>(hints.x);
-                    int16_t hinted_y = static_cast<int16_t>(hints.y);
+                    int16_t hinted_x = geometry_coordinate(hints.x);
+                    int16_t hinted_y = geometry_coordinate(hints.y);
                     bool desktop_pinned = !transient_anchored && client->desktop_pinned;
                     auto target = floating::resolve_position_hint(
                         monitors_,
@@ -1650,159 +1669,42 @@ void WindowManager::handle_timeouts()
 
 void WindowManager::handle_randr_screen_change()
 {
-    // Save window locations using policy types directly (by monitor NAME, not index)
-    std::vector<hotplug_policy::SavedWindowLocation> tiled_locations;
-    std::vector<hotplug_policy::SavedWindowLocation> floating_locations;
-    // Dock/Desktop clients live in clients_ but not in workspace.windows or the floating loop;
-    // capture their monitor names so they can be rebound after detect_monitors() rebuilds monitors_.
-    std::vector<std::pair<xcb_window_t, std::string>> dock_desktop_monitor_names;
+    auto previous = std::move(monitors_);
+    detect_monitors();
+    auto destinations = hotplug_policy::preserve_workspaces(previous, monitors_);
+    focused_monitor_ = focused_monitor_ < destinations.size() ? destinations[focused_monitor_] : 0;
 
-    // Clear fullscreen_monitors from all clients since monitor indices may have changed
+    std::unordered_set<xcb_window_t> displaced_floating;
+    // Rebind every kind through one mapping before recomputing struts/visibility.
     for (auto& [id, client] : clients_)
     {
+        size_t target = client.monitor < destinations.size() ? destinations[client.monitor] : 0;
+        if (client.kind() == Client::Kind::Floating
+            && (client.monitor >= previous.size() || previous[client.monitor].name != monitors_[target].name))
+            displaced_floating.insert(id);
         client.fullscreen_monitors.reset();
+        assign_window_workspace(client, target, std::min(client.workspace, monitors_[target].workspaces.size() - 1));
     }
-
-    // Save tiled window locations
-    for (size_t mi = 0; mi < monitors_.size(); ++mi)
-    {
-        auto const& monitor = monitors_[mi];
-        for (size_t wi = 0; wi < monitor.workspaces.size(); ++wi)
-        {
-            for (xcb_window_t window : monitor.workspaces[wi].windows)
-            {
-                tiled_locations.push_back({ window, monitor.name, wi });
-            }
-        }
-    }
-
-    // Save floating window locations (geometry persists in Client)
-    for (auto const& [fw, client] : clients_)
+    update_struts();
+    for (auto& [id, client] : clients_)
     {
         if (client.kind() != Client::Kind::Floating)
             continue;
-        std::string monitor_name = (client.monitor < monitors_.size()) ? monitors_[client.monitor].name : "";
-        floating_locations.push_back({ fw, monitor_name, client.workspace });
-    }
-
-    // Save dock/desktop monitor names so they can be rebound by name after the rebuild.
-    // Dock/Desktop monitor indices are not part of the Tiled/Floating invariant so they may
-    // be stale; fall back to an empty name (which resolves to monitor 0 on the apply pass).
-    for (auto const& [id, client] : clients_)
-    {
-        if (client.kind() != Client::Kind::Dock && client.kind() != Client::Kind::Desktop)
-            continue;
-        std::string monitor_name = (client.monitor < monitors_.size()) ? monitors_[client.monitor].name : "";
-        dock_desktop_monitor_names.push_back({ id, monitor_name });
-    }
-
-    // Save workspace state per monitor name for restoration
-    std::unordered_map<std::string, hotplug_policy::SavedWorkspaceState> saved_workspace_state;
-    for (auto const& monitor : monitors_)
-    {
-        std::vector<LayoutStrategy> layout_strategies;
-        layout_strategies.reserve(monitor.workspaces.size());
-        for (auto const& workspace : monitor.workspaces) layout_strategies.push_back(workspace.layout_strategy);
-        saved_workspace_state[monitor.name] = {
-            monitor.current_workspace,
-            monitor.previous_workspace,
-            std::move(layout_strategies),
-        };
-    }
-
-    // Save focused monitor name for restoration
-    std::string focused_monitor_name =
-        (!monitors_.empty() && focused_monitor_ < monitors_.size()) ? monitors_[focused_monitor_].name : "";
-
-    detect_monitors();
-    update_struts();
-
-    // Compute the relocation plan (pure function — no side effects)
-    auto plan = hotplug_policy::plan_hotplug(
-        monitors_,
-        tiled_locations,
-        floating_locations,
-        saved_workspace_state,
-        focused_monitor_name
-    );
-
-    // Apply workspace state
-    for (auto const& [mi, ws] : plan.workspace_current)
-    {
-        if (mi < monitors_.size())
-            monitors_[mi].current_workspace = ws;
-    }
-    for (auto const& [mi, ws] : plan.workspace_previous)
-    {
-        if (mi < monitors_.size())
-            monitors_[mi].previous_workspace = ws;
-    }
-    for (auto const& restore : plan.workspace_layouts)
-    {
-        if (restore.monitor < monitors_.size() && restore.workspace < monitors_[restore.monitor].workspaces.size())
+        auto area = monitors_[client.monitor].working_area();
+        if (displaced_floating.contains(id))
         {
-            monitors_[restore.monitor].workspaces[restore.workspace].layout_strategy = restore.strategy;
-        }
-    }
-
-    if (!monitors_.empty())
-    {
-        // Apply tiled relocations. Plan IDs came from clients_ at save time and nothing
-        // erases between (detect_monitors is X-only, no event dispatch).
-        for (auto const& rel : plan.tiled_relocations)
-        {
-            auto& client = require_client(rel.id);
-            add_tiled_to_workspace(client, rel.target_monitor, rel.target_workspace);
-        }
-
-        // Apply floating relocations
-        for (auto const& rel : plan.floating_relocations)
-        {
-            auto& client = require_client(rel.id);
-            // Invalidate fullscreen_restore if window moved to a different monitor.
-            // Done before assign_window_workspace so the saved geometry is rewritten
-            // for the new monitor's working area, not the old one.
-            if (rel.original_monitor_name != monitors_[rel.target_monitor].name && client.fullscreen_restore)
-            {
-                auto area = monitors_[rel.target_monitor].working_area();
+            auto& geometry = floating_geometry(client);
+            geometry = floating::place_floating(area, geometry.width, geometry.height, std::nullopt);
+            if (client.fullscreen_restore)
                 client.fullscreen_restore = floating::place_floating(
                     area,
                     client.fullscreen_restore->width,
                     client.fullscreen_restore->height,
                     std::nullopt
                 );
-            }
-            if (rel.original_monitor_name != monitors_[rel.target_monitor].name)
-            {
-                auto area = monitors_[rel.target_monitor].working_area();
-                auto& geom = floating_geometry(client);
-                geom = floating::place_floating(area, geom.width, geom.height, std::nullopt);
-            }
-            else
-            {
-                auto area = monitors_[rel.target_monitor].working_area();
-                floating_geometry(client) = floating::clamp_to_area(area, floating_geometry(client));
-            }
-            assign_window_workspace(client, rel.target_monitor, rel.target_workspace);
         }
-
-        focused_monitor_ = plan.focused_monitor;
-
-        // Rebind dock/desktop clients by name (plan_hotplug only handles tiled/floating).
-        std::unordered_map<std::string, size_t> name_to_index;
-        for (size_t i = 0; i < monitors_.size(); ++i) name_to_index[monitors_[i].name] = i;
-
-        for (auto const& [id, old_name] : dock_desktop_monitor_names)
-        {
-            auto& client = require_client(id);
-            size_t new_monitor = 0;
-            if (auto it = name_to_index.find(old_name); it != name_to_index.end())
-                new_monitor = it->second;
-            client.monitor = new_monitor;
-            size_t ws_count = monitors_[new_monitor].workspaces.size();
-            if (client.workspace >= ws_count)
-                client.workspace = monitors_[new_monitor].current_workspace;
-        }
+        else
+            floating_geometry(client) = floating::clamp_to_area(area, floating_geometry(client));
     }
 
     // Update EWMH for new monitor configuration

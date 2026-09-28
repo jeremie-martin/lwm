@@ -56,9 +56,11 @@ add_executable(lwm_tests
   test_ipc_server.cpp
   test_harness.cpp
   test_layout.cpp
+  test_restart.cpp
   test_stacking_policy.cpp
   test_window_rules.cpp
   test_monitor_hotplug.cpp
+  test_integration_hotplug.cpp
   test_workspace.cpp
   test_workspace_policy.cpp
   test_integration_logging.cpp
@@ -66,6 +68,7 @@ add_executable(lwm_tests
 
 target_compile_definitions(lwm_tests PRIVATE
     LWM_BINARY_PATH="$<TARGET_FILE:lwm>"
+    LWM_XORG_CONFIG_PATH="${CMAKE_CURRENT_SOURCE_DIR}/xorg-dummy.conf"
     LWMCTL_BINARY_PATH="$<TARGET_FILE:lwmctl>"
 )
 add_dependencies(lwm_tests lwm lwmctl)

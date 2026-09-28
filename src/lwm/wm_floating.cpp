@@ -6,9 +6,14 @@
 
 namespace lwm {
 
-void WindowManager::manage_floating_window(xcb_window_t window, bool start_iconic, bool allow_focus)
+void WindowManager::manage_floating_window(
+    xcb_window_t window,
+    ClassificationResult const& initial,
+    bool start_iconic,
+    bool allow_focus
+)
 {
-    auto transient = transient_for_window(window);
+    auto transient = initial.transient_for != XCB_NONE ? std::optional{ initial.transient_for } : std::nullopt;
     std::optional<size_t> monitor_idx;
     std::optional<size_t> workspace_idx;
     std::optional<Geometry> parent_geom;
@@ -74,14 +79,14 @@ void WindowManager::manage_floating_window(xcb_window_t window, bool start_iconi
         if (user_placed || (program_placed && !dominated_by_parent))
         {
             has_position_hint = true;
-            hinted_x = static_cast<int16_t>(size_hints.x);
-            hinted_y = static_cast<int16_t>(size_hints.y);
+            hinted_x = geometry_coordinate(size_hints.x);
+            hinted_y = geometry_coordinate(size_hints.y);
         }
         if (size_hints.flags & (XCB_ICCCM_SIZE_HINT_US_SIZE | XCB_ICCCM_SIZE_HINT_P_SIZE))
         {
             has_size_hint = true;
-            hinted_width = static_cast<uint32_t>(size_hints.width);
-            hinted_height = static_cast<uint32_t>(size_hints.height);
+            hinted_width = size_hints.width > 0 ? geometry_extent(size_hints.width) : 0;
+            hinted_height = size_hints.height > 0 ? geometry_extent(size_hints.height) : 0;
         }
     }
 
@@ -118,11 +123,7 @@ void WindowManager::manage_floating_window(xcb_window_t window, bool start_iconi
     {
         int32_t center_x = static_cast<int32_t>(hinted_x) + static_cast<int32_t>(width) / 2;
         int32_t center_y = static_cast<int32_t>(hinted_y) + static_cast<int32_t>(height) / 2;
-        if (auto hinted_monitor = focus::monitor_index_at_point(
-                monitors_,
-                static_cast<int16_t>(center_x),
-                static_cast<int16_t>(center_y)
-            ))
+        if (auto hinted_monitor = focus::monitor_index_at_point(monitors_, center_x, center_y))
         {
             monitor_idx = *hinted_monitor;
             workspace_idx = monitors_[*hinted_monitor].current_workspace;
@@ -155,21 +156,20 @@ void WindowManager::manage_floating_window(xcb_window_t window, bool start_iconi
     }
 
     {
-        auto [instance_name, class_name] = get_wm_class(window);
         Client client;
         client.id = window;
         set_floating_state(client, placement);
         client.monitor = *monitor_idx;
         client.workspace = *workspace_idx;
-        client.name = get_window_name(window);
-        client.wm_class = class_name;
-        client.wm_class_name = instance_name;
+        client.name = initial.properties.title;
+        client.wm_class = initial.properties.wm_class;
+        client.wm_class_name = initial.properties.wm_class_name;
         client.transient_for = transient.value_or(XCB_NONE);
         client.desktop_pinned = desktop_pinned;
         client.order = next_client_order_++;
         client.mru_order = next_mru_order_++;
         client.iconic = start_iconic;
-        client.ewmh_type = ewmh_.get_window_type_enum(window);
+        client.ewmh_type = initial.properties.ewmh_type;
         parse_initial_ewmh_state(client);
         cache_focus_hints_into(client);
         refresh_user_time_tracking_into(client);
@@ -294,8 +294,7 @@ void WindowManager::update_floating_monitor_for_geometry(Client& client, Geometr
 {
     int32_t center_x = static_cast<int32_t>(geom.x) + static_cast<int32_t>(geom.width) / 2;
     int32_t center_y = static_cast<int32_t>(geom.y) + static_cast<int32_t>(geom.height) / 2;
-    auto new_monitor =
-        focus::monitor_index_at_point(monitors_, static_cast<int16_t>(center_x), static_cast<int16_t>(center_y));
+    auto new_monitor = focus::monitor_index_at_point(monitors_, center_x, center_y);
     if (!new_monitor || *new_monitor == client.monitor)
         return;
 

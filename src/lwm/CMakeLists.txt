@@ -5,6 +5,7 @@ add_library(liblwm STATIC
     core/floating.cpp
     core/focus.cpp
     core/ipc_server.cpp
+    core/restart.cpp
     core/ipc.cpp
     core/window_rules.cpp
     config/config.cpp

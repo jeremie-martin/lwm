@@ -117,7 +117,11 @@ private:
     {
         char const* requested_server = std::getenv("LWM_TEST_XSERVER");
         bool nested = requested_server && std::strcmp(requested_server, "Xephyr") == 0;
-        auto server = find_in_path(nested ? "Xephyr" : "Xvfb");
+        bool dummy = requested_server && std::strcmp(requested_server, "Xorg") == 0;
+        auto server = find_in_path(dummy ? "Xorg" : nested ? "Xephyr" : "Xvfb");
+        // Debian's console-only wrapper is unnecessary for a rootless dummy server.
+        if (dummy && access("/usr/lib/xorg/Xorg", X_OK) == 0)
+            server = "/usr/lib/xorg/Xorg";
         if (!server)
             return false;
 
@@ -134,6 +138,22 @@ private:
         if (pid == 0)
         {
             close(ready[0]);
+            if (dummy)
+            {
+                execl(
+                    server->c_str(),
+                    "Xorg",
+                    "-displayfd",
+                    ready_fd.c_str(),
+                    "-config",
+                    LWM_XORG_CONFIG_PATH,
+                    "-noreset",
+                    "-nolisten",
+                    "tcp",
+                    nullptr
+                );
+                _exit(127);
+            }
             if (nested)
             {
                 execl(
@@ -255,7 +275,12 @@ public:
             {
                 if (conn_)
                     xcb_disconnect(conn_);
+                // XCB's handshake uses writev: a resetting server can raise SIGPIPE
+                // before xcb_connect returns its connection error. Suppress only
+                // during this synchronous attempt; WM children keep normal signals.
+                auto previous = ::signal(SIGPIPE, SIG_IGN);
                 conn_ = xcb_connect(nullptr, nullptr);
+                ::signal(SIGPIPE, previous);
                 return conn_ && !xcb_connection_has_error(conn_);
             },
             std::chrono::seconds(1)

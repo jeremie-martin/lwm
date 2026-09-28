@@ -53,6 +53,8 @@ void print_usage()
               << "  focus next               focus next window in MRU cycle\n"
               << "  focus prev               focus previous window in MRU cycle\n"
               << "  window list              list tiled/floating windows as JSON\n"
+              << "  scratchpad <list|stash|cycle|toggle NAME|cancel-launch NAME>\n"
+              << "                           inspect, recall, or recover scratchpads\n"
               << "  subscribe [FILTER]       stream events as JSON lines\n"
               << "                           filter: comma-separated event types\n"
               << "                           (window_map,window_unmap,focus_change,\n"
@@ -377,6 +379,16 @@ int main(int argc, char* argv[])
         if (args.size() == 2 && args[1] == "list")
             return run_command(socket_path, "window list");
         std::cerr << "usage: lwmctl window list\n";
+        return 1;
+    }
+
+    if (command == "scratchpad")
+    {
+        if (args.size() == 2 && (args[1] == "list" || args[1] == "stash" || args[1] == "cycle"))
+            return run_command(socket_path, "scratchpad " + args[1]);
+        if (args.size() == 3 && (args[1] == "toggle" || args[1] == "cancel-launch"))
+            return run_command(socket_path, "scratchpad " + args[1] + " " + args[2]);
+        std::cerr << "usage: lwmctl scratchpad <list|stash|cycle|toggle NAME|cancel-launch NAME>\n";
         return 1;
     }
 

@@ -18,6 +18,7 @@ belongs in [IPC.md](IPC.md).
 | `src/lwm/core/types.hpp` | domain state: clients, monitors, workspaces, geometry |
 | `src/lwm/core/policy.hpp` | pure visibility, focus, workspace, fullscreen, and hotplug decisions |
 | `src/lwm/core/ewmh.*` | EWMH atoms, classification, and property I/O |
+| `src/lwm/core/restart.*` | bounded restart record encoding/decoding without X or live-state mutation |
 | `src/lwm/core/ipc_server.*` | socket ownership, bounded request/reply transport, subscriptions |
 | `src/lwm/wm_ipc.cpp` | command handling and IPC query results |
 | `src/lwm/wm.cpp` | construction, client lifecycle, visibility, stacking, geometry application |
@@ -37,10 +38,11 @@ config reloads, and timeouts use the same state-transition helpers.
 
 Logging is an owned service rather than spdlog global state. A non-null
 stderr fallback exists before initialization and after shutdown; the configured
-logger is swapped in only after every sink is ready. Exec restart and forked
-children flush and return to the fallback before crossing the process boundary,
-which prevents log-file descriptor inheritance. Logging policy is fixed by
-startup options and is not reloaded from TOML.
+logger is swapped in only after every sink is ready. Exec restart flushes and
+returns to the fallback before replacing the process.
+Application launches use `posix_spawnp`; owned descriptors are close-on-exec,
+so children inherit stderr but not the private log sink. Logging policy is
+fixed by startup options and is not reloaded from TOML.
 
 ## Layout and geometry
 
@@ -191,9 +193,13 @@ types are only mapped.
 
 Mapping, property reevaluation, and config reload apply rule actions through
 `apply_rule_result_to_window()`. Classification and application preferences feed
-the shared desired-state policy on mapping and property changes. Reload uses the
-current effective state as its baseline, preserving unspecified state and the
-existing behavior when no rule matches. Placement and fullscreen overrides use
+the shared desired-state policy on mapping and property changes. Classification
+and rule/scratchpad matching use the same captured properties; initial client
+registration reuses these values. This is consistency within one update, not
+an atomic snapshot of independently changing X properties. Managed
+class/title/type data are refreshed at their property-notification boundaries.
+Reload uses the current effective state as its baseline, preserving unspecified
+state and the existing behavior when no rule matches. Placement and fullscreen overrides use
 the same transition helpers in all three paths.
 
 Client removal writes `WM_STATE=WithdrawnState`, removes every authoritative
@@ -211,18 +217,32 @@ Graceful restart serializes global, workspace, client, ordering, ratio, and
 scratchpad state into private X properties, execs the selected binary, restores
 that state during the next scan, then removes the handoff properties. Autostart
 is skipped during this handoff. These properties are private implementation
-details, not a compatibility API.
+details, not a compatibility API. The X envelope (type, format, and completeness)
+is checked before decoding. Client records validate before mutation; layout
+restore retains complete workspace records and discards an incomplete tail.
+One invalid client record does not discard valid peers.
 
-RANDR changes rebuild the monitor graph. Tiled and floating clients are rebound
-by monitor name, missing names fall back to monitor 0, workspace indices are
-clamped, dock/desktop clients are rebound separately, workareas are recomputed,
-and visibility, fullscreen geometry, layout, and focus are restored. Fullscreen
-monitor-index hints are cleared because their indices may no longer be valid.
+RandR screen, output, and CRTC notifications mark topology dirty. The event loop
+coalesces each batch before reconciliation. Discovery supplies fresh output
+geometry; surviving monitor names retain complete workspace state, including
+tiled order, focus history, split ratios, and layout strategy. Removed outputs'
+clients move to monitor 0, with surviving workspace order/focus taking precedence.
+Returning outputs start fresh and do not reclaim relocated clients. All client
+kinds use the same old-to-new monitor mapping. Workareas, floating geometry,
+visibility, and focus are then reconciled. Fullscreen monitor-index hints are
+cleared because the indices may have changed.
 
 Named and generic scratchpads remain ordinary managed clients. Hidden
 scratchpads are iconic and off-screen. Showing one rehosts it on the focused
 monitor's current workspace and restores its tiled membership or floating
 geometry through the normal visibility and focus funnels.
+
+A named scratchpad enters launch-pending state only after successful process
+creation and exec. Process exit is not used as a window-creation signal: a
+launcher may delegate to another process. Pending launches suppress duplicate
+toggles until a matching window arrives or the user explicitly cancels the
+pending launch through IPC. Cancellation neither kills the program nor prevents
+a late matching window from being claimed.
 
 ## Invariants
 

@@ -17,6 +17,7 @@
 #include <optional>
 #include <poll.h>
 #include <signal.h>
+#include <spawn.h>
 #include <string_view>
 #include <sys/wait.h>
 #include <unistd.h>
@@ -287,6 +288,12 @@ RunResult WindowManager::run()
                 timeout_ms = static_cast<int>(delta.count());
             }
         }
+        // Replies can pull events into XCB's queue without leaving the fd readable.
+        while (auto* event = xcb_poll_for_queued_event(conn_.get()))
+        {
+            deferred_events_.push_back(*event);
+            free(event);
+        }
         if (!deferred_events_.empty())
             timeout_ms = 0;
 
@@ -349,6 +356,11 @@ RunResult WindowManager::run()
         ipc_.expire();
 
         handle_timeouts();
+        if (monitors_dirty_)
+        {
+            monitors_dirty_ = false;
+            handle_randr_screen_change();
+        }
         LWM_ASSERT_INVARIANTS(clients_, monitors_, active_window_);
         flush_stacking_list();
         conn_.flush();
@@ -753,7 +765,12 @@ void WindowManager::setup_root()
 
     if (conn_.has_randr())
     {
-        xcb_randr_select_input(conn_.get(), conn_.screen()->root, XCB_RANDR_NOTIFY_MASK_SCREEN_CHANGE);
+        xcb_randr_select_input(
+            conn_.get(),
+            conn_.screen()->root,
+            XCB_RANDR_NOTIFY_MASK_SCREEN_CHANGE | XCB_RANDR_NOTIFY_MASK_CRTC_CHANGE
+                | XCB_RANDR_NOTIFY_MASK_OUTPUT_CHANGE
+        );
     }
 }
 
@@ -1038,8 +1055,8 @@ void WindowManager::scan_existing_windows()
         if (!is_viewable || override_redirect)
             continue;
 
-        auto [classification, scan_rule_result] = classify_managed_window(window);
-        (void)scan_rule_result; // Used implicitly via classify; scan path re-evaluates after manage
+        auto initial = classify_managed_window(window);
+        auto const& classification = initial.classification;
 
         switch (classification.kind)
         {
@@ -1056,7 +1073,7 @@ void WindowManager::scan_existing_windows()
 
             case WindowClassification::Kind::Floating:
             {
-                manage_floating_window(window);
+                manage_floating_window(window, initial);
                 if (auto* c = get_client(window))
                 {
                     if (is_restart_)
@@ -1074,7 +1091,7 @@ void WindowManager::scan_existing_windows()
 
             case WindowClassification::Kind::Tiled:
             {
-                manage_window(window);
+                manage_window(window, initial);
                 if (auto* c = get_client(window))
                 {
                     if (is_restart_)
@@ -1242,10 +1259,8 @@ void WindowManager::apply_post_manage_states(xcb_window_t window, bool has_trans
     }
 }
 
-void WindowManager::manage_window(xcb_window_t window, bool start_iconic)
+void WindowManager::manage_window(xcb_window_t window, ClassificationResult const& initial, bool start_iconic)
 {
-    auto [instance_name, class_name] = get_wm_class(window);
-    std::string window_name = get_window_name(window);
     auto target = resolve_window_desktop(window);
     if (target.kind == DesktopResolution::OutOfRange)
         LOG_WARN("manage_window({:#x}): _NET_WM_DESKTOP out of range, falling back to focused monitor", window);
@@ -1259,14 +1274,14 @@ void WindowManager::manage_window(xcb_window_t window, bool start_iconic)
         set_tiled_state(client);
         client.monitor = target_monitor_idx;
         client.workspace = target_workspace_idx;
-        client.name = window_name;
-        client.wm_class = class_name;
-        client.wm_class_name = instance_name;
+        client.name = initial.properties.title;
+        client.wm_class = initial.properties.wm_class;
+        client.wm_class_name = initial.properties.wm_class_name;
         client.order = next_client_order_++;
         client.iconic = start_iconic;
-        client.ewmh_type = ewmh_.get_window_type_enum(window);
+        client.ewmh_type = initial.properties.ewmh_type;
         parse_initial_ewmh_state(client);
-        client.transient_for = transient_for_window(window).value_or(XCB_NONE);
+        client.transient_for = initial.transient_for;
         client.desktop_pinned = resolved;
 
         clients_[window] = std::move(client);
@@ -2000,32 +2015,33 @@ void WindowManager::rearrange_all_monitors()
         rearrange_monitor(monitors_[monitor_idx]);
 }
 
-void WindowManager::launch_program(CommandConfig const& command)
+bool WindowManager::launch_program(CommandConfig const& command)
 {
-    if (fork() == 0)
-    {
-        // Child processes must not retain the rotating file sink or its descriptor.
-        // stderr remains inherited so the command can still report startup errors.
-        lwm::log::prepare_exec();
-        setsid();
-
-        if (command.kind == CommandConfig::Kind::Shell)
-        {
-            execl("/bin/sh", "sh", "-c", command.shell.c_str(), nullptr);
-            _exit(1);
-        }
-
-        std::vector<char*> argv;
-        argv.reserve(command.argv.size() + 1);
+    if (command.empty())
+        return false;
+    std::vector<char*> argv;
+    if (command.kind == CommandConfig::Kind::Shell)
+        argv = { const_cast<char*>("/bin/sh"), const_cast<char*>("-c"), const_cast<char*>(command.shell.c_str()) };
+    else
         for (auto const& arg : command.argv)
-        {
             argv.push_back(const_cast<char*>(arg.c_str()));
-        }
-        argv.push_back(nullptr);
+    argv.push_back(nullptr);
 
-        execvp(argv.front(), argv.data());
-        _exit(1);
+    // posix_spawn reports exec failure to the parent. Owned WM descriptors are
+    // CLOEXEC; stderr is inherited so the application can report its own errors.
+    posix_spawnattr_t attributes;
+    int error = posix_spawnattr_init(&attributes);
+    if (!error)
+    {
+        error = posix_spawnattr_setflags(&attributes, POSIX_SPAWN_SETSID);
+        pid_t child;
+        if (!error)
+            error = posix_spawnp(&child, argv.front(), nullptr, &attributes, argv.data(), environ);
+        posix_spawnattr_destroy(&attributes);
     }
+    if (error)
+        LOG_ERROR("Cannot launch '{}': {}", command.describe(), std::strerror(error));
+    return error == 0;
 }
 
 bool WindowManager::adjust_master_ratio(double delta)

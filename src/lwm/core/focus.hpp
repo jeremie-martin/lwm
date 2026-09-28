@@ -21,7 +21,7 @@ struct PointerFocusResult
     bool clears_focus() const { return transition == PointerTransition::MonitorChangedClearFocus; }
 };
 
-std::optional<size_t> monitor_index_at_point(std::span<Monitor const> monitors, int16_t x, int16_t y);
+std::optional<size_t> monitor_index_at_point(std::span<Monitor const> monitors, int32_t x, int32_t y);
 
 PointerFocusResult pointer_move(std::span<Monitor const> monitors, size_t active_monitor, int16_t x, int16_t y);
 

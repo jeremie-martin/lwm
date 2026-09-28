@@ -1230,3 +1230,75 @@ apply = { floating = true, borderless = true, below = true, sticky = true, skip_
     REQUIRE(geometry->border_width == 0);
     destroy_window(conn, window);
 }
+
+TEST_CASE(
+    "Integration: class changes refresh classification and rule matching together",
+    "[integration][property][rules]"
+)
+{
+    auto env = TestEnvironment::create(R"(
+[[rules]]
+match = { class = "FloatNow" }
+apply = { floating = true, borderless = true }
+)");
+    if (!env)
+        SKIP("X11 unavailable");
+    auto& conn = env->conn;
+    auto window = create_window(conn, 10, 10, 300, 200);
+    set_window_wm_class(conn, window, "test", "TileNow");
+    map_window(conn, window);
+    REQUIRE(wait_for_active_window(conn, window, kTimeout));
+    auto kind = intern_atom(conn.get(), "_LWM_WINDOW_CLASS");
+    for (int i = 0; i < 3; ++i)
+    {
+        set_window_wm_class(conn, window, "test", "FloatNow");
+        REQUIRE(wait_for_condition(
+            [&] { return get_window_property_string(conn.get(), window, kind) == "floating"; },
+            kTimeout
+        ));
+        auto geometry = get_window_geometry(conn, window);
+        REQUIRE(geometry);
+        CHECK(geometry->border_width == 0);
+        set_window_wm_class(conn, window, "test", "TileNow");
+        REQUIRE(wait_for_condition(
+            [&] { return get_window_property_string(conn.get(), window, kind) == "tiled"; },
+            kTimeout
+        ));
+    }
+    destroy_window(conn, window);
+}
+
+TEST_CASE("Integration: oversized normal hints do not wrap floating dimensions", "[integration][property][bounds]")
+{
+    auto env = TestEnvironment::create(R"(
+[[rules]]
+match = { class = "HugeHints" }
+apply = { floating = true }
+)");
+    if (!env)
+        SKIP("X11 unavailable");
+    auto& conn = env->conn;
+    auto window = create_window(conn, 10, 10, 300, 200);
+    set_window_wm_class(conn, window, "test", "HugeHints");
+    set_wm_normal_hints(conn, window, 10, 10, 65536, 32);
+    map_window(conn, window);
+    REQUIRE(wait_for_active_window(conn, window, kTimeout));
+    auto geometry = get_window_geometry(conn, window);
+    REQUIRE(geometry);
+    CHECK(geometry->width == 65535);
+    CHECK(geometry->height == 32);
+    set_wm_normal_hints(conn, window, 20, 20, 65537, 33);
+    REQUIRE(wait_for_condition(
+        [&]
+        {
+            auto g = get_window_geometry(conn, window);
+            return g && g->height == 33;
+        },
+        kTimeout
+    ));
+    geometry = get_window_geometry(conn, window);
+    REQUIRE(geometry);
+    CHECK(geometry->width == 65535);
+    CHECK(geometry->height == 33);
+    destroy_window(conn, window);
+}

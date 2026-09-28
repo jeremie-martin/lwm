@@ -88,7 +88,7 @@ TEST_CASE("Integration: dock window publishes _LWM_WINDOW_CLASS = dock", "[integ
 }
 
 TEST_CASE(
-    "Integration: _LWM_WINDOW_CLASS updates when a tiled window is toggled to floating",
+    "Integration: _LWM_WINDOW_CLASS updates when a managed window changes type",
     "[integration][ewmh][lwm_window_class]"
 )
 {
@@ -98,29 +98,16 @@ TEST_CASE(
 
     auto& conn = test_env->conn;
 
-    xcb_atom_t net_wm_state = intern_atom(conn.get(), "_NET_WM_STATE");
-    xcb_atom_t net_wm_state_above = intern_atom(conn.get(), "_NET_WM_STATE_ABOVE");
-    if (net_wm_state == XCB_NONE || net_wm_state_above == XCB_NONE)
-    {
-        WARN("Failed to intern _NET_WM_STATE / _NET_WM_STATE_ABOVE.");
-        return;
-    }
-
     xcb_window_t window = create_window(conn, 10, 10, 200, 150);
     map_window(conn, window);
 
     REQUIRE(wait_for_window_class(conn, intern_atom(conn.get(), "_LWM_WINDOW_CLASS"), window, "tiled"));
 
-    // _NET_WM_STATE_ADD = 1; flip to ABOVE which LWM treats as a float-class signal
-    // via its window-state machinery, exercising the kind-transition funnel.
-    send_client_message(conn, window, net_wm_state, 1, net_wm_state_above, 0, 0, 0);
+    set_window_type(conn, window, intern_atom(conn.get(), "_NET_WM_WINDOW_TYPE_DIALOG"));
+    REQUIRE(wait_for_window_class(conn, intern_atom(conn.get(), "_LWM_WINDOW_CLASS"), window, "floating"));
 
-    // The client message may be coalesced; the assertion below is the one that
-    // actually proves the funnel published. If it stays "tiled" forever the test
-    // will fail at kTimeout — that's the signal we want.
-    bool transitioned = wait_for_window_class(conn, intern_atom(conn.get(), "_LWM_WINDOW_CLASS"), window, "floating");
-    if (!transitioned)
-        WARN("Window did not transition to floating via _NET_WM_STATE_ABOVE; LWM may use a different signal.");
+    set_window_type(conn, window, intern_atom(conn.get(), "_NET_WM_WINDOW_TYPE_NORMAL"));
+    REQUIRE(wait_for_window_class(conn, intern_atom(conn.get(), "_LWM_WINDOW_CLASS"), window, "tiled"));
 
     destroy_window(conn, window);
 }

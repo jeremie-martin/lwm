@@ -53,6 +53,8 @@ struct ClassificationResult
 {
     WindowClassification classification;
     WindowRuleResult rule_result;
+    xcb_window_t transient_for = XCB_NONE;
+    WindowMatchInfo properties;
 };
 
 class WindowManager
@@ -203,6 +205,7 @@ private:
     int signal_pipe_[2] = { -1, -1 };
 
     bool stacking_dirty_ = false;
+    bool monitors_dirty_ = false;
     std::deque<xcb_generic_event_t> deferred_events_;
 
     // Scratchpad state
@@ -265,20 +268,8 @@ private:
     void handle_map_request(xcb_map_request_event_t const& e);
     void map_desktop_window(xcb_window_t window);
     void map_dock_window(xcb_window_t window);
-    void map_floating_window(
-        xcb_window_t window,
-        WindowClassification const& classification,
-        WindowRuleResult const& rule_result,
-        bool start_iconic,
-        bool urgent
-    );
-    void map_tiled_window(
-        xcb_window_t window,
-        WindowClassification const& classification,
-        WindowRuleResult const& rule_result,
-        bool start_iconic,
-        bool urgent
-    );
+    void map_floating_window(xcb_window_t window, ClassificationResult const& initial, bool start_iconic, bool urgent);
+    void map_tiled_window(xcb_window_t window, ClassificationResult const& initial, bool start_iconic, bool urgent);
     void handle_window_removal(xcb_window_t window);
     void handle_enter_notify(xcb_enter_notify_event_t const& e);
     void handle_motion_notify(xcb_motion_notify_event_t const& e);
@@ -327,8 +318,13 @@ private:
     void toggle_window_float(xcb_window_t window);
     Geometry current_window_geometry(xcb_window_t window) const;
 
-    void manage_window(xcb_window_t window, bool start_iconic = false);
-    void manage_floating_window(xcb_window_t window, bool start_iconic = false, bool allow_focus = true);
+    void manage_window(xcb_window_t window, ClassificationResult const& initial, bool start_iconic = false);
+    void manage_floating_window(
+        xcb_window_t window,
+        ClassificationResult const& initial,
+        bool start_iconic = false,
+        bool allow_focus = true
+    );
     /// Populate accepts_input / supports_take_focus on a client struct from X11 properties.
     /// The _into form takes a reference so it can be called before the client is inserted
     /// into clients_; the window-keyed wrapper is for event-handler use after insert.
@@ -392,7 +388,7 @@ private:
     void focus_monitor(int direction); // -1 = left, +1 = right
     void move_window_to_monitor(int direction);
 
-    void launch_program(CommandConfig const& command);
+    bool launch_program(CommandConfig const& command);
     /// Returns true when the ratio actually changed (false: no focused
     /// monitor, or already clamped at the bound).
     bool adjust_master_ratio(double delta);
@@ -571,7 +567,8 @@ private:
     void toggle_named_scratchpad(std::string_view name);
     void stash_to_scratchpad(xcb_window_t window);
     void cycle_scratchpad_pool();
-    std::optional<std::string> match_scratchpad_for_window(xcb_window_t window, WindowRuleResult const& rule_result);
+    std::optional<std::string>
+    match_scratchpad_for_window(WindowMatchInfo const& properties, WindowRuleResult const& rule_result);
     void hide_scratchpad_window(xcb_window_t window);
     void show_named_scratchpad_window(xcb_window_t window, ScratchpadConfig const& config);
     void show_pool_scratchpad_window(xcb_window_t window);

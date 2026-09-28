@@ -90,18 +90,6 @@ public:
     xcb_atom_t get_window_type(xcb_window_t window) const;
     WindowType get_window_type_enum(xcb_window_t window) const;
 
-    /**
-     * @brief Classify a window based on EWMH type and transient status
-     *
-     * Desktop and dock types are managed specially; toolbar, menu, utility,
-     * splash, and dialog types float; ephemeral types are direct-mapped
-     * popups; normal and unknown types tile unless transient.
-     *
-     * @param window The window to classify
-     * @param is_transient Whether WM_TRANSIENT_FOR is set
-     * @return Classification result with kind and state flags
-     */
-    WindowClassification classify_window(xcb_window_t window, bool is_transient) const;
 
     // Strut support
     Strut get_window_strut(xcb_window_t window) const;

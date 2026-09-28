@@ -448,11 +448,6 @@ WindowType Ewmh::get_window_type_enum(xcb_window_t window) const
     return WindowType::Normal;
 }
 
-WindowClassification Ewmh::classify_window(xcb_window_t window, bool is_transient) const
-{
-    return classify_window_type(get_window_type_enum(window), is_transient);
-}
-
 Strut Ewmh::get_window_strut(xcb_window_t window) const
 {
     Strut strut;

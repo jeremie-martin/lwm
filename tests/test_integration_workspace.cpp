@@ -1130,3 +1130,80 @@ TEST_CASE("Integration: invalid ratio commands cannot poison layout state", "[in
     CHECK(get_window_geometry(conn, window) == geometry);
     destroy_window(conn, window);
 }
+
+TEST_CASE("Integration: malformed restart clients do not contaminate valid peers", "[integration][restart][malformed]")
+{
+    auto& x11 = X11TestEnvironment::instance();
+    if (!x11.available())
+        SKIP("X11 unavailable");
+    X11Connection conn;
+    REQUIRE(conn.ok());
+    auto bad = create_window(conn, 10, 10, 200, 150);
+    auto good = create_window(conn, 10, 10, 200, 150);
+    map_window(conn, bad);
+    map_window(conn, good);
+    auto property = intern_atom(conn.get(), "_LWM_RESTART_CLIENT");
+    std::array<uint32_t, 28> record{};
+    record[1] = 1;
+    record[2] = 40;
+    record[3] = 50;
+    record[4] = 320;
+    record[5] = 180;
+    record[23] = 2;
+    xcb_change_property(
+        conn.get(),
+        XCB_PROP_MODE_REPLACE,
+        good,
+        property,
+        XCB_ATOM_CARDINAL,
+        32,
+        record.size(),
+        record.data()
+    );
+    SECTION("wrong X property format")
+    {
+        xcb_change_property(
+            conn.get(),
+            XCB_PROP_MODE_REPLACE,
+            bad,
+            property,
+            XCB_ATOM_CARDINAL,
+            8,
+            sizeof(record),
+            record.data()
+        );
+    }
+    SECTION("truncated client record")
+    {
+        xcb_change_property(conn.get(), XCB_PROP_MODE_REPLACE, bad, property, XCB_ATOM_CARDINAL, 32, 23, record.data());
+    }
+    auto root_property = intern_atom(conn.get(), "_LWM_RESTART_STATE");
+    std::array<uint32_t, 7> global{ 3, 0, good, 0, 1, 0, 0 };
+    xcb_change_property(
+        conn.get(),
+        XCB_PROP_MODE_REPLACE,
+        conn.root(),
+        root_property,
+        XCB_ATOM_CARDINAL,
+        32,
+        global.size(),
+        global.data()
+    );
+    xcb_flush(conn.get());
+    LwmProcess wm(x11.display(), "[workspaces]\ncount = 2\n");
+    REQUIRE(wm.running());
+    REQUIRE(wait_for_wm_ready(conn, kTimeout));
+    auto kind = intern_atom(conn.get(), "_LWM_WINDOW_CLASS");
+    REQUIRE(wait_for_condition(
+        [&]
+        {
+            return get_window_property_string(conn.get(), bad, kind) == "tiled"
+                && get_window_property_string(conn.get(), good, kind) == "floating";
+        },
+        kTimeout
+    ));
+    CHECK(get_window_border_width(conn, bad) == 2);
+    CHECK(get_window_border_width(conn, good) == 0);
+    destroy_window(conn, good);
+    destroy_window(conn, bad);
+}

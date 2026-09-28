@@ -12,7 +12,6 @@ release promise; completed work belongs in Git history.
 
 ## Protocol and tooling
 
-- Expose the existing raw scratchpad commands through `lwmctl`.
 - Model `_NET_WM_STRUT_PARTIAL` coordinate ranges instead of using edge extents
   only.
 - Decide and document a policy for tiled-window `_NET_WM_MOVERESIZE` requests;
@@ -22,6 +21,7 @@ release promise; completed work belongs in Git history.
 
 ## Test coverage
 
-- Add real multi-output integration coverage for cross-monitor moves, floating
-  geometry, and RANDR rebind. Pure hotplug planning is covered today, while the
-  Xvfb and nested Xephyr runs currently exercise a single output.
+- Extend the owned Xorg dummy-server tests to cover more cross-monitor input,
+  scratchpad, and dock interactions. Output add/reorder/remove/return, workspace
+  preservation, floating rebind, and fullscreen migration are covered. Physical
+  monitor/driver hotplug behavior still needs hardware validation.

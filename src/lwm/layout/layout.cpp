@@ -8,8 +8,8 @@ namespace lwm {
 Geometry working_area_to_content_rect(Geometry const& area, uint32_t padding, uint32_t border_width)
 {
     int32_t inset = static_cast<int32_t>(padding + border_width);
-    return { static_cast<int16_t>(area.x + inset),
-             static_cast<int16_t>(area.y + inset),
+    return { geometry_coordinate(area.x + inset),
+             geometry_coordinate(area.y + inset),
              static_cast<uint16_t>(std::max<int32_t>(1, area.width - 2 * inset)),
              static_cast<uint16_t>(std::max<int32_t>(1, area.height - 2 * inset)) };
 }
@@ -58,13 +58,13 @@ void visit_layout(
         if (horizontal)
         {
             allocated.width = static_cast<uint16_t>(std::max(1, first));
-            area.x = static_cast<int16_t>(area.x + first + gap);
+            area.x = geometry_coordinate(area.x + first + gap);
             area.width = static_cast<uint16_t>(std::max(1, available - first));
         }
         else
         {
             allocated.height = static_cast<uint16_t>(std::max(1, first));
-            area.y = static_cast<int16_t>(area.y + first + gap);
+            area.y = geometry_coordinate(area.y + first + gap);
             area.height = static_cast<uint16_t>(std::max(1, available - first));
         }
         slot(i, allocated);

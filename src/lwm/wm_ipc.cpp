@@ -353,6 +353,16 @@ std::string WindowManager::run_ipc_command(std::string const& command)
         toggle_named_scratchpad(name);
         return ok_reply("");
     }
+    if (trimmed.starts_with("scratchpad cancel-launch "))
+    {
+        auto name = trim_ascii(trimmed.substr(25));
+        auto* state = find_named_scratchpad(name);
+        if (!state)
+            return error_reply("unknown scratchpad: " + name);
+        if (state->pending_launch())
+            state->mark_empty();
+        return ok_reply("");
+    }
     if (trimmed == "scratchpad list")
     {
         std::string json = "{\"named\":[";

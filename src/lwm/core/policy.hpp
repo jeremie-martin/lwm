@@ -10,6 +10,7 @@
 
 #include "lwm/core/types.hpp"
 #include <algorithm>
+#include <cassert>
 #include <functional>
 #include <optional>
 #include <span>
@@ -486,122 +487,49 @@ inline DesiredWindowState compute_desired_state(DesiredStateInputs const& in)
 
 namespace lwm::hotplug_policy {
 
-struct SavedWindowLocation
+// Transfer complete workspace state for surviving outputs. Discovery supplies
+// fresh geometry; old geometry remains available to relocate floating clients.
+// Every monitor has the same nonzero configured workspace count.
+inline std::vector<size_t> preserve_workspaces(std::span<Monitor> previous, std::span<Monitor> discovered)
 {
-    xcb_window_t id = XCB_NONE;
-    std::string monitor_name;
-    size_t workspace = 0;
-};
-
-struct SavedWorkspaceState
-{
-    size_t current_workspace = 0;
-    size_t previous_workspace = 0;
-    std::vector<LayoutStrategy> layout_strategies;
-};
-
-struct WorkspaceLayoutRestore
-{
-    size_t monitor = 0;
-    size_t workspace = 0;
-    LayoutStrategy strategy = LayoutStrategy::MasterStack;
-};
-
-struct WindowRelocation
-{
-    xcb_window_t id = XCB_NONE;
-    size_t target_monitor = 0;
-    size_t target_workspace = 0;
-    std::string original_monitor_name; ///< Monitor name from before the hotplug
-};
-
-struct HotplugPlan
-{
-    std::vector<WindowRelocation> tiled_relocations;
-    std::vector<WindowRelocation> floating_relocations;
-    size_t focused_monitor = 0;
-    // Per-monitor workspace indices to restore (monitor_idx -> {current, previous})
-    std::vector<std::pair<size_t, size_t>> workspace_current;
-    std::vector<std::pair<size_t, size_t>> workspace_previous;
-    std::vector<WorkspaceLayoutRestore> workspace_layouts;
-};
-
-/// Pure function: compute a relocation plan for windows after a monitor configuration change.
-/// Maps saved window locations (by monitor name) onto the new monitor set.
-/// Windows whose monitor name no longer exists fall back to monitor 0.
-/// Workspace indices are clamped to the new monitor's workspace count.
-inline HotplugPlan plan_hotplug(
-    std::span<Monitor const> new_monitors,
-    std::span<SavedWindowLocation const> tiled_locations,
-    std::span<SavedWindowLocation const> floating_locations,
-    std::unordered_map<std::string, SavedWorkspaceState> const& saved_ws_state,
-    std::string const& focused_monitor_name
-)
-{
-    HotplugPlan plan;
-    if (new_monitors.empty())
-        return plan;
-
-    // Build name -> index map
-    std::unordered_map<std::string, size_t> name_to_index;
-    for (size_t i = 0; i < new_monitors.size(); ++i)
-        name_to_index[new_monitors[i].name] = i;
-
-    // Restore workspace state per monitor
-    for (size_t i = 0; i < new_monitors.size(); ++i)
+    assert(!discovered.empty());
+    std::vector<size_t> destinations(previous.size(), 0);
+    for (size_t old = 0; old < previous.size(); ++old)
     {
-        auto const& mon = new_monitors[i];
-        size_t ws_count = mon.workspaces.size();
-        if (ws_count == 0)
-            ws_count = 1; // Defensive
-
-        if (auto it = saved_ws_state.find(mon.name); it != saved_ws_state.end())
+        for (size_t next = 0; next < discovered.size(); ++next)
         {
-            plan.workspace_current.push_back({ i, std::min(it->second.current_workspace, ws_count - 1) });
-            plan.workspace_previous.push_back({ i, std::min(it->second.previous_workspace, ws_count - 1) });
-            size_t layout_count = std::min(it->second.layout_strategies.size(), mon.workspaces.size());
-            for (size_t workspace = 0; workspace < layout_count; ++workspace)
+            if (previous[old].name != discovered[next].name)
+                continue;
+            destinations[old] = next;
+            auto& source = previous[old];
+            auto& target = discovered[next];
+            assert(source.workspaces.size() == target.workspaces.size());
+            target.workspaces = std::move(source.workspaces);
+            source.workspaces.clear();
+            target.current_workspace = source.current_workspace;
+            target.previous_workspace = source.previous_workspace;
+            // Reconciliation revalidates this owner against the rebound clients.
+            target.fullscreen_owner = source.fullscreen_owner;
+            break;
+        }
+    }
+    // Removed outputs fall back to output 0. Surviving workspace order and
+    // focus take precedence; incoming tiled clients retain their relative order.
+    for (auto& source : previous)
+    {
+        for (size_t w = 0; w < source.workspaces.size(); ++w)
+        {
+            auto& from = source.workspaces[w];
+            auto& to = discovered[0].workspaces[w];
+            to.windows.insert(to.windows.end(), from.windows.begin(), from.windows.end());
+            if (to.focused_window == XCB_NONE && !from.windows.empty())
             {
-                plan.workspace_layouts.push_back({ i, workspace, it->second.layout_strategies[workspace] });
+                to.focused_window = from.focused_window;
+                to.focus_history = std::move(from.focus_history);
             }
         }
     }
-
-    // Helper: resolve a saved location to a target monitor + clamped workspace
-    auto resolve_location = [&](SavedWindowLocation const& loc) -> WindowRelocation {
-        size_t target_monitor = 0;
-        if (auto it = name_to_index.find(loc.monitor_name); it != name_to_index.end())
-            target_monitor = it->second;
-
-        size_t ws_count = new_monitors[target_monitor].workspaces.size();
-        size_t target_workspace = loc.workspace;
-        if (ws_count > 0 && target_workspace >= ws_count)
-        {
-            // Clamp to the monitor's current workspace (from saved state, or 0)
-            target_workspace = 0;
-            if (auto it = saved_ws_state.find(new_monitors[target_monitor].name); it != saved_ws_state.end())
-                target_workspace = std::min(it->second.current_workspace, ws_count - 1);
-        }
-
-        return { loc.id, target_monitor, target_workspace, loc.monitor_name };
-    };
-
-    // Plan tiled relocations
-    plan.tiled_relocations.reserve(tiled_locations.size());
-    for (auto const& loc : tiled_locations)
-        plan.tiled_relocations.push_back(resolve_location(loc));
-
-    // Plan floating relocations
-    plan.floating_relocations.reserve(floating_locations.size());
-    for (auto const& loc : floating_locations)
-        plan.floating_relocations.push_back(resolve_location(loc));
-
-    // Resolve focused monitor by name, fallback to 0
-    plan.focused_monitor = 0;
-    if (auto it = name_to_index.find(focused_monitor_name); it != name_to_index.end())
-        plan.focused_monitor = it->second;
-
-    return plan;
+    return destinations;
 }
 
 } // namespace lwm::hotplug_policy
