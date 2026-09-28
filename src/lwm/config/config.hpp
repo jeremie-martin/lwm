@@ -27,7 +27,7 @@ struct WindowRuleConfig
     std::optional<std::string> instance_pattern; // WM_CLASS instance name (regex)
     std::optional<std::string> title_pattern;    // Window title (regex)
     std::optional<std::string> type;             // "normal", "dialog", "utility", etc.
-    std::optional<bool> transient;               // Match only transient windows
+    std::optional<bool> transient;               // Require transient (true) or non-transient (false)
 
     // Actions
     std::optional<bool> floating;              // Force floating (true) or tiled (false)
@@ -35,13 +35,13 @@ struct WindowRuleConfig
     std::optional<std::string> workspace_name; // Target workspace (by name)
     std::optional<int> monitor;                // Target monitor (index)
     std::optional<std::string> monitor_name;   // Target monitor (by name like "HDMI-1")
-    std::optional<bool> fullscreen;            // Start fullscreen
-    std::optional<bool> above;                 // Always on top
-    std::optional<bool> below;                 // Always below
-    std::optional<bool> sticky;                // Visible on all workspaces
+    std::optional<bool> fullscreen;            // Fullscreen state override
+    std::optional<bool> above;                 // Above-layer preference
+    std::optional<bool> below;                 // Below-layer preference
+    std::optional<bool> sticky;                // Visible on all workspaces of the owning monitor
     std::optional<bool> skip_taskbar;          // Exclude from taskbar
     std::optional<bool> skip_pager;            // Exclude from pager
-    std::optional<bool> borderless;            // Zero border for managed floating windows
+    std::optional<bool> borderless;            // Zero border for tiled or floating windows
     std::optional<RuleGeometry> geometry;      // Floating geometry
     std::optional<bool> center;
     std::optional<std::string> scratchpad; ///< Assign to named scratchpad

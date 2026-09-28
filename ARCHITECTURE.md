@@ -31,8 +31,9 @@ belongs in [IPC.md](IPC.md).
 
 `WindowManager` owns one event loop. It polls the X connection, the SIGHUP
 self-pipe, the IPC listener, one pending request or reply, and subscription
-connections.
-State mutation is single-threaded.
+connections. State mutation is single-threaded. Socket readiness feeds the
+transport server; its command callback runs on this same thread. X events,
+config reloads, and timeouts use the same state-transition helpers.
 
 Logging is an owned service rather than spdlog global state. A non-null
 stderr fallback exists before initialization and after shutdown; the configured
@@ -65,12 +66,9 @@ a second vector of old rectangles.
 ## State model
 
 Each RANDR monitor owns a fixed-size vector of workspaces and identifies one as
-current. The same configured workspace names are repeated per monitor. EWMH
-projects this model into a flat, monitor-major desktop list:
-
-```text
-desktop = monitor_index * workspaces_per_monitor + workspace_index
-```
+current. The same configured workspace names are repeated per monitor.
+[X11.md](X11.md#desktops-and-root-properties) defines the external EWMH desktop
+numbering; internal placement uses separate monitor and workspace indices.
 
 `focused_monitor_` is the target for commands. It usually follows the focused
 window or pointer but is distinct from X input focus.
@@ -149,10 +147,11 @@ geometry only and does not create cross-monitor ownership.
 `apply_stacking()` is the single global stacking authority. Transitions mark
 stacking dirty; it is reconciled at startup, at the end of an event-loop
 iteration, before IPC replies/subscription events, and before a crossing-event
-drain. The drain must include the restack because it can also generate crossing events. Each reconciliation
-reasserts the server order even if the desired order is unchanged, since other
-X clients can perturb it. It computes the X order and `_NET_CLIENT_LIST_STACKING` together. Physically hidden clients sort
-before visible clients. Desktop clients use the Below tier and docks use the
+drain. The drain includes the restack because it can generate crossing events.
+Each reconciliation reasserts the server order even if the desired order is
+unchanged, since other X clients can perturb it. It computes the X order and
+`_NET_CLIENT_LIST_STACKING` together. Physically hidden clients sort before
+visible clients. Desktop clients use the Below tier and docks use the
 Above tier; tiled and floating clients use Below, Normal, Above, or Fullscreen
 according to effective state. Within a tier, floating clients are above
 non-floating clients, active preference is applied within each kind, and
@@ -164,12 +163,13 @@ visible transients are placed above visible parents.
 deiconifies when necessary, switches the target monitor's workspace when
 necessary, checks the resulting fullscreen suppression, then commits active
 focus, focus memory and recency. It sends `WM_TAKE_FOCUS` when
-advertised, sets X input focus, restacks, updates EWMH focus state, clears
-urgency, and emits the IPC event.
+advertised, sets X input focus, marks stacking dirty, updates EWMH focus state,
+clears urgency, and emits the IPC event.
 
-Docks, desktops, iconic clients, and fullscreen-suppressed clients are not
-focus candidates. A managed client accepts focus when `WM_HINTS.input` is true
-or it advertises `WM_TAKE_FOCUS`.
+Docks, desktops, iconic clients, and fullscreen-suppressed clients are excluded
+from fallback and cycling. Explicit activation can deiconify a client before
+the final eligibility check. A managed client accepts focus when `WM_HINTS.input`
+is true or it advertises `WM_TAKE_FOCUS`.
 
 Fallback selection prefers the workspace's remembered focus, its bounded focus
 history, reverse tiled order, sticky tiled clients on the monitor, then visible
@@ -177,9 +177,9 @@ floating clients by recency. Focus cycling instead builds one recency-ranked
 list of eligible tiled and floating clients.
 
 Visibility-changing transitions finish with `flush_and_drain_crossing()`
-before relying on programmatic focus. This round-trip discards stale crossing
-and motion events that could otherwise overwrite the intended focus under
-focus-follows-mouse.
+before accepting subsequent pointer-driven focus. This round-trip discards stale
+crossing and motion events that could otherwise overwrite the intended focus
+under focus-follows-mouse.
 
 ## Lifecycle and transitions
 
@@ -238,8 +238,9 @@ Every completed transition must preserve:
 - managed X stacking and `_NET_CLIENT_LIST_STACKING` come from the same order.
 
 `invariants::validate()` checks registry identity, placement, tiled membership,
-workspace focus, effective fullscreen ownership, and active focus without X calls. Debug builds run it on entry
-to the event loop and after each completed iteration, covering X events, IPC,
-signal reloads, and timeouts after their transitions settle. A violation logs the
-reason and aborts at that boundary; release builds omit these checks. X properties
-and observable ordering require integration tests.
+workspace focus, effective fullscreen ownership, and active focus without X
+calls. Debug builds run it on entry to the event loop and after each completed
+iteration, covering X events, IPC, signal reloads, and timeouts after their
+transitions settle. A violation logs the reason and aborts at that boundary;
+Release builds omit these checks. X properties and observable ordering require
+integration tests.

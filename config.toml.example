@@ -1,7 +1,8 @@
-# Numeric values must be finite; NaN and infinity are rejected.
 # LWM configuration reference and starter file.
-# Unknown sections and keys are errors. With no explicit --config path, this
-# file is loaded from $XDG_CONFIG_HOME/lwm/config.toml only when
+# Unknown sections and keys are errors. Numeric values must be finite.
+# Omitted settings use built-in defaults, except for the binding replacement
+# rules documented below. Without --config, the implicit path is
+# $XDG_CONFIG_HOME/lwm/config.toml, used only when
 # XDG_CONFIG_HOME is set; otherwise LWM uses built-in defaults.
 
 [appearance]
@@ -34,8 +35,11 @@ launcher = { argv = ["dmenu_run"] }
 [workspaces]
 # Number of workspaces per monitor (must be >= 1).
 count = 10
-# Workspace indices used by rules, keybinds, IPC, and EWMH are 0-based.
-# Names are display labels exposed to EWMH bars and pagers.
+# Rules, keybinds, and IPC use zero-based workspace indices within a monitor.
+# EWMH flattens all monitors' workspaces into one desktop list (see X11.md).
+# Names are display labels exposed to EWMH bars and pagers. When count is
+# omitted, nonempty names determine it; otherwise missing names become numeric
+# labels and excess names are discarded.
 names = ["1", "2", "3", "4", "5", "6", "7", "8", "9", "10"]
 
 # Commands run once when LWM starts. Use:
@@ -215,6 +219,9 @@ keys = ["1", "2", "3", "4", "5", "6", "7", "8", "9", "0"]
 #   workspace_name = "dev"   # optional if you prefer names
 #   monitor_name = "HDMI-1"  # optional if you prefer names
 #   scratchpad = "music"
+# Use either workspace or workspace_name, and either monitor or monitor_name.
+# workspace_name must appear in [workspaces].names. Match regexes must be valid
+# and nonempty; malformed configuration is rejected before any rules apply.
 #
 # Rules affect only tiled/floating clients; they cannot convert desktop, dock,
 # or direct-mapped popup types. geometry and center affect floating clients.
@@ -230,7 +237,7 @@ keys = ["1", "2", "3", "4", "5", "6", "7", "8", "9", "0"]
 # Example: pin Slack to a monitor/workspace
 # [[rules]]
 # match = { class = "Slack" }
-# apply = { monitor_name = "HDMI-1", workspace_name = "chat" }
+# apply = { monitor_name = "HDMI-1", workspace_name = "2" }
 
 # Named scratchpads
 # Each entry requires a unique name, a spawn command, and at least one

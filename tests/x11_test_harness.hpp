@@ -125,7 +125,7 @@ private:
         if (previous && *previous)
             previous_display_ = std::string(previous);
 
-        // Let Xvfb reserve a free display atomically and report it only when ready.
+        // Let the server reserve a free display atomically and report it when ready.
         int ready[2];
         if (pipe(ready) != 0)
             return false;

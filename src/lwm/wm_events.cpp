@@ -1,14 +1,3 @@
-/**
- * @file wm_events.cpp
- * @brief Event handling implementation for WindowManager
- *
- * This file contains all X11 event handlers. Each handler answers the question
- * "what happens when this event occurs?" and updates window manager state accordingly.
- *
- * Extracted from wm.cpp to improve navigability and local reasoning about event-driven
- * behavior. All functions are methods of WindowManager.
- */
-
 #include "lwm/core/floating.hpp"
 #include "lwm/core/log.hpp"
 #include "lwm/core/policy.hpp"

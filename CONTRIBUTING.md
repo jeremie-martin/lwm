@@ -16,14 +16,14 @@ For a direct CMake workflow:
 ```sh
 cmake -S . -B build -DBUILD_TESTS=ON -DCMAKE_BUILD_TYPE=Debug
 cmake --build build -j
-ctest --test-dir build --output-on-failure
+LWM_TEST_REQUIRE_X11=1 ctest --test-dir build --output-on-failure
 ```
 
 Run a focused Catch2 selection before the full suite, for example:
 
 ```sh
 ./build/tests/lwm_tests "[integration][focus]"
-./build/tests/lwm_tests "subscription filter"
+./build/tests/lwm_tests "[integration][subscribe]"
 ./build/tests/lwm_logging_tests
 ```
 
@@ -32,9 +32,10 @@ binaries from its CMake build, independently of the working directory. WM
 startup/readiness failures fail the test and include captured stderr; they do
 not skip. Direct test runs may skip when Xvfb is unavailable; `make test` sets
 `LWM_TEST_REQUIRE_X11=1` to make that a failure. Capability-specific tests can
-still skip when the isolated server lacks that capability. Set
-`LWM_TEST_ALLOW_EXISTING_DISPLAY=1` only when deliberately testing against the
-current `DISPLAY`; the default protects a live desktop from test input.
+still skip when the isolated server lacks that capability.
+`LWM_TEST_ALLOW_EXISTING_DISPLAY=1` permits fallback to the current `DISPLAY`
+if the private server cannot start. Use it only with a disposable test display:
+these tests launch a WM and may inject input.
 
 To check undefined behavior and memory safety, use a separate build:
 
@@ -62,9 +63,25 @@ Set `LWM_TEST_XSERVER=Xephyr` to run the same integration tests in an owned
 nested Xephyr server; `DISPLAY` must point to its parent X server. This does not
 manage the parent display. The parent may itself be a private Xvfb server.
 
-Use `./scripts/preview.sh` for manual testing in Xephyr. It creates a debug
-build, uses display `:100`, and seeds `test-config/config.toml` from
-`config.toml.example` when the test config is absent.
+## Nested preview
+
+For an interactive check, install Xephyr (`xorg-server-xephyr` on Arch Linux,
+`xserver-xephyr` on Debian/Ubuntu) and run from an existing X session:
+
+```sh
+./scripts/preview.sh
+```
+
+The script builds Debug, uses display `:100` (which must be free), and seeds
+`test-config/config.toml` from `config.toml.example` if absent. Edit that test
+config to choose installed applications. It also starts `config/polybar.ini`
+when Polybar is installed. Launch applications with `DISPLAY=:100 <program>`;
+press Enter in the script's terminal to stop the preview.
+
+The sample bar uses PulseAudio and battery names `BAT0`/`ACA0`; adjust its
+modules for your machine. `scripts/launch-polybar.sh` starts a bar on each
+connected output, replacing existing Polybar processes. It is intended for
+your desktop session, not the isolated preview.
 
 ## Change model
 

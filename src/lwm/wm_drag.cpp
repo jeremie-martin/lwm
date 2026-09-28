@@ -1,16 +1,5 @@
-/**
- * @file wm_drag.cpp
- * @brief Mouse drag operation implementation for WindowManager
- *
- * This file contains the drag-and-drop state machine for window movement and resizing.
- * It handles both floating window dragging (move/resize) and tiled window reordering.
- *
- * The drag lifecycle is:
- *   begin_floating_move / begin_floating_resize / begin_tiled_drag -> update_drag -> end_drag
- *
- * Extracted from wm.cpp to improve navigability and local reasoning about
- * drag-related behavior. All functions are methods of WindowManager.
- */
+// Drag lifecycle: begin_* -> update_drag -> end_drag.
+// Floating move/resize, tiled reorder, and split resize share this state machine.
 
 #include "lwm/core/focus.hpp"
 #include "wm.hpp"

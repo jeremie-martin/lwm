@@ -73,9 +73,9 @@ Monitor- and workspace-relative commands target the focused monitor.
 | `scratchpad list` | named and generic scratchpad state as JSON |
 
 Ratio values must be finite numbers with no trailing characters.
-The permitted ratio range is `[min_ratio, 1 - min_ratio]` from the active
-configuration. Scratchpad commands are currently raw-protocol commands and are
-not exposed by `lwmctl`.
+`ratio set` rejects values outside `[min_ratio, 1 - min_ratio]` from the active
+configuration; `ratio adjust` clamps to that range. Scratchpad commands are
+currently raw-protocol commands and are not exposed by `lwmctl`.
 
 ## JSON results
 

@@ -1,17 +1,5 @@
-/**
- * @file wm_restart.cpp
- * @brief Hot-reload (exec-based binary replacement) for WindowManager
- *
- * Implements state serialization to X properties before exec and state
- * restoration from X properties after exec. This enables seamless WM
- * binary replacement without losing window state.
- *
- * Private atoms used:
- *   _LWM_RESTART_CLIENT  — per-window state (kind, geometry, etc.)
- *   _LWM_RESTART_STATE   — global state (monitor workspaces, focus, etc.)
- *   _LWM_RESTART_TILED_ORDER   — tiled window ordering across workspaces
- *   _LWM_RESTART_FLOATING_ORDER — floating window MRU ordering
- */
+// Exec handoff through private X properties. Serialization versions and field
+// counts below must agree with restore; the properties are consumed after scan.
 
 #include "lwm/core/log.hpp"
 #include "wm.hpp"

@@ -65,12 +65,12 @@ FetchContent_MakeAvailable(tomlplusplus spdlog)
 
 add_subdirectory(src)
 
-# Install binaries to /usr/local/bin
+# Install under the configured CMAKE_INSTALL_PREFIX
 install(TARGETS lwm lwmctl DESTINATION bin)
 install(PROGRAMS scripts/lwm-notify.sh DESTINATION bin RENAME lwm-notify)
 
 # Optional tests
-option(BUILD_TESTS "Build unit tests" OFF)
+option(BUILD_TESTS "Build unit and integration tests" OFF)
 
 if(BUILD_TESTS)
     enable_testing()

@@ -77,14 +77,7 @@ void Ewmh::create_supporting_window()
     xcb_ewmh_set_supporting_wm_check(&ewmh_, supporting_window_, supporting_window_);
 }
 
-/**
- * @brief Set the _NET_SUPPORTED atom list.
- *
- * This list declares which EWMH features the WM supports. Per EWMH spec,
- * every atom listed here must have a working implementation.
- *
- * Keep this declaration aligned with the implemented contract in X11.md.
- */
+// Keep advertised atoms aligned with the implemented contract in X11.md.
 void Ewmh::set_supported_atoms()
 {
     std::vector<xcb_atom_t> supported = {

@@ -439,8 +439,7 @@ private:
     bool is_sticky_desktop(xcb_window_t window) const;
 
     /// Outcome of resolving a window's _NET_WM_DESKTOP hint to (monitor, workspace).
-    /// Discriminates the three reasons a hint can fail to land at a concrete location,
-    /// so callers can distinguish "the window has no opinion" from "the app sent garbage".
+    /// Distinguishes an absent/sticky hint from an invalid explicit assignment.
     enum class DesktopResolution
     {
         Resolved,   ///< monitor/workspace are valid indices.
@@ -588,7 +587,7 @@ private:
     xcb_atom_t lwm_restart_scratchpad_name_ = XCB_NONE;
     xcb_atom_t lwm_restart_scratchpad_pool_ = XCB_NONE;
 
-    // Hot-reload (exec-based restart)
+    // Exec restart
     void initiate_restart(std::string binary = {});
     void serialize_restart_state();
     bool restore_global_restart_state();

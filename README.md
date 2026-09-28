@@ -9,23 +9,6 @@ LWM is not a compositor, panel, launcher, or desktop session. Run those as
 separate programs, normally from `[autostart]` in the LWM configuration or from
 your X session.
 
-## Runtime model
-
-- Every monitor has its own workspace set and one current workspace.
-- Commands act on the focused monitor. Sticky windows remain on one monitor
-  but are visible on all of that monitor's workspaces.
-- Normal workspace changes move managed windows off-screen; LWM does not
-  unmap and remap them.
-- One tiled or floating fullscreen window can own a monitor's visible scope.
-  Other tiled and floating windows there are hidden, except transients owned by the
-  fullscreen window.
-- Docks and desktop windows are managed outside normal focus and tiling.
-  Tooltips, notifications, dropdown/pop-up menus, and other ephemeral windows
-  are mapped but otherwise unmanaged.
-
-See [ARCHITECTURE.md](ARCHITECTURE.md) for the complete maintainer model and
-[X11.md](X11.md) for the ICCCM/EWMH contract.
-
 ## Build
 
 Required tools and libraries:
@@ -63,14 +46,9 @@ make
 make test
 ```
 
-The binaries are written to `build/src/app/lwm` and
-`build/src/app/lwmctl`. Direct CMake use is also supported:
-
-```sh
-cmake -S . -B build -DBUILD_TESTS=ON
-cmake --build build -j
-ctest --test-dir build --output-on-failure
-```
+The binaries are written to `build/src/app/lwm` and `build/src/app/lwmctl`.
+See [CONTRIBUTING.md](CONTRIBUTING.md#build-and-test) for direct CMake use,
+focused tests, sanitizers, and separate Debug/Release builds.
 
 ## Install and start
 
@@ -106,7 +84,18 @@ defaults.
 [config.toml.example](config.toml.example) is the commented starter and
 configuration reference. It documents commands, autostart, appearance,
 layouts, focus behavior, key and mouse bindings, window rules, workspace
-names, and scratchpads. Workspace and monitor indices are zero-based.
+names, and scratchpads. Adjust the terminal and launcher commands before use.
+
+Each monitor has its own workspaces. Commands target the focused monitor;
+workspace and monitor indices in configuration and IPC are zero-based. Sticky
+windows stay on their owning monitor and appear on all its workspaces. EWMH
+uses a [flat desktop list](X11.md#desktops-and-root-properties) across monitors.
+
+Focus follows the pointer. Master-stack tiles windows; monocle gives each tiled
+window the full content rectangle. Floating windows retain independent geometry.
+A fullscreen window hides other normal windows on its monitor except its own
+transients. Scratchpads provide named windows and a generic pool that can be
+hidden and recalled on the current workspace.
 
 Reload with `lwmctl reload-config`, a configured `reload_config` binding, or
 `SIGHUP`. A successful reload updates appearance, bindings, workspace names,
@@ -155,17 +144,8 @@ The file is mode `0600`, rotates at 1 MiB, and keeps three backups. Use
 `--log-level`, `--log-file`, `--no-log-file`, and `--log-color` to change the
 startup policy.
 
-## Nested preview
-
-Install Xephyr, then run:
-
-```sh
-./scripts/preview.sh
-```
-
-The script builds a debug binary, starts a nested server on `:100`, and starts
-the sample Polybar configuration when Polybar is installed. Launch test
-applications with `DISPLAY=:100 <program>`.
+To try LWM without replacing your current window manager, use the
+[nested Xephyr preview](CONTRIBUTING.md#nested-preview).
 
 ## Documentation
 

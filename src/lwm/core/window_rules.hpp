@@ -11,12 +11,7 @@
 
 namespace lwm {
 
-/**
- * @brief Compiled window rule for efficient matching
- *
- * Regex patterns are pre-compiled at load time to avoid repeated
- * compilation during window mapping.
- */
+// Compile once at configuration load; matching does not recompile regexes.
 struct CompiledWindowRule
 {
     // Pre-compiled regex patterns (nullopt if not specified)
@@ -49,11 +44,7 @@ struct CompiledWindowRule
     bool never_matches = false;
 };
 
-/**
- * @brief Window information used for rule matching
- *
- * Collected from WM_CLASS, _NET_WM_NAME/WM_NAME, and EWMH type.
- */
+// X properties collected by the caller for pure rule matching.
 struct WindowMatchInfo
 {
     std::string wm_class;      // WM_CLASS class name
@@ -63,11 +54,7 @@ struct WindowMatchInfo
     bool is_transient = false;
 };
 
-/**
- * @brief Result of rule matching
- *
- * Contains all actions to apply if a rule matched.
- */
+// Optional actions preserve the distinction between unspecified and false.
 struct WindowRuleResult
 {
     bool matched = false;
@@ -95,46 +82,24 @@ struct WindowRuleResult
     std::optional<std::string> scratchpad;
 };
 
-/**
- * @brief Window rules engine for automatic window configuration
- *
- * Rules are evaluated in order - first match wins.
- * All criteria in a rule use AND logic (all specified must match).
- */
+// First matching rule wins; every specified criterion must match.
 class WindowRules
 {
 public:
-    /**
-     * @brief Load and compile rules from configuration
-     *
-     * Invalid regex patterns fall back to literal string matching.
-     *
-     * @param configs Raw rule configurations from TOML
-     */
+    // TOML parsing rejects invalid regexes. Programmatically supplied patterns
+    // fall back to literal matching here if compilation fails.
     void load_rules(std::vector<WindowRuleConfig> const& configs);
 
-    /**
-     * @brief Match a window against all rules
-     *
-     * @param info Window properties to match against
-     * @param monitors Current monitor list (for name resolution)
-     * @param workspace_names Workspace names (for name resolution)
-     * @return Match result with actions to apply
-     */
+    // Resolve named placement against the supplied monitor/workspace lists.
     WindowRuleResult match(
         WindowMatchInfo const& info,
         std::span<Monitor const> monitors,
         std::span<std::string const> workspace_names
     ) const;
 
-    /**
-     * @brief Get number of loaded rules
-     */
     size_t rule_count() const { return rules_.size(); }
 
-    /**
-     * @brief Compile a regex pattern, falling back to literal on failure
-     */
+    // Invalid regex syntax falls back to literal matching.
     static std::optional<std::regex> compile_pattern(std::optional<std::string> const& pattern);
 
 private:

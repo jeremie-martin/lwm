@@ -24,4 +24,4 @@ release promise; completed work belongs in Git history.
 
 - Add real multi-output integration coverage for cross-monitor moves, floating
   geometry, and RANDR rebind. Pure hotplug planning is covered today, while the
-  integration harness exposes a single Xvfb screen.
+  Xvfb and nested Xephyr runs currently exercise a single output.

@@ -1,12 +1,5 @@
-/**
- * @file wm_scratchpad.cpp
- * @brief Scratchpad operations for WindowManager
- *
- * Implements named scratchpads (pre-configured, always floating, auto-launch)
- * and a generic scratchpad pool (ad-hoc stash/recall with original kind preserved).
- * Both can be recalled from any workspace; showing one targets the focused
- * monitor's current workspace.
- */
+// Named scratchpads launch as floating windows; generic pool entries retain
+// their kind. Recall rehosts either on the focused monitor/current workspace.
 
 #include "lwm/core/floating.hpp"
 #include "lwm/core/log.hpp"

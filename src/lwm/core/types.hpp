@@ -63,11 +63,7 @@ struct Strut
     uint32_t bottom = 0;
 };
 
-/**
- * @brief Fullscreen monitor configuration for _NET_WM_FULLSCREEN_MONITORS.
- *
- * Specifies which monitors a fullscreen window should span.
- */
+/// Edge monitor indices for _NET_WM_FULLSCREEN_MONITORS geometry.
 struct FullscreenMonitors
 {
     uint32_t top = 0;
@@ -183,13 +179,8 @@ struct DesktopState
 
 using ClientState = std::variant<TiledState, FloatingState, DockState, DesktopState>;
 
-/**
- * @brief Unified authoritative record for a managed window.
- *
- * It contains the window's classification, placement, protocol state, and
- * restore geometry. Kind-specific data is held by `tiled_state` or
- * `floating_state`; `WindowManager::clients_` is the central registry.
- */
+/// Managed-window record owned by WindowManager::clients_. The state variant
+/// holds kind-specific data and is the authority for kind().
 struct Client
 {
     xcb_window_t id = XCB_NONE;
@@ -261,7 +252,7 @@ struct Client
     std::optional<FullscreenMonitors> fullscreen_monitors;  ///< Multi-monitor fullscreen
 
     uint32_t sync_counter = 0; ///< XSync counter ID (0 if none)
-    uint64_t sync_value = 0;   ///< Expected counter value
+    uint64_t sync_value = 0;   ///< Last sync-request sequence value sent
 
     uint32_t user_time = 0;                   ///< Last user interaction time
     xcb_window_t user_time_window = XCB_NONE; ///< _NET_WM_USER_TIME_WINDOW
@@ -401,7 +392,7 @@ using SplitRatioMap = std::map<SplitAddress, double>;
 enum class LayoutStrategy
 {
     MasterStack,
-    Monocle ///< All tiled windows occupy the full content rect; stacking elects the visible one.
+    Monocle ///< All tiled windows occupy the full content rect; stacking determines which is on top.
 };
 
 /// Stable name for a layout strategy. Single source of truth for IPC JSON,
@@ -434,7 +425,7 @@ struct Workspace
     std::vector<xcb_window_t> focus_history; ///< MRU stack; back = most recent
 
     LayoutStrategy layout_strategy = LayoutStrategy::MasterStack;
-    SplitRatioMap split_ratios; ///< Per-workspace split ratios, keyed by structural address
+    SplitRatioMap split_ratios; ///< Per-workspace split ratios, keyed by split index
 
     auto find_window(xcb_window_t id) { return std::ranges::find(windows, id); }
 

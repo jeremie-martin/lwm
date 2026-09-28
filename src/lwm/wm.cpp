@@ -1907,18 +1907,8 @@ void WindowManager::deiconify_window(xcb_window_t window, bool focus)
     flush_and_drain_crossing();
 }
 
-/**
- * @brief Initiate window close with graceful fallback to force kill.
- *
- * Protocol:
- * 1. If window supports WM_DELETE_WINDOW, send the close request.
- * 2. Send _NET_WM_PING to check if the window is responsive.
- * 3. If ping response is received within timeout, the window is responsive
- *    and will close itself. Cancel the pending force kill.
- * 4. If ping times out without response, the window is hung - force kill it.
- *
- * If window doesn't support WM_DELETE_WINDOW, kill it immediately.
- */
+// A ping reply cancels the pending force-kill even if the client stays open
+// (for example, to show a save dialog). See X11.md for close behavior.
 void WindowManager::kill_window(xcb_window_t window)
 {
     if (supports_protocol(window, wm_delete_window_))
@@ -2046,7 +2036,6 @@ bool WindowManager::adjust_master_ratio(double delta)
     auto& ws = focused_monitor().current();
     double min_ratio = config_.layout.min_ratio;
 
-    // Root split address = {depth=0, path=0}
     SplitAddress root_addr{ 0 };
 
     double current = config_.layout.default_ratio;
@@ -2140,10 +2129,7 @@ Client const& WindowManager::require_client(xcb_window_t window) const
     return it->second;
 }
 
-/**
- * @brief Get raw _NET_WM_DESKTOP value for a window.
- * @return The desktop index, or nullopt if not set. 0xFFFFFFFF indicates sticky.
- */
+// Preserve 0xFFFFFFFF (sticky); absence or an unreadable property yields nullopt.
 std::optional<uint32_t> WindowManager::get_raw_window_desktop(xcb_window_t window) const
 {
     uint32_t desktop = 0;
@@ -2451,18 +2437,8 @@ void WindowManager::send_wm_ping(xcb_window_t window, uint32_t timestamp)
     xcb_send_event(conn_.get(), 0, window, XCB_EVENT_MASK_NO_EVENT, reinterpret_cast<char*>(&ev));
 }
 
-/**
- * @brief Send _NET_WM_SYNC_REQUEST to notify client before resize.
- *
- * This notifies the client that the WM is about to resize the window.
- * The sync request is sent without blocking - we don't wait for the client
- * to update its counter. This "fire and forget" approach is consistent with
- * how most tiling WMs handle sync requests, since window geometry is
- * WM-controlled and blocking would kill event loop responsiveness.
- *
- * Clients that support _NET_WM_SYNC_REQUEST will use the request to
- * synchronize their rendering, but we proceed with the configure regardless.
- */
+// Notification only: advance the sequence before configure without waiting on
+// the client counter. See X11.md for the supported sync-request behavior.
 void WindowManager::send_sync_request(Client& client, uint32_t timestamp)
 {
     if (wm_protocols_ == XCB_NONE || net_wm_sync_request_ == XCB_NONE)
@@ -2954,12 +2930,7 @@ void WindowManager::remove_tiled_from_workspace(Client const& client, size_t mon
     );
 }
 
-/**
- * @brief Hide a window by moving it off-screen while keeping it mapped.
- *
- * Keeping the window mapped avoids unmap/remap side effects for clients and
- * preserves the WM's visibility model.
- */
+// Keep clients mapped while hidden; UnmapNotify is reserved for withdrawal.
 void WindowManager::hide_window(Client& client)
 {
     xcb_window_t window = client.id;
@@ -2980,16 +2951,8 @@ void WindowManager::hide_window(Client& client)
     LOG_TRACE("hide_window({:#x}): moved to x={}", window, OFF_SCREEN_X);
 }
 
-/**
- * @brief Show a previously hidden window by restoring its position.
- *
- * The window's geometry is restored via the normal layout/floating geometry
- * management. This function just clears the hidden flag - the caller is
- * responsible for configuring the correct geometry (via rearrange_monitor
- * or apply_floating_geometry).
- *
- * @param window The window to show
- */
+// Clear the flag only. The caller must restore geometry through layout or
+// apply_floating_geometry before completing the visibility transition.
 void WindowManager::show_window(Client& client)
 {
     xcb_window_t window = client.id;
