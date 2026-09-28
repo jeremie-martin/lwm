@@ -9,47 +9,6 @@ namespace {
 
 constexpr auto kTimeout = std::chrono::seconds(2);
 
-struct TestEnvironment
-{
-    X11TestEnvironment& x11_env;
-    X11Connection conn;
-    LwmProcess wm;
-
-    bool ok() const { return conn.ok() && wm.running(); }
-
-    static std::optional<TestEnvironment> create()
-    {
-        auto& env = X11TestEnvironment::instance();
-        if (!env.available())
-        {
-            WARN("Xvfb not available; set LWM_TEST_ALLOW_EXISTING_DISPLAY=1 to use an existing DISPLAY.");
-            return std::nullopt;
-        }
-
-        X11Connection conn;
-        if (!conn.ok())
-        {
-            WARN("Failed to connect to X server.");
-            return std::nullopt;
-        }
-
-        LwmProcess wm(env.display(), "[workspaces]\ncount = 2\n");
-        if (!wm.running())
-        {
-            WARN("Failed to start lwm.");
-            return std::nullopt;
-        }
-
-        if (!wait_for_wm_ready(conn, kTimeout))
-        {
-            WARN("Window manager not ready.");
-            return std::nullopt;
-        }
-
-        return TestEnvironment{ env, std::move(conn), std::move(wm) };
-    }
-};
-
 bool has_state(X11Connection& conn, xcb_window_t window, xcb_atom_t state)
 {
     xcb_atom_t net_wm_state = intern_atom(conn.get(), "_NET_WM_STATE");
@@ -100,7 +59,7 @@ TEST_CASE(
     "[integration][client_message][workspace]"
 )
 {
-    auto test_env = TestEnvironment::create();
+    auto test_env = TestEnvironment::create("[workspaces]\ncount = 2\n");
     if (!test_env)
         SKIP("Test environment not available");
 
@@ -168,7 +127,7 @@ TEST_CASE(
     "[integration][client_message][workspace][edge]"
 )
 {
-    auto test_env = TestEnvironment::create();
+    auto test_env = TestEnvironment::create("[workspaces]\ncount = 2\n");
     if (!test_env)
         SKIP("Test environment not available");
 
@@ -211,7 +170,7 @@ TEST_CASE(
 
 TEST_CASE("Integration: client message to invalid window ID is ignored", "[integration][client_message][edge]")
 {
-    auto test_env = TestEnvironment::create();
+    auto test_env = TestEnvironment::create("[workspaces]\ncount = 2\n");
     if (!test_env)
         SKIP("Test environment not available");
 
@@ -244,7 +203,7 @@ TEST_CASE(
     "[integration][client_message][workspace][focus]"
 )
 {
-    auto test_env = TestEnvironment::create();
+    auto test_env = TestEnvironment::create("[workspaces]\ncount = 2\n");
     if (!test_env)
         SKIP("Test environment not available");
 
@@ -289,7 +248,7 @@ TEST_CASE(
     "[integration][client_message][workspace][sticky]"
 )
 {
-    auto test_env = TestEnvironment::create();
+    auto test_env = TestEnvironment::create("[workspaces]\ncount = 2\n");
     if (!test_env)
         SKIP("Test environment not available");
 
@@ -349,7 +308,7 @@ TEST_CASE(
     "[integration][client_message][workspace][sticky][edge]"
 )
 {
-    auto test_env = TestEnvironment::create();
+    auto test_env = TestEnvironment::create("[workspaces]\ncount = 2\n");
     if (!test_env)
         SKIP("Test environment not available");
 
@@ -381,7 +340,7 @@ TEST_CASE(
     "[integration][client_message][focus][user_time]"
 )
 {
-    auto test_env = TestEnvironment::create();
+    auto test_env = TestEnvironment::create("[workspaces]\ncount = 2\n");
     if (!test_env)
         SKIP("Test environment not available");
 
@@ -490,7 +449,7 @@ TEST_CASE(
     "[integration][client_message][focus][user_time]"
 )
 {
-    auto test_env = TestEnvironment::create();
+    auto test_env = TestEnvironment::create("[workspaces]\ncount = 2\n");
     if (!test_env)
         SKIP("Test environment not available");
 
@@ -523,7 +482,7 @@ TEST_CASE(
     "[integration][client_message][focus][user_time]"
 )
 {
-    auto test_env = TestEnvironment::create();
+    auto test_env = TestEnvironment::create("[workspaces]\ncount = 2\n");
     if (!test_env)
         SKIP("Test environment not available");
 
@@ -561,7 +520,7 @@ TEST_CASE(
     "[integration][client_message][focus][user_time][wraparound]"
 )
 {
-    auto test_env = TestEnvironment::create();
+    auto test_env = TestEnvironment::create("[workspaces]\ncount = 2\n");
     if (!test_env)
         SKIP("Test environment not available");
 
@@ -580,8 +539,14 @@ TEST_CASE(
     xcb_window_t w2 = create_window(conn, 60, 60, 220, 160);
     uint32_t initial_time = 0xFFFFFFD0U;
     xcb_change_property(
-        conn.get(), XCB_PROP_MODE_REPLACE, w2, net_wm_user_time,
-        XCB_ATOM_CARDINAL, 32, 1, &initial_time
+        conn.get(),
+        XCB_PROP_MODE_REPLACE,
+        w2,
+        net_wm_user_time,
+        XCB_ATOM_CARDINAL,
+        32,
+        1,
+        &initial_time
     );
     map_window(conn, w2);
     REQUIRE(wait_for_active_window(conn, w2, kTimeout));
@@ -608,7 +573,7 @@ TEST_CASE(
     "[integration][client_message][focus][fullscreen][user_time]"
 )
 {
-    auto test_env = TestEnvironment::create();
+    auto test_env = TestEnvironment::create("[workspaces]\ncount = 2\n");
     if (!test_env)
         SKIP("Test environment not available");
 

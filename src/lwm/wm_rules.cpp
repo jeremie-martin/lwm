@@ -228,27 +228,25 @@ void WindowManager::apply_classification_state(
     auto state_flags = ewmh_.get_window_state_flags(window);
 
     // Reload patches current state; mapping and property changes recompute defaults.
-    auto desired = classification_policy::compute_desired_state(
-        {
-            .classification_skip_taskbar = classification ? classification->skip_taskbar : client->skip_taskbar,
-            .classification_skip_pager = classification ? classification->skip_pager : client->skip_pager,
-            .classification_above = classification ? classification->above : client->layer_hint == LayerHint::Above,
-            .app_skip_taskbar = classification && client->app_prefs.skip_taskbar,
-            .app_skip_pager = classification && client->app_prefs.skip_pager,
-            .ewmh_sticky = state_flags.sticky,
-            .ewmh_modal = state_flags.modal,
-            .app_above = classification && !client->fullscreen && client->app_prefs.above,
-            .app_below = classification ? !client->fullscreen && client->app_prefs.below
-                                        : client->layer_hint == LayerHint::Below,
-            .rule_skip_taskbar = rule_result.skip_taskbar,
-            .rule_skip_pager = rule_result.skip_pager,
-            .rule_sticky = rule_result.sticky,
-            .rule_layer_hint = rule_result.layer_hint,
-            .rule_borderless = rule_result.borderless.value_or(classification ? false : client->borderless),
-            .has_transient = classification && has_transient,
-            .is_sticky_desktop = is_sticky_desktop(window),
-        }
-    );
+    auto desired = classification_policy::compute_desired_state({
+        .classification_skip_taskbar = classification ? classification->skip_taskbar : client->skip_taskbar,
+        .classification_skip_pager = classification ? classification->skip_pager : client->skip_pager,
+        .classification_above = classification ? classification->above : client->layer_hint == LayerHint::Above,
+        .app_skip_taskbar = classification && client->app_prefs.skip_taskbar,
+        .app_skip_pager = classification && client->app_prefs.skip_pager,
+        .ewmh_sticky = state_flags.sticky,
+        .ewmh_modal = state_flags.modal,
+        .app_above = classification && !client->fullscreen && client->app_prefs.above,
+        .app_below =
+            classification ? !client->fullscreen && client->app_prefs.below : client->layer_hint == LayerHint::Below,
+        .rule_skip_taskbar = rule_result.skip_taskbar,
+        .rule_skip_pager = rule_result.skip_pager,
+        .rule_sticky = rule_result.sticky,
+        .rule_layer_hint = rule_result.layer_hint,
+        .rule_borderless = rule_result.borderless.value_or(classification ? false : client->borderless),
+        .has_transient = classification && has_transient,
+        .is_sticky_desktop = is_sticky_desktop(window),
+    });
 
     if (client->skip_taskbar != desired.skip_taskbar)
         set_client_skip_taskbar(*client, desired.skip_taskbar);
@@ -308,9 +306,9 @@ void WindowManager::sync_managed_window_classification(xcb_window_t window, Clas
     bool kind_changed = previous_kind != client->kind();
 
     // Sync visibility on all affected monitors.
-    sync_visibility_for_monitor(previous_monitor);
+    reconcile_visibility_for_monitor(previous_monitor);
     if (monitor_changed)
-        sync_visibility_for_monitor(current_monitor);
+        reconcile_visibility_for_monitor(current_monitor);
 
     // Rearrange/restack previous monitor if window moved away
     if (monitor_changed || workspace_changed || kind_changed)
@@ -318,7 +316,7 @@ void WindowManager::sync_managed_window_classification(xcb_window_t window, Clas
         if (previous_kind == Client::Kind::Tiled)
             rearrange_monitor(monitors_[previous_monitor]);
         else if (monitor_changed)
-            apply_stacking();
+            stacking_dirty_ = true;
     }
 
     // Rearrange/apply geometry on current monitor
@@ -330,7 +328,7 @@ void WindowManager::sync_managed_window_classification(xcb_window_t window, Clas
     else
     {
         apply_visible_floating_geometry(*client);
-        apply_stacking();
+        stacking_dirty_ = true;
     }
 
     if (window == active_window_ && (!is_focus_eligible(*client) || !is_physically_visible(*client)))

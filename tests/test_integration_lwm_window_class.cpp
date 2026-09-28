@@ -9,55 +9,6 @@ namespace {
 
 constexpr auto kTimeout = std::chrono::seconds(2);
 
-struct TestEnvironment
-{
-    X11TestEnvironment& x11_env;
-    X11Connection conn;
-    LwmProcess wm;
-    xcb_atom_t lwm_window_class = XCB_NONE;
-
-    bool ok() const { return conn.ok() && wm.running() && lwm_window_class != XCB_NONE; }
-
-    static std::optional<TestEnvironment> create()
-    {
-        auto& env = X11TestEnvironment::instance();
-        if (!env.available())
-        {
-            WARN("Xvfb not available; set LWM_TEST_ALLOW_EXISTING_DISPLAY=1 to use an existing DISPLAY.");
-            return std::nullopt;
-        }
-
-        X11Connection conn;
-        if (!conn.ok())
-        {
-            WARN("Failed to connect to X server.");
-            return std::nullopt;
-        }
-
-        LwmProcess wm(env.display());
-        if (!wm.running())
-        {
-            WARN("Failed to start lwm.");
-            return std::nullopt;
-        }
-
-        if (!wait_for_wm_ready(conn, kTimeout))
-        {
-            WARN("Window manager not ready.");
-            return std::nullopt;
-        }
-
-        xcb_atom_t atom = intern_atom(conn.get(), "_LWM_WINDOW_CLASS");
-        if (atom == XCB_NONE)
-        {
-            WARN("Failed to intern _LWM_WINDOW_CLASS.");
-            return std::nullopt;
-        }
-
-        return TestEnvironment{ env, std::move(conn), std::move(wm), atom };
-    }
-};
-
 bool wait_for_window_class(X11Connection& conn, xcb_atom_t atom, xcb_window_t window, std::string expected)
 {
     return wait_for_condition(
@@ -75,7 +26,7 @@ bool wait_for_window_class(X11Connection& conn, xcb_atom_t atom, xcb_window_t wi
 TEST_CASE("Integration: tiled window publishes _LWM_WINDOW_CLASS = tiled", "[integration][ewmh][lwm_window_class]")
 {
     auto test_env = TestEnvironment::create();
-    if (!test_env || !test_env->ok())
+    if (!test_env)
         SKIP("Test environment not available");
 
     auto& conn = test_env->conn;
@@ -83,7 +34,7 @@ TEST_CASE("Integration: tiled window publishes _LWM_WINDOW_CLASS = tiled", "[int
     xcb_window_t window = create_window(conn, 10, 10, 200, 150);
     map_window(conn, window);
 
-    REQUIRE(wait_for_window_class(conn, test_env->lwm_window_class, window, "tiled"));
+    REQUIRE(wait_for_window_class(conn, intern_atom(conn.get(), "_LWM_WINDOW_CLASS"), window, "tiled"));
 
     destroy_window(conn, window);
 }
@@ -91,7 +42,7 @@ TEST_CASE("Integration: tiled window publishes _LWM_WINDOW_CLASS = tiled", "[int
 TEST_CASE("Integration: dialog window publishes _LWM_WINDOW_CLASS = floating", "[integration][ewmh][lwm_window_class]")
 {
     auto test_env = TestEnvironment::create();
-    if (!test_env || !test_env->ok())
+    if (!test_env)
         SKIP("Test environment not available");
 
     auto& conn = test_env->conn;
@@ -107,7 +58,7 @@ TEST_CASE("Integration: dialog window publishes _LWM_WINDOW_CLASS = floating", "
     set_window_type(conn, window, dialog_type);
     map_window(conn, window);
 
-    REQUIRE(wait_for_window_class(conn, test_env->lwm_window_class, window, "floating"));
+    REQUIRE(wait_for_window_class(conn, intern_atom(conn.get(), "_LWM_WINDOW_CLASS"), window, "floating"));
 
     destroy_window(conn, window);
 }
@@ -115,7 +66,7 @@ TEST_CASE("Integration: dialog window publishes _LWM_WINDOW_CLASS = floating", "
 TEST_CASE("Integration: dock window publishes _LWM_WINDOW_CLASS = dock", "[integration][ewmh][lwm_window_class]")
 {
     auto test_env = TestEnvironment::create();
-    if (!test_env || !test_env->ok())
+    if (!test_env)
         SKIP("Test environment not available");
 
     auto& conn = test_env->conn;
@@ -131,16 +82,18 @@ TEST_CASE("Integration: dock window publishes _LWM_WINDOW_CLASS = dock", "[integ
     set_window_type(conn, window, dock_type);
     map_window(conn, window);
 
-    REQUIRE(wait_for_window_class(conn, test_env->lwm_window_class, window, "dock"));
+    REQUIRE(wait_for_window_class(conn, intern_atom(conn.get(), "_LWM_WINDOW_CLASS"), window, "dock"));
 
     destroy_window(conn, window);
 }
 
-TEST_CASE("Integration: _LWM_WINDOW_CLASS updates when a tiled window is toggled to floating",
-         "[integration][ewmh][lwm_window_class]")
+TEST_CASE(
+    "Integration: _LWM_WINDOW_CLASS updates when a tiled window is toggled to floating",
+    "[integration][ewmh][lwm_window_class]"
+)
 {
     auto test_env = TestEnvironment::create();
-    if (!test_env || !test_env->ok())
+    if (!test_env)
         SKIP("Test environment not available");
 
     auto& conn = test_env->conn;
@@ -156,7 +109,7 @@ TEST_CASE("Integration: _LWM_WINDOW_CLASS updates when a tiled window is toggled
     xcb_window_t window = create_window(conn, 10, 10, 200, 150);
     map_window(conn, window);
 
-    REQUIRE(wait_for_window_class(conn, test_env->lwm_window_class, window, "tiled"));
+    REQUIRE(wait_for_window_class(conn, intern_atom(conn.get(), "_LWM_WINDOW_CLASS"), window, "tiled"));
 
     // _NET_WM_STATE_ADD = 1; flip to ABOVE which LWM treats as a float-class signal
     // via its window-state machinery, exercising the kind-transition funnel.
@@ -165,7 +118,7 @@ TEST_CASE("Integration: _LWM_WINDOW_CLASS updates when a tiled window is toggled
     // The client message may be coalesced; the assertion below is the one that
     // actually proves the funnel published. If it stays "tiled" forever the test
     // will fail at kTimeout — that's the signal we want.
-    bool transitioned = wait_for_window_class(conn, test_env->lwm_window_class, window, "floating");
+    bool transitioned = wait_for_window_class(conn, intern_atom(conn.get(), "_LWM_WINDOW_CLASS"), window, "floating");
     if (!transitioned)
         WARN("Window did not transition to floating via _NET_WM_STATE_ABOVE; LWM may use a different signal.");
 

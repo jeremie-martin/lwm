@@ -106,7 +106,8 @@ void WindowManager::manage_floating_window(xcb_window_t window, bool start_iconi
         width = 300;
     if (height == 0)
         height = 200;
-    layout_.apply_size_hints(window, width, height);
+    width = std::max<uint32_t>(1, width);
+    height = std::max<uint32_t>(1, height);
 
     // A position hint may legitimately target a different monitor than the one
     // chosen above (e.g. `xterm -geometry +2400+100` while another monitor is
@@ -118,7 +119,10 @@ void WindowManager::manage_floating_window(xcb_window_t window, bool start_iconi
         int32_t center_x = static_cast<int32_t>(hinted_x) + static_cast<int32_t>(width) / 2;
         int32_t center_y = static_cast<int32_t>(hinted_y) + static_cast<int32_t>(height) / 2;
         if (auto hinted_monitor = focus::monitor_index_at_point(
-                monitors_, static_cast<int16_t>(center_x), static_cast<int16_t>(center_y)))
+                monitors_,
+                static_cast<int16_t>(center_x),
+                static_cast<int16_t>(center_y)
+            ))
         {
             monitor_idx = *hinted_monitor;
             workspace_idx = monitors_[*hinted_monitor].current_workspace;
@@ -178,9 +182,16 @@ void WindowManager::manage_floating_window(xcb_window_t window, bool start_iconi
 
     // Passive button grab for click-to-focus (same as manage_window for tiled).
     xcb_grab_button(
-        conn_.get(), 0, window, XCB_EVENT_MASK_BUTTON_PRESS,
-        XCB_GRAB_MODE_SYNC, XCB_GRAB_MODE_ASYNC,
-        XCB_NONE, XCB_NONE, XCB_BUTTON_INDEX_ANY, XCB_MOD_MASK_ANY
+        conn_.get(),
+        0,
+        window,
+        XCB_EVENT_MASK_BUTTON_PRESS,
+        XCB_GRAB_MODE_SYNC,
+        XCB_GRAB_MODE_ASYNC,
+        XCB_NONE,
+        XCB_NONE,
+        XCB_BUTTON_INDEX_ANY,
+        XCB_MOD_MASK_ANY
     );
 
     auto& client = require_client(window);
@@ -230,10 +241,11 @@ void WindowManager::manage_floating_window(xcb_window_t window, bool start_iconi
     xcb_map_window(conn_.get(), window);
 
     // Sync visibility decides whether to hide or show (and applies floating geometry)
-    sync_visibility_for_monitor(*monitor_idx);
-    apply_stacking();
+    reconcile_visibility_for_monitor(*monitor_idx);
+    stacking_dirty_ = true;
 
-    if (allow_focus && !start_iconic && !suppress_focus_ && *monitor_idx == focused_monitor_ && should_be_visible(client))
+    if (allow_focus && !start_iconic && !suppress_focus_ && *monitor_idx == focused_monitor_
+        && should_be_visible(client))
         focus_any_window(window);
 
     // AFTER mapping: Apply non-geometry states
@@ -298,38 +310,7 @@ void WindowManager::update_floating_monitor_for_geometry(Client& client, Geometr
 
 void WindowManager::apply_floating_geometry(Client& client)
 {
-    xcb_window_t window = client.id;
-
-    Geometry geom = floating_geometry(client);
-
-    uint32_t width = geom.width;
-    uint32_t height = geom.height;
-    layout_.apply_size_hints(window, width, height);
-
-    send_sync_request(client, last_event_time_);
-
-    int32_t x = static_cast<int32_t>(geom.x);
-    int32_t y = static_cast<int32_t>(geom.y);
-
-    uint32_t border_width = border_width_for_client(client);
-    uint32_t values[] = { static_cast<uint32_t>(x), static_cast<uint32_t>(y), width, height, border_width };
-    uint16_t mask = XCB_CONFIG_WINDOW_X | XCB_CONFIG_WINDOW_Y | XCB_CONFIG_WINDOW_WIDTH | XCB_CONFIG_WINDOW_HEIGHT
-        | XCB_CONFIG_WINDOW_BORDER_WIDTH;
-    xcb_configure_window(conn_.get(), window, mask, values);
-
-    xcb_configure_notify_event_t ev = {};
-    ev.response_type = XCB_CONFIGURE_NOTIFY;
-    ev.event = window;
-    ev.window = window;
-    ev.x = static_cast<int16_t>(x);
-    ev.y = static_cast<int16_t>(y);
-    ev.width = static_cast<uint16_t>(width);
-    ev.height = static_cast<uint16_t>(height);
-    ev.border_width = static_cast<uint16_t>(border_width);
-    ev.above_sibling = XCB_NONE;
-    ev.override_redirect = 0;
-
-    xcb_send_event(conn_.get(), 0, window, XCB_EVENT_MASK_STRUCTURE_NOTIFY, reinterpret_cast<char*>(&ev));
+    apply_geometry(client, floating_geometry(client), border_width_for_client(client));
 }
 
 void WindowManager::apply_visible_floating_geometry(Client& client)

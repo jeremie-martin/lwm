@@ -1,6 +1,6 @@
 #include "x11_test_harness.hpp"
-#include <catch2/catch_test_macros.hpp>
 #include <algorithm>
+#include <catch2/catch_test_macros.hpp>
 #include <chrono>
 #include <optional>
 #include <thread>
@@ -12,47 +12,6 @@ using namespace lwm::test;
 namespace {
 
 constexpr auto kTimeout = std::chrono::seconds(2);
-
-struct TestEnvironment
-{
-    X11TestEnvironment& x11_env;
-    X11Connection conn;
-    LwmProcess wm;
-
-    bool ok() const { return conn.ok() && wm.running(); }
-
-    static std::optional<TestEnvironment> create(std::string const& config = {})
-    {
-        auto& env = X11TestEnvironment::instance();
-        if (!env.available())
-        {
-            WARN("Xvfb not available; set LWM_TEST_ALLOW_EXISTING_DISPLAY=1 to use an existing DISPLAY.");
-            return std::nullopt;
-        }
-
-        X11Connection conn;
-        if (!conn.ok())
-        {
-            WARN("Failed to connect to X server.");
-            return std::nullopt;
-        }
-
-        LwmProcess wm(env.display(), config);
-        if (!wm.running())
-        {
-            WARN("Failed to start lwm.");
-            return std::nullopt;
-        }
-
-        if (!wait_for_wm_ready(conn, kTimeout))
-        {
-            WARN("Window manager not ready.");
-            return std::nullopt;
-        }
-
-        return TestEnvironment{ env, std::move(conn), std::move(wm) };
-    }
-};
 
 std::vector<xcb_atom_t> get_window_property_atoms(xcb_connection_t* conn, xcb_window_t window, xcb_atom_t atom)
 {
@@ -407,11 +366,25 @@ TEST_CASE("Integration: _NET_WM_WINDOW_TYPE changes reclassify managed windows",
     REQUIRE_FALSE(property_has_atom(conn.get(), window, net_wm_allowed_actions, action_resize));
 
     set_window_type(conn, window, type_utility);
-    REQUIRE(wait_for_condition([&]() { return property_has_atom(conn.get(), window, net_wm_allowed_actions, action_move); }, kTimeout));
-    REQUIRE(wait_for_condition([&]() { return property_has_atom(conn.get(), window, net_wm_allowed_actions, action_resize); }, kTimeout));
-    REQUIRE(wait_for_condition([&]() { return property_has_atom(conn.get(), window, net_wm_state, state_skip_taskbar); }, kTimeout));
-    REQUIRE(wait_for_condition([&]() { return property_has_atom(conn.get(), window, net_wm_state, state_skip_pager); }, kTimeout));
-    REQUIRE(wait_for_condition([&]() { return property_has_atom(conn.get(), window, net_wm_state, state_above); }, kTimeout));
+    REQUIRE(wait_for_condition(
+        [&]() { return property_has_atom(conn.get(), window, net_wm_allowed_actions, action_move); },
+        kTimeout
+    ));
+    REQUIRE(wait_for_condition(
+        [&]() { return property_has_atom(conn.get(), window, net_wm_allowed_actions, action_resize); },
+        kTimeout
+    ));
+    REQUIRE(wait_for_condition(
+        [&]() { return property_has_atom(conn.get(), window, net_wm_state, state_skip_taskbar); },
+        kTimeout
+    ));
+    REQUIRE(wait_for_condition(
+        [&]() { return property_has_atom(conn.get(), window, net_wm_state, state_skip_pager); },
+        kTimeout
+    ));
+    REQUIRE(
+        wait_for_condition([&]() { return property_has_atom(conn.get(), window, net_wm_state, state_above); }, kTimeout)
+    );
     REQUIRE(wait_for_condition(
         [&]()
         {
@@ -422,11 +395,26 @@ TEST_CASE("Integration: _NET_WM_WINDOW_TYPE changes reclassify managed windows",
     ));
 
     set_window_type(conn, window, type_normal);
-    REQUIRE(wait_for_condition([&]() { return !property_has_atom(conn.get(), window, net_wm_allowed_actions, action_move); }, kTimeout));
-    REQUIRE(wait_for_condition([&]() { return !property_has_atom(conn.get(), window, net_wm_allowed_actions, action_resize); }, kTimeout));
-    REQUIRE(wait_for_condition([&]() { return !property_has_atom(conn.get(), window, net_wm_state, state_skip_taskbar); }, kTimeout));
-    REQUIRE(wait_for_condition([&]() { return !property_has_atom(conn.get(), window, net_wm_state, state_skip_pager); }, kTimeout));
-    REQUIRE(wait_for_condition([&]() { return !property_has_atom(conn.get(), window, net_wm_state, state_above); }, kTimeout));
+    REQUIRE(wait_for_condition(
+        [&]() { return !property_has_atom(conn.get(), window, net_wm_allowed_actions, action_move); },
+        kTimeout
+    ));
+    REQUIRE(wait_for_condition(
+        [&]() { return !property_has_atom(conn.get(), window, net_wm_allowed_actions, action_resize); },
+        kTimeout
+    ));
+    REQUIRE(wait_for_condition(
+        [&]() { return !property_has_atom(conn.get(), window, net_wm_state, state_skip_taskbar); },
+        kTimeout
+    ));
+    REQUIRE(wait_for_condition(
+        [&]() { return !property_has_atom(conn.get(), window, net_wm_state, state_skip_pager); },
+        kTimeout
+    ));
+    REQUIRE(wait_for_condition(
+        [&]() { return !property_has_atom(conn.get(), window, net_wm_state, state_above); },
+        kTimeout
+    ));
     REQUIRE(wait_for_condition(
         [&]()
         {
@@ -509,11 +497,19 @@ TEST_CASE(
     REQUIRE(wait_for_active_window(conn, window, kTimeout));
 
     send_client_message(conn, window, net_wm_state, 1, state_above, 0, 0, 0);
-    REQUIRE(wait_for_condition([&]() { return property_has_atom(conn.get(), window, net_wm_state, state_above); }, kTimeout));
+    REQUIRE(
+        wait_for_condition([&]() { return property_has_atom(conn.get(), window, net_wm_state, state_above); }, kTimeout)
+    );
 
     send_client_message(conn, window, net_wm_state, 1, state_fullscreen, 0, 0, 0);
-    REQUIRE(wait_for_condition([&]() { return property_has_atom(conn.get(), window, net_wm_state, state_fullscreen); }, kTimeout));
-    REQUIRE(wait_for_condition([&]() { return !property_has_atom(conn.get(), window, net_wm_state, state_above); }, kTimeout));
+    REQUIRE(wait_for_condition(
+        [&]() { return property_has_atom(conn.get(), window, net_wm_state, state_fullscreen); },
+        kTimeout
+    ));
+    REQUIRE(wait_for_condition(
+        [&]() { return !property_has_atom(conn.get(), window, net_wm_state, state_above); },
+        kTimeout
+    ));
 
     REQUIRE_FALSE(property_has_atom(conn.get(), window, net_wm_allowed_actions, action_move));
     REQUIRE_FALSE(property_has_atom(conn.get(), window, net_wm_allowed_actions, action_resize));
@@ -577,10 +573,22 @@ TEST_CASE("Integration: WM_TRANSIENT_FOR changes reclassify managed windows", "[
     REQUIRE_FALSE(property_has_atom(conn.get(), child, net_wm_state, state_skip_taskbar));
 
     set_transient_for(conn, child, parent);
-    REQUIRE(wait_for_condition([&]() { return property_has_atom(conn.get(), child, net_wm_allowed_actions, action_move); }, kTimeout));
-    REQUIRE(wait_for_condition([&]() { return property_has_atom(conn.get(), child, net_wm_allowed_actions, action_resize); }, kTimeout));
-    REQUIRE(wait_for_condition([&]() { return property_has_atom(conn.get(), child, net_wm_state, state_skip_taskbar); }, kTimeout));
-    REQUIRE(wait_for_condition([&]() { return property_has_atom(conn.get(), child, net_wm_state, state_skip_pager); }, kTimeout));
+    REQUIRE(wait_for_condition(
+        [&]() { return property_has_atom(conn.get(), child, net_wm_allowed_actions, action_move); },
+        kTimeout
+    ));
+    REQUIRE(wait_for_condition(
+        [&]() { return property_has_atom(conn.get(), child, net_wm_allowed_actions, action_resize); },
+        kTimeout
+    ));
+    REQUIRE(wait_for_condition(
+        [&]() { return property_has_atom(conn.get(), child, net_wm_state, state_skip_taskbar); },
+        kTimeout
+    ));
+    REQUIRE(wait_for_condition(
+        [&]() { return property_has_atom(conn.get(), child, net_wm_state, state_skip_pager); },
+        kTimeout
+    ));
     REQUIRE(wait_for_property_cardinal(conn.get(), child, net_wm_desktop, 0, kTimeout));
     REQUIRE(wait_for_condition(
         [&]()
@@ -593,10 +601,22 @@ TEST_CASE("Integration: WM_TRANSIENT_FOR changes reclassify managed windows", "[
     REQUIRE(wait_for_condition([&]() { return is_stacked_above(conn, child, parent); }, kTimeout));
 
     clear_transient_for(conn, child);
-    REQUIRE(wait_for_condition([&]() { return !property_has_atom(conn.get(), child, net_wm_allowed_actions, action_move); }, kTimeout));
-    REQUIRE(wait_for_condition([&]() { return !property_has_atom(conn.get(), child, net_wm_allowed_actions, action_resize); }, kTimeout));
-    REQUIRE(wait_for_condition([&]() { return !property_has_atom(conn.get(), child, net_wm_state, state_skip_taskbar); }, kTimeout));
-    REQUIRE(wait_for_condition([&]() { return !property_has_atom(conn.get(), child, net_wm_state, state_skip_pager); }, kTimeout));
+    REQUIRE(wait_for_condition(
+        [&]() { return !property_has_atom(conn.get(), child, net_wm_allowed_actions, action_move); },
+        kTimeout
+    ));
+    REQUIRE(wait_for_condition(
+        [&]() { return !property_has_atom(conn.get(), child, net_wm_allowed_actions, action_resize); },
+        kTimeout
+    ));
+    REQUIRE(wait_for_condition(
+        [&]() { return !property_has_atom(conn.get(), child, net_wm_state, state_skip_taskbar); },
+        kTimeout
+    ));
+    REQUIRE(wait_for_condition(
+        [&]() { return !property_has_atom(conn.get(), child, net_wm_state, state_skip_pager); },
+        kTimeout
+    ));
     REQUIRE(wait_for_condition(
         [&]()
         {
@@ -748,7 +768,10 @@ TEST_CASE(
     destroy_window(conn, helper1);
 }
 
-TEST_CASE("Integration: WM_HINTS.input changes can revoke focus eligibility", "[integration][property][focus][wm_hints]")
+TEST_CASE(
+    "Integration: WM_HINTS.input changes can revoke focus eligibility",
+    "[integration][property][focus][wm_hints]"
+)
 {
     auto test_env = TestEnvironment::create();
     if (!test_env)
@@ -927,10 +950,9 @@ TEST_CASE(
     REQUIRE(wait_for_window_geometry(conn, window, 140, 120, 410, 260));
 
     send_client_message(conn, window, net_wm_state, 1, fullscreen);
-    REQUIRE(wait_for_condition(
-        [&]() { return property_has_atom(conn.get(), window, net_wm_state, fullscreen); },
-        kTimeout
-    ));
+    REQUIRE(
+        wait_for_condition([&]() { return property_has_atom(conn.get(), window, net_wm_state, fullscreen); }, kTimeout)
+    );
     require_realized_state_geometry();
 
     set_wm_normal_hints(conn, window, 180, 150, 430, 290);

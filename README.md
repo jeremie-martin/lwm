@@ -38,7 +38,8 @@ Required tools and libraries:
 - `xcb-xtest` and Xvfb for the full test suite
 
 CMake downloads pinned toml++ and spdlog sources on the first configure; test
-builds also download pinned Catch2 sources.
+builds also download pinned Catch2 and nlohmann/json sources. JSON parsing is
+a test-only dependency used to validate IPC independently of its implementation.
 
 Arch Linux:
 
@@ -54,7 +55,8 @@ sudo apt install cmake g++ git pkg-config libx11-dev libxcb1-dev \
   libxcb-icccm4-dev libxcb-sync-dev libxcb-xtest0-dev xvfb
 ```
 
-Build the release binaries or build and run all tests:
+Build the release binaries or build and run all tests in Debug with required
+X11 integration:
 
 ```sh
 make

@@ -25,47 +25,6 @@ struct WindowGeometry
     bool operator==(WindowGeometry const&) const = default;
 };
 
-struct TestEnvironment
-{
-    X11TestEnvironment& x11_env;
-    X11Connection conn;
-    LwmProcess wm;
-
-    bool ok() const { return conn.ok() && wm.running(); }
-
-    static std::optional<TestEnvironment> create(std::string const& config = {})
-    {
-        auto& env = X11TestEnvironment::instance();
-        if (!env.available())
-        {
-            WARN("Xvfb not available; set LWM_TEST_ALLOW_EXISTING_DISPLAY=1 to use an existing DISPLAY.");
-            return std::nullopt;
-        }
-
-        X11Connection conn;
-        if (!conn.ok())
-        {
-            WARN("Failed to connect to X server.");
-            return std::nullopt;
-        }
-
-        LwmProcess wm(env.display(), config);
-        if (!wm.running())
-        {
-            WARN("Failed to start lwm.");
-            return std::nullopt;
-        }
-
-        if (!wait_for_wm_ready(conn, kTimeout))
-        {
-            WARN("Window manager not ready.");
-            return std::nullopt;
-        }
-
-        return TestEnvironment{ env, std::move(conn), std::move(wm) };
-    }
-};
-
 bool has_state(X11Connection& conn, xcb_window_t window, xcb_atom_t state)
 {
     xcb_atom_t net_wm_state = intern_atom(conn.get(), "_NET_WM_STATE");
@@ -287,13 +246,7 @@ std::optional<xcb_keycode_t> first_keycode_for_keysym(X11Connection& conn, xcb_k
     return result;
 }
 
-bool send_mouse_chord(
-    X11Connection& conn,
-    xcb_keysym_t modifier,
-    uint8_t button,
-    int16_t root_x,
-    int16_t root_y
-)
+bool send_mouse_chord(X11Connection& conn, xcb_keysym_t modifier, uint8_t button, int16_t root_x, int16_t root_y)
 {
     auto modifier_code = first_keycode_for_keysym(conn, modifier);
     if (!modifier_code)
@@ -644,8 +597,8 @@ TEST_CASE(
         [&]()
         {
             auto geometry = get_window_geometry(conn, floating);
-            return geometry.has_value() && geometry->x == 100 && geometry->y == 110
-                && geometry->width == 260 && geometry->height == 180;
+            return geometry.has_value() && geometry->x == 100 && geometry->y == 110 && geometry->width == 260
+                && geometry->height == 180;
         },
         kTimeout
     ));
@@ -654,7 +607,10 @@ TEST_CASE(
     destroy_window(conn, fallback);
 }
 
-TEST_CASE("Integration: focused initially urgent floating window clears urgency", "[integration][focus][floating][urgent]")
+TEST_CASE(
+    "Integration: focused initially urgent floating window clears urgency",
+    "[integration][focus][floating][urgent]"
+)
 {
     auto test_env = TestEnvironment::create();
     if (!test_env)
@@ -688,10 +644,7 @@ TEST_CASE("Integration: focused initially urgent floating window clears urgency"
     destroy_window(conn, tiled);
 }
 
-TEST_CASE(
-    "Integration: Super+Button2 on a managed window still reaches toggle_float",
-    "[integration][focus][mouse]"
-)
+TEST_CASE("Integration: Super+Button2 on a managed window still reaches toggle_float", "[integration][focus][mouse]")
 {
     auto test_env = TestEnvironment::create();
     if (!test_env)
@@ -853,7 +806,7 @@ TEST_CASE(
 
     auto previous_wm = supporting_wm_window(conn);
     REQUIRE(previous_wm.has_value());
-    auto restart_result = run_lwmctl(wm, {"restart"});
+    auto restart_result = run_lwmctl(wm, { "restart" });
     (void)restart_result;
     REQUIRE(wait_for_wm_ready(conn, std::chrono::seconds(5), *previous_wm));
 
@@ -1023,8 +976,8 @@ TEST_CASE(
     xcb_atom_t net_wm_state_fullscreen = intern_atom(conn.get(), "_NET_WM_STATE_FULLSCREEN");
     xcb_atom_t net_wm_state_demands_attention = intern_atom(conn.get(), "_NET_WM_STATE_DEMANDS_ATTENTION");
     xcb_atom_t net_active_window = intern_atom(conn.get(), "_NET_ACTIVE_WINDOW");
-    if (net_wm_state == XCB_NONE || net_wm_state_fullscreen == XCB_NONE
-        || net_wm_state_demands_attention == XCB_NONE || net_active_window == XCB_NONE)
+    if (net_wm_state == XCB_NONE || net_wm_state_fullscreen == XCB_NONE || net_wm_state_demands_attention == XCB_NONE
+        || net_active_window == XCB_NONE)
     {
         WARN("Failed to intern EWMH atoms.");
         return;
@@ -1099,10 +1052,7 @@ TEST_CASE(
     destroy_window(conn, owner);
 }
 
-TEST_CASE(
-    "Integration: lwmctl focus reports redirected focus as failure",
-    "[integration][focus][fullscreen][ipc]"
-)
+TEST_CASE("Integration: lwmctl focus reports redirected focus as failure", "[integration][focus][fullscreen][ipc]")
 {
     auto test_env = TestEnvironment::create("[workspaces]\ncount = 2\n");
     if (!test_env)
@@ -1229,12 +1179,7 @@ TEST_CASE(
     REQUIRE(wait_for_condition([&]() { return is_stacked_above(conn, w1, w2); }, kTimeout));
 
     uint32_t values[] = { w1, XCB_STACK_MODE_ABOVE };
-    xcb_configure_window(
-        conn.get(),
-        w2,
-        XCB_CONFIG_WINDOW_SIBLING | XCB_CONFIG_WINDOW_STACK_MODE,
-        values
-    );
+    xcb_configure_window(conn.get(), w2, XCB_CONFIG_WINDOW_SIBLING | XCB_CONFIG_WINDOW_STACK_MODE, values);
     xcb_flush(conn.get());
 
     REQUIRE(wait_for_condition([&]() { return is_stacked_above(conn, w1, w2); }, kTimeout));
@@ -1331,7 +1276,10 @@ TEST_CASE("Integration: iconifying a visible sticky window restores focus fallba
     destroy_window(conn, fallback);
 }
 
-TEST_CASE("Integration: removing sticky from off-workspace active window restores focus fallback", "[integration][focus][sticky]")
+TEST_CASE(
+    "Integration: removing sticky from off-workspace active window restores focus fallback",
+    "[integration][focus][sticky]"
+)
 {
     auto test_env = TestEnvironment::create();
     if (!test_env)
@@ -1661,8 +1609,7 @@ TEST_CASE(
     REQUIRE(wait_for_condition(
         [&]()
         {
-            return has_state(conn, w1, net_wm_state_fullscreen)
-                && !is_hidden_offscreen(conn, w1)
+            return has_state(conn, w1, net_wm_state_fullscreen) && !is_hidden_offscreen(conn, w1)
                 && is_hidden_offscreen(conn, w2);
         },
         kTimeout
@@ -1687,8 +1634,8 @@ TEST_CASE(
     xcb_atom_t net_wm_state_fullscreen = intern_atom(conn.get(), "_NET_WM_STATE_FULLSCREEN");
     xcb_atom_t net_wm_state_sticky = intern_atom(conn.get(), "_NET_WM_STATE_STICKY");
     xcb_atom_t net_showing_desktop = intern_atom(conn.get(), "_NET_SHOWING_DESKTOP");
-    if (net_wm_state == XCB_NONE || net_wm_state_fullscreen == XCB_NONE
-        || net_wm_state_sticky == XCB_NONE || net_showing_desktop == XCB_NONE)
+    if (net_wm_state == XCB_NONE || net_wm_state_fullscreen == XCB_NONE || net_wm_state_sticky == XCB_NONE
+        || net_showing_desktop == XCB_NONE)
     {
         WARN("Failed to intern EWMH atoms.");
         return;
@@ -1734,7 +1681,7 @@ TEST_CASE(
     if (!original_geometry || original_geometry->width <= 1)
         SKIP("Root window geometry is not suitable for RandR resize test.");
 
-    RandrScreenSizeGuard screen_guard {
+    RandrScreenSizeGuard screen_guard{
         .conn = conn,
         .width = original_geometry->width,
         .height = original_geometry->height,
@@ -1768,8 +1715,7 @@ TEST_CASE(
     REQUIRE(wait_for_condition(
         [&]()
         {
-            return has_state(conn, w1, net_wm_state_fullscreen)
-                && !is_hidden_offscreen(conn, w1)
+            return has_state(conn, w1, net_wm_state_fullscreen) && !is_hidden_offscreen(conn, w1)
                 && is_hidden_offscreen(conn, w2);
         },
         kTimeout
@@ -1939,10 +1885,7 @@ TEST_CASE(
     destroy_window(conn, parent);
 }
 
-TEST_CASE(
-    "Integration: multiple transients of same parent all stack above it",
-    "[integration][transient][stacking]"
-)
+TEST_CASE("Integration: multiple transients of same parent all stack above it", "[integration][transient][stacking]")
 {
     auto test_env = TestEnvironment::create();
     if (!test_env)

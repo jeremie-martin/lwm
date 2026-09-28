@@ -5,12 +5,13 @@
 #include <catch2/catch_test_macros.hpp>
 #include <chrono>
 #include <cstdlib>
+#include <nlohmann/json.hpp>
 #include <optional>
 #include <poll.h>
 #include <string>
 #include <string_view>
-#include <thread>
 #include <sys/wait.h>
+#include <thread>
 #include <unistd.h>
 #include <xcb/xcb_keysyms.h>
 #include <xcb/xtest.h>
@@ -21,55 +22,17 @@ namespace {
 
 constexpr auto kTimeout = std::chrono::seconds(2);
 
-struct TestEnvironment
-{
-    X11TestEnvironment& x11_env;
-    X11Connection conn;
-    LwmProcess wm;
-
-    static std::optional<TestEnvironment> create()
-    {
-        auto& env = X11TestEnvironment::instance();
-        if (!env.available())
-        {
-            WARN("Xvfb not available; set LWM_TEST_ALLOW_EXISTING_DISPLAY=1 to use an existing DISPLAY.");
-            return std::nullopt;
-        }
-
-        X11Connection conn;
-        if (!conn.ok())
-        {
-            WARN("Failed to connect to X server.");
-            return std::nullopt;
-        }
-
-        LwmProcess wm(env.display());
-        if (!wm.running())
-        {
-            WARN("Failed to start lwm.");
-            return std::nullopt;
-        }
-
-        if (!wait_for_wm_ready(conn, kTimeout))
-        {
-            WARN("Window manager not ready.");
-            return std::nullopt;
-        }
-
-        return TestEnvironment{ env, std::move(conn), std::move(wm) };
-    }
-};
-
 std::optional<std::string> read_line_with_timeout(int fd, std::chrono::milliseconds timeout)
 {
     auto deadline = std::chrono::steady_clock::now() + timeout;
     std::string output;
-    std::array<char, 512> buffer {};
+    std::array<char, 512> buffer{};
 
     while (std::chrono::steady_clock::now() < deadline)
     {
-        auto remaining = std::chrono::duration_cast<std::chrono::milliseconds>(deadline - std::chrono::steady_clock::now());
-        pollfd pfd { .fd = fd, .events = POLLIN | POLLHUP, .revents = 0 };
+        auto remaining =
+            std::chrono::duration_cast<std::chrono::milliseconds>(deadline - std::chrono::steady_clock::now());
+        pollfd pfd{ .fd = fd, .events = POLLIN | POLLHUP, .revents = 0 };
         int rc = poll(&pfd, 1, static_cast<int>(std::max<int64_t>(1, remaining.count())));
         if (rc <= 0)
             continue;
@@ -95,10 +58,9 @@ std::optional<std::string> read_line_with_timeout(int fd, std::chrono::milliseco
 std::string read_all_from_fd(int fd)
 {
     std::string output;
-    std::array<char, 512> buffer {};
+    std::array<char, 512> buffer{};
     ssize_t n = 0;
-    while ((n = read(fd, buffer.data(), buffer.size())) > 0)
-        output.append(buffer.data(), static_cast<size_t>(n));
+    while ((n = read(fd, buffer.data(), buffer.size())) > 0) output.append(buffer.data(), static_cast<size_t>(n));
     return output;
 }
 
@@ -184,93 +146,22 @@ struct FocusChangeEvent
     std::string title;
 };
 
-std::optional<std::string> parse_json_string(std::string_view line, size_t& position)
-{
-    if (position >= line.size() || line[position++] != '"')
-        return std::nullopt;
-    std::string result;
-    while (position < line.size())
-    {
-        char ch = line[position++];
-        if (ch == '"')
-            return result;
-        if (static_cast<unsigned char>(ch) < 0x20)
-            return std::nullopt;
-        if (ch != '\\')
-        {
-            result += ch;
-            continue;
-        }
-        if (position >= line.size())
-            return std::nullopt;
-        char escaped = line[position++];
-        switch (escaped)
-        {
-            case '"': result += '"'; break;
-            case '\\': result += '\\'; break;
-            case 'b': result += '\b'; break;
-            case 'f': result += '\f'; break;
-            case 'n': result += '\n'; break;
-            case 'r': result += '\r'; break;
-            case 't': result += '\t'; break;
-            default: return std::nullopt;
-        }
-    }
-    return std::nullopt;
-}
-
 std::optional<FocusChangeEvent> parse_focus_change_event(std::string_view line)
 {
     if (line.empty() || line.back() != '\n')
         return std::nullopt;
-    line.remove_suffix(1);
-    size_t position = 0;
-    auto consume = [&](char expected)
-    {
-        return position < line.size() && line[position++] == expected;
-    };
-    auto key = [&](std::string_view expected)
-    {
-        auto value = parse_json_string(line, position);
-        return value && *value == expected && consume(':');
-    };
-    auto number = [&]() -> std::optional<xcb_window_t>
-    {
-        if (position >= line.size() || line[position] < '0' || line[position] > '9')
-            return std::nullopt;
-        uint64_t value = 0;
-        while (position < line.size() && line[position] >= '0' && line[position] <= '9')
-        {
-            value = value * 10 + static_cast<uint64_t>(line[position++] - '0');
-            if (value > UINT32_MAX)
-                return std::nullopt;
-        }
-        return static_cast<xcb_window_t>(value);
-    };
-
-    if (!consume('{') || !key("event"))
+    auto value = nlohmann::json::parse(line, nullptr, false);
+    if (!value.is_object() || !value.contains("event") || !value["event"].is_string() || !value.contains("window")
+        || !value["window"].is_number_unsigned() || value["window"].get<uint64_t>() > UINT32_MAX
+        || !value.contains("class") || !value["class"].is_string() || !value.contains("title")
+        || !value["title"].is_string())
         return std::nullopt;
-    auto event = parse_json_string(line, position);
-    if (!event || !consume(',') || !key("window"))
-        return std::nullopt;
-    auto window = number();
-    if (!window || !consume(',') || !key("class"))
-        return std::nullopt;
-    auto class_name = parse_json_string(line, position);
-    if (!class_name || !consume(',') || !key("title"))
-        return std::nullopt;
-    auto title = parse_json_string(line, position);
-    if (!title || !consume('}') || position != line.size())
-        return std::nullopt;
-    return FocusChangeEvent { std::move(*event), *window, std::move(*class_name), std::move(*title) };
+    return FocusChangeEvent{ value["event"], value["window"], value["class"], value["title"] };
 }
 
 } // namespace
 
-TEST_CASE(
-    "Integration: lwmctl subscribe exits when stdout consumer closes",
-    "[integration][subscribe]"
-)
+TEST_CASE("Integration: lwmctl subscribe exits when stdout consumer closes", "[integration][subscribe]")
 {
     auto test_env = TestEnvironment::create();
     if (!test_env)
@@ -363,10 +254,7 @@ TEST_CASE(
     destroy_window(conn, w1);
 }
 
-TEST_CASE(
-    "Integration: subscribe decodes escaped focus change fields",
-    "[integration][subscribe][json]"
-)
+TEST_CASE("Integration: subscribe decodes escaped focus change fields", "[integration][subscribe][json]")
 {
     auto test_env = TestEnvironment::create();
     if (!test_env)
@@ -426,10 +314,7 @@ TEST_CASE(
     destroy_window(conn, window);
 }
 
-TEST_CASE(
-    "Integration: lwmctl subscribe preserves monitor direction in key_action events",
-    "[integration][subscribe]"
-)
+TEST_CASE("Integration: lwmctl subscribe preserves monitor direction in key_action events", "[integration][subscribe]")
 {
     auto test_env = TestEnvironment::create();
     if (!test_env)

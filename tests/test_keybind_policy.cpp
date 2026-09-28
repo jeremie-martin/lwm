@@ -17,49 +17,43 @@ Config make_empty_config()
     return cfg;
 }
 
-CommandConfig make_shell_command(std::string value)
-{
-    return CommandConfig::shell_command(std::move(value));
-}
+CommandConfig make_shell_command(std::string value) { return CommandConfig::shell_command(std::move(value)); }
 
 KeybindConfig make_spawn_bind(std::string mod, std::string key, std::string command)
 {
     KeybindConfig keybind;
     keybind.mod = std::move(mod);
     keybind.key = std::move(key);
-    keybind.action = SpawnAction { make_shell_command(std::move(command)) };
+    keybind.action = SpawnAction{ make_shell_command(std::move(command)) };
     return keybind;
 }
 
-KeybindConfig make_action_bind(std::string mod, std::string key, std::string action, int workspace = -1, int direction = 0)
+KeybindConfig
+make_action_bind(std::string mod, std::string key, std::string action, int workspace = -1, int direction = 0)
 {
     KeybindConfig keybind;
     keybind.mod = std::move(mod);
     keybind.key = std::move(key);
     if (action == "kill")
-        keybind.action = KillAction {};
+        keybind.action = KillAction{};
     else if (action == "switch_workspace")
-        keybind.action = SwitchWorkspaceAction { static_cast<size_t>(workspace) };
+        keybind.action = SwitchWorkspaceAction{ static_cast<size_t>(workspace) };
     else if (action == "move_to_workspace")
-        keybind.action = MoveToWorkspaceAction { static_cast<size_t>(workspace) };
+        keybind.action = MoveToWorkspaceAction{ static_cast<size_t>(workspace) };
     else if (action == "focus_monitor")
-        keybind.action = FocusMonitorAction { direction };
+        keybind.action = FocusMonitorAction{ direction };
     else if (action == "move_to_monitor")
-        keybind.action = MoveToMonitorAction { direction };
+        keybind.action = MoveToMonitorAction{ direction };
     else if (action == "toggle_fullscreen")
-        keybind.action = ToggleFullscreenAction {};
+        keybind.action = ToggleFullscreenAction{};
     else if (action == "focus_next")
-        keybind.action = FocusNextAction {};
+        keybind.action = FocusNextAction{};
     else if (action == "focus_prev")
-        keybind.action = FocusPrevAction {};
+        keybind.action = FocusPrevAction{};
     return keybind;
 }
 
-template<typename T>
-T const* action_as(Action const& action)
-{
-    return std::get_if<T>(&action);
-}
+template <typename T> T const* action_as(Action const& action) { return std::get_if<T>(&action); }
 
 bool ensure_x11_environment()
 {
@@ -72,17 +66,30 @@ bool ensure_x11_environment()
     return true;
 }
 
-std::unique_ptr<Connection> make_connection_or_null()
+std::unique_ptr<Connection> make_connection()
 {
-    try
-    {
-        return std::make_unique<Connection>();
-    }
-    catch (std::exception const& e)
-    {
-        WARN(e.what());
-        return nullptr;
-    }
+    std::unique_ptr<Connection> connection;
+    std::string error;
+    // The isolated server can briefly refuse connections during a reset.
+    bool connected = lwm::test::wait_for_condition(
+        [&]()
+        {
+            try
+            {
+                connection = std::make_unique<Connection>();
+                return true;
+            }
+            catch (std::exception const& e)
+            {
+                error = e.what();
+                return false;
+            }
+        },
+        std::chrono::seconds(1)
+    );
+    INFO(error);
+    REQUIRE(connected);
+    return connection;
 }
 
 } // namespace
@@ -172,9 +179,7 @@ TEST_CASE("KeybindManager preserves shell command payloads for spawn actions", "
 
     Config cfg = make_empty_config();
     cfg.keybinds.push_back(make_spawn_bind("super", "a", "/usr/bin/firefox"));
-    auto conn = make_connection_or_null();
-    if (!conn)
-        SKIP("X11 connection not available");
+    auto conn = make_connection();
     KeybindManager mgr(*conn, cfg);
 
     auto action = mgr.resolve(XCB_MOD_MASK_4, XStringToKeysym("a"));
@@ -195,9 +200,7 @@ TEST_CASE("KeybindManager::resolve returns nullopt for unregistered bindings", "
         SKIP("X11 environment not available");
 
     Config cfg = make_empty_config();
-    auto conn = make_connection_or_null();
-    if (!conn)
-        SKIP("X11 connection not available");
+    auto conn = make_connection();
     KeybindManager mgr(*conn, cfg);
 
     auto result = mgr.resolve(XCB_MOD_MASK_4, 0x61);
@@ -216,9 +219,7 @@ TEST_CASE("KeybindManager::resolve handles multiple bindings across keys, modifi
     cfg.keybinds.push_back(make_action_bind("super", "1", "switch_workspace", 0));
     cfg.keybinds.push_back(make_action_bind("super+shift", "1", "move_to_workspace", 0));
 
-    auto conn = make_connection_or_null();
-    if (!conn)
-        SKIP("X11 connection not available");
+    auto conn = make_connection();
     KeybindManager mgr(*conn, cfg);
 
     uint16_t super = XCB_MOD_MASK_4;
@@ -256,9 +257,7 @@ TEST_CASE("KeybindManager handles all standard keybind modifiers", "[keybind]")
     cfg.keybinds.push_back(make_spawn_bind("super+ctrl", "a", "test-cmd-3"));
     cfg.keybinds.push_back(make_spawn_bind("super+alt", "a", "test-cmd-4"));
 
-    auto conn = make_connection_or_null();
-    if (!conn)
-        SKIP("X11 connection not available");
+    auto conn = make_connection();
     KeybindManager mgr(*conn, cfg);
 
     uint16_t super = XCB_MOD_MASK_4;
@@ -282,9 +281,7 @@ TEST_CASE("KeybindManager handles modifier state filtering", "[keybind]")
     Config cfg = make_empty_config();
     cfg.keybinds.push_back(make_spawn_bind("super", "a", "test"));
 
-    auto conn = make_connection_or_null();
-    if (!conn)
-        SKIP("X11 connection not available");
+    auto conn = make_connection();
     KeybindManager mgr(*conn, cfg);
 
     uint16_t super = XCB_MOD_MASK_4;
@@ -309,9 +306,7 @@ TEST_CASE("KeybindManager handles invalid key names in config", "[keybind]")
     Config cfg = make_empty_config();
     cfg.keybinds.push_back(make_spawn_bind("super", "InvalidKeyThatDoesNotExist", "test"));
 
-    auto conn = make_connection_or_null();
-    if (!conn)
-        SKIP("X11 connection not available");
+    auto conn = make_connection();
     KeybindManager mgr(*conn, cfg);
 
     uint16_t super = XCB_MOD_MASK_4;
@@ -335,9 +330,7 @@ TEST_CASE("KeybindManager handles all action types", "[keybind]")
     cfg.keybinds.push_back(make_action_bind("super", "j", "focus_next"));
     cfg.keybinds.push_back(make_action_bind("super", "k", "focus_prev"));
 
-    auto conn = make_connection_or_null();
-    if (!conn)
-        SKIP("X11 connection not available");
+    auto conn = make_connection();
     KeybindManager mgr(*conn, cfg);
 
     uint16_t super = XCB_MOD_MASK_4;

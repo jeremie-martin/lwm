@@ -23,9 +23,12 @@ When `XDG_RUNTIME_DIR` is unset, LWM uses
 3. the root-window `_LWM_IPC_SOCKET` property
 4. the default path above
 
-LWM accepts one incomplete ordinary request at a time. A second connection is
-answered with `error busy`. A request must complete within 500 ms and contain
-fewer than 4096 received bytes, including the terminating newline.
+LWM accepts one ordinary request/reply exchange at a time. A second connection
+is answered with `error busy`. A request must complete within 500 ms and contain
+fewer than 4096 received bytes, including the terminating newline. Replies have
+a separate 500 ms delivery deadline. Partial writes resume when the socket is
+writable; a stalled reader cannot block window management. A timed-out exchange
+is disconnected, so consumers must reject an incomplete response line.
 
 ## Framing
 
@@ -36,7 +39,9 @@ returns one line:
 - `ok VALUE`
 - `error MESSAGE`
 
-The connection then closes. `lwmctl` removes the `ok` envelope, prints `VALUE`
+A write-side EOF also terminates a nonempty request, for compatibility with
+existing clients. The connection closes after the complete reply is sent.
+`lwmctl` removes the `ok` envelope, prints `VALUE`
 to stdout, and prints an error message to stderr with a nonzero exit status.
 
 ## Commands
@@ -67,6 +72,7 @@ Monitor- and workspace-relative commands target the focused monitor.
 | `scratchpad toggle NAME` | show, hide, or launch a named scratchpad |
 | `scratchpad list` | named and generic scratchpad state as JSON |
 
+Ratio values must be finite numbers with no trailing characters.
 The permitted ratio range is `[min_ratio, 1 - min_ratio]` from the active
 configuration. Scratchpad commands are currently raw-protocol commands and are
 not exposed by `lwmctl`.

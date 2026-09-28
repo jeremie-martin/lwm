@@ -8,7 +8,7 @@ Read [ARCHITECTURE.md](ARCHITECTURE.md) before changing state transitions and
 ```sh
 make                 # release build
 make debug           # debug build with invariant checks
-make test            # build and run both test executables
+make test            # Debug build, required X11 integration, both test executables
 ```
 
 For a direct CMake workflow:
@@ -27,10 +27,40 @@ Run a focused Catch2 selection before the full suite, for example:
 ./build/tests/lwm_logging_tests
 ```
 
-The X11 integration harness starts a private Xvfb server. Integration cases
-skip when the harness cannot start an isolated server. Set
+The X11 integration harness starts a private Xvfb server and launches the exact
+binaries from its CMake build, independently of the working directory. WM
+startup/readiness failures fail the test and include captured stderr; they do
+not skip. Direct test runs may skip when Xvfb is unavailable; `make test` sets
+`LWM_TEST_REQUIRE_X11=1` to make that a failure. Capability-specific tests can
+still skip when the isolated server lacks that capability. Set
 `LWM_TEST_ALLOW_EXISTING_DISPLAY=1` only when deliberately testing against the
 current `DISPLAY`; the default protects a live desktop from test input.
+
+To check undefined behavior and memory safety, use a separate build:
+
+```sh
+cmake -S . -B build/sanitize -DBUILD_TESTS=ON -DCMAKE_BUILD_TYPE=Debug -DLWM_SANITIZERS=ON
+cmake --build build/sanitize -j
+LWM_TEST_REQUIRE_X11=1 ./build/sanitize/tests/lwm_tests
+./build/sanitize/tests/lwm_logging_tests
+```
+
+Validate Release separately with `make test BUILD_DIR=build/release TEST_BUILD_TYPE=Release`.
+The default `make test` explicitly selects Debug so invariant checks cannot be
+silently disabled by an earlier Release configuration.
+
+Use `TestEnvironment::create(config)` for integration fixtures, and the shared
+bounded process/socket helpers in `x11_test_harness.hpp`. Synchronize on the
+observable result under test; a round trip on the test client's X connection
+does not prove that the WM handled an event. Test layout rectangles and resize
+boundaries rather than the shape of an internal data structure. IPC transport
+tests use real Unix sockets, including partial writes and stalled clients. IPC
+JSON is checked with the test-only nlohmann/json parser, not a local parser or
+production serialization helpers.
+
+Set `LWM_TEST_XSERVER=Xephyr` to run the same integration tests in an owned
+nested Xephyr server; `DISPLAY` must point to its parent X server. This does not
+manage the parent display. The parent may itself be a private Xvfb server.
 
 Use `./scripts/preview.sh` for manual testing in Xephyr. It creates a debug
 build, uses display `:100`, and seeds `test-config/config.toml` from

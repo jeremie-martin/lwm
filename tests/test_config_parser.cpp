@@ -52,11 +52,7 @@ ConfigLoadResult load_from_string(std::string const& contents)
     return load_config_result(file.path());
 }
 
-template<typename T>
-T const* action_as(Action const& action)
-{
-    return std::get_if<T>(&action);
-}
+template <typename T> T const* action_as(Action const& action) { return std::get_if<T>(&action); }
 
 } // namespace
 
@@ -233,8 +229,8 @@ keys = ["F1", "F2", "F3"]
     {
         if (auto const* spawn = action_as<SpawnAction>(keybind.action); spawn && keybind.key == "Return")
         {
-            saw_terminal_spawn = spawn->command.kind == CommandConfig::Kind::Argv
-                && spawn->command.argv.front() == "/usr/bin/ghostty";
+            saw_terminal_spawn =
+                spawn->command.kind == CommandConfig::Kind::Argv && spawn->command.argv.front() == "/usr/bin/ghostty";
         }
         if (action_as<FocusMonitorAction>(keybind.action))
             saw_focus_monitor = true;
@@ -386,5 +382,15 @@ TEST_CASE("Config parser rejects rule geometry outside X11 ranges", "[config][ru
     {
         auto loaded = load_from_string(std::string("[[rules]]\napply.geometry = { ") + geometry + " }");
         REQUIRE(loaded.has_value());
+    }
+}
+
+TEST_CASE("Numeric configuration rejects non-finite values before range checks", "[config]")
+{
+    for (std::string value : { "nan", "+nan", "-nan", "inf", "+inf", "-inf" })
+    {
+        CAPTURE(value);
+        CHECK_FALSE(load_from_string("[layout]\ndefault_ratio = " + value + "\n"));
+        CHECK_FALSE(load_from_string("[layout]\nmin_ratio = " + value + "\n"));
     }
 }

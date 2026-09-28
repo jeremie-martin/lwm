@@ -19,47 +19,6 @@ namespace {
 
 constexpr auto kTimeout = std::chrono::seconds(2);
 
-struct TestEnvironment
-{
-    X11TestEnvironment& x11_env;
-    X11Connection conn;
-    LwmProcess wm;
-
-    bool ok() const { return conn.ok() && wm.running(); }
-
-    static std::optional<TestEnvironment> create()
-    {
-        auto& env = X11TestEnvironment::instance();
-        if (!env.available())
-        {
-            WARN("Xvfb not available; set LWM_TEST_ALLOW_EXISTING_DISPLAY=1 to use an existing DISPLAY.");
-            return std::nullopt;
-        }
-
-        X11Connection conn;
-        if (!conn.ok())
-        {
-            WARN("Failed to connect to X server.");
-            return std::nullopt;
-        }
-
-        LwmProcess wm(env.display());
-        if (!wm.running())
-        {
-            WARN("Failed to start lwm.");
-            return std::nullopt;
-        }
-
-        if (!wait_for_wm_ready(conn, kTimeout))
-        {
-            WARN("Window manager not ready.");
-            return std::nullopt;
-        }
-
-        return TestEnvironment{ env, std::move(conn), std::move(wm) };
-    }
-};
-
 /// Query the actual X server input focus (not the WM's _NET_ACTIVE_WINDOW).
 xcb_window_t get_x_input_focus(X11Connection& conn)
 {
@@ -75,10 +34,7 @@ xcb_window_t get_x_input_focus(X11Connection& conn)
 /// Wait for xcb_get_input_focus() to return the expected window.
 bool wait_for_x_input_focus(X11Connection& conn, xcb_window_t expected, std::chrono::milliseconds timeout)
 {
-    return wait_for_condition(
-        [&]() { return get_x_input_focus(conn) == expected; },
-        timeout
-    );
+    return wait_for_condition([&]() { return get_x_input_focus(conn) == expected; }, timeout);
 }
 
 /// Set WM_HINTS with the input field (ICCCM).
@@ -91,9 +47,7 @@ void set_wm_hints_input(X11Connection& conn, xcb_window_t window, bool accepts_i
     uint32_t hints[9] = {};
     hints[0] = 1; // InputHint flag
     hints[1] = accepts_input ? 1 : 0;
-    xcb_change_property(
-        conn.get(), XCB_PROP_MODE_REPLACE, window, wm_hints_atom, wm_hints_atom, 32, 9, hints
-    );
+    xcb_change_property(conn.get(), XCB_PROP_MODE_REPLACE, window, wm_hints_atom, wm_hints_atom, 32, 9, hints);
     xcb_flush(conn.get());
 }
 
@@ -103,8 +57,14 @@ void set_wm_protocols(X11Connection& conn, xcb_window_t window, std::initializer
     xcb_atom_t wm_protocols = intern_atom(conn.get(), "WM_PROTOCOLS");
     std::vector<xcb_atom_t> atoms(protocols);
     xcb_change_property(
-        conn.get(), XCB_PROP_MODE_REPLACE, window, wm_protocols, XCB_ATOM_ATOM, 32,
-        static_cast<uint32_t>(atoms.size()), atoms.data()
+        conn.get(),
+        XCB_PROP_MODE_REPLACE,
+        window,
+        wm_protocols,
+        XCB_ATOM_ATOM,
+        32,
+        static_cast<uint32_t>(atoms.size()),
+        atoms.data()
     );
     xcb_flush(conn.get());
 }
@@ -114,10 +74,7 @@ void set_wm_protocols(X11Connection& conn, xcb_window_t window, std::initializer
 // =============================================================================
 // Sanity: for standard (Passive) windows, X input focus matches _NET_ACTIVE_WINDOW
 // =============================================================================
-TEST_CASE(
-    "Integration: X input focus matches _NET_ACTIVE_WINDOW for passive windows",
-    "[integration][focus][input]"
-)
+TEST_CASE("Integration: X input focus matches _NET_ACTIVE_WINDOW for passive windows", "[integration][focus][input]")
 {
     auto test_env = TestEnvironment::create();
     if (!test_env)
@@ -146,10 +103,7 @@ TEST_CASE(
 // but following dwm/i3 convention the WM should always set focus directly so
 // that keyboard input isn't lost if the client is slow or ignores the message.
 // =============================================================================
-TEST_CASE(
-    "Integration: globally active window receives X input focus",
-    "[integration][focus][input]"
-)
+TEST_CASE("Integration: globally active window receives X input focus", "[integration][focus][input]")
 {
     auto test_env = TestEnvironment::create();
     if (!test_env)
@@ -192,10 +146,7 @@ TEST_CASE(
 // Verify that _NET_ACTIVE_WINDOW and X focus agree after request-based focus
 // changes (sanity check that our basic focus path is sound).
 // =============================================================================
-TEST_CASE(
-    "Integration: _NET_ACTIVE_WINDOW request produces matching X input focus",
-    "[integration][focus][input]"
-)
+TEST_CASE("Integration: _NET_ACTIVE_WINDOW request produces matching X input focus", "[integration][focus][input]")
 {
     auto test_env = TestEnvironment::create();
     if (!test_env)

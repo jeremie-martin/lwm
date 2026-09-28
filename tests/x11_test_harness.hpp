@@ -1,11 +1,13 @@
 #pragma once
 
 #include <array>
+#include <catch2/catch_test_macros.hpp>
 #include <cerrno>
 #include <chrono>
 #include <csignal>
 #include <cstdlib>
 #include <cstring>
+#include <fcntl.h>
 #include <filesystem>
 #include <fstream>
 #include <functional>
@@ -18,7 +20,9 @@
 #include <vector>
 
 #include <poll.h>
+#include <sys/socket.h>
 #include <sys/types.h>
+#include <sys/un.h>
 #include <sys/wait.h>
 #include <unistd.h>
 #include <xcb/xcb.h>
@@ -68,7 +72,12 @@ public:
         return env;
     }
 
-    bool available() const { return available_; }
+    bool available() const
+    {
+        if (std::getenv("LWM_TEST_REQUIRE_X11"))
+            REQUIRE(available_);
+        return available_;
+    }
     bool owns_display() const { return owns_display_; }
     std::string const& display() const { return display_; }
 
@@ -78,7 +87,7 @@ private:
         char const* allow_existing = std::getenv("LWM_TEST_ALLOW_EXISTING_DISPLAY");
         bool use_existing = allow_existing && std::strcmp(allow_existing, "1") == 0;
 
-        if (start_xvfb())
+        if (start_server())
         {
             available_ = true;
             return;
@@ -97,17 +106,19 @@ private:
 
     ~X11TestEnvironment()
     {
-        stop_xvfb();
+        stop_server();
         restore_display();
     }
 
     X11TestEnvironment(X11TestEnvironment const&) = delete;
     X11TestEnvironment& operator=(X11TestEnvironment const&) = delete;
 
-    bool start_xvfb()
+    bool start_server()
     {
-        auto xvfb = find_in_path("Xvfb");
-        if (!xvfb)
+        char const* requested_server = std::getenv("LWM_TEST_XSERVER");
+        bool nested = requested_server && std::strcmp(requested_server, "Xephyr") == 0;
+        auto server = find_in_path(nested ? "Xephyr" : "Xvfb");
+        if (!server)
             return false;
 
         char const* previous = std::getenv("DISPLAY");
@@ -123,8 +134,23 @@ private:
         if (pid == 0)
         {
             close(ready[0]);
+            if (nested)
+            {
+                execl(
+                    server->c_str(),
+                    "Xephyr",
+                    "-displayfd",
+                    ready_fd.c_str(),
+                    "-screen",
+                    "1280x720",
+                    "-nolisten",
+                    "tcp",
+                    nullptr
+                );
+                _exit(127);
+            }
             execl(
-                xvfb->c_str(),
+                server->c_str(),
                 "Xvfb",
                 "-displayfd",
                 ready_fd.c_str(),
@@ -144,7 +170,7 @@ private:
             return false;
         }
 
-        xvfb_pid_ = pid;
+        server_pid_ = pid;
         owns_display_ = true;
         std::string number;
         auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(5);
@@ -174,26 +200,26 @@ private:
             number += ch;
         }
         close(ready[0]);
-        stop_xvfb();
+        stop_server();
         return false;
     }
 
-    void stop_xvfb()
+    void stop_server()
     {
-        if (!owns_display_ || xvfb_pid_ <= 0)
+        if (!owns_display_ || server_pid_ <= 0)
             return;
 
-        kill(xvfb_pid_, SIGTERM);
+        kill(server_pid_, SIGTERM);
         bool exited = wait_for_condition(
-            [this]() { return waitpid(xvfb_pid_, nullptr, WNOHANG) > 0; },
+            [this]() { return waitpid(server_pid_, nullptr, WNOHANG) > 0; },
             std::chrono::milliseconds(1000)
         );
         if (!exited)
         {
-            kill(xvfb_pid_, SIGKILL);
-            waitpid(xvfb_pid_, nullptr, 0);
+            kill(server_pid_, SIGKILL);
+            waitpid(server_pid_, nullptr, 0);
         }
-        xvfb_pid_ = -1;
+        server_pid_ = -1;
         owns_display_ = false;
     }
 
@@ -210,7 +236,7 @@ private:
 
     bool available_ = false;
     bool owns_display_ = false;
-    pid_t xvfb_pid_ = -1;
+    pid_t server_pid_ = -1;
     std::string display_;
     std::optional<std::string> previous_display_;
     bool display_modified_ = false;
@@ -224,12 +250,16 @@ public:
         , screen_(nullptr)
     {
         // Xvfb briefly refuses connections while resetting between test cases.
-        wait_for_condition([&]() {
-            if (conn_)
-                xcb_disconnect(conn_);
-            conn_ = xcb_connect(nullptr, nullptr);
-            return conn_ && !xcb_connection_has_error(conn_);
-        }, std::chrono::seconds(1));
+        wait_for_condition(
+            [&]()
+            {
+                if (conn_)
+                    xcb_disconnect(conn_);
+                conn_ = xcb_connect(nullptr, nullptr);
+                return conn_ && !xcb_connection_has_error(conn_);
+            },
+            std::chrono::seconds(1)
+        );
         if (conn_ && !xcb_connection_has_error(conn_))
             screen_ = xcb_setup_roots_iterator(xcb_get_setup(conn_)).data;
     }
@@ -415,12 +445,7 @@ inline void set_window_wm_class(
     value.append(class_name);
     value.push_back('\0');
 
-    xcb_icccm_set_wm_class(
-        conn.get(),
-        window,
-        static_cast<uint32_t>(value.size()),
-        value.c_str()
-    );
+    xcb_icccm_set_wm_class(conn.get(), window, static_cast<uint32_t>(value.size()), value.c_str());
     xcb_flush(conn.get());
 }
 
@@ -465,7 +490,8 @@ inline bool wait_for_property_cardinal(
     );
 }
 
-inline std::optional<std::string> get_window_property_string(xcb_connection_t* conn, xcb_window_t window, xcb_atom_t atom)
+inline std::optional<std::string>
+get_window_property_string(xcb_connection_t* conn, xcb_window_t window, xcb_atom_t atom)
 {
     auto cookie = xcb_get_property(conn, 0, window, atom, XCB_GET_PROPERTY_TYPE_ANY, 0, 4096);
     auto* reply = xcb_get_property_reply(conn, cookie, nullptr);
@@ -577,25 +603,93 @@ inline std::string make_temp_dir()
     return std::string(result);
 }
 
+inline std::optional<std::string> wait_for_ipc_socket_path(X11Connection& conn)
+{
+    auto atom = intern_atom(conn.get(), "_LWM_IPC_SOCKET");
+    std::optional<std::string> path;
+    wait_for_condition(
+        [&]
+        {
+            path = get_window_property_string(conn.get(), conn.root(), atom);
+            return path && !path->empty();
+        },
+        std::chrono::seconds(2)
+    );
+    return path;
+}
+
+inline std::optional<std::string> send_raw_ipc(std::string const& path, std::string const& command)
+{
+    if (path.size() >= sizeof(sockaddr_un::sun_path))
+        return std::nullopt;
+    struct Socket
+    {
+        int fd = socket(AF_UNIX, SOCK_STREAM | SOCK_CLOEXEC | SOCK_NONBLOCK, 0);
+        ~Socket()
+        {
+            if (fd >= 0)
+                close(fd);
+        }
+    } connection;
+    int fd = connection.fd;
+    if (fd < 0)
+        return std::nullopt;
+    auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(2);
+    auto ready = [&](short events)
+    {
+        auto remaining =
+            std::chrono::duration_cast<std::chrono::milliseconds>(deadline - std::chrono::steady_clock::now());
+        pollfd descriptor{ fd, events, 0 };
+        return remaining.count() > 0 && poll(&descriptor, 1, remaining.count()) > 0;
+    };
+    sockaddr_un address{};
+    address.sun_family = AF_UNIX;
+    std::memcpy(address.sun_path, path.c_str(), path.size() + 1);
+    if (connect(fd, reinterpret_cast<sockaddr*>(&address), sizeof(address)) < 0)
+        return std::nullopt;
+    std::string request = command + '\n';
+    size_t sent = 0;
+    while (sent < request.size())
+    {
+        if (!ready(POLLOUT))
+            return std::nullopt;
+        auto n = send(fd, request.data() + sent, request.size() - sent, MSG_NOSIGNAL);
+        if (n > 0)
+            sent += n;
+        else if (errno != EINTR && errno != EAGAIN)
+            return std::nullopt;
+    }
+    shutdown(fd, SHUT_WR);
+    std::string response;
+    while (ready(POLLIN))
+    {
+        char buffer[4096];
+        auto n = recv(fd, buffer, sizeof(buffer), 0);
+        if (n == 0)
+            return response;
+        if (n > 0)
+            response.append(buffer, n);
+        else if (errno != EINTR && errno != EAGAIN)
+            return std::nullopt;
+    }
+    return std::nullopt;
+}
+
+inline std::optional<std::string> send_ipc_command(std::string const& path, std::string const& command)
+{
+    auto response = send_raw_ipc(path, command);
+    if (response)
+        while (!response->empty() && (response->back() == '\n' || response->back() == '\r' || response->back() == ' '))
+            response->pop_back();
+    return response;
+}
+
 inline std::filesystem::path find_test_executable_path(std::string_view name)
 {
-    std::filesystem::path current = std::filesystem::current_path();
-
-    for (int depth = 0; depth < 6; ++depth)
-    {
-        std::filesystem::path direct = current / "src" / "app" / std::string(name);
-        if (std::filesystem::exists(direct))
-            return direct;
-
-        std::filesystem::path in_build = current / "build" / "src" / "app" / std::string(name);
-        if (std::filesystem::exists(in_build))
-            return in_build;
-
-        if (current == current.root_path())
-            break;
-        current = current.parent_path();
-    }
-
+    if (name == "lwm")
+        return LWM_BINARY_PATH;
+    if (name == "lwmctl")
+        return LWMCTL_BINARY_PATH;
     return {};
 }
 
@@ -641,7 +735,7 @@ inline std::optional<CommandResult> run_command(
 
     int stdout_pipe[2] = { -1, -1 };
     int stderr_pipe[2] = { -1, -1 };
-    if (pipe(stdout_pipe) != 0 || pipe(stderr_pipe) != 0)
+    if (pipe2(stdout_pipe, O_CLOEXEC) != 0 || pipe2(stderr_pipe, O_CLOEXEC) != 0)
     {
         if (stdout_pipe[0] != -1)
         {
@@ -678,8 +772,7 @@ inline std::optional<CommandResult> run_command(
 
         std::vector<char*> argv;
         argv.reserve(owned_args.size() + 1);
-        for (auto& arg : owned_args)
-            argv.push_back(arg.data());
+        for (auto& arg : owned_args) argv.push_back(arg.data());
         argv.push_back(nullptr);
 
         execv(executable.c_str(), argv.data());
@@ -689,25 +782,58 @@ inline std::optional<CommandResult> run_command(
     close(stdout_pipe[1]);
     close(stderr_pipe[1]);
 
-    auto read_fd = [](int fd)
+    if (pid < 0)
     {
-        std::string output;
-        std::array<char, 4096> buffer{};
-        ssize_t read_count = 0;
-        while ((read_count = read(fd, buffer.data(), buffer.size())) > 0)
-            output.append(buffer.data(), static_cast<size_t>(read_count));
-        close(fd);
-        return output;
-    };
-
-    CommandResult result;
-    result.stdout_text = read_fd(stdout_pipe[0]);
-    result.stderr_text = read_fd(stderr_pipe[0]);
-
-    int status = 0;
-    if (waitpid(pid, &status, 0) <= 0)
+        close(stdout_pipe[0]);
+        close(stderr_pipe[0]);
         return std::nullopt;
-
+    }
+    CommandResult result;
+    std::array<pollfd, 2> fds{
+        { { stdout_pipe[0], POLLIN, 0 }, { stderr_pipe[0], POLLIN, 0 } }
+    };
+    for (auto& fd : fds) fcntl(fd.fd, F_SETFL, fcntl(fd.fd, F_GETFL) | O_NONBLOCK);
+    auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(5);
+    int status = 0;
+    bool exited = false;
+    while (std::chrono::steady_clock::now() < deadline)
+    {
+        poll(fds.data(), fds.size(), 10);
+        for (size_t i = 0; i < fds.size(); ++i)
+        {
+            auto& fd = fds[i];
+            if (fd.fd < 0)
+                continue;
+            std::array<char, 4096> buffer;
+            ssize_t count = read(fd.fd, buffer.data(), buffer.size());
+            if (count > 0)
+                (i == 0 ? result.stdout_text : result.stderr_text).append(buffer.data(), count);
+            else if (count == 0 || (errno != EAGAIN && errno != EWOULDBLOCK && errno != EINTR))
+            {
+                close(fd.fd);
+                fd.fd = -1;
+            }
+        }
+        if (!exited)
+            exited = waitpid(pid, &status, WNOHANG) == pid;
+        if (exited && fds[0].fd < 0 && fds[1].fd < 0)
+            break;
+    }
+    bool complete = exited && fds[0].fd < 0 && fds[1].fd < 0;
+    for (auto& fd : fds)
+        if (fd.fd >= 0)
+            close(fd.fd);
+    if (!exited)
+    {
+        kill(pid, SIGKILL);
+        while (waitpid(pid, &status, 0) < 0 && errno == EINTR)
+        { }
+    }
+    if (!complete)
+    {
+        result.stderr_text += "\nTest command timed out";
+        return result;
+    }
     if (WIFEXITED(status))
         result.exit_code = WEXITSTATUS(status);
     else if (WIFSIGNALED(status))
@@ -738,6 +864,14 @@ public:
         pid_ = fork();
         if (pid_ == 0)
         {
+            int diagnostics =
+                open((std::filesystem::path(runtime_dir_) / "stderr").c_str(), O_WRONLY | O_CREAT | O_TRUNC, 0600);
+            if (diagnostics >= 0)
+            {
+                dup2(diagnostics, STDERR_FILENO);
+                close(diagnostics);
+            }
+            unsetenv("LWM_SOCKET");
             if (!display_.empty())
                 setenv("DISPLAY", display_.c_str(), 1);
             if (!config_home_.empty())
@@ -751,8 +885,7 @@ public:
             owned_args.insert(owned_args.end(), startup_args.begin(), startup_args.end());
             std::vector<char*> argv;
             argv.reserve(owned_args.size() + 1);
-            for (std::string& arg : owned_args)
-                argv.push_back(arg.data());
+            for (std::string& arg : owned_args) argv.push_back(arg.data());
             argv.push_back(nullptr);
             execv(executable.c_str(), argv.data());
             _exit(127);
@@ -818,12 +951,16 @@ public:
         return *this;
     }
 
-    bool running() const { return pid_ > 0; }
-    pid_t pid() const { return pid_; }
-    std::filesystem::path config_path() const
+    bool running() const
     {
-        return std::filesystem::path(config_home_) / "lwm" / "config.toml";
+        if (pid_ <= 0)
+            return false;
+        siginfo_t info{};
+        return waitid(P_PID, pid_, &info, WEXITED | WNOHANG | WNOWAIT) == 0 && info.si_pid == 0;
     }
+    std::string diagnostics() const { return read_text_file(std::filesystem::path(runtime_dir_) / "stderr"); }
+    pid_t pid() const { return pid_; }
+    std::filesystem::path config_path() const { return std::filesystem::path(config_home_) / "lwm" / "config.toml"; }
     std::string const& runtime_dir() const { return runtime_dir_; }
     std::string const& display() const { return display_; }
 
@@ -854,16 +991,42 @@ private:
     std::string runtime_dir_;
 };
 
-inline std::filesystem::path lwmctl_executable_path()
+// Only missing optional infrastructure may skip; a broken WM must fail.
+struct TestEnvironment
 {
-    return find_test_executable_path("lwmctl");
-}
+    X11TestEnvironment& x11_env;
+    X11Connection conn;
+    LwmProcess wm;
+
+    static std::optional<TestEnvironment> create(std::string config = {})
+    {
+        auto& env = X11TestEnvironment::instance();
+        if (!env.available())
+        {
+            REQUIRE(std::getenv("LWM_TEST_REQUIRE_X11") == nullptr);
+            return std::nullopt;
+        }
+        X11Connection conn;
+        REQUIRE(conn.ok());
+        LwmProcess wm(env.display(), std::move(config));
+        bool ready = wait_for_condition(
+            [&] { return !wm.running() || wait_for_wm_ready(conn, std::chrono::milliseconds(10)); },
+            std::chrono::seconds(2)
+        );
+        INFO(wm.diagnostics());
+        REQUIRE(wm.running());
+        REQUIRE(ready);
+        return TestEnvironment{ env, std::move(conn), std::move(wm) };
+    }
+};
+
+inline std::filesystem::path lwmctl_executable_path() { return find_test_executable_path("lwmctl"); }
 
 inline std::optional<CommandResult>
 run_lwmctl(LwmProcess const& wm, std::vector<std::string> const& args, std::string socket_path = {})
 {
     std::vector<std::pair<std::string, std::string>> env = {
-        { "DISPLAY", wm.display() },
+        {         "DISPLAY",     wm.display() },
         { "XDG_RUNTIME_DIR", wm.runtime_dir() },
     };
     if (!socket_path.empty())

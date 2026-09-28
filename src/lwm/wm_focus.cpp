@@ -38,130 +38,29 @@ void WindowManager::focus_any_window(xcb_window_t window, bool record_user_time,
     // Stale monitor/workspace indices are reachable after a RandR shrink (see the
     // orphan path in unmanage_window); every path below indexes monitors_[client->monitor]
     // and workspaces[client->workspace] directly, so reject out-of-range clients up front.
-    if (client->monitor >= monitors_.size()
-        || client->workspace >= monitors_[client->monitor].workspaces.size())
+    if (client->monitor >= monitors_.size() || client->workspace >= monitors_[client->monitor].workspaces.size())
     {
         LOG_TRACE("focus_any_window: rejected (stale monitor/workspace index)");
         return;
     }
 
-    bool is_floating = (client->kind() == Client::Kind::Floating);
-
     if (client->iconic)
-    {
-        LOG_DEBUG("focus_any_window: deiconifying window {:#x}", window);
         deiconify_window(window, false);
-    }
 
     xcb_window_t previous_active = active_window_;
-    std::optional<size_t> previous_monitor;
-    if (auto const* previous = get_client(previous_active))
-        previous_monitor = previous->monitor;
-    bool is_sticky = client->sticky;
-
-    if (is_floating)
+    focused_monitor_ = client->monitor;
+    // Resolve visibility before committing focus. Workspace reconciliation does
+    // not dispatch events or remove clients, so the target remains valid here.
+    bool workspace_changed = !client->sticky && apply_workspace_switch(client->monitor, client->workspace);
+    if (is_suppressed_by_fullscreen(*client))
     {
-        // Floating path: workspace switch + MRU promotion
-        LOG_TRACE(
-            "focus_any_window: floating path, client->monitor={} client->workspace={} "
-            "current_workspace={} is_sticky={}",
-            client->monitor,
-            client->workspace,
-            monitors_[client->monitor].current_workspace,
-            is_sticky
-        );
-
-        focused_monitor_ = client->monitor;
-        auto& monitor = monitors_[client->monitor];
-        if (!is_sticky)
-        {
-            size_t old_workspace = monitor.current_workspace;
-            if (apply_workspace_switch(client->monitor, client->workspace))
-            {
-                LOG_DEBUG(
-                    "focus_any_window({:#x}): WORKSPACE SWITCH TRIGGERED by focus! "
-                    "old_ws={} new_ws={}",
-                    window, old_workspace, client->workspace
-                );
-                if (is_suppressed_by_fullscreen(*client))
-                {
-                    focus_or_fallback(monitors_[client->monitor], false);
-                    return;
-                }
-            }
-        }
-
-        client->mru_order = next_mru_order_++;
-        active_window_ = window;
+        focus_or_fallback(monitors_[client->monitor], false);
+        return;
     }
-    else
-    {
-#ifndef NDEBUG
-        auto const& recorded_workspace = monitors_[client->monitor].workspaces[client->workspace];
-        if (recorded_workspace.find_window(window) == recorded_workspace.windows.end())
-        {
-            LOG_ERROR(
-                "focus_any_window: tiled client {:#x} recorded at monitor={} workspace={} but is not in workspace",
-                window,
-                client->monitor,
-                client->workspace
-            );
-        }
-#endif
-
-        LOG_DEBUG(
-            "focus_any_window({:#x}): target_monitor={} workspace_changed={} "
-            "old_ws={} new_ws={} prev_active={:#x}",
-            window,
-            client->monitor,
-            !is_sticky && monitors_[client->monitor].current_workspace != client->workspace,
-            monitors_[client->monitor].current_workspace,
-            client->workspace,
-            previous_active
-        );
-
-        focused_monitor_ = client->monitor;
+    if (client->kind() == Client::Kind::Tiled)
         workspace_policy::set_workspace_focus(monitors_[client->monitor].workspaces[client->workspace], window);
-        client->mru_order = next_mru_order_++;
-        active_window_ = window;
-
-        auto& monitor = monitors_[client->monitor];
-        if (!is_sticky)
-        {
-            size_t old_workspace = monitor.current_workspace;
-            if (apply_workspace_switch(client->monitor, client->workspace))
-            {
-                LOG_DEBUG(
-                    "focus_any_window: WORKSPACE SWITCH TRIGGERED by focus! old_ws={} new_ws={}",
-                    old_workspace, client->workspace
-                );
-                // After the workspace switch a sticky fullscreen owner may now suppress the target.
-                if (is_suppressed_by_fullscreen(*client))
-                {
-                    active_window_ = previous_active;
-                    focus_or_fallback(monitors_[client->monitor], false);
-                    return;
-                }
-            }
-        }
-    }
-
-    client = get_client(window);
-    if (!client)
-    {
-        LOG_TRACE("focus_any_window: target disappeared before finalization");
-        return;
-    }
-
-    if (active_window_ != window)
-    {
-        LOG_TRACE(
-            "focus_any_window: focus redirected to {:#x}, skipping stale finalization for {:#x}",
-            active_window_,
-            window
-        );
-        return;
-    }
+    client->mru_order = next_mru_order_++;
+    active_window_ = window;
 
     LOG_TRACE("focus_any_window: updating EWMH current desktop");
     update_ewmh_current_desktop();
@@ -197,7 +96,7 @@ void WindowManager::focus_any_window(xcb_window_t window, bool record_user_time,
     // still redirect focus after receiving the protocol message above.
     xcb_set_input_focus(conn_.get(), XCB_INPUT_FOCUS_POINTER_ROOT, window, focus_time);
 
-    apply_stacking();
+    stacking_dirty_ = true;
 
     if (client->urgency.active())
         clear_client_urgency(*client);
@@ -231,11 +130,14 @@ void WindowManager::focus_any_window(xcb_window_t window, bool record_user_time,
 
     conn_.flush();
 
-    emit_event(Event_FocusChange,
-        "{\"event\":\"focus_change\",\"window\":" + std::to_string(window)
-        + ",\"class\":\"" + json_escape(client->wm_class)
-        + "\",\"title\":\"" + json_escape(client->name) + "\"}");
+    emit_event(
+        Event_FocusChange,
+        "{\"event\":\"focus_change\",\"window\":" + std::to_string(window) + ",\"class\":\""
+            + json_escape(client->wm_class) + "\",\"title\":\"" + json_escape(client->name) + "\"}"
+    );
 
+    if (workspace_changed)
+        flush_and_drain_crossing();
     LOG_TRACE("focus_any_window({:#x}): DONE", window);
 }
 
@@ -264,7 +166,7 @@ void WindowManager::clear_focus()
         }
     }
     if (previous_monitor)
-        apply_stacking();
+        stacking_dirty_ = true;
 
     conn_.flush();
 }
@@ -405,7 +307,8 @@ bool WindowManager::cycle_focus(bool forward)
 
     auto floating_candidates = build_floating_candidates();
 
-    auto get_mru = [this](xcb_window_t w) -> uint64_t {
+    auto get_mru = [this](xcb_window_t w) -> uint64_t
+    {
         auto const* c = get_client(w);
         return c ? c->mru_order : 0;
     };
@@ -441,14 +344,16 @@ std::vector<focus_policy::FloatingCandidate> WindowManager::build_floating_candi
     {
         if (client.kind() != Client::Kind::Floating)
             continue;
-        entries.push_back({ { window, client.monitor, client.workspace, client.sticky }, client.mru_order });
+        entries.push_back({
+            { window, client.monitor, client.workspace, client.sticky },
+            client.mru_order
+        });
     }
     std::sort(entries.begin(), entries.end(), [](Entry const& a, Entry const& b) { return a.mru < b.mru; });
 
     std::vector<focus_policy::FloatingCandidate> candidates;
     candidates.reserve(entries.size());
-    for (auto const& e : entries)
-        candidates.push_back(e.cand);
+    for (auto const& e : entries) candidates.push_back(e.cand);
     return candidates;
 }
 

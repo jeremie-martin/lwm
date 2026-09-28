@@ -5,6 +5,7 @@
 #include "lwm/core/events.hpp"
 #include "lwm/core/ewmh.hpp"
 #include "lwm/core/invariants.hpp"
+#include "lwm/core/ipc_server.hpp"
 #include "lwm/core/policy.hpp"
 #include "lwm/core/types.hpp"
 #include "lwm/core/window_rules.hpp"
@@ -65,7 +66,8 @@ public:
     void prepare_restart();
 
 private:
-    struct NoDrag {};
+    struct NoDrag
+    { };
 
     struct FloatingMove
     {
@@ -101,7 +103,7 @@ private:
     {
         size_t monitor_idx = 0;
         size_t workspace_idx = 0; // abort drag if workspace changes
-        SplitAddress address {};
+        SplitAddress address{};
         SplitDirection direction = SplitDirection::Horizontal;
         double start_ratio = 0.5;
         int32_t available_extent = 0; // total available pixels along split axis
@@ -147,8 +149,7 @@ private:
     xcb_atom_t wm_s0_ = XCB_NONE;
     bool running_ = true;
     std::string config_path_;
-    std::string ipc_socket_path_;
-    int ipc_listener_fd_ = -1;
+    ipc::Server ipc_;
     xcb_atom_t wm_transient_for_ = XCB_NONE;
     xcb_atom_t wm_state_ = XCB_NONE;
     xcb_atom_t wm_change_state_ = XCB_NONE;
@@ -195,28 +196,11 @@ private:
 
     // Double-click detection for gap ratio reset
     xcb_timestamp_t last_gap_click_time_ = 0;
-    SplitAddress last_gap_click_address_ {};
+    SplitAddress last_gap_click_address_{};
     size_t last_gap_click_monitor_ = 0;
 
-    struct IpcClient
-    {
-        int fd = -1;
-        std::string buffer;
-        std::chrono::steady_clock::time_point deadline;
-    };
-    std::optional<IpcClient> pending_ipc_;
-
     // SIGHUP self-pipe: handler writes to [1], main loop polls [0]
-    int signal_pipe_[2] = {-1, -1};
-
-    // Event subscribers (long-lived IPC connections)
-    struct Subscriber
-    {
-        int fd = -1;
-        uint32_t event_mask = Event_All;
-    };
-    std::vector<Subscriber> subscribers_;
-    static constexpr size_t MAX_SUBSCRIBERS = 8;
+    int signal_pipe_[2] = { -1, -1 };
 
     bool stacking_dirty_ = false;
     std::deque<xcb_generic_event_t> deferred_events_;
@@ -224,15 +208,17 @@ private:
     // Scratchpad state
     struct NamedScratchpadState
     {
-        struct Empty {};
-        struct LaunchPending {};
+        struct Empty
+        { };
+        struct LaunchPending
+        { };
         struct Claimed
         {
             xcb_window_t window = XCB_NONE;
         };
 
         std::string name;
-        std::variant<Empty, LaunchPending, Claimed> state = Empty {};
+        std::variant<Empty, LaunchPending, Claimed> state = Empty{};
 
         xcb_window_t window() const
         {
@@ -241,25 +227,13 @@ private:
             return XCB_NONE;
         }
 
-        bool pending_launch() const
-        {
-            return std::holds_alternative<LaunchPending>(state);
-        }
+        bool pending_launch() const { return std::holds_alternative<LaunchPending>(state); }
 
-        void mark_empty()
-        {
-            state = Empty {};
-        }
+        void mark_empty() { state = Empty{}; }
 
-        void mark_launch_pending()
-        {
-            state = LaunchPending {};
-        }
+        void mark_launch_pending() { state = LaunchPending{}; }
 
-        void mark_claimed(xcb_window_t claimed_window)
-        {
-            state = Claimed { claimed_window };
-        }
+        void mark_claimed(xcb_window_t claimed_window) { state = Claimed{ claimed_window }; }
     };
     std::vector<NamedScratchpadState> named_scratchpads_;
     std::vector<xcb_window_t> scratchpad_pool_; ///< Generic pool, MRU-ordered (back = most recent)
@@ -285,11 +259,7 @@ private:
     void run_autostart();
     void setup_ipc();
     void cleanup_ipc();
-    void accept_ipc_client();
-    void process_ipc_client();
-    void close_ipc_client();
     void emit_event(EventType type, std::string_view json);
-    void cleanup_dead_subscribers();
 
     void handle_event(xcb_generic_event_t const& event);
     void handle_map_request(xcb_map_request_event_t const& e);
@@ -300,7 +270,8 @@ private:
         WindowClassification const& classification,
         WindowRuleResult const& rule_result,
         bool start_iconic,
-        bool urgent);
+        bool urgent
+    );
     void map_tiled_window(
         xcb_window_t window,
         WindowClassification const& classification,
@@ -333,7 +304,7 @@ private:
     void handle_property_notify(xcb_property_notify_event_t const& e);
     void handle_randr_screen_change();
     void handle_timeouts();
-    std::optional<std::string> run_ipc_command(std::string const& command);
+    std::string run_ipc_command(std::string const& command);
     std::expected<void, std::string> reload_config();
     void emit_config_reload_result(std::expected<void, std::string> const& result, char const* source);
     std::expected<void, std::string> apply_config_reload(Config config);
@@ -412,7 +383,8 @@ private:
     void finalize_removed_window_after_unmanage(
         size_t monitor_idx,
         bool removed_active_window,
-        bool focus_fallback_if_active);
+        bool focus_fallback_if_active
+    );
     void switch_workspace(size_t ws);
     void toggle_workspace();
     void move_window_to_workspace(size_t ws);
@@ -471,9 +443,9 @@ private:
     /// so callers can distinguish "the window has no opinion" from "the app sent garbage".
     enum class DesktopResolution
     {
-        Resolved,    ///< monitor/workspace are valid indices.
-        NoHint,      ///< Window has no _NET_WM_DESKTOP, or it is sticky (0xFFFFFFFF).
-        OutOfRange,  ///< Hint present but decodes to an invalid monitor or workspace index.
+        Resolved,   ///< monitor/workspace are valid indices.
+        NoHint,     ///< Window has no _NET_WM_DESKTOP, or it is sticky (0xFFFFFFFF).
+        OutOfRange, ///< Hint present but decodes to an invalid monitor or workspace index.
     };
     struct DesktopResolutionResult
     {
@@ -488,12 +460,10 @@ private:
     bool is_suppressed_by_fullscreen(Client const& client) const;
     stacking_policy::Tier compute_stack_tier(Client const& client) const;
     stacking_policy::ClientStackInputs stack_inputs_of(Client const& client) const;
-    xcb_window_t select_fullscreen_owner_for_monitor(
-        size_t monitor_idx,
-        xcb_window_t preferred_owner = XCB_NONE) const;
+    xcb_window_t select_fullscreen_owner_for_monitor(size_t monitor_idx, xcb_window_t preferred_owner = XCB_NONE) const;
     void reconcile_visibility_for_monitor(size_t monitor_idx, xcb_window_t preferred_owner = XCB_NONE);
-    void finalize_after_desktop_move(
-        xcb_window_t window, bool was_active, size_t target_monitor, size_t target_workspace);
+    void
+    finalize_after_desktop_move(xcb_window_t window, bool was_active, size_t target_monitor, size_t target_workspace);
     /// Realize stacking_policy onto X and EWMH _NET_CLIENT_LIST_STACKING in
     /// one global pass.  X stacking is a single global order — a per-monitor
     /// pass cannot enforce cross-monitor invariants like floating-above-tile.
@@ -507,6 +477,7 @@ private:
     uint32_t border_width_for_client(Client const& client) const;
     uint32_t border_color_for_client(Client const& client) const;
     bool should_apply_focus_border(Client const& client) const;
+    void apply_geometry(Client& client, Geometry geometry, uint32_t border_width);
     void send_configure_notify(xcb_window_t window, Geometry const& geom, uint16_t border_width);
     void send_configure_notify(Client const& client);
     bool drag_active() const;
@@ -561,12 +532,14 @@ private:
         Client& client,
         size_t target_monitor,
         size_t target_workspace,
-        std::optional<size_t> insert_index = std::nullopt);
+        std::optional<size_t> insert_index = std::nullopt
+    );
     bool move_floating_client_to_workspace(
         Client& client,
         size_t target_monitor,
         size_t target_workspace,
-        bool place_on_monitor_change);
+        bool place_on_monitor_change
+    );
 
     // Tiled window membership helpers (atomically update workspace list + client fields + EWMH)
     void add_tiled_to_workspace(Client& client, size_t monitor_idx, size_t workspace_idx);
@@ -578,7 +551,6 @@ private:
     void flush_and_drain_crossing();
 
     // Derived visibility: sync physical visibility to match policy state
-    void sync_visibility_for_monitor(size_t monitor_idx);
 
     // Funnel: refresh fullscreen ownership, sync visibility, then re-tile.
     void finalize_visibility_on_monitor(size_t monitor_idx, xcb_window_t preferred_fullscreen_owner = XCB_NONE);

@@ -32,6 +32,18 @@ inline std::optional<Violation> validate(
             || monitor.previous_workspace >= monitor.workspaces.size())
             return Violation{ "Monitor has an invalid current or previous workspace" };
 
+        if (monitor.fullscreen_owner != XCB_NONE)
+        {
+            auto it = clients.find(monitor.fullscreen_owner);
+            if (it == clients.end())
+                return Violation{ "Fullscreen owner is unmanaged", monitor.fullscreen_owner };
+            auto const& owner = it->second;
+            if ((owner.kind() != Client::Kind::Tiled && owner.kind() != Client::Kind::Floating) || !owner.fullscreen
+                || owner.iconic || owner.hidden || owner.monitor != m
+                || (!owner.sticky && owner.workspace != monitor.current_workspace))
+                return Violation{ "Fullscreen owner is ineligible", owner.id };
+        }
+
         for (size_t w = 0; w < monitor.workspaces.size(); ++w)
         {
             auto const& workspace = monitor.workspaces[w];
@@ -91,8 +103,7 @@ inline std::optional<Violation> validate(
 #    define LWM_ASSERT_INVARIANTS(clients, monitors, active_window) ((void)0)
 #else
 #    define LWM_ASSERT_INVARIANTS(clients, monitors, active_window)                                  \
-        do                                                                                           \
-        {                                                                                            \
+        do {                                                                                         \
             if (auto violation = lwm::invariants::validate(clients, monitors, active_window))        \
             {                                                                                        \
                 LOG_ERROR("INVARIANT VIOLATION: {} ({:#x})", violation->message, violation->window); \

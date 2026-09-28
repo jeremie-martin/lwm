@@ -19,47 +19,6 @@ namespace {
 
 constexpr auto kTimeout = std::chrono::seconds(2);
 
-struct TestEnvironment
-{
-    X11TestEnvironment& x11_env;
-    X11Connection conn;
-    LwmProcess wm;
-
-    bool ok() const { return conn.ok() && wm.running(); }
-
-    static std::optional<TestEnvironment> create(std::string const& config = "")
-    {
-        auto& env = X11TestEnvironment::instance();
-        if (!env.available())
-        {
-            WARN("Xvfb not available");
-            return std::nullopt;
-        }
-
-        X11Connection conn;
-        if (!conn.ok())
-        {
-            WARN("Failed to connect to X server");
-            return std::nullopt;
-        }
-
-        LwmProcess wm(env.display(), config);
-        if (!wm.running())
-        {
-            WARN("Failed to start lwm");
-            return std::nullopt;
-        }
-
-        if (!wait_for_wm_ready(conn, kTimeout))
-        {
-            WARN("Window manager not ready");
-            return std::nullopt;
-        }
-
-        return TestEnvironment{ env, std::move(conn), std::move(wm) };
-    }
-};
-
 bool has_state(X11Connection& conn, xcb_window_t window, xcb_atom_t state)
 {
     xcb_atom_t net_wm_state = intern_atom(conn.get(), "_NET_WM_STATE");
@@ -88,7 +47,12 @@ bool has_state(X11Connection& conn, xcb_window_t window, xcb_atom_t state)
 
 /// Send a _NET_WM_STATE client message. action: 0=remove, 1=add, 2=toggle
 void send_wm_state_change(
-    X11Connection& conn, xcb_window_t window, uint32_t action, xcb_atom_t state1, xcb_atom_t state2 = XCB_NONE)
+    X11Connection& conn,
+    xcb_window_t window,
+    uint32_t action,
+    xcb_atom_t state1,
+    xcb_atom_t state2 = XCB_NONE
+)
 {
     xcb_atom_t net_wm_state = intern_atom(conn.get(), "_NET_WM_STATE");
     send_client_message(conn, window, net_wm_state, action, state1, state2);
@@ -152,10 +116,9 @@ TEST_CASE("Integration: dock and desktop clients receive WM_STATE lifecycle", "[
     xcb_window_t dock = create_window(conn, 0, 0, 200, 30);
     set_window_type(conn, dock, dock_type);
     map_window(conn, dock);
-    REQUIRE(wait_for_condition(
-        [&]() { return get_wm_state(conn, dock, wm_state) == XCB_ICCCM_WM_STATE_NORMAL; },
-        kTimeout
-    ));
+    REQUIRE(
+        wait_for_condition([&]() { return get_wm_state(conn, dock, wm_state) == XCB_ICCCM_WM_STATE_NORMAL; }, kTimeout)
+    );
 
     xcb_unmap_window(conn.get(), dock);
     xcb_flush(conn.get());
@@ -231,10 +194,7 @@ TEST_CASE("Integration: above and below are mutually exclusive", "[integration][
     destroy_window(conn, w);
 }
 
-TEST_CASE(
-    "Integration: toggling above after below re-enables above",
-    "[integration][wm_state][above][below]"
-)
+TEST_CASE("Integration: toggling above after below re-enables above", "[integration][wm_state][above][below]")
 {
     auto test_env = TestEnvironment::create();
     if (!test_env)
@@ -478,10 +438,7 @@ TEST_CASE("Integration: _NET_WM_STATE add modal sets above", "[integration][wm_s
 // Two-state message (first + second atom in one message)
 // ─────────────────────────────────────────────────────────────────────────────
 
-TEST_CASE(
-    "Integration: _NET_WM_STATE handles two atoms in single message",
-    "[integration][wm_state][multi]"
-)
+TEST_CASE("Integration: _NET_WM_STATE handles two atoms in single message", "[integration][wm_state][multi]")
 {
     auto test_env = TestEnvironment::create();
     if (!test_env)

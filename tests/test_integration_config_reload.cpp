@@ -16,47 +16,6 @@ namespace {
 
 constexpr auto kTimeout = std::chrono::seconds(2);
 
-struct TestEnvironment
-{
-    X11TestEnvironment& x11_env;
-    X11Connection conn;
-    LwmProcess wm;
-
-    bool ok() const { return conn.ok() && wm.running(); }
-
-    static std::optional<TestEnvironment> create(std::string const& config)
-    {
-        auto& env = X11TestEnvironment::instance();
-        if (!env.available())
-        {
-            WARN("Xvfb not available; set LWM_TEST_ALLOW_EXISTING_DISPLAY=1 to use an existing DISPLAY.");
-            return std::nullopt;
-        }
-
-        X11Connection conn;
-        if (!conn.ok())
-        {
-            WARN("Failed to connect to X server.");
-            return std::nullopt;
-        }
-
-        LwmProcess wm(env.display(), config);
-        if (!wm.running())
-        {
-            WARN("Failed to start lwm.");
-            return std::nullopt;
-        }
-
-        if (!wait_for_wm_ready(conn, kTimeout))
-        {
-            WARN("Window manager not ready.");
-            return std::nullopt;
-        }
-
-        return TestEnvironment{ env, std::move(conn), std::move(wm) };
-    }
-};
-
 std::string toml_escape(std::string const& value)
 {
     std::string out;
@@ -110,78 +69,6 @@ std::string make_config(
         out << "\n" << extra;
 
     return out.str();
-}
-
-std::optional<std::string> wait_for_ipc_socket_path(X11Connection& conn)
-{
-    xcb_atom_t socket_atom = intern_atom(conn.get(), "_LWM_IPC_SOCKET");
-    if (socket_atom == XCB_NONE)
-        return std::nullopt;
-
-    bool ready = wait_for_condition(
-        [&conn, socket_atom]()
-        {
-            auto value = get_window_property_string(conn.get(), conn.root(), socket_atom);
-            return value && !value->empty();
-        },
-        kTimeout
-    );
-    if (!ready)
-        return std::nullopt;
-
-    return get_window_property_string(conn.get(), conn.root(), socket_atom);
-}
-
-std::optional<std::string> send_ipc_command(std::string const& socket_path, std::string const& command)
-{
-    if (socket_path.size() >= sizeof(sockaddr_un::sun_path))
-        return std::nullopt;
-
-    int fd = socket(AF_UNIX, SOCK_STREAM, 0);
-    if (fd < 0)
-        return std::nullopt;
-
-    sockaddr_un addr = {};
-    addr.sun_family = AF_UNIX;
-    std::strncpy(addr.sun_path, socket_path.c_str(), sizeof(addr.sun_path) - 1);
-
-    if (connect(fd, reinterpret_cast<sockaddr*>(&addr), sizeof(addr)) < 0)
-    {
-        close(fd);
-        return std::nullopt;
-    }
-
-    std::string request = command;
-    request.push_back('\n');
-    if (send(fd, request.data(), request.size(), 0) < 0)
-    {
-        close(fd);
-        return std::nullopt;
-    }
-
-    shutdown(fd, SHUT_WR);
-
-    std::string response;
-    char buffer[1024];
-    while (true)
-    {
-        ssize_t bytes_read = recv(fd, buffer, sizeof(buffer), 0);
-        if (bytes_read < 0)
-        {
-            close(fd);
-            return std::nullopt;
-        }
-        if (bytes_read == 0)
-            break;
-        response.append(buffer, static_cast<size_t>(bytes_read));
-    }
-
-    close(fd);
-
-    while (!response.empty() && (response.back() == '\n' || response.back() == '\r' || response.back() == ' '))
-        response.pop_back();
-
-    return response;
 }
 
 std::vector<std::string> desktop_names(X11Connection& conn)
@@ -315,7 +202,10 @@ std::optional<std::pair<int16_t, int16_t>> window_center(X11Connection& conn, xc
 
 } // namespace
 
-TEST_CASE("Integration: reload-config updates desktop names and keeps failed reload atomic", "[integration][ipc][reload]")
+TEST_CASE(
+    "Integration: reload-config updates desktop names and keeps failed reload atomic",
+    "[integration][ipc][reload]"
+)
 {
     auto env = TestEnvironment::create(make_config("dev", "web"));
     if (!env || !ensure_lwmctl_available())
@@ -412,7 +302,10 @@ TEST_CASE("Integration: reload-config does not rerun autostart", "[integration][
     std::filesystem::remove_all(marker_dir, ec);
 }
 
-TEST_CASE("Integration: reload-config reapplies geometry rules to visible floating windows", "[integration][ipc][reload][rules]")
+TEST_CASE(
+    "Integration: reload-config reapplies geometry rules to visible floating windows",
+    "[integration][ipc][reload][rules]"
+)
 {
     auto env = TestEnvironment::create(make_config("left", "right"));
     if (!env || !ensure_lwmctl_available())
@@ -444,7 +337,10 @@ apply = { geometry = { x = 300, y = 200, width = 240, height = 160 } }
     destroy_window(env->conn, floating);
 }
 
-TEST_CASE("Integration: reload-config reapplies workspace rules to existing windows", "[integration][ipc][reload][rules][workspace]")
+TEST_CASE(
+    "Integration: reload-config reapplies workspace rules to existing windows",
+    "[integration][ipc][reload][rules][workspace]"
+)
 {
     auto env = TestEnvironment::create(make_config("left", "right"));
     if (!env || !ensure_lwmctl_available())

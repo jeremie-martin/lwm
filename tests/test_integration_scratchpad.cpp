@@ -26,47 +26,6 @@ struct WindowGeometry
     bool operator==(WindowGeometry const&) const = default;
 };
 
-struct TestEnvironment
-{
-    X11TestEnvironment& x11_env;
-    X11Connection conn;
-    LwmProcess wm;
-
-    bool ok() const { return conn.ok() && wm.running(); }
-
-    static std::optional<TestEnvironment> create(std::string const& config)
-    {
-        auto& env = X11TestEnvironment::instance();
-        if (!env.available())
-        {
-            WARN("Xvfb not available; set LWM_TEST_ALLOW_EXISTING_DISPLAY=1 to use an existing DISPLAY.");
-            return std::nullopt;
-        }
-
-        X11Connection conn;
-        if (!conn.ok())
-        {
-            WARN("Failed to connect to X server.");
-            return std::nullopt;
-        }
-
-        LwmProcess wm(env.display(), config);
-        if (!wm.running())
-        {
-            WARN("Failed to start lwm.");
-            return std::nullopt;
-        }
-
-        if (!wait_for_wm_ready(conn, kTimeout))
-        {
-            WARN("Window manager not ready.");
-            return std::nullopt;
-        }
-
-        return TestEnvironment{ env, std::move(conn), std::move(wm) };
-    }
-};
-
 std::optional<WindowGeometry> get_window_geometry(X11Connection& conn, xcb_window_t window)
 {
     auto cookie = xcb_get_geometry(conn.get(), window);
@@ -110,78 +69,6 @@ bool wait_for_window_geometry(
     );
 }
 
-std::optional<std::string> wait_for_ipc_socket_path(X11Connection& conn)
-{
-    xcb_atom_t socket_atom = intern_atom(conn.get(), "_LWM_IPC_SOCKET");
-    if (socket_atom == XCB_NONE)
-        return std::nullopt;
-
-    bool ready = wait_for_condition(
-        [&conn, socket_atom]()
-        {
-            auto value = get_window_property_string(conn.get(), conn.root(), socket_atom);
-            return value && !value->empty();
-        },
-        kTimeout
-    );
-    if (!ready)
-        return std::nullopt;
-
-    return get_window_property_string(conn.get(), conn.root(), socket_atom);
-}
-
-std::optional<std::string> send_ipc_command(std::string const& socket_path, std::string const& command)
-{
-    if (socket_path.size() >= sizeof(sockaddr_un::sun_path))
-        return std::nullopt;
-
-    int fd = socket(AF_UNIX, SOCK_STREAM, 0);
-    if (fd < 0)
-        return std::nullopt;
-
-    sockaddr_un addr = {};
-    addr.sun_family = AF_UNIX;
-    std::strncpy(addr.sun_path, socket_path.c_str(), sizeof(addr.sun_path) - 1);
-
-    if (connect(fd, reinterpret_cast<sockaddr*>(&addr), sizeof(addr)) < 0)
-    {
-        close(fd);
-        return std::nullopt;
-    }
-
-    std::string request = command;
-    request.push_back('\n');
-    if (send(fd, request.data(), request.size(), 0) < 0)
-    {
-        close(fd);
-        return std::nullopt;
-    }
-
-    shutdown(fd, SHUT_WR);
-
-    std::string response;
-    char buffer[1024];
-    while (true)
-    {
-        ssize_t bytes_read = recv(fd, buffer, sizeof(buffer), 0);
-        if (bytes_read < 0)
-        {
-            close(fd);
-            return std::nullopt;
-        }
-        if (bytes_read == 0)
-            break;
-        response.append(buffer, static_cast<size_t>(bytes_read));
-    }
-
-    close(fd);
-
-    while (!response.empty() && (response.back() == '\n' || response.back() == '\r' || response.back() == ' '))
-        response.pop_back();
-
-    return response;
-}
-
 std::optional<xcb_keycode_t> first_keycode_for_keysym(X11Connection& conn, xcb_keysym_t keysym)
 {
     xcb_key_symbols_t* key_symbols = xcb_key_symbols_alloc(conn.get());
@@ -198,13 +85,7 @@ std::optional<xcb_keycode_t> first_keycode_for_keysym(X11Connection& conn, xcb_k
     return result;
 }
 
-bool send_mouse_chord(
-    X11Connection& conn,
-    xcb_keysym_t modifier,
-    uint8_t button,
-    int16_t root_x,
-    int16_t root_y
-)
+bool send_mouse_chord(X11Connection& conn, xcb_keysym_t modifier, uint8_t button, int16_t root_x, int16_t root_y)
 {
     auto modifier_code = first_keycode_for_keysym(conn, modifier);
     if (!modifier_code)
@@ -289,7 +170,10 @@ size = { width = 0.8, height = 0.6 }
 
 } // namespace
 
-TEST_CASE("Integration: named scratchpads match WM_CLASS class and instance in the documented order", "[integration][scratchpad]")
+TEST_CASE(
+    "Integration: named scratchpads match WM_CLASS class and instance in the documented order",
+    "[integration][scratchpad]"
+)
 {
     auto test_env = TestEnvironment::create(scratchpad_match_config());
     if (!test_env)
@@ -306,7 +190,10 @@ TEST_CASE("Integration: named scratchpads match WM_CLASS class and instance in t
     destroy_window(conn, window);
 }
 
-TEST_CASE("Integration: named scratchpads can finish a pending launch after a late title update", "[integration][scratchpad]")
+TEST_CASE(
+    "Integration: named scratchpads can finish a pending launch after a late title update",
+    "[integration][scratchpad]"
+)
 {
     auto test_env = TestEnvironment::create(title_scratchpad_match_config());
     if (!test_env)
@@ -338,7 +225,10 @@ TEST_CASE("Integration: named scratchpads can finish a pending launch after a la
     destroy_window(conn, window);
 }
 
-TEST_CASE("Integration: scratchpad regains focus on pointer enter after keyboard focus change", "[integration][scratchpad]")
+TEST_CASE(
+    "Integration: scratchpad regains focus on pointer enter after keyboard focus change",
+    "[integration][scratchpad]"
+)
 {
     auto test_env = TestEnvironment::create(scratchpad_match_config());
     if (!test_env)
@@ -516,10 +406,7 @@ TEST_CASE("Integration: scratchpad cycle keeps pooled windows in rotation", "[in
     destroy_window(conn, first);
 }
 
-TEST_CASE(
-    "Integration: tiled scratchpad pool preserves prior floating geometry",
-    "[integration][scratchpad][floating]"
-)
+TEST_CASE("Integration: tiled scratchpad pool preserves prior floating geometry", "[integration][scratchpad][floating]")
 {
     auto test_env = TestEnvironment::create(scratchpad_match_config());
     if (!test_env)
@@ -552,7 +439,7 @@ TEST_CASE(
 
     REQUIRE(toggle_float_at_window_center());
 
-    WindowGeometry saved_float { 123, 87, 345, 234 };
+    WindowGeometry saved_float{ 123, 87, 345, 234 };
     constexpr uint32_t move_resize_flags = (1u << 8) | (1u << 9) | (1u << 10) | (1u << 11);
     send_client_message(
         conn,
@@ -564,14 +451,8 @@ TEST_CASE(
         saved_float.width,
         saved_float.height
     );
-    REQUIRE(wait_for_window_geometry(
-        conn,
-        window,
-        saved_float.x,
-        saved_float.y,
-        saved_float.width,
-        saved_float.height
-    ));
+    REQUIRE(wait_for_window_geometry(conn, window, saved_float.x, saved_float.y, saved_float.width, saved_float.height)
+    );
 
     REQUIRE(toggle_float_at_window_center());
     REQUIRE(wait_for_condition(
@@ -595,7 +476,7 @@ TEST_CASE(
     REQUIRE(wait_for_condition([&]() { return !is_hidden_offscreen(conn, window); }, kTimeout));
 
     REQUIRE(toggle_float_at_window_center());
-    WindowGeometry final_geometry {};
+    WindowGeometry final_geometry{};
     bool restored_saved_geometry = wait_for_condition(
         [&]()
         {
@@ -608,9 +489,8 @@ TEST_CASE(
         kTimeout
     );
     INFO(
-        "restored floating geometry was "
-        << final_geometry.x << "," << final_geometry.y << " "
-        << final_geometry.width << "x" << final_geometry.height
+        "restored floating geometry was " << final_geometry.x << "," << final_geometry.y << " " << final_geometry.width
+                                          << "x" << final_geometry.height
     );
     REQUIRE(restored_saved_geometry);
 

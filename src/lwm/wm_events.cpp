@@ -42,54 +42,54 @@ uint32_t extract_event_time(uint8_t response_type, xcb_generic_event_t const& ev
     }
 }
 
-template<class... Ts>
-struct Overloaded : Ts...
+template <class... Ts> struct Overloaded : Ts...
 {
     using Ts::operator()...;
 };
 
-template<class... Ts>
-Overloaded(Ts...) -> Overloaded<Ts...>;
+template <class... Ts> Overloaded(Ts...) -> Overloaded<Ts...>;
 
 std::string key_action_event_name(Action const& action)
 {
-    return std::visit(Overloaded {
-        [](KillAction const&) { return std::string("kill"); },
-        [](ReloadConfigAction const&) { return std::string("reload_config"); },
-        [](RestartAction const&) { return std::string("restart"); },
-        [](ToggleWorkspaceAction const&) { return std::string("toggle_workspace"); },
-        [](ToggleFullscreenAction const&) { return std::string("toggle_fullscreen"); },
-        [](ToggleFloatAction const&) { return std::string("toggle_float"); },
-        [](FocusNextAction const&) { return std::string("focus_next"); },
-        [](FocusPrevAction const&) { return std::string("focus_prev"); },
-        [](RatioGrowAction const&) { return std::string("ratio_grow"); },
-        [](RatioShrinkAction const&) { return std::string("ratio_shrink"); },
-        [](SwapNextAction const&) { return std::string("swap_next"); },
-        [](SwapPrevAction const&) { return std::string("swap_prev"); },
-        [](ScratchpadStashAction const&) { return std::string("scratchpad_stash"); },
-        [](ScratchpadCycleAction const&) { return std::string("scratchpad_cycle"); },
-        [](SpawnAction const&) { return std::string("spawn"); },
-        [](SwitchWorkspaceAction const&) { return std::string("switch_workspace"); },
-        [](MoveToWorkspaceAction const&) { return std::string("move_to_workspace"); },
-        [](FocusMonitorAction const& action)
-        {
-            if (action.direction < 0)
-                return std::string("focus_monitor_left");
-            if (action.direction > 0)
-                return std::string("focus_monitor_right");
-            return std::string("focus_monitor");
+    return std::visit(
+        Overloaded{
+            [](KillAction const&) { return std::string("kill"); },
+            [](ReloadConfigAction const&) { return std::string("reload_config"); },
+            [](RestartAction const&) { return std::string("restart"); },
+            [](ToggleWorkspaceAction const&) { return std::string("toggle_workspace"); },
+            [](ToggleFullscreenAction const&) { return std::string("toggle_fullscreen"); },
+            [](ToggleFloatAction const&) { return std::string("toggle_float"); },
+            [](FocusNextAction const&) { return std::string("focus_next"); },
+            [](FocusPrevAction const&) { return std::string("focus_prev"); },
+            [](RatioGrowAction const&) { return std::string("ratio_grow"); },
+            [](RatioShrinkAction const&) { return std::string("ratio_shrink"); },
+            [](SwapNextAction const&) { return std::string("swap_next"); },
+            [](SwapPrevAction const&) { return std::string("swap_prev"); },
+            [](ScratchpadStashAction const&) { return std::string("scratchpad_stash"); },
+            [](ScratchpadCycleAction const&) { return std::string("scratchpad_cycle"); },
+            [](SpawnAction const&) { return std::string("spawn"); },
+            [](SwitchWorkspaceAction const&) { return std::string("switch_workspace"); },
+            [](MoveToWorkspaceAction const&) { return std::string("move_to_workspace"); },
+            [](FocusMonitorAction const& action)
+            {
+                if (action.direction < 0)
+                    return std::string("focus_monitor_left");
+                if (action.direction > 0)
+                    return std::string("focus_monitor_right");
+                return std::string("focus_monitor");
+            },
+            [](MoveToMonitorAction const& action)
+            {
+                if (action.direction < 0)
+                    return std::string("move_to_monitor_left");
+                if (action.direction > 0)
+                    return std::string("move_to_monitor_right");
+                return std::string("move_to_monitor");
+            },
+            [](ToggleScratchpadAction const&) { return std::string("toggle_scratchpad"); },
         },
-        [](MoveToMonitorAction const& action)
-        {
-            if (action.direction < 0)
-                return std::string("move_to_monitor_left");
-            if (action.direction > 0)
-                return std::string("move_to_monitor_right");
-            return std::string("move_to_monitor");
-        },
-        [](ToggleScratchpadAction const&) { return std::string("toggle_scratchpad"); },
-    },
-        action);
+        action
+    );
 }
 
 }
@@ -194,7 +194,12 @@ void WindowManager::handle_map_request(xcb_map_request_event_t const& e)
     {
         bool focus = client->monitor == focused_monitor_
             && visibility_policy::is_window_visible(
-                showing_desktop_, false, client->sticky, client->monitor, client->workspace, monitors_
+                         showing_desktop_,
+                         false,
+                         client->sticky,
+                         client->monitor,
+                         client->workspace,
+                         monitors_
             );
         deiconify_window(e.window, focus);
         return;
@@ -222,7 +227,7 @@ void WindowManager::handle_map_request(xcb_map_request_event_t const& e)
     // Detect scratchpad match BEFORE mapping so the window never enters the tiled layout.
     // If matched, force floating + iconic so it maps hidden, then finalize after.
     auto scratchpad_match = (classification.kind == WindowClassification::Kind::Tiled
-        || classification.kind == WindowClassification::Kind::Floating)
+                             || classification.kind == WindowClassification::Kind::Floating)
         ? match_scratchpad_for_window(e.window, rule_result)
         : std::optional<std::string>{};
 
@@ -269,12 +274,11 @@ void WindowManager::handle_map_request(xcb_map_request_event_t const& e)
         }
     }
 
-    if (kind_str && !subscribers_.empty())
+    if (kind_str && ipc_.has_subscribers())
     {
         auto const* client = get_client(e.window);
-        std::string json = "{\"event\":\"window_map\",\"window\":" + std::to_string(e.window)
-            + ",\"class\":\"" + json_escape(client ? client->wm_class : std::string{})
-            + "\",\"kind\":\"" + kind_str + "\"";
+        std::string json = "{\"event\":\"window_map\",\"window\":" + std::to_string(e.window) + ",\"class\":\""
+            + json_escape(client ? client->wm_class : std::string{}) + "\",\"kind\":\"" + kind_str + "\"";
         if (client)
         {
             json += ",\"monitor\":" + std::to_string(client->monitor)
@@ -301,7 +305,7 @@ void WindowManager::map_desktop_window(xcb_window_t window)
     {
         Client client;
         client.id = window;
-        client.state = DesktopState {};
+        client.state = DesktopState{};
         client.skip_taskbar = true;
         client.skip_pager = true;
         client.order = next_client_order_++;
@@ -328,7 +332,7 @@ void WindowManager::map_dock_window(xcb_window_t window)
     {
         Client client;
         client.id = window;
-        client.state = DockState {};
+        client.state = DockState{};
         client.skip_taskbar = true;
         client.skip_pager = true;
         client.order = next_client_order_++;
@@ -347,7 +351,8 @@ void WindowManager::map_floating_window(
     WindowClassification const& classification,
     WindowRuleResult const& rule_result,
     bool start_iconic,
-    bool urgent)
+    bool urgent
+)
 {
     manage_floating_window(window, start_iconic, false);
     auto& client = require_client(window);
@@ -356,9 +361,9 @@ void WindowManager::map_floating_window(
         client.urgency.add(UrgencySource::App);
     apply_rule_result_to_window(window, rule_result, &classification);
 
-    sync_visibility_for_monitor(client.monitor);
+    reconcile_visibility_for_monitor(client.monitor);
     apply_visible_floating_geometry(client);
-    apply_stacking();
+    stacking_dirty_ = true;
 
     if (!start_iconic && !suppress_focus_ && client.monitor == focused_monitor_ && is_physically_visible(client)
         && is_focus_eligible(client))
@@ -378,7 +383,8 @@ void WindowManager::map_tiled_window(
     WindowClassification const& classification,
     WindowRuleResult const& rule_result,
     bool start_iconic,
-    bool urgent)
+    bool urgent
+)
 {
     manage_window(window, start_iconic);
 
@@ -390,8 +396,7 @@ void WindowManager::map_tiled_window(
         sync_client_urgency_state(client);
     apply_rule_result_to_window(window, rule_result, &classification);
 
-    if (!start_iconic && client.monitor == focused_monitor_ && should_be_visible(client)
-        && is_focus_eligible(client))
+    if (!start_iconic && client.monitor == focused_monitor_ && should_be_visible(client) && is_focus_eligible(client))
     {
         focus_any_window(window);
     }
@@ -407,11 +412,10 @@ void WindowManager::handle_window_removal(xcb_window_t window)
 
     // Capture info before unmanage destroys the client record
     std::string unmap_json;
-    if (!subscribers_.empty())
+    if (ipc_.has_subscribers())
     {
-        unmap_json = "{\"event\":\"window_unmap\",\"window\":" + std::to_string(window)
-            + ",\"kind\":\"" + client_kind_str(client->kind()) + "\""
-            + ",\"monitor\":" + std::to_string(client->monitor)
+        unmap_json = "{\"event\":\"window_unmap\",\"window\":" + std::to_string(window) + ",\"kind\":\""
+            + client_kind_str(client->kind()) + "\"" + ",\"monitor\":" + std::to_string(client->monitor)
             + ",\"workspace\":" + std::to_string(client->workspace) + "}";
     }
 
@@ -467,7 +471,6 @@ void WindowManager::handle_enter_notify(xcb_enter_notify_event_t const& e)
             );
             return;
         }
-
     }
 
     if (e.event != conn_.screen()->root)
@@ -685,8 +688,7 @@ void WindowManager::handle_button_press(xcb_button_press_event_t const& e)
             {
                 bool ctrl_held = (e.state & XCB_MOD_MASK_CONTROL) != 0;
 
-                bool is_double_click = !ctrl_held
-                    && static_cast<int32_t>(e.time - last_gap_click_time_) > 0
+                bool is_double_click = !ctrl_held && static_cast<int32_t>(e.time - last_gap_click_time_) > 0
                     && static_cast<int32_t>(e.time - last_gap_click_time_) < 400
                     && last_gap_click_address_ == border_hit->hit.address
                     && last_gap_click_monitor_ == border_hit->monitor_idx;
@@ -760,130 +762,131 @@ void WindowManager::handle_key_press(xcb_key_press_event_t const& e)
 
     LOG_DEBUG("Action: {}", key_action_event_name(*action));
 
-    bool handled = std::visit(Overloaded {
-        [&](KillAction const&)
-        {
-            if (active_window_ == XCB_NONE)
-                return false;
-            kill_window(active_window_);
-            return true;
+    bool handled = std::visit(
+        Overloaded{
+            [&](KillAction const&)
+            {
+                if (active_window_ == XCB_NONE)
+                    return false;
+                kill_window(active_window_);
+                return true;
+            },
+            [&](ReloadConfigAction const&)
+            {
+                auto result = reload_config();
+                if (!result)
+                    LOG_WARN("Config reload failed: {}", result.error());
+                emit_config_reload_result(result, "keybind");
+                return true;
+            },
+            [&](RestartAction const&)
+            {
+                LOG_INFO("Restart triggered by keybind");
+                initiate_restart();
+                return true;
+            },
+            [&](ToggleWorkspaceAction const&)
+            {
+                if (!is_auto_repeat_toggle(keysym, e.time))
+                    toggle_workspace();
+                return true;
+            },
+            [&](ToggleFullscreenAction const&)
+            {
+                if (auto* client = get_client(active_window_))
+                    set_fullscreen(*client, !client->fullscreen);
+                return true;
+            },
+            [&](ToggleFloatAction const&)
+            {
+                if (active_window_ != XCB_NONE)
+                    toggle_window_float(active_window_);
+                return true;
+            },
+            [&](FocusNextAction const&)
+            {
+                cycle_focus(true);
+                return true;
+            },
+            [&](FocusPrevAction const&)
+            {
+                cycle_focus(false);
+                return true;
+            },
+            [&](RatioGrowAction const&)
+            {
+                adjust_master_ratio(0.05);
+                emit_event(Event_LayoutChange, "{\"event\":\"layout_change\",\"action\":\"ratio_grow\"}");
+                return true;
+            },
+            [&](RatioShrinkAction const&)
+            {
+                adjust_master_ratio(-0.05);
+                emit_event(Event_LayoutChange, "{\"event\":\"layout_change\",\"action\":\"ratio_shrink\"}");
+                return true;
+            },
+            [&](SwapNextAction const&)
+            {
+                swap_focused_tiled(1);
+                emit_event(Event_LayoutChange, "{\"event\":\"layout_change\",\"action\":\"swap_next\"}");
+                return true;
+            },
+            [&](SwapPrevAction const&)
+            {
+                swap_focused_tiled(-1);
+                emit_event(Event_LayoutChange, "{\"event\":\"layout_change\",\"action\":\"swap_prev\"}");
+                return true;
+            },
+            [&](ScratchpadStashAction const&)
+            {
+                if (active_window_ != XCB_NONE)
+                    stash_to_scratchpad(active_window_);
+                return true;
+            },
+            [&](ScratchpadCycleAction const&)
+            {
+                cycle_scratchpad_pool();
+                return true;
+            },
+            [&](SpawnAction const& spawn)
+            {
+                launch_program(spawn.command);
+                return true;
+            },
+            [&](SwitchWorkspaceAction const& switch_workspace_action)
+            {
+                switch_workspace(switch_workspace_action.workspace);
+                return true;
+            },
+            [&](MoveToWorkspaceAction const& move_action)
+            {
+                move_window_to_workspace(move_action.workspace);
+                return true;
+            },
+            [&](FocusMonitorAction const& focus_action)
+            {
+                focus_monitor(focus_action.direction);
+                return true;
+            },
+            [&](MoveToMonitorAction const& move_action)
+            {
+                move_window_to_monitor(move_action.direction);
+                return true;
+            },
+            [&](ToggleScratchpadAction const& scratchpad_action)
+            {
+                toggle_named_scratchpad(scratchpad_action.name);
+                return true;
+            },
         },
-        [&](ReloadConfigAction const&)
-        {
-            auto result = reload_config();
-            if (!result)
-                LOG_WARN("Config reload failed: {}", result.error());
-            emit_config_reload_result(result, "keybind");
-            return true;
-        },
-        [&](RestartAction const&)
-        {
-            LOG_INFO("Restart triggered by keybind");
-            initiate_restart();
-            return true;
-        },
-        [&](ToggleWorkspaceAction const&)
-        {
-            if (!is_auto_repeat_toggle(keysym, e.time))
-                toggle_workspace();
-            return true;
-        },
-        [&](ToggleFullscreenAction const&)
-        {
-            if (auto* client = get_client(active_window_))
-                set_fullscreen(*client, !client->fullscreen);
-            return true;
-        },
-        [&](ToggleFloatAction const&)
-        {
-            if (active_window_ != XCB_NONE)
-                toggle_window_float(active_window_);
-            return true;
-        },
-        [&](FocusNextAction const&)
-        {
-            cycle_focus(true);
-            return true;
-        },
-        [&](FocusPrevAction const&)
-        {
-            cycle_focus(false);
-            return true;
-        },
-        [&](RatioGrowAction const&)
-        {
-            adjust_master_ratio(0.05);
-            emit_event(Event_LayoutChange, "{\"event\":\"layout_change\",\"action\":\"ratio_grow\"}");
-            return true;
-        },
-        [&](RatioShrinkAction const&)
-        {
-            adjust_master_ratio(-0.05);
-            emit_event(Event_LayoutChange, "{\"event\":\"layout_change\",\"action\":\"ratio_shrink\"}");
-            return true;
-        },
-        [&](SwapNextAction const&)
-        {
-            swap_focused_tiled(1);
-            emit_event(Event_LayoutChange, "{\"event\":\"layout_change\",\"action\":\"swap_next\"}");
-            return true;
-        },
-        [&](SwapPrevAction const&)
-        {
-            swap_focused_tiled(-1);
-            emit_event(Event_LayoutChange, "{\"event\":\"layout_change\",\"action\":\"swap_prev\"}");
-            return true;
-        },
-        [&](ScratchpadStashAction const&)
-        {
-            if (active_window_ != XCB_NONE)
-                stash_to_scratchpad(active_window_);
-            return true;
-        },
-        [&](ScratchpadCycleAction const&)
-        {
-            cycle_scratchpad_pool();
-            return true;
-        },
-        [&](SpawnAction const& spawn)
-        {
-            launch_program(spawn.command);
-            return true;
-        },
-        [&](SwitchWorkspaceAction const& switch_workspace_action)
-        {
-            switch_workspace(switch_workspace_action.workspace);
-            return true;
-        },
-        [&](MoveToWorkspaceAction const& move_action)
-        {
-            move_window_to_workspace(move_action.workspace);
-            return true;
-        },
-        [&](FocusMonitorAction const& focus_action)
-        {
-            focus_monitor(focus_action.direction);
-            return true;
-        },
-        [&](MoveToMonitorAction const& move_action)
-        {
-            move_window_to_monitor(move_action.direction);
-            return true;
-        },
-        [&](ToggleScratchpadAction const& scratchpad_action)
-        {
-            toggle_named_scratchpad(scratchpad_action.name);
-            return true;
-        },
-    },
-        *action);
+        *action
+    );
 
     if (!handled)
         return;
 
     std::string event_action = key_action_event_name(*action);
-    emit_event(Event_KeyAction,
-        "{\"event\":\"key_action\",\"action\":\"" + json_escape(event_action) + "\"}");
+    emit_event(Event_KeyAction, "{\"event\":\"key_action\",\"action\":\"" + json_escape(event_action) + "\"}");
 }
 
 void WindowManager::handle_key_release(xcb_key_release_event_t const& e)
@@ -922,18 +925,18 @@ void WindowManager::handle_client_message(xcb_client_message_event_t const& e)
         Handler handler;
     };
     Entry const dispatch[] = {
-        { net_close_window_, &WindowManager::handle_close_window_message },
-        { net_wm_fullscreen_monitors_, &WindowManager::handle_fullscreen_monitors_message },
-        { wm_change_state_, &WindowManager::handle_change_state_message },
-        { ewmh->_NET_WM_STATE, &WindowManager::handle_wm_state_change },
-        { ewmh->_NET_CURRENT_DESKTOP, &WindowManager::handle_current_desktop_message },
-        { ewmh->_NET_ACTIVE_WINDOW, &WindowManager::handle_active_window_request },
-        { ewmh->_NET_WM_DESKTOP, &WindowManager::handle_desktop_change },
-        { ewmh->_NET_REQUEST_FRAME_EXTENTS, &WindowManager::handle_frame_extents_message },
-        { ewmh->_NET_MOVERESIZE_WINDOW, &WindowManager::handle_moveresize_window },
-        { ewmh->_NET_WM_MOVERESIZE, &WindowManager::handle_wm_moveresize },
-        { ewmh->_NET_SHOWING_DESKTOP, &WindowManager::handle_showing_desktop },
-        { ewmh->_NET_RESTACK_WINDOW, &WindowManager::handle_restack_message },
+        {                net_close_window_,        &WindowManager::handle_close_window_message },
+        {      net_wm_fullscreen_monitors_, &WindowManager::handle_fullscreen_monitors_message },
+        {                 wm_change_state_,        &WindowManager::handle_change_state_message },
+        {              ewmh->_NET_WM_STATE,             &WindowManager::handle_wm_state_change },
+        {       ewmh->_NET_CURRENT_DESKTOP,     &WindowManager::handle_current_desktop_message },
+        {         ewmh->_NET_ACTIVE_WINDOW,       &WindowManager::handle_active_window_request },
+        {            ewmh->_NET_WM_DESKTOP,              &WindowManager::handle_desktop_change },
+        { ewmh->_NET_REQUEST_FRAME_EXTENTS,       &WindowManager::handle_frame_extents_message },
+        {     ewmh->_NET_MOVERESIZE_WINDOW,           &WindowManager::handle_moveresize_window },
+        {         ewmh->_NET_WM_MOVERESIZE,               &WindowManager::handle_wm_moveresize },
+        {       ewmh->_NET_SHOWING_DESKTOP,             &WindowManager::handle_showing_desktop },
+        {        ewmh->_NET_RESTACK_WINDOW,             &WindowManager::handle_restack_message },
     };
 
     for (auto const& entry : dispatch)
@@ -946,10 +949,7 @@ void WindowManager::handle_client_message(xcb_client_message_event_t const& e)
     }
 }
 
-void WindowManager::handle_close_window_message(xcb_client_message_event_t const& e)
-{
-    kill_window(e.window);
-}
+void WindowManager::handle_close_window_message(xcb_client_message_event_t const& e) { kill_window(e.window); }
 
 void WindowManager::handle_fullscreen_monitors_message(xcb_client_message_event_t const& e)
 {
@@ -986,7 +986,7 @@ void WindowManager::handle_restack_message(xcb_client_message_event_t const& e)
     if (auto const* client = get_client(e.window);
         client && (client->kind() == Client::Kind::Tiled || client->kind() == Client::Kind::Floating))
     {
-        apply_stacking();
+        stacking_dirty_ = true;
         conn_.flush();
         return;
     }
@@ -1183,7 +1183,11 @@ void WindowManager::handle_active_window_request(xcb_client_message_event_t cons
 }
 
 void WindowManager::finalize_after_desktop_move(
-    xcb_window_t window, bool was_active, size_t target_monitor, size_t target_workspace)
+    xcb_window_t window,
+    bool was_active,
+    size_t target_monitor,
+    size_t target_workspace
+)
 {
     (void)window;
     if (was_active)
@@ -1192,8 +1196,7 @@ void WindowManager::finalize_after_desktop_move(
         // not currently visible — repair_focus_after_visibility_change would
         // otherwise reassign focused_monitor_ to target_monitor and jump the
         // user's focus to a screen they are not interacting with.
-        bool target_visible = target_monitor < monitors_.size()
-            && !showing_desktop_
+        bool target_visible = target_monitor < monitors_.size() && !showing_desktop_
             && target_workspace == monitors_[target_monitor].current_workspace;
         if (target_visible)
             repair_focus_after_visibility_change(target_monitor, false);
@@ -1245,8 +1248,7 @@ void WindowManager::handle_desktop_change(xcb_client_message_event_t const& e)
         size_t source_mon_idx = client->monitor;
         size_t source_ws_idx = client->workspace;
 
-        if (source_mon_idx >= monitors_.size()
-            || source_ws_idx >= monitors_[source_mon_idx].workspaces.size())
+        if (source_mon_idx >= monitors_.size() || source_ws_idx >= monitors_[source_mon_idx].workspaces.size())
             return;
 
         auto& source_ws = monitors_[source_mon_idx].workspaces[source_ws_idx];
@@ -1393,8 +1395,8 @@ void WindowManager::handle_configure_request(xcb_configure_request_event_t const
 
     if (is_floating)
     {
-        uint16_t geometry_mask = XCB_CONFIG_WINDOW_X | XCB_CONFIG_WINDOW_Y | XCB_CONFIG_WINDOW_WIDTH
-            | XCB_CONFIG_WINDOW_HEIGHT;
+        uint16_t geometry_mask =
+            XCB_CONFIG_WINDOW_X | XCB_CONFIG_WINDOW_Y | XCB_CONFIG_WINDOW_WIDTH | XCB_CONFIG_WINDOW_HEIGHT;
         if (client->suppress_next_configure_request && (mask & geometry_mask) != 0)
         {
             client->suppress_next_configure_request = false;
@@ -1415,11 +1417,8 @@ void WindowManager::handle_configure_request(xcb_configure_request_event_t const
         if (mask & XCB_CONFIG_WINDOW_HEIGHT)
             geom.height = std::max<uint16_t>(1, e.height);
 
-        uint32_t hinted_width = geom.width;
-        uint32_t hinted_height = geom.height;
-        layout_.apply_size_hints(e.window, hinted_width, hinted_height);
-        geom.width = static_cast<uint16_t>(std::max<uint32_t>(1, hinted_width));
-        geom.height = static_cast<uint16_t>(std::max<uint32_t>(1, hinted_height));
+        geom.width = std::max<uint16_t>(1, geom.width);
+        geom.height = std::max<uint16_t>(1, geom.height);
 
         update_floating_monitor_for_geometry(*client);
         bool visible = !client->hidden && should_be_visible(*client);
@@ -1467,7 +1466,8 @@ void WindowManager::handle_property_notify(xcb_property_notify_event_t const& e)
     {
         update_window_title(e.window);
     }
-    else if (e.atom == ewmh_.get()->_NET_WM_WINDOW_TYPE || (wm_transient_for_ != XCB_NONE && e.atom == wm_transient_for_))
+    else if (e.atom == ewmh_.get()->_NET_WM_WINDOW_TYPE
+             || (wm_transient_for_ != XCB_NONE && e.atom == wm_transient_for_))
     {
         if (e.atom == ewmh_.get()->_NET_WM_WINDOW_TYPE)
         {
@@ -1494,7 +1494,7 @@ void WindowManager::handle_property_notify(xcb_property_notify_event_t const& e)
                 {
                     uint32_t hinted_width = hints.width > 0 ? static_cast<uint32_t>(hints.width) : geom.width;
                     uint32_t hinted_height = hints.height > 0 ? static_cast<uint32_t>(hints.height) : geom.height;
-                    layout_.apply_size_hints(e.window, hinted_width, hinted_height);
+
                     geom.width = static_cast<uint16_t>(std::max<uint32_t>(1, hinted_width));
                     geom.height = static_cast<uint16_t>(std::max<uint32_t>(1, hinted_height));
                 }
@@ -1608,8 +1608,7 @@ void WindowManager::handle_property_notify(xcb_property_notify_event_t const& e)
                 repair_focus_after_visibility_change(client->monitor, false);
         }
     }
-    else if (auto const* strut_client = get_client(e.window);
-             strut_client && strut_client->kind() == Client::Kind::Dock
+    else if (auto const* strut_client = get_client(e.window); strut_client && strut_client->kind() == Client::Kind::Dock
              && (e.atom == ewmh_.get()->_NET_WM_STRUT || e.atom == ewmh_.get()->_NET_WM_STRUT_PARTIAL))
     {
         update_struts();
@@ -1714,8 +1713,7 @@ void WindowManager::handle_randr_screen_change()
     {
         std::vector<LayoutStrategy> layout_strategies;
         layout_strategies.reserve(monitor.workspaces.size());
-        for (auto const& workspace : monitor.workspaces)
-            layout_strategies.push_back(workspace.layout_strategy);
+        for (auto const& workspace : monitor.workspaces) layout_strategies.push_back(workspace.layout_strategy);
         saved_workspace_state[monitor.name] = {
             monitor.current_workspace,
             monitor.previous_workspace,
@@ -1732,7 +1730,11 @@ void WindowManager::handle_randr_screen_change()
 
     // Compute the relocation plan (pure function — no side effects)
     auto plan = hotplug_policy::plan_hotplug(
-        monitors_, tiled_locations, floating_locations, saved_workspace_state, focused_monitor_name
+        monitors_,
+        tiled_locations,
+        floating_locations,
+        saved_workspace_state,
+        focused_monitor_name
     );
 
     // Apply workspace state
@@ -1748,8 +1750,7 @@ void WindowManager::handle_randr_screen_change()
     }
     for (auto const& restore : plan.workspace_layouts)
     {
-        if (restore.monitor < monitors_.size()
-            && restore.workspace < monitors_[restore.monitor].workspaces.size())
+        if (restore.monitor < monitors_.size() && restore.workspace < monitors_[restore.monitor].workspaces.size())
         {
             monitors_[restore.monitor].workspaces[restore.workspace].layout_strategy = restore.strategy;
         }
@@ -1800,8 +1801,7 @@ void WindowManager::handle_randr_screen_change()
 
         // Rebind dock/desktop clients by name (plan_hotplug only handles tiled/floating).
         std::unordered_map<std::string, size_t> name_to_index;
-        for (size_t i = 0; i < monitors_.size(); ++i)
-            name_to_index[monitors_[i].name] = i;
+        for (size_t i = 0; i < monitors_.size(); ++i) name_to_index[monitors_[i].name] = i;
 
         for (auto const& [id, old_name] : dock_desktop_monitor_names)
         {

@@ -51,6 +51,8 @@ struct Geometry
     int16_t y = 0;
     uint16_t width = 0;
     uint16_t height = 0;
+
+    bool operator==(Geometry const&) const = default;
 };
 
 struct Strut
@@ -88,7 +90,8 @@ struct NamedScratchpadMembership
     std::string name;
 };
 
-struct VisibleScratchpadPoolMembership {};
+struct VisibleScratchpadPoolMembership
+{ };
 
 struct HiddenTiledScratchpadPoolMembership
 {
@@ -124,15 +127,9 @@ struct Urgency
 {
     uint8_t sources = 0;
 
-    bool active() const
-    {
-        return sources != 0;
-    }
+    bool active() const { return sources != 0; }
 
-    bool has(UrgencySource source) const
-    {
-        return (sources & static_cast<uint8_t>(source)) != 0;
-    }
+    bool has(UrgencySource source) const { return (sources & static_cast<uint8_t>(source)) != 0; }
 
     bool add(UrgencySource source)
     {
@@ -179,8 +176,10 @@ struct FloatingState
     std::optional<SavedTilePos> saved_tiled_pos;
 };
 
-struct DockState {};
-struct DesktopState {};
+struct DockState
+{ };
+struct DesktopState
+{ };
 
 using ClientState = std::variant<TiledState, FloatingState, DockState, DesktopState>;
 
@@ -228,37 +227,38 @@ struct Client
     std::string wm_class;
     std::string wm_class_name;
 
-    bool hidden = false;            ///< True when window is moved off-screen by WM
-    bool fullscreen = false;        ///< _NET_WM_STATE_FULLSCREEN
+    bool hidden = false;                      ///< True when window is moved off-screen by WM
+    bool fullscreen = false;                  ///< _NET_WM_STATE_FULLSCREEN
     LayerHint layer_hint = LayerHint::Normal; ///< _NET_WM_STATE_ABOVE / _BELOW (tri-state)
-    bool iconic = false;            ///< _NET_WM_STATE_HIDDEN (minimized)
-    bool sticky = false;            ///< _NET_WM_STATE_STICKY
-    bool maximized_horz = false;    ///< _NET_WM_STATE_MAXIMIZED_HORZ
-    bool maximized_vert = false;    ///< _NET_WM_STATE_MAXIMIZED_VERT
+    bool iconic = false;                      ///< _NET_WM_STATE_HIDDEN (minimized)
+    bool sticky = false;                      ///< _NET_WM_STATE_STICKY
+    bool maximized_horz = false;              ///< _NET_WM_STATE_MAXIMIZED_HORZ
+    bool maximized_vert = false;              ///< _NET_WM_STATE_MAXIMIZED_VERT
 
-    bool modal = false;             ///< _NET_WM_STATE_MODAL
-    bool skip_taskbar = false;      ///< _NET_WM_STATE_SKIP_TASKBAR
-    bool skip_pager = false;        ///< _NET_WM_STATE_SKIP_PAGER
-    AppPreferences app_prefs;       ///< App-declared EWMH preferences before WM policy
-    Urgency urgency;                ///< _NET_WM_STATE_DEMANDS_ATTENTION provenance
+    bool modal = false;                             ///< _NET_WM_STATE_MODAL
+    bool skip_taskbar = false;                      ///< _NET_WM_STATE_SKIP_TASKBAR
+    bool skip_pager = false;                        ///< _NET_WM_STATE_SKIP_PAGER
+    AppPreferences app_prefs;                       ///< App-declared EWMH preferences before WM policy
+    Urgency urgency;                                ///< _NET_WM_STATE_DEMANDS_ATTENTION provenance
     bool ignore_next_wm_hints_urgency_echo = false; ///< Skip the PropertyNotify from our own WM_HINTS write
-    bool borderless = false;        ///< WM-managed zero-border window
-    WindowType ewmh_type = WindowType::Normal; ///< Cached EWMH window type
-    bool accepts_input = true;       ///< Cached WM_HINTS input field (ICCCM default: true)
-    bool supports_take_focus = false; ///< Cached: WM_PROTOCOLS contains WM_TAKE_FOCUS
-    bool desktop_pinned = false;      ///< Client supplied a concrete _NET_WM_DESKTOP assignment
+    bool borderless = false;                        ///< WM-managed zero-border window
+    WindowType ewmh_type = WindowType::Normal;      ///< Cached EWMH window type
+    bool accepts_input = true;                      ///< Cached WM_HINTS input field (ICCCM default: true)
+    bool supports_take_focus = false;               ///< Cached: WM_PROTOCOLS contains WM_TAKE_FOCUS
+    bool desktop_pinned = false;                    ///< Client supplied a concrete _NET_WM_DESKTOP assignment
 
     using SavedTilePos = lwm::SavedTilePos;
 
-    ClientState state = TiledState {};
-    Geometry tiled_geometry;             ///< Last applied tiled layout geometry (avoids X round-trip)
+    ClientState state = TiledState{};
+    Geometry tiled_geometry; ///< Last applied tiled layout geometry (avoids X round-trip)
     xcb_window_t transient_for = XCB_NONE;
-    bool suppress_next_configure_request = false; ///< Preserve WM-chosen startup placement against one client resize/move request
+    bool suppress_next_configure_request =
+        false; ///< Preserve WM-chosen startup placement against one client resize/move request
 
-    std::optional<Geometry> fullscreen_restore;            ///< Geometry before fullscreen
+    std::optional<Geometry> fullscreen_restore;             ///< Geometry before fullscreen
     std::optional<LayerHint> fullscreen_restore_layer_hint; ///< Layer hint before fullscreen
-    std::optional<Geometry> maximize_restore;              ///< Geometry before maximize
-    std::optional<FullscreenMonitors> fullscreen_monitors; ///< Multi-monitor fullscreen
+    std::optional<Geometry> maximize_restore;               ///< Geometry before maximize
+    std::optional<FullscreenMonitors> fullscreen_monitors;  ///< Multi-monitor fullscreen
 
     uint32_t sync_counter = 0; ///< XSync counter ID (0 if none)
     uint64_t sync_value = 0;   ///< Expected counter value
@@ -278,38 +278,27 @@ inline char const* client_kind_str(Client::Kind kind)
 {
     switch (kind)
     {
-        case Client::Kind::Tiled: return "tiled";
-        case Client::Kind::Floating: return "floating";
-        case Client::Kind::Dock: return "dock";
-        case Client::Kind::Desktop: return "desktop";
+        case Client::Kind::Tiled:
+            return "tiled";
+        case Client::Kind::Floating:
+            return "floating";
+        case Client::Kind::Dock:
+            return "dock";
+        case Client::Kind::Desktop:
+            return "desktop";
     }
     return "unknown";
 }
 
-inline TiledState* tiled_state(Client& client)
-{
-    return std::get_if<TiledState>(&client.state);
-}
+inline TiledState* tiled_state(Client& client) { return std::get_if<TiledState>(&client.state); }
 
-inline TiledState const* tiled_state(Client const& client)
-{
-    return std::get_if<TiledState>(&client.state);
-}
+inline TiledState const* tiled_state(Client const& client) { return std::get_if<TiledState>(&client.state); }
 
-inline FloatingState* floating_state(Client& client)
-{
-    return std::get_if<FloatingState>(&client.state);
-}
+inline FloatingState* floating_state(Client& client) { return std::get_if<FloatingState>(&client.state); }
 
-inline FloatingState const* floating_state(Client const& client)
-{
-    return std::get_if<FloatingState>(&client.state);
-}
+inline FloatingState const* floating_state(Client const& client) { return std::get_if<FloatingState>(&client.state); }
 
-inline Geometry& floating_geometry(Client& client)
-{
-    return std::get<FloatingState>(client.state).geometry;
-}
+inline Geometry& floating_geometry(Client& client) { return std::get<FloatingState>(client.state).geometry; }
 
 inline Geometry const& floating_geometry(Client const& client)
 {
@@ -338,15 +327,13 @@ inline std::optional<SavedTilePos> const& saved_tiled_pos(Client const& client)
 
 inline void set_tiled_state(Client& client, std::optional<Geometry> prior_floating = std::nullopt)
 {
-    client.state = TiledState { prior_floating };
+    client.state = TiledState{ prior_floating };
 }
 
-inline void set_floating_state(
-    Client& client,
-    Geometry geometry,
-    std::optional<SavedTilePos> saved_position = std::nullopt)
+inline void
+set_floating_state(Client& client, Geometry geometry, std::optional<SavedTilePos> saved_position = std::nullopt)
 {
-    client.state = FloatingState { geometry, saved_position };
+    client.state = FloatingState{ geometry, saved_position };
 }
 
 inline NamedScratchpadMembership const* scratchpad_named(Client const& client)
@@ -380,33 +367,32 @@ inline bool is_hidden_pool_scratchpad(Client const& client)
     return is_hidden_tiled_pool_scratchpad(client) || hidden_floating_pool_scratchpad(client) != nullptr;
 }
 
-/// Identifies a split node by its structural position in the layout tree.
-/// path encodes the sequence of left(0)/right(1) choices from the root:
-/// bit i = child direction taken at depth i.
+/// Split 0 divides master and stack; split i > 0 divides stack slot i
+/// from the remaining slots. Identity is stable when the window count changes.
 struct SplitAddress
 {
-    uint8_t depth;   // 0 = root
-    uint32_t path;   // bit field: bit i = direction at depth i (0=left, 1=right)
-
+    uint32_t index = 0;
     auto operator<=>(SplitAddress const&) const = default;
 };
 
+// Preserve the version-3 restart representation for the old right-leaning tree.
 struct SerializedSplitAddress
 {
     uint32_t depth;
     uint32_t path;
 };
 
-constexpr SerializedSplitAddress serialize_split_address(SplitAddress const& address)
+constexpr SerializedSplitAddress serialize_split_address(SplitAddress address)
 {
-    return { static_cast<uint32_t>(address.depth), address.path };
+    return { address.index, address.index < 32 ? (uint32_t{ 1 } << address.index) - 1 : UINT32_MAX };
 }
 
 constexpr std::optional<SplitAddress> deserialize_split_address(uint32_t depth, uint32_t path)
 {
-    if (depth > std::numeric_limits<uint8_t>::max())
+    SplitAddress address{ depth };
+    if (serialize_split_address(address).path != path)
         return std::nullopt;
-    return SplitAddress { static_cast<uint8_t>(depth), path };
+    return address;
 }
 
 using SplitRatioMap = std::map<SplitAddress, double>;
@@ -424,8 +410,10 @@ inline char const* layout_strategy_str(LayoutStrategy strategy)
 {
     switch (strategy)
     {
-        case LayoutStrategy::MasterStack: return "master-stack";
-        case LayoutStrategy::Monocle: return "monocle";
+        case LayoutStrategy::MasterStack:
+            return "master-stack";
+        case LayoutStrategy::Monocle:
+            return "monocle";
     }
     return "unknown";
 }
@@ -511,20 +499,34 @@ struct KeyBinding
     auto operator<=>(KeyBinding const&) const = default;
 };
 
-struct KillAction {};
-struct ReloadConfigAction {};
-struct RestartAction {};
-struct ToggleWorkspaceAction {};
-struct ToggleFullscreenAction {};
-struct ToggleFloatAction {};
-struct FocusNextAction {};
-struct FocusPrevAction {};
-struct RatioGrowAction {};
-struct RatioShrinkAction {};
-struct SwapNextAction {};
-struct SwapPrevAction {};
-struct ScratchpadStashAction {};
-struct ScratchpadCycleAction {};
+struct KillAction
+{ };
+struct ReloadConfigAction
+{ };
+struct RestartAction
+{ };
+struct ToggleWorkspaceAction
+{ };
+struct ToggleFullscreenAction
+{ };
+struct ToggleFloatAction
+{ };
+struct FocusNextAction
+{ };
+struct FocusPrevAction
+{ };
+struct RatioGrowAction
+{ };
+struct RatioShrinkAction
+{ };
+struct SwapNextAction
+{ };
+struct SwapPrevAction
+{ };
+struct ScratchpadStashAction
+{ };
+struct ScratchpadCycleAction
+{ };
 
 struct SpawnAction
 {

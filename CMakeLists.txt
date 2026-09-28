@@ -13,6 +13,12 @@ endif()
 # Optimize for release
 set(CMAKE_CXX_FLAGS_RELEASE "-O2 -DNDEBUG")
 
+option(LWM_SANITIZERS "Enable address and undefined-behavior sanitizers" OFF)
+if(LWM_SANITIZERS)
+    add_compile_options(-fsanitize=address,undefined -fno-sanitize-recover=all -fno-omit-frame-pointer)
+    add_link_options(-fsanitize=address,undefined)
+endif()
+
 # Dependencies
 find_package(PkgConfig REQUIRED)
 pkg_check_modules(XCB REQUIRED IMPORTED_TARGET xcb xcb-keysyms xcb-randr xcb-ewmh xcb-icccm xcb-sync x11)

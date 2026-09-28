@@ -1,7 +1,8 @@
 # LWM - Lightweight Window Manager
 # Root Makefile wrapping CMake
 
-BUILD_DIR := build
+BUILD_DIR ?= build
+TEST_BUILD_TYPE ?= Debug
 CMAKE := cmake
 NPROC := $(shell nproc)
 
@@ -25,9 +26,9 @@ debug:
 # Build with tests
 test:
 	@mkdir -p $(BUILD_DIR)
-	@$(CMAKE) -S . -B $(BUILD_DIR) -DBUILD_TESTS=ON
+	@$(CMAKE) -S . -B $(BUILD_DIR) -DBUILD_TESTS=ON -DCMAKE_BUILD_TYPE=$(TEST_BUILD_TYPE)
 	@$(MAKE) -C $(BUILD_DIR) -j$(NPROC)
-	@$(BUILD_DIR)/tests/lwm_tests
+	@LWM_TEST_REQUIRE_X11=1 $(BUILD_DIR)/tests/lwm_tests
 	@$(BUILD_DIR)/tests/lwm_logging_tests
 
 # Install to system (requires sudo)

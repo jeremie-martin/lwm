@@ -4,18 +4,18 @@ add_library(liblwm STATIC
     core/ewmh.cpp
     core/floating.cpp
     core/focus.cpp
+    core/ipc_server.cpp
     core/ipc.cpp
     core/window_rules.cpp
     config/config.cpp
     layout/layout.cpp
-    layout/split_tree.cpp
-    layout/strategy.cpp
     keybind/keybind.cpp
     wm_rules.cpp
     wm_focus.cpp
     wm_floating.cpp
     wm_workspace.cpp
     wm_ewmh.cpp
+    wm_ipc.cpp
     wm.cpp
     wm_events.cpp
     wm_drag.cpp

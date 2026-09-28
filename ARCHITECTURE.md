@@ -13,12 +13,14 @@ belongs in [IPC.md](IPC.md).
 | `src/app/lwmctl.cpp` | supported command-line IPC client |
 | `src/lwm/config/` | strict TOML parsing and built-in defaults |
 | `src/lwm/keybind/` | key binding normalization, grabs, and lookup |
-| `src/lwm/layout/` | master-stack and monocle geometry, split ratios, hit testing |
+| `src/lwm/layout/` | pure master-stack and monocle geometry, split ratios, hit testing |
 | `src/lwm/core/log.*` | owned logger, secure rotating sink, process-boundary lifecycle |
 | `src/lwm/core/types.hpp` | domain state: clients, monitors, workspaces, geometry |
 | `src/lwm/core/policy.hpp` | pure visibility, focus, workspace, fullscreen, and hotplug decisions |
 | `src/lwm/core/ewmh.*` | EWMH atoms, classification, and property I/O |
-| `src/lwm/wm.cpp` | construction, IPC, client lifecycle, visibility, stacking, layout |
+| `src/lwm/core/ipc_server.*` | socket ownership, bounded request/reply transport, subscriptions |
+| `src/lwm/wm_ipc.cpp` | command handling and IPC query results |
+| `src/lwm/wm.cpp` | construction, client lifecycle, visibility, stacking, geometry application |
 | `src/lwm/wm_rules.cpp` | classification, rule application, and runtime reevaluation |
 | `src/lwm/wm_ewmh.cpp` | root properties, client lists, workareas, EWMH desktop projection |
 | `src/lwm/wm_events.cpp` | X event dispatch, client messages, property changes, RANDR |
@@ -28,7 +30,8 @@ belongs in [IPC.md](IPC.md).
 | `src/lwm/wm_restart.cpp`, `wm_scratchpad.cpp` | exec handoff and scratchpad state |
 
 `WindowManager` owns one event loop. It polls the X connection, the SIGHUP
-self-pipe, the IPC listener, one pending request, and subscription connections.
+self-pipe, the IPC listener, one pending request or reply, and subscription
+connections.
 State mutation is single-threaded.
 
 Logging is an owned service rather than spdlog global state. A non-null
@@ -37,6 +40,27 @@ logger is swapped in only after every sink is ready. Exec restart and forked
 children flush and return to the fallback before crossing the process boundary,
 which prevents log-file descriptor inheritance. Logging policy is fixed by
 startup options and is not reloaded from TOML.
+
+## Layout and geometry
+
+`Layout` computes rectangles and resize boundaries without X calls. Master-stack
+is evaluated as an iterative sequence of cuts: split 0 divides master from
+stack, and split i divides stack slot i from the remaining slots. Monocle gives
+every window the content rectangle and has no resize boundaries. Arrangement,
+drop selection, and resize hit testing share the same calculation; they do not
+allocate an intermediate tree.
+
+Split identities are stable slot indices. Restart serialization retains the
+version-3 depth/path encoding of the former right-leaning tree for existing
+splits. Beyond depth 32, the path field is saturated and the full index remains
+in the depth field. Non-chain legacy addresses have no meaning in the supported
+layouts and are ignored on restore.
+
+`WindowManager::apply_geometry()` owns WM-driven configure requests, sync
+notifications, and synthetic ConfigureNotify events for tiled, floating, and
+fullscreen geometry. It reports the actual policy-selected border width.
+Geometry-only tiled updates compare against the client cache without allocating
+a second vector of old rectangles.
 
 ## State model
 
@@ -98,15 +122,15 @@ incoming `UnmapNotify` means client withdrawal rather than a workspace change.
 selection and physical hide/show state. Its wrappers add only the next required
 phase:
 
-- `sync_visibility_for_monitor()`: reconciliation only.
 - `finalize_visibility_on_monitor()`: reconciliation, then layout.
 - `finalize_move_visibility()`: reconciliation and layout for source and
   destination monitors.
 - `rearrange_all_monitors()`: reconcile every monitor before arranging any.
 
 `rearrange_monitor()` consumes reconciled state. It lays out visible tiled
-clients, applies fullscreen geometry, then normally delegates global ordering to
-`apply_stacking()`.
+clients, applies fullscreen geometry, then marks global stacking dirty unless
+the operation changes geometry only.
+Multi-monitor arrangement therefore does not restack once per monitor.
 
 ## Fullscreen and stacking
 
@@ -122,8 +146,12 @@ is effective only when they return to visible scope. Showing-desktop removes
 fullscreen ownership while active. `_NET_WM_FULLSCREEN_MONITORS` changes
 geometry only and does not create cross-monitor ownership.
 
-`apply_stacking()` is the single global stacking authority. It computes the X
-order and `_NET_CLIENT_LIST_STACKING` together. Physically hidden clients sort
+`apply_stacking()` is the single global stacking authority. Transitions mark
+stacking dirty; it is reconciled at startup, at the end of an event-loop
+iteration, before IPC replies/subscription events, and before a crossing-event
+drain. The drain must include the restack because it can also generate crossing events. Each reconciliation
+reasserts the server order even if the desired order is unchanged, since other
+X clients can perturb it. It computes the X order and `_NET_CLIENT_LIST_STACKING` together. Physically hidden clients sort
 before visible clients. Desktop clients use the Below tier and docks use the
 Above tier; tiled and floating clients use Below, Normal, Above, or Fullscreen
 according to effective state. Within a tier, floating clients are above
@@ -134,7 +162,8 @@ visible transients are placed above visible parents.
 
 `focus_any_window()` is the normal focus funnel. It validates eligibility,
 deiconifies when necessary, switches the target monitor's workspace when
-necessary, updates focus memory and recency, sends `WM_TAKE_FOCUS` when
+necessary, checks the resulting fullscreen suppression, then commits active
+focus, focus memory and recency. It sends `WM_TAKE_FOCUS` when
 advertised, sets X input focus, restacks, updates EWMH focus state, clears
 urgency, and emits the IPC event.
 
@@ -209,7 +238,7 @@ Every completed transition must preserve:
 - managed X stacking and `_NET_CLIENT_LIST_STACKING` come from the same order.
 
 `invariants::validate()` checks registry identity, placement, tiled membership,
-workspace focus, and active focus without X calls. Debug builds run it on entry
+workspace focus, effective fullscreen ownership, and active focus without X calls. Debug builds run it on entry
 to the event loop and after each completed iteration, covering X events, IPC,
 signal reloads, and timeouts after their transitions settle. A violation logs the
 reason and aborts at that boundary; release builds omit these checks. X properties

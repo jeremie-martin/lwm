@@ -4,9 +4,10 @@
 #include <array>
 #include <catch2/catch_test_macros.hpp>
 #include <chrono>
+#include <filesystem>
 #include <initializer_list>
 #include <map>
-#include <filesystem>
+#include <nlohmann/json.hpp>
 #include <optional>
 #include <string_view>
 #include <sys/socket.h>
@@ -22,287 +23,33 @@ namespace {
 
 constexpr auto kTimeout = std::chrono::seconds(2);
 
-struct JsonValue
-{
-    enum class Type
-    {
-        Object,
-        Array,
-        String,
-        Number,
-        Boolean,
-        Null,
-    };
-
-    Type type = Type::Null;
-    std::map<std::string, JsonValue> object;
-    std::vector<JsonValue> array;
-};
-
-class JsonParser
-{
-public:
-    explicit JsonParser(std::string_view input)
-        : input_(input)
-    {
-    }
-
-    std::optional<JsonValue> parse()
-    {
-        auto value = parse_value();
-        skip_whitespace();
-        if (!value || position_ != input_.size())
-            return std::nullopt;
-        return value;
-    }
-
-private:
-    void skip_whitespace()
-    {
-        while (position_ < input_.size()
-            && (input_[position_] == ' ' || input_[position_] == '\n' || input_[position_] == '\r'
-                || input_[position_] == '\t'))
-        {
-            ++position_;
-        }
-    }
-
-    bool consume(char expected)
-    {
-        if (position_ >= input_.size() || input_[position_] != expected)
-            return false;
-        ++position_;
-        return true;
-    }
-
-    std::optional<std::string> parse_string()
-    {
-        if (!consume('"'))
-            return std::nullopt;
-
-        std::string result;
-        while (position_ < input_.size())
-        {
-            char ch = input_[position_++];
-            if (ch == '"')
-                return result;
-            if (static_cast<unsigned char>(ch) < 0x20)
-                return std::nullopt;
-            if (ch != '\\')
-            {
-                result += ch;
-                continue;
-            }
-
-            if (position_ >= input_.size())
-                return std::nullopt;
-            char escaped = input_[position_++];
-            switch (escaped)
-            {
-                case '"': result += '"'; break;
-                case '\\': result += '\\'; break;
-                case '/': result += '/'; break;
-                case 'b': result += '\b'; break;
-                case 'f': result += '\f'; break;
-                case 'n': result += '\n'; break;
-                case 'r': result += '\r'; break;
-                case 't': result += '\t'; break;
-                case 'u':
-                    if (position_ + 4 > input_.size())
-                        return std::nullopt;
-                    for (size_t i = 0; i < 4; ++i)
-                    {
-                        char digit = input_[position_ + i];
-                        bool hex = (digit >= '0' && digit <= '9') || (digit >= 'a' && digit <= 'f')
-                            || (digit >= 'A' && digit <= 'F');
-                        if (!hex)
-                            return std::nullopt;
-                    }
-                    position_ += 4;
-                    result += '?';
-                    break;
-                default: return std::nullopt;
-            }
-        }
-        return std::nullopt;
-    }
-
-    bool parse_number()
-    {
-        size_t start = position_;
-        if (position_ < input_.size() && input_[position_] == '-')
-            ++position_;
-
-        if (position_ >= input_.size())
-            return false;
-        if (input_[position_] == '0')
-            ++position_;
-        else if (input_[position_] >= '1' && input_[position_] <= '9')
-        {
-            while (position_ < input_.size() && input_[position_] >= '0' && input_[position_] <= '9')
-                ++position_;
-        }
-        else
-        {
-            return false;
-        }
-
-        if (position_ < input_.size() && input_[position_] == '.')
-        {
-            ++position_;
-            size_t fraction_start = position_;
-            while (position_ < input_.size() && input_[position_] >= '0' && input_[position_] <= '9')
-                ++position_;
-            if (position_ == fraction_start)
-                return false;
-        }
-
-        if (position_ < input_.size() && (input_[position_] == 'e' || input_[position_] == 'E'))
-        {
-            ++position_;
-            if (position_ < input_.size() && (input_[position_] == '+' || input_[position_] == '-'))
-                ++position_;
-            size_t exponent_start = position_;
-            while (position_ < input_.size() && input_[position_] >= '0' && input_[position_] <= '9')
-                ++position_;
-            if (position_ == exponent_start)
-                return false;
-        }
-
-        return position_ > start;
-    }
-
-    std::optional<JsonValue> parse_value()
-    {
-        skip_whitespace();
-        if (position_ >= input_.size())
-            return std::nullopt;
-
-        if (input_[position_] == '{')
-            return parse_object();
-        if (input_[position_] == '[')
-            return parse_array();
-        if (input_[position_] == '"')
-        {
-            if (!parse_string())
-                return std::nullopt;
-            JsonValue value;
-            value.type = JsonValue::Type::String;
-            return value;
-        }
-        if (input_.substr(position_, 4) == "true")
-        {
-            position_ += 4;
-            JsonValue value;
-            value.type = JsonValue::Type::Boolean;
-            return value;
-        }
-        if (input_.substr(position_, 5) == "false")
-        {
-            position_ += 5;
-            JsonValue value;
-            value.type = JsonValue::Type::Boolean;
-            return value;
-        }
-        if (input_.substr(position_, 4) == "null")
-        {
-            position_ += 4;
-            JsonValue value;
-            value.type = JsonValue::Type::Null;
-            return value;
-        }
-        if (parse_number())
-        {
-            JsonValue value;
-            value.type = JsonValue::Type::Number;
-            return value;
-        }
-        return std::nullopt;
-    }
-
-    std::optional<JsonValue> parse_object()
-    {
-        if (!consume('{'))
-            return std::nullopt;
-        JsonValue value;
-        value.type = JsonValue::Type::Object;
-        skip_whitespace();
-        if (consume('}'))
-            return value;
-
-        while (true)
-        {
-            auto key = parse_string();
-            if (!key)
-                return std::nullopt;
-            skip_whitespace();
-            if (!consume(':'))
-                return std::nullopt;
-            auto child = parse_value();
-            if (!child || !value.object.emplace(std::move(*key), std::move(*child)).second)
-                return std::nullopt;
-            skip_whitespace();
-            if (consume('}'))
-                return value;
-            if (!consume(','))
-                return std::nullopt;
-            skip_whitespace();
-        }
-    }
-
-    std::optional<JsonValue> parse_array()
-    {
-        if (!consume('['))
-            return std::nullopt;
-        JsonValue value;
-        value.type = JsonValue::Type::Array;
-        skip_whitespace();
-        if (consume(']'))
-            return value;
-
-        while (true)
-        {
-            auto child = parse_value();
-            if (!child)
-                return std::nullopt;
-            value.array.push_back(std::move(*child));
-            skip_whitespace();
-            if (consume(']'))
-                return value;
-            if (!consume(','))
-                return std::nullopt;
-            skip_whitespace();
-        }
-    }
-
-    std::string_view input_;
-    size_t position_ = 0;
-};
+using JsonValue = nlohmann::json;
 
 std::optional<JsonValue> parse_ok_json(std::string const& reply)
 {
     if (!reply.starts_with("ok ") || reply.size() < 5 || reply.back() != '\n')
         return std::nullopt;
-    return JsonParser(std::string_view(reply).substr(3, reply.size() - 4)).parse();
+    auto value = JsonValue::parse(std::string_view(reply).substr(3, reply.size() - 4), nullptr, false);
+    return value.is_discarded() ? std::nullopt : std::optional{ std::move(value) };
 }
 
 JsonValue const* json_member(JsonValue const& value, std::string_view name)
 {
-    if (value.type != JsonValue::Type::Object)
+    if (!value.is_object())
         return nullptr;
-    auto it = value.object.find(std::string(name));
-    return it == value.object.end() ? nullptr : &it->second;
+    auto it = value.find(std::string(name));
+    return it == value.end() ? nullptr : &*it;
 }
 
 bool has_json_fields(
     JsonValue const& value,
-    std::initializer_list<std::pair<std::string_view, JsonValue::Type>> fields
+    std::initializer_list<std::pair<std::string_view, JsonValue::value_t>> fields
 )
 {
     for (auto const& [name, type] : fields)
     {
         auto const* member = json_member(value, name);
-        if (!member || member->type != type)
+        if (!member || member->type() != type)
             return false;
     }
     return true;
@@ -311,13 +58,13 @@ bool has_json_fields(
 bool has_object_array_fields(
     JsonValue const& value,
     std::string_view array_name,
-    std::initializer_list<std::pair<std::string_view, JsonValue::Type>> fields
+    std::initializer_list<std::pair<std::string_view, JsonValue::value_t>> fields
 )
 {
     auto const* array = json_member(value, array_name);
-    if (!array || array->type != JsonValue::Type::Array || array->array.empty())
+    if (!array || !array->is_array() || array->empty())
         return false;
-    for (auto const& item : array->array)
+    for (auto const& item : *array)
     {
         if (!has_json_fields(item, fields))
             return false;
@@ -325,37 +72,53 @@ bool has_object_array_fields(
     return true;
 }
 
-bool has_typed_array(JsonValue const& value, std::string_view array_name, JsonValue::Type item_type)
+bool has_typed_array(JsonValue const& value, std::string_view array_name, JsonValue::value_t item_type)
 {
     auto const* array = json_member(value, array_name);
-    if (!array || array->type != JsonValue::Type::Array || array->array.empty())
+    if (!array || !array->is_array() || array->empty())
         return false;
-    return std::all_of(array->array.begin(), array->array.end(), [item_type](JsonValue const& item)
-        { return item.type == item_type; });
+    return std::all_of(
+        array->begin(),
+        array->end(),
+        [item_type](JsonValue const& item) { return item.type() == item_type; }
+    );
 }
 
 bool workspace_list_has_documented_shape(JsonValue const& value)
 {
-    if (!has_json_fields(value, { { "focused_monitor", JsonValue::Type::Number }, { "monitors", JsonValue::Type::Array } }))
+    if (!has_json_fields(
+            value,
+            {
+                { "focused_monitor", JsonValue::value_t::number_unsigned },
+                {        "monitors",           JsonValue::value_t::array }
+    }
+        ))
         return false;
     auto const* monitors = json_member(value, "monitors");
-    if (!monitors || monitors->array.empty())
+    if (!monitors || monitors->empty())
         return false;
-    for (auto const& monitor : monitors->array)
+    for (auto const& monitor : *monitors)
     {
-        if (!has_json_fields(monitor, {
-                { "index", JsonValue::Type::Number },
-                { "name", JsonValue::Type::String },
-                { "current_workspace", JsonValue::Type::Number },
-                { "workspaces", JsonValue::Type::Array },
-            })
-            || !has_object_array_fields(monitor, "workspaces", {
-                { "index", JsonValue::Type::Number },
-                { "name", JsonValue::Type::String },
-                { "current", JsonValue::Type::Boolean },
-                { "window_count", JsonValue::Type::Number },
-                { "layout", JsonValue::Type::String },
-            }))
+        if (!has_json_fields(
+                monitor,
+                {
+                    {             "index", JsonValue::value_t::number_unsigned },
+                    {              "name",          JsonValue::value_t::string },
+                    { "current_workspace", JsonValue::value_t::number_unsigned },
+                    {        "workspaces",           JsonValue::value_t::array },
+        }
+            )
+            || !has_object_array_fields(
+                monitor,
+                "workspaces",
+                {
+                    { "index", JsonValue::value_t::number_unsigned },
+                    { "name", JsonValue::value_t::string },
+                    { "current", JsonValue::value_t::boolean },
+                    { "window_count", JsonValue::value_t::number_unsigned },
+                    { "layout", JsonValue::value_t::string },
+                }
+            ))
         {
             return false;
         }
@@ -365,32 +128,52 @@ bool workspace_list_has_documented_shape(JsonValue const& value)
 
 bool window_list_has_documented_shape(JsonValue const& value)
 {
-    return has_json_fields(value, { { "focused", JsonValue::Type::Number }, { "windows", JsonValue::Type::Array } })
-        && has_object_array_fields(value, "windows", {
-            { "id", JsonValue::Type::Number },
-            { "monitor", JsonValue::Type::Number },
-            { "workspace", JsonValue::Type::Number },
-            { "kind", JsonValue::Type::String },
-            { "class", JsonValue::Type::String },
-            { "instance", JsonValue::Type::String },
-            { "title", JsonValue::Type::String },
-            { "focused", JsonValue::Type::Boolean },
-            { "fullscreen", JsonValue::Type::Boolean },
-            { "urgent", JsonValue::Type::Boolean },
-            { "sticky", JsonValue::Type::Boolean },
-            { "iconic", JsonValue::Type::Boolean },
-        });
+    return has_json_fields(
+               value,
+               {
+                   { "focused", JsonValue::value_t::number_unsigned },
+                   { "windows",           JsonValue::value_t::array }
+    }
+           )
+        && has_object_array_fields(
+               value,
+               "windows",
+               {
+                   { "id", JsonValue::value_t::number_unsigned },
+                   { "monitor", JsonValue::value_t::number_unsigned },
+                   { "workspace", JsonValue::value_t::number_unsigned },
+                   { "kind", JsonValue::value_t::string },
+                   { "class", JsonValue::value_t::string },
+                   { "instance", JsonValue::value_t::string },
+                   { "title", JsonValue::value_t::string },
+                   { "focused", JsonValue::value_t::boolean },
+                   { "fullscreen", JsonValue::value_t::boolean },
+                   { "urgent", JsonValue::value_t::boolean },
+                   { "sticky", JsonValue::value_t::boolean },
+                   { "iconic", JsonValue::value_t::boolean },
+               }
+        );
 }
 
 bool scratchpad_list_has_documented_shape(JsonValue const& value)
 {
-    return has_json_fields(value, { { "named", JsonValue::Type::Array }, { "pool", JsonValue::Type::Array } })
-        && has_object_array_fields(value, "named", {
-            { "name", JsonValue::Type::String },
-            { "window", JsonValue::Type::Number },
-            { "pending", JsonValue::Type::Boolean },
-        })
-        && has_typed_array(value, "pool", JsonValue::Type::Number);
+    return has_json_fields(
+               value,
+               {
+                   { "named", JsonValue::value_t::array },
+                   {  "pool", JsonValue::value_t::array }
+    }
+           )
+        && has_object_array_fields(
+               value,
+               "named",
+               {
+                   { "name", JsonValue::value_t::string },
+                   { "window", JsonValue::value_t::number_unsigned },
+                   { "pending", JsonValue::value_t::boolean },
+               }
+        )
+        && has_typed_array(value, "pool", JsonValue::value_t::number_unsigned);
 }
 
 struct WindowGeometry
@@ -408,7 +191,7 @@ std::optional<WindowGeometry> get_window_geometry(X11Connection& conn, xcb_windo
     auto* reply = xcb_get_geometry_reply(conn.get(), cookie, nullptr);
     if (!reply)
         return std::nullopt;
-    WindowGeometry g { reply->x, reply->y, reply->width, reply->height };
+    WindowGeometry g{ reply->x, reply->y, reply->width, reply->height };
     free(reply);
     return g;
 }
@@ -425,7 +208,7 @@ std::optional<std::array<uint32_t, 4>> get_frame_extents(X11Connection& conn, xc
     }
 
     auto* values = static_cast<uint32_t*>(xcb_get_property_value(reply));
-    std::array<uint32_t, 4> result { values[0], values[1], values[2], values[3] };
+    std::array<uint32_t, 4> result{ values[0], values[1], values[2], values[3] };
     free(reply);
     return result;
 }
@@ -515,12 +298,8 @@ std::optional<uint32_t> get_wm_state(X11Connection& conn, xcb_window_t window, x
     return result;
 }
 
-std::optional<bool> property_contains_atom(
-    X11Connection& conn,
-    xcb_window_t window,
-    xcb_atom_t property,
-    xcb_atom_t expected
-)
+std::optional<bool>
+property_contains_atom(X11Connection& conn, xcb_window_t window, xcb_atom_t property, xcb_atom_t expected)
 {
     auto cookie = xcb_get_property(conn.get(), 0, window, property, XCB_ATOM_ATOM, 0, 64);
     auto* reply = xcb_get_property_reply(conn.get(), cookie, nullptr);
@@ -540,8 +319,7 @@ std::optional<bool> property_contains_atom(
     bool result = false;
     auto* atoms = static_cast<xcb_atom_t*>(xcb_get_property_value(reply));
     int const count = xcb_get_property_value_length(reply) / 4;
-    for (int i = 0; i < count; ++i)
-        result = result || atoms[i] == expected;
+    for (int i = 0; i < count; ++i) result = result || atoms[i] == expected;
     free(reply);
     return result;
 }
@@ -564,112 +342,7 @@ std::optional<std::vector<xcb_window_t>> get_client_list(X11Connection& conn, xc
     return result;
 }
 
-std::optional<std::string> wait_for_ipc_socket_path(X11Connection& conn)
-{
-    xcb_atom_t socket_atom = intern_atom(conn.get(), "_LWM_IPC_SOCKET");
-    if (socket_atom == XCB_NONE)
-        return std::nullopt;
-    bool ready = wait_for_condition(
-        [&conn, socket_atom]()
-        {
-            auto value = get_window_property_string(conn.get(), conn.root(), socket_atom);
-            return value && !value->empty();
-        },
-        kTimeout);
-    if (!ready)
-        return std::nullopt;
-    return get_window_property_string(conn.get(), conn.root(), socket_atom);
-}
-
-std::optional<std::string> send_raw_ipc(std::string const& socket_path, std::string const& command)
-{
-    if (socket_path.size() >= sizeof(sockaddr_un::sun_path))
-        return std::nullopt;
-
-    int fd = socket(AF_UNIX, SOCK_STREAM, 0);
-    if (fd < 0)
-        return std::nullopt;
-
-    sockaddr_un address{};
-    address.sun_family = AF_UNIX;
-    std::strncpy(address.sun_path, socket_path.c_str(), sizeof(address.sun_path) - 1);
-    if (connect(fd, reinterpret_cast<sockaddr*>(&address), sizeof(address)) != 0)
-    {
-        close(fd);
-        return std::nullopt;
-    }
-
-    std::string request = command + "\n";
-    if (send(fd, request.data(), request.size(), 0) != static_cast<ssize_t>(request.size()))
-    {
-        close(fd);
-        return std::nullopt;
-    }
-    shutdown(fd, SHUT_WR);
-
-    std::string response;
-    std::array<char, 1024> buffer{};
-    while (true)
-    {
-        ssize_t received = recv(fd, buffer.data(), buffer.size(), 0);
-        if (received < 0)
-        {
-            close(fd);
-            return std::nullopt;
-        }
-        if (received == 0)
-            break;
-        response.append(buffer.data(), static_cast<size_t>(received));
-    }
-    close(fd);
-    return response;
-}
-
-bool lwmctl_available()
-{
-    return std::filesystem::exists(lwmctl_executable_path());
-}
-
-struct TestEnvironment
-{
-    X11TestEnvironment& x11_env;
-    X11Connection conn;
-    LwmProcess wm;
-
-    bool ok() const { return conn.ok() && wm.running(); }
-
-    static std::optional<TestEnvironment> create(std::string config = "[workspaces]\ncount = 2\n")
-    {
-        auto& env = X11TestEnvironment::instance();
-        if (!env.available())
-        {
-            WARN("Xvfb not available; set LWM_TEST_ALLOW_EXISTING_DISPLAY=1 to use an existing DISPLAY.");
-            return std::nullopt;
-        }
-
-        X11Connection conn;
-        if (!conn.ok())
-        {
-            WARN("Failed to connect to X server.");
-            return std::nullopt;
-        }
-
-        LwmProcess wm(env.display(), std::move(config));
-        if (!wm.running())
-        {
-            WARN("Failed to start lwm.");
-            return std::nullopt;
-        }
-
-        if (!wait_for_wm_ready(conn, kTimeout))
-        {
-            WARN("Window manager not ready.");
-            return std::nullopt;
-        }
-
-        return TestEnvironment{ env, std::move(conn), std::move(wm) };
-    }
-};
+bool lwmctl_available() { return std::filesystem::exists(lwmctl_executable_path()); }
 
 std::optional<xcb_keycode_t> first_keycode_for_keysym(X11Connection& conn, xcb_keysym_t keysym)
 {
@@ -706,7 +379,7 @@ bool send_key_chord(X11Connection& conn, xcb_keysym_t modifier, xcb_keysym_t key
 
 TEST_CASE("Integration: workspace switch updates _NET_CURRENT_DESKTOP", "[integration][workspace]")
 {
-    auto test_env = TestEnvironment::create();
+    auto test_env = TestEnvironment::create("[workspaces]\ncount = 2\n");
     if (!test_env)
         SKIP("Test environment not available");
 
@@ -733,7 +406,7 @@ TEST_CASE("Integration: workspace switch updates _NET_CURRENT_DESKTOP", "[integr
 
 TEST_CASE("Integration: workspace switch back and forth", "[integration][workspace]")
 {
-    auto test_env = TestEnvironment::create();
+    auto test_env = TestEnvironment::create("[workspaces]\ncount = 2\n");
     if (!test_env)
         SKIP("Test environment not available");
 
@@ -759,7 +432,7 @@ TEST_CASE("Integration: workspace switch back and forth", "[integration][workspa
 
 TEST_CASE("Integration: windows persist across workspace switches", "[integration][workspace]")
 {
-    auto test_env = TestEnvironment::create();
+    auto test_env = TestEnvironment::create("[workspaces]\ncount = 2\n");
     if (!test_env)
         SKIP("Test environment not available");
 
@@ -803,7 +476,7 @@ TEST_CASE(
     "[integration][workspace][fullscreen]"
 )
 {
-    auto test_env = TestEnvironment::create();
+    auto test_env = TestEnvironment::create("[workspaces]\ncount = 2\n");
     if (!test_env)
         SKIP("Test environment not available");
 
@@ -904,7 +577,7 @@ TEST_CASE(
     "[integration][workspace][focus][visibility]"
 )
 {
-    auto test_env = TestEnvironment::create();
+    auto test_env = TestEnvironment::create("[workspaces]\ncount = 2\n");
     if (!test_env)
         SKIP("Test environment not available");
 
@@ -979,7 +652,8 @@ TEST_CASE(
             auto active = get_window_property_window(conn.get(), conn.root(), net_active_window);
             auto focus = get_input_focus(conn);
             return window_is_viewable(conn, w2) && state && *state == XCB_ICCCM_WM_STATE_NORMAL && hidden && !*hidden
-                && client_list && *client_list == *client_list_before && active && *active == w1 && focus && *focus == w1;
+                && client_list && *client_list == *client_list_before && active && *active == w1 && focus
+                && *focus == w1;
         },
         kTimeout
     ));
@@ -1005,7 +679,8 @@ TEST_CASE(
             auto active = get_window_property_window(conn.get(), conn.root(), net_active_window);
             auto focus = get_input_focus(conn);
             return window_is_viewable(conn, w2) && state && *state == XCB_ICCCM_WM_STATE_NORMAL && hidden && !*hidden
-                && client_list && *client_list == *client_list_before && active && *active == w2 && focus && *focus == w2;
+                && client_list && *client_list == *client_list_before && active && *active == w2 && focus
+                && *focus == w2;
         },
         kTimeout
     ));
@@ -1022,7 +697,7 @@ TEST_CASE(
 // =============================================================================
 TEST_CASE("Integration: monocle layout assigns identical geometries", "[integration][layout][monocle]")
 {
-    auto test_env = TestEnvironment::create();
+    auto test_env = TestEnvironment::create("[workspaces]\ncount = 2\n");
     if (!test_env)
         SKIP("Test environment not available");
     if (!lwmctl_available())
@@ -1065,7 +740,8 @@ TEST_CASE("Integration: monocle layout assigns identical geometries", "[integrat
             auto c = get_window_geometry(conn, w3);
             return a && b && c && *a == *b && *b == *c;
         },
-        kTimeout);
+        kTimeout
+    );
     REQUIRE(ok);
 
     auto restore = run_lwmctl(test_env->wm, { "layout", "set", "master-stack" }, *socket_path);
@@ -1129,7 +805,7 @@ match = { class = "ScratchpadClass" }
 
 TEST_CASE("Integration: managed windows publish zero frame extents", "[integration][ewmh][frame_extents]")
 {
-    auto test_env = TestEnvironment::create();
+    auto test_env = TestEnvironment::create("[workspaces]\ncount = 2\n");
     if (!test_env)
         SKIP("Test environment not available");
 
@@ -1140,21 +816,18 @@ TEST_CASE("Integration: managed windows publish zero frame extents", "[integrati
     xcb_window_t window = create_window(conn, 10, 10, 200, 150);
     map_window(conn, window);
     REQUIRE(wait_for_active_window(conn, window, kTimeout));
-    REQUIRE(wait_for_condition(
-        [&]() { return get_frame_extents(conn, window, frame_extents).has_value(); },
-        kTimeout
-    ));
+    REQUIRE(wait_for_condition([&]() { return get_frame_extents(conn, window, frame_extents).has_value(); }, kTimeout));
 
     auto extents = get_frame_extents(conn, window, frame_extents);
     REQUIRE(extents.has_value());
-    CHECK(*extents == std::array<uint32_t, 4> { 0, 0, 0, 0 });
+    CHECK(*extents == std::array<uint32_t, 4>{ 0, 0, 0, 0 });
 
     destroy_window(conn, window);
 }
 
 TEST_CASE("Integration: monocle layout survives exec restart", "[integration][layout][monocle][restart]")
 {
-    auto test_env = TestEnvironment::create();
+    auto test_env = TestEnvironment::create("[workspaces]\ncount = 2\n");
     if (!test_env)
         SKIP("Test environment not available");
     if (!lwmctl_available())
@@ -1243,7 +916,7 @@ TEST_CASE("Integration: version 3 restart handoff survives overlay removal", "[i
 
     // Reproduce the shortest supported payload emitted by an older version-3
     // binary. Its client state starts with the retired overlay flag.
-    std::array<uint32_t, 24> client_state{ };
+    std::array<uint32_t, 24> client_state{};
     client_state[0] = 1;
     client_state[2] = 120;
     client_state[3] = 130;
@@ -1261,7 +934,7 @@ TEST_CASE("Integration: version 3 restart handoff survives overlay removal", "[i
         client_state.data()
     );
 
-    std::array<uint32_t, 7> global_state {
+    std::array<uint32_t, 7> global_state{
         3, // Version
         0, // Focused monitor
         window,
@@ -1290,7 +963,7 @@ TEST_CASE("Integration: version 3 restart handoff survives overlay removal", "[i
         [&]()
         {
             auto geometry = get_window_geometry(conn, window);
-            return geometry && *geometry == WindowGeometry { 120, 130, 410, 260 };
+            return geometry && *geometry == WindowGeometry{ 120, 130, 410, 260 };
         },
         kTimeout
     ));
@@ -1346,11 +1019,7 @@ swap_next = true
     REQUIRE(set_layout.has_value());
     REQUIRE(set_layout->exit_code == 0);
 
-    auto focus = run_lwmctl(
-        test_env->wm,
-        { "focus", "window=" + std::to_string(w1) },
-        *socket_path
-    );
+    auto focus = run_lwmctl(test_env->wm, { "focus", "window=" + std::to_string(w1) }, *socket_path);
     REQUIRE(focus.has_value());
     REQUIRE(focus->exit_code == 0);
     REQUIRE(wait_for_active_window(conn, w1, kTimeout));
@@ -1362,4 +1031,102 @@ swap_next = true
     destroy_window(conn, w3);
     destroy_window(conn, w2);
     destroy_window(conn, w1);
+}
+
+TEST_CASE("Integration: workspace, fullscreen, scratchpad and restart transitions compose", "[integration][sequence]")
+{
+    auto env = TestEnvironment::create("[workspaces]\ncount = 2\n");
+    if (!env)
+        SKIP("Xvfb not available");
+    auto& conn = env->conn;
+    auto socket = wait_for_ipc_socket_path(conn);
+    REQUIRE(socket);
+    auto command = [&](std::string const& text)
+    {
+        auto response = send_ipc_command(*socket, text);
+        REQUIRE(response);
+        REQUIRE(response->starts_with("ok"));
+    };
+    xcb_window_t a = create_window(conn, 20, 20, 200, 200);
+    xcb_window_t b = create_window(conn, 40, 40, 200, 200);
+    map_window(conn, a);
+    REQUIRE(wait_for_active_window(conn, a, kTimeout));
+    map_window(conn, b);
+    REQUIRE(wait_for_active_window(conn, b, kTimeout));
+    auto state = intern_atom(conn.get(), "_NET_WM_STATE");
+    auto fullscreen = intern_atom(conn.get(), "_NET_WM_STATE_FULLSCREEN");
+    auto desktop = intern_atom(conn.get(), "_NET_WM_DESKTOP");
+    auto visible = [&](xcb_window_t w)
+    {
+        auto geometry = get_window_geometry(conn, w);
+        return geometry && geometry->x >= 0;
+    };
+    for (int iteration = 0; iteration < 3; ++iteration)
+    {
+        CAPTURE(iteration);
+        command("focus window=" + std::to_string(b));
+        send_client_message(conn, b, state, 1, fullscreen);
+        REQUIRE(wait_for_condition([&] { return visible(b) && !visible(a); }, kTimeout));
+        // Moving the owner away restores the old workspace; activating it again
+        // resolves destination visibility before committing focus.
+        send_client_message(conn, b, desktop, 1);
+        REQUIRE(wait_for_condition([&] { return visible(a) && !visible(b); }, kTimeout));
+        REQUIRE(wait_for_active_window(conn, a, kTimeout));
+        command("focus window=" + std::to_string(b));
+        REQUIRE(wait_for_active_window(conn, b, kTimeout));
+        REQUIRE(wait_for_condition([&] { return visible(b) && !visible(a); }, kTimeout));
+        send_client_message(conn, b, state, 0, fullscreen);
+        // Wait for the state request before issuing a command on another socket.
+        REQUIRE(wait_for_condition(
+            [&]
+            {
+                auto geometry = get_window_geometry(conn, b);
+                return geometry && geometry->x > 0;
+            },
+            kTimeout
+        ));
+        command(iteration == 0 ? "scratchpad stash" : "scratchpad cycle");
+        REQUIRE(wait_for_condition([&] { return !visible(b); }, kTimeout));
+        command("workspace switch 0");
+        REQUIRE(wait_for_active_window(conn, a, kTimeout));
+        command("scratchpad cycle");
+        REQUIRE(wait_for_active_window(conn, b, kTimeout));
+        REQUIRE(wait_for_condition([&] { return visible(a) && visible(b); }, kTimeout));
+        auto previous = supporting_wm_window(conn);
+        REQUIRE(previous);
+        command("restart");
+        REQUIRE(wait_for_wm_ready(conn, kTimeout, *previous));
+        REQUIRE(wait_for_active_window(conn, b, kTimeout));
+        REQUIRE(wait_for_condition([&] { return visible(a) && visible(b); }, kTimeout));
+    }
+    destroy_window(conn, b);
+    REQUIRE(wait_for_active_window(conn, a, kTimeout));
+    destroy_window(conn, a);
+    REQUIRE(wait_for_active_window(conn, XCB_NONE, kTimeout));
+}
+
+TEST_CASE("Integration: invalid ratio commands cannot poison layout state", "[integration][layout][ipc]")
+{
+    auto env = TestEnvironment::create();
+    if (!env)
+        SKIP("Xvfb not available");
+    auto& conn = env->conn;
+    auto socket = wait_for_ipc_socket_path(conn);
+    REQUIRE(socket);
+    auto window = create_window(conn, 20, 20, 200, 200);
+    map_window(conn, window);
+    REQUIRE(wait_for_active_window(conn, window, kTimeout));
+    auto geometry = get_window_geometry(conn, window);
+    REQUIRE(geometry);
+    for (std::string action : { "set", "adjust" })
+        for (std::string value : { "nan", "inf", "-inf", "0.5junk", "1e9999" })
+        {
+            CAPTURE(action, value);
+            auto response = send_ipc_command(*socket, "ratio " + action + " " + value);
+            REQUIRE(response);
+            CHECK(response->starts_with("error "));
+        }
+    CHECK(send_ipc_command(*socket, "ping") == "ok pong");
+    CHECK(get_window_geometry(conn, window) == geometry);
+    destroy_window(conn, window);
 }

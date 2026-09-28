@@ -13,47 +13,6 @@ namespace {
 
 constexpr auto kTimeout = std::chrono::seconds(2);
 
-struct TestEnvironment
-{
-    X11TestEnvironment& x11_env;
-    X11Connection conn;
-    LwmProcess wm;
-
-    bool ok() const { return conn.ok() && wm.running(); }
-
-    static std::optional<TestEnvironment> create()
-    {
-        auto& env = X11TestEnvironment::instance();
-        if (!env.available())
-        {
-            WARN("Xvfb not available; set LWM_TEST_ALLOW_EXISTING_DISPLAY=1 to use an existing DISPLAY.");
-            return std::nullopt;
-        }
-
-        X11Connection conn;
-        if (!conn.ok())
-        {
-            WARN("Failed to connect to X server.");
-            return std::nullopt;
-        }
-
-        LwmProcess wm(env.display());
-        if (!wm.running())
-        {
-            WARN("Failed to start lwm.");
-            return std::nullopt;
-        }
-
-        if (!wait_for_wm_ready(conn, kTimeout))
-        {
-            WARN("Window manager not ready.");
-            return std::nullopt;
-        }
-
-        return TestEnvironment{ env, std::move(conn), std::move(wm) };
-    }
-};
-
 std::vector<xcb_atom_t> get_window_property_atoms(xcb_connection_t* conn, xcb_window_t window, xcb_atom_t atom)
 {
     auto cookie = xcb_get_property(conn, 0, window, atom, XCB_ATOM_ATOM, 0, 64);
@@ -130,7 +89,7 @@ TEST_CASE(
     REQUIRE(wait_for_active_window(conn, w2, kTimeout));
 
     std::string window_arg = "window=" + std::to_string(w1);
-    auto result = run_lwmctl(wm, {"notify-attention", window_arg});
+    auto result = run_lwmctl(wm, { "notify-attention", window_arg });
     REQUIRE(result.has_value());
     REQUIRE(result->exit_code == 0);
 
@@ -138,10 +97,7 @@ TEST_CASE(
         [&]() { return property_has_atom(conn.get(), w1, net_wm_state, net_wm_state_demands_attention); },
         kTimeout
     ));
-    REQUIRE(wait_for_condition(
-        [&]() { return has_wm_hints_urgency(conn.get(), w1); },
-        kTimeout
-    ));
+    REQUIRE(wait_for_condition([&]() { return has_wm_hints_urgency(conn.get(), w1); }, kTimeout));
 
     REQUIRE_FALSE(property_has_atom(conn.get(), w2, net_wm_state, net_wm_state_demands_attention));
 
@@ -149,10 +105,7 @@ TEST_CASE(
     destroy_window(conn, w1);
 }
 
-TEST_CASE(
-    "Integration: notify-attention window=<active> is skipped",
-    "[integration][notify_attention]"
-)
+TEST_CASE("Integration: notify-attention window=<active> is skipped", "[integration][notify_attention]")
 {
     auto test_env = TestEnvironment::create();
     if (!test_env)
@@ -172,7 +125,7 @@ TEST_CASE(
 
     // The user is already focused on the window — no urgency needed.
     std::string window_arg = "window=" + std::to_string(w1);
-    auto result = run_lwmctl(wm, {"notify-attention", window_arg});
+    auto result = run_lwmctl(wm, { "notify-attention", window_arg });
     REQUIRE(result.has_value());
     REQUIRE(result->exit_code == 0);
     REQUIRE(result->stdout_text.find("skipped-active") != std::string::npos);
@@ -181,10 +134,7 @@ TEST_CASE(
     destroy_window(conn, w1);
 }
 
-TEST_CASE(
-    "Integration: notify-attention clears on focus",
-    "[integration][notify_attention]"
-)
+TEST_CASE("Integration: notify-attention clears on focus", "[integration][notify_attention]")
 {
     auto test_env = TestEnvironment::create();
     if (!test_env)
@@ -210,7 +160,7 @@ TEST_CASE(
 
     // Mark w1 urgent
     std::string window_arg = "window=" + std::to_string(w1);
-    run_lwmctl(wm, {"notify-attention", window_arg});
+    run_lwmctl(wm, { "notify-attention", window_arg });
 
     REQUIRE(wait_for_condition(
         [&]() { return property_has_atom(conn.get(), w1, net_wm_state, net_wm_state_demands_attention); },
@@ -225,19 +175,13 @@ TEST_CASE(
         [&]() { return !property_has_atom(conn.get(), w1, net_wm_state, net_wm_state_demands_attention); },
         kTimeout
     ));
-    REQUIRE(wait_for_condition(
-        [&]() { return !has_wm_hints_urgency(conn.get(), w1); },
-        kTimeout
-    ));
+    REQUIRE(wait_for_condition([&]() { return !has_wm_hints_urgency(conn.get(), w1); }, kTimeout));
 
     destroy_window(conn, w2);
     destroy_window(conn, w1);
 }
 
-TEST_CASE(
-    "Integration: notify-attention returns no-match for unmanaged window ID",
-    "[integration][notify_attention]"
-)
+TEST_CASE("Integration: notify-attention returns no-match for unmanaged window ID", "[integration][notify_attention]")
 {
     auto test_env = TestEnvironment::create();
     if (!test_env)
@@ -259,7 +203,7 @@ TEST_CASE(
     map_window(conn, w2);
     REQUIRE(wait_for_active_window(conn, w2, kTimeout));
 
-    auto result = run_lwmctl(wm, {"notify-attention", "window=0"});
+    auto result = run_lwmctl(wm, { "notify-attention", "window=0" });
     REQUIRE(result.has_value());
     REQUIRE(result->exit_code == 0);
     REQUIRE(result->stdout_text.find("no-match") != std::string::npos);
@@ -270,10 +214,7 @@ TEST_CASE(
     destroy_window(conn, w1);
 }
 
-TEST_CASE(
-    "Integration: notify-attention rejects app metadata",
-    "[integration][notify_attention]"
-)
+TEST_CASE("Integration: notify-attention rejects app metadata", "[integration][notify_attention]")
 {
     auto test_env = TestEnvironment::create();
     if (!test_env)
@@ -283,17 +224,14 @@ TEST_CASE(
 
     for (auto const& arg : { std::string("app-name=Ghostty"), std::string("desktop-entry=Ghostty") })
     {
-        auto result = run_lwmctl(wm, {"notify-attention", arg});
+        auto result = run_lwmctl(wm, { "notify-attention", arg });
         REQUIRE(result.has_value());
         REQUIRE(result->exit_code != 0);
         REQUIRE(result->stderr_text.find("usage: notify-attention window=<xid>") != std::string::npos);
     }
 }
 
-TEST_CASE(
-    "Integration: notify-attention rejects extra tokens after window=<xid>",
-    "[integration][notify_attention]"
-)
+TEST_CASE("Integration: notify-attention rejects extra tokens after window=<xid>", "[integration][notify_attention]")
 {
     auto test_env = TestEnvironment::create();
     if (!test_env)
@@ -318,7 +256,7 @@ TEST_CASE(
     // Single shell arg with embedded whitespace reaches the WM as one token,
     // bypassing lwmctl's argv-count check. The WM parser must still reject it.
     std::string arg = "window=" + std::to_string(w1) + " app-name=Ghostty";
-    auto result = run_lwmctl(wm, {"notify-attention", arg});
+    auto result = run_lwmctl(wm, { "notify-attention", arg });
     REQUIRE(result.has_value());
     REQUIRE(result->exit_code != 0);
     REQUIRE(result->stderr_text.find("usage: notify-attention window=<xid>") != std::string::npos);
@@ -328,10 +266,7 @@ TEST_CASE(
     destroy_window(conn, w1);
 }
 
-TEST_CASE(
-    "Integration: notify-attention accepts hex window id",
-    "[integration][notify_attention]"
-)
+TEST_CASE("Integration: notify-attention accepts hex window id", "[integration][notify_attention]")
 {
     auto test_env = TestEnvironment::create();
     if (!test_env)
@@ -355,7 +290,7 @@ TEST_CASE(
 
     std::ostringstream hex_arg;
     hex_arg << "window=0x" << std::hex << w1;
-    auto result = run_lwmctl(wm, {"notify-attention", hex_arg.str()});
+    auto result = run_lwmctl(wm, { "notify-attention", hex_arg.str() });
     REQUIRE(result.has_value());
     REQUIRE(result->exit_code == 0);
     REQUIRE(wait_for_condition(
@@ -396,7 +331,7 @@ TEST_CASE(
 
     // Mark w1 urgent via WM IPC (WM-initiated urgency).
     std::string window_arg = "window=" + std::to_string(w1);
-    run_lwmctl(wm, {"notify-attention", window_arg});
+    run_lwmctl(wm, { "notify-attention", window_arg });
     REQUIRE(wait_for_condition(
         [&]() { return property_has_atom(conn.get(), w1, net_wm_state, net_wm_state_demands_attention); },
         kTimeout
@@ -458,7 +393,7 @@ TEST_CASE(
     REQUIRE(wait_for_active_window(conn, w2, kTimeout));
 
     std::string window_arg = "window=" + std::to_string(w1);
-    run_lwmctl(wm, {"notify-attention", window_arg});
+    run_lwmctl(wm, { "notify-attention", window_arg });
     REQUIRE(wait_for_condition(
         [&]() { return property_has_atom(conn.get(), w1, net_wm_state, net_wm_state_demands_attention); },
         kTimeout
@@ -486,10 +421,7 @@ TEST_CASE(
     destroy_window(conn, w1);
 }
 
-TEST_CASE(
-    "Integration: app-only urgency clears on app WM_HINTS rewrite",
-    "[integration][notify_attention][wm_hints]"
-)
+TEST_CASE("Integration: app-only urgency clears on app WM_HINTS rewrite", "[integration][notify_attention][wm_hints]")
 {
     auto test_env = TestEnvironment::create();
     if (!test_env)
@@ -571,7 +503,7 @@ TEST_CASE(
 
     auto previous_wm = supporting_wm_window(conn);
     REQUIRE(previous_wm.has_value());
-    auto restart_result = run_lwmctl(wm, {"restart"});
+    auto restart_result = run_lwmctl(wm, { "restart" });
     (void)restart_result;
     REQUIRE(wait_for_wm_ready(conn, std::chrono::seconds(5), *previous_wm));
     REQUIRE(wait_for_active_window(conn, w2, kTimeout));
@@ -628,7 +560,7 @@ TEST_CASE(
     REQUIRE(wait_for_active_window(conn, w2, kTimeout));
 
     std::string window_arg = "window=" + std::to_string(w1);
-    auto notify_result = run_lwmctl(wm, {"notify-attention", window_arg});
+    auto notify_result = run_lwmctl(wm, { "notify-attention", window_arg });
     REQUIRE(notify_result.has_value());
     REQUIRE(notify_result->exit_code == 0);
     REQUIRE(wait_for_condition(
@@ -641,7 +573,7 @@ TEST_CASE(
     auto old_supporting = get_window_property_window(conn.get(), conn.root(), supporting);
     REQUIRE(old_supporting.has_value());
 
-    auto restart_result = run_lwmctl(wm, {"restart"});
+    auto restart_result = run_lwmctl(wm, { "restart" });
     (void)restart_result;
     REQUIRE(wait_for_condition(
         [&]()

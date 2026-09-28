@@ -1,3 +1,4 @@
+# Numeric values must be finite; NaN and infinity are rejected.
 # LWM configuration reference and starter file.
 # Unknown sections and keys are errors. With no explicit --config path, this
 # file is loaded from $XDG_CONFIG_HOME/lwm/config.toml only when
