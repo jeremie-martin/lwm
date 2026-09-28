@@ -1,5 +1,4 @@
 #include "lwm/core/ipc.hpp"
-#include <cctype>
 #include <cerrno>
 #include <csignal>
 #include <cstdlib>
@@ -15,19 +14,6 @@
 #include <xcb/xcb.h>
 
 namespace {
-
-std::string trim_ascii(std::string_view value)
-{
-    size_t start = 0;
-    while (start < value.size() && std::isspace(static_cast<unsigned char>(value[start])))
-        ++start;
-
-    size_t end = value.size();
-    while (end > start && std::isspace(static_cast<unsigned char>(value[end - 1])))
-        --end;
-
-    return std::string(value.substr(start, end - start));
-}
 
 void print_usage()
 {
@@ -130,6 +116,31 @@ int connect_socket(std::string const& socket_path)
     return fd;
 }
 
+bool send_request(int fd, std::string_view request)
+{
+    while (!request.empty())
+    {
+        ssize_t sent = send(fd, request.data(), request.size(), MSG_NOSIGNAL);
+        if (sent < 0 && errno == EINTR)
+            continue;
+        if (sent <= 0)
+        {
+            std::cerr << "failed to send request: " << (sent < 0 ? std::strerror(errno) : "connection closed") << '\n';
+            return false;
+        }
+        request.remove_prefix(static_cast<size_t>(sent));
+    }
+    return true;
+}
+
+ssize_t receive(int fd, char* buffer, size_t size)
+{
+    ssize_t result;
+    do result = recv(fd, buffer, size, 0);
+    while (result < 0 && errno == EINTR);
+    return result;
+}
+
 int run_command(std::string const& socket_path, std::string const& command)
 {
     int fd = connect_socket(socket_path);
@@ -139,9 +150,8 @@ int run_command(std::string const& socket_path, std::string const& command)
     std::string request = command;
     request.push_back('\n');
 
-    if (send(fd, request.data(), request.size(), 0) < 0)
+    if (!send_request(fd, request))
     {
-        std::cerr << "failed to send request: " << std::strerror(errno) << '\n';
         close(fd);
         return 1;
     }
@@ -152,7 +162,7 @@ int run_command(std::string const& socket_path, std::string const& command)
     std::vector<char> buffer(1024);
     while (true)
     {
-        ssize_t bytes_read = recv(fd, buffer.data(), buffer.size(), 0);
+        ssize_t bytes_read = receive(fd, buffer.data(), buffer.size());
         if (bytes_read < 0)
         {
             std::cerr << "failed to read response: " << std::strerror(errno) << '\n';
@@ -166,7 +176,12 @@ int run_command(std::string const& socket_path, std::string const& command)
 
     close(fd);
 
-    response = trim_ascii(response);
+    if (response.empty() || response.back() != '\n' || response.find('\n') != response.size() - 1)
+    {
+        std::cerr << "invalid or incomplete response\n";
+        return 1;
+    }
+    response.pop_back();
     if (response == "ok")
         return 0;
     if (response.rfind("ok ", 0) == 0)
@@ -182,9 +197,8 @@ int run_command(std::string const& socket_path, std::string const& command)
         return 1;
     }
 
-    if (!response.empty())
-        std::cout << response << '\n';
-    return 0;
+    std::cerr << "invalid response\n";
+    return 1;
 }
 
 int run_subscribe(std::string const& socket_path, std::string const& filter)
@@ -201,9 +215,8 @@ int run_subscribe(std::string const& socket_path, std::string const& filter)
     }
     request.push_back('\n');
 
-    if (send(fd, request.data(), request.size(), 0) < 0)
+    if (!send_request(fd, request))
     {
-        std::cerr << "failed to send subscribe request: " << std::strerror(errno) << '\n';
         close(fd);
         return 1;
     }
@@ -213,7 +226,7 @@ int run_subscribe(std::string const& socket_path, std::string const& filter)
     std::vector<char> buf(4096);
     while (true)
     {
-        ssize_t n = recv(fd, buf.data(), buf.size(), 0);
+        ssize_t n = receive(fd, buf.data(), buf.size());
         if (n <= 0)
         {
             std::cerr << "connection closed before subscription confirmed\n";
@@ -231,6 +244,13 @@ int run_subscribe(std::string const& socket_path, std::string const& filter)
     if (first_line.rfind("error", 0) == 0)
     {
         std::cerr << (first_line.size() > 6 ? first_line.substr(6) : "subscription failed") << '\n';
+        close(fd);
+        return 1;
+    }
+
+    if (first_line != "ok subscribed")
+    {
+        std::cerr << "invalid subscription response\n";
         close(fd);
         return 1;
     }
@@ -256,8 +276,14 @@ int run_subscribe(std::string const& socket_path, std::string const& filter)
     // Stream events until EOF or SIGINT
     while (true)
     {
-        ssize_t n = recv(fd, buf.data(), buf.size(), 0);
-        if (n <= 0)
+        ssize_t n = receive(fd, buf.data(), buf.size());
+        if (n < 0)
+        {
+            std::cerr << "failed to read events: " << std::strerror(errno) << '\n';
+            close(fd);
+            return 1;
+        }
+        if (n == 0)
             break;
         if (!write_stdout(buf.data(), static_cast<size_t>(n)))
             break;

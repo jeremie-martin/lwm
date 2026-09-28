@@ -280,16 +280,13 @@ void WindowManager::update_drag(int16_t root_x, int16_t root_y)
         {
             int32_t new_w = static_cast<int32_t>(drag.start_geometry.width) + dx;
             int32_t new_h = static_cast<int32_t>(drag.start_geometry.height) + dy;
-            updated.width = static_cast<uint16_t>(std::max<int32_t>(1, new_w));
-            updated.height = static_cast<uint16_t>(std::max<int32_t>(1, new_h));
-
-            updated.width = std::max<uint16_t>(1, updated.width);
-            updated.height = std::max<uint16_t>(1, updated.height);
+            updated.width = geometry_extent(new_w);
+            updated.height = geometry_extent(new_h);
         }
         else
         {
-            updated.x = static_cast<int16_t>(static_cast<int32_t>(drag.start_geometry.x) + dx);
-            updated.y = static_cast<int16_t>(static_cast<int32_t>(drag.start_geometry.y) + dy);
+            updated.x = geometry_coordinate(static_cast<int32_t>(drag.start_geometry.x) + dx);
+            updated.y = geometry_coordinate(static_cast<int32_t>(drag.start_geometry.y) + dy);
         }
 
         floating_geometry(*client) = updated;

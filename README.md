@@ -59,8 +59,11 @@ sudo make install
 With the default CMake prefix this installs `lwm`, `lwmctl`, and `lwm-notify`
 under `/usr/local/bin`.
 
-`sudo make uninstall` currently removes only `/usr/local/bin/lwm`; remove
-`lwmctl` and `lwm-notify` separately until the open install-system gap is fixed.
+`sudo make uninstall` removes the files recorded in `build/install_manifest.txt`,
+including all three programs. Keep the build directory used for installation;
+for another build directory use `make uninstall BUILD_DIR=...`. This honors the
+prefix used at install time. For a staged installation, supply the same `DESTDIR`
+when uninstalling. Missing files are harmless; directories are left in place.
 
 Copy the reference configuration and start LWM with an explicit path:
 

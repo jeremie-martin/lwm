@@ -1290,13 +1290,13 @@ void WindowManager::handle_moveresize_window(xcb_client_message_event_t const& e
 
     auto& geom = floating_geometry(*client);
     if (has_x)
-        geom.x = static_cast<int16_t>(e.data.data32[1]);
+        geom.x = geometry_coordinate(static_cast<int32_t>(e.data.data32[1]));
     if (has_y)
-        geom.y = static_cast<int16_t>(e.data.data32[2]);
+        geom.y = geometry_coordinate(static_cast<int32_t>(e.data.data32[2]));
     if (has_width)
-        geom.width = static_cast<uint16_t>(std::max<int32_t>(1, e.data.data32[3]));
+        geom.width = geometry_extent(e.data.data32[3]);
     if (has_height)
-        geom.height = static_cast<uint16_t>(std::max<int32_t>(1, e.data.data32[4]));
+        geom.height = geometry_extent(e.data.data32[4]);
 
     update_floating_monitor_for_geometry(*client);
     bool visible = !client->hidden && should_be_visible(*client);
@@ -1318,8 +1318,8 @@ void WindowManager::handle_wm_moveresize(xcb_client_message_event_t const& e)
     if (!client || client->kind() != Client::Kind::Floating)
         return;
 
-    int16_t x_root = static_cast<int16_t>(e.data.data32[0]);
-    int16_t y_root = static_cast<int16_t>(e.data.data32[1]);
+    int16_t x_root = geometry_coordinate(static_cast<int32_t>(e.data.data32[0]));
+    int16_t y_root = geometry_coordinate(static_cast<int32_t>(e.data.data32[1]));
     uint32_t direction = e.data.data32[2];
 
     if (direction == 11)

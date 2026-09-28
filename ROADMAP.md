@@ -8,7 +8,6 @@ release promise; completed work belongs in Git history.
 - Decide whether config reload should restore state left by a removed or
   no-longer-matching rule. Current reload applies the first rule that now
   matches but does not undo earlier rule effects when nothing matches.
-- Make `make uninstall` remove `lwmctl` and `lwm-notify` as well as `lwm`.
 
 ## Protocol and tooling
 

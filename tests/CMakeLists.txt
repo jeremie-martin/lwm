@@ -53,6 +53,7 @@ add_executable(lwm_tests
   test_integration_workspace.cpp
   test_floating_policy.cpp
   test_keybind_policy.cpp
+  test_lwmctl.cpp
   test_ipc_server.cpp
   test_harness.cpp
   test_layout.cpp
@@ -79,3 +80,8 @@ target_include_directories(lwm_tests PRIVATE ${CMAKE_SOURCE_DIR}/src)
 include(Catch)
 catch_discover_tests(lwm_logging_tests PROPERTIES SKIP_RETURN_CODE 4 TIMEOUT 60)
 catch_discover_tests(lwm_tests PROPERTIES SKIP_RETURN_CODE 4 TIMEOUT 60)
+
+add_test(NAME uninstall_manifest
+    COMMAND "${CMAKE_COMMAND}" "-DTEST_DIR=${CMAKE_CURRENT_BINARY_DIR}"
+            "-DUNINSTALL_SCRIPT=${CMAKE_SOURCE_DIR}/cmake/uninstall.cmake"
+            -P "${CMAKE_CURRENT_SOURCE_DIR}/test_uninstall.cmake")

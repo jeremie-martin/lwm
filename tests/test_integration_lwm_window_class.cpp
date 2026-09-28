@@ -48,11 +48,7 @@ TEST_CASE("Integration: dialog window publishes _LWM_WINDOW_CLASS = floating", "
     auto& conn = test_env->conn;
 
     xcb_atom_t dialog_type = intern_atom(conn.get(), "_NET_WM_WINDOW_TYPE_DIALOG");
-    if (dialog_type == XCB_NONE)
-    {
-        WARN("Failed to intern _NET_WM_WINDOW_TYPE_DIALOG.");
-        return;
-    }
+    REQUIRE(dialog_type != XCB_NONE);
 
     xcb_window_t window = create_window(conn, 60, 60, 180, 120);
     set_window_type(conn, window, dialog_type);
@@ -72,11 +68,7 @@ TEST_CASE("Integration: dock window publishes _LWM_WINDOW_CLASS = dock", "[integ
     auto& conn = test_env->conn;
 
     xcb_atom_t dock_type = intern_atom(conn.get(), "_NET_WM_WINDOW_TYPE_DOCK");
-    if (dock_type == XCB_NONE)
-    {
-        WARN("Failed to intern _NET_WM_WINDOW_TYPE_DOCK.");
-        return;
-    }
+    REQUIRE(dock_type != XCB_NONE);
 
     xcb_window_t window = create_window(conn, 0, 0, 1280, 24);
     set_window_type(conn, window, dock_type);

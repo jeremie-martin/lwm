@@ -43,6 +43,9 @@ A write-side EOF also terminates a nonempty request, for compatibility with
 existing clients. The connection closes after the complete reply is sent.
 `lwmctl` removes the `ok` envelope, prints `VALUE`
 to stdout, and prints an error message to stderr with a nonzero exit status.
+Empty, truncated, or unrecognized replies are errors. A subscription begins only
+after the exact `ok subscribed` acknowledgement. Socket operations retry signal
+interruptions, and a closed socket produces an ordinary failure exit.
 
 ## Commands
 

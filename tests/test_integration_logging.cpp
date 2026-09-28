@@ -24,8 +24,6 @@ TEST_CASE("Integration: failed exec is reported at critical level and recovers",
     auto& environment = X11TestEnvironment::instance();
     if (!environment.available())
         SKIP("Xvfb not available; set LWM_TEST_ALLOW_EXISTING_DISPLAY=1 to use an existing DISPLAY.");
-    if (lwmctl_executable_path().empty())
-        SKIP("lwmctl binary not available");
 
     X11Connection connection;
     REQUIRE(connection.ok());

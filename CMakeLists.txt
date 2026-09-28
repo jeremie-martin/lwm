@@ -69,6 +69,12 @@ add_subdirectory(src)
 install(TARGETS lwm lwmctl DESTINATION bin)
 install(PROGRAMS scripts/lwm-notify.sh DESTINATION bin RENAME lwm-notify)
 
+add_custom_target(uninstall
+    COMMAND "${CMAKE_COMMAND}" "-DMANIFEST=${CMAKE_BINARY_DIR}/install_manifest.txt"
+            -P "${CMAKE_SOURCE_DIR}/cmake/uninstall.cmake"
+    VERBATIM
+)
+
 # Optional tests
 option(BUILD_TESTS "Build unit and integration tests" OFF)
 

@@ -8,7 +8,7 @@ Read [ARCHITECTURE.md](ARCHITECTURE.md) before changing state transitions and
 ```sh
 make                 # release build
 make debug           # debug build with invariant checks
-make test            # Debug build, required X11 integration, both test executables
+make test            # Debug build, required X11 integration, logging, install-manifest check
 ```
 
 For a direct CMake workflow:
@@ -32,7 +32,8 @@ binaries from its CMake build, independently of the working directory. WM
 startup/readiness failures fail the test and include captured stderr; they do
 not skip. Direct test runs may skip when Xvfb is unavailable; `make test` sets
 `LWM_TEST_REQUIRE_X11=1` to make that a failure. Capability-specific tests can
-still skip when the isolated server lacks that capability.
+still skip when the isolated server lacks that capability. Missing built binaries,
+failed atom creation, and unmet fixture requirements fail rather than skip.
 `LWM_TEST_ALLOW_EXISTING_DISPLAY=1` permits fallback to the current `DISPLAY`
 if the private server cannot start. Use it only with a disposable test display:
 these tests launch a WM and may inject input.

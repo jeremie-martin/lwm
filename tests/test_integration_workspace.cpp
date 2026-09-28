@@ -342,8 +342,6 @@ std::optional<std::vector<xcb_window_t>> get_client_list(X11Connection& conn, xc
     return result;
 }
 
-bool lwmctl_available() { return std::filesystem::exists(lwmctl_executable_path()); }
-
 std::optional<xcb_keycode_t> first_keycode_for_keysym(X11Connection& conn, xcb_keysym_t keysym)
 {
     xcb_key_symbols_t* key_symbols = xcb_key_symbols_alloc(conn.get());
@@ -387,11 +385,8 @@ TEST_CASE("Integration: workspace switch updates _NET_CURRENT_DESKTOP", "[integr
 
     xcb_atom_t net_current_desktop = intern_atom(conn.get(), "_NET_CURRENT_DESKTOP");
     xcb_atom_t net_number_of_desktops = intern_atom(conn.get(), "_NET_NUMBER_OF_DESKTOPS");
-    if (net_current_desktop == XCB_NONE || net_number_of_desktops == XCB_NONE)
-    {
-        WARN("Failed to intern EWMH atoms.");
-        return;
-    }
+    REQUIRE(net_current_desktop != XCB_NONE);
+    REQUIRE(net_number_of_desktops != XCB_NONE);
 
     uint32_t num_desktops = get_window_property_cardinal(conn.get(), conn.root(), net_number_of_desktops).value_or(0);
     uint32_t initial_desktop = get_window_property_cardinal(conn.get(), conn.root(), net_current_desktop).value_or(0);
@@ -414,11 +409,8 @@ TEST_CASE("Integration: workspace switch back and forth", "[integration][workspa
 
     xcb_atom_t net_current_desktop = intern_atom(conn.get(), "_NET_CURRENT_DESKTOP");
     xcb_atom_t net_number_of_desktops = intern_atom(conn.get(), "_NET_NUMBER_OF_DESKTOPS");
-    if (net_current_desktop == XCB_NONE || net_number_of_desktops == XCB_NONE)
-    {
-        WARN("Failed to intern EWMH atoms.");
-        return;
-    }
+    REQUIRE(net_current_desktop != XCB_NONE);
+    REQUIRE(net_number_of_desktops != XCB_NONE);
 
     uint32_t num_desktops = get_window_property_cardinal(conn.get(), conn.root(), net_number_of_desktops).value_or(0);
     REQUIRE(num_desktops == 2);
@@ -441,11 +433,9 @@ TEST_CASE("Integration: windows persist across workspace switches", "[integratio
     xcb_atom_t net_current_desktop = intern_atom(conn.get(), "_NET_CURRENT_DESKTOP");
     xcb_atom_t net_wm_desktop = intern_atom(conn.get(), "_NET_WM_DESKTOP");
     xcb_atom_t net_number_of_desktops = intern_atom(conn.get(), "_NET_NUMBER_OF_DESKTOPS");
-    if (net_current_desktop == XCB_NONE || net_wm_desktop == XCB_NONE || net_number_of_desktops == XCB_NONE)
-    {
-        WARN("Failed to intern EWMH atoms.");
-        return;
-    }
+    REQUIRE(net_current_desktop != XCB_NONE);
+    REQUIRE(net_wm_desktop != XCB_NONE);
+    REQUIRE(net_number_of_desktops != XCB_NONE);
 
     uint32_t num_desktops = get_window_property_cardinal(conn.get(), conn.root(), net_number_of_desktops).value_or(0);
     REQUIRE(num_desktops == 2);
@@ -487,12 +477,11 @@ TEST_CASE(
     xcb_atom_t net_wm_state = intern_atom(conn.get(), "_NET_WM_STATE");
     xcb_atom_t net_wm_state_fullscreen = intern_atom(conn.get(), "_NET_WM_STATE_FULLSCREEN");
     xcb_atom_t net_number_of_desktops = intern_atom(conn.get(), "_NET_NUMBER_OF_DESKTOPS");
-    if (net_current_desktop == XCB_NONE || net_wm_desktop == XCB_NONE || net_wm_state == XCB_NONE
-        || net_wm_state_fullscreen == XCB_NONE || net_number_of_desktops == XCB_NONE)
-    {
-        WARN("Failed to intern EWMH atoms.");
-        return;
-    }
+    REQUIRE(net_current_desktop != XCB_NONE);
+    REQUIRE(net_wm_desktop != XCB_NONE);
+    REQUIRE(net_wm_state != XCB_NONE);
+    REQUIRE(net_wm_state_fullscreen != XCB_NONE);
+    REQUIRE(net_number_of_desktops != XCB_NONE);
 
     uint32_t num_desktops = get_window_property_cardinal(conn.get(), conn.root(), net_number_of_desktops).value_or(0);
     REQUIRE(num_desktops == 2);
@@ -601,8 +590,7 @@ TEST_CASE(
     REQUIRE(wm_state != XCB_NONE);
 
     uint32_t num_desktops = get_window_property_cardinal(conn.get(), conn.root(), net_number_of_desktops).value_or(0);
-    if (num_desktops < 2)
-        SKIP("Need at least 2 desktops");
+    REQUIRE(num_desktops >= 2);
 
     xcb_window_t w1 = create_window(conn, 10, 10, 200, 150);
     map_window(conn, w1);
@@ -700,8 +688,6 @@ TEST_CASE("Integration: monocle layout assigns identical geometries", "[integrat
     auto test_env = TestEnvironment::create("[workspaces]\ncount = 2\n");
     if (!test_env)
         SKIP("Test environment not available");
-    if (!lwmctl_available())
-        SKIP("lwmctl binary not available");
 
     auto& conn = test_env->conn;
     auto socket_path = wait_for_ipc_socket_path(conn);
@@ -830,8 +816,6 @@ TEST_CASE("Integration: monocle layout survives exec restart", "[integration][la
     auto test_env = TestEnvironment::create("[workspaces]\ncount = 2\n");
     if (!test_env)
         SKIP("Test environment not available");
-    if (!lwmctl_available())
-        SKIP("lwmctl binary not available");
 
     auto& conn = test_env->conn;
     auto socket_path = wait_for_ipc_socket_path(conn);
@@ -896,15 +880,9 @@ TEST_CASE("Integration: version 3 restart handoff survives overlay removal", "[i
     auto& env = X11TestEnvironment::instance();
     if (!env.available())
         SKIP("Test environment not available");
-    if (!lwmctl_available())
-        SKIP("lwmctl binary not available");
 
     X11Connection conn;
-    if (!conn.ok())
-    {
-        WARN("Failed to connect to X server.");
-        SKIP("Test environment not available");
-    }
+    REQUIRE(conn.ok());
 
     xcb_window_t window = create_window(conn, 10, 10, 200, 150);
     map_window(conn, window);
@@ -991,8 +969,6 @@ swap_next = true
 )");
     if (!test_env)
         SKIP("Test environment not available");
-    if (!lwmctl_available())
-        SKIP("lwmctl binary not available");
 
     auto& conn = test_env->conn;
     auto socket_path = wait_for_ipc_socket_path(conn);

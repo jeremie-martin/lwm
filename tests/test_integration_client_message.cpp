@@ -80,13 +80,8 @@ TEST_CASE(
     // Get EWMH atoms
     xcb_atom_t net_wm_desktop = intern_atom(conn.get(), "_NET_WM_DESKTOP");
     xcb_atom_t net_number_of_desktops = intern_atom(conn.get(), "_NET_NUMBER_OF_DESKTOPS");
-    if (net_wm_desktop == XCB_NONE || net_number_of_desktops == XCB_NONE)
-    {
-        WARN("Failed to intern EWMH atoms.");
-        destroy_window(conn, w2);
-        destroy_window(conn, w1);
-        return;
-    }
+    REQUIRE(net_wm_desktop != XCB_NONE);
+    REQUIRE(net_number_of_desktops != XCB_NONE);
 
     // Verify initial state (workspace 0)
     uint32_t num_desktops = get_window_property_cardinal(conn.get(), conn.root(), net_number_of_desktops).value_or(0);
@@ -141,12 +136,8 @@ TEST_CASE(
 
     xcb_atom_t net_wm_desktop = intern_atom(conn.get(), "_NET_WM_DESKTOP");
     xcb_atom_t net_number_of_desktops = intern_atom(conn.get(), "_NET_NUMBER_OF_DESKTOPS");
-    if (net_wm_desktop == XCB_NONE || net_number_of_desktops == XCB_NONE)
-    {
-        WARN("Failed to intern EWMH atoms.");
-        destroy_window(conn, w1);
-        return;
-    }
+    REQUIRE(net_wm_desktop != XCB_NONE);
+    REQUIRE(net_number_of_desktops != XCB_NONE);
 
     uint32_t num_desktops = get_window_property_cardinal(conn.get(), conn.root(), net_number_of_desktops).value_or(0);
     uint32_t initial_desktop = get_window_property_cardinal(conn.get(), w1, net_wm_desktop).value_or(0);
@@ -264,12 +255,9 @@ TEST_CASE(
     xcb_atom_t net_wm_state = intern_atom(conn.get(), "_NET_WM_STATE");
     xcb_atom_t net_wm_state_sticky = intern_atom(conn.get(), "_NET_WM_STATE_STICKY");
 
-    if (net_wm_desktop == XCB_NONE || net_wm_state == XCB_NONE || net_wm_state_sticky == XCB_NONE)
-    {
-        WARN("Failed to intern EWMH atoms.");
-        destroy_window(conn, w1);
-        return;
-    }
+    REQUIRE(net_wm_desktop != XCB_NONE);
+    REQUIRE(net_wm_state != XCB_NONE);
+    REQUIRE(net_wm_state_sticky != XCB_NONE);
 
     uint32_t initial_desktop = get_window_property_cardinal(conn.get(), w1, net_wm_desktop).value_or(0);
 
@@ -351,12 +339,11 @@ TEST_CASE(
     xcb_atom_t net_wm_user_time_window = intern_atom(conn.get(), "_NET_WM_USER_TIME_WINDOW");
     xcb_atom_t net_wm_state = intern_atom(conn.get(), "_NET_WM_STATE");
     xcb_atom_t net_wm_state_demands_attention = intern_atom(conn.get(), "_NET_WM_STATE_DEMANDS_ATTENTION");
-    if (net_active_window == XCB_NONE || net_wm_user_time == XCB_NONE || net_wm_user_time_window == XCB_NONE
-        || net_wm_state == XCB_NONE || net_wm_state_demands_attention == XCB_NONE)
-    {
-        WARN("Failed to intern EWMH atoms.");
-        return;
-    }
+    REQUIRE(net_active_window != XCB_NONE);
+    REQUIRE(net_wm_user_time != XCB_NONE);
+    REQUIRE(net_wm_user_time_window != XCB_NONE);
+    REQUIRE(net_wm_state != XCB_NONE);
+    REQUIRE(net_wm_state_demands_attention != XCB_NONE);
 
     auto has_state = [&](xcb_window_t window, xcb_atom_t state)
     {

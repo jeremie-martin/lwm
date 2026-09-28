@@ -106,16 +106,6 @@ size_t line_count(std::filesystem::path const& path)
     return count;
 }
 
-bool ensure_lwmctl_available()
-{
-    if (!std::filesystem::exists(lwmctl_executable_path()))
-    {
-        WARN("lwmctl binary not built.");
-        return false;
-    }
-    return true;
-}
-
 void set_window_title(X11Connection& conn, xcb_window_t window, std::string const& title)
 {
     xcb_atom_t net_wm_name = intern_atom(conn.get(), "_NET_WM_NAME");
@@ -208,8 +198,8 @@ TEST_CASE(
 )
 {
     auto env = TestEnvironment::create(make_config("dev", "web"));
-    if (!env || !ensure_lwmctl_available())
-        SKIP("Test environment or lwmctl not available");
+    if (!env)
+        SKIP("Test environment not available");
 
     auto socket_path = wait_for_ipc_socket_path(env->conn);
     REQUIRE(socket_path.has_value());
@@ -231,8 +221,8 @@ TEST_CASE(
 TEST_CASE("Integration: reload-config rejects workspace-count changes", "[integration][ipc][reload]")
 {
     auto env = TestEnvironment::create(make_config("one", "two"));
-    if (!env || !ensure_lwmctl_available())
-        SKIP("Test environment or lwmctl not available");
+    if (!env)
+        SKIP("Test environment not available");
 
     auto socket_path = wait_for_ipc_socket_path(env->conn);
     REQUIRE(socket_path.has_value());
@@ -253,8 +243,8 @@ TEST_CASE("Integration: reload-config rejects workspace-count changes", "[integr
 TEST_CASE("Integration: IPC ping and reload succeed", "[integration][ipc][reload]")
 {
     auto env = TestEnvironment::create(make_config("left", "right"));
-    if (!env || !ensure_lwmctl_available())
-        SKIP("Test environment or lwmctl not available");
+    if (!env)
+        SKIP("Test environment not available");
 
     auto socket_path = wait_for_ipc_socket_path(env->conn);
     REQUIRE(socket_path.has_value());
@@ -271,15 +261,14 @@ TEST_CASE("Integration: IPC ping and reload succeed", "[integration][ipc][reload
 TEST_CASE("Integration: reload-config does not rerun autostart", "[integration][ipc][reload][autostart]")
 {
     auto marker_dir = make_temp_dir();
-    if (marker_dir.empty())
-        SKIP("Failed to create marker directory");
+    REQUIRE_FALSE(marker_dir.empty());
 
     std::filesystem::path marker_path = std::filesystem::path(marker_dir) / "autostart.log";
     std::string autostart_cmd = "sh -c 'echo start >> " + marker_path.string() + "'";
 
     auto env = TestEnvironment::create(make_config("alpha", "beta", 2, autostart_cmd));
-    if (!env || !ensure_lwmctl_available())
-        SKIP("Test environment or lwmctl not available");
+    if (!env)
+        SKIP("Test environment not available");
 
     auto socket_path = wait_for_ipc_socket_path(env->conn);
     REQUIRE(socket_path.has_value());
@@ -308,8 +297,8 @@ TEST_CASE(
 )
 {
     auto env = TestEnvironment::create(make_config("left", "right"));
-    if (!env || !ensure_lwmctl_available())
-        SKIP("Test environment or lwmctl not available");
+    if (!env)
+        SKIP("Test environment not available");
 
     auto socket_path = wait_for_ipc_socket_path(env->conn);
     REQUIRE(socket_path.has_value());
@@ -343,8 +332,8 @@ TEST_CASE(
 )
 {
     auto env = TestEnvironment::create(make_config("left", "right"));
-    if (!env || !ensure_lwmctl_available())
-        SKIP("Test environment or lwmctl not available");
+    if (!env)
+        SKIP("Test environment not available");
 
     auto socket_path = wait_for_ipc_socket_path(env->conn);
     REQUIRE(socket_path.has_value());
@@ -396,8 +385,8 @@ match = { class = "ScratchpadClass", instance = "scratchpad-instance" }
 size = { width = 0.8, height = 0.6 }
 )";
     auto env = TestEnvironment::create(make_config("one", "two", 2, {}, scratchpad));
-    if (!env || !ensure_lwmctl_available())
-        SKIP("Test environment or lwmctl not available");
+    if (!env)
+        SKIP("Test environment not available");
 
     auto socket_path = wait_for_ipc_socket_path(env->conn);
     REQUIRE(socket_path.has_value());

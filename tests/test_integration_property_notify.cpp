@@ -6,6 +6,7 @@
 #include <thread>
 #include <vector>
 #include <xcb/xcb_icccm.h>
+#include <xcb/xtest.h>
 
 using namespace lwm::test;
 
@@ -341,13 +342,15 @@ TEST_CASE("Integration: _NET_WM_WINDOW_TYPE changes reclassify managed windows",
     xcb_atom_t state_above = intern_atom(conn.get(), "_NET_WM_STATE_ABOVE");
     xcb_atom_t type_utility = intern_atom(conn.get(), "_NET_WM_WINDOW_TYPE_UTILITY");
     xcb_atom_t type_normal = intern_atom(conn.get(), "_NET_WM_WINDOW_TYPE_NORMAL");
-    if (net_wm_allowed_actions == XCB_NONE || net_wm_state == XCB_NONE || action_move == XCB_NONE
-        || action_resize == XCB_NONE || state_skip_taskbar == XCB_NONE || state_skip_pager == XCB_NONE
-        || state_above == XCB_NONE || type_utility == XCB_NONE || type_normal == XCB_NONE)
-    {
-        WARN("Failed to intern EWMH atoms.");
-        return;
-    }
+    REQUIRE(net_wm_allowed_actions != XCB_NONE);
+    REQUIRE(net_wm_state != XCB_NONE);
+    REQUIRE(action_move != XCB_NONE);
+    REQUIRE(action_resize != XCB_NONE);
+    REQUIRE(state_skip_taskbar != XCB_NONE);
+    REQUIRE(state_skip_pager != XCB_NONE);
+    REQUIRE(state_above != XCB_NONE);
+    REQUIRE(type_utility != XCB_NONE);
+    REQUIRE(type_normal != XCB_NONE);
 
     xcb_window_t window = create_window(conn, 20, 20, 300, 200);
     map_window(conn, window);
@@ -484,13 +487,13 @@ TEST_CASE(
     xcb_atom_t state_above = intern_atom(conn.get(), "_NET_WM_STATE_ABOVE");
     xcb_atom_t state_fullscreen = intern_atom(conn.get(), "_NET_WM_STATE_FULLSCREEN");
     xcb_atom_t type_dialog = intern_atom(conn.get(), "_NET_WM_WINDOW_TYPE_DIALOG");
-    if (net_wm_allowed_actions == XCB_NONE || net_wm_state == XCB_NONE || action_move == XCB_NONE
-        || action_resize == XCB_NONE || state_above == XCB_NONE || state_fullscreen == XCB_NONE
-        || type_dialog == XCB_NONE)
-    {
-        WARN("Failed to intern EWMH atoms.");
-        return;
-    }
+    REQUIRE(net_wm_allowed_actions != XCB_NONE);
+    REQUIRE(net_wm_state != XCB_NONE);
+    REQUIRE(action_move != XCB_NONE);
+    REQUIRE(action_resize != XCB_NONE);
+    REQUIRE(state_above != XCB_NONE);
+    REQUIRE(state_fullscreen != XCB_NONE);
+    REQUIRE(type_dialog != XCB_NONE);
 
     xcb_window_t window = create_window(conn, 20, 20, 320, 220);
     map_window(conn, window);
@@ -545,13 +548,14 @@ TEST_CASE("Integration: WM_TRANSIENT_FOR changes reclassify managed windows", "[
     xcb_atom_t state_skip_pager = intern_atom(conn.get(), "_NET_WM_STATE_SKIP_PAGER");
     xcb_atom_t net_wm_desktop = intern_atom(conn.get(), "_NET_WM_DESKTOP");
     xcb_atom_t net_current_desktop = intern_atom(conn.get(), "_NET_CURRENT_DESKTOP");
-    if (net_wm_allowed_actions == XCB_NONE || net_wm_state == XCB_NONE || action_move == XCB_NONE
-        || action_resize == XCB_NONE || state_skip_taskbar == XCB_NONE || state_skip_pager == XCB_NONE
-        || net_wm_desktop == XCB_NONE || net_current_desktop == XCB_NONE)
-    {
-        WARN("Failed to intern atoms.");
-        return;
-    }
+    REQUIRE(net_wm_allowed_actions != XCB_NONE);
+    REQUIRE(net_wm_state != XCB_NONE);
+    REQUIRE(action_move != XCB_NONE);
+    REQUIRE(action_resize != XCB_NONE);
+    REQUIRE(state_skip_taskbar != XCB_NONE);
+    REQUIRE(state_skip_pager != XCB_NONE);
+    REQUIRE(net_wm_desktop != XCB_NONE);
+    REQUIRE(net_current_desktop != XCB_NONE);
 
     xcb_window_t parent = create_window(conn, 10, 10, 220, 160);
     map_window(conn, parent);
@@ -685,12 +689,11 @@ TEST_CASE(
     xcb_atom_t net_wm_user_time_window = intern_atom(conn.get(), "_NET_WM_USER_TIME_WINDOW");
     xcb_atom_t net_wm_state = intern_atom(conn.get(), "_NET_WM_STATE");
     xcb_atom_t net_wm_state_demands_attention = intern_atom(conn.get(), "_NET_WM_STATE_DEMANDS_ATTENTION");
-    if (net_active_window == XCB_NONE || net_wm_user_time == XCB_NONE || net_wm_user_time_window == XCB_NONE
-        || net_wm_state == XCB_NONE || net_wm_state_demands_attention == XCB_NONE)
-    {
-        WARN("Failed to intern EWMH atoms.");
-        return;
-    }
+    REQUIRE(net_active_window != XCB_NONE);
+    REQUIRE(net_wm_user_time != XCB_NONE);
+    REQUIRE(net_wm_user_time_window != XCB_NONE);
+    REQUIRE(net_wm_state != XCB_NONE);
+    REQUIRE(net_wm_state_demands_attention != XCB_NONE);
 
     xcb_window_t w1 = create_window(conn, 10, 10, 220, 160);
     map_window(conn, w1);
@@ -1118,11 +1121,9 @@ TEST_CASE("Integration: _NET_SUPPORTED does not overclaim visible-name atoms", "
     xcb_atom_t net_supported = intern_atom(conn.get(), "_NET_SUPPORTED");
     xcb_atom_t net_wm_visible_name = intern_atom(conn.get(), "_NET_WM_VISIBLE_NAME");
     xcb_atom_t net_wm_visible_icon_name = intern_atom(conn.get(), "_NET_WM_VISIBLE_ICON_NAME");
-    if (net_supported == XCB_NONE || net_wm_visible_name == XCB_NONE || net_wm_visible_icon_name == XCB_NONE)
-    {
-        WARN("Failed to intern EWMH atoms.");
-        return;
-    }
+    REQUIRE(net_supported != XCB_NONE);
+    REQUIRE(net_wm_visible_name != XCB_NONE);
+    REQUIRE(net_wm_visible_icon_name != XCB_NONE);
 
     REQUIRE_FALSE(property_has_atom(conn.get(), conn.root(), net_supported, net_wm_visible_name));
     REQUIRE_FALSE(property_has_atom(conn.get(), conn.root(), net_supported, net_wm_visible_icon_name));
@@ -1300,5 +1301,76 @@ apply = { floating = true }
     REQUIRE(geometry);
     CHECK(geometry->width == 65535);
     CHECK(geometry->height == 33);
+    destroy_window(conn, window);
+}
+
+TEST_CASE("Integration: moveresize messages saturate geometry instead of wrapping", "[integration][bounds]")
+{
+    auto env = TestEnvironment::create();
+    if (!env)
+        SKIP("X11 unavailable");
+    auto& conn = env->conn;
+    auto window = create_window(conn, 10, 10, 300, 40);
+    set_window_type(conn, window, intern_atom(conn.get(), "_NET_WM_WINDOW_TYPE_DIALOG"));
+    map_window(conn, window);
+    REQUIRE(wait_for_active_window(conn, window, kTimeout));
+    auto atom = intern_atom(conn.get(), "_NET_MOVERESIZE_WINDOW");
+    REQUIRE(atom != XCB_NONE);
+    auto resize = [&](uint32_t width, uint32_t height, uint16_t expected_width)
+    {
+        send_client_message(conn, window, atom, (1u << 10) | (1u << 11), 0, 0, width, height);
+        REQUIRE(wait_for_condition(
+            [&]
+            {
+                auto geometry = get_window_geometry(conn, window);
+                return geometry && geometry->width == expected_width && geometry->height == height;
+            },
+            kTimeout
+        ));
+    };
+    resize(65536, 41, 65535);
+    resize(UINT32_MAX, 42, 65535);
+    resize(0, 43, 1);
+    send_client_message(conn, window, atom, (1u << 8) | (1u << 9), static_cast<uint32_t>(-40000), 40000);
+    REQUIRE(wait_for_condition(
+        [&]
+        {
+            auto geometry = get_window_geometry(conn, window);
+            return geometry && geometry->x == -32768 && geometry->y == 32767;
+        },
+        kTimeout
+    ));
+    destroy_window(conn, window);
+}
+
+TEST_CASE("Integration: pointer resize saturates an oversized floating extent", "[integration][bounds][drag]")
+{
+    auto env = TestEnvironment::create();
+    if (!env)
+        SKIP("X11 unavailable");
+    auto& conn = env->conn;
+    if (!extension_available(conn, &xcb_test_id))
+        SKIP("XTEST extension not available");
+    auto window = create_window(conn, 0, 0, 65530, 50);
+    set_window_type(conn, window, intern_atom(conn.get(), "_NET_WM_WINDOW_TYPE_DIALOG"));
+    map_window(conn, window);
+    REQUIRE(wait_for_active_window(conn, window, kTimeout));
+    auto geometry = get_window_geometry(conn, window);
+    REQUIRE(geometry);
+    REQUIRE(geometry->width == 65530);
+    auto atom = intern_atom(conn.get(), "_NET_WM_MOVERESIZE");
+    send_client_message(conn, window, atom, 100, 100, 4);
+    REQUIRE(wait_for_condition(
+        [&]
+        {
+            // Repeated motion also handles the first event arriving before the grab.
+            xcb_test_fake_input(conn.get(), XCB_MOTION_NOTIFY, 0, XCB_CURRENT_TIME, conn.root(), 120, 100, 0);
+            xcb_flush(conn.get());
+            auto current = get_window_geometry(conn, window);
+            return current && current->width == 65535 && current->height == 50;
+        },
+        kTimeout
+    ));
+    send_client_message(conn, window, atom, 120, 100, 11);
     destroy_window(conn, window);
 }

@@ -345,11 +345,7 @@ TEST_CASE("Integration: _NET_RESTACK_WINDOW does not override managed stack poli
     auto& conn = test_env->conn;
 
     xcb_atom_t net_restack_window = intern_atom(conn.get(), "_NET_RESTACK_WINDOW");
-    if (net_restack_window == XCB_NONE)
-    {
-        WARN("Failed to intern _NET_RESTACK_WINDOW.");
-        return;
-    }
+    REQUIRE(net_restack_window != XCB_NONE);
 
     xcb_window_t w1 = create_window(conn, 10, 10, 200, 150);
     map_window(conn, w1);
@@ -379,11 +375,8 @@ TEST_CASE("Integration: focused tiled window does not restack above floating dia
 
     xcb_atom_t dialog_type = intern_atom(conn.get(), "_NET_WM_WINDOW_TYPE_DIALOG");
     xcb_atom_t net_active_window = intern_atom(conn.get(), "_NET_ACTIVE_WINDOW");
-    if (dialog_type == XCB_NONE || net_active_window == XCB_NONE)
-    {
-        WARN("Failed to intern required atoms.");
-        return;
-    }
+    REQUIRE(dialog_type != XCB_NONE);
+    REQUIRE(net_active_window != XCB_NONE);
 
     xcb_window_t tiled = create_window(conn, 10, 10, 200, 150);
     map_window(conn, tiled);
@@ -420,11 +413,7 @@ TEST_CASE(
     auto& conn = test_env->conn;
 
     xcb_atom_t dialog_type = intern_atom(conn.get(), "_NET_WM_WINDOW_TYPE_DIALOG");
-    if (dialog_type == XCB_NONE)
-    {
-        WARN("Failed to intern _NET_WM_WINDOW_TYPE_DIALOG.");
-        return;
-    }
+    REQUIRE(dialog_type != XCB_NONE);
 
     xcb_window_t parent_tile = create_window(conn, 10, 10, 200, 150);
     map_window(conn, parent_tile);
@@ -465,11 +454,8 @@ TEST_CASE(
 
     xcb_atom_t dialog_type = intern_atom(conn.get(), "_NET_WM_WINDOW_TYPE_DIALOG");
     xcb_atom_t net_restack_window = intern_atom(conn.get(), "_NET_RESTACK_WINDOW");
-    if (dialog_type == XCB_NONE || net_restack_window == XCB_NONE)
-    {
-        WARN("Failed to intern required atoms.");
-        return;
-    }
+    REQUIRE(dialog_type != XCB_NONE);
+    REQUIRE(net_restack_window != XCB_NONE);
 
     xcb_window_t tiled = create_window(conn, 10, 10, 200, 150);
     map_window(conn, tiled);
@@ -694,11 +680,9 @@ TEST_CASE(
     xcb_atom_t net_wm_state = intern_atom(conn.get(), "_NET_WM_STATE");
     xcb_atom_t net_wm_state_fullscreen = intern_atom(conn.get(), "_NET_WM_STATE_FULLSCREEN");
     xcb_atom_t net_active_window = intern_atom(conn.get(), "_NET_ACTIVE_WINDOW");
-    if (net_wm_state == XCB_NONE || net_wm_state_fullscreen == XCB_NONE || net_active_window == XCB_NONE)
-    {
-        WARN("Failed to intern EWMH atoms.");
-        return;
-    }
+    REQUIRE(net_wm_state != XCB_NONE);
+    REQUIRE(net_wm_state_fullscreen != XCB_NONE);
+    REQUIRE(net_active_window != XCB_NONE);
 
     xcb_window_t w1 = create_window(conn, 10, 10, 640, 360);
     map_window(conn, w1);
@@ -774,11 +758,9 @@ TEST_CASE(
     xcb_atom_t net_wm_state = intern_atom(conn.get(), "_NET_WM_STATE");
     xcb_atom_t net_wm_state_fullscreen = intern_atom(conn.get(), "_NET_WM_STATE_FULLSCREEN");
     xcb_atom_t dialog_type = intern_atom(conn.get(), "_NET_WM_WINDOW_TYPE_DIALOG");
-    if (net_wm_state == XCB_NONE || net_wm_state_fullscreen == XCB_NONE || dialog_type == XCB_NONE)
-    {
-        WARN("Failed to intern EWMH atoms.");
-        return;
-    }
+    REQUIRE(net_wm_state != XCB_NONE);
+    REQUIRE(net_wm_state_fullscreen != XCB_NONE);
+    REQUIRE(dialog_type != XCB_NONE);
 
     xcb_window_t window = create_window(conn, 10, 10, 320, 220);
     set_window_type(conn, window, dialog_type);
@@ -839,11 +821,9 @@ TEST_CASE(
     xcb_atom_t net_wm_state = intern_atom(conn.get(), "_NET_WM_STATE");
     xcb_atom_t net_wm_state_fullscreen = intern_atom(conn.get(), "_NET_WM_STATE_FULLSCREEN");
     xcb_atom_t net_wm_state_below = intern_atom(conn.get(), "_NET_WM_STATE_BELOW");
-    if (net_wm_state == XCB_NONE || net_wm_state_fullscreen == XCB_NONE || net_wm_state_below == XCB_NONE)
-    {
-        WARN("Failed to intern EWMH atoms.");
-        return;
-    }
+    REQUIRE(net_wm_state != XCB_NONE);
+    REQUIRE(net_wm_state_fullscreen != XCB_NONE);
+    REQUIRE(net_wm_state_below != XCB_NONE);
 
     xcb_window_t window = create_window(conn, 10, 10, 360, 240);
     map_window(conn, window);
@@ -875,11 +855,8 @@ TEST_CASE(
 
     xcb_atom_t net_wm_state = intern_atom(conn.get(), "_NET_WM_STATE");
     xcb_atom_t net_wm_state_fullscreen = intern_atom(conn.get(), "_NET_WM_STATE_FULLSCREEN");
-    if (net_wm_state == XCB_NONE || net_wm_state_fullscreen == XCB_NONE)
-    {
-        WARN("Failed to intern EWMH atoms.");
-        return;
-    }
+    REQUIRE(net_wm_state != XCB_NONE);
+    REQUIRE(net_wm_state_fullscreen != XCB_NONE);
 
     auto has_fullscreen_state = [&](xcb_window_t window)
     {
@@ -935,11 +912,7 @@ TEST_CASE(
     auto& conn = test_env->conn;
 
     xcb_atom_t net_wm_state_fullscreen = intern_atom(conn.get(), "_NET_WM_STATE_FULLSCREEN");
-    if (net_wm_state_fullscreen == XCB_NONE)
-    {
-        WARN("Failed to intern _NET_WM_STATE_FULLSCREEN.");
-        return;
-    }
+    REQUIRE(net_wm_state_fullscreen != XCB_NONE);
 
     xcb_window_t w1 = create_window(conn, 10, 10, 640, 360);
     map_window(conn, w1);
@@ -976,12 +949,10 @@ TEST_CASE(
     xcb_atom_t net_wm_state_fullscreen = intern_atom(conn.get(), "_NET_WM_STATE_FULLSCREEN");
     xcb_atom_t net_wm_state_demands_attention = intern_atom(conn.get(), "_NET_WM_STATE_DEMANDS_ATTENTION");
     xcb_atom_t net_active_window = intern_atom(conn.get(), "_NET_ACTIVE_WINDOW");
-    if (net_wm_state == XCB_NONE || net_wm_state_fullscreen == XCB_NONE || net_wm_state_demands_attention == XCB_NONE
-        || net_active_window == XCB_NONE)
-    {
-        WARN("Failed to intern EWMH atoms.");
-        return;
-    }
+    REQUIRE(net_wm_state != XCB_NONE);
+    REQUIRE(net_wm_state_fullscreen != XCB_NONE);
+    REQUIRE(net_wm_state_demands_attention != XCB_NONE);
+    REQUIRE(net_active_window != XCB_NONE);
 
     xcb_window_t w1 = create_window(conn, 10, 10, 640, 360);
     map_window(conn, w1);
@@ -1019,12 +990,12 @@ TEST_CASE(
     xcb_atom_t net_wm_state_fullscreen = intern_atom(conn.get(), "_NET_WM_STATE_FULLSCREEN");
     xcb_atom_t net_wm_state_sticky = intern_atom(conn.get(), "_NET_WM_STATE_STICKY");
     xcb_atom_t net_active_window = intern_atom(conn.get(), "_NET_ACTIVE_WINDOW");
-    if (net_current_desktop == XCB_NONE || net_wm_desktop == XCB_NONE || net_wm_state == XCB_NONE
-        || net_wm_state_fullscreen == XCB_NONE || net_wm_state_sticky == XCB_NONE || net_active_window == XCB_NONE)
-    {
-        WARN("Failed to intern EWMH atoms.");
-        return;
-    }
+    REQUIRE(net_current_desktop != XCB_NONE);
+    REQUIRE(net_wm_desktop != XCB_NONE);
+    REQUIRE(net_wm_state != XCB_NONE);
+    REQUIRE(net_wm_state_fullscreen != XCB_NONE);
+    REQUIRE(net_wm_state_sticky != XCB_NONE);
+    REQUIRE(net_active_window != XCB_NONE);
 
     xcb_window_t owner = create_window(conn, 10, 10, 640, 360);
     map_window(conn, owner);
@@ -1065,12 +1036,11 @@ TEST_CASE("Integration: lwmctl focus reports redirected focus as failure", "[int
     xcb_atom_t net_wm_state = intern_atom(conn.get(), "_NET_WM_STATE");
     xcb_atom_t net_wm_state_fullscreen = intern_atom(conn.get(), "_NET_WM_STATE_FULLSCREEN");
     xcb_atom_t net_wm_state_sticky = intern_atom(conn.get(), "_NET_WM_STATE_STICKY");
-    if (net_current_desktop == XCB_NONE || net_wm_desktop == XCB_NONE || net_wm_state == XCB_NONE
-        || net_wm_state_fullscreen == XCB_NONE || net_wm_state_sticky == XCB_NONE)
-    {
-        WARN("Failed to intern EWMH atoms.");
-        return;
-    }
+    REQUIRE(net_current_desktop != XCB_NONE);
+    REQUIRE(net_wm_desktop != XCB_NONE);
+    REQUIRE(net_wm_state != XCB_NONE);
+    REQUIRE(net_wm_state_fullscreen != XCB_NONE);
+    REQUIRE(net_wm_state_sticky != XCB_NONE);
 
     xcb_window_t owner = create_window(conn, 10, 10, 640, 360);
     map_window(conn, owner);
@@ -1090,8 +1060,7 @@ TEST_CASE("Integration: lwmctl focus reports redirected focus as failure", "[int
     REQUIRE(wait_for_active_window(conn, owner, kTimeout));
 
     auto result = run_lwmctl(test_env->wm, { "focus", "window=" + std::to_string(target) });
-    if (!result)
-        SKIP("lwmctl binary not available");
+    REQUIRE(result);
 
     REQUIRE(result->exit_code != 0);
     REQUIRE(result->stderr_text.find("focus request refused") != std::string::npos);
@@ -1118,12 +1087,11 @@ TEST_CASE(
     xcb_atom_t net_wm_state = intern_atom(conn.get(), "_NET_WM_STATE");
     xcb_atom_t net_wm_state_fullscreen = intern_atom(conn.get(), "_NET_WM_STATE_FULLSCREEN");
     xcb_atom_t net_active_window = intern_atom(conn.get(), "_NET_ACTIVE_WINDOW");
-    if (net_current_desktop == XCB_NONE || net_wm_desktop == XCB_NONE || net_wm_state == XCB_NONE
-        || net_wm_state_fullscreen == XCB_NONE || net_active_window == XCB_NONE)
-    {
-        WARN("Failed to intern EWMH atoms.");
-        return;
-    }
+    REQUIRE(net_current_desktop != XCB_NONE);
+    REQUIRE(net_wm_desktop != XCB_NONE);
+    REQUIRE(net_wm_state != XCB_NONE);
+    REQUIRE(net_wm_state_fullscreen != XCB_NONE);
+    REQUIRE(net_active_window != XCB_NONE);
 
     xcb_window_t w1 = create_window(conn, 10, 10, 640, 360);
     map_window(conn, w1);
@@ -1161,11 +1129,8 @@ TEST_CASE(
 
     xcb_atom_t net_wm_state = intern_atom(conn.get(), "_NET_WM_STATE");
     xcb_atom_t net_wm_state_fullscreen = intern_atom(conn.get(), "_NET_WM_STATE_FULLSCREEN");
-    if (net_wm_state == XCB_NONE || net_wm_state_fullscreen == XCB_NONE)
-    {
-        WARN("Failed to intern EWMH atoms.");
-        return;
-    }
+    REQUIRE(net_wm_state != XCB_NONE);
+    REQUIRE(net_wm_state_fullscreen != XCB_NONE);
 
     xcb_window_t w1 = create_window(conn, 10, 10, 640, 360);
     map_window(conn, w1);
@@ -1200,12 +1165,10 @@ TEST_CASE("Integration: sticky window on another workspace can take focus when m
     xcb_atom_t net_current_desktop = intern_atom(conn.get(), "_NET_CURRENT_DESKTOP");
     xcb_atom_t net_wm_desktop = intern_atom(conn.get(), "_NET_WM_DESKTOP");
     xcb_atom_t net_wm_state_sticky = intern_atom(conn.get(), "_NET_WM_STATE_STICKY");
-    if (net_active_window == XCB_NONE || net_current_desktop == XCB_NONE || net_wm_desktop == XCB_NONE
-        || net_wm_state_sticky == XCB_NONE)
-    {
-        WARN("Failed to intern EWMH atoms.");
-        return;
-    }
+    REQUIRE(net_active_window != XCB_NONE);
+    REQUIRE(net_current_desktop != XCB_NONE);
+    REQUIRE(net_wm_desktop != XCB_NONE);
+    REQUIRE(net_wm_state_sticky != XCB_NONE);
 
     xcb_window_t w1 = create_window(conn, 10, 10, 220, 160);
     map_window(conn, w1);
@@ -1243,12 +1206,10 @@ TEST_CASE("Integration: iconifying a visible sticky window restores focus fallba
     xcb_atom_t net_wm_desktop = intern_atom(conn.get(), "_NET_WM_DESKTOP");
     xcb_atom_t net_wm_state_hidden = intern_atom(conn.get(), "_NET_WM_STATE_HIDDEN");
     xcb_atom_t net_wm_state_sticky = intern_atom(conn.get(), "_NET_WM_STATE_STICKY");
-    if (net_wm_state == XCB_NONE || net_wm_desktop == XCB_NONE || net_wm_state_hidden == XCB_NONE
-        || net_wm_state_sticky == XCB_NONE)
-    {
-        WARN("Failed to intern EWMH atoms.");
-        return;
-    }
+    REQUIRE(net_wm_state != XCB_NONE);
+    REQUIRE(net_wm_desktop != XCB_NONE);
+    REQUIRE(net_wm_state_hidden != XCB_NONE);
+    REQUIRE(net_wm_state_sticky != XCB_NONE);
 
     xcb_window_t fallback = create_window(conn, 10, 10, 220, 160);
     map_window(conn, fallback);
@@ -1336,11 +1297,8 @@ TEST_CASE(
 
     xcb_atom_t net_wm_state = intern_atom(conn.get(), "_NET_WM_STATE");
     xcb_atom_t net_wm_state_fullscreen = intern_atom(conn.get(), "_NET_WM_STATE_FULLSCREEN");
-    if (net_wm_state == XCB_NONE || net_wm_state_fullscreen == XCB_NONE)
-    {
-        WARN("Failed to intern EWMH atoms.");
-        return;
-    }
+    REQUIRE(net_wm_state != XCB_NONE);
+    REQUIRE(net_wm_state_fullscreen != XCB_NONE);
 
     xcb_window_t w1 = create_window(conn, 10, 10, 640, 360);
     map_window(conn, w1);
@@ -1372,11 +1330,9 @@ TEST_CASE(
     xcb_atom_t net_wm_state = intern_atom(conn.get(), "_NET_WM_STATE");
     xcb_atom_t net_wm_state_fullscreen = intern_atom(conn.get(), "_NET_WM_STATE_FULLSCREEN");
     xcb_atom_t net_restack_window = intern_atom(conn.get(), "_NET_RESTACK_WINDOW");
-    if (net_wm_state == XCB_NONE || net_wm_state_fullscreen == XCB_NONE || net_restack_window == XCB_NONE)
-    {
-        WARN("Failed to intern EWMH atoms.");
-        return;
-    }
+    REQUIRE(net_wm_state != XCB_NONE);
+    REQUIRE(net_wm_state_fullscreen != XCB_NONE);
+    REQUIRE(net_restack_window != XCB_NONE);
 
     xcb_window_t w1 = create_window(conn, 10, 10, 640, 360);
     map_window(conn, w1);
@@ -1411,11 +1367,9 @@ TEST_CASE(
     xcb_atom_t dialog_type = intern_atom(conn.get(), "_NET_WM_WINDOW_TYPE_DIALOG");
     xcb_atom_t net_wm_state = intern_atom(conn.get(), "_NET_WM_STATE");
     xcb_atom_t net_wm_state_fullscreen = intern_atom(conn.get(), "_NET_WM_STATE_FULLSCREEN");
-    if (dialog_type == XCB_NONE || net_wm_state == XCB_NONE || net_wm_state_fullscreen == XCB_NONE)
-    {
-        WARN("Failed to intern EWMH atoms.");
-        return;
-    }
+    REQUIRE(dialog_type != XCB_NONE);
+    REQUIRE(net_wm_state != XCB_NONE);
+    REQUIRE(net_wm_state_fullscreen != XCB_NONE);
 
     xcb_window_t w1 = create_window(conn, 10, 10, 640, 360);
     map_window(conn, w1);
@@ -1454,11 +1408,8 @@ TEST_CASE(
 
     xcb_atom_t net_wm_state = intern_atom(conn.get(), "_NET_WM_STATE");
     xcb_atom_t net_wm_state_fullscreen = intern_atom(conn.get(), "_NET_WM_STATE_FULLSCREEN");
-    if (net_wm_state == XCB_NONE || net_wm_state_fullscreen == XCB_NONE)
-    {
-        WARN("Failed to intern EWMH atoms.");
-        return;
-    }
+    REQUIRE(net_wm_state != XCB_NONE);
+    REQUIRE(net_wm_state_fullscreen != XCB_NONE);
 
     xcb_window_t w1 = create_window(conn, 10, 10, 640, 360);
     map_window(conn, w1);
@@ -1494,11 +1445,9 @@ TEST_CASE(
     xcb_atom_t dialog_type = intern_atom(conn.get(), "_NET_WM_WINDOW_TYPE_DIALOG");
     xcb_atom_t net_wm_state = intern_atom(conn.get(), "_NET_WM_STATE");
     xcb_atom_t net_wm_state_fullscreen = intern_atom(conn.get(), "_NET_WM_STATE_FULLSCREEN");
-    if (dialog_type == XCB_NONE || net_wm_state == XCB_NONE || net_wm_state_fullscreen == XCB_NONE)
-    {
-        WARN("Failed to intern EWMH atoms.");
-        return;
-    }
+    REQUIRE(dialog_type != XCB_NONE);
+    REQUIRE(net_wm_state != XCB_NONE);
+    REQUIRE(net_wm_state_fullscreen != XCB_NONE);
 
     xcb_window_t w1 = create_window(conn, 100, 120, 320, 180);
     set_window_type(conn, w1, dialog_type);
@@ -1541,11 +1490,9 @@ TEST_CASE(
     xcb_atom_t net_wm_state = intern_atom(conn.get(), "_NET_WM_STATE");
     xcb_atom_t net_wm_state_fullscreen = intern_atom(conn.get(), "_NET_WM_STATE_FULLSCREEN");
     xcb_atom_t net_wm_state_hidden = intern_atom(conn.get(), "_NET_WM_STATE_HIDDEN");
-    if (net_wm_state == XCB_NONE || net_wm_state_fullscreen == XCB_NONE || net_wm_state_hidden == XCB_NONE)
-    {
-        WARN("Failed to intern EWMH atoms.");
-        return;
-    }
+    REQUIRE(net_wm_state != XCB_NONE);
+    REQUIRE(net_wm_state_fullscreen != XCB_NONE);
+    REQUIRE(net_wm_state_hidden != XCB_NONE);
 
     xcb_window_t w1 = create_window(conn, 10, 10, 640, 360);
     map_window(conn, w1);
@@ -1584,11 +1531,9 @@ TEST_CASE(
     xcb_atom_t net_wm_state = intern_atom(conn.get(), "_NET_WM_STATE");
     xcb_atom_t net_wm_state_fullscreen = intern_atom(conn.get(), "_NET_WM_STATE_FULLSCREEN");
     xcb_atom_t net_showing_desktop = intern_atom(conn.get(), "_NET_SHOWING_DESKTOP");
-    if (net_wm_state == XCB_NONE || net_wm_state_fullscreen == XCB_NONE || net_showing_desktop == XCB_NONE)
-    {
-        WARN("Failed to intern EWMH atoms.");
-        return;
-    }
+    REQUIRE(net_wm_state != XCB_NONE);
+    REQUIRE(net_wm_state_fullscreen != XCB_NONE);
+    REQUIRE(net_showing_desktop != XCB_NONE);
 
     xcb_window_t w1 = create_window(conn, 10, 10, 640, 360);
     map_window(conn, w1);
@@ -1634,12 +1579,10 @@ TEST_CASE(
     xcb_atom_t net_wm_state_fullscreen = intern_atom(conn.get(), "_NET_WM_STATE_FULLSCREEN");
     xcb_atom_t net_wm_state_sticky = intern_atom(conn.get(), "_NET_WM_STATE_STICKY");
     xcb_atom_t net_showing_desktop = intern_atom(conn.get(), "_NET_SHOWING_DESKTOP");
-    if (net_wm_state == XCB_NONE || net_wm_state_fullscreen == XCB_NONE || net_wm_state_sticky == XCB_NONE
-        || net_showing_desktop == XCB_NONE)
-    {
-        WARN("Failed to intern EWMH atoms.");
-        return;
-    }
+    REQUIRE(net_wm_state != XCB_NONE);
+    REQUIRE(net_wm_state_fullscreen != XCB_NONE);
+    REQUIRE(net_wm_state_sticky != XCB_NONE);
+    REQUIRE(net_showing_desktop != XCB_NONE);
 
     xcb_window_t owner = create_window(conn, 10, 10, 640, 360);
     map_window(conn, owner);
@@ -1689,11 +1632,8 @@ TEST_CASE(
 
     xcb_atom_t net_wm_state = intern_atom(conn.get(), "_NET_WM_STATE");
     xcb_atom_t net_wm_state_fullscreen = intern_atom(conn.get(), "_NET_WM_STATE_FULLSCREEN");
-    if (net_wm_state == XCB_NONE || net_wm_state_fullscreen == XCB_NONE)
-    {
-        WARN("Failed to intern EWMH atoms.");
-        return;
-    }
+    REQUIRE(net_wm_state != XCB_NONE);
+    REQUIRE(net_wm_state_fullscreen != XCB_NONE);
 
     xcb_window_t w1 = create_window(conn, 10, 10, 640, 360);
     map_window(conn, w1);
@@ -1740,12 +1680,10 @@ TEST_CASE("Integration: clear_focus clears _NET_WM_STATE_FOCUSED from previous w
     xcb_atom_t net_wm_state_focused = intern_atom(conn.get(), "_NET_WM_STATE_FOCUSED");
     xcb_atom_t net_showing_desktop = intern_atom(conn.get(), "_NET_SHOWING_DESKTOP");
     xcb_atom_t net_active_window = intern_atom(conn.get(), "_NET_ACTIVE_WINDOW");
-    if (net_wm_state == XCB_NONE || net_wm_state_focused == XCB_NONE || net_showing_desktop == XCB_NONE
-        || net_active_window == XCB_NONE)
-    {
-        WARN("Failed to intern EWMH atoms.");
-        return;
-    }
+    REQUIRE(net_wm_state != XCB_NONE);
+    REQUIRE(net_wm_state_focused != XCB_NONE);
+    REQUIRE(net_showing_desktop != XCB_NONE);
+    REQUIRE(net_active_window != XCB_NONE);
 
     auto has_state = [&](xcb_window_t window, xcb_atom_t state)
     {
@@ -1838,18 +1776,11 @@ TEST_CASE(
 
     xcb_atom_t net_current_desktop = intern_atom(conn.get(), "_NET_CURRENT_DESKTOP");
     xcb_atom_t net_number_of_desktops = intern_atom(conn.get(), "_NET_NUMBER_OF_DESKTOPS");
-    if (net_current_desktop == XCB_NONE || net_number_of_desktops == XCB_NONE)
-    {
-        WARN("Failed to intern EWMH atoms.");
-        return;
-    }
+    REQUIRE(net_current_desktop != XCB_NONE);
+    REQUIRE(net_number_of_desktops != XCB_NONE);
 
     uint32_t num_desktops = get_window_property_cardinal(conn.get(), conn.root(), net_number_of_desktops).value_or(0);
-    if (num_desktops < 2)
-    {
-        WARN("Need at least 2 workspaces for this test.");
-        return;
-    }
+    REQUIRE(num_desktops >= 2);
 
     // Start on workspace 0.
     REQUIRE(wait_for_property_cardinal(conn.get(), conn.root(), net_current_desktop, 0, kTimeout));

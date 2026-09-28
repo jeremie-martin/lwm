@@ -1045,7 +1045,12 @@ struct TestEnvironment
     }
 };
 
-inline std::filesystem::path lwmctl_executable_path() { return find_test_executable_path("lwmctl"); }
+inline std::filesystem::path lwmctl_executable_path()
+{
+    auto path = find_test_executable_path("lwmctl");
+    REQUIRE(std::filesystem::exists(path));
+    return path;
+}
 
 inline std::optional<CommandResult>
 run_lwmctl(LwmProcess const& wm, std::vector<std::string> const& args, std::string socket_path = {})

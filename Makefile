@@ -30,6 +30,7 @@ test:
 	@$(MAKE) -C $(BUILD_DIR) -j$(NPROC)
 	@LWM_TEST_REQUIRE_X11=1 $(BUILD_DIR)/tests/lwm_tests
 	@$(BUILD_DIR)/tests/lwm_logging_tests
+	@ctest --test-dir "$(BUILD_DIR)" -R '^uninstall_manifest$$' --output-on-failure
 
 # Install to system (requires sudo)
 install: build
@@ -37,8 +38,7 @@ install: build
 
 # Uninstall from system (requires sudo)
 uninstall:
-	@rm -f /usr/local/bin/lwm
-	@echo "Uninstalled lwm"
+	@$(CMAKE) --build "$(BUILD_DIR)" --target uninstall
 
 # Clean build artifacts
 clean:
@@ -55,6 +55,6 @@ help:
 	@echo "  make debug     Build debug binary"
 	@echo "  make test      Build and run tests"
 	@echo "  make install   Install to /usr/local/bin (use with sudo)"
-	@echo "  make uninstall Remove from /usr/local/bin (use with sudo)"
+	@echo "  make uninstall Remove files recorded by this build (use sudo if needed)"
 	@echo "  make clean     Remove build directory"
 	@echo "  make help      Show this help"
