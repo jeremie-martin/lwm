@@ -32,7 +32,8 @@ to 8 MiB. Writes resume when the socket is writable, with at most 64 KiB written
 per connection per dispatch. A timed-out exchange is disconnected.
 
 `lwmctl --timeout MS` bounds connection, request transmission, response, and
-subscription acknowledgement waits (default 2000 ms). Idle subscriptions do not
+subscription acknowledgement waits (default 2000 ms). A full listener backlog
+is retried within the original connection deadline. Idle subscriptions do not
 time out; once an event starts arriving, its complete line must arrive within
 the timeout. Explicit socket selection takes precedence even if the path is
 unavailable. Discovery properties must be complete text without embedded NULs.

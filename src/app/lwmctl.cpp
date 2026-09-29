@@ -109,10 +109,22 @@ public:
         auto deadline = Clock::now() + timeout_;
         for (;;)
         {
+            auto remaining = std::chrono::ceil<std::chrono::milliseconds>(deadline - Clock::now());
+            if (remaining.count() <= 0)
+                throw std::runtime_error("socket operation timed out");
             if (::connect(fd_, reinterpret_cast<sockaddr*>(&address), sizeof(address)) == 0)
                 return;
             if (errno == EINTR)
                 continue;
+            if (errno == EAGAIN || errno == EWOULDBLOCK)
+            {
+                // A full Unix listener queue leaves the socket unconnected, not in progress.
+                // It can poll writable immediately, so pause before retrying connect itself.
+                int pause_ms = static_cast<int>(remaining.count() < 10 ? remaining.count() : 10);
+                if (poll(nullptr, 0, pause_ms) < 0 && errno != EINTR)
+                    fail("wait for connection capacity");
+                continue;
+            }
             if (errno != EINPROGRESS)
                 fail("connect to " + path);
             wait(POLLOUT, deadline);

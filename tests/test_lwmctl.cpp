@@ -14,7 +14,13 @@ struct ReplyServer
     std::string path;
     pid_t child = -1;
 
-    ReplyServer(std::string const& expected, std::string const& reply, int before_ms = 0, int after_line_ms = 0)
+    ReplyServer(
+        std::string const& expected,
+        std::string const& reply,
+        int before_ms = 0,
+        int after_line_ms = 0,
+        int backlog_delay_ms = 0
+    )
     {
         char pattern[] = "/tmp/lwmctl-test-XXXXXX";
         auto* created = mkdtemp(pattern);
@@ -28,10 +34,44 @@ struct ReplyServer
         std::strcpy(address.sun_path, path.c_str());
         REQUIRE(bind(listener, reinterpret_cast<sockaddr*>(&address), sizeof(address)) == 0);
         REQUIRE(listen(listener, 1) == 0);
+        std::vector<int> queued;
+        if (backlog_delay_ms)
+        {
+            // Linux permits backlog + 1 queued connections. Verify saturation before launching the CLI.
+            for (int i = 0; i < 3; ++i)
+            {
+                int fd = socket(AF_UNIX, SOCK_STREAM | SOCK_NONBLOCK | SOCK_CLOEXEC, 0);
+                REQUIRE(fd >= 0);
+                int result = connect(fd, reinterpret_cast<sockaddr*>(&address), sizeof(address));
+                if (i < 2)
+                {
+                    REQUIRE(result == 0);
+                    queued.push_back(fd);
+                }
+                else
+                {
+                    CHECK(result == -1);
+                    CHECK(errno == EAGAIN);
+                    close(fd);
+                }
+            }
+        }
         child = fork();
         if (child == 0)
         {
             alarm(5);
+            if (backlog_delay_ms)
+            {
+                std::this_thread::sleep_for(std::chrono::milliseconds(backlog_delay_ms));
+                for (int queued_fd : queued)
+                {
+                    close(queued_fd);
+                    int accepted = accept(listener, nullptr, nullptr);
+                    if (accepted < 0)
+                        _exit(5);
+                    close(accepted);
+                }
+            }
             int fd = accept(listener, nullptr, nullptr);
             if (fd < 0)
                 _exit(2);
@@ -60,6 +100,7 @@ struct ReplyServer
             close(fd);
             _exit(0);
         }
+        for (int fd : queued) close(fd);
         close(listener);
         REQUIRE(child > 0);
     }
@@ -178,4 +219,31 @@ TEST_CASE("lwmctl offers local help and preserves option-like names after double
     REQUIRE(result);
     CHECK(result->exit_code == 0);
     server.finish();
+}
+
+TEST_CASE("lwmctl waits for Unix listener capacity within its connection deadline", "[ipc][lwmctl]")
+{
+    SECTION("capacity becomes available")
+    {
+        ReplyServer server("ping\n", "ok pong\n", 0, 0, 200);
+        auto result = run_command(lwmctl_executable_path(), { "--socket", server.path, "--timeout", "1000", "ping" });
+        REQUIRE(result);
+        CHECK(result->exit_code == 0);
+        CHECK(result->stdout_text == "pong\n");
+        CHECK(result->stderr_text.empty());
+        server.finish();
+    }
+    SECTION("capacity remains unavailable through the deadline")
+    {
+        ReplyServer server("ping\n", "ok pong\n", 0, 0, 2000);
+        auto start = std::chrono::steady_clock::now();
+        auto result = run_command(lwmctl_executable_path(), { "--socket", server.path, "--timeout", "100", "ping" });
+        auto elapsed = std::chrono::steady_clock::now() - start;
+        REQUIRE(result);
+        CHECK(result->exit_code == 1);
+        CHECK(result->stdout_text.empty());
+        CHECK(result->stderr_text.find("timed out") != std::string::npos);
+        CHECK(elapsed >= std::chrono::milliseconds(100));
+        CHECK(elapsed < std::chrono::seconds(1));
+    }
 }
