@@ -217,6 +217,8 @@ private:
         uint32_t focus_time = XCB_CURRENT_TIME;
         bool drain_crossing = false;
         bool repair_focus = false;
+        bool stacking = false;
+        bool workareas = false;
         bool client_list = false;
         bool current_desktop = false;
         std::set<xcb_window_t> allowed_actions;
@@ -236,7 +238,6 @@ private:
     void request_geometry(Client const& client);
     Geometry presentation_geometry(Client const& client) const;
     void write_geometry(Client& client, Geometry geometry, uint32_t border);
-    bool stacking_dirty_ = false;
     bool monitors_dirty_ = false;
     std::deque<xcb_generic_event_t> deferred_events_;
 
@@ -294,7 +295,7 @@ private:
     void run_autostart();
     void setup_ipc();
     void cleanup_ipc();
-    void emit_event(EventType type, std::string_view json);
+    void queue_event(EventType type, std::string json);
 
     void handle_event(xcb_generic_event_t const& event);
     void handle_map_request(xcb_map_request_event_t const& e);
@@ -332,7 +333,7 @@ private:
     std::expected<void, std::string> validate_reload(Config const& config) const;
     void regrab_all_keys();
     void apply_appearance_reload();
-    void update_allowed_actions(Client const& client);
+    void request_allowed_actions(Client const& client);
     void publish_allowed_actions(Client const& client);
     /// Publish the stable LWM classification used by external desktop tools.
     void publish_lwm_window_class(Client const& client);
@@ -431,7 +432,7 @@ private:
     void set_client_skip_pager(Client& client, bool enabled);
     void set_client_urgency(Client& client, UrgencySource source, bool enabled);
     void clear_client_urgency(Client& client);
-    void sync_client_urgency_state(Client& client);
+    void request_urgency_update(Client& client);
     void publish_urgency(Client& client);
 
     Monitor& focused_monitor() { return monitors_[focused_monitor_]; }
@@ -499,7 +500,7 @@ private:
     uint32_t border_color_for_client(Client const& client) const;
     bool should_apply_focus_border(Client const& client) const;
     void send_configure_notify(xcb_window_t window, Geometry const& geom, uint16_t border_width);
-    void send_configure_notify(Client const& client);
+    void request_configure_notify(Client const& client);
     void publish_configure_notify(Client const& client);
     bool drag_active() const;
     void begin_floating_move(xcb_window_t window, int16_t root_x, int16_t root_y);
@@ -540,7 +541,8 @@ private:
     void update_window_title(xcb_window_t window);
     void update_ewmh_workarea();
 
-    void update_struts();
+    void request_workarea_update();
+    void refresh_workareas();
 
     // Low-level client location write: updates client fields + EWMH desktop.
     // Movement/hotplug callers must invalidate source and target monitors.
@@ -574,10 +576,9 @@ private:
 
     void setup_ewmh();
     void update_ewmh_desktops();
-    void update_ewmh_client_list();
+    void request_client_list_update();
     void publish_client_list();
-    void flush_stacking_list();
-    void update_ewmh_current_desktop();
+    void request_current_desktop_update();
     void publish_current_desktop();
     uint32_t get_ewmh_desktop_index(size_t monitor_idx, size_t workspace_idx) const;
     void switch_to_ewmh_desktop(uint32_t desktop);

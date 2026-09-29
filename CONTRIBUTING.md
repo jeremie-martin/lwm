@@ -29,9 +29,11 @@ Run a focused Catch2 selection before the full suite, for example:
 
 The X11 integration harness starts a private Xvfb server and launches the exact
 binaries from its CMake build, independently of the working directory. WM
-startup/readiness failures fail the test and include captured stderr; they do
-not skip. Direct test runs may skip when Xvfb is unavailable; `make test` sets
-`LWM_TEST_REQUIRE_X11=1` to make that a failure. Capability-specific tests can
+readiness requires a live supporting window and a successful ping through that
+process's own socket, so stale root properties cannot satisfy it. Startup/readiness
+failures fail the test and include captured stderr; they do not skip. Direct test
+runs may skip when Xvfb is unavailable; `make test` sets `LWM_TEST_REQUIRE_X11=1`
+to make that a failure. Capability-specific tests can
 still skip when the isolated server lacks that capability. Missing built binaries,
 failed atom creation, and unmet fixture requirements fail rather than skip.
 `LWM_TEST_ALLOW_EXISTING_DISPLAY=1` permits fallback to the current `DISPLAY`
@@ -91,7 +93,8 @@ visibility/stacking reconciliation; sticky and sticky+fullscreen rule changes
 allow at most 200 crossing barriers and 200 QueryTree requests. Sticky-only
 changes must not rewrite unchanged geometry. A 200-client workspace workload
 also bounds flush calls to catch completion work repeated for each configure
-notification. Omit `--check` to compare an older
+notification. Startup workloads with 10 and 40 docks bound property reads to
+catch repeated workarea scans during adoption. Omit `--check` to compare an older
 binary. These are protocol-work budgets, not latency measurements; measure
 uninstrumented Release builds separately on an otherwise idle machine.
 

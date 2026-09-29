@@ -247,7 +247,7 @@ void WindowManager::apply_classification_state(
     if (client->borderless != desired.borderless)
         set_window_borderless(*client, desired.borderless);
 
-    update_allowed_actions(*client);
+    request_allowed_actions(*client);
 }
 
 void WindowManager::sync_managed_window_classification(xcb_window_t window, ClassificationResult const& result)
@@ -259,7 +259,7 @@ void WindowManager::sync_managed_window_classification(xcb_window_t window, Clas
     auto kind = result.classification.kind;
     if (kind != WindowClassification::Kind::Tiled && kind != WindowClassification::Kind::Floating)
     {
-        stacking_dirty_ |= previous_transient != client.transient_for;
+        effects_.stacking |= previous_transient != client.transient_for;
         return;
     }
     sync_kind(window, kind);

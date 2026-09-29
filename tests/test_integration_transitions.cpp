@@ -490,3 +490,127 @@ TEST_CASE(
     destroy_window(conn, first);
     destroy_window(conn, second);
 }
+
+TEST_CASE(
+    "Integration: dock batches preserve adoption placement and refresh workareas",
+    "[integration][transition][dock][adoption]"
+)
+{
+    auto& server = X11TestEnvironment::instance();
+    if (!server.available())
+    {
+        REQUIRE(std::getenv("LWM_TEST_REQUIRE_X11") == nullptr);
+        SKIP("X11 unavailable");
+    }
+    X11Connection conn;
+    REQUIRE(conn.ok());
+    auto strut = intern_atom(conn.get(), "_NET_WM_STRUT");
+    auto partial = intern_atom(conn.get(), "_NET_WM_STRUT_PARTIAL");
+    auto set_strut = [&](xcb_window_t window, xcb_atom_t property, uint32_t top)
+    {
+        uint32_t values[12] = { 0, 0, top, 0 };
+        xcb_change_property(
+            conn.get(),
+            XCB_PROP_MODE_REPLACE,
+            window,
+            property,
+            XCB_ATOM_CARDINAL,
+            32,
+            property == partial ? 12 : 4,
+            values
+        );
+        xcb_flush(conn.get());
+    };
+    auto dock = [&](uint32_t top)
+    {
+        auto window = create_window(conn, 0, 0, 200, 20);
+        set_window_type(conn, window, intern_atom(conn.get(), "_NET_WM_WINDOW_TYPE_DOCK"));
+        set_strut(window, strut, top);
+        map_window(conn, window);
+        return window;
+    };
+    auto dialog = [&]
+    {
+        auto window = create_window(conn, 0, 0, 200, 100);
+        set_window_type(conn, window, intern_atom(conn.get(), "_NET_WM_WINDOW_TYPE_DIALOG"));
+        map_window(conn, window);
+        return window;
+    };
+    auto first_dock = dock(20);
+    auto second_dock = dock(40);
+    auto first = dialog();
+    auto third_dock = dock(80);
+    auto second = dialog();
+    // A reply on this connection ensures all windows exist before the startup scan.
+    REQUIRE(geometry(conn, second));
+    LwmProcess wm(server.display(), R"(
+[appearance]
+padding = 0
+border_width = 0
+[[rules]]
+match = { type = "dialog" }
+apply = { center = true }
+)");
+    REQUIRE(wait_for_wm_ready(conn, timeout));
+    auto path = wait_for_ipc_socket_path(conn);
+    REQUIRE(path);
+    REQUIRE(send_ipc_command(*path, "ping"));
+    auto screen_height = conn.screen()->height_in_pixels;
+    auto first_rect = geometry(conn, first);
+    auto second_rect = geometry(conn, second);
+    REQUIRE(first_rect);
+    REQUIRE(second_rect);
+    CHECK(first_rect->y == 40 + (screen_height - 40 - 100) / 2);
+    CHECK(second_rect->y == 80 + (screen_height - 80 - 100) / 2);
+    auto workarea_top = [&]() -> uint32_t
+    {
+        auto* reply = xcb_get_property_reply(
+            conn.get(),
+            xcb_get_property(
+                conn.get(),
+                0,
+                conn.root(),
+                intern_atom(conn.get(), "_NET_WORKAREA"),
+                XCB_ATOM_CARDINAL,
+                0,
+                4
+            ),
+            nullptr
+        );
+        uint32_t top = UINT32_MAX;
+        if (reply && xcb_get_property_value_length(reply) == 16)
+            top = static_cast<uint32_t*>(xcb_get_property_value(reply))[1];
+        free(reply);
+        return top;
+    };
+    REQUIRE(wait_for_condition([&] { return workarea_top() == 80; }, timeout));
+    auto tiled = create_window(conn, 10, 10, 200, 100);
+    map_window(conn, tiled);
+    REQUIRE(wait_for_active_window(conn, tiled, timeout));
+    auto check_area = [&](uint32_t top)
+    {
+        REQUIRE(wait_for_condition(
+            [&]
+            {
+                auto rect = geometry(conn, tiled);
+                return workarea_top() == top && rect && rect->y == top && rect->height == screen_height - top;
+            },
+            timeout
+        ));
+    };
+    check_area(80);
+    set_strut(second_dock, partial, 120);
+    check_area(120);
+    xcb_delete_property(conn.get(), second_dock, partial);
+    xcb_flush(conn.get());
+    check_area(80);
+    destroy_window(conn, third_dock);
+    check_area(40);
+    destroy_window(conn, second_dock);
+    check_area(20);
+    destroy_window(conn, first_dock);
+    check_area(0);
+    destroy_window(conn, tiled);
+    destroy_window(conn, first);
+    destroy_window(conn, second);
+}

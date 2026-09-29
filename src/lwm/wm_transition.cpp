@@ -14,10 +14,10 @@ void WindowManager::invalidate_monitor(size_t monitor, xcb_window_t preferred)
     if (preferred != XCB_NONE)
         entry->second = preferred;
     effects_.drain_crossing |= !drag_active();
-    stacking_dirty_ = true;
+    effects_.stacking = true;
 }
 
-void WindowManager::send_configure_notify(Client const& client) { effects_.configure_replies.insert(client.id); }
+void WindowManager::request_configure_notify(Client const& client) { effects_.configure_replies.insert(client.id); }
 
 void WindowManager::request_geometry(Client const& client)
 {
@@ -86,26 +86,30 @@ void WindowManager::commit_focus()
         send_wm_take_focus(*client, effects_.focus_time ? effects_.focus_time : last_event_time_);
         xcb_set_input_focus(conn_.get(), XCB_INPUT_FOCUS_POINTER_ROOT, client->id, effects_.focus_time);
         ewmh_.set_window_state(client->id, net_wm_state_focused_, true);
-        emit_event(
-            Event_FocusChange,
-            "{\"event\":\"focus_change\",\"window\":" + std::to_string(client->id) + ",\"class\":\""
-                + json_escape(client->wm_class) + "\",\"title\":\"" + json_escape(client->name) + "\"}"
-        );
+        if (ipc_.has_subscribers(Event_FocusChange))
+        {
+            queue_event(
+                Event_FocusChange,
+                "{\"event\":\"focus_change\",\"window\":" + std::to_string(client->id) + ",\"class\":\""
+                    + json_escape(client->wm_class) + "\",\"title\":\"" + json_escape(client->name) + "\"}"
+            );
+        }
     }
     else
         xcb_set_input_focus(conn_.get(), XCB_INPUT_FOCUS_POINTER_ROOT, conn_.screen()->root, XCB_CURRENT_TIME);
     ewmh_.set_active_window(active_window_);
-    update_ewmh_current_desktop();
-    stacking_dirty_ = true;
+    request_current_desktop_update();
+    effects_.stacking = true;
 }
 
-void WindowManager::sync_client_urgency_state(Client& client) { effects_.urgency.insert(client.id); }
-void WindowManager::update_allowed_actions(Client const& client) { effects_.allowed_actions.insert(client.id); }
-void WindowManager::update_ewmh_client_list() { effects_.client_list = true; }
-void WindowManager::update_ewmh_current_desktop() { effects_.current_desktop = true; }
+void WindowManager::request_urgency_update(Client& client) { effects_.urgency.insert(client.id); }
+void WindowManager::request_allowed_actions(Client const& client) { effects_.allowed_actions.insert(client.id); }
+void WindowManager::request_client_list_update() { effects_.client_list = true; }
+void WindowManager::request_current_desktop_update() { effects_.current_desktop = true; }
 
 void WindowManager::complete_transition()
 {
+    refresh_workareas();
     // Consume pending ownership preferences once. Later phases use resolved owners.
     auto affected_monitors = std::exchange(effects_.monitors, {});
     for (auto [monitor, preferred] : affected_monitors)
@@ -116,8 +120,7 @@ void WindowManager::complete_transition()
         repair_focus_after_visibility_change(focused_monitor_, false);
     if (active_window_ == XCB_NONE && effects_.repair_focus && !effects_.previous_focus && !showing_desktop_)
         focus_or_fallback(focused_monitor(), false);
-    if (affected_monitors.empty() && effects_ == TransitionEffects{} && !stacking_dirty_
-        && !ewmh_.has_pending_window_states())
+    if (affected_monitors.empty() && effects_ == TransitionEffects{} && !ewmh_.has_pending_window_states())
     {
         LWM_ASSERT_INVARIANTS(clients_, monitors_, active_window_);
         return;
@@ -171,17 +174,20 @@ void WindowManager::complete_transition()
     if (effects_.current_desktop)
         publish_current_desktop();
     ewmh_.flush_window_states();
-    flush_stacking_list();
+    if (effects_.stacking)
+        apply_stacking();
     if (effects_.drain_crossing)
         flush_and_drain_crossing();
     conn_.flush();
     for (auto const& [monitor, change] : effects_.workspace_events)
-        if (change.first != change.second)
-            emit_event(
+        if (change.first != change.second && ipc_.has_subscribers(Event_WorkspaceSwitch))
+        {
+            queue_event(
                 Event_WorkspaceSwitch,
                 "{\"event\":\"workspace_switch\",\"monitor\":" + std::to_string(monitor)
                     + ",\"from\":" + std::to_string(change.first) + ",\"to\":" + std::to_string(change.second) + "}"
             );
+        }
     auto priority = [](EventType type)
     {
         if (type == Event_WorkspaceSwitch)

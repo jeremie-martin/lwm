@@ -194,7 +194,8 @@ An operation is one dispatched X event, IPC command, signal reload, timeout and
 coalesced topology pass, or startup scan. Mutations record `TransitionEffects`;
 only the boundary calls `complete_transition()`. Completion has this order:
 
-1. Resolve visibility/fullscreen ownership and repair focus eligibility.
+1. Refresh pending workareas, resolve visibility/fullscreen ownership, and repair
+   focus eligibility.
 2. Compute layout and presentation geometry; write changed rectangles and
    required ConfigureNotify replies, then map new clients.
 3. Commit focus and publish client/root properties. `_NET_WM_STATE` updates
@@ -204,12 +205,26 @@ only the boundary calls `complete_transition()`. Completion has this order:
 5. Emit settled subscription events, discard the operation's effects, and
    check Debug invariants.
 
+Stacking invalidation belongs to the same effects record and is reset with it.
+WindowManager's deferred publication helpers use `request_*` names; `publish_*`
+helpers perform property writes. `queue_event()` receives JSON only after
+checking for a live subscriber interested in that event type.
+
+Dock registration, removal, and strut notifications request a workarea refresh.
+The refresh reads current dock properties and geometry, publishes workareas, and
+invalidates layout. Consecutive dock registrations during startup share a refresh;
+adopting a normal client consumes pending workarea changes before placement and
+rules. Hotplug likewise refreshes before relocating floating clients. Completion
+consumes any remaining refresh before arranging monitors. There is no persistent
+dock-property cache, and adoption retains its existing traversal order.
+
 Empty effects require no reconciliation. The outer loop flushes direct protocol
 replies once after draining ready events.
 
 This is ordered completion, not rollback or an atomic X-server transaction.
-Helpers may read X hints and register protocol resources while mutating state;
-they must not independently run completion phases. Tiled-resize motion
+Helpers may read X hints, refresh workareas needed for placement, and register
+protocol resources while mutating state. Visibility, geometry, focus publication,
+stacking, and event delivery remain owned by completion. Tiled-resize motion
 compression happens in outer dispatch and stops at the first non-motion event.
 A drag handler never recursively dispatches another event.
 

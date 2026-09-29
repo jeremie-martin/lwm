@@ -21,6 +21,7 @@
 #include <string_view>
 #include <sys/wait.h>
 #include <unistd.h>
+#include <utility>
 #include <xcb/xcb_icccm.h>
 
 namespace lwm {
@@ -229,7 +230,7 @@ WindowManager::WindowManager(Config config, std::string config_path)
     // restores and fresh scans so stale state from an older schema cannot linger.
     clean_restart_properties();
     keybinds_.grab_keys(conn_.screen()->root);
-    update_ewmh_client_list();
+    request_client_list_update();
     complete_transition();
 }
 
@@ -395,13 +396,15 @@ void WindowManager::cleanup_ipc()
 
 void WindowManager::emit_config_reload_result(std::expected<void, std::string> const& result, char const* source)
 {
+    if (!ipc_.has_subscribers(Event_ConfigReload))
+        return;
     if (result)
-        emit_event(
+        queue_event(
             Event_ConfigReload,
             std::string("{\"event\":\"config_reload\",\"success\":true,\"source\":\"") + source + "\"}"
         );
     else
-        emit_event(
+        queue_event(
             Event_ConfigReload,
             std::string("{\"event\":\"config_reload\",\"success\":false,\"source\":\"") + source + "\",\"error\":\""
                 + json_escape(result.error()) + "\"}"
@@ -654,7 +657,7 @@ void WindowManager::convert_window_to_floating(xcb_window_t window)
 
     uint32_t values[] = { kManagedWindowEventMask };
     xcb_change_window_attributes(conn_.get(), window, XCB_CW_EVENT_MASK, values);
-    update_allowed_actions(*client);
+    request_allowed_actions(*client);
 }
 
 void WindowManager::convert_window_to_tiled(xcb_window_t window, std::optional<Geometry> prior_floating)
@@ -682,7 +685,7 @@ void WindowManager::convert_window_to_tiled(xcb_window_t window, std::optional<G
 
     uint32_t values[] = { kManagedWindowEventMask };
     xcb_change_window_attributes(conn_.get(), window, XCB_CW_EVENT_MASK, values);
-    update_allowed_actions(*client);
+    request_allowed_actions(*client);
 }
 
 void WindowManager::toggle_window_float(xcb_window_t window)
@@ -733,7 +736,7 @@ void WindowManager::toggle_window_float(xcb_window_t window)
             && !client->fullscreen)
         {
             request_geometry(*client);
-            stacking_dirty_ = true;
+            effects_.stacking = true;
         }
     }
 
@@ -1157,6 +1160,8 @@ void WindowManager::manage_client(
     bool adopting
 )
 {
+    // Adoption may follow a batch of docks in the same startup operation.
+    refresh_workareas();
     auto target = resolve_window_desktop(window);
     Client candidate;
     candidate.id = window;
@@ -1218,10 +1223,10 @@ void WindowManager::manage_client(
     set_window_layer_hint(client, client.layer_hint);
     assign_window_workspace(client, client.monitor, client.workspace);
     set_iconic_state(window, client.iconic);
-    update_allowed_actions(client);
+    request_allowed_actions(client);
     if (client.urgency.active())
-        sync_client_urgency_state(client);
-    update_ewmh_client_list();
+        request_urgency_update(client);
+    request_client_list_update();
     invalidate_monitor(client.monitor, client.fullscreen ? window : XCB_NONE);
     request_geometry(client);
     if (!adopting)
@@ -1252,12 +1257,11 @@ void WindowManager::unmanage_window(xcb_window_t window)
     clients_.erase(window);
     if (dock)
     {
-        update_struts();
-        invalidate_all_monitors();
+        request_workarea_update();
     }
     else
         invalidate_monitor(monitor);
-    update_ewmh_client_list();
+    request_client_list_update();
     if (active)
     {
         if (monitor == focused_monitor_ && monitor < monitors_.size())
@@ -1335,13 +1339,13 @@ void WindowManager::set_window_borderless(Client& client, bool enabled)
 {
     client.borderless = enabled;
     invalidate_monitor(client.monitor);
-    update_allowed_actions(client);
+    request_allowed_actions(client);
 }
 
 void WindowManager::set_window_layer_hint(Client& client, LayerHint hint)
 {
     if (client.layer_hint != hint)
-        stacking_dirty_ = true;
+        effects_.stacking = true;
     client.layer_hint = hint;
     ewmh_.set_window_state(client.id, ewmh_.get()->_NET_WM_STATE_ABOVE, hint == LayerHint::Above);
     ewmh_.set_window_state(client.id, ewmh_.get()->_NET_WM_STATE_BELOW, hint == LayerHint::Below);
@@ -1450,7 +1454,7 @@ void WindowManager::publish_urgency(Client& client)
     }
 
     // Re-publish client list so EWMH panels (e.g. polybar) re-check urgency.
-    update_ewmh_client_list();
+    request_client_list_update();
     conn_.flush();
 }
 
@@ -1460,7 +1464,7 @@ void WindowManager::set_client_urgency(Client& client, UrgencySource source, boo
     if (!changed)
         return;
 
-    sync_client_urgency_state(client);
+    request_urgency_update(client);
 }
 
 void WindowManager::clear_client_urgency(Client& client)
@@ -1468,7 +1472,7 @@ void WindowManager::clear_client_urgency(Client& client)
     if (!client.urgency.clear())
         return;
 
-    sync_client_urgency_state(client);
+    request_urgency_update(client);
 }
 
 void WindowManager::set_fullscreen_monitors(Client& client, FullscreenMonitors const& monitors)
@@ -1692,7 +1696,7 @@ void WindowManager::arrange_monitor(Monitor& monitor)
             request_geometry(*client);
     }
 
-    stacking_dirty_ = true;
+    effects_.stacking = true;
 
     LOG_TRACE("arrange_monitor: DONE");
 }
@@ -1998,8 +2002,6 @@ stacking_policy::ClientStackInputs WindowManager::stack_inputs_of(Client const& 
 
 void WindowManager::apply_stacking()
 {
-    stacking_dirty_ = false;
-
     std::vector<stacking_policy::ClientStackInputs> inputs;
     inputs.reserve(clients_.size());
     for (auto const& [window, client] : clients_) inputs.push_back(stack_inputs_of(client));
@@ -2342,7 +2344,7 @@ void WindowManager::update_focused_monitor_at_point(int16_t x, int16_t y)
 
     // We crossed monitors - update active monitor and clear focus
     focused_monitor_ = result.new_monitor;
-    update_ewmh_current_desktop();
+    request_current_desktop_update();
     if (result.clears_focus())
         clear_focus();
 
@@ -2453,8 +2455,12 @@ void WindowManager::update_window_title(xcb_window_t window)
     reevaluate_metadata(window, previous);
 }
 
-void WindowManager::update_struts()
+void WindowManager::request_workarea_update() { effects_.workareas = true; }
+
+void WindowManager::refresh_workareas()
 {
+    if (!std::exchange(effects_.workareas, false))
+        return;
     for (auto& monitor : monitors_)
     {
         monitor.strut = {};
@@ -2487,6 +2493,7 @@ void WindowManager::update_struts()
     }
 
     update_ewmh_workarea();
+    invalidate_all_monitors();
 }
 
 void WindowManager::assign_window_workspace(Client& client, size_t monitor_idx, size_t workspace_idx)
@@ -2725,7 +2732,7 @@ void WindowManager::realize_visibility(size_t monitor_idx, xcb_window_t preferre
         }
     }
 
-    stacking_dirty_ = true;
+    effects_.stacking = true;
 }
 
 void WindowManager::clear_all_borders()

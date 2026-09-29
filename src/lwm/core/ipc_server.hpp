@@ -27,7 +27,7 @@ public:
     void start(std::string path);
     void stop();
     std::string const& path() const { return path_; }
-    bool has_subscribers() const { return !subscribers_.empty(); }
+    bool has_subscribers(EventType type) const;
     std::optional<Clock::time_point> deadline() const;
     void append_poll_fds(std::vector<pollfd>& fds) const;
     void dispatch(std::span<pollfd const> fds, Handler const& handler);

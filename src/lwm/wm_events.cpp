@@ -270,7 +270,7 @@ void WindowManager::handle_map_request(xcb_map_request_event_t const& e)
         }
     }
 
-    if (kind_str && ipc_.has_subscribers())
+    if (kind_str && ipc_.has_subscribers(Event_WindowMap))
     {
         auto const* client = get_client(e.window);
         if (client)
@@ -283,7 +283,7 @@ void WindowManager::handle_map_request(xcb_map_request_event_t const& e)
                 + ",\"workspace\":" + std::to_string(client->workspace);
         }
         json += "}";
-        emit_event(Event_WindowMap, json);
+        queue_event(Event_WindowMap, std::move(json));
     }
 }
 
@@ -311,7 +311,7 @@ void WindowManager::map_desktop_window(xcb_window_t window)
     }
     if (auto* c = get_client(window))
         publish_lwm_window_class(*c);
-    update_ewmh_client_list();
+    request_client_list_update();
     conn_.flush();
 }
 
@@ -338,9 +338,8 @@ void WindowManager::map_dock_window(xcb_window_t window)
     }
     if (auto* c = get_client(window))
         publish_lwm_window_class(*c);
-    update_struts();
-    invalidate_all_monitors();
-    update_ewmh_client_list();
+    request_workarea_update();
+    request_client_list_update();
     conn_.flush();
 }
 
@@ -352,7 +351,7 @@ void WindowManager::handle_window_removal(xcb_window_t window)
 
     // Capture info before unmanage destroys the client record
     std::string unmap_json;
-    if (ipc_.has_subscribers())
+    if (ipc_.has_subscribers(Event_WindowUnmap))
     {
         unmap_json = "{\"event\":\"window_unmap\",\"window\":" + std::to_string(window) + ",\"kind\":\""
             + client_kind_str(client->kind()) + "\"" + ",\"monitor\":" + std::to_string(client->monitor)
@@ -365,7 +364,7 @@ void WindowManager::handle_window_removal(xcb_window_t window)
     unmanage_window(window);
 
     if (!unmap_json.empty())
-        emit_event(Event_WindowUnmap, unmap_json);
+        queue_event(Event_WindowUnmap, std::move(unmap_json));
 }
 
 void WindowManager::handle_enter_notify(xcb_enter_notify_event_t const& e)
@@ -742,25 +741,37 @@ void WindowManager::handle_key_press(xcb_key_press_event_t const& e)
             [&](RatioGrowAction const&)
             {
                 adjust_master_ratio(0.05);
-                emit_event(Event_LayoutChange, "{\"event\":\"layout_change\",\"action\":\"ratio_grow\"}");
+                if (ipc_.has_subscribers(Event_LayoutChange))
+                {
+                    queue_event(Event_LayoutChange, "{\"event\":\"layout_change\",\"action\":\"ratio_grow\"}");
+                }
                 return true;
             },
             [&](RatioShrinkAction const&)
             {
                 adjust_master_ratio(-0.05);
-                emit_event(Event_LayoutChange, "{\"event\":\"layout_change\",\"action\":\"ratio_shrink\"}");
+                if (ipc_.has_subscribers(Event_LayoutChange))
+                {
+                    queue_event(Event_LayoutChange, "{\"event\":\"layout_change\",\"action\":\"ratio_shrink\"}");
+                }
                 return true;
             },
             [&](SwapNextAction const&)
             {
                 swap_focused_tiled(1);
-                emit_event(Event_LayoutChange, "{\"event\":\"layout_change\",\"action\":\"swap_next\"}");
+                if (ipc_.has_subscribers(Event_LayoutChange))
+                {
+                    queue_event(Event_LayoutChange, "{\"event\":\"layout_change\",\"action\":\"swap_next\"}");
+                }
                 return true;
             },
             [&](SwapPrevAction const&)
             {
                 swap_focused_tiled(-1);
-                emit_event(Event_LayoutChange, "{\"event\":\"layout_change\",\"action\":\"swap_prev\"}");
+                if (ipc_.has_subscribers(Event_LayoutChange))
+                {
+                    queue_event(Event_LayoutChange, "{\"event\":\"layout_change\",\"action\":\"swap_prev\"}");
+                }
                 return true;
             },
             [&](ScratchpadStashAction const&)
@@ -811,8 +822,11 @@ void WindowManager::handle_key_press(xcb_key_press_event_t const& e)
     if (!handled)
         return;
 
-    std::string event_action = key_action_event_name(*action);
-    emit_event(Event_KeyAction, "{\"event\":\"key_action\",\"action\":\"" + json_escape(event_action) + "\"}");
+    if (ipc_.has_subscribers(Event_KeyAction))
+    {
+        std::string event_action = key_action_event_name(*action);
+        queue_event(Event_KeyAction, "{\"event\":\"key_action\",\"action\":\"" + json_escape(event_action) + "\"}");
+    }
 }
 
 void WindowManager::handle_key_release(xcb_key_release_event_t const& e)
@@ -912,7 +926,7 @@ void WindowManager::handle_restack_message(xcb_client_message_event_t const& e)
     if (auto const* client = get_client(e.window);
         client && (client->kind() == Client::Kind::Tiled || client->kind() == Client::Kind::Floating))
     {
-        stacking_dirty_ = true;
+        effects_.stacking = true;
         conn_.flush();
         return;
     }
@@ -935,7 +949,7 @@ void WindowManager::handle_restack_message(xcb_client_message_event_t const& e)
     // The raw restack of an unmanaged window perturbs X's stacking order
     // outside our funnel; schedule a recompute so apply_stacking re-asserts
     // managed ordering and refreshes _NET_CLIENT_LIST_STACKING.
-    stacking_dirty_ = true;
+    effects_.stacking = true;
     conn_.flush();
 }
 
@@ -1219,7 +1233,7 @@ void WindowManager::handle_moveresize_window(xcb_client_message_event_t const& e
     if (visible && active_window_ == e.window)
     {
         focused_monitor_ = client->monitor;
-        update_ewmh_current_desktop();
+        request_current_desktop_update();
     }
     if (visible && !client->fullscreen)
     {
@@ -1283,7 +1297,7 @@ void WindowManager::handle_configure_request(xcb_configure_request_event_t const
 {
     auto* client = get_client(e.window);
     if (client && (client->kind() == Client::Kind::Tiled || client->kind() == Client::Kind::Floating))
-        send_configure_notify(*client);
+        request_configure_notify(*client);
     if (client && client->kind() == Client::Kind::Tiled)
         return;
 
@@ -1331,7 +1345,7 @@ void WindowManager::handle_configure_request(xcb_configure_request_event_t const
         if (visible && active_window_ == e.window)
         {
             focused_monitor_ = client->monitor;
-            update_ewmh_current_desktop();
+            request_current_desktop_update();
         }
 
         if (visible)
@@ -1454,7 +1468,7 @@ void WindowManager::handle_property_notify(xcb_property_notify_event_t const& e)
             if (visible && active_window_ == e.window)
             {
                 focused_monitor_ = client->monitor;
-                update_ewmh_current_desktop();
+                request_current_desktop_update();
             }
             if (visible)
                 request_geometry(*client);
@@ -1500,7 +1514,7 @@ void WindowManager::handle_property_notify(xcb_property_notify_event_t const& e)
                         if (client->urgency.has(UrgencySource::App))
                             set_client_urgency(*client, UrgencySource::App, false);
                         else if (client->urgency.has(UrgencySource::WmInitiated))
-                            sync_client_urgency_state(*client);
+                            request_urgency_update(*client);
                     }
                 }
             }
@@ -1527,9 +1541,7 @@ void WindowManager::handle_property_notify(xcb_property_notify_event_t const& e)
     else if (auto const* strut_client = get_client(e.window); strut_client && strut_client->kind() == Client::Kind::Dock
              && (e.atom == ewmh_.get()->_NET_WM_STRUT || e.atom == ewmh_.get()->_NET_WM_STRUT_PARTIAL))
     {
-        update_struts();
-        invalidate_all_monitors();
-        conn_.flush();
+        request_workarea_update();
     }
 
     // User time tracking: only scan when relevant atoms change
@@ -1593,7 +1605,8 @@ void WindowManager::handle_randr_screen_change()
         client.fullscreen_monitors.reset();
         assign_window_workspace(client, target, std::min(client.workspace, monitors_[target].workspaces.size() - 1));
     }
-    update_struts();
+    request_workarea_update();
+    refresh_workareas();
     for (auto& [id, client] : clients_)
     {
         if (client.kind() != Client::Kind::Floating)
@@ -1610,9 +1623,7 @@ void WindowManager::handle_randr_screen_change()
 
     // Update EWMH for new monitor configuration
     update_ewmh_desktops();
-    update_ewmh_current_desktop();
-
-    invalidate_all_monitors();
+    request_current_desktop_update();
 
     // Focus a window after reconfiguration
     if (!monitors_.empty())

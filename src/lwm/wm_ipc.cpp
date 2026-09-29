@@ -61,10 +61,9 @@ std::optional<xcb_window_t> parse_window_id(std::string_view value)
 
 }
 
-void WindowManager::emit_event(EventType type, std::string_view json)
+void WindowManager::queue_event(EventType type, std::string json)
 {
-    if (ipc_.has_subscribers())
-        effects_.events.emplace_back(type, json);
+    effects_.events.emplace_back(type, std::move(json));
 }
 
 std::string WindowManager::run_ipc_command(std::string const& command)
@@ -118,10 +117,13 @@ std::string WindowManager::run_ipc_command(std::string const& command)
             invalidate_monitor(focused_monitor_);
             effects_.drain_crossing = true;
             std::string strategy_name = layout_strategy_str(*strategy);
-            emit_event(
-                Event_LayoutChange,
-                "{\"event\":\"layout_change\",\"action\":\"layout_set\",\"value\":\"" + strategy_name + "\"}"
-            );
+            if (ipc_.has_subscribers(Event_LayoutChange))
+            {
+                queue_event(
+                    Event_LayoutChange,
+                    "{\"event\":\"layout_change\",\"action\":\"layout_set\",\"value\":\"" + strategy_name + "\"}"
+                );
+            }
             return ok_reply("layout set to " + strategy_name);
         }
     }
@@ -144,10 +146,13 @@ std::string WindowManager::run_ipc_command(std::string const& command)
                 return error_reply("no focused monitor");
             focused_monitor().current().split_ratios[SplitAddress{ 0 }] = val;
             invalidate_monitor(focused_monitor_);
-            emit_event(
-                Event_LayoutChange,
-                "{\"event\":\"layout_change\",\"action\":\"ratio_set\",\"value\":" + std::to_string(val) + "}"
-            );
+            if (ipc_.has_subscribers(Event_LayoutChange))
+            {
+                queue_event(
+                    Event_LayoutChange,
+                    "{\"event\":\"layout_change\",\"action\":\"ratio_set\",\"value\":" + std::to_string(val) + "}"
+                );
+            }
             return ok_reply("ratio set");
         }
     }
@@ -158,7 +163,10 @@ std::string WindowManager::run_ipc_command(std::string const& command)
             return error_reply("no focused monitor");
         focused_monitor().current().split_ratios.clear();
         invalidate_monitor(focused_monitor_);
-        emit_event(Event_LayoutChange, "{\"event\":\"layout_change\",\"action\":\"ratio_reset\"}");
+        if (ipc_.has_subscribers(Event_LayoutChange))
+        {
+            queue_event(Event_LayoutChange, "{\"event\":\"layout_change\",\"action\":\"ratio_reset\"}");
+        }
         return ok_reply("ratios reset");
     }
 
@@ -175,10 +183,13 @@ std::string WindowManager::run_ipc_command(std::string const& command)
                 return error_reply("no focused monitor");
             if (!adjust_master_ratio(delta))
                 return ok_reply("ratio unchanged");
-            emit_event(
-                Event_LayoutChange,
-                "{\"event\":\"layout_change\",\"action\":\"ratio_adjust\",\"delta\":" + std::to_string(delta) + "}"
-            );
+            if (ipc_.has_subscribers(Event_LayoutChange))
+            {
+                queue_event(
+                    Event_LayoutChange,
+                    "{\"event\":\"layout_change\",\"action\":\"ratio_adjust\",\"delta\":" + std::to_string(delta) + "}"
+                );
+            }
             return ok_reply("ratio adjusted");
         }
     }

@@ -130,7 +130,7 @@ void WindowManager::repair_focus_after_visibility_change(size_t preferred_monito
         focused_monitor_ = active->monitor;
         if (active->kind() == Client::Kind::Tiled && active->workspace < monitors_[active->monitor].workspaces.size())
             workspace_policy::set_workspace_focus(monitors_[active->monitor].workspaces[active->workspace], active->id);
-        update_ewmh_current_desktop();
+        request_current_desktop_update();
         return;
     }
 

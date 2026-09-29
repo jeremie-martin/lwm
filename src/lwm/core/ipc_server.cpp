@@ -223,9 +223,14 @@ void Server::write_response()
     }
 }
 
+bool Server::has_subscribers(EventType type) const
+{
+    return std::ranges::any_of(subscribers_, [type](auto const& s) { return s.fd >= 0 && (s.mask & type); });
+}
+
 void Server::emit(EventType type, std::string_view json)
 {
-    if (std::ranges::none_of(subscribers_, [type](auto const& s) { return s.fd >= 0 && (s.mask & type); }))
+    if (!has_subscribers(type))
         return;
     std::string line(json);
     line.push_back('\n');

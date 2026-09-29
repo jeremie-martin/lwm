@@ -162,9 +162,12 @@ TEST_CASE("IPC subscription acknowledgement precedes filtered events", "[ipc][tr
 {
     Fixture f;
     Peer peer(f.server.path());
+    CHECK_FALSE(f.server.has_subscribers(lwm::Event_All));
     peer.send("subscribe focus_change\n");
     CHECK(f.receive(peer, false) == "ok subscribed\n");
     CHECK(f.requests.empty());
+    CHECK(f.server.has_subscribers(lwm::Event_FocusChange));
+    CHECK_FALSE(f.server.has_subscribers(lwm::Event_WindowMap));
     f.server.emit(lwm::Event_WindowMap, "ignored");
     f.server.emit(lwm::Event_FocusChange, "{\"event\":\"focus_change\"}");
     CHECK(f.receive(peer, false) == "{\"event\":\"focus_change\"}\n");

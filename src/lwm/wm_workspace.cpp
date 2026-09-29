@@ -23,7 +23,7 @@ bool WindowManager::apply_workspace_switch(size_t monitor_idx, size_t target_wor
     monitor.previous_workspace = result->old_workspace;
     monitor.current_workspace = result->new_workspace;
 
-    update_ewmh_current_desktop();
+    request_current_desktop_update();
     invalidate_monitor(monitor_idx);
     auto [entry, inserted] =
         effects_.workspace_events.try_emplace(monitor_idx, result->old_workspace, result->new_workspace);
@@ -33,7 +33,7 @@ bool WindowManager::apply_workspace_switch(size_t monitor_idx, size_t target_wor
     {
         if (!client.urgency.active() || wid == active_window_)
             continue;
-        sync_client_urgency_state(client);
+        request_urgency_update(client);
     }
 
     return true;
@@ -112,28 +112,23 @@ void WindowManager::move_window_to_workspace(size_t ws)
     if (active_window_ == XCB_NONE)
         return;
 
-    xcb_window_t window_to_move = active_window_;
-    size_t target_ws = ws;
-    auto* client = get_client(window_to_move);
+    auto* client = get_client(active_window_);
     if (!client)
         return;
 
+    auto source_monitor = client->monitor;
     if (client->kind() == Client::Kind::Floating)
     {
-        size_t monitor_idx = client->monitor;
-        if (!move_floating_client_to_workspace(*client, monitor_idx, target_ws, false))
+        if (!move_floating_client_to_workspace(*client, source_monitor, ws, false))
             return;
-        focus_or_fallback(monitors_[monitor_idx]);
-
-        return;
     }
-
-    if (!move_tiled_client_to_workspace(*client, focused_monitor_, target_ws))
-        return;
-
-    workspace_policy::set_workspace_focus(monitor.workspaces[target_ws], window_to_move);
-    focus_or_fallback(monitor);
-
+    else
+    {
+        if (!move_tiled_client_to_workspace(*client, source_monitor, ws))
+            return;
+        workspace_policy::set_workspace_focus(monitors_[source_monitor].workspaces[ws], client->id);
+    }
+    focus_or_fallback(monitors_[source_monitor]);
 }
 
 size_t WindowManager::wrap_monitor_index(int idx) const
@@ -163,7 +158,7 @@ void WindowManager::focus_monitor(int direction)
         return;
 
     focused_monitor_ = wrap_monitor_index(static_cast<int>(focused_monitor_) + direction);
-    update_ewmh_current_desktop();
+    request_current_desktop_update();
 
     auto& monitor = focused_monitor();
     focus_or_fallback(monitor);
@@ -182,55 +177,35 @@ void WindowManager::move_window_to_monitor(int direction)
     if (active_window_ == XCB_NONE)
         return;
 
-    xcb_window_t window_to_move = active_window_;
-    auto* client = get_client(window_to_move);
+    auto* client = get_client(active_window_);
     if (!client)
         return;
 
-    if (client->kind() == Client::Kind::Floating)
-    {
-        size_t source_idx = client->monitor;
-        size_t target_idx = wrap_monitor_index(static_cast<int>(source_idx) + direction);
-        if (target_idx == source_idx)
-            return;
-
-        size_t target_workspace = monitors_[target_idx].current_workspace;
-        if (!move_floating_client_to_workspace(*client, target_idx, target_workspace, true))
-            return;
-
-        focused_monitor_ = target_idx;
-        update_ewmh_current_desktop();
-        if (is_suppressed_by_fullscreen(*client))
-            focus_or_fallback(monitors_[target_idx]);
-        else
-            focus_any_window(window_to_move);
-        if (config_.focus.warp_cursor_on_monitor_change)
-        {
-            warp_to_monitor(monitors_[target_idx]);
-        }
-
-        return;
-    }
-
-    size_t target_idx = wrap_monitor_index(static_cast<int>(focused_monitor_) + direction);
-    if (target_idx == focused_monitor_)
+    size_t target_idx = wrap_monitor_index(static_cast<int>(client->monitor) + direction);
+    if (target_idx == client->monitor)
         return;
 
     auto& target_monitor = monitors_[target_idx];
-    if (!move_tiled_client_to_workspace(*client, target_idx, target_monitor.current_workspace))
-        return;
-    workspace_policy::set_workspace_focus(target_monitor.current(), window_to_move);
+    if (client->kind() == Client::Kind::Floating)
+    {
+        if (!move_floating_client_to_workspace(*client, target_idx, target_monitor.current_workspace, true))
+            return;
+    }
+    else
+    {
+        if (!move_tiled_client_to_workspace(*client, target_idx, target_monitor.current_workspace))
+            return;
+        workspace_policy::set_workspace_focus(target_monitor.current(), client->id);
+    }
 
     focused_monitor_ = target_idx;
-    update_ewmh_current_desktop();
+    request_current_desktop_update();
     if (is_suppressed_by_fullscreen(*client))
         focus_or_fallback(target_monitor);
     else
-        focus_any_window(window_to_move);
+        focus_any_window(client->id);
     if (config_.focus.warp_cursor_on_monitor_change)
-    {
         warp_to_monitor(target_monitor);
-    }
 
 }
 

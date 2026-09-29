@@ -268,7 +268,7 @@ void WindowManager::update_drag(int16_t root_x, int16_t root_y)
         if (active_window_ == drag.window)
         {
             focused_monitor_ = client->monitor;
-            update_ewmh_current_desktop();
+            request_current_desktop_update();
         }
 
         conn_.flush();

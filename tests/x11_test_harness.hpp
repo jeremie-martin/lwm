@@ -412,7 +412,10 @@ inline bool wait_for_wm_ready(X11Connection& conn, std::chrono::milliseconds tim
         [&]()
         {
             auto current = supporting_wm_window(conn);
-            return current && *current != XCB_NONE && *current != previous;
+            if (!current || *current == XCB_NONE || *current == previous)
+                return false;
+            auto atom = intern_atom(conn.get(), "_NET_SUPPORTING_WM_CHECK");
+            return get_window_property_window(conn.get(), *current, atom) == current;
         },
         timeout
     );
@@ -1034,8 +1037,17 @@ struct TestEnvironment
         X11Connection conn;
         REQUIRE(conn.ok());
         LwmProcess wm(env.display(), std::move(config));
+        auto socket_atom = intern_atom(conn.get(), "_LWM_IPC_SOCKET");
         bool ready = wait_for_condition(
-            [&] { return !wm.running() || wait_for_wm_ready(conn, std::chrono::milliseconds(10)); },
+            [&]
+            {
+                if (!wm.running())
+                    return true;
+                auto path = get_window_property_string(conn.get(), conn.root(), socket_atom);
+                // A previous WM can leave root properties behind on a reused server.
+                return path && path->starts_with(wm.runtime_dir() + "/") && send_ipc_command(*path, "ping") == "ok pong"
+                    && wait_for_wm_ready(conn, std::chrono::milliseconds(10));
+            },
             std::chrono::seconds(2)
         );
         INFO(wm.diagnostics());

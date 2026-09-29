@@ -109,12 +109,28 @@ def measure(binary, library, scenario, operations):
         environment = dict(os.environ, DISPLAY=display_name, XDG_RUNTIME_DIR=temporary,
                            LD_PRELOAD=str(library), LWM_TRANSITION_COUNTS=str(counts_path))
         environment.pop("LWM_SOCKET", None)
+        atom = lambda name: X.XInternAtom(display, name.encode(), 0)
+        if scenario == "dock_startup":
+            for index in range(operations):
+                window = X.XCreateSimpleWindow(display, root, 0, 0, 200, 20, 0, 0, 0)
+                value = WINDOW(atom("_NET_WM_WINDOW_TYPE_DOCK"))
+                X.XChangeProperty(display, window, atom("_NET_WM_WINDOW_TYPE"), atom("ATOM"),
+                                  32, 0, c.byref(value), 1)
+                values = (WINDOW * 4)(0, 0, 20 + index, 0)
+                X.XChangeProperty(display, window, atom("_NET_WM_STRUT"), atom("CARDINAL"),
+                                  32, 0, values, 4)
+                X.XMapWindow(display, window)
+            X.XSync(display, 0)
         wm = subprocess.Popen([str(binary), "--config", str(config_path), "--no-log-file", "--log-level", "error"],
                               env=environment, stdout=log, stderr=log)
         cleanup.callback(stop, wm)
         path = directory / "lwm" / ("ipc-" + display_name.replace(":", "_") + ".sock")
         wait(lambda: ipc(path, "ping") == b"pong", wm, log_path)
-        atom = lambda name: X.XInternAtom(display, name.encode(), 0)
+        if scenario == "dock_startup":
+            # The successful ping follows startup completion, including adoption.
+            counts = struct.unpack("=5Q", counts_path.read_bytes())
+            return dict(scenario=scenario, operations=operations,
+                        counts=dict(zip(("get_property", "geometry_configure", "visibility_barrier", "query_tree", "flush"), counts)))
         window_type, dialog, atom_type = atom("_NET_WM_WINDOW_TYPE"), atom("_NET_WM_WINDOW_TYPE_DIALOG"), atom("ATOM")
         windows = []
         client_count = 200 if scenario == "workspace" else 10
@@ -168,11 +184,17 @@ def main():
         library = Path(temporary) / "xcb_counts.so"
         subprocess.run(["cc", "-shared", "-fPIC", "-O2", "-o", str(library),
                         str(Path(__file__).with_name("xcb_counts.c")), "-ldl"], check=True)
-        for scenario in ("metadata", "sticky", "sticky_fullscreen", "workspace"):
-            result = measure(binary, library, scenario, 200)
+        scenarios = [(name, 200) for name in ("metadata", "sticky", "sticky_fullscreen", "workspace")]
+        scenarios += [("dock_startup", count) for count in (10, 40)]
+        for scenario, operations in scenarios:
+            result = measure(binary, library, scenario, operations)
             print(json.dumps(result), flush=True)
             if arguments.check:
                 counts = result["counts"]
+                if scenario == "dock_startup":
+                    if not operations <= counts["get_property"] <= 12 * operations + 100:
+                        raise AssertionError("Repeated dock reads or inactive tracer: " + json.dumps(result))
+                    continue
                 operations_flush_budget = result["operations"] * 20
                 reads = result["operations"] * (1 if scenario == "metadata" else 2)
                 if not result["operations"] - 1 <= counts["get_property"] <= reads:

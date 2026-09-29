@@ -13,7 +13,7 @@ void WindowManager::setup_ewmh()
     ewmh_.set_wm_name("lwm");
 
     update_ewmh_desktops();
-    update_ewmh_current_desktop();
+    request_current_desktop_update();
 }
 
 void WindowManager::update_ewmh_desktops()
@@ -87,13 +87,7 @@ void WindowManager::publish_client_list()
     }
     ewmh_.update_client_list(windows);
 
-    stacking_dirty_ = true;
-}
-
-void WindowManager::flush_stacking_list()
-{
-    if (stacking_dirty_)
-        apply_stacking();
+    effects_.stacking = true;
 }
 
 void WindowManager::publish_current_desktop()
@@ -103,7 +97,7 @@ void WindowManager::publish_current_desktop()
     size_t const workspace_idx = focused_monitor().current_workspace;
     uint32_t const desktop = get_ewmh_desktop_index(monitor_idx, workspace_idx);
     LOG_TRACE(
-        "update_ewmh_current_desktop: monitor={} workspace={} desktop={}",
+        "request_current_desktop_update: monitor={} workspace={} desktop={}",
         monitor_idx,
         workspace_idx,
         desktop
@@ -187,7 +181,7 @@ void WindowManager::switch_to_ewmh_desktop(uint32_t desktop)
     if (!apply_workspace_switch(monitor_idx, workspace_idx))
     {
         // Only monitor changed (or no-op), no workspace switch needed.
-        update_ewmh_current_desktop();
+        request_current_desktop_update();
     }
     focus_or_fallback(monitor);
 
