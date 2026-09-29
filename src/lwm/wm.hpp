@@ -338,6 +338,9 @@ private:
     void refresh_user_time_tracking_into(Client& client);
     void refresh_user_time_tracking(xcb_window_t window);
     void reevaluate_managed_window(xcb_window_t window);
+    void reevaluate_metadata(xcb_window_t window, WindowRuleResult const& previous);
+    bool
+    claim_pending_scratchpad(xcb_window_t window, WindowMatchInfo const& properties, WindowRuleResult const& rules);
     void sync_managed_window_classification(xcb_window_t window, ClassificationResult const& result);
     bool sync_kind(xcb_window_t window, WindowClassification::Kind desired_kind);
     void relocate_to_transient_parent(xcb_window_t window, xcb_window_t previous_transient_for);

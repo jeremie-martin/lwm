@@ -104,13 +104,7 @@ void WindowManager::reapply_rules_to_existing_windows()
         if (!client)
             continue;
 
-        WindowMatchInfo match_info{
-            .wm_class = client->wm_class,
-            .wm_class_name = client->wm_class_name,
-            .title = client->name,
-            .ewmh_type = client->ewmh_type,
-            .is_transient = client->transient_for != XCB_NONE,
-        };
+        auto match_info = window_match_info(*client);
 
         auto rule_result = window_rules_.match(match_info, monitors_, config_.workspaces.names);
         if (rule_result.matched)
@@ -131,10 +125,7 @@ ClassificationResult WindowManager::classify_managed_window(xcb_window_t window)
     WindowMatchInfo match_info;
     if (auto const* existing = get_client(window))
     {
-        match_info.wm_class = existing->wm_class;
-        match_info.wm_class_name = existing->wm_class_name;
-        match_info.title = existing->name;
-        match_info.ewmh_type = existing->ewmh_type;
+        match_info = window_match_info(*existing);
     }
     else
     {
@@ -342,21 +333,43 @@ void WindowManager::reevaluate_managed_window(xcb_window_t window)
 
     auto result = classify_managed_window(window);
 
-    if (!client->scratchpad.has_value())
-    {
-        auto scratchpad_match = match_scratchpad_for_window(result.properties, result.rule_result);
-        if (scratchpad_match)
-        {
-            auto* state = find_named_scratchpad(*scratchpad_match);
-            if (state && state->window() == XCB_NONE && state->pending_launch())
-            {
-                finalize_scratchpad_claim(window, *state, *scratchpad_match);
-                return;
-            }
-        }
-    }
+    if (claim_pending_scratchpad(window, result.properties, result.rule_result))
+        return;
 
     sync_managed_window_classification(window, result);
+}
+
+bool WindowManager::claim_pending_scratchpad(
+    xcb_window_t window,
+    WindowMatchInfo const& properties,
+    WindowRuleResult const& rules
+)
+{
+    auto const& client = require_client(window);
+    if (client.scratchpad)
+        return false;
+    auto name = match_scratchpad_for_window(properties, rules);
+    if (!name)
+        return false;
+    auto* state = find_named_scratchpad(*name);
+    if (!state || state->window() != XCB_NONE || !state->pending_launch())
+        return false;
+    finalize_scratchpad_claim(window, *state, *name);
+    return true;
+}
+
+void WindowManager::reevaluate_metadata(xcb_window_t window, WindowRuleResult const& previous)
+{
+    auto const& client = require_client(window);
+    if (client.kind() != Client::Kind::Tiled && client.kind() != Client::Kind::Floating)
+        return;
+    auto properties = window_match_info(client);
+    auto current = window_rules_.match(properties, monitors_, config_.workspaces.names);
+    if (claim_pending_scratchpad(window, properties, current))
+        return;
+    // Metadata alone must not reapply placement or undo a user's state changes.
+    if (current != previous)
+        reevaluate_managed_window(window);
 }
 
 } // namespace lwm

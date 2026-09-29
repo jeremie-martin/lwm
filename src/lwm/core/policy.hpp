@@ -14,6 +14,7 @@
 #include <functional>
 #include <optional>
 #include <span>
+#include <unordered_map>
 #include <utility>
 
 namespace lwm::ewmh_policy {
@@ -603,6 +604,68 @@ inline std::vector<xcb_window_t> compute_order(std::span<ClientStackInputs const
     for (auto const& in : ranked)
         result.push_back(in.id);
     return result;
+}
+
+struct StackMove
+{
+    xcb_window_t window;
+    xcb_window_t sibling;
+    uint32_t mode;
+};
+
+// Keep a longest subsequence already in server order. Each other visible
+// managed window needs one move; unrelated root children are not reordered.
+inline std::vector<StackMove>
+plan_moves(std::span<xcb_window_t const> server_order, std::span<xcb_window_t const> desired_order)
+{
+    std::unordered_map<xcb_window_t, size_t> positions;
+    positions.reserve(server_order.size());
+    for (size_t i = 0; i < server_order.size(); ++i) positions.emplace(server_order[i], i);
+    std::vector<xcb_window_t> windows;
+    std::vector<size_t> ranks;
+    for (auto window : desired_order)
+    {
+        auto found = positions.find(window);
+        // A client may have been destroyed since the policy was computed.
+        if (found == positions.end())
+            continue;
+        windows.push_back(window);
+        ranks.push_back(found->second);
+    }
+    if (std::is_sorted(ranks.begin(), ranks.end()))
+        return {};
+    size_t none = windows.size();
+    std::vector<size_t> tails, previous(windows.size(), none);
+    for (size_t i = 0; i < windows.size(); ++i)
+    {
+        auto tail = std::lower_bound(
+            tails.begin(),
+            tails.end(),
+            ranks[i],
+            [&](size_t index, size_t rank) { return ranks[index] < rank; }
+        );
+        if (tail != tails.begin())
+            previous[i] = *(tail - 1);
+        if (tail == tails.end())
+            tails.push_back(i);
+        else
+            *tail = i;
+    }
+    std::vector<bool> keep(windows.size());
+    size_t anchor = tails.back();
+    for (size_t i = anchor; i != none; i = previous[i])
+    {
+        keep[i] = true;
+        anchor = i;
+    }
+    std::vector<StackMove> moves;
+    moves.reserve(windows.size() - tails.size());
+    for (size_t i = 0; i < windows.size(); ++i)
+        if (!keep[i])
+            moves.push_back(
+                { windows[i], i ? windows[i - 1] : windows[anchor], i ? XCB_STACK_MODE_ABOVE : XCB_STACK_MODE_BELOW }
+            );
+    return moves;
 }
 
 } // namespace lwm::stacking_policy

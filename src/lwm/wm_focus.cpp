@@ -102,13 +102,7 @@ void WindowManager::focus_any_window(xcb_window_t window, bool record_user_time,
         clear_client_urgency(*client);
     ewmh_.set_active_window(window);
     if (net_wm_state_focused_ != XCB_NONE)
-    {
-        if (previous_active != XCB_NONE && previous_active != window && is_managed(previous_active))
-        {
-            ewmh_.set_window_state(previous_active, net_wm_state_focused_, false);
-        }
-        ewmh_.set_window_state(window, net_wm_state_focused_, true);
-    }
+        ewmh_.set_focus_state(is_managed(previous_active) ? previous_active : XCB_NONE, window, net_wm_state_focused_);
 
     // Persist the focus time into user_time, and never let it regress —
     // focus-stealing prevention (see handle_active_window_request) relies on

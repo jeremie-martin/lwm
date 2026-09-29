@@ -144,3 +144,48 @@ TEST_CASE("compute_order: order field is the ultimate tiebreaker", "[stacking][p
     REQUIRE(order[1] == 0x1);
     REQUIRE(order[2] == 0x2);
 }
+
+TEST_CASE("Stack moves produce the requested order with the minimum number of moves", "[stacking][policy]")
+{
+    for (size_t n = 0; n <= 6; ++n)
+    {
+        std::vector<xcb_window_t> desired;
+        for (size_t i = 0; i < n; ++i) desired.push_back(static_cast<xcb_window_t>(i + 1));
+        auto actual = desired;
+        do {
+            // Independent exhaustive reference: largest already-ordered subset.
+            size_t longest = 0;
+            for (size_t mask = 0; mask < (size_t{ 1 } << n); ++mask)
+            {
+                std::vector<xcb_window_t> subset;
+                for (size_t i = 0; i < n; ++i)
+                    if (mask & (size_t{ 1 } << i))
+                        subset.push_back(actual[i]);
+                if (std::is_sorted(subset.begin(), subset.end()))
+                    longest = std::max(longest, subset.size());
+            }
+            auto moves = plan_moves(actual, desired);
+            REQUIRE(moves.size() == n - longest);
+            auto result = actual;
+            for (auto move : moves)
+            {
+                std::erase(result, move.window);
+                auto sibling = std::ranges::find(result, move.sibling);
+                REQUIRE(sibling != result.end());
+                result.insert(sibling + (move.mode == XCB_STACK_MODE_ABOVE ? 1 : 0), move.window);
+            }
+            REQUIRE(result == desired);
+        } while (std::next_permutation(actual.begin(), actual.end()));
+    }
+}
+
+TEST_CASE("Stack planning ignores unrelated and already-destroyed root children", "[stacking][policy]")
+{
+    std::vector<xcb_window_t> actual{ 90, 3, 91, 1, 92, 2 };
+    std::vector<xcb_window_t> desired{ 1, 2, 3, 4 };
+    auto moves = plan_moves(actual, desired);
+    REQUIRE(moves.size() == 1);
+    CHECK(moves[0].window == 3);
+    CHECK(moves[0].sibling == 2);
+    CHECK(moves[0].mode == XCB_STACK_MODE_ABOVE);
+}

@@ -1,4 +1,5 @@
 #include "ewmh.hpp"
+#include <algorithm>
 #include <cstring>
 
 namespace lwm {
@@ -251,37 +252,46 @@ void Ewmh::update_client_list_stacking(std::vector<xcb_window_t> const& windows)
 
 void Ewmh::set_window_state(xcb_window_t window, xcb_atom_t state, bool enabled)
 {
-    xcb_ewmh_get_atoms_reply_t current_state;
-    bool has_current =
-        xcb_ewmh_get_wm_state_reply(&ewmh_, xcb_ewmh_get_wm_state(&ewmh_, window), &current_state, nullptr);
+    apply_window_state(window, state, enabled, xcb_ewmh_get_wm_state(&ewmh_, window));
+}
 
-    std::vector<xcb_atom_t> new_state;
+void Ewmh::set_focus_state(xcb_window_t previous, xcb_window_t current, xcb_atom_t focused_atom)
+{
+    bool clear_previous = previous != XCB_NONE && previous != current;
+    xcb_get_property_cookie_t old_cookie{}, new_cookie{};
+    // Send independent reads together; preserve atoms owned by other clients
+    // without serializing a separate round trip for each focused-state change.
+    if (clear_previous)
+        old_cookie = xcb_ewmh_get_wm_state(&ewmh_, previous);
+    if (current != XCB_NONE)
+        new_cookie = xcb_ewmh_get_wm_state(&ewmh_, current);
+    if (clear_previous)
+        apply_window_state(previous, focused_atom, false, old_cookie);
+    if (current != XCB_NONE)
+        apply_window_state(current, focused_atom, true, new_cookie);
+}
 
-    if (has_current)
+void Ewmh::apply_window_state(xcb_window_t window, xcb_atom_t state, bool enabled, xcb_get_property_cookie_t cookie)
+{
+    xcb_ewmh_get_atoms_reply_t current{};
+    bool present = xcb_ewmh_get_wm_state_reply(&ewmh_, cookie, &current, nullptr);
+    std::vector<xcb_atom_t> atoms;
+    if (present)
     {
-        for (uint32_t i = 0; i < current_state.atoms_len; ++i)
-        {
-            if (current_state.atoms[i] != state)
-            {
-                new_state.push_back(current_state.atoms[i]);
-            }
-        }
-        xcb_ewmh_get_atoms_reply_wipe(&current_state);
+        atoms.assign(current.atoms, current.atoms + current.atoms_len);
+        xcb_ewmh_get_atoms_reply_wipe(&current);
     }
-
+    bool contains = std::ranges::find(atoms, state) != atoms.end();
+    if (contains == enabled)
+        return;
     if (enabled)
-    {
-        new_state.push_back(state);
-    }
-
-    if (new_state.empty())
-    {
-        xcb_delete_property(conn_.get(), window, ewmh_._NET_WM_STATE);
-    }
+        atoms.push_back(state);
     else
-    {
-        xcb_ewmh_set_wm_state(&ewmh_, window, new_state.size(), new_state.data());
-    }
+        std::erase(atoms, state);
+    if (atoms.empty())
+        xcb_delete_property(conn_.get(), window, ewmh_._NET_WM_STATE);
+    else
+        xcb_ewmh_set_wm_state(&ewmh_, window, atoms.size(), atoms.data());
 }
 
 bool Ewmh::has_window_state(xcb_window_t window, xcb_atom_t state) const

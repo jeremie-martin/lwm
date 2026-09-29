@@ -1849,3 +1849,99 @@ TEST_CASE("Integration: multiple transients of same parent all stack above it", 
     destroy_window(conn, transient1);
     destroy_window(conn, parent);
 }
+
+TEST_CASE("Integration: unchanged stacking policy repairs an external server restack", "[integration][stacking]")
+{
+    auto env = TestEnvironment::create();
+    if (!env)
+        SKIP("X11 unavailable");
+    auto& conn = env->conn;
+    xcb_warp_pointer(conn.get(), XCB_NONE, conn.root(), 0, 0, 0, 0, 0, 0);
+    xcb_flush(conn.get());
+    std::vector<xcb_window_t> windows;
+    for (int i = 0; i < 6; ++i)
+    {
+        auto window = create_window(conn, 10, 10, 100, 100);
+        windows.push_back(window);
+        map_window(conn, window);
+        REQUIRE(wait_for_active_window(conn, window, kTimeout));
+    }
+    auto actual_order = [&]
+    {
+        auto* reply = xcb_query_tree_reply(conn.get(), xcb_query_tree(conn.get(), conn.root()), nullptr);
+        std::vector<xcb_window_t> result;
+        if (reply)
+        {
+            auto* children = xcb_query_tree_children(reply);
+            for (int i = 0; i < xcb_query_tree_children_length(reply); ++i)
+                if (std::ranges::find(windows, children[i]) != windows.end())
+                    result.push_back(children[i]);
+        }
+        free(reply);
+        return result;
+    };
+    REQUIRE(wait_for_condition([&] { return actual_order() == windows; }, kTimeout));
+    // Bypass SubstructureRedirect to mutate server order outside the WM funnel.
+    uint32_t override_redirect = 1, above = XCB_STACK_MODE_ABOVE;
+    xcb_change_window_attributes(conn.get(), windows.front(), XCB_CW_OVERRIDE_REDIRECT, &override_redirect);
+    xcb_configure_window(conn.get(), windows.front(), XCB_CONFIG_WINDOW_STACK_MODE, &above);
+    override_redirect = 0;
+    xcb_change_window_attributes(conn.get(), windows.front(), XCB_CW_OVERRIDE_REDIRECT, &override_redirect);
+    xcb_flush(conn.get());
+    REQUIRE(wait_for_condition(
+        [&]
+        {
+            auto order = actual_order();
+            return !order.empty() && order.back() == windows.front();
+        },
+        kTimeout
+    ));
+    auto result = run_lwmctl(env->wm, { "focus", "window=" + std::to_string(windows.back()) });
+    REQUIRE(result);
+    REQUIRE(result->exit_code == 0);
+    REQUIRE(wait_for_condition([&] { return actual_order() == windows; }, kTimeout));
+    for (auto window : windows) destroy_window(conn, window);
+}
+
+TEST_CASE(
+    "Integration: focus preserves unknown state atoms and reasserts unchanged focus",
+    "[integration][focus][ewmh]"
+)
+{
+    auto env = TestEnvironment::create();
+    if (!env)
+        SKIP("X11 unavailable");
+    auto& conn = env->conn;
+    auto a = create_window(conn, 10, 10, 100, 100);
+    auto b = create_window(conn, 10, 10, 100, 100);
+    map_window(conn, a);
+    REQUIRE(wait_for_active_window(conn, a, kTimeout));
+    map_window(conn, b);
+    REQUIRE(wait_for_active_window(conn, b, kTimeout));
+    auto unknown = intern_atom(conn.get(), "_LWM_TEST_UNKNOWN_STATE");
+    auto focused = intern_atom(conn.get(), "_NET_WM_STATE_FOCUSED");
+    set_initial_window_state(conn, a, { unknown });
+    set_initial_window_state(conn, b, { unknown, focused });
+    for (auto target : { a, b })
+    {
+        auto result = run_lwmctl(env->wm, { "focus", "window=" + std::to_string(target) });
+        REQUIRE(result);
+        REQUIRE(result->exit_code == 0);
+        CHECK(has_state(conn, target, focused));
+        CHECK_FALSE(has_state(conn, target == a ? b : a, focused));
+        CHECK(has_state(conn, a, unknown));
+        CHECK(has_state(conn, b, unknown));
+    }
+    set_initial_window_state(conn, b, { unknown });
+    xcb_set_input_focus(conn.get(), XCB_INPUT_FOCUS_POINTER_ROOT, conn.root(), XCB_CURRENT_TIME);
+    xcb_flush(conn.get());
+    REQUIRE(wait_for_x_input_focus(conn, conn.root(), kTimeout));
+    auto result = run_lwmctl(env->wm, { "focus", "window=" + std::to_string(b) });
+    REQUIRE(result);
+    REQUIRE(result->exit_code == 0);
+    REQUIRE(wait_for_x_input_focus(conn, b, kTimeout));
+    CHECK(has_state(conn, b, focused));
+    CHECK(has_state(conn, b, unknown));
+    destroy_window(conn, a);
+    destroy_window(conn, b);
+}

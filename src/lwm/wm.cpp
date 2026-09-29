@@ -2361,27 +2361,38 @@ void WindowManager::apply_stacking()
             break;
     }
 
-    // Always restack: other clients can perturb the X stack independently of
-    // our policy, so replay the sibling chain whenever stacking is reconciled.
-    auto stack_above_sibling = [this](xcb_window_t window, xcb_window_t sibling)
-    {
-        uint32_t values[2] = { sibling, XCB_STACK_MODE_ABOVE };
-        uint16_t mask = XCB_CONFIG_WINDOW_SIBLING | XCB_CONFIG_WINDOW_STACK_MODE;
-        xcb_configure_window(conn_.get(), window, mask, values);
-    };
+    std::vector<xcb_window_t> visible;
+    visible.reserve(order.size());
+    for (auto window : order)
+        if (auto const* client = get_client(window); client && stack_inputs_of(*client).visible)
+            visible.push_back(window);
 
-    xcb_window_t prev_visible = XCB_NONE;
-    for (xcb_window_t window : order)
+    if (visible.size() > 1)
     {
-        auto const* client = get_client(window);
-        if (!client)
-            continue;
-        if (!stack_inputs_of(*client).visible)
-            continue;
-
-        if (prev_visible != XCB_NONE)
-            stack_above_sibling(window, prev_visible);
-        prev_visible = window;
+        // Read server truth instead of trusting a cached desired order: external
+        // restacks must still be repaired, including when our policy is unchanged.
+        auto cookie = xcb_query_tree(conn_.get(), conn_.screen()->root);
+        auto* reply = xcb_query_tree_reply(conn_.get(), cookie, nullptr);
+        std::vector<stacking_policy::StackMove> moves;
+        if (reply)
+            moves = stacking_policy::plan_moves(
+                { xcb_query_tree_children(reply), static_cast<size_t>(xcb_query_tree_children_length(reply)) },
+                visible
+            );
+        else
+            for (size_t i = 1; i < visible.size(); ++i)
+                moves.push_back({ visible[i], visible[i - 1], XCB_STACK_MODE_ABOVE });
+        free(reply);
+        for (auto const& move : moves)
+        {
+            uint32_t values[] = { move.sibling, move.mode };
+            xcb_configure_window(
+                conn_.get(),
+                move.window,
+                XCB_CONFIG_WINDOW_SIBLING | XCB_CONFIG_WINDOW_STACK_MODE,
+                values
+            );
+        }
     }
 
     ewmh_.update_client_list_stacking(order);
@@ -2740,22 +2751,15 @@ uint32_t WindowManager::get_user_time(xcb_window_t window)
 
 void WindowManager::update_window_title(xcb_window_t window)
 {
-    std::string name = get_window_name(window);
-
     auto* client = get_client(window);
     if (!client)
         return;
-
-    std::string previous_name = client->name;
-    client->name = name;
-
-    // Re-evaluate window rules when the title changes so title-based placement
-    // rules apply even when the client sets its title after MapRequest.
-    if (name != previous_name)
-    {
-        reevaluate_managed_window(window);
-        conn_.flush();
-    }
+    auto name = get_window_name(window);
+    if (name == client->name)
+        return;
+    auto previous = window_rules_.match(window_match_info(*client), monitors_, config_.workspaces.names);
+    client->name = std::move(name);
+    reevaluate_metadata(window, previous);
 }
 
 void WindowManager::update_struts()

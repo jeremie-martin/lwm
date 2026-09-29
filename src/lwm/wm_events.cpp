@@ -1469,9 +1469,13 @@ void WindowManager::handle_property_notify(xcb_property_notify_event_t const& e)
         if (auto* client = get_client(e.window))
         {
             auto [instance, name] = get_wm_class(e.window);
-            client->wm_class_name = std::move(instance);
-            client->wm_class = std::move(name);
-            reevaluate_managed_window(e.window);
+            if (client->wm_class_name != instance || client->wm_class != name)
+            {
+                auto previous = window_rules_.match(window_match_info(*client), monitors_, config_.workspaces.names);
+                client->wm_class_name = std::move(instance);
+                client->wm_class = std::move(name);
+                reevaluate_metadata(e.window, previous);
+            }
         }
     }
     else if (e.atom == ewmh_.get()->_NET_WM_WINDOW_TYPE

@@ -54,6 +54,11 @@ struct WindowMatchInfo
     bool is_transient = false;
 };
 
+inline WindowMatchInfo window_match_info(Client const& client)
+{
+    return { client.wm_class, client.wm_class_name, client.name, client.ewmh_type, client.transient_for != XCB_NONE };
+}
+
 // Optional actions preserve the distinction between unspecified and false.
 struct WindowRuleResult
 {
@@ -80,6 +85,8 @@ struct WindowRuleResult
 
     // Scratchpad assignment
     std::optional<std::string> scratchpad;
+
+    bool operator==(WindowRuleResult const&) const = default;
 };
 
 // First matching rule wins; every specified criterion must match.

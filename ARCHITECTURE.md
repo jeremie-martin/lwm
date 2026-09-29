@@ -150,8 +150,11 @@ geometry only and does not create cross-monitor ownership.
 stacking dirty; it is reconciled at startup, at the end of an event-loop
 iteration, before IPC replies/subscription events, and before a crossing-event
 drain. The drain includes the restack because it can generate crossing events.
-Each reconciliation reasserts the server order even if the desired order is
-unchanged, since other X clients can perturb it. It computes the X order and
+Each reconciliation compares the desired visible order with a fresh root
+`QueryTree` reply. A longest increasing subsequence identifies the windows
+already in order; each remaining window needs one sibling move. This repairs
+external restacks without maintaining a second cached authority for X order.
+Unrelated root children are not themselves moved. It computes the X order and
 `_NET_CLIENT_LIST_STACKING` together. Physically hidden clients sort before
 visible clients. Desktop clients use the Below tier and docks use the
 Above tier; tiled and floating clients use Below, Normal, Above, or Fullscreen
@@ -166,7 +169,10 @@ deiconifies when necessary, switches the target monitor's workspace when
 necessary, checks the resulting fullscreen suppression, then commits active
 focus, focus memory and recency. It sends `WM_TAKE_FOCUS` when
 advertised, sets X input focus, marks stacking dirty, updates EWMH focus state,
-clears urgency, and emits the IPC event.
+clears urgency, and emits the IPC event. Reads of the old and new windows'
+`_NET_WM_STATE` are issued together; updates preserve unrelated atoms and avoid
+rewriting an already-correct state. Explicit same-window focus still reasserts
+input focus, protocol notifications, and server stacking.
 
 Docks, desktops, iconic clients, and fullscreen-suppressed clients are excluded
 from fallback and cycling. Explicit activation can deiconify a client before
@@ -198,6 +204,11 @@ and rule/scratchpad matching use the same captured properties; initial client
 registration reuses these values. This is consistency within one update, not
 an atomic snapshot of independently changing X properties. Managed
 class/title/type data are refreshed at their property-notification boundaries.
+Title and class updates compare rule results before and after updating metadata.
+Unchanged actions leave placement and user state intact; changed results enter
+the normal classification transition. Pending scratchpad claims are checked even
+when the rule result is unchanged. Type/transient changes still reclassify, and
+config reload explicitly reapplies matching rules.
 Reload uses the current effective state as its baseline, preserving unspecified
 state and the existing behavior when no rule matches. Placement and fullscreen overrides use
 the same transition helpers in all three paths.

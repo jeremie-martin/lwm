@@ -2,6 +2,7 @@
 #include <algorithm>
 #include <catch2/catch_test_macros.hpp>
 #include <chrono>
+#include <nlohmann/json.hpp>
 #include <optional>
 #include <thread>
 #include <vector>
@@ -1372,5 +1373,75 @@ TEST_CASE("Integration: pointer resize saturates an oversized floating extent", 
         kTimeout
     ));
     send_client_message(conn, window, atom, 120, 100, 11);
+    destroy_window(conn, window);
+}
+
+TEST_CASE(
+    "Integration: unchanged metadata rule results preserve user placement",
+    "[integration][property][rules][metadata]"
+)
+{
+    std::string config;
+    SECTION("no rules") { }
+    SECTION("unrelated rule") { config = "[[rules]]\nmatch = { class = 'Other' }\napply = { floating = true }\n"; }
+    SECTION("same matching title rule")
+    {
+        config = "[[rules]]\nmatch = { title = 'work-.*' }\napply = { floating = true, center = true }\n";
+    }
+    SECTION("same matching class rule")
+    {
+        config = "[[rules]]\nmatch = { class = 'Stable.*' }\napply = { floating = true, center = true }\n";
+    }
+    auto env = TestEnvironment::create(config);
+    if (!env)
+        SKIP("X11 unavailable");
+    auto& conn = env->conn;
+    auto socket = wait_for_ipc_socket_path(conn);
+    REQUIRE(socket);
+    auto window = create_window(conn, 10, 10, 300, 200);
+    set_window_type(conn, window, intern_atom(conn.get(), "_NET_WM_WINDOW_TYPE_DIALOG"));
+    set_window_title(conn, window, "work-one");
+    set_window_wm_class(conn, window, "instance", "StableOne");
+    map_window(conn, window);
+    REQUIRE(wait_for_active_window(conn, window, kTimeout));
+    send_client_message(
+        conn,
+        window,
+        intern_atom(conn.get(), "_NET_MOVERESIZE_WINDOW"),
+        (1u << 8) | (1u << 9) | (1u << 10) | (1u << 11),
+        123,
+        87,
+        345,
+        234
+    );
+    REQUIRE(wait_for_condition(
+        [&]
+        {
+            auto geometry = get_window_geometry(conn, window);
+            return geometry && geometry->x == 123 && geometry->y == 87 && geometry->width == 345;
+        },
+        kTimeout
+    ));
+    auto previous = get_window_geometry(conn, window);
+    REQUIRE(previous);
+    set_window_title(conn, window, "work-two");
+    set_window_wm_class(conn, window, "instance", "StableTwo");
+    REQUIRE(wait_for_condition(
+        [&]
+        {
+            auto reply = send_ipc_command(*socket, "window list");
+            if (!reply || !reply->starts_with("ok "))
+                return false;
+            auto value = nlohmann::json::parse(reply->substr(3), nullptr, false);
+            if (value.is_discarded())
+                return false;
+            auto const& windows = value.at("windows");
+            return windows.size() == 1 && windows.at(0).at("id") == window && windows.at(0).at("title") == "work-two"
+                && windows.at(0).at("class") == "StableTwo";
+        },
+        kTimeout
+    ));
+    CHECK(get_window_geometry(conn, window) == previous);
+    REQUIRE(wait_for_active_window(conn, window, kTimeout));
     destroy_window(conn, window);
 }

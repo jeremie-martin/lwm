@@ -76,6 +76,7 @@ public:
     // Per-window properties
     void set_window_desktop(xcb_window_t window, uint32_t desktop);
     void set_window_state(xcb_window_t window, xcb_atom_t state, bool enabled);
+    void set_focus_state(xcb_window_t previous, xcb_window_t current, xcb_atom_t focused_atom);
     bool has_window_state(xcb_window_t window, xcb_atom_t state) const;
     WindowStateFlags get_window_state_flags(xcb_window_t window) const;
 
@@ -106,6 +107,7 @@ private:
     std::vector<xcb_atom_t> extra_supported_atoms_;
 
     void create_supporting_window();
+    void apply_window_state(xcb_window_t window, xcb_atom_t state, bool enabled, xcb_get_property_cookie_t cookie);
 };
 
 } // namespace lwm
