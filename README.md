@@ -56,11 +56,11 @@ focused tests, sanitizers, and separate Debug/Release builds.
 sudo make install
 ```
 
-With the default CMake prefix this installs `lwm`, `lwmctl`, and `lwm-notify`
+With the default CMake prefix this installs `lwm`, `lwmctl`, `lwm-notify`, and `lwm-notify-bridge`
 under `/usr/local/bin`.
 
 `sudo make uninstall` removes the files recorded in `build/install_manifest.txt`,
-including all three programs. Keep the build directory used for installation;
+including all four programs. Keep the build directory used for installation;
 for another build directory use `make uninstall BUILD_DIR=...`. This honors the
 prefix used at install time. For a staged installation, supply the same `DESTDIR`
 when uninstalling. Missing files are harmless; directories are left in place.
@@ -124,6 +124,7 @@ lwmctl workspace switch 2
 lwmctl layout set monocle
 lwmctl ratio adjust -0.05
 lwmctl window list
+lwmctl state
 lwmctl scratchpad list
 lwmctl subscribe focus_change,workspace_switch
 lwmctl reload-config
@@ -133,7 +134,10 @@ lwmctl restart
 `lwm-notify [notify-send arguments...]` shows a desktop notification when
 `notify-send` is installed. When the caller has a numeric `WINDOWID`, it also
 marks that exact managed source window urgent; LWM does not guess a source from
-notification metadata.
+notification metadata. The optional `lwm-notify-bridge` forwards desktop
+notifications that carry an explicit `x-window-id` hint; it requires `busctl`
+and `jq`. Run it in your session only if needed. It does not infer a target from
+application names, and reports command errors to stderr.
 
 List commands return JSON and subscriptions stream JSON Lines. See
 [IPC.md](IPC.md) for discovery, the raw wire protocol, schemas, and delivery

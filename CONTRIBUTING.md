@@ -98,6 +98,17 @@ catch repeated workarea scans during adoption. Omit `--check` to compare an olde
 binary. These are protocol-work budgets, not latency measurements; measure
 uninstrumented Release builds separately on an otherwise idle machine.
 
+For independent IPC callers, run:
+
+```sh
+python3 tests/performance/ipc_load.py build/release/src/app/lwm --check
+```
+
+This uses an owned Xvfb server and 16 concurrent callers, both normally and with
+an incomplete request already connected. All 512 pings must succeed in each
+case. Reported latency is descriptive, not a pass/fail threshold. Omit `--check`
+when comparing an older binary with the former single-client limit.
+
 ## Nested preview
 
 For an interactive check, install Xephyr (`xorg-server-xephyr` on Arch Linux,

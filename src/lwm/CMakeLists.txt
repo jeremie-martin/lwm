@@ -4,6 +4,7 @@ add_library(liblwm STATIC
     core/ewmh.cpp
     core/floating.cpp
     core/focus.cpp
+    core/ipc_command.cpp
     core/ipc_server.cpp
     core/restart.cpp
     core/ipc.cpp

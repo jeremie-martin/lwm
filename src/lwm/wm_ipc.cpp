@@ -1,22 +1,8 @@
 #include "wm.hpp"
 #include <algorithm>
-#include <cctype>
-#include <charconv>
-#include <cmath>
 
 namespace lwm {
 namespace {
-std::string trim_ascii(std::string_view value)
-{
-    size_t start = 0;
-    while (start < value.size() && std::isspace(static_cast<unsigned char>(value[start]))) ++start;
-
-    size_t end = value.size();
-    while (end > start && std::isspace(static_cast<unsigned char>(value[end - 1]))) --end;
-
-    return std::string(value.substr(start, end - start));
-}
-
 std::string ok_reply(std::string const& message)
 {
     if (message.empty())
@@ -25,40 +11,6 @@ std::string ok_reply(std::string const& message)
 }
 
 std::string error_reply(std::string const& message) { return "error " + message; }
-
-std::optional<double> parse_finite_number(std::string_view text)
-{
-    if (text.starts_with('+'))
-        text.remove_prefix(1);
-    double value;
-    auto [end, error] = std::from_chars(text.data(), text.data() + text.size(), value);
-    if (error != std::errc{} || end != text.data() + text.size() || !std::isfinite(value))
-        return std::nullopt;
-    return value;
-}
-
-std::optional<xcb_window_t> parse_window_id(std::string_view value)
-{
-    uint32_t xid = 0;
-    int base = 10;
-    std::string_view digits = value;
-
-    if (digits.size() > 2 && digits[0] == '0' && (digits[1] == 'x' || digits[1] == 'X'))
-    {
-        base = 16;
-        digits.remove_prefix(2);
-    }
-
-    if (digits.empty())
-        return std::nullopt;
-
-    auto [ptr, ec] = std::from_chars(digits.data(), digits.data() + digits.size(), xid, base);
-    if (ec != std::errc{} || ptr != digits.data() + digits.size())
-        return std::nullopt;
-
-    return static_cast<xcb_window_t>(xid);
-}
-
 }
 
 void WindowManager::queue_event(EventType type, std::string json)
@@ -66,19 +18,19 @@ void WindowManager::queue_event(EventType type, std::string json)
     effects_.events.emplace_back(type, std::move(json));
 }
 
-std::string WindowManager::run_ipc_command(std::string const& command)
+std::string WindowManager::run_ipc_command(ipc::Command const& command)
 {
-    auto const& trimmed = command;
-    if (trimmed.empty())
-        return error_reply("empty command");
-
-    if (trimmed == "ping")
+    using enum ipc::CommandId;
+    if (command.id != Ping && command.id != Version && command.id != WorkspaceList && command.id != WindowList
+        && command.id != ScratchpadList && command.id != State)
+        effects_.state_changed |= ipc_.has_subscribers(Event_StateChange);
+    if (command.id == Ping)
         return ok_reply("pong");
 
-    if (trimmed == "version")
+    if (command.id == Version)
         return ok_reply(LWM_VERSION);
 
-    if (trimmed == "reload-config")
+    if (command.id == Reload)
     {
         auto result = reload_config();
         emit_config_reload_result(result, "ipc");
@@ -87,77 +39,65 @@ std::string WindowManager::run_ipc_command(std::string const& command)
         return ok_reply("reloaded");
     }
 
-    if (trimmed == "restart")
+    if (command.id == Restart)
     {
         initiate_restart();
         return ok_reply("restarting");
     }
 
-    if (trimmed.starts_with("exec "))
+    if (command.id == Exec)
     {
-        std::string binary = trim_ascii(trimmed.substr(5));
-        if (binary.empty())
-            return error_reply("exec requires a binary path");
+        std::string binary = std::get<std::string>(command.argument);
         initiate_restart(std::move(binary));
         return ok_reply("restarting");
     }
 
     // Layout commands
+    if (command.id == Layout)
     {
-        constexpr std::string_view layout_set_prefix = "layout set ";
-        if (trimmed.starts_with(layout_set_prefix))
+        auto const& name = std::get<std::string>(command.argument);
+        if (focused_monitor_ >= monitors_.size())
+            return error_reply("no focused monitor");
+        auto strategy = parse_layout_strategy(name);
+        if (!strategy)
+            return error_reply("unknown layout: " + name);
+        focused_monitor().current().layout_strategy = *strategy;
+        invalidate_monitor(focused_monitor_);
+        effects_.drain_crossing = true;
+        std::string strategy_name = layout_strategy_str(*strategy);
+        if (ipc_.has_subscribers(Event_LayoutChange))
         {
-            std::string name = trim_ascii(trimmed.substr(layout_set_prefix.size()));
-            if (focused_monitor_ >= monitors_.size())
-                return error_reply("no focused monitor");
-            auto strategy = parse_layout_strategy(name);
-            if (!strategy)
-                return error_reply("unknown layout: " + name);
-            focused_monitor().current().layout_strategy = *strategy;
-            invalidate_monitor(focused_monitor_);
-            effects_.drain_crossing = true;
-            std::string strategy_name = layout_strategy_str(*strategy);
-            if (ipc_.has_subscribers(Event_LayoutChange))
-            {
-                queue_event(
-                    Event_LayoutChange,
-                    "{\"event\":\"layout_change\",\"action\":\"layout_set\",\"value\":\"" + strategy_name + "\"}"
-                );
-            }
-            return ok_reply("layout set to " + strategy_name);
+            queue_event(
+                Event_LayoutChange,
+                "{\"event\":\"layout_change\",\"action\":\"layout_set\",\"value\":\"" + strategy_name + "\"}"
+            );
         }
+        return ok_reply("layout set to " + strategy_name);
     }
 
+    if (command.id == RatioSet)
     {
-        constexpr std::string_view ratio_set_prefix = "ratio set ";
-        if (trimmed.starts_with(ratio_set_prefix))
+        double val = std::get<double>(command.argument);
+        double min_r = config_.layout.min_ratio;
+        if (val < min_r || val > 1.0 - min_r)
+            return error_reply(
+                "ratio out of range [" + std::to_string(min_r) + ", " + std::to_string(1.0 - min_r) + "]"
+            );
+        if (focused_monitor_ >= monitors_.size())
+            return error_reply("no focused monitor");
+        focused_monitor().current().split_ratios[SplitAddress{ 0 }] = val;
+        invalidate_monitor(focused_monitor_);
+        if (ipc_.has_subscribers(Event_LayoutChange))
         {
-            std::string val_str = trim_ascii(trimmed.substr(ratio_set_prefix.size()));
-            auto parsed = parse_finite_number(val_str);
-            if (!parsed)
-                return error_reply("invalid ratio value: " + val_str);
-            double val = *parsed;
-            double min_r = config_.layout.min_ratio;
-            if (val < min_r || val > 1.0 - min_r)
-                return error_reply(
-                    "ratio out of range [" + std::to_string(min_r) + ", " + std::to_string(1.0 - min_r) + "]"
-                );
-            if (focused_monitor_ >= monitors_.size())
-                return error_reply("no focused monitor");
-            focused_monitor().current().split_ratios[SplitAddress{ 0 }] = val;
-            invalidate_monitor(focused_monitor_);
-            if (ipc_.has_subscribers(Event_LayoutChange))
-            {
-                queue_event(
-                    Event_LayoutChange,
-                    "{\"event\":\"layout_change\",\"action\":\"ratio_set\",\"value\":" + std::to_string(val) + "}"
-                );
-            }
-            return ok_reply("ratio set");
+            queue_event(
+                Event_LayoutChange,
+                "{\"event\":\"layout_change\",\"action\":\"ratio_set\",\"value\":" + std::to_string(val) + "}"
+            );
         }
+        return ok_reply("ratio set");
     }
 
-    if (trimmed == "ratio reset")
+    if (command.id == RatioReset)
     {
         if (focused_monitor_ >= monitors_.size())
             return error_reply("no focused monitor");
@@ -170,73 +110,39 @@ std::string WindowManager::run_ipc_command(std::string const& command)
         return ok_reply("ratios reset");
     }
 
+    if (command.id == RatioAdjust)
     {
-        constexpr std::string_view ratio_adj_prefix = "ratio adjust ";
-        if (trimmed.starts_with(ratio_adj_prefix))
+        double delta = std::get<double>(command.argument);
+        if (focused_monitor_ >= monitors_.size())
+            return error_reply("no focused monitor");
+        if (!adjust_master_ratio(delta))
+            return ok_reply("ratio unchanged");
+        if (ipc_.has_subscribers(Event_LayoutChange))
         {
-            std::string delta_str = trim_ascii(trimmed.substr(ratio_adj_prefix.size()));
-            auto parsed = parse_finite_number(delta_str);
-            if (!parsed)
-                return error_reply("invalid delta value: " + delta_str);
-            double delta = *parsed;
-            if (focused_monitor_ >= monitors_.size())
-                return error_reply("no focused monitor");
-            if (!adjust_master_ratio(delta))
-                return ok_reply("ratio unchanged");
-            if (ipc_.has_subscribers(Event_LayoutChange))
-            {
-                queue_event(
-                    Event_LayoutChange,
-                    "{\"event\":\"layout_change\",\"action\":\"ratio_adjust\",\"delta\":" + std::to_string(delta) + "}"
-                );
-            }
-            return ok_reply("ratio adjusted");
+            queue_event(
+                Event_LayoutChange,
+                "{\"event\":\"layout_change\",\"action\":\"ratio_adjust\",\"delta\":" + std::to_string(delta) + "}"
+            );
         }
+        return ok_reply("ratio adjusted");
     }
 
+    if (command.id == Attention)
+        return handle_notification_attention(std::get<uint32_t>(command.argument));
+
+    if (command.id == WorkspaceSwitch)
     {
-        constexpr std::string_view notify_prefix = "notify-attention";
-        constexpr std::string_view window_prefix = "window=";
-        if (trimmed == notify_prefix || trimmed.starts_with("notify-attention "))
-        {
-            std::string arg = trim_ascii(trimmed.substr(notify_prefix.size()));
-            // After trimming edges, any remaining whitespace means extra tokens.
-            if (!arg.starts_with(window_prefix) || arg.find_first_of(" \t\r\n") != std::string::npos)
-                return error_reply("usage: notify-attention window=<xid>");
+        size_t target = std::get<uint32_t>(command.argument);
+        if (focused_monitor_ >= monitors_.size())
+            return error_reply("no focused monitor");
+        if (target >= focused_monitor().workspaces.size())
+            return error_reply("workspace out of range");
 
-            std::string_view value = std::string_view(arg).substr(window_prefix.size());
-            auto window = parse_window_id(value);
-            if (!window)
-                return error_reply("invalid window id: " + std::string(value));
-
-            return handle_notification_attention(*window);
-        }
+        switch_workspace(target);
+        return ok_reply(std::to_string(target));
     }
 
-    {
-        constexpr std::string_view ws_switch_prefix = "workspace switch ";
-        if (trimmed.starts_with(ws_switch_prefix))
-        {
-            std::string arg = trim_ascii(trimmed.substr(ws_switch_prefix.size()));
-            if (arg.empty() || arg.find_first_of(" \t\r\n") != std::string::npos)
-                return error_reply("usage: workspace switch <index>");
-
-            size_t target = 0;
-            auto [ptr, ec] = std::from_chars(arg.data(), arg.data() + arg.size(), target);
-            if (ec != std::errc{} || ptr != arg.data() + arg.size())
-                return error_reply("invalid workspace index: " + arg);
-
-            if (focused_monitor_ >= monitors_.size())
-                return error_reply("no focused monitor");
-            if (target >= focused_monitor().workspaces.size())
-                return error_reply("workspace out of range");
-
-            switch_workspace(target);
-            return ok_reply(std::to_string(target));
-        }
-    }
-
-    if (trimmed == "workspace next" || trimmed == "workspace prev")
+    if (command.id == WorkspaceNext || command.id == WorkspacePrev)
     {
         if (focused_monitor_ >= monitors_.size())
             return error_reply("no focused monitor");
@@ -244,12 +150,12 @@ std::string WindowManager::run_ipc_command(std::string const& command)
         if (count == 0)
             return error_reply("no workspaces");
         size_t current = focused_monitor().current_workspace;
-        size_t target = (trimmed == "workspace next") ? (current + 1) % count : (current + count - 1) % count;
+        size_t target = (command.id == WorkspaceNext) ? (current + 1) % count : (current + count - 1) % count;
         switch_workspace(target);
         return ok_reply(std::to_string(target));
     }
 
-    if (trimmed == "workspace list")
+    if (command.id == WorkspaceList)
     {
         std::string json = "{\"focused_monitor\":" + std::to_string(focused_monitor_) + ",\"monitors\":[";
         for (size_t m = 0; m < monitors_.size(); ++m)
@@ -276,42 +182,31 @@ std::string WindowManager::run_ipc_command(std::string const& command)
         return ok_reply(json);
     }
 
-    if (trimmed == "focus next" || trimmed == "focus prev")
+    if (command.id == FocusNext || command.id == FocusPrev)
     {
         if (focused_monitor_ >= monitors_.size())
             return error_reply("no focused monitor");
-        if (!cycle_focus(trimmed == "focus next"))
+        if (!cycle_focus(command.id == FocusNext))
             return error_reply("no focus candidates");
         return ok_reply(std::to_string(active_window_));
     }
 
+    if (command.id == FocusWindow)
     {
-        constexpr std::string_view window_prefix = "window=";
-        if (trimmed.starts_with("focus "))
-        {
-            std::string arg = trim_ascii(trimmed.substr(std::string_view("focus").size()));
-            if (!arg.starts_with(window_prefix) || arg.find_first_of(" \t\r\n") != std::string::npos)
-                return error_reply("usage: focus <next|prev|window=<xid>>");
+        auto window = std::get<uint32_t>(command.argument);
+        auto* client = get_client(window);
+        if (!client)
+            return error_reply("unknown window");
+        if (!is_focus_eligible(*client))
+            return error_reply("window not focusable");
 
-            std::string_view value = std::string_view(arg).substr(window_prefix.size());
-            auto window = parse_window_id(value);
-            if (!window)
-                return error_reply("invalid window id: " + std::string(value));
-
-            auto* client = get_client(*window);
-            if (!client)
-                return error_reply("unknown window");
-            if (!is_focus_eligible(*client))
-                return error_reply("window not focusable");
-
-            focus_any_window(*window);
-            if (active_window_ != *window)
-                return error_reply("focus request refused");
-            return ok_reply(std::to_string(*window));
-        }
+        focus_any_window(window);
+        if (active_window_ != window)
+            return error_reply("focus request refused");
+        return ok_reply(std::to_string(window));
     }
 
-    if (trimmed == "window list")
+    if (command.id == WindowList)
     {
         std::vector<std::pair<uint64_t, Client const*>> ordered;
         ordered.reserve(clients_.size());
@@ -343,26 +238,28 @@ std::string WindowManager::run_ipc_command(std::string const& command)
         return ok_reply(json);
     }
 
-    if (trimmed == "scratchpad stash")
+    if (command.id == Stash)
     {
         if (active_window_ != XCB_NONE)
             stash_to_scratchpad(active_window_);
         return ok_reply("");
     }
-    if (trimmed == "scratchpad cycle")
+    if (command.id == Cycle)
     {
         cycle_scratchpad_pool();
         return ok_reply("");
     }
-    if (trimmed.starts_with("scratchpad toggle "))
+    if (command.id == Toggle)
     {
-        std::string name(trimmed.substr(18));
+        auto const& name = std::get<std::string>(command.argument);
+        if (!find_named_scratchpad(name))
+            return error_reply("unknown scratchpad: " + name);
         toggle_named_scratchpad(name);
         return ok_reply("");
     }
-    if (trimmed.starts_with("scratchpad cancel-launch "))
+    if (command.id == CancelLaunch)
     {
-        auto name = trim_ascii(trimmed.substr(25));
+        auto const& name = std::get<std::string>(command.argument);
         auto* state = find_named_scratchpad(name);
         if (!state)
             return error_reply("unknown scratchpad: " + name);
@@ -370,7 +267,7 @@ std::string WindowManager::run_ipc_command(std::string const& command)
             state->mark_empty();
         return ok_reply("");
     }
-    if (trimmed == "scratchpad list")
+    if (command.id == ScratchpadList)
     {
         std::string json = "{\"named\":[";
         for (size_t i = 0; i < named_scratchpads_.size(); ++i)
@@ -392,6 +289,15 @@ std::string WindowManager::run_ipc_command(std::string const& command)
         return ok_reply(json);
     }
 
+    if (command.id == State)
+    {
+        auto query = [this](ipc::CommandId id) { return run_ipc_command(ipc::Command{ id, {} }).substr(3); };
+        return ok_reply(
+            "{\"instance\":\"" + ipc_.instance() + "\",\"sequence\":" + std::to_string(ipc_.sequence())
+            + ",\"workspaces\":" + query(WorkspaceList) + ",\"windows\":" + query(WindowList)
+            + ",\"scratchpads\":" + query(ScratchpadList) + "}"
+        );
+    }
     return error_reply("unknown command");
 }
 

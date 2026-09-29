@@ -2,6 +2,7 @@
 #include <catch2/catch_test_macros.hpp>
 #include <sys/socket.h>
 #include <sys/un.h>
+#include <thread>
 
 using namespace lwm::test;
 
@@ -13,7 +14,7 @@ struct ReplyServer
     std::string path;
     pid_t child = -1;
 
-    ReplyServer(std::string const& expected, std::string const& reply)
+    ReplyServer(std::string const& expected, std::string const& reply, int before_ms = 0, int after_line_ms = 0)
     {
         char pattern[] = "/tmp/lwmctl-test-XXXXXX";
         auto* created = mkdtemp(pattern);
@@ -44,10 +45,18 @@ struct ReplyServer
             }
             if (request != expected)
                 _exit(3);
+            std::this_thread::sleep_for(std::chrono::milliseconds(before_ms));
             // Single-byte writes exercise framing independently of packet boundaries.
             for (char byte : reply)
+            {
                 if (send(fd, &byte, 1, MSG_NOSIGNAL) != 1)
                     _exit(4);
+                if (byte == '\n' && after_line_ms)
+                {
+                    std::this_thread::sleep_for(std::chrono::milliseconds(after_line_ms));
+                    after_line_ms = 0;
+                }
+            }
             close(fd);
             _exit(0);
         }
@@ -115,6 +124,7 @@ TEST_CASE("lwmctl validates subscription acknowledgement before streaming", "[ip
     SECTION("unknown acknowledgement") { reply = "anything\n"; }
     SECTION("ordinary success is not subscription confirmation") { reply = "ok\n"; }
     SECTION("server error") { reply = "error busy\n"; }
+    SECTION("truncated event") { reply = "ok subscribed\n{\"event\":\"focus_change\""; }
     SECTION("acknowledgement and event")
     {
         reply = "ok subscribed\n{\"event\":\"focus_change\"}\n";
@@ -128,5 +138,44 @@ TEST_CASE("lwmctl validates subscription acknowledgement before streaming", "[ip
     CHECK(result->stdout_text == output);
     if (expected_exit)
         CHECK_FALSE(result->stderr_text.empty());
+    server.finish();
+}
+
+TEST_CASE("lwmctl bounds handshakes but permits idle subscriptions", "[ipc][lwmctl]")
+{
+    SECTION("silent peer times out")
+    {
+        ReplyServer server("ping\n", "", 200);
+        auto result = run_command(lwmctl_executable_path(), { "--socket", server.path, "--timeout", "50", "ping" });
+        REQUIRE(result);
+        CHECK(result->exit_code == 1);
+        CHECK(result->stderr_text.find("timed out") != std::string::npos);
+        server.finish();
+    }
+    SECTION("idle stream does not inherit the handshake deadline")
+    {
+        ReplyServer server("subscribe\n", "ok subscribed\n{\"event\":\"future\"}\n", 0, 200);
+        auto result =
+            run_command(lwmctl_executable_path(), { "--socket", server.path, "--timeout", "50", "subscribe" });
+        REQUIRE(result);
+        CHECK(result->exit_code == 0);
+        CHECK(result->stdout_text == "{\"event\":\"future\"}\n");
+        server.finish();
+    }
+}
+
+TEST_CASE("lwmctl offers local help and preserves option-like names after double dash", "[ipc][lwmctl]")
+{
+    auto help = run_command(lwmctl_executable_path(), { "workspace", "--help" });
+    REQUIRE(help);
+    CHECK(help->exit_code == 0);
+    CHECK(help->stderr_text.empty());
+    CHECK(help->stdout_text.find("workspace switch N") != std::string::npos);
+    CHECK(help->stdout_text.find("scratchpad stash") == std::string::npos);
+    ReplyServer server("scratchpad toggle --help\n", "ok\n");
+    auto result =
+        run_command(lwmctl_executable_path(), { "--socket", server.path, "--", "scratchpad", "toggle", "--help" });
+    REQUIRE(result);
+    CHECK(result->exit_code == 0);
     server.finish();
 }

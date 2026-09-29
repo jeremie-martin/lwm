@@ -1,51 +1,45 @@
+#include "lwm/core/events.hpp"
 #include "lwm/core/ipc.hpp"
+#include "lwm/core/ipc_command.hpp"
+#include <array>
 #include <cerrno>
+#include <charconv>
+#include <chrono>
 #include <csignal>
-#include <cstdlib>
 #include <cstring>
 #include <iostream>
 #include <optional>
+#include <poll.h>
+#include <stdexcept>
 #include <string>
-#include <string_view>
 #include <sys/socket.h>
 #include <sys/un.h>
 #include <unistd.h>
 #include <vector>
-#include <xcb/xcb.h>
 
 namespace {
+using Clock = std::chrono::steady_clock;
+using Deadline = std::optional<Clock::time_point>;
 
-void print_usage()
+bool print_usage(std::ostream& out, std::string_view group = {})
 {
-    std::cerr << "usage: lwmctl [--socket PATH] <command>\n"
-              << "\n"
-              << "commands:\n"
-              << "  ping                     check if WM is running\n"
-              << "  version                  show WM version\n"
-              << "  reload-config            reload configuration\n"
-              << "  restart                  restart WM\n"
-              << "  exec PATH                restart WM with a different binary\n"
-              << "  layout set NAME          set layout strategy (master-stack, monocle)\n"
-              << "  ratio set VALUE          set root split ratio (bounded by config)\n"
-              << "  ratio reset              reset current workspace split ratios\n"
-              << "  ratio adjust DELTA       adjust root split ratio (e.g. +0.05)\n"
-              << "  notify-attention window=<xid>\n"
-              << "                           mark a managed window as needing attention\n"
-              << "  workspace switch N       switch focused monitor to workspace N (0-based)\n"
-              << "  workspace next           switch to next workspace (wraps)\n"
-              << "  workspace prev           switch to previous workspace (wraps)\n"
-              << "  workspace list           list workspaces as JSON\n"
-              << "  focus window=<xid>       focus a window by X11 ID (jumps to its workspace)\n"
-              << "  focus next               focus next window in MRU cycle\n"
-              << "  focus prev               focus previous window in MRU cycle\n"
-              << "  window list              list tiled/floating windows as JSON\n"
-              << "  scratchpad <list|stash|cycle|toggle NAME|cancel-launch NAME>\n"
-              << "                           inspect, recall, or recover scratchpads\n"
-              << "  subscribe [FILTER]       stream events as JSON lines\n"
-              << "                           filter: comma-separated event types\n"
-              << "                           (window_map,window_unmap,focus_change,\n"
-              << "                            workspace_switch,layout_change,config_reload,\n"
-              << "                            key_action)\n";
+    out << "usage: lwmctl [--socket PATH] [--timeout MS] [--] <command>\n\n";
+    bool found = false;
+    for (auto const& spec : lwm::ipc::command_specs())
+        if (group.empty() || spec.name == group || (spec.name.starts_with(group) && spec.name[group.size()] == ' '))
+        {
+            out << "  " << spec.usage << "\n      " << spec.description << '\n';
+            found = true;
+        }
+    if (group.empty() || group == "subscribe")
+    {
+        out << "\nSubscription filters:";
+        for (auto const& event : lwm::event_specs) out << ' ' << event.name;
+        out << '\n';
+    }
+    out << "\nTimeout defaults to 2000 ms; idle subscriptions do not time out.\n"
+           "Use -- before arguments that resemble options.\n";
+    return found;
 }
 
 std::optional<std::string> root_socket_path()
@@ -87,361 +81,241 @@ std::string resolve_socket_path(std::optional<std::string> const& cli_socket)
     return lwm::ipc::default_socket_path().string();
 }
 
-int connect_socket(std::string const& socket_path)
+// One owner for connection, deadlines, buffering, and complete-line framing.
+class Socket
 {
-    if (socket_path.size() >= sizeof(sockaddr_un::sun_path))
+public:
+    explicit Socket(std::chrono::milliseconds timeout)
+        : timeout_(timeout)
+    { }
+    ~Socket()
     {
-        std::cerr << "socket path too long: " << socket_path << '\n';
-        return -1;
+        if (fd_ >= 0)
+            close(fd_);
     }
+    Socket(Socket const&) = delete;
+    Socket& operator=(Socket const&) = delete;
 
-    int fd = socket(AF_UNIX, SOCK_STREAM, 0);
-    if (fd < 0)
+    void connect_to(std::string const& path)
     {
-        std::cerr << "failed to create socket: " << std::strerror(errno) << '\n';
-        return -1;
-    }
-
-    sockaddr_un addr = {};
-    addr.sun_family = AF_UNIX;
-    std::strncpy(addr.sun_path, socket_path.c_str(), sizeof(addr.sun_path) - 1);
-
-    if (connect(fd, reinterpret_cast<sockaddr*>(&addr), sizeof(addr)) < 0)
-    {
-        std::cerr << "failed to connect to " << socket_path << ": " << std::strerror(errno) << '\n';
-        close(fd);
-        return -1;
-    }
-
-    return fd;
-}
-
-bool send_request(int fd, std::string_view request)
-{
-    while (!request.empty())
-    {
-        ssize_t sent = send(fd, request.data(), request.size(), MSG_NOSIGNAL);
-        if (sent < 0 && errno == EINTR)
-            continue;
-        if (sent <= 0)
+        if (path.empty() || path.size() >= sizeof(sockaddr_un::sun_path) || path.find('\0') != path.npos)
+            throw std::runtime_error("invalid socket path");
+        fd_ = socket(AF_UNIX, SOCK_STREAM | SOCK_NONBLOCK | SOCK_CLOEXEC, 0);
+        if (fd_ < 0)
+            fail("create socket");
+        sockaddr_un address{};
+        address.sun_family = AF_UNIX;
+        std::memcpy(address.sun_path, path.c_str(), path.size() + 1);
+        auto deadline = Clock::now() + timeout_;
+        for (;;)
         {
-            std::cerr << "failed to send request: " << (sent < 0 ? std::strerror(errno) : "connection closed") << '\n';
-            return false;
+            if (::connect(fd_, reinterpret_cast<sockaddr*>(&address), sizeof(address)) == 0)
+                return;
+            if (errno == EINTR)
+                continue;
+            if (errno != EINPROGRESS)
+                fail("connect to " + path);
+            wait(POLLOUT, deadline);
+            int error = 0;
+            socklen_t length = sizeof(error);
+            if (getsockopt(fd_, SOL_SOCKET, SO_ERROR, &error, &length) < 0)
+                fail("check connection");
+            if (error)
+            {
+                errno = error;
+                fail("connect to " + path);
+            }
+            return;
         }
-        request.remove_prefix(static_cast<size_t>(sent));
-    }
-    return true;
-}
-
-ssize_t receive(int fd, char* buffer, size_t size)
-{
-    ssize_t result;
-    do result = recv(fd, buffer, size, 0);
-    while (result < 0 && errno == EINTR);
-    return result;
-}
-
-int run_command(std::string const& socket_path, std::string const& command)
-{
-    int fd = connect_socket(socket_path);
-    if (fd < 0)
-        return 1;
-
-    std::string request = command;
-    request.push_back('\n');
-
-    if (!send_request(fd, request))
-    {
-        close(fd);
-        return 1;
     }
 
-    shutdown(fd, SHUT_WR);
-
-    std::string response;
-    std::vector<char> buffer(1024);
-    while (true)
+    void send(std::string request)
     {
-        ssize_t bytes_read = receive(fd, buffer.data(), buffer.size());
-        if (bytes_read < 0)
+        request += '\n';
+        auto deadline = Clock::now() + timeout_;
+        std::string_view remaining = request;
+        while (!remaining.empty())
         {
-            std::cerr << "failed to read response: " << std::strerror(errno) << '\n';
-            close(fd);
-            return 1;
+            wait(POLLOUT, deadline);
+            auto count = ::send(fd_, remaining.data(), remaining.size(), MSG_NOSIGNAL);
+            if (count < 0)
+            {
+                if (errno == EINTR || errno == EAGAIN || errno == EWOULDBLOCK)
+                    continue;
+                fail("send request");
+            }
+            if (!count)
+                throw std::runtime_error("connection closed while sending request");
+            remaining.remove_prefix(count);
         }
-        if (bytes_read == 0)
-            break;
-        response.append(buffer.data(), static_cast<size_t>(bytes_read));
     }
 
-    close(fd);
-
-    if (response.empty() || response.back() != '\n' || response.find('\n') != response.size() - 1)
+    std::optional<std::string> line(size_t limit, bool idle = false)
     {
-        std::cerr << "invalid or incomplete response\n";
-        return 1;
-    }
-    response.pop_back();
-    if (response == "ok")
-        return 0;
-    if (response.rfind("ok ", 0) == 0)
-    {
-        std::cout << response.substr(3) << '\n';
-        return 0;
-    }
-    if (response == "error")
-        return 1;
-    if (response.rfind("error ", 0) == 0)
-    {
-        std::cerr << response.substr(6) << '\n';
-        return 1;
-    }
-
-    std::cerr << "invalid response\n";
-    return 1;
-}
-
-int run_subscribe(std::string const& socket_path, std::string const& filter)
-{
-    int fd = connect_socket(socket_path);
-    if (fd < 0)
-        return 1;
-
-    std::string request = "subscribe";
-    if (!filter.empty())
-    {
-        request.push_back(' ');
-        request.append(filter);
-    }
-    request.push_back('\n');
-
-    if (!send_request(fd, request))
-    {
-        close(fd);
-        return 1;
-    }
-
-    // Read initial response (ok subscribed or error ...)
-    std::string initial;
-    std::vector<char> buf(4096);
-    while (true)
-    {
-        ssize_t n = receive(fd, buf.data(), buf.size());
-        if (n <= 0)
+        Deadline deadline = idle && buffer_.empty() ? Deadline{} : Deadline{ Clock::now() + timeout_ };
+        for (;;)
         {
-            std::cerr << "connection closed before subscription confirmed\n";
-            close(fd);
-            return 1;
+            auto end = buffer_.find('\n');
+            if ((end == buffer_.npos ? buffer_.size() : end + 1) > limit)
+                throw std::runtime_error("response line too large");
+            if (end != buffer_.npos)
+            {
+                auto result = buffer_.substr(0, end);
+                buffer_.erase(0, end + 1);
+                return result;
+            }
+            wait(POLLIN, deadline);
+            std::array<char, 8192> bytes;
+            auto count = recv(fd_, bytes.data(), bytes.size(), 0);
+            if (count < 0)
+            {
+                if (errno == EINTR || errno == EAGAIN || errno == EWOULDBLOCK)
+                    continue;
+                fail("read response");
+            }
+            if (!count)
+            {
+                if (!buffer_.empty())
+                    throw std::runtime_error("incomplete response line");
+                return {};
+            }
+            if (!deadline)
+                deadline = Clock::now() + timeout_;
+            buffer_.append(bytes.data(), count);
         }
-        initial.append(buf.data(), static_cast<size_t>(n));
-        if (initial.find('\n') != std::string::npos)
-            break;
     }
 
-    // Check for error response
-    auto first_line_end = initial.find('\n');
-    std::string first_line = initial.substr(0, first_line_end);
-    if (first_line.rfind("error", 0) == 0)
+private:
+    int fd_ = -1;
+    std::chrono::milliseconds timeout_;
+    std::string buffer_;
+    [[noreturn]] static void fail(std::string const& operation)
     {
-        std::cerr << (first_line.size() > 6 ? first_line.substr(6) : "subscription failed") << '\n';
-        close(fd);
-        return 1;
+        throw std::runtime_error(operation + ": " + std::strerror(errno));
     }
-
-    if (first_line != "ok subscribed")
+    void wait(short events, Deadline deadline)
     {
-        std::cerr << "invalid subscription response\n";
-        close(fd);
-        return 1;
+        for (;;)
+        {
+            int milliseconds = -1;
+            if (deadline)
+            {
+                auto remaining = std::chrono::ceil<std::chrono::milliseconds>(*deadline - Clock::now());
+                if (remaining.count() <= 0)
+                    throw std::runtime_error("socket operation timed out");
+                milliseconds = static_cast<int>(remaining.count());
+            }
+            pollfd descriptor{ fd_, events, 0 };
+            int result = poll(&descriptor, 1, milliseconds);
+            if (result > 0)
+                return; // recv/send report EOF and socket errors.
+            if (result < 0 && errno != EINTR)
+                fail("poll socket");
+            if (!result)
+                throw std::runtime_error("socket operation timed out");
+        }
     }
+};
 
-    // Ignore SIGPIPE so a closed stdout consumer becomes a normal write failure.
-    signal(SIGPIPE, SIG_IGN);
-
-    auto write_stdout = [](char const* data, size_t size) -> bool
+int run(std::string const& path, std::string const& request, bool subscribe, std::chrono::milliseconds timeout)
+{
+    Socket socket(timeout);
+    socket.connect_to(path);
+    socket.send(request);
+    auto response = socket.line(lwm::ipc::max_reply_bytes);
+    if (!response)
+        throw std::runtime_error("connection closed before response");
+    if (*response == "error" || response->starts_with("error "))
+        throw std::runtime_error(response->size() > 6 ? response->substr(6) : "command failed");
+    if (subscribe)
     {
-        std::cout.write(data, static_cast<std::streamsize>(size));
-        std::cout.flush();
-        return static_cast<bool>(std::cout);
-    };
-
-    // Print any remaining data after the first line (unlikely but possible)
-    if (first_line_end + 1 < initial.size()
-        && !write_stdout(initial.data() + first_line_end + 1, initial.size() - first_line_end - 1))
-    {
-        close(fd);
+        if (*response != "ok subscribed")
+            throw std::runtime_error("invalid subscription response");
+        while (auto event = socket.line(lwm::ipc::max_event_bytes, true))
+        {
+            std::cout << *event << '\n' << std::flush;
+            if (!std::cout)
+                return 0; // A closed pipe ends a subscription normally.
+        }
         return 0;
     }
-
-    // Stream events until EOF or SIGINT
-    while (true)
-    {
-        ssize_t n = receive(fd, buf.data(), buf.size());
-        if (n < 0)
-        {
-            std::cerr << "failed to read events: " << std::strerror(errno) << '\n';
-            close(fd);
-            return 1;
-        }
-        if (n == 0)
-            break;
-        if (!write_stdout(buf.data(), static_cast<size_t>(n)))
-            break;
-    }
-
-    close(fd);
-    return 0;
+    if (*response != "ok" && !response->starts_with("ok "))
+        throw std::runtime_error("invalid response");
+    if (socket.line(lwm::ipc::max_reply_bytes))
+        throw std::runtime_error("multiple command replies");
+    if (response->starts_with("ok "))
+        std::cout << response->substr(3) << '\n';
+    std::cout.flush();
+    return std::cout ? 0 : 1;
 }
-
 } // namespace
 
 int main(int argc, char* argv[])
 {
-    std::optional<std::string> cli_socket;
-    std::vector<std::string> args;
-    args.reserve(argc > 0 ? static_cast<size_t>(argc - 1) : 0);
-
-    for (int i = 1; i < argc; ++i)
+    signal(SIGPIPE, SIG_IGN);
+    try
     {
-        std::string arg = argv[i];
-        if (arg == "--socket")
+        std::optional<std::string> socket;
+        std::chrono::milliseconds timeout{ 2000 };
+        std::vector<std::string> arguments;
+        bool options = true;
+        bool help = false;
+        for (int i = 1; i < argc; ++i)
         {
-            if (i + 1 >= argc)
+            std::string_view arg = argv[i];
+            if (options && arg == "--")
             {
-                print_usage();
-                return 1;
+                options = false;
+                continue;
             }
-            cli_socket = argv[++i];
-            continue;
+            if (options && (arg == "--help" || arg == "-h"))
+            {
+                help = true;
+                continue;
+            }
+            if (options && (arg == "--socket" || arg == "--timeout"))
+            {
+                if (++i == argc)
+                    throw std::runtime_error(std::string(arg) + " requires a value");
+                if (arg == "--socket")
+                    socket = argv[i];
+                else
+                {
+                    std::string_view text = argv[i];
+                    int value = 0;
+                    auto [end, error] = std::from_chars(text.data(), text.data() + text.size(), value);
+                    if (error != std::errc{} || end != text.data() + text.size() || value < 1 || value > 600000)
+                        throw std::runtime_error("timeout must be 1–600000 milliseconds");
+                    timeout = std::chrono::milliseconds(value);
+                }
+                continue;
+            }
+            arguments.emplace_back(arg);
         }
-        if (arg == "--help" || arg == "-h")
+        if (help)
         {
-            print_usage();
-            return 0;
+            std::string group;
+            for (auto const& arg : arguments)
+            {
+                if (!group.empty())
+                    group += ' ';
+                group += arg;
+            }
+            return print_usage(std::cout, group) ? 0 : 1;
         }
-        args.push_back(std::move(arg));
-    }
-
-    if (args.empty())
-    {
-        print_usage();
-        return 1;
-    }
-
-    std::string const& command = args[0];
-    std::string socket_path = resolve_socket_path(cli_socket);
-
-    // Commands with arguments
-    if (command == "exec")
-    {
-        if (args.size() != 2)
+        if (arguments.empty())
         {
-            std::cerr << "usage: lwmctl exec PATH\n";
+            print_usage(std::cerr);
             return 1;
         }
-        return run_command(socket_path, "exec " + args[1]);
+        auto request = lwm::ipc::encode_command(arguments);
+        if (!request)
+            throw std::runtime_error(request.error());
+        return run(resolve_socket_path(socket), *request, arguments.front() == "subscribe", timeout);
     }
-
-    if (command == "layout")
+    catch (std::exception const& error)
     {
-        if (args.size() != 3 || args[1] != "set")
-        {
-            std::cerr << "usage: lwmctl layout set NAME\n";
-            return 1;
-        }
-        return run_command(socket_path, "layout set " + args[2]);
-    }
-
-    if (command == "ratio")
-    {
-        if (args.size() < 2)
-        {
-            std::cerr << "usage: lwmctl ratio <set VALUE|reset|adjust DELTA>\n";
-            return 1;
-        }
-        if (args[1] == "reset" && args.size() == 2)
-            return run_command(socket_path, "ratio reset");
-        if (args[1] == "set" && args.size() == 3)
-            return run_command(socket_path, "ratio set " + args[2]);
-        if (args[1] == "adjust" && args.size() == 3)
-            return run_command(socket_path, "ratio adjust " + args[2]);
-        std::cerr << "usage: lwmctl ratio <set VALUE|reset|adjust DELTA>\n";
+        std::cerr << "lwmctl: " << error.what() << '\n';
         return 1;
     }
-
-    if (command == "notify-attention")
-    {
-        if (args.size() != 2)
-        {
-            std::cerr << "usage: lwmctl notify-attention window=<xid>\n";
-            return 1;
-        }
-        std::string ipc_cmd = "notify-attention " + args[1];
-        return run_command(socket_path, ipc_cmd);
-    }
-
-    if (command == "workspace")
-    {
-        if (args.size() == 2 && (args[1] == "list" || args[1] == "next" || args[1] == "prev"))
-            return run_command(socket_path, "workspace " + args[1]);
-        if (args.size() == 3 && args[1] == "switch")
-            return run_command(socket_path, "workspace switch " + args[2]);
-        std::cerr << "usage: lwmctl workspace <switch N|next|prev|list>\n";
-        return 1;
-    }
-
-    if (command == "focus")
-    {
-        if (args.size() == 2 && (args[1] == "next" || args[1] == "prev"))
-            return run_command(socket_path, "focus " + args[1]);
-        if (args.size() == 2 && args[1].rfind("window=", 0) == 0)
-            return run_command(socket_path, "focus " + args[1]);
-        std::cerr << "usage: lwmctl focus <next|prev|window=<xid>>\n";
-        return 1;
-    }
-
-    if (command == "window")
-    {
-        if (args.size() == 2 && args[1] == "list")
-            return run_command(socket_path, "window list");
-        std::cerr << "usage: lwmctl window list\n";
-        return 1;
-    }
-
-    if (command == "scratchpad")
-    {
-        if (args.size() == 2 && (args[1] == "list" || args[1] == "stash" || args[1] == "cycle"))
-            return run_command(socket_path, "scratchpad " + args[1]);
-        if (args.size() == 3 && (args[1] == "toggle" || args[1] == "cancel-launch"))
-            return run_command(socket_path, "scratchpad " + args[1] + " " + args[2]);
-        std::cerr << "usage: lwmctl scratchpad <list|stash|cycle|toggle NAME|cancel-launch NAME>\n";
-        return 1;
-    }
-
-    if (command == "subscribe")
-    {
-        std::string filter;
-        for (size_t i = 1; i < args.size(); ++i)
-        {
-            if (!filter.empty())
-                filter.push_back(',');
-            filter.append(args[i]);
-        }
-        return run_subscribe(socket_path, filter);
-    }
-
-    // Simple commands (no arguments)
-    if (args.size() != 1)
-    {
-        print_usage();
-        return 1;
-    }
-
-    if (command != "ping" && command != "version" && command != "reload-config" && command != "restart")
-    {
-        print_usage();
-        return 1;
-    }
-
-    return run_command(socket_path, command);
 }

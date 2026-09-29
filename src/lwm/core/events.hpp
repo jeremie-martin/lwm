@@ -15,7 +15,24 @@ enum EventType : uint32_t
     Event_LayoutChange = 1 << 4,
     Event_ConfigReload = 1 << 5,
     Event_KeyAction = 1 << 6,
+    Event_StateChange = 1 << 7,
     Event_All = 0xFFFFFFFF,
+};
+
+struct NamedEvent
+{
+    std::string_view name;
+    EventType type;
+};
+inline constexpr NamedEvent event_specs[] = {
+    {       "window_map",       Event_WindowMap },
+    {     "window_unmap",     Event_WindowUnmap },
+    {     "focus_change",     Event_FocusChange },
+    { "workspace_switch", Event_WorkspaceSwitch },
+    {    "layout_change",    Event_LayoutChange },
+    {    "config_reload",    Event_ConfigReload },
+    {       "key_action",       Event_KeyAction },
+    {     "state_change",     Event_StateChange },
 };
 
 /// Parse a comma-separated filter string (e.g. "focus_change,window_map") into bitmask.
@@ -25,20 +42,6 @@ inline uint32_t parse_event_filter(std::string_view filter)
     if (filter.empty())
         return Event_All;
 
-    struct NamedEvent
-    {
-        std::string_view name;
-        EventType type;
-    };
-    static constexpr NamedEvent table[] = {
-        {"window_map", Event_WindowMap},
-        {"window_unmap", Event_WindowUnmap},
-        {"focus_change", Event_FocusChange},
-        {"workspace_switch", Event_WorkspaceSwitch},
-        {"layout_change", Event_LayoutChange},
-        {"config_reload", Event_ConfigReload},
-        {"key_action", Event_KeyAction},
-    };
 
     uint32_t mask = 0;
     size_t pos = 0;
@@ -57,7 +60,7 @@ inline uint32_t parse_event_filter(std::string_view filter)
             --end;
 
         std::string_view token = filter.substr(start, end - start);
-        for (auto const& entry : table)
+        for (auto const& entry : event_specs)
         {
             if (entry.name == token)
             {

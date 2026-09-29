@@ -8,6 +8,46 @@ using namespace lwm::test;
 namespace {
 constexpr auto timeout = std::chrono::seconds(2);
 
+struct Subscriber
+{
+    int fd = socket(AF_UNIX, SOCK_STREAM | SOCK_CLOEXEC, 0);
+    Subscriber(std::string const& path, std::string_view filter)
+    {
+        REQUIRE(fd >= 0);
+        sockaddr_un address{};
+        address.sun_family = AF_UNIX;
+        REQUIRE(path.size() < sizeof(address.sun_path));
+        std::memcpy(address.sun_path, path.c_str(), path.size() + 1);
+        REQUIRE(connect(fd, reinterpret_cast<sockaddr*>(&address), sizeof(address)) == 0);
+        std::string request = "subscribe " + std::string(filter) + "\n";
+        REQUIRE(send(fd, request.data(), request.size(), MSG_NOSIGNAL) == request.size());
+        REQUIRE(line() == "ok subscribed");
+    }
+    ~Subscriber()
+    {
+        if (fd >= 0)
+            close(fd);
+    }
+    std::string line()
+    {
+        std::string result;
+        auto deadline = std::chrono::steady_clock::now() + timeout;
+        while (std::chrono::steady_clock::now() < deadline)
+        {
+            pollfd descriptor{ fd, POLLIN, 0 };
+            if (poll(&descriptor, 1, 20) <= 0)
+                continue;
+            char byte;
+            if (recv(fd, &byte, 1, 0) != 1)
+                break;
+            if (byte == '\n')
+                return result;
+            result += byte;
+        }
+        return {};
+    }
+};
+
 std::optional<lwm::Geometry> geometry(X11Connection& conn, xcb_window_t window)
 {
     auto* reply = xcb_get_geometry_reply(conn.get(), xcb_get_geometry(conn.get(), window), nullptr);
@@ -234,42 +274,10 @@ TEST_CASE(
     auto& conn = env->conn;
     auto path = wait_for_ipc_socket_path(conn);
     REQUIRE(path);
-    struct Subscriber
-    {
-        int fd = socket(AF_UNIX, SOCK_STREAM | SOCK_CLOEXEC, 0);
-        ~Subscriber()
-        {
-            if (fd >= 0)
-                close(fd);
-        }
-        std::string line()
-        {
-            std::string result;
-            auto deadline = std::chrono::steady_clock::now() + timeout;
-            while (std::chrono::steady_clock::now() < deadline)
-            {
-                pollfd descriptor{ fd, POLLIN, 0 };
-                if (poll(&descriptor, 1, 20) <= 0)
-                    continue;
-                char byte;
-                if (recv(fd, &byte, 1, 0) != 1)
-                    break;
-                if (byte == '\n')
-                    return result;
-                result += byte;
-            }
-            return {};
-        }
-    } subscriber;
-    REQUIRE(subscriber.fd >= 0);
-    sockaddr_un address{};
-    address.sun_family = AF_UNIX;
-    REQUIRE(path->size() < sizeof(address.sun_path));
-    std::memcpy(address.sun_path, path->c_str(), path->size() + 1);
-    REQUIRE(connect(subscriber.fd, reinterpret_cast<sockaddr*>(&address), sizeof(address)) == 0);
-    constexpr std::string_view request = "subscribe\n";
-    REQUIRE(send(subscriber.fd, request.data(), request.size(), MSG_NOSIGNAL) == request.size());
-    REQUIRE(subscriber.line() == "ok subscribed");
+    Subscriber subscriber(
+        *path,
+        "workspace_switch,focus_change,window_map,window_unmap,layout_change,config_reload,key_action"
+    );
     auto event = [&]
     {
         auto line = subscriber.line();
@@ -613,4 +621,65 @@ apply = { center = true }
     destroy_window(conn, tiled);
     destroy_window(conn, first);
     destroy_window(conn, second);
+}
+
+TEST_CASE(
+    "Integration: subscriptions and state snapshots have a recoverable ordering boundary",
+    "[integration][ipc][subscribe]"
+)
+{
+    auto env = TestEnvironment::create();
+    if (!env)
+        SKIP("X11 unavailable");
+    auto& conn = env->conn;
+    auto path = wait_for_ipc_socket_path(conn);
+    REQUIRE(path);
+    Subscriber subscriber(*path, "state_change,window_map");
+    auto state = [&]
+    {
+        auto reply = send_ipc_command(*path, "state");
+        REQUIRE(reply);
+        REQUIRE(reply->starts_with("ok "));
+        return nlohmann::json::parse(reply->substr(3));
+    };
+    auto window = create_window(conn, 30, 40, 200, 150);
+    map_window(conn, window);
+    REQUIRE(wait_for_active_window(conn, window, timeout));
+    auto snapshot = state();
+    CHECK(snapshot.at("windows").at("focused") == window);
+    CHECK(snapshot.at("windows").at("windows").size() == 1);
+    CHECK(snapshot.at("workspaces").contains("monitors"));
+    CHECK(snapshot.at("scratchpads").contains("named"));
+    uint64_t previous = 0;
+    for (int i = 0; i < 2; ++i)
+    {
+        auto line = subscriber.line();
+        REQUIRE_FALSE(line.empty());
+        auto event = nlohmann::json::parse(line);
+        CHECK(event.at("instance") == snapshot.at("instance"));
+        auto sequence = event.at("sequence").get<uint64_t>();
+        CHECK(sequence > previous);
+        CHECK(sequence <= snapshot.at("sequence").get<uint64_t>());
+        previous = sequence;
+    }
+    // A metadata-only update must invalidate snapshots even when no rule matches.
+    title(conn, window, "snapshot-new-title");
+    auto line = subscriber.line();
+    REQUIRE_FALSE(line.empty());
+    auto changed = nlohmann::json::parse(line);
+    CHECK(changed.at("event") == "state_change");
+    CHECK(changed.at("sequence").get<uint64_t>() > snapshot.at("sequence").get<uint64_t>());
+    auto current = state();
+    CHECK(current.at("windows").at("windows").at(0).at("title") == "snapshot-new-title");
+    CHECK(current.at("sequence") == changed.at("sequence"));
+    pollfd descriptor{ subscriber.fd, POLLIN, 0 };
+    CHECK(poll(&descriptor, 1, 30) == 0); // Querying state must not create an event feedback loop.
+    auto previous_wm = supporting_wm_window(conn);
+    REQUIRE(previous_wm);
+    REQUIRE(send_ipc_command(*path, "restart"));
+    REQUIRE(wait_for_wm_ready(conn, timeout, *previous_wm));
+    REQUIRE(wait_for_condition([&] { return send_ipc_command(*path, "ping") == "ok pong"; }, timeout));
+    Subscriber reconnected(*path, "state_change");
+    CHECK(state().at("instance") != snapshot.at("instance"));
+    destroy_window(conn, window);
 }

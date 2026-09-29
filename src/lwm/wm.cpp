@@ -296,7 +296,7 @@ RunResult WindowManager::run()
         if (!deferred_events_.empty())
             timeout_ms = 0;
 
-        // Build poll array: X fd, signal pipe, IPC listener, pending client, subscribers
+        // Build poll array: X fd, signal pipe, IPC listener and connections
         poll_fds.clear();
         poll_fds.push_back({ .fd = xfd, .events = POLLIN, .revents = 0 });
         poll_fds.push_back({ .fd = signal_pipe_[0], .events = POLLIN, .revents = 0 });
@@ -323,7 +323,7 @@ RunResult WindowManager::run()
 
             ipc_.dispatch(
                 std::span(poll_fds).subspan(POLL_IPC),
-                [this](std::string const& command)
+                [this](ipc::Command const& command)
                 {
                     auto reply = run_ipc_command(command);
                     complete_transition();
@@ -2452,6 +2452,7 @@ void WindowManager::update_window_title(xcb_window_t window)
         return;
     auto previous = window_rules_.match(window_match_info(*client), monitors_, config_.workspaces.names);
     client->name = std::move(name);
+    effects_.state_changed |= ipc_.has_subscribers(Event_StateChange);
     reevaluate_metadata(window, previous);
 }
 

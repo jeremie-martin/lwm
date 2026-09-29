@@ -1,10 +1,13 @@
 #include "lwm/core/ipc_server.hpp"
+#include <algorithm>
 #include <catch2/catch_test_macros.hpp>
 #include <cerrno>
 #include <cstring>
 #include <filesystem>
+#include <memory>
 #include <sys/socket.h>
 #include <sys/un.h>
+#include <thread>
 #include <unistd.h>
 
 using lwm::ipc::Server;
@@ -38,7 +41,7 @@ struct Fixture
     std::filesystem::path directory;
     Server server;
     std::string reply = "ok pong";
-    std::vector<std::string> requests;
+    std::vector<lwm::ipc::CommandId> requests;
     Fixture()
     {
         char pattern[] = "/tmp/lwm-ipc-test-XXXXXX";
@@ -59,9 +62,9 @@ struct Fixture
         poll(fds.data(), fds.size(), 1);
         server.dispatch(
             fds,
-            [&](std::string const& request)
+            [&](lwm::ipc::Command const& request)
             {
-                requests.push_back(request);
+                requests.push_back(request.id);
                 return reply;
             }
         );
@@ -107,7 +110,7 @@ TEST_CASE("IPC assembles partial requests and preserves EOF framing", "[ipc][tra
         REQUIRE(shutdown(peer.fd, SHUT_WR) == 0);
     }
     CHECK(f.receive(peer) == "ok pong\n");
-    CHECK(f.requests == std::vector<std::string>{ "ping" });
+    CHECK(f.requests == std::vector<lwm::ipc::CommandId>{ lwm::ipc::CommandId::Ping });
 }
 
 TEST_CASE("IPC finishes large replies across partial writes", "[ipc][transport]")
@@ -122,7 +125,7 @@ TEST_CASE("IPC finishes large replies across partial writes", "[ipc][transport]"
     CHECK(f.receive(peer) == f.reply + '\n');
 }
 
-TEST_CASE("IPC bounds requests and rejects concurrent incomplete requests", "[ipc][transport]")
+TEST_CASE("IPC bounds requests without blocking independent clients", "[ipc][transport]")
 {
     Fixture f;
     Peer first(f.server.path());
@@ -130,10 +133,11 @@ TEST_CASE("IPC bounds requests and rejects concurrent incomplete requests", "[ip
     f.pump();
     f.pump();
     Peer second(f.server.path());
-    CHECK(f.receive(second) == "error busy\n");
+    second.send("ping\n");
+    CHECK(f.receive(second) == "ok pong\n");
     first.send(std::string(4096, 'x'));
     CHECK(f.receive(first) == "error request too large\n");
-    CHECK(f.requests.empty());
+    CHECK(f.requests.size() == 1);
 }
 
 TEST_CASE("IPC releases stalled readers and writers at the deadline", "[ipc][transport]")
@@ -170,5 +174,89 @@ TEST_CASE("IPC subscription acknowledgement precedes filtered events", "[ipc][tr
     CHECK_FALSE(f.server.has_subscribers(lwm::Event_WindowMap));
     f.server.emit(lwm::Event_WindowMap, "ignored");
     f.server.emit(lwm::Event_FocusChange, "{\"event\":\"focus_change\"}");
-    CHECK(f.receive(peer, false) == "{\"event\":\"focus_change\"}\n");
+    CHECK(
+        f.receive(peer, false)
+        == "{\"instance\":\"" + f.server.instance() + "\",\"sequence\":1,\"event\":\"focus_change\"}\n"
+    );
+}
+
+TEST_CASE("IPC serves parallel callers while a reply is stalled", "[ipc][transport]")
+{
+    Fixture f;
+    f.reply = "ok " + std::string(2 * 1024 * 1024, 'x');
+    Peer stalled(f.server.path());
+    stalled.send("window list\n");
+    for (int i = 0; i < 12; ++i) f.pump();
+    REQUIRE(f.requests.size() == 1);
+    f.reply = "ok pong";
+    std::vector<std::unique_ptr<Peer>> peers;
+    for (int i = 0; i < 16; ++i)
+    {
+        peers.push_back(std::make_unique<Peer>(f.server.path()));
+        peers.back()->send("ping\n");
+    }
+    for (auto& peer : peers) CHECK(f.receive(*peer) == "ok pong\n");
+    CHECK(f.requests.size() == 17);
+}
+
+TEST_CASE("IPC parses the first request line independently of trailing packets", "[ipc][transport]")
+{
+    Fixture f;
+    Peer peer(f.server.path());
+    peer.send("ping\n" + std::string(4000, 'x'));
+    CHECK(f.receive(peer, false) == "ok pong\n");
+    CHECK(f.requests.size() == 1);
+}
+
+TEST_CASE("IPC buffers subscription writes and disconnects overflow instead of dropping events", "[ipc][transport]")
+{
+    Fixture f;
+    Peer peer(f.server.path());
+    peer.send("subscribe focus_change\n");
+    REQUIRE(f.receive(peer, false) == "ok subscribed\n");
+    std::string event = "{\"event\":\"focus_change\",\"title\":\"" + std::string(20000, 'x') + "\"}";
+    SECTION("queued events remain complete and ordered")
+    {
+        for (int i = 0; i < 10; ++i) f.server.emit(lwm::Event_FocusChange, event);
+        std::string received;
+        for (int i = 0; std::count(received.begin(), received.end(), '\n') < 10 && i < 100; ++i)
+            received += f.receive(peer, false);
+        std::string expected;
+        for (int i = 1; i <= 10; ++i)
+            expected += "{\"instance\":\"" + f.server.instance() + "\",\"sequence\":" + std::to_string(i) + ","
+                + event.substr(1) + "\n";
+        CHECK(received == expected);
+    }
+    SECTION("queue overflow closes the subscriber")
+    {
+        for (int i = 0; i < 60; ++i) f.server.emit(lwm::Event_FocusChange, event);
+        CHECK_FALSE(f.server.has_subscribers(lwm::Event_FocusChange));
+        CHECK(f.receive(peer).empty());
+        Peer next(f.server.path());
+        next.send("ping\n");
+        CHECK(f.receive(next) == "ok pong\n");
+    }
+}
+
+TEST_CASE("IPC subscriptions may drain continuously beyond one response deadline", "[ipc][transport]")
+{
+    Fixture f;
+    Peer peer(f.server.path());
+    peer.send("subscribe focus_change\n");
+    REQUIRE(f.receive(peer, false) == "ok subscribed\n");
+    std::string event = "{\"event\":\"focus_change\",\"title\":\"" + std::string(700000, 'x') + "\"}";
+    f.server.emit(lwm::Event_FocusChange, event);
+    std::string received;
+    for (int i = 0; i < 8; ++i)
+    {
+        f.pump();
+        char buffer[32768];
+        auto count = recv(peer.fd, buffer, sizeof(buffer), 0);
+        REQUIRE(count > 0);
+        received.append(buffer, count);
+        std::this_thread::sleep_for(std::chrono::milliseconds(100));
+    }
+    CHECK(f.server.has_subscribers(lwm::Event_FocusChange));
+    received += f.receive(peer, false);
+    CHECK(received == "{\"instance\":\"" + f.server.instance() + "\",\"sequence\":1," + event.substr(1) + "\n");
 }

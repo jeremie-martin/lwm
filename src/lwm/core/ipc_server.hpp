@@ -1,6 +1,7 @@
 #pragma once
 
 #include "events.hpp"
+#include "ipc_command.hpp"
 #include <chrono>
 #include <functional>
 #include <optional>
@@ -18,7 +19,7 @@ class Server
 {
 public:
     using Clock = std::chrono::steady_clock;
-    using Handler = std::function<std::string(std::string const&)>;
+    using Handler = std::function<std::string(Command const&)>;
     Server() = default;
     ~Server() { stop(); }
     Server(Server const&) = delete;
@@ -33,40 +34,31 @@ public:
     void dispatch(std::span<pollfd const> fds, Handler const& handler);
     void expire();
     void emit(EventType type, std::string_view json);
+    uint64_t sequence() const { return sequence_; }
+    std::string const& instance() const { return instance_; }
 
 private:
-    struct Request
-    {
-        std::string text;
-    };
-    struct Response
-    {
-        std::string text;
-        size_t sent = 0;
-        uint32_t subscribe_mask = 0;
-    };
     struct Client
     {
         int fd;
-        Clock::time_point deadline;
-        std::variant<Request, Response> state = Request{};
-    };
-    struct Subscriber
-    {
-        int fd;
-        uint32_t mask;
+        std::optional<Clock::time_point> deadline;
+        std::string input;
+        std::string output;
+        size_t sent = 0;
+        uint32_t mask = 0;
+        bool reading = true;
     };
     std::string path_;
     int listener_ = -1;
-    std::optional<Client> client_;
-    std::vector<Subscriber> subscribers_;
+    std::vector<Client> clients_;
+    uint64_t sequence_ = 0;
+    std::string instance_;
 
-    void accept_client();
-    void close_client();
-    void read_request(Handler const& handler);
-    void execute(std::string request, Handler const& handler);
-    void respond(std::string response, uint32_t subscribe_mask = 0);
-    void write_response();
+    void accept_clients();
+    void read_request(Client& client, Handler const& handler);
+    void execute(Client& client, Handler const& handler);
+    void respond(Client& client, std::string response);
+    void write_response(Client& client);
 };
 
 } // namespace lwm::ipc

@@ -23,12 +23,19 @@ When `XDG_RUNTIME_DIR` is unset, LWM uses
 3. the root-window `_LWM_IPC_SOCKET` property
 4. the default path above
 
-LWM accepts one ordinary request/reply exchange at a time. A second connection
-is answered with `error busy`. A request must complete within 500 ms and contain
-fewer than 4096 received bytes, including the terminating newline. Replies have
-a separate 500 ms delivery deadline. Partial writes resume when the socket is
-writable; a stalled reader cannot block window management. A timed-out exchange
-is disconnected, so consumers must reject an incomplete response line.
+LWM services up to 32 ordinary connections and eight subscriptions concurrently.
+Commands still execute sequentially on the WM event loop; a partial request or
+slow reply does not occupy another client's slot. Excess connections are rejected, with `error busy` when the rejection reply
+can be delivered. Requests and replies each have a 500 ms deadline. A command line
+must contain fewer than 4096 bytes including its newline; replies are limited
+to 8 MiB. Writes resume when the socket is writable, with at most 64 KiB written
+per connection per dispatch. A timed-out exchange is disconnected.
+
+`lwmctl --timeout MS` bounds connection, request transmission, response, and
+subscription acknowledgement waits (default 2000 ms). Idle subscriptions do not
+time out; once an event starts arriving, its complete line must arrive within
+the timeout. Explicit socket selection takes precedence even if the path is
+unavailable. Discovery properties must be complete text without embedded NULs.
 
 ## Framing
 
@@ -44,8 +51,15 @@ existing clients. The connection closes after the complete reply is sent.
 `lwmctl` removes the `ok` envelope, prints `VALUE`
 to stdout, and prints an error message to stderr with a nonzero exit status.
 Empty, truncated, or unrecognized replies are errors. A subscription begins only
-after the exact `ok subscribed` acknowledgement. Socket operations retry signal
-interruptions, and a closed socket produces an ordinary failure exit.
+after the exact `ok subscribed` acknowledgement. Interrupted reads and writes retry. Truncated subscription events are rejected
+without printing their partial contents. Ordinary command output failures return
+nonzero; a closed stdout pipe ends a subscription normally.
+
+`lwmctl --help` and command-specific help (for example `lwmctl workspace --help`)
+print to stdout without connecting. Usage and runtime errors print to stderr and
+return status 1; successful commands return 0. Use `--` before arguments that
+resemble options, and shell-quote names or paths containing spaces. Arguments
+containing line breaks or NULs cannot be represented by this line protocol.
 
 ## Commands
 
@@ -54,6 +68,7 @@ Monitor- and workspace-relative commands target the focused monitor.
 | Command | Result |
 | --- | --- |
 | `ping` | `pong` |
+| `state` | consistent combined state snapshot as JSON |
 | `version` | LWM version |
 | `reload-config` | reload the configured file |
 | `restart` | exec-restart the current binary |
@@ -84,6 +99,7 @@ the scratchpad retryable. Successful exec does not guarantee a matching window:
 `scratchpad cancel-launch NAME` clears a pending launch so the user can retry.
 It is a no-op for an empty or already claimed slot and rejects unknown names.
 It does not terminate a process; a late matching window can still be claimed.
+Both named scratchpad commands reject unknown names.
 
 ## JSON results
 
@@ -163,19 +179,53 @@ subscribers may be connected.
 | `layout_change` | `action`; `value` or `delta` where applicable |
 | `config_reload` | `success`, `source`; `error` on failure |
 | `key_action` | `action` |
+| `state_change` | no additional fields; refresh a state snapshot |
 
 `config_reload.source` is `ipc`, `sighup`, or `keybind`. LWM does not emit a
 `focus_change` event when focus is cleared.
 
 Events are sent after the triggering operation has completed its geometry, focus,
 property, and stacking updates. Within an operation, events are ordered as
-workspace changes, final focus, map/unmap, then action or reload outcomes.
+workspace changes, final focus, map/unmap, then action or reload outcomes, followed by `state_change` when subscribed.
 Multiple workspace changes on one monitor coalesce to its initial and final
 workspace; intermediate focus choices are omitted. Explicit same-window focus
 still emits `focus_change`. This ordering does not combine separate X events
 or separate IPC commands.
 
-Delivery is best-effort and non-blocking. LWM drops an event when a subscriber
-would block and disconnects a subscriber after a partial or failed write. There
-is no replay, ordering acknowledgement, or protocol-version negotiation.
-Consumers should ignore unknown JSON fields and event names.
+Every event also has an `instance` string identifying this WM lifetime and a
+monotonically increasing `sequence` number within it. Filtering may leave gaps;
+a gap is not evidence of loss. An exec restart starts a new instance.
+
+Subscription delivery is ordered and non-blocking. Each subscriber has at most
+1 MiB of queued output and must make write progress within 500 ms while output
+is pending. Partial writes resume;
+queue overflow, delivery timeout, or a socket error disconnects the subscriber
+instead of silently dropping events. An event larger than the queue limit also
+disconnects it. Registration precedes acknowledgement, and subsequent events queue
+behind `ok subscribed`.
+
+There is no replay. Consumers must treat EOF or an error as a reason to reconnect
+and resynchronize, and ignore unknown JSON fields and event names.
+
+## State consumers and recovery
+
+`state` returns one snapshot containing `instance`, `sequence`, `workspaces`,
+`windows`, and `scratchpads`. The last three values have exactly the shapes of
+the corresponding list commands above. The sequence is the last published event
+at the time of the snapshot; producing a snapshot does not publish an event.
+
+For a panel or other state consumer:
+
+1. Open `subscribe state_change` and wait for `ok subscribed`.
+2. Query `state` on a separate connection and install that snapshot.
+3. Ignore queued events from that instance whose sequence is at or before the
+   snapshot's sequence. A later `state_change` means to query a fresh snapshot;
+   several pending notifications can share one refresh.
+4. On EOF, errors, or a different instance, discard the old stream and repeat.
+
+`state_change` is an invalidation notification after completion, not a patch or
+proof that a value changed. It covers the exposed list state, including metadata,
+urgency, placement, and scratchpad changes; no-op actions can also emit it.
+Individual focus/map/workspace events remain available for consumers that need
+those occurrences instead of a current-state view. Notifications cover only the
+fields exposed by the list API, not every X property or application state.

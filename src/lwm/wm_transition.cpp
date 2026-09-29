@@ -204,6 +204,7 @@ void WindowManager::complete_transition()
         [&](auto const& a, auto const& b) { return priority(a.first) < priority(b.first); }
     );
     for (auto const& [type, json] : effects_.events) ipc_.emit(type, json);
+    ipc_.emit(Event_StateChange, "{\"event\":\"state_change\"}");
     effects_ = {};
     LWM_ASSERT_INVARIANTS(clients_, monitors_, active_window_);
 }

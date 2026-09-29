@@ -68,6 +68,7 @@ add_subdirectory(src)
 # Install under the configured CMAKE_INSTALL_PREFIX
 install(TARGETS lwm lwmctl DESTINATION bin)
 install(PROGRAMS scripts/lwm-notify.sh DESTINATION bin RENAME lwm-notify)
+install(PROGRAMS scripts/lwm-notify-bridge.sh DESTINATION bin RENAME lwm-notify-bridge)
 
 add_custom_target(uninstall
     COMMAND "${CMAKE_COMMAND}" "-DMANIFEST=${CMAKE_BINARY_DIR}/install_manifest.txt"

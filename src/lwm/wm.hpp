@@ -217,6 +217,7 @@ private:
         uint32_t focus_time = XCB_CURRENT_TIME;
         bool drain_crossing = false;
         bool repair_focus = false;
+        bool state_changed = false;
         bool stacking = false;
         bool workareas = false;
         bool client_list = false;
@@ -326,7 +327,7 @@ private:
     void handle_property_notify(xcb_property_notify_event_t const& e);
     void handle_randr_screen_change();
     void handle_timeouts();
-    std::string run_ipc_command(std::string const& command);
+    std::string run_ipc_command(ipc::Command const& command);
     std::expected<void, std::string> reload_config();
     void emit_config_reload_result(std::expected<void, std::string> const& result, char const* source);
     std::expected<void, std::string> apply_config_reload(Config config);

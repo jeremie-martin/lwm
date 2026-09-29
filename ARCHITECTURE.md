@@ -19,7 +19,8 @@ belongs in [IPC.md](IPC.md).
 | `src/lwm/core/policy.hpp` | pure visibility, focus, workspace, fullscreen, and hotplug decisions |
 | `src/lwm/core/ewmh.*` | EWMH atoms, classification, and property I/O |
 | `src/lwm/core/restart.*` | bounded restart record encoding/decoding without X or live-state mutation |
-| `src/lwm/core/ipc_server.*` | socket ownership, bounded request/reply transport, subscriptions |
+| `src/lwm/core/ipc_server.*` | bounded independent connections, deadlines, ordered subscription output |
+| `src/lwm/core/ipc_command.*` | shared command grammar, argument validation, and CLI help metadata |
 | `src/lwm/wm_ipc.cpp` | command handling and IPC query results |
 | `src/lwm/wm.cpp` | construction, client registration/removal, visibility, stacking, geometry writes |
 | `src/lwm/wm_transition.cpp` | operation boundaries and ordered completion of accumulated effects |
@@ -32,8 +33,9 @@ belongs in [IPC.md](IPC.md).
 | `src/lwm/wm_restart.cpp`, `wm_scratchpad.cpp` | exec handoff and scratchpad state |
 
 `WindowManager` owns one event loop. It polls the X connection, the SIGHUP
-self-pipe, the IPC listener, one pending request or reply, and subscription
-connections. State mutation is single-threaded. Socket readiness feeds the
+self-pipe, the IPC listener, bounded request/reply and subscription connections. State mutation is single-threaded. Command parsing produces validated command IDs and arguments;
+`wm_ipc.cpp` applies domain policy and serializes query results. The CLI and
+server use the same grammar, while tests use independent wire peers. Socket readiness feeds the
 transport server; its command callback runs on this same thread. X events,
 config reloads, and timeouts use the same state-transition helpers.
 
@@ -202,7 +204,7 @@ only the boundary calls `complete_transition()`. Completion has this order:
    merge once per affected window with a fresh property read, preserving atoms
    LWM does not own. Reads are issued together; there is no persistent atom cache.
 4. Reconcile stacking, perform at most one crossing-event barrier, and flush X.
-5. Emit settled subscription events, discard the operation's effects, and
+5. Emit settled subscription events and state invalidation, discard the operation's effects, and
    check Debug invariants.
 
 Stacking invalidation belongs to the same effects record and is reset with it.

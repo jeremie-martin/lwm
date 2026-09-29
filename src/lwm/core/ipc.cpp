@@ -89,10 +89,11 @@ std::optional<std::string> get_root_text_property(xcb_connection_t* conn, xcb_wi
 
     std::optional<std::string> value;
     int length = xcb_get_property_value_length(reply);
-    if (length > 0)
+    if (reply->type == type && reply->format == 8 && reply->bytes_after == 0 && length > 0)
     {
         auto const* bytes = static_cast<char const*>(xcb_get_property_value(reply));
-        value = std::string(bytes, bytes + length);
+        if (!std::memchr(bytes, 0, length))
+            value = std::string(bytes, bytes + length);
     }
 
     free(reply);

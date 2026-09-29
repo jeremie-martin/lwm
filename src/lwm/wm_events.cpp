@@ -821,6 +821,7 @@ void WindowManager::handle_key_press(xcb_key_press_event_t const& e)
 
     if (!handled)
         return;
+    effects_.state_changed |= ipc_.has_subscribers(Event_StateChange);
 
     if (ipc_.has_subscribers(Event_KeyAction))
     {
@@ -1392,6 +1393,7 @@ void WindowManager::handle_property_notify(xcb_property_notify_event_t const& e)
                 auto previous = window_rules_.match(window_match_info(*client), monitors_, config_.workspaces.names);
                 client->wm_class_name = std::move(instance);
                 client->wm_class = std::move(name);
+                effects_.state_changed |= ipc_.has_subscribers(Event_StateChange);
                 reevaluate_metadata(e.window, previous);
             }
         }
