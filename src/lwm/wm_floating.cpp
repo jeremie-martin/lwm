@@ -6,11 +6,10 @@
 
 namespace lwm {
 
-void WindowManager::manage_floating_window(
+WindowManager::FloatingPlacement WindowManager::initial_floating_placement(
     xcb_window_t window,
     ClassificationResult const& initial,
-    bool start_iconic,
-    bool allow_focus
+    DesktopResolutionResult const& desktop_target
 )
 {
     auto transient = initial.transient_for != XCB_NONE ? std::optional{ initial.transient_for } : std::nullopt;
@@ -36,7 +35,6 @@ void WindowManager::manage_floating_window(
         }
     }
 
-    auto desktop_target = resolve_window_desktop(window);
     bool desktop_pinned = desktop_target.kind == WindowManager::DesktopResolution::Resolved;
     if (!monitor_idx || !workspace_idx)
     {
@@ -155,128 +153,7 @@ void WindowManager::manage_floating_window(
         );
     }
 
-    {
-        Client client;
-        client.id = window;
-        set_floating_state(client, placement);
-        client.monitor = *monitor_idx;
-        client.workspace = *workspace_idx;
-        client.name = initial.properties.title;
-        client.wm_class = initial.properties.wm_class;
-        client.wm_class_name = initial.properties.wm_class_name;
-        client.transient_for = transient.value_or(XCB_NONE);
-        client.desktop_pinned = desktop_pinned;
-        client.order = next_client_order_++;
-        client.mru_order = next_mru_order_++;
-        client.iconic = start_iconic;
-        client.ewmh_type = initial.properties.ewmh_type;
-        parse_initial_ewmh_state(client);
-        cache_focus_hints_into(client);
-        refresh_user_time_tracking_into(client);
-
-        clients_[window] = std::move(client);
-    }
-
-    uint32_t values[] = { kManagedWindowEventMask };
-    xcb_change_window_attributes(conn_.get(), window, XCB_CW_EVENT_MASK, values);
-
-    // Passive button grab for click-to-focus (same as manage_window for tiled).
-    xcb_grab_button(
-        conn_.get(),
-        0,
-        window,
-        XCB_EVENT_MASK_BUTTON_PRESS,
-        XCB_GRAB_MODE_SYNC,
-        XCB_GRAB_MODE_ASYNC,
-        XCB_NONE,
-        XCB_NONE,
-        XCB_BUTTON_INDEX_ANY,
-        XCB_MOD_MASK_ANY
-    );
-
-    auto& client = require_client(window);
-
-    uint32_t border_width = border_width_for_client(client);
-    xcb_configure_window(conn_.get(), window, XCB_CONFIG_WINDOW_BORDER_WIDTH, &border_width);
-
-    if (wm_state_ != XCB_NONE)
-    {
-        uint32_t data[] = { start_iconic ? WM_STATE_ICONIC : WM_STATE_NORMAL, 0 };
-        xcb_change_property(conn_.get(), XCB_PROP_MODE_REPLACE, window, wm_state_, wm_state_, 32, 2, data);
-    }
-
-    if (start_iconic)
-    {
-
-        ewmh_.set_window_state(window, ewmh_.get()->_NET_WM_STATE_HIDDEN, true);
-    }
-
-    update_sync_state(client);
-    update_fullscreen_monitor_state(client);
-
-    ewmh_.set_frame_extents(window, 0, 0, 0, 0); // LWM doesn't add frames
-    uint32_t desktop = get_ewmh_desktop_index(*monitor_idx, *workspace_idx);
-    ewmh_.set_window_desktop(window, desktop);
-
-    update_allowed_actions(client);
-
-    update_ewmh_client_list();
-
-    keybinds_.grab_keys(window);
-
-    // Apply geometry-affecting state before mapping to avoid a wrong first frame.
-    // Fetch all EWMH state flags in a single round-trip.
-    auto manage_state_flags = ewmh_.get_window_state_flags(window);
-    if (manage_state_flags.fullscreen)
-    {
-        set_fullscreen(client, true);
-    }
-
-    if (manage_state_flags.maximized_horz || manage_state_flags.maximized_vert)
-    {
-        set_window_maximized(client, manage_state_flags.maximized_horz, manage_state_flags.maximized_vert);
-    }
-
-    // With off-screen visibility: map window once when managing
-    xcb_map_window(conn_.get(), window);
-
-    // Sync visibility decides whether to hide or show (and applies floating geometry)
-    reconcile_visibility_for_monitor(*monitor_idx);
-    stacking_dirty_ = true;
-
-    if (allow_focus && !start_iconic && !suppress_focus_ && *monitor_idx == focused_monitor_
-        && should_be_visible(client))
-        focus_any_window(window);
-
-    // AFTER mapping: Apply non-geometry states
-    apply_post_manage_states(window, transient.has_value());
-}
-
-void WindowManager::unmanage_floating_window(xcb_window_t window)
-{
-    // Set WM_STATE to Withdrawn before unmanaging (ICCCM)
-    if (wm_state_ != XCB_NONE)
-    {
-        uint32_t data[] = { WM_STATE_WITHDRAWN, 0 };
-        xcb_change_property(conn_.get(), XCB_PROP_MODE_REPLACE, window, wm_state_, wm_state_, 32, 2, data);
-    }
-
-    // Tracking state that remains outside Client
-    pending_kills_.erase(window);
-
-    size_t monitor_idx = 0;
-    auto const* client = get_client(window);
-    if (!client)
-        return; // Not managed
-    monitor_idx = client->monitor;
-
-    bool was_active = (active_window_ == window);
-
-    // Remove from unified Client registry (handles all client state including order)
-    clients_.erase(window);
-
-    update_ewmh_client_list();
-    finalize_removed_window_after_unmanage(monitor_idx, was_active, monitor_idx == focused_monitor_);
+    return { placement, *monitor_idx, *workspace_idx, desktop_pinned };
 }
 
 bool WindowManager::is_floating_window(xcb_window_t window) const
@@ -304,25 +181,6 @@ void WindowManager::update_floating_monitor_for_geometry(Client& client, Geometr
     if (active_window_ == client.id && is_suppressed_by_fullscreen(client))
         focus_or_fallback(monitors_[client.monitor], false);
 
-    flush_and_drain_crossing();
-}
-
-void WindowManager::apply_floating_geometry(Client& client)
-{
-    apply_geometry(client, floating_geometry(client), border_width_for_client(client));
-}
-
-void WindowManager::apply_visible_floating_geometry(Client& client)
-{
-    if (client.kind() != Client::Kind::Floating || client.hidden || !should_be_visible(client))
-        return;
-
-    if (client.fullscreen)
-        apply_fullscreen_if_needed(client);
-    else if (client.maximized_horz || client.maximized_vert)
-        apply_maximized_geometry(client);
-    else
-        apply_floating_geometry(client);
 }
 
 } // namespace lwm

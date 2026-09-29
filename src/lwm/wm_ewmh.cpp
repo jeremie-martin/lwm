@@ -69,7 +69,7 @@ void WindowManager::update_ewmh_desktops()
     update_ewmh_workarea();
 }
 
-void WindowManager::update_ewmh_client_list()
+void WindowManager::publish_client_list()
 {
     std::vector<std::pair<uint64_t, xcb_window_t>> ordered;
     ordered.reserve(clients_.size());
@@ -96,7 +96,7 @@ void WindowManager::flush_stacking_list()
         apply_stacking();
 }
 
-void WindowManager::update_ewmh_current_desktop()
+void WindowManager::publish_current_desktop()
 {
     // Per-monitor workspaces: report the active monitor's current workspace only.
     size_t const monitor_idx = focused_monitor_;
@@ -190,7 +190,7 @@ void WindowManager::switch_to_ewmh_desktop(uint32_t desktop)
         update_ewmh_current_desktop();
     }
     focus_or_fallback(monitor);
-    flush_and_drain_crossing();
+
     LOG_DEBUG("switch_to_ewmh_desktop: DONE, now on monitor {} ws {}", focused_monitor_, monitor.current_workspace);
 }
 

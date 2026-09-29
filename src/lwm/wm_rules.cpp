@@ -110,14 +110,16 @@ void WindowManager::reapply_rules_to_existing_windows()
         if (rule_result.matched)
         {
             apply_rule_result_to_window(window, rule_result);
-            apply_visible_floating_geometry(require_client(window));
+            request_geometry(require_client(window));
         }
     }
 }
 
-ClassificationResult WindowManager::classify_managed_window(xcb_window_t window)
+ClassificationResult WindowManager::classify_managed_window(xcb_window_t window, bool refresh_transient)
 {
-    xcb_window_t transient = transient_for_window(window).value_or(XCB_NONE);
+    auto const* cached = get_client(window);
+    xcb_window_t transient =
+        cached && !refresh_transient ? cached->transient_for : transient_for_window(window).value_or(XCB_NONE);
     bool has_transient = transient != XCB_NONE;
 
     // One set of property values drives classification, rules, and initial
@@ -211,8 +213,6 @@ void WindowManager::apply_classification_state(
     if (!client)
         return;
 
-    auto state_flags = ewmh_.get_window_state_flags(window);
-
     // Reload patches current state; mapping and property changes recompute defaults.
     auto desired = classification_policy::compute_desired_state({
         .classification_skip_taskbar = classification ? classification->skip_taskbar : client->skip_taskbar,
@@ -220,8 +220,8 @@ void WindowManager::apply_classification_state(
         .classification_above = classification ? classification->above : client->layer_hint == LayerHint::Above,
         .app_skip_taskbar = classification && client->app_prefs.skip_taskbar,
         .app_skip_pager = classification && client->app_prefs.skip_pager,
-        .ewmh_sticky = state_flags.sticky,
-        .ewmh_modal = state_flags.modal,
+        .ewmh_sticky = client->sticky,
+        .ewmh_modal = client->modal,
         .app_above = classification && !client->fullscreen && client->app_prefs.above,
         .app_below =
             classification ? !client->fullscreen && client->app_prefs.below : client->layer_hint == LayerHint::Below,
@@ -231,7 +231,7 @@ void WindowManager::apply_classification_state(
         .rule_layer_hint = rule_result.layer_hint,
         .rule_borderless = rule_result.borderless.value_or(classification ? false : client->borderless),
         .has_transient = classification && has_transient,
-        .is_sticky_desktop = is_sticky_desktop(window),
+        .is_sticky_desktop = client->sticky,
     });
 
     if (client->skip_taskbar != desired.skip_taskbar)
@@ -252,77 +252,24 @@ void WindowManager::apply_classification_state(
 
 void WindowManager::sync_managed_window_classification(xcb_window_t window, ClassificationResult const& result)
 {
-    auto const& classification = result.classification;
-    auto const& rule_result = result.rule_result;
-
-    auto* client = get_client(window);
-    if (!client)
-        return;
-
-    Client::Kind previous_kind = client->kind();
-    size_t previous_monitor = client->monitor;
-    size_t previous_workspace = client->workspace;
-    xcb_window_t previous_transient_for = client->transient_for;
-
-    client->transient_for = result.transient_for;
-
-    // If classification isn't tiled/floating, only transient restacking matters
-    WindowClassification::Kind desired_kind = classification.kind;
-    if (desired_kind != WindowClassification::Kind::Tiled && desired_kind != WindowClassification::Kind::Floating)
+    auto& client = require_client(window);
+    auto previous_monitor = client.monitor;
+    auto previous_transient = client.transient_for;
+    client.transient_for = result.transient_for;
+    auto kind = result.classification.kind;
+    if (kind != WindowClassification::Kind::Tiled && kind != WindowClassification::Kind::Floating)
     {
-        if (previous_transient_for != client->transient_for)
-            stacking_dirty_ = true;
+        stacking_dirty_ |= previous_transient != client.transient_for;
         return;
     }
-
-    // Classification determines kind before transient placement and rule overrides.
-    if (!sync_kind(window, desired_kind))
-        return;
-    relocate_to_transient_parent(window, previous_transient_for);
-    apply_rule_result_to_window(window, rule_result, &classification);
-
-    if (previous_transient_for != client->transient_for)
-        stacking_dirty_ = true;
-
-    // Reconcile affected monitors before applying geometry and focus.
-    size_t current_monitor = client->monitor;
-    bool monitor_changed = previous_monitor != current_monitor;
-    bool workspace_changed = previous_workspace != client->workspace;
-    bool kind_changed = previous_kind != client->kind();
-
-    // Sync visibility on all affected monitors.
-    reconcile_visibility_for_monitor(previous_monitor);
-    if (monitor_changed)
-        reconcile_visibility_for_monitor(current_monitor);
-
-    // Rearrange/restack previous monitor if window moved away
-    if (monitor_changed || workspace_changed || kind_changed)
-    {
-        if (previous_kind == Client::Kind::Tiled)
-            rearrange_monitor(monitors_[previous_monitor]);
-        else if (monitor_changed)
-            stacking_dirty_ = true;
-    }
-
-    // Rearrange/apply geometry on current monitor
-    if (client->kind() == Client::Kind::Tiled)
-    {
-        if (kind_changed || monitor_changed || workspace_changed)
-            rearrange_monitor(monitors_[current_monitor]);
-    }
-    else
-    {
-        apply_visible_floating_geometry(*client);
-        stacking_dirty_ = true;
-    }
-
-    if (window == active_window_ && (!is_focus_eligible(*client) || !is_physically_visible(*client)))
-        repair_focus_after_visibility_change(previous_monitor, false);
-
-    flush_and_drain_crossing();
+    sync_kind(window, kind);
+    relocate_to_transient_parent(window, previous_transient);
+    apply_rule_result_to_window(window, result.rule_result, &result.classification);
+    invalidate_monitor(previous_monitor);
+    invalidate_monitor(client.monitor);
 }
 
-void WindowManager::reevaluate_managed_window(xcb_window_t window)
+void WindowManager::reevaluate_managed_window(xcb_window_t window, bool refresh_transient)
 {
     auto* client = get_client(window);
     if (!client)
@@ -331,7 +278,7 @@ void WindowManager::reevaluate_managed_window(xcb_window_t window)
     if (client->kind() != Client::Kind::Tiled && client->kind() != Client::Kind::Floating)
         return;
 
-    auto result = classify_managed_window(window);
+    auto result = classify_managed_window(window, refresh_transient);
 
     if (claim_pending_scratchpad(window, result.properties, result.rule_result))
         return;

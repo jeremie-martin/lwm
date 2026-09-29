@@ -106,7 +106,7 @@ void WindowManager::toggle_named_scratchpad(std::string_view name)
         return;
     }
 
-    if (!client->iconic && !client->hidden && is_physically_visible(*client))
+    if (!client->iconic && !client->hidden && is_visible(*client))
     {
         if (active_window_ == claimed)
             hide_scratchpad_window(claimed);
@@ -161,10 +161,8 @@ xcb_window_t WindowManager::find_visible_pool_window() const
     for (auto it = scratchpad_pool_.rbegin(); it != scratchpad_pool_.rend(); ++it)
     {
         auto const& client = require_client(*it);
-        if (client.scratchpad
-            && std::holds_alternative<VisibleScratchpadPoolMembership>(*client.scratchpad)
-            && !client.iconic && !client.hidden
-            && is_physically_visible(client))
+        if (client.scratchpad && std::holds_alternative<VisibleScratchpadPoolMembership>(*client.scratchpad)
+            && !client.iconic && !client.hidden && is_visible(client))
         {
             return *it;
         }
@@ -274,7 +272,7 @@ void WindowManager::show_named_scratchpad_window(xcb_window_t window, Scratchpad
     move_floating_client_to_workspace(*client, target_monitor, target_workspace, false);
 
     // A late title/class match may already be visible on the target workspace.
-    apply_visible_floating_geometry(*client);
+    request_geometry(*client);
     deiconify_window(window, true);
 }
 
@@ -307,7 +305,8 @@ void WindowManager::show_pool_scratchpad_window(xcb_window_t window)
     {
         set_tiled_state(*client, restore_prior_floating);
         add_tiled_to_workspace(*client, target_monitor, target_workspace);
-        finalize_move_visibility(old_monitor, target_monitor);
+        invalidate_monitor(old_monitor);
+        invalidate_monitor(target_monitor);
     }
     else
     {

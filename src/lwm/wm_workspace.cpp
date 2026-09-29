@@ -24,11 +24,10 @@ bool WindowManager::apply_workspace_switch(size_t monitor_idx, size_t target_wor
     monitor.current_workspace = result->new_workspace;
 
     update_ewmh_current_desktop();
-    finalize_visibility_on_monitor(monitor_idx);
-    emit_event(Event_WorkspaceSwitch,
-        "{\"event\":\"workspace_switch\",\"monitor\":" + std::to_string(monitor_idx)
-        + ",\"from\":" + std::to_string(result->old_workspace)
-        + ",\"to\":" + std::to_string(result->new_workspace) + "}");
+    invalidate_monitor(monitor_idx);
+    auto [entry, inserted] =
+        effects_.workspace_events.try_emplace(monitor_idx, result->old_workspace, result->new_workspace);
+    entry->second.second = result->new_workspace;
 
     for (auto& [wid, client] : clients_)
     {
@@ -63,7 +62,6 @@ void WindowManager::switch_workspace(size_t ws)
     }
 
     focus_or_fallback(focused_monitor());
-    flush_and_drain_crossing();
 
     LOG_TRACE(
         "switch_workspace: DONE, now current={} previous={}",
@@ -126,7 +124,7 @@ void WindowManager::move_window_to_workspace(size_t ws)
         if (!move_floating_client_to_workspace(*client, monitor_idx, target_ws, false))
             return;
         focus_or_fallback(monitors_[monitor_idx]);
-        flush_and_drain_crossing();
+
         return;
     }
 
@@ -136,7 +134,6 @@ void WindowManager::move_window_to_workspace(size_t ws)
     workspace_policy::set_workspace_focus(monitor.workspaces[target_ws], window_to_move);
     focus_or_fallback(monitor);
 
-    flush_and_drain_crossing();
 }
 
 size_t WindowManager::wrap_monitor_index(int idx) const
@@ -175,7 +172,6 @@ void WindowManager::focus_monitor(int direction)
         warp_to_monitor(monitor);
     }
 
-    conn_.flush();
 }
 
 void WindowManager::move_window_to_monitor(int direction)
@@ -213,7 +209,6 @@ void WindowManager::move_window_to_monitor(int direction)
             warp_to_monitor(monitors_[target_idx]);
         }
 
-        flush_and_drain_crossing();
         return;
     }
 
@@ -237,7 +232,6 @@ void WindowManager::move_window_to_monitor(int direction)
         warp_to_monitor(target_monitor);
     }
 
-    flush_and_drain_crossing();
 }
 
 }

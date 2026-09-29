@@ -9,160 +9,42 @@ namespace lwm {
 
 void WindowManager::focus_any_window(xcb_window_t window, bool record_user_time, uint32_t focus_timestamp)
 {
-    LOG_TRACE(
-        "focus_any_window({:#x}) called, active_window_={:#x}, showing_desktop_={}",
-        window,
-        active_window_,
-        showing_desktop_
-    );
-
-    if (showing_desktop_)
-    {
-        LOG_TRACE("focus_any_window: rejected (showing_desktop_)");
-        return;
-    }
-
     auto* client = get_client(window);
-    if (!client)
-    {
-        LOG_TRACE("focus_any_window: rejected (no client)");
+    if (showing_desktop_ || !client || client->monitor >= monitors_.size()
+        || client->workspace >= monitors_[client->monitor].workspaces.size()
+        || !focus_policy::is_focus_eligible(client->accepts_input, client->supports_take_focus)
+        || (client->kind() != Client::Kind::Tiled && client->kind() != Client::Kind::Floating))
         return;
-    }
-
-    if (!is_focus_eligible(*client))
-    {
-        LOG_TRACE("focus_any_window: rejected (not focus eligible)");
-        return;
-    }
-
-    // Stale monitor/workspace indices are reachable after a RandR shrink (see the
-    // orphan path in unmanage_window); every path below indexes monitors_[client->monitor]
-    // and workspaces[client->workspace] directly, so reject out-of-range clients up front.
-    if (client->monitor >= monitors_.size() || client->workspace >= monitors_[client->monitor].workspaces.size())
-    {
-        LOG_TRACE("focus_any_window: rejected (stale monitor/workspace index)");
-        return;
-    }
-
     if (client->iconic)
         deiconify_window(window, false);
-
-    xcb_window_t previous_active = active_window_;
     focused_monitor_ = client->monitor;
-    // Resolve visibility before committing focus. Workspace reconciliation does
-    // not dispatch events or remove clients, so the target remains valid here.
-    bool workspace_changed = !client->sticky && apply_workspace_switch(client->monitor, client->workspace);
+    if (!client->sticky)
+        apply_workspace_switch(client->monitor, client->workspace);
     if (is_suppressed_by_fullscreen(*client))
     {
         focus_or_fallback(monitors_[client->monitor], false);
         return;
     }
+    if (!effects_.previous_focus)
+        effects_.previous_focus = active_window_;
+    effects_.focus_time = focus_timestamp;
+    active_window_ = window;
     if (client->kind() == Client::Kind::Tiled)
         workspace_policy::set_workspace_focus(monitors_[client->monitor].workspaces[client->workspace], window);
     client->mru_order = next_mru_order_++;
-    active_window_ = window;
-
-    LOG_TRACE("focus_any_window: updating EWMH current desktop");
-    update_ewmh_current_desktop();
-
-    if (previous_active != XCB_NONE && previous_active != window && is_managed(previous_active))
-    {
-        if (auto const* prev_client = get_client(previous_active))
-        {
-            uint32_t color = border_color_for_client(*prev_client);
-            xcb_change_window_attributes(conn_.get(), previous_active, XCB_CW_BORDER_PIXEL, &color);
-        }
-    }
-
-    if (should_apply_focus_border(*client))
-    {
-        uint32_t focus_color = border_color_for_client(*client);
-        xcb_change_window_attributes(conn_.get(), window, XCB_CW_BORDER_PIXEL, &focus_color);
-        uint32_t border_width = border_width_for_client(*client);
-        xcb_configure_window(conn_.get(), window, XCB_CONFIG_WINDOW_BORDER_WIDTH, &border_width);
-        LOG_TRACE("focus_any_window: applied focus border visuals");
-    }
-    else
-    {
-        LOG_TRACE("focus_any_window: skipped focus border visuals (fullscreen/borderless)");
-    }
-
-    xcb_timestamp_t focus_time =
-        focus_timestamp ? focus_timestamp : (last_event_time_ ? last_event_time_ : XCB_CURRENT_TIME);
-    send_wm_take_focus(*client, focus_time);
-    // Always set input focus directly on the target window. ICCCM prescribes
-    // root focus for "Globally Active" windows, but waiting for WM_TAKE_FOCUS
-    // can leave keyboard input stranded on the root window. Such clients can
-    // still redirect focus after receiving the protocol message above.
-    xcb_set_input_focus(conn_.get(), XCB_INPUT_FOCUS_POINTER_ROOT, window, focus_time);
-
-    stacking_dirty_ = true;
-
-    if (client->urgency.active())
-        clear_client_urgency(*client);
-    ewmh_.set_active_window(window);
-    if (net_wm_state_focused_ != XCB_NONE)
-        ewmh_.set_focus_state(is_managed(previous_active) ? previous_active : XCB_NONE, window, net_wm_state_focused_);
-
-    // Persist the focus time into user_time, and never let it regress —
-    // focus-stealing prevention (see handle_active_window_request) relies on
-    // user_time being monotonic and non-zero. Mouse/keyboard focus paths pass
-    // focus_timestamp == 0; fall back to the latest input time so those
-    // user-driven focuses still protect the window from later focus-steal.
-    // last_input_time_ (not last_event_time_) — PropertyNotify churn must not
-    // inflate user_time on auto-focus paths, or genuine older activation
-    // timestamps get refused by handle_active_window_request.
     if (record_user_time)
     {
-        uint32_t candidate = focus_timestamp != 0 ? focus_timestamp : last_input_time_;
-        if (candidate != 0
-            && (client->user_time == 0 || !ewmh_policy::timestamp_is_before(candidate, client->user_time)))
-        {
-            client->user_time = candidate;
-        }
+        uint32_t time = focus_timestamp ? focus_timestamp : last_input_time_;
+        if (time && (!client->user_time || !ewmh_policy::timestamp_is_before(time, client->user_time)))
+            client->user_time = time;
     }
-
-    conn_.flush();
-
-    emit_event(
-        Event_FocusChange,
-        "{\"event\":\"focus_change\",\"window\":" + std::to_string(window) + ",\"class\":\""
-            + json_escape(client->wm_class) + "\",\"title\":\"" + json_escape(client->name) + "\"}"
-    );
-
-    if (workspace_changed)
-        flush_and_drain_crossing();
-    LOG_TRACE("focus_any_window({:#x}): DONE", window);
 }
 
 void WindowManager::clear_focus()
 {
-    xcb_window_t previous_active = active_window_;
-    std::optional<size_t> previous_monitor;
-    if (auto const* previous = get_client(previous_active))
-        previous_monitor = previous->monitor;
+    if (!effects_.previous_focus)
+        effects_.previous_focus = active_window_;
     active_window_ = XCB_NONE;
-    ewmh_.set_active_window(XCB_NONE);
-    xcb_set_input_focus(conn_.get(), XCB_INPUT_FOCUS_POINTER_ROOT, conn_.screen()->root, XCB_CURRENT_TIME);
-
-    // Keep _NET_WM_STATE_FOCUSED in sync when focus is explicitly cleared.
-    if (net_wm_state_focused_ != XCB_NONE && previous_active != XCB_NONE)
-    {
-        ewmh_.set_window_state(previous_active, net_wm_state_focused_, false);
-    }
-
-    if (previous_active != XCB_NONE && is_managed(previous_active))
-    {
-        if (auto const* prev_client = get_client(previous_active))
-        {
-            uint32_t color = border_color_for_client(*prev_client);
-            xcb_change_window_attributes(conn_.get(), previous_active, XCB_CW_BORDER_PIXEL, &color);
-        }
-    }
-    if (previous_monitor)
-        stacking_dirty_ = true;
-
-    conn_.flush();
 }
 
 void WindowManager::focus_or_fallback(Monitor& monitor, bool record_user_time)
@@ -243,7 +125,7 @@ void WindowManager::repair_focus_after_visibility_change(size_t preferred_monito
     }
 
     if (auto* active = get_client(active_window_);
-        active && active->monitor < monitors_.size() && is_focus_eligible(*active) && is_physically_visible(*active))
+        active && active->monitor < monitors_.size() && is_focus_eligible(*active) && is_visible(*active))
     {
         focused_monitor_ = active->monitor;
         if (active->kind() == Client::Kind::Tiled && active->workspace < monitors_[active->monitor].workspaces.size())

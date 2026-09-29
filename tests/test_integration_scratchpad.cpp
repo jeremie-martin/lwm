@@ -648,14 +648,15 @@ TEST_CASE("Integration: spawned commands do not inherit WM descriptors", "[integ
 {
     auto env = TestEnvironment::create(R"(
 [autostart]
-commands = [{ shell = 'readlink /proc/$$/fd/* > "$XDG_RUNTIME_DIR/child-fds"; printf done > "$XDG_RUNTIME_DIR/child-done"' }]
+commands = [{ shell = 'exec 3>"$XDG_RUNTIME_DIR/child-marker"; for fd in /proc/$$/fd/*; do case "${fd##*/}" in 0|1|2) continue;; esac; readlink "$fd" >> "$XDG_RUNTIME_DIR/child-fds"; done; printf done > "$XDG_RUNTIME_DIR/child-done"' }]
 )");
     if (!env)
         SKIP("X11 unavailable");
     auto runtime = std::filesystem::path(env->wm.runtime_dir());
     REQUIRE(wait_for_condition([&] { return std::filesystem::exists(runtime / "child-done"); }, kTimeout));
     auto descriptors = read_text_file(runtime / "child-fds");
-    REQUIRE_FALSE(descriptors.empty());
+    REQUIRE(descriptors.find("child-marker") != std::string::npos);
+    INFO(descriptors);
     CHECK(descriptors.find("socket:") == std::string::npos);
     CHECK(descriptors.find(".log") == std::string::npos);
 }

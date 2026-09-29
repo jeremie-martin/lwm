@@ -15,9 +15,11 @@
 #include <chrono>
 #include <deque>
 #include <expected>
+#include <map>
 #include <memory>
 #include <optional>
 #include <regex>
+#include <set>
 #include <string>
 #include <unordered_map>
 #include <variant>
@@ -204,6 +206,36 @@ private:
     // SIGHUP self-pipe: handler writes to [1], main loop polls [0]
     int signal_pipe_[2] = { -1, -1 };
 
+    // One outer operation owns these effects; feature helpers never complete them.
+    struct TransitionEffects
+    {
+        std::map<size_t, xcb_window_t> monitors;
+        std::vector<xcb_window_t> geometry;
+        std::set<xcb_window_t> configure_replies;
+        std::vector<xcb_window_t> maps;
+        std::optional<xcb_window_t> previous_focus;
+        uint32_t focus_time = XCB_CURRENT_TIME;
+        bool drain_crossing = false;
+        bool repair_focus = false;
+        bool client_list = false;
+        bool current_desktop = false;
+        std::set<xcb_window_t> allowed_actions;
+        std::set<xcb_window_t> urgency;
+        std::set<xcb_window_t> desktops;
+        std::set<xcb_window_t> iconic;
+        std::map<size_t, std::pair<size_t, size_t>> workspace_events;
+        std::vector<std::pair<EventType, std::string>> events;
+        bool operator==(TransitionEffects const&) const = default;
+    } effects_;
+    void complete_transition();
+    void dispatch_event(xcb_generic_event_t const& event);
+    void invalidate_monitor(size_t monitor, xcb_window_t preferred = XCB_NONE);
+    void arrange_monitor(Monitor& monitor);
+    void realize_visibility(size_t monitor, xcb_window_t preferred);
+    void commit_focus();
+    void request_geometry(Client const& client);
+    Geometry presentation_geometry(Client const& client) const;
+    void write_geometry(Client& client, Geometry geometry, uint32_t border);
     bool stacking_dirty_ = false;
     bool monitors_dirty_ = false;
     std::deque<xcb_generic_event_t> deferred_events_;
@@ -268,8 +300,6 @@ private:
     void handle_map_request(xcb_map_request_event_t const& e);
     void map_desktop_window(xcb_window_t window);
     void map_dock_window(xcb_window_t window);
-    void map_floating_window(xcb_window_t window, ClassificationResult const& initial, bool start_iconic, bool urgent);
-    void map_tiled_window(xcb_window_t window, ClassificationResult const& initial, bool start_iconic, bool urgent);
     void handle_window_removal(xcb_window_t window);
     void handle_enter_notify(xcb_enter_notify_event_t const& e);
     void handle_motion_notify(xcb_motion_notify_event_t const& e);
@@ -303,6 +333,7 @@ private:
     void regrab_all_keys();
     void apply_appearance_reload();
     void update_allowed_actions(Client const& client);
+    void publish_allowed_actions(Client const& client);
     /// Publish the stable LWM classification used by external desktop tools.
     void publish_lwm_window_class(Client const& client);
     void reapply_rules_to_existing_windows();
@@ -318,26 +349,20 @@ private:
     void toggle_window_float(xcb_window_t window);
     Geometry current_window_geometry(xcb_window_t window) const;
 
-    void manage_window(xcb_window_t window, ClassificationResult const& initial, bool start_iconic = false);
-    void manage_floating_window(
+    void manage_client(
         xcb_window_t window,
         ClassificationResult const& initial,
         bool start_iconic = false,
-        bool allow_focus = true
+        bool adopting = false
     );
-    /// Populate accepts_input / supports_take_focus on a client struct from X11 properties.
-    /// The _into form takes a reference so it can be called before the client is inserted
-    /// into clients_; the window-keyed wrapper is for event-handler use after insert.
-    void cache_focus_hints_into(Client& client);
-    void cache_focus_hints(xcb_window_t window);
+    void read_initial_focus_hints(Client& client, bool honor_initial_state);
     void parse_initial_ewmh_state(Client& client);
-    void apply_post_manage_states(xcb_window_t window, bool has_transient);
-    ClassificationResult classify_managed_window(xcb_window_t window);
-    /// Same split: _into populates user_time fields before insert; window-keyed wrapper
+    ClassificationResult classify_managed_window(xcb_window_t window, bool refresh_transient = false);
+    /// _into populates user_time fields before insert; the window-keyed wrapper
     /// is for event-handler refresh after insert.
     void refresh_user_time_tracking_into(Client& client);
     void refresh_user_time_tracking(xcb_window_t window);
-    void reevaluate_managed_window(xcb_window_t window);
+    void reevaluate_managed_window(xcb_window_t window, bool refresh_transient = false);
     void reevaluate_metadata(xcb_window_t window, WindowRuleResult const& previous);
     bool
     claim_pending_scratchpad(xcb_window_t window, WindowMatchInfo const& properties, WindowRuleResult const& rules);
@@ -352,7 +377,6 @@ private:
     );
 
     void unmanage_window(xcb_window_t window);
-    void unmanage_floating_window(xcb_window_t window);
     void focus_any_window(xcb_window_t window, bool record_user_time = true, uint32_t focus_timestamp = 0);
     /// Returns true when a target was focused; false when there is no focused
     /// monitor or no cycle candidates.
@@ -363,9 +387,7 @@ private:
     void set_window_layer_hint(Client& client, LayerHint hint);
     void set_window_sticky(Client& client, bool enabled);
     void set_window_maximized(Client& client, bool horiz, bool vert);
-    void apply_maximized_geometry(Client& client);
     void set_window_modal(Client& client, bool enabled);
-    void apply_fullscreen_if_needed(Client& client);
     void set_fullscreen_monitors(Client& client, FullscreenMonitors const& monitors);
     Geometry fullscreen_geometry_for_client(Client const& client) const;
     void set_iconic_state(xcb_window_t window, bool iconic);
@@ -374,16 +396,9 @@ private:
     void kill_window(xcb_window_t window);
     void clear_focus();
 
-    void rearrange_monitor(Monitor& monitor, bool geometry_only = false);
-    void rearrange_all_monitors();
+    void invalidate_all_monitors();
 
     bool apply_workspace_switch(size_t monitor_idx, size_t target_workspace);
-    void finalize_move_visibility(size_t source_monitor, size_t target_monitor);
-    void finalize_removed_window_after_unmanage(
-        size_t monitor_idx,
-        bool removed_active_window,
-        bool focus_fallback_if_active
-    );
     void switch_workspace(size_t ws);
     void toggle_workspace();
     void move_window_to_workspace(size_t ws);
@@ -417,6 +432,7 @@ private:
     void set_client_urgency(Client& client, UrgencySource source, bool enabled);
     void clear_client_urgency(Client& client);
     void sync_client_urgency_state(Client& client);
+    void publish_urgency(Client& client);
 
     Monitor& focused_monitor() { return monitors_[focused_monitor_]; }
     Monitor const& focused_monitor() const { return monitors_[focused_monitor_]; }
@@ -451,17 +467,26 @@ private:
         size_t monitor = 0;
         size_t workspace = 0;
     };
+    struct FloatingPlacement
+    {
+        Geometry geometry;
+        size_t monitor;
+        size_t workspace;
+        bool desktop_pinned;
+    };
+    FloatingPlacement initial_floating_placement(
+        xcb_window_t window,
+        ClassificationResult const& initial,
+        DesktopResolutionResult const& desktop_target
+    );
     DesktopResolutionResult resolve_window_desktop(xcb_window_t window) const;
     std::optional<xcb_window_t> transient_for_window(xcb_window_t window) const;
     bool should_be_visible(Client const& client) const;
-    bool is_physically_visible(Client const& client) const;
+    bool is_visible(Client const& client) const;
     bool is_suppressed_by_fullscreen(Client const& client) const;
     stacking_policy::Tier compute_stack_tier(Client const& client) const;
     stacking_policy::ClientStackInputs stack_inputs_of(Client const& client) const;
     xcb_window_t select_fullscreen_owner_for_monitor(size_t monitor_idx, xcb_window_t preferred_owner = XCB_NONE) const;
-    void reconcile_visibility_for_monitor(size_t monitor_idx, xcb_window_t preferred_owner = XCB_NONE);
-    void
-    finalize_after_desktop_move(xcb_window_t window, bool was_active, size_t target_monitor, size_t target_workspace);
     /// Realize stacking_policy onto X and EWMH _NET_CLIENT_LIST_STACKING in
     /// one global pass.  X stacking is a single global order — a per-monitor
     /// pass cannot enforce cross-monitor invariants like floating-above-tile.
@@ -470,14 +495,12 @@ private:
     bool is_workspace_visible(size_t monitor_idx, size_t workspace_idx) const;
     void update_floating_monitor_for_geometry(Client& client);
     void update_floating_monitor_for_geometry(Client& client, Geometry const& geometry);
-    void apply_floating_geometry(Client& client);
-    void apply_visible_floating_geometry(Client& client);
     uint32_t border_width_for_client(Client const& client) const;
     uint32_t border_color_for_client(Client const& client) const;
     bool should_apply_focus_border(Client const& client) const;
-    void apply_geometry(Client& client, Geometry geometry, uint32_t border_width);
     void send_configure_notify(xcb_window_t window, Geometry const& geom, uint16_t border_width);
     void send_configure_notify(Client const& client);
+    void publish_configure_notify(Client const& client);
     bool drag_active() const;
     void begin_floating_move(xcb_window_t window, int16_t root_x, int16_t root_y);
     void begin_floating_resize(xcb_window_t window, int16_t root_x, int16_t root_y);
@@ -518,12 +541,9 @@ private:
     void update_ewmh_workarea();
 
     void update_struts();
-    void unmanage_dock_window(xcb_window_t window);
-    void unmanage_desktop_window(xcb_window_t window);
 
     // Low-level client location write: updates client fields + EWMH desktop.
-    // Use only inside movement/hotplug funnels that reconcile source/target
-    // visibility before returning.
+    // Movement/hotplug callers must invalidate source and target monitors.
     void assign_window_workspace(Client& client, size_t monitor_idx, size_t workspace_idx);
 
     bool move_tiled_client_to_workspace(
@@ -551,13 +571,14 @@ private:
     // Derived visibility: sync physical visibility to match policy state
 
     // Funnel: refresh fullscreen ownership, sync visibility, then re-tile.
-    void finalize_visibility_on_monitor(size_t monitor_idx, xcb_window_t preferred_fullscreen_owner = XCB_NONE);
 
     void setup_ewmh();
     void update_ewmh_desktops();
     void update_ewmh_client_list();
+    void publish_client_list();
     void flush_stacking_list();
     void update_ewmh_current_desktop();
+    void publish_current_desktop();
     uint32_t get_ewmh_desktop_index(size_t monitor_idx, size_t workspace_idx) const;
     void switch_to_ewmh_desktop(uint32_t desktop);
     void clear_all_borders();

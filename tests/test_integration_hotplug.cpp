@@ -68,6 +68,26 @@ apply = { floating = true, monitor_name = "DUMMY1" }
         REQUIRE(result);
         REQUIRE(result->starts_with("ok"));
     };
+    auto dock = create_window(conn, 15, 25, 500, 40);
+    auto desktop = create_window(conn, 0, 0, 600, 400);
+    set_window_type(conn, dock, intern_atom(conn.get(), "_NET_WM_WINDOW_TYPE_DOCK"));
+    set_window_type(conn, desktop, intern_atom(conn.get(), "_NET_WM_WINDOW_TYPE_DESKTOP"));
+    map_window(conn, dock);
+    map_window(conn, desktop);
+    auto classification = intern_atom(conn.get(), "_LWM_WINDOW_CLASS");
+    REQUIRE(wait_for_condition(
+        [&]
+        {
+            return get_window_property_string(conn.get(), dock, classification) == "dock"
+                && get_window_property_string(conn.get(), desktop, classification) == "desktop";
+        },
+        timeout
+    ));
+    auto check_external_geometry = [&]
+    {
+        CHECK(width(conn, dock) == 500);
+        CHECK(width(conn, desktop) == 600);
+    };
     auto a = create_window(conn, 10, 10, 200, 150);
     auto b = create_window(conn, 10, 10, 200, 150);
     map_window(conn, a);
@@ -90,12 +110,14 @@ apply = { floating = true, monitor_name = "DUMMY1" }
     auto outputs = run_command("/usr/bin/xrandr", { "--query" });
     INFO((outputs ? outputs->stdout_text : "xrandr failed"));
     REQUIRE(two_outputs);
+    check_external_geometry();
     auto workspaces = query(*socket, "workspace list");
     CHECK(workspaces["monitors"][0]["current_workspace"] == 1);
     CHECK(workspaces["monitors"][0]["workspaces"][1]["layout"] == "monocle");
     command("workspace switch 0");
     REQUIRE(wait_for_active_window(conn, a, timeout));
     CHECK(width(conn, a) == original_width);
+    check_external_geometry();
 
     auto floating = create_window(conn, 1300, 20, 250, 180);
     set_window_wm_class(conn, floating, "floating", "FloatingOutput");
@@ -113,6 +135,7 @@ apply = { floating = true, monitor_name = "DUMMY1" }
     randr({ "--output", "DUMMY1", "--pos", "0x0", "--output", "DUMMY0", "--pos", "1280x0" });
     REQUIRE(wait_for_condition([&] { return monitor_for(a) == 1 && monitor_for(floating) == 0; }, timeout));
     CHECK(width(conn, a) == original_width);
+    check_external_geometry();
     command("focus window=" + std::to_string(a));
     auto state = intern_atom(conn.get(), "_NET_WM_STATE");
     auto fullscreen = intern_atom(conn.get(), "_NET_WM_STATE_FULLSCREEN");
@@ -139,11 +162,15 @@ apply = { floating = true, monitor_name = "DUMMY1" }
     ));
     REQUIRE(wait_for_active_window(conn, a, timeout));
     CHECK(width(conn, a) == 1280);
+    check_external_geometry();
     randr({ "--output", "DUMMY0", "--mode", "1280x720", "--right-of", "DUMMY1" });
     REQUIRE(wait_for_condition([&] { return query(*socket, "workspace list")["monitors"].size() == 2; }, timeout));
     CHECK(monitor_for(a) == 0); // Returning outputs do not reclaim relocated clients.
     CHECK(monitor_for(floating) == 0);
+    check_external_geometry();
     destroy_window(conn, floating);
     destroy_window(conn, b);
     destroy_window(conn, a);
+    destroy_window(conn, dock);
+    destroy_window(conn, desktop);
 }

@@ -12,8 +12,6 @@ struct ClientRecord
 {
     bool borderless = false;
     Geometry floating;
-    std::optional<Geometry> fullscreen_restore;
-    std::optional<Geometry> maximize_restore;
     std::optional<Geometry> prior_floating;
     uint32_t hidden_pool_kind = 0;
     std::optional<Client::Kind> kind;

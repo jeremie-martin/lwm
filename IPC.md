@@ -167,6 +167,14 @@ subscribers may be connected.
 `config_reload.source` is `ipc`, `sighup`, or `keybind`. LWM does not emit a
 `focus_change` event when focus is cleared.
 
+Events are sent after the triggering operation has completed its geometry, focus,
+property, and stacking updates. Within an operation, events are ordered as
+workspace changes, final focus, map/unmap, then action or reload outcomes.
+Multiple workspace changes on one monitor coalesce to its initial and final
+workspace; intermediate focus choices are omitted. Explicit same-window focus
+still emits `focus_change`. This ordering does not combine separate X events
+or separate IPC commands.
+
 Delivery is best-effort and non-blocking. LWM drops an event when a subscriber
 would block and disconnects a subscriber after a partial or failed write. There
 is no replay, ordering acknowledgement, or protocol-version negotiation.

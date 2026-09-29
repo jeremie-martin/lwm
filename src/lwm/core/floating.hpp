@@ -7,9 +7,8 @@ namespace lwm::floating {
 
 Geometry place_floating(Geometry area, uint16_t width, uint16_t height, std::optional<Geometry> parent);
 
-// Runtime normal hints update the geometry restored after fullscreen/maximize,
-// not the currently realized state geometry.
-Geometry& runtime_hints_geometry(Client& client);
+// Derive maximized presentation without overwriting normal placement.
+Geometry presentation_geometry(Geometry normal, Geometry area, bool horizontal, bool vertical);
 
 struct PositionHintResolution
 {

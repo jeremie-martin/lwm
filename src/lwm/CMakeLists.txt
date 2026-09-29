@@ -17,6 +17,7 @@ add_library(liblwm STATIC
     wm_workspace.cpp
     wm_ewmh.cpp
     wm_ipc.cpp
+    wm_transition.cpp
     wm.cpp
     wm_events.cpp
     wm_drag.cpp

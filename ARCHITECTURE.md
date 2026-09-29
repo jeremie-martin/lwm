@@ -21,7 +21,8 @@ belongs in [IPC.md](IPC.md).
 | `src/lwm/core/restart.*` | bounded restart record encoding/decoding without X or live-state mutation |
 | `src/lwm/core/ipc_server.*` | socket ownership, bounded request/reply transport, subscriptions |
 | `src/lwm/wm_ipc.cpp` | command handling and IPC query results |
-| `src/lwm/wm.cpp` | construction, client lifecycle, visibility, stacking, geometry application |
+| `src/lwm/wm.cpp` | construction, client registration/removal, visibility, stacking, geometry writes |
+| `src/lwm/wm_transition.cpp` | operation boundaries and ordered completion of accumulated effects |
 | `src/lwm/wm_rules.cpp` | classification, rule application, and runtime reevaluation |
 | `src/lwm/wm_ewmh.cpp` | root properties, client lists, workareas, EWMH desktop projection |
 | `src/lwm/wm_events.cpp` | X event dispatch, client messages, property changes, RANDR |
@@ -59,11 +60,17 @@ splits. Beyond depth 32, the path field is saturated and the full index remains
 in the depth field. Non-chain legacy addresses have no meaning in the supported
 layouts and are ignored on restore.
 
-`WindowManager::apply_geometry()` owns WM-driven configure requests, sync
-notifications, and synthetic ConfigureNotify events for tiled, floating, and
-fullscreen geometry. It reports the actual policy-selected border width.
-Geometry-only tiled updates compare against the client cache without allocating
-a second vector of old rectangles.
+Floating clients keep one normal rectangle. Maximize projects selected axes onto
+the workarea; fullscreen projects onto its target monitor rectangle. Neither
+projection overwrites normal geometry. Tiled layout writes `tiled_geometry` as
+its target, independently of the last rectangle sent to X.
+
+`write_geometry()` owns WM-driven configure requests, sync notifications, and
+synthetic ConfigureNotify events. Its output cache skips an already-applied
+rectangle and border, coalescing duplicate requests without reordering layout
+or client traversal. Off-screen hiding and conflicting ConfigureNotify events
+invalidate that cache. A client's ConfigureRequest creates a separate reply
+obligation, so skipping a geometry write never skips a required acknowledgement.
 
 ## State model
 
@@ -89,7 +96,7 @@ Popup-only window types are mapped directly and never enter `clients_`.
 
 The important authorities are:
 
-- `Client`: placement, classification, geometry restore data, protocol state,
+- `Client`: placement, classification, normal geometry, protocol state,
   urgency, and scratchpad membership.
 - `Workspace::windows`: tiled membership and layout order.
 - `Workspace::focused_window` and `focus_history`: remembered tiled focus.
@@ -118,19 +125,12 @@ A policy-visible client can still be hidden when another window owns fullscreen.
 Normal workspace changes therefore update `hidden`, not `WM_STATE`, and an
 incoming `UnmapNotify` means client withdrawal rather than a workspace change.
 
-`reconcile_visibility_for_monitor()` is the authority for fullscreen-owner
-selection and physical hide/show state. Its wrappers add only the next required
-phase:
-
-- `finalize_visibility_on_monitor()`: reconciliation, then layout.
-- `finalize_move_visibility()`: reconciliation and layout for source and
-  destination monitors.
-- `rearrange_all_monitors()`: reconcile every monitor before arranging any.
-
-`rearrange_monitor()` consumes reconciled state. It lays out visible tiled
-clients, applies fullscreen geometry, then marks global stacking dirty unless
-the operation changes geometry only.
-Multi-monitor arrangement therefore does not restack once per monitor.
+Mutations invalidate affected monitors. During completion, `realize_visibility()`
+selects fullscreen ownership and physically hides/shows clients, then
+`arrange_monitor()` computes layout targets. Geometry is written after all
+monitor arrangements. While an operation is pending, eligibility checks use
+its preferred fullscreen owner and current domain state, rather than stale
+physical visibility.
 
 ## Fullscreen and stacking
 
@@ -147,9 +147,9 @@ fullscreen ownership while active. `_NET_WM_FULLSCREEN_MONITORS` changes
 geometry only and does not create cross-monitor ownership.
 
 `apply_stacking()` is the single global stacking authority. Transitions mark
-stacking dirty; it is reconciled at startup, at the end of an event-loop
-iteration, before IPC replies/subscription events, and before a crossing-event
-drain. The drain includes the restack because it can generate crossing events.
+stacking dirty; completion reconciles it once, before the crossing-event drain
+and before IPC replies/subscription events. Restacking precedes the drain
+because it can generate crossing events.
 Each reconciliation compares the desired visible order with a fresh root
 `QueryTree` reply. A longest increasing subsequence identifies the windows
 already in order; each remaining window needs one sibling move. This repairs
@@ -164,15 +164,14 @@ visible transients are placed above visible parents.
 
 ## Focus
 
-`focus_any_window()` is the normal focus funnel. It validates eligibility,
-deiconifies when necessary, switches the target monitor's workspace when
-necessary, checks the resulting fullscreen suppression, then commits active
-focus, focus memory and recency. It sends `WM_TAKE_FOCUS` when
-advertised, sets X input focus, marks stacking dirty, updates EWMH focus state,
-clears urgency, and emits the IPC event. Reads of the old and new windows'
-`_NET_WM_STATE` are issued together; updates preserve unrelated atoms and avoid
-rewriting an already-correct state. Explicit same-window focus still reasserts
-input focus, protocol notifications, and server stacking.
+`focus_any_window()` records focus intent. It validates eligibility, deiconifies
+when necessary, switches the target monitor's workspace when necessary, checks
+fullscreen suppression, and updates active focus, memory, and recency.
+`commit_focus()` publishes the final choice once during completion: it sends
+`WM_TAKE_FOCUS` when advertised, sets X input focus, clears urgency, and updates
+EWMH state and borders. Explicit same-window focus still reasserts input focus,
+protocol notifications, and server stacking. Intermediate choices within one
+operation do not produce focus events.
 
 Docks, desktops, iconic clients, and fullscreen-suppressed clients are excluded
 from fallback and cycling. Explicit activation can deiconify a client before
@@ -191,11 +190,36 @@ under focus-follows-mouse.
 
 ## Lifecycle and transitions
 
-The normal map path classifies the X window, matches the first applicable rule,
-creates the client record, reads initial hints/state, establishes placement and
-protocol properties, maps once, then reconciles visibility, geometry, stacking,
-and focus. Docks and desktops use dedicated registration paths; popup-only
-types are only mapped.
+An operation is one dispatched X event, IPC command, signal reload, timeout and
+coalesced topology pass, or startup scan. Mutations record `TransitionEffects`;
+only the boundary calls `complete_transition()`. Completion has this order:
+
+1. Resolve visibility/fullscreen ownership and repair focus eligibility.
+2. Compute layout and presentation geometry; write changed rectangles and
+   required ConfigureNotify replies, then map new clients.
+3. Commit focus and publish client/root properties. `_NET_WM_STATE` updates
+   merge once per affected window with a fresh property read, preserving atoms
+   LWM does not own. Reads are issued together; there is no persistent atom cache.
+4. Reconcile stacking, perform at most one crossing-event barrier, and flush X.
+5. Emit settled subscription events, discard the operation's effects, and
+   check Debug invariants.
+
+Empty effects require no reconciliation. The outer loop flushes direct protocol
+replies once after draining ready events.
+
+This is ordered completion, not rollback or an atomic X-server transaction.
+Helpers may read X hints and register protocol resources while mutating state;
+they must not independently run completion phases. Tiled-resize motion
+compression happens in outer dispatch and stops at the first non-motion event.
+A drag handler never recursively dispatches another event.
+
+`manage_client()` registers both tiled and floating clients for new MapRequests
+and adoption of existing windows. It captures hints, establishes placement and
+workspace membership, initializes protocol resources, and applies restart state
+or rules. Floating placement remains a separate policy calculation. New clients
+are mapped at completion; adopted clients are not remapped. Docks and desktops
+retain dedicated registration because their layout and focus roles differ;
+popup-only types are mapped without registration.
 
 Mapping, property reevaluation, and config reload apply rule actions through
 `apply_rule_result_to_window()`. Classification and application preferences feed
@@ -213,10 +237,11 @@ Reload uses the current effective state as its baseline, preserving unspecified
 state and the existing behavior when no rule matches. Placement and fullscreen overrides use
 the same transition helpers in all three paths.
 
-Client removal writes `WM_STATE=WithdrawnState`, removes every authoritative
-membership, repairs visibility/focus, and refreshes EWMH lists. Movement helpers
-update both client placement and tiled membership before reconciling the source
-and destination monitors. Direct monitor/workspace writes belong only in
+`unmanage_window()` removes all managed kinds: it writes
+`WM_STATE=WithdrawnState`, removes authoritative membership and pending kill
+state, and requests visibility/focus repair and EWMH list publication. Movement
+helpers update both client placement and tiled membership before invalidating
+the source and destination monitors. Direct monitor/workspace writes belong only in
 manage, movement, restart, and hotplug paths.
 
 Config loading is strict and atomic. Reload replaces the parsed configuration,
@@ -231,7 +256,10 @@ is skipped during this handoff. These properties are private implementation
 details, not a compatibility API. The X envelope (type, format, and completeness)
 is checked before decoding. Client records validate before mutation; layout
 restore retains complete workspace records and discards an incomplete tail.
-One invalid client record does not discard valid peers.
+One invalid client record does not discard valid peers. The codec retains the
+existing restore-rectangle wire slots for cross-binary handoff, folding legacy
+maximize/fullscreen restore rectangles into the one normal rectangle on decode.
+Legacy slots do not introduce additional live geometry state.
 
 RandR screen, output, and CRTC notifications mark topology dirty. The event loop
 coalesces each batch before reconciliation. Discovery supplies fresh output
@@ -271,7 +299,7 @@ Every completed transition must preserve:
 `invariants::validate()` checks registry identity, placement, tiled membership,
 workspace focus, effective fullscreen ownership, and active focus without X
 calls. Debug builds run it on entry to the event loop and after each completed
-iteration, covering X events, IPC, signal reloads, and timeouts after their
-transitions settle. A violation logs the reason and aborts at that boundary;
+operation, including startup, X events, IPC, signal reloads, and timeout/topology
+work. A violation logs the reason and aborts at that boundary;
 Release builds omit these checks. X properties and observable ordering require
 integration tests.

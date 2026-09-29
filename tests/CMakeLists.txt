@@ -61,6 +61,7 @@ add_executable(lwm_tests
   test_stacking_policy.cpp
   test_window_rules.cpp
   test_monitor_hotplug.cpp
+  test_integration_transitions.cpp
   test_integration_hotplug.cpp
   test_workspace.cpp
   test_workspace_policy.cpp

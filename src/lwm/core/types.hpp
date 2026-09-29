@@ -252,14 +252,14 @@ struct Client
     using SavedTilePos = lwm::SavedTilePos;
 
     ClientState state = TiledState{};
-    Geometry tiled_geometry; ///< Last applied tiled layout geometry (avoids X round-trip)
+    std::optional<Geometry> applied_geometry;
+    uint32_t applied_border = 0;
+    Geometry tiled_geometry; ///< Target selected by tiled layout
     xcb_window_t transient_for = XCB_NONE;
     bool suppress_next_configure_request =
         false; ///< Preserve WM-chosen startup placement against one client resize/move request
 
-    std::optional<Geometry> fullscreen_restore;             ///< Geometry before fullscreen
     std::optional<LayerHint> fullscreen_restore_layer_hint; ///< Layer hint before fullscreen
-    std::optional<Geometry> maximize_restore;               ///< Geometry before maximize
     std::optional<FullscreenMonitors> fullscreen_monitors;  ///< Multi-monitor fullscreen
 
     uint32_t sync_counter = 0; ///< XSync counter ID (0 if none)

@@ -271,8 +271,6 @@ void WindowManager::apply_restart_client_state(xcb_window_t window)
         return;
 
     client->borderless = record->borderless;
-    client->fullscreen_restore = record->fullscreen_restore;
-    client->maximize_restore = record->maximize_restore;
     auto saved_prior_floating = record->prior_floating;
     auto saved_floating_geometry = record->floating;
     auto saved_kind = record->kind;
@@ -475,7 +473,7 @@ void WindowManager::prepare_restart()
     serialize_restart_state();
 
     // Move all hidden windows back on-screen so they're recoverable if restart fails.
-    // The new WM instance re-tiles everything via scan_existing_windows() → rearrange_all_monitors().
+    // Startup adoption restores geometry at its completion boundary.
     for (auto& [window, client] : clients_)
     {
         if (!client.hidden)

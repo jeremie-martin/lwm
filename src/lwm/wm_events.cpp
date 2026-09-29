@@ -111,6 +111,15 @@ void WindowManager::handle_event(xcb_generic_event_t const& event)
 
     switch (response_type)
     {
+        case XCB_CONFIGURE_NOTIFY:
+        {
+            auto const& e = reinterpret_cast<xcb_configure_notify_event_t const&>(event);
+            if (auto* client = get_client(e.window); client && client->applied_geometry
+                && (client->applied_geometry != Geometry{ e.x, e.y, e.width, e.height }
+                    || client->applied_border != e.border_width))
+                client->applied_geometry.reset();
+            break;
+        }
         case XCB_MAP_REQUEST:
             handle_map_request(reinterpret_cast<xcb_map_request_event_t const&>(event));
             break;
@@ -211,19 +220,6 @@ void WindowManager::handle_map_request(xcb_map_request_event_t const& e)
     auto const& rule_result = initial.rule_result;
 
     bool start_iconic = false;
-    bool urgent = false;
-
-    xcb_icccm_wm_hints_t hints;
-    if (xcb_icccm_get_wm_hints_reply(conn_.get(), xcb_icccm_get_wm_hints(conn_.get(), e.window), &hints, nullptr))
-    {
-        if ((hints.flags & XCB_ICCCM_WM_HINT_STATE) && hints.initial_state == XCB_ICCCM_WM_STATE_ICONIC)
-            start_iconic = true;
-        if (hints.flags & XUrgencyHint)
-            urgent = true;
-    }
-    if (ewmh_.has_window_state(e.window, ewmh_.get()->_NET_WM_STATE_HIDDEN))
-        start_iconic = true;
-
     // Detect scratchpad match BEFORE mapping so the window never enters the tiled layout.
     // If matched, force floating + iconic so it maps hidden, then finalize after.
     auto scratchpad_match = (classification.kind == WindowClassification::Kind::Tiled
@@ -254,11 +250,11 @@ void WindowManager::handle_map_request(xcb_map_request_event_t const& e)
             kind_str = "popup";
             break;
         case WindowClassification::Kind::Floating:
-            map_floating_window(e.window, initial, start_iconic, urgent);
+            manage_client(e.window, initial, start_iconic);
             kind_str = "floating";
             break;
         case WindowClassification::Kind::Tiled:
-            map_tiled_window(e.window, initial, start_iconic, urgent);
+            manage_client(e.window, initial, start_iconic);
             kind_str = "tiled";
             break;
     }
@@ -277,6 +273,8 @@ void WindowManager::handle_map_request(xcb_map_request_event_t const& e)
     if (kind_str && ipc_.has_subscribers())
     {
         auto const* client = get_client(e.window);
+        if (client)
+            kind_str = client_kind_str(client->kind());
         std::string json = "{\"event\":\"window_map\",\"window\":" + std::to_string(e.window) + ",\"class\":\""
             + json_escape(client ? client->wm_class : std::string{}) + "\",\"kind\":\"" + kind_str + "\"";
         if (client)
@@ -341,65 +339,9 @@ void WindowManager::map_dock_window(xcb_window_t window)
     if (auto* c = get_client(window))
         publish_lwm_window_class(*c);
     update_struts();
-    rearrange_all_monitors();
+    invalidate_all_monitors();
     update_ewmh_client_list();
     conn_.flush();
-}
-
-void WindowManager::map_floating_window(
-    xcb_window_t window,
-    ClassificationResult const& initial,
-    bool start_iconic,
-    bool urgent
-)
-{
-    manage_floating_window(window, initial, start_iconic, false);
-    auto& client = require_client(window);
-
-    if (urgent)
-        client.urgency.add(UrgencySource::App);
-    apply_rule_result_to_window(window, initial.rule_result, &initial.classification);
-
-    reconcile_visibility_for_monitor(client.monitor);
-    apply_visible_floating_geometry(client);
-    stacking_dirty_ = true;
-
-    if (!start_iconic && !suppress_focus_ && client.monitor == focused_monitor_ && is_physically_visible(client)
-        && is_focus_eligible(client))
-    {
-        focus_any_window(window);
-    }
-    else if (client.urgency.active())
-    {
-        sync_client_urgency_state(client);
-    }
-
-    flush_and_drain_crossing();
-}
-
-void WindowManager::map_tiled_window(
-    xcb_window_t window,
-    ClassificationResult const& initial,
-    bool start_iconic,
-    bool urgent
-)
-{
-    manage_window(window, initial, start_iconic);
-
-    auto& client = require_client(window);
-
-    if (urgent)
-        client.urgency.add(UrgencySource::App);
-    if (client.urgency.active())
-        sync_client_urgency_state(client);
-    apply_rule_result_to_window(window, initial.rule_result, &initial.classification);
-
-    if (!start_iconic && client.monitor == focused_monitor_ && should_be_visible(client) && is_focus_eligible(client))
-    {
-        focus_any_window(window);
-    }
-
-    flush_and_drain_crossing();
 }
 
 void WindowManager::handle_window_removal(xcb_window_t window)
@@ -420,21 +362,7 @@ void WindowManager::handle_window_removal(xcb_window_t window)
     // Release scratchpad slot before unmanage destroys the client
     release_scratchpad_window(window);
 
-    switch (client->kind())
-    {
-        case Client::Kind::Tiled:
-            unmanage_window(window);
-            break;
-        case Client::Kind::Floating:
-            unmanage_floating_window(window);
-            break;
-        case Client::Kind::Dock:
-            unmanage_dock_window(window);
-            break;
-        case Client::Kind::Desktop:
-            unmanage_desktop_window(window);
-            break;
-    }
+    unmanage_window(window);
 
     if (!unmap_json.empty())
         emit_event(Event_WindowUnmap, unmap_json);
@@ -629,8 +557,8 @@ void WindowManager::handle_button_press(xcb_button_press_event_t const& e)
                 if (!c || c->kind() != Client::Kind::Floating)
                     return true;
 
-                finalize_visibility_on_monitor(monitor_idx);
-                flush_and_drain_crossing();
+                invalidate_monitor(monitor_idx);
+                effects_.drain_crossing = true;
 
                 focus_any_window(target);
                 begin_floating_resize(target, e.root_x, e.root_y);
@@ -1111,7 +1039,8 @@ void WindowManager::handle_wm_state_change(xcb_client_message_event_t const& e)
     };
 
     handle_state(first);
-    handle_state(second);
+    if (second != first)
+        handle_state(second);
 }
 
 void WindowManager::handle_active_window_request(xcb_client_message_event_t const& e)
@@ -1180,33 +1109,6 @@ void WindowManager::handle_active_window_request(xcb_client_message_event_t cons
     }
 }
 
-void WindowManager::finalize_after_desktop_move(
-    xcb_window_t window,
-    bool was_active,
-    size_t target_monitor,
-    size_t target_workspace
-)
-{
-    (void)window;
-    if (was_active)
-    {
-        // Keep focus on the source monitor when the destination workspace is
-        // not currently visible — repair_focus_after_visibility_change would
-        // otherwise reassign focused_monitor_ to target_monitor and jump the
-        // user's focus to a screen they are not interacting with.
-        bool target_visible = target_monitor < monitors_.size() && !showing_desktop_
-            && target_workspace == monitors_[target_monitor].current_workspace;
-        if (target_visible)
-            repair_focus_after_visibility_change(target_monitor, false);
-        else if (focused_monitor_ < monitors_.size())
-            focus_or_fallback(monitors_[focused_monitor_]);
-        else
-            clear_focus();
-    }
-
-    flush_and_drain_crossing();
-}
-
 void WindowManager::handle_desktop_change(xcb_client_message_event_t const& e)
 {
     uint32_t desktop = e.data.data32[0];
@@ -1256,24 +1158,38 @@ void WindowManager::handle_desktop_change(xcb_client_message_event_t const& e)
         if (!move_tiled_client_to_workspace(*client, target_monitor, target_workspace))
             return;
 
-        client->desktop_pinned = true;
-
         bool target_ws_visible = !showing_desktop_ && target_workspace == monitors_[target_monitor].current_workspace;
         if (!target_ws_visible || was_active)
         {
             workspace_policy::set_workspace_focus(monitors_[target_monitor].workspaces[target_workspace], e.window);
         }
-
-        finalize_after_desktop_move(e.window, was_active, target_monitor, target_workspace);
     }
     else if (client->kind() == Client::Kind::Floating)
     {
         if (!move_floating_client_to_workspace(*client, target_monitor, target_workspace, true))
             return;
-
-        client->desktop_pinned = true;
-        finalize_after_desktop_move(e.window, was_active, target_monitor, target_workspace);
     }
+    else
+        return;
+
+    client->desktop_pinned = true;
+    if (was_active)
+    {
+        // Keep focus on the source monitor when the destination workspace is
+        // not currently visible — repair_focus_after_visibility_change would
+        // otherwise reassign focused_monitor_ to target_monitor and jump the
+        // user's focus to a screen they are not interacting with.
+        bool target_visible = target_monitor < monitors_.size() && !showing_desktop_
+            && target_workspace == monitors_[target_monitor].current_workspace;
+        if (target_visible)
+            repair_focus_after_visibility_change(target_monitor, false);
+        else if (focused_monitor_ < monitors_.size())
+            focus_or_fallback(monitors_[focused_monitor_]);
+        else
+            clear_focus();
+    }
+
+    effects_.drain_crossing = true;
 }
 
 void WindowManager::handle_moveresize_window(xcb_client_message_event_t const& e)
@@ -1307,7 +1223,7 @@ void WindowManager::handle_moveresize_window(xcb_client_message_event_t const& e
     }
     if (visible && !client->fullscreen)
     {
-        apply_floating_geometry(*client);
+        request_geometry(*client);
     }
     conn_.flush();
 }
@@ -1349,33 +1265,31 @@ void WindowManager::handle_showing_desktop(xcb_client_message_event_t const& e)
 
     if (showing_desktop_)
     {
-        rearrange_all_monitors();
+        invalidate_all_monitors();
         clear_focus();
     }
     else
     {
-        rearrange_all_monitors();
+        invalidate_all_monitors();
         if (!monitors_.empty())
         {
             focus_or_fallback(focused_monitor());
         }
     }
-    flush_and_drain_crossing();
+    effects_.drain_crossing = true;
 }
 
 void WindowManager::handle_configure_request(xcb_configure_request_event_t const& e)
 {
     auto* client = get_client(e.window);
-    if (client && client->kind() == Client::Kind::Tiled)
-    {
+    if (client && (client->kind() == Client::Kind::Tiled || client->kind() == Client::Kind::Floating))
         send_configure_notify(*client);
+    if (client && client->kind() == Client::Kind::Tiled)
         return;
-    }
 
     if (client && client->fullscreen)
     {
-        apply_fullscreen_if_needed(*client);
-        send_configure_notify(*client);
+        request_geometry(*client);
         return;
     }
 
@@ -1385,11 +1299,7 @@ void WindowManager::handle_configure_request(xcb_configure_request_event_t const
         mask &= ~(XCB_CONFIG_WINDOW_BORDER_WIDTH | XCB_CONFIG_WINDOW_SIBLING | XCB_CONFIG_WINDOW_STACK_MODE);
 
     if (mask == 0)
-    {
-        if (is_floating)
-            send_configure_notify(*client);
         return;
-    }
 
     if (is_floating)
     {
@@ -1399,9 +1309,7 @@ void WindowManager::handle_configure_request(xcb_configure_request_event_t const
         {
             client->suppress_next_configure_request = false;
             if (!client->hidden && should_be_visible(*client))
-                apply_floating_geometry(*client);
-            send_configure_notify(*client);
-            conn_.flush();
+                request_geometry(*client);
             return;
         }
 
@@ -1427,11 +1335,7 @@ void WindowManager::handle_configure_request(xcb_configure_request_event_t const
         }
 
         if (visible)
-            apply_floating_geometry(*client);
-        else
-            send_configure_notify(*client);
-
-        conn_.flush();
+            request_geometry(*client);
         return;
     }
 
@@ -1486,14 +1390,14 @@ void WindowManager::handle_property_notify(xcb_property_notify_event_t const& e)
             if (auto* client = get_client(e.window))
                 client->ewmh_type = ewmh_.get_window_type_enum(e.window);
         }
-        reevaluate_managed_window(e.window);
+        reevaluate_managed_window(e.window, e.atom == wm_transient_for_);
         conn_.flush();
     }
     else if (wm_normal_hints_ != XCB_NONE && e.atom == wm_normal_hints_)
     {
         if (auto* client = get_client(e.window); client && client->kind() == Client::Kind::Floating)
         {
-            auto& geom = floating::runtime_hints_geometry(*client);
+            auto& geom = floating_geometry(*client);
             xcb_size_hints_t hints;
             if (xcb_icccm_get_wm_normal_hints_reply(
                     conn_.get(),
@@ -1553,13 +1457,13 @@ void WindowManager::handle_property_notify(xcb_property_notify_event_t const& e)
                 update_ewmh_current_desktop();
             }
             if (visible)
-                apply_visible_floating_geometry(*client);
+                request_geometry(*client);
             conn_.flush();
         }
         else if (auto const* client = get_client(e.window))
         {
             if (client->kind() == Client::Kind::Tiled)
-                rearrange_monitor(monitors_[client->monitor]);
+                invalidate_monitor(client->monitor);
         }
     }
     else if (wm_hints_ != XCB_NONE && e.atom == wm_hints_)
@@ -1624,7 +1528,7 @@ void WindowManager::handle_property_notify(xcb_property_notify_event_t const& e)
              && (e.atom == ewmh_.get()->_NET_WM_STRUT || e.atom == ewmh_.get()->_NET_WM_STRUT_PARTIAL))
     {
         update_struts();
-        rearrange_all_monitors();
+        invalidate_all_monitors();
         conn_.flush();
     }
 
@@ -1699,13 +1603,6 @@ void WindowManager::handle_randr_screen_change()
         {
             auto& geometry = floating_geometry(client);
             geometry = floating::place_floating(area, geometry.width, geometry.height, std::nullopt);
-            if (client.fullscreen_restore)
-                client.fullscreen_restore = floating::place_floating(
-                    area,
-                    client.fullscreen_restore->width,
-                    client.fullscreen_restore->height,
-                    std::nullopt
-                );
         }
         else
             floating_geometry(client) = floating::clamp_to_area(area, floating_geometry(client));
@@ -1715,19 +1612,7 @@ void WindowManager::handle_randr_screen_change()
     update_ewmh_desktops();
     update_ewmh_current_desktop();
 
-    rearrange_all_monitors();
-    for (auto& [id, client] : clients_)
-    {
-        (void)id;
-        apply_visible_floating_geometry(client);
-    }
-
-    // Reapply fullscreen geometry for windows that stayed fullscreen
-    for (size_t i = 0; i < monitors_.size(); ++i)
-    {
-        if (monitors_[i].fullscreen_owner != XCB_NONE)
-            apply_fullscreen_if_needed(require_client(monitors_[i].fullscreen_owner));
-    }
+    invalidate_all_monitors();
 
     // Focus a window after reconfiguration
     if (!monitors_.empty())
@@ -1735,7 +1620,7 @@ void WindowManager::handle_randr_screen_change()
         focus_or_fallback(monitors_[focused_monitor_]);
     }
 
-    flush_and_drain_crossing();
+    effects_.drain_crossing = true;
 }
 
 } // namespace lwm

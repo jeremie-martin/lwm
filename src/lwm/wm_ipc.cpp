@@ -63,12 +63,8 @@ std::optional<xcb_window_t> parse_window_id(std::string_view value)
 
 void WindowManager::emit_event(EventType type, std::string_view json)
 {
-    if (!ipc_.has_subscribers())
-        return;
-    // Observers must not receive an event before its pending X ordering updates.
-    flush_stacking_list();
-    conn_.flush();
-    ipc_.emit(type, json);
+    if (ipc_.has_subscribers())
+        effects_.events.emplace_back(type, json);
 }
 
 std::string WindowManager::run_ipc_command(std::string const& command)
@@ -119,8 +115,8 @@ std::string WindowManager::run_ipc_command(std::string const& command)
             if (!strategy)
                 return error_reply("unknown layout: " + name);
             focused_monitor().current().layout_strategy = *strategy;
-            rearrange_monitor(focused_monitor(), true);
-            flush_and_drain_crossing();
+            invalidate_monitor(focused_monitor_);
+            effects_.drain_crossing = true;
             std::string strategy_name = layout_strategy_str(*strategy);
             emit_event(
                 Event_LayoutChange,
@@ -147,7 +143,7 @@ std::string WindowManager::run_ipc_command(std::string const& command)
             if (focused_monitor_ >= monitors_.size())
                 return error_reply("no focused monitor");
             focused_monitor().current().split_ratios[SplitAddress{ 0 }] = val;
-            rearrange_monitor(focused_monitor(), true);
+            invalidate_monitor(focused_monitor_);
             emit_event(
                 Event_LayoutChange,
                 "{\"event\":\"layout_change\",\"action\":\"ratio_set\",\"value\":" + std::to_string(val) + "}"
@@ -161,7 +157,7 @@ std::string WindowManager::run_ipc_command(std::string const& command)
         if (focused_monitor_ >= monitors_.size())
             return error_reply("no focused monitor");
         focused_monitor().current().split_ratios.clear();
-        rearrange_monitor(focused_monitor(), true);
+        invalidate_monitor(focused_monitor_);
         emit_event(Event_LayoutChange, "{\"event\":\"layout_change\",\"action\":\"ratio_reset\"}");
         return ok_reply("ratios reset");
     }

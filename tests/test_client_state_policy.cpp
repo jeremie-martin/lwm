@@ -87,8 +87,6 @@ TEST_CASE("Client has sensible defaults", "[client][state]")
     // Restore geometries should be empty
     REQUIRE(tiled_state(c) != nullptr);
     REQUIRE_FALSE(prior_floating_geometry(c).has_value());
-    REQUIRE_FALSE(c.fullscreen_restore.has_value());
-    REQUIRE_FALSE(c.maximize_restore.has_value());
     REQUIRE_FALSE(c.fullscreen_monitors.has_value());
 }
 
@@ -227,25 +225,6 @@ TEST_CASE("Container states discard tiled and floating data", "[client][state]")
 // Fullscreen state tests
 // ─────────────────────────────────────────────────────────────────────────────
 
-TEST_CASE("Fullscreen restore geometry can be stored and retrieved", "[client][state][fullscreen]")
-{
-    Client c = make_client(0x1000);
-
-    // Before fullscreen, no restore geometry
-    REQUIRE_FALSE(c.fullscreen_restore.has_value());
-
-    // Store restore geometry
-    c.fullscreen_restore = Geometry{ 100, 100, 800, 600 };
-    c.fullscreen = true;
-
-    REQUIRE(c.fullscreen);
-    REQUIRE(c.fullscreen_restore.has_value());
-    REQUIRE(c.fullscreen_restore->x == 100);
-    REQUIRE(c.fullscreen_restore->y == 100);
-    REQUIRE(c.fullscreen_restore->width == 800);
-    REQUIRE(c.fullscreen_restore->height == 600);
-}
-
 TEST_CASE("Fullscreen monitors can be specified", "[client][state][fullscreen]")
 {
     Client c = make_client(0x1000);
@@ -293,21 +272,6 @@ TEST_CASE("Sticky window visible across workspaces but not monitors", "[client][
 // Maximized state tests
 // ─────────────────────────────────────────────────────────────────────────────
 
-TEST_CASE("Maximize restore geometry can be stored and retrieved", "[client][state][maximized]")
-{
-    Client c = make_client(0x1000, Client::Kind::Floating);
-
-    c.maximize_restore = Geometry{ 200, 150, 600, 400 };
-    c.maximized_horz = true;
-    c.maximized_vert = true;
-
-    REQUIRE(c.maximized_horz);
-    REQUIRE(c.maximized_vert);
-    REQUIRE(c.maximize_restore.has_value());
-    REQUIRE(c.maximize_restore->x == 200);
-    REQUIRE(c.maximize_restore->y == 150);
-}
-
 TEST_CASE("Maximized states can be set independently", "[client][state][maximized]")
 {
     Client c = make_client(0x1000, Client::Kind::Floating);
@@ -327,59 +291,6 @@ TEST_CASE("Maximized states can be set independently", "[client][state][maximize
     c.maximized_horz = true;
     REQUIRE(c.maximized_horz);
     REQUIRE(c.maximized_vert);
-}
-
-TEST_CASE("Runtime normal hints target restore geometry for realized states", "[client][state][floating]")
-{
-    Client c = make_client(0x1000, Client::Kind::Floating);
-    floating_geometry(c) = Geometry{ 0, 0, 1920, 1080 };
-
-    auto require_displayed_geometry_unchanged = [&]()
-    {
-        REQUIRE(floating_geometry(c).x == 0);
-        REQUIRE(floating_geometry(c).y == 0);
-        REQUIRE(floating_geometry(c).width == 1920);
-        REQUIRE(floating_geometry(c).height == 1080);
-    };
-
-    SECTION("Maximized windows update maximize restore geometry")
-    {
-        c.maximized_horz = true;
-        c.maximized_vert = true;
-        c.maximize_restore = Geometry{ 100, 120, 500, 360 };
-
-        floating::runtime_hints_geometry(c) = Geometry{ 2000, 140, 420, 280 };
-
-        require_displayed_geometry_unchanged();
-        REQUIRE(c.maximize_restore->x == 2000);
-        REQUIRE(c.maximize_restore->y == 140);
-        REQUIRE(c.maximize_restore->width == 420);
-        REQUIRE(c.maximize_restore->height == 280);
-    }
-
-    SECTION("Fullscreen windows update fullscreen restore geometry")
-    {
-        c.fullscreen = true;
-        c.fullscreen_restore = Geometry{ 100, 120, 500, 360 };
-
-        floating::runtime_hints_geometry(c) = Geometry{ 2000, 140, 420, 280 };
-
-        require_displayed_geometry_unchanged();
-        REQUIRE(c.fullscreen_restore->x == 2000);
-        REQUIRE(c.fullscreen_restore->y == 140);
-        REQUIRE(c.fullscreen_restore->width == 420);
-        REQUIRE(c.fullscreen_restore->height == 280);
-    }
-
-    SECTION("Ordinary floating windows update displayed geometry")
-    {
-        floating::runtime_hints_geometry(c) = Geometry{ 2000, 140, 420, 280 };
-
-        REQUIRE(floating_geometry(c).x == 2000);
-        REQUIRE(floating_geometry(c).y == 140);
-        REQUIRE(floating_geometry(c).width == 420);
-        REQUIRE(floating_geometry(c).height == 280);
-    }
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -671,4 +582,14 @@ TEST_CASE("compute_desired_state: borderless follows the window rule", "[policy]
     in.rule_borderless = true;
     auto out = classification_policy::compute_desired_state(in);
     REQUIRE(out.borderless);
+}
+
+TEST_CASE("Maximize presentation preserves normal placement", "[client][state][floating]")
+{
+    Geometry normal{ 100, 120, 500, 360 }, area{ 0, 0, 1920, 1080 };
+    CHECK(floating::presentation_geometry(normal, area, false, false) == normal);
+    CHECK(floating::presentation_geometry(normal, area, true, false) == Geometry{ 0, 120, 1920, 360 });
+    CHECK(floating::presentation_geometry(normal, area, false, true) == Geometry{ 100, 0, 500, 1080 });
+    CHECK(floating::presentation_geometry(normal, area, true, true) == area);
+    CHECK(normal == Geometry{ 100, 120, 500, 360 });
 }

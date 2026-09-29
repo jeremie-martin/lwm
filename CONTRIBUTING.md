@@ -78,6 +78,23 @@ run it for topology changes. This covers the X protocol path, not hardware/drive
 behavior. The harness uses the server binary directly on Debian to avoid its
 console-only wrapper.
 
+For transition request budgets on an owned Xvfb server:
+
+```sh
+python3 tests/performance/transition_counts.py build/release/src/app/lwm --check
+```
+
+This optional Linux check needs Python 3, `cc`, XCB headers, and libX11. It builds
+an LD_PRELOAD tracer in a temporary directory and counts only the WM's requests.
+For 200 title changes, metadata-only updates must perform no geometry writes or
+visibility/stacking reconciliation; sticky and sticky+fullscreen rule changes
+allow at most 200 crossing barriers and 200 QueryTree requests. Sticky-only
+changes must not rewrite unchanged geometry. A 200-client workspace workload
+also bounds flush calls to catch completion work repeated for each configure
+notification. Omit `--check` to compare an older
+binary. These are protocol-work budgets, not latency measurements; measure
+uninstrumented Release builds separately on an otherwise idle machine.
+
 ## Nested preview
 
 For an interactive check, install Xephyr (`xorg-server-xephyr` on Arch Linux,
@@ -101,10 +118,12 @@ your desktop session, not the isolated preview.
 ## Change model
 
 Keep state changes in the funnels described by [ARCHITECTURE.md](ARCHITECTURE.md):
-visibility reconciliation owns physical visibility and fullscreen ownership,
-`apply_stacking()` owns stacking, and `focus_any_window()` owns normal focus
-changes. Prefer explicit domain state and pure policy functions over duplicated
-guard logic.
+mutations update domain state and accumulate effects; `complete_transition()`
+owns their ordered completion. Invalidate affected monitors for visibility/layout
+changes, request geometry for rectangle-only changes, and use `focus_any_window()`
+for focus intent. Do not add local reconciliation, property flushes, or crossing
+barriers to feature handlers. Prefer explicit domain state and pure policy
+functions over duplicated guard logic.
 
 At X event boundaries, use `get_client(window)` because the window may be
 unmanaged or already destroyed. Inside a path that has established managed

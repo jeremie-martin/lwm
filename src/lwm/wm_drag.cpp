@@ -107,6 +107,11 @@ void WindowManager::begin_floating_move(xcb_window_t window, int16_t root_x, int
     if (client->kind() != Client::Kind::Floating)
         return;
 
+    if (client->maximized_horz || client->maximized_vert)
+    {
+        floating_geometry(*client) = current_window_geometry(window);
+        set_window_maximized(*client, false, false);
+    }
     drag_state_ = FloatingMove{ window, root_x, root_y, root_x, root_y, floating_geometry(*client) };
 
     grab_pointer_for_drag();
@@ -122,6 +127,11 @@ void WindowManager::begin_floating_resize(xcb_window_t window, int16_t root_x, i
     if (client->kind() != Client::Kind::Floating)
         return;
 
+    if (client->maximized_horz || client->maximized_vert)
+    {
+        floating_geometry(*client) = current_window_geometry(window);
+        set_window_maximized(*client, false, false);
+    }
     drag_state_ = FloatingResize{ window, root_x, root_y, root_x, root_y, floating_geometry(*client) };
 
     grab_pointer_for_drag();
@@ -180,41 +190,7 @@ void WindowManager::update_drag(int16_t root_x, int16_t root_y)
         tr.last_root_x = root_x;
         tr.last_root_y = root_y;
 
-        // Motion compression: drain all queued motion events, use the latest position.
-        // This prevents redundant rearranges when events queue up faster than we process them.
-        // A non-motion event drained here is dispatched via handle_event(), which can rebuild
-        // monitors_ (RandR) or reassign drag_state_ — so `tr` may be stale/dangling afterwards.
-        {
-            xcb_generic_event_t* ev;
-            while ((ev = xcb_poll_for_queued_event(conn_.get())) != nullptr)
-            {
-                uint8_t type = ev->response_type & ~0x80;
-                if (type == XCB_MOTION_NOTIFY)
-                {
-                    auto* m = reinterpret_cast<xcb_motion_notify_event_t*>(ev);
-                    root_x = m->root_x;
-                    root_y = m->root_y;
-                    tr.last_root_x = root_x;
-                    tr.last_root_y = root_y;
-                    free(ev);
-                    continue;
-                }
-                // Non-motion event: push back is not possible, so just stop compressing.
-                // The event loop will pick up remaining events after we return.
-                // We must handle this event now to avoid losing it.
-                handle_event(*ev);
-                free(ev);
-                break;
-            }
-        }
-
-        // Single validate-and-compute pass against the live variant: `tr` may be
-        // stale after handle_event, so re-bind (get_if is null if the drag was
-        // cancelled) and re-check monitor/workspace before touching layout.
-        auto* live_ptr = std::get_if<TiledResize>(&drag_state_);
-        if (!live_ptr)
-            return;
-        auto& live = *live_ptr;
+        auto& live = tr;
         if (live.monitor_idx >= monitors_.size() || monitors_[live.monitor_idx].current_workspace != live.workspace_idx)
         {
             abort_drag = true;
@@ -239,13 +215,8 @@ void WindowManager::update_drag(int16_t root_x, int16_t root_y)
         if (it != ws.split_ratios.end() && it->second == new_ratio)
             return;
 
-        // Server grab prevents clients from repainting between window configures,
-        // eliminating flicker when multiple tiled windows resize simultaneously.
-        xcb_grab_server(conn_.get());
         ws.split_ratios[live.address] = new_ratio;
-        rearrange_monitor(monitors_[live.monitor_idx], true);
-        xcb_ungrab_server(conn_.get());
-        conn_.flush();
+        invalidate_monitor(live.monitor_idx);
         return;
     };
 
@@ -291,7 +262,7 @@ void WindowManager::update_drag(int16_t root_x, int16_t root_y)
 
         floating_geometry(*client) = updated;
 
-        apply_floating_geometry(*client);
+        request_geometry(*client);
         update_floating_monitor_for_geometry(*client);
 
         if (active_window_ == drag.window)
@@ -365,7 +336,7 @@ void WindowManager::end_drag()
         if (move_tiled_client_to_workspace(*client, target_monitor_idx, target_workspace_idx, target_index))
         {
             workspace_policy::set_workspace_focus(target_ws, window);
-            flush_and_drain_crossing();
+            effects_.drain_crossing = true;
             focus_any_window(window);
         }
     };
@@ -387,7 +358,7 @@ void WindowManager::end_drag()
     if (was_tiled_resize && cursor_default_ != XCB_NONE)
         set_root_cursor(cursor_default_);
 
-    flush_and_drain_crossing();
+    effects_.drain_crossing = true;
 }
 
 }

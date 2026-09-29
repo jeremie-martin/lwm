@@ -9,7 +9,7 @@ TEST_CASE("Restart client codec preserves state and accepts older record lengths
     set_floating_state(client, { -100, 25, 600, 400 });
     client.borderless = true;
     client.desktop_pinned = true;
-    client.fullscreen_restore = Geometry{ -200, -50, 800, 600 };
+    client.fullscreen = true;
     client.fullscreen_restore_layer_hint = LayerHint::Below;
     client.app_prefs.skip_taskbar = true;
     client.urgency.add(UrgencySource::App);
@@ -17,7 +17,7 @@ TEST_CASE("Restart client codec preserves state and accepts older record lengths
     auto result = restart::decode_client(words);
     REQUIRE(result);
     CHECK(result->floating == floating_geometry(client));
-    CHECK(result->fullscreen_restore == client.fullscreen_restore);
+    CHECK(words[6] == 1); // old readers receive a fullscreen restore rectangle
     CHECK(result->restore_layer == LayerHint::Below);
     CHECK(result->desktop_pinned);
     REQUIRE(result->app_prefs);
@@ -86,5 +86,34 @@ TEST_CASE("Restart ratio decoder accepts historical packed and depth-path addres
         CHECK(layouts[0].ratios.at(SplitAddress{ 3 }) == 0.3);
         for (size_t end = 0; end < words.size(); ++end)
             CHECK(restart::decode_layouts(std::span(words).first(end)).empty());
+    }
+}
+
+TEST_CASE("Restart decoder folds legacy restore rectangles into normal geometry", "[restart][codec]")
+{
+    std::array<uint32_t, restart::client_words> words{};
+    words[23] = 2;
+    auto rectangle = [&](size_t offset, uint32_t x)
+    {
+        words[offset] = x;
+        words[offset + 1] = 20;
+        words[offset + 2] = 300;
+        words[offset + 3] = 200;
+    };
+    rectangle(2, 10);
+    rectangle(7, 30);
+    rectangle(12, 50);
+    for (auto [fullscreen, maximize, expected] : {
+             std::array<uint32_t, 3>{ 0, 0, 10 },
+             { 1, 0, 30 },
+             { 0, 1, 50 },
+             { 1, 1, 50 }
+    })
+    {
+        words[6] = fullscreen;
+        words[11] = maximize;
+        auto decoded = restart::decode_client(words);
+        REQUIRE(decoded);
+        CHECK(decoded->floating.x == expected);
     }
 }

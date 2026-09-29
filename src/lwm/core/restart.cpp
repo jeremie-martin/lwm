@@ -63,8 +63,10 @@ std::array<uint32_t, client_words> encode_client(Client const& client)
         data.data() + 2,
         client.kind() == Client::Kind::Floating ? floating_geometry(client) : prior.value_or(Geometry{})
     );
-    pack_optional(data.data() + 6, client.fullscreen_restore);
-    pack_optional(data.data() + 11, client.maximize_restore);
+    // Keep the old wire slots for cross-binary restart; live state has one normal rectangle.
+    auto normal = client.kind() == Client::Kind::Floating ? std::optional{ floating_geometry(client) } : std::nullopt;
+    pack_optional(data.data() + 6, client.fullscreen ? normal : std::nullopt);
+    pack_optional(data.data() + 11, client.maximized_horz || client.maximized_vert ? normal : std::nullopt);
     pack_optional(data.data() + 16, prior);
     data[22] = is_hidden_tiled_pool_scratchpad(client) ? 1 : hidden_floating_pool_scratchpad(client) ? 2 : 0;
     data[23] = client.kind() == Client::Kind::Tiled ? 1 : 2;
@@ -90,9 +92,8 @@ std::optional<ClientRecord> decode_client(std::span<uint32_t const> data)
     }
     ClientRecord record;
     record.borderless = data[1] != 0;
-    record.floating = geometry(data.data() + 2);
-    record.fullscreen_restore = optional_geometry(data.data() + 6);
-    record.maximize_restore = optional_geometry(data.data() + 11);
+    record.floating = optional_geometry(data.data() + 11)
+                          .value_or(optional_geometry(data.data() + 6).value_or(geometry(data.data() + 2)));
     record.prior_floating = optional_geometry(data.data() + 16);
     record.hidden_pool_kind = data[22];
     if (data[23])

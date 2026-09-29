@@ -2,6 +2,7 @@
 
 #include "connection.hpp"
 #include "types.hpp"
+#include <map>
 #include <string>
 #include <vector>
 #include <xcb/xcb_ewmh.h>
@@ -34,20 +35,6 @@ struct WindowClassification
 
 WindowClassification classify_window_type(WindowType type, bool is_transient);
 
-struct WindowStateFlags
-{
-    bool skip_taskbar = false;
-    bool skip_pager = false;
-    bool sticky = false;
-    bool modal = false;
-    bool above = false;
-    bool below = false;
-    bool fullscreen = false;
-    bool iconic = false;  ///< _NET_WM_STATE_HIDDEN (EWMH uses "hidden" for iconic/minimized)
-    bool maximized_horz = false;
-    bool maximized_vert = false;
-};
-
 class Ewmh
 {
 public:
@@ -75,10 +62,10 @@ public:
 
     // Per-window properties
     void set_window_desktop(xcb_window_t window, uint32_t desktop);
+    // Accumulate updates until the operation boundary; merge with fresh X state.
     void set_window_state(xcb_window_t window, xcb_atom_t state, bool enabled);
-    void set_focus_state(xcb_window_t previous, xcb_window_t current, xcb_atom_t focused_atom);
-    bool has_window_state(xcb_window_t window, xcb_atom_t state) const;
-    WindowStateFlags get_window_state_flags(xcb_window_t window) const;
+    void flush_window_states();
+    bool has_pending_window_states() const { return !state_updates_.empty(); }
 
     void set_frame_extents(xcb_window_t window, uint32_t left, uint32_t right, uint32_t top, uint32_t bottom);
     void set_allowed_actions(xcb_window_t window, std::vector<xcb_atom_t> const& actions);
@@ -90,7 +77,6 @@ public:
     // Window type detection and classification
     xcb_atom_t get_window_type(xcb_window_t window) const;
     WindowType get_window_type_enum(xcb_window_t window) const;
-
 
     // Strut support
     Strut get_window_strut(xcb_window_t window) const;
@@ -107,7 +93,7 @@ private:
     std::vector<xcb_atom_t> extra_supported_atoms_;
 
     void create_supporting_window();
-    void apply_window_state(xcb_window_t window, xcb_atom_t state, bool enabled, xcb_get_property_cookie_t cookie);
+    std::map<xcb_window_t, std::map<xcb_atom_t, bool>> state_updates_;
 };
 
 } // namespace lwm

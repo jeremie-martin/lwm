@@ -52,13 +52,19 @@ Geometry place_floating(Geometry area, uint16_t width, uint16_t height, std::opt
     return clamp_geometry(area, Geometry{ 0, 0, width, height }, target_x, target_y);
 }
 
-Geometry& runtime_hints_geometry(Client& client)
+Geometry presentation_geometry(Geometry normal, Geometry area, bool horizontal, bool vertical)
 {
-    if (client.fullscreen && client.fullscreen_restore)
-        return *client.fullscreen_restore;
-    if ((client.maximized_horz || client.maximized_vert) && client.maximize_restore)
-        return *client.maximize_restore;
-    return floating_geometry(client);
+    if (horizontal)
+    {
+        normal.x = area.x;
+        normal.width = area.width;
+    }
+    if (vertical)
+    {
+        normal.y = area.y;
+        normal.height = area.height;
+    }
+    return normal;
 }
 
 PositionHintResolution resolve_position_hint(
