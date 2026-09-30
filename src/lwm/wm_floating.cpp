@@ -39,7 +39,7 @@ WindowManager::FloatingPlacement WindowManager::initial_floating_placement(
     if (!monitor_idx || !workspace_idx)
     {
         if (desktop_target.kind == WindowManager::DesktopResolution::OutOfRange)
-            LOG_WARN("manage_floating_window({:#x}): _NET_WM_DESKTOP out of range, ignoring hint", window);
+            LWM_LOG_WARN("manage_floating_window({:#x}): _NET_WM_DESKTOP out of range, ignoring hint", window);
         else if (desktop_pinned)
         {
             monitor_idx = desktop_target.monitor;
@@ -180,7 +180,6 @@ void WindowManager::update_floating_monitor_for_geometry(Client& client, Geometr
 
     if (active_window_ == client.id && is_suppressed_by_fullscreen(client))
         focus_or_fallback(monitors_[client.monitor], false);
-
 }
 
 } // namespace lwm

@@ -71,6 +71,7 @@ Monitor- and workspace-relative commands target the focused monitor.
 | `ping` | `pong` |
 | `state` | consistent combined state snapshot as JSON |
 | `version` | LWM version |
+| `log status` | logging destination, instance, and loss counters as JSON |
 | `reload-config` | reload the configured file |
 | `restart` | exec-restart the current binary |
 | `exec PATH` | restart with another binary |
@@ -101,6 +102,31 @@ the scratchpad retryable. Successful exec does not guarantee a matching window:
 It is a no-op for an empty or already claimed slot and rejects unknown names.
 It does not terminate a process; a late matching window can still be claimed.
 Both named scratchpad commands reject unknown names.
+
+## Logging status
+
+`lwmctl log status` is read-only and does not emit `state_change`. It returns:
+
+```json
+{"target":"journal","level":"info","instance":"1336-43855073878725","active":true,"queue_drops":0,"delivery_drops":0,"truncations":0,"backend_notifications":0,"last_delivery_error":0,"initialization_error":"","last_backend_notification":""}
+```
+
+`queue_drops` counts records rejected before enqueue. `delivery_drops` counts
+records rejected by the destination or discarded while a previous stderr record
+is pending (including a remainder discarded at shutdown). A partially written
+record can therefore count as dropped. `truncations` counts shortened arguments
+and shortened output records, not distinct messages. `backend_notifications`
+counts Quill notifications, including queue-overflow summaries and formatting
+errors. `last_backend_notification` retains the latest notification text (at most
+1 KiB) to help diagnose the cause. `last_delivery_error` is the most recent delivery errno (zero before any
+failure); it remains set after recovery. `initialization_error` explains an
+inactive service after a failed restore.
+
+Counters are cumulative within a logging `instance`, survive failed exec, and
+reset on successful exec. Counter reads do not form a barrier against the worker: a queued record may not yet have been delivered or counted.
+Successful delivery means acceptance by the local destination, not durable
+storage. An unavailable journal does not make the service inactive; its failed
+sends increment `delivery_drops`.
 
 ## JSON results
 

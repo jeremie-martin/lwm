@@ -32,7 +32,7 @@ fi
 
 # Start the window manager in Xephyr
 echo "Starting LWM in Xephyr..."
-DISPLAY=:100 "$BUILD_DIR/src/app/lwm" "$TEST_CONFIG_DIR/config.toml" &
+DISPLAY=:100 "$BUILD_DIR/src/app/lwm" --log-target stderr --config "$TEST_CONFIG_DIR/config.toml" &
 WM_PID=$!
 
 # Wait for WM to initialize

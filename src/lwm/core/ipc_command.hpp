@@ -34,7 +34,8 @@ enum class CommandId
     CancelLaunch,
     ScratchpadList,
     Subscribe,
-    State
+    State,
+    LogStatus
 };
 enum class Argument
 {

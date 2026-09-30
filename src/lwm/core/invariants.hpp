@@ -102,12 +102,14 @@ inline std::optional<Violation> validate(
 #ifdef NDEBUG
 #    define LWM_ASSERT_INVARIANTS(clients, monitors, active_window) ((void)0)
 #else
-#    define LWM_ASSERT_INVARIANTS(clients, monitors, active_window)                                  \
-        do {                                                                                         \
-            if (auto violation = lwm::invariants::validate(clients, monitors, active_window))        \
-            {                                                                                        \
-                LOG_ERROR("INVARIANT VIOLATION: {} ({:#x})", violation->message, violation->window); \
-                std::abort();                                                                        \
-            }                                                                                        \
+#    define LWM_ASSERT_INVARIANTS(clients, monitors, active_window)                                      \
+        do                                                                                               \
+        {                                                                                                \
+            if (auto violation = lwm::invariants::validate(clients, monitors, active_window))            \
+            {                                                                                            \
+                LWM_LOG_ERROR("INVARIANT VIOLATION: {} ({:#x})", violation->message, violation->window); \
+                lwm::log::shutdown();                                                                    \
+                std::abort();                                                                            \
+            }                                                                                            \
         } while (0)
 #endif

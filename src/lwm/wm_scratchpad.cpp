@@ -74,7 +74,7 @@ void WindowManager::toggle_named_scratchpad(std::string_view name)
     auto* state = find_named_scratchpad(name);
     if (!state)
     {
-        LOG_WARN("Unknown scratchpad: {}", name);
+        LWM_LOG_WARN("Unknown scratchpad: {}", name);
         return;
     }
 
@@ -90,10 +90,10 @@ void WindowManager::toggle_named_scratchpad(std::string_view name)
             return; // already waiting
         if (config->spawn.empty())
         {
-            LOG_WARN("Scratchpad '{}' has no command configured", name);
+            LWM_LOG_WARN("Scratchpad '{}' has no command configured", name);
             return;
         }
-        LOG_INFO("Scratchpad '{}': launching '{}'", name, config->spawn.describe());
+        LWM_LOG_DEBUG("Scratchpad '{}': launching", name);
         if (launch_program(config->spawn))
             state->mark_launch_pending();
         return;
@@ -136,7 +136,7 @@ void WindowManager::stash_to_scratchpad(xcb_window_t window)
     if (drag_active())
         return;
 
-    LOG_INFO("Stashing window {:#x} to scratchpad pool", window);
+    LWM_LOG_DEBUG("Stashing window {:#x} to scratchpad pool", window);
 
     if (client->kind() == Client::Kind::Tiled)
     {
@@ -223,7 +223,7 @@ void WindowManager::hide_scratchpad_window(xcb_window_t window)
     if (!client)
         return;
 
-    LOG_DEBUG("Hiding scratchpad window {:#x}", window);
+    LWM_LOG_DEBUG("Hiding scratchpad window {:#x}", window);
 
     if (scratchpad_named(*client))
     {
@@ -250,7 +250,7 @@ void WindowManager::show_named_scratchpad_window(xcb_window_t window, Scratchpad
     if (!client)
         return;
 
-    LOG_DEBUG("Showing named scratchpad '{}' window {:#x}", config.name, window);
+    LWM_LOG_DEBUG("Showing named scratchpad '{}' window {:#x}", config.name, window);
 
     size_t target_monitor = focused_monitor_;
     size_t target_workspace = monitors_[target_monitor].current_workspace;
@@ -282,7 +282,7 @@ void WindowManager::show_pool_scratchpad_window(xcb_window_t window)
     if (!client)
         return;
 
-    LOG_DEBUG("Showing pool scratchpad window {:#x}", window);
+    LWM_LOG_DEBUG("Showing pool scratchpad window {:#x}", window);
 
     size_t old_monitor = client->monitor;
     size_t target_monitor = focused_monitor_;
@@ -408,7 +408,7 @@ void WindowManager::release_scratchpad_window(xcb_window_t window)
         auto* state = find_named_scratchpad(named->name);
         if (state && state->window() == window)
         {
-            LOG_INFO("Named scratchpad '{}' window {:#x} removed", state->name, window);
+            LWM_LOG_DEBUG("Named scratchpad '{}' window {:#x} removed", state->name, window);
             state->mark_empty();
         }
     }

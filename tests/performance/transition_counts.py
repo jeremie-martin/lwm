@@ -109,6 +109,7 @@ def measure(binary, library, scenario, operations):
         environment = dict(os.environ, DISPLAY=display_name, XDG_RUNTIME_DIR=temporary,
                            LD_PRELOAD=str(library), LWM_TRANSITION_COUNTS=str(counts_path))
         environment.pop("LWM_SOCKET", None)
+        environment["LWM_LOG_SOCKET"] = str(directory / "unused-journal")
         atom = lambda name: X.XInternAtom(display, name.encode(), 0)
         if scenario == "dock_startup":
             for index in range(operations):
@@ -121,7 +122,7 @@ def measure(binary, library, scenario, operations):
                                   32, 0, values, 4)
                 X.XMapWindow(display, window)
             X.XSync(display, 0)
-        wm = subprocess.Popen([str(binary), "--config", str(config_path), "--no-log-file", "--log-level", "error"],
+        wm = subprocess.Popen([str(binary), "--config", str(config_path), "--log-level", "error"],
                               env=environment, stdout=log, stderr=log)
         cleanup.callback(stop, wm)
         path = directory / "lwm" / ("ipc-" + display_name.replace(":", "_") + ".sock")

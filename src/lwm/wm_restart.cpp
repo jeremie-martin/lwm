@@ -51,7 +51,6 @@ void WindowManager::initiate_restart(std::string binary)
 
 void WindowManager::serialize_restart_state()
 {
-    LOG_INFO("Serializing restart state");
 
     // Per-window: write _LWM_RESTART_CLIENT on each tiled/floating client
     for (auto const& [window, client] : clients_)
@@ -219,7 +218,7 @@ void WindowManager::serialize_restart_state()
     }
 
     conn_.flush();
-    LOG_INFO(
+    LWM_LOG_INFO(
         "Restart state serialized ({} clients, {} tiled, {} floating)",
         clients_.size(),
         tiled_order.size(),
@@ -253,7 +252,7 @@ bool WindowManager::restore_global_restart_state()
         workspace.split_ratios = std::move(layout.ratios);
     }
 
-    LOG_INFO(
+    LWM_LOG_INFO(
         "Global state restored: focused_monitor={} active_window={:#x} showing_desktop={}",
         focused_monitor_,
         active_window_,
@@ -339,7 +338,6 @@ void WindowManager::apply_restart_client_state(xcb_window_t window)
 
 void WindowManager::restore_window_ordering()
 {
-    LOG_INFO("Restoring window ordering");
 
     // Pipeline both property reads before collecting replies
     auto tiled_cookie =
@@ -437,13 +435,10 @@ void WindowManager::restore_window_ordering()
         }
     }
     free(pool_reply);
-
-    LOG_INFO("Window ordering restored");
 }
 
 void WindowManager::clean_restart_properties()
 {
-    LOG_INFO("Cleaning restart properties");
 
     // Delete global properties from root
     xcb_delete_property(conn_.get(), conn_.screen()->root, lwm_restart_state_);
@@ -467,7 +462,6 @@ void WindowManager::clean_restart_properties()
 
 void WindowManager::prepare_restart()
 {
-    LOG_INFO("Preparing for restart");
 
     end_drag();
     serialize_restart_state();
@@ -529,8 +523,6 @@ void WindowManager::prepare_restart()
     conn_.flush();
     auto cookie = xcb_get_input_focus(conn_.get());
     free(xcb_get_input_focus_reply(conn_.get(), cookie, nullptr));
-
-    LOG_INFO("Restart preparation complete");
 }
 
 } // namespace lwm

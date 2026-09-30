@@ -43,7 +43,7 @@ std::optional<std::regex> WindowRules::compile_pattern(std::optional<std::string
     catch (std::regex_error const& e)
     {
         // Fall back to literal string matching by escaping the pattern
-        LOG_WARN("Invalid regex pattern '{}', using literal match: {}", *pattern, e.what());
+        LWM_LOG_WARN("Invalid regex pattern '{}', using literal match: {}", *pattern, e.what());
         try
         {
             return std::regex("^(?:" + escape_regex(*pattern) + ")$", std::regex::ECMAScript | std::regex::optimize);
@@ -110,17 +110,17 @@ void WindowRules::load_rules(std::vector<WindowRuleConfig> const& configs)
         // Detect empty patterns (present but empty string) — fail-closed
         if (cfg.class_pattern.has_value() && cfg.class_pattern->empty())
         {
-            LOG_WARN("Window rule has empty class_pattern, rule will never match");
+            LWM_LOG_WARN("Window rule has empty class_pattern, rule will never match");
             rule.never_matches = true;
         }
         if (cfg.instance_pattern.has_value() && cfg.instance_pattern->empty())
         {
-            LOG_WARN("Window rule has empty instance_pattern, rule will never match");
+            LWM_LOG_WARN("Window rule has empty instance_pattern, rule will never match");
             rule.never_matches = true;
         }
         if (cfg.title_pattern.has_value() && cfg.title_pattern->empty())
         {
-            LOG_WARN("Window rule has empty title_pattern, rule will never match");
+            LWM_LOG_WARN("Window rule has empty title_pattern, rule will never match");
             rule.never_matches = true;
         }
 
@@ -136,7 +136,7 @@ void WindowRules::load_rules(std::vector<WindowRuleConfig> const& configs)
         // Detect unknown type string — fail-closed
         if (cfg.type.has_value() && !rule.type.has_value())
         {
-            LOG_WARN("Window rule has unknown type '{}', rule will never match", *cfg.type);
+            LWM_LOG_WARN("Window rule has unknown type '{}', rule will never match", *cfg.type);
             rule.never_matches = true;
         }
         rule.transient = cfg.transient;

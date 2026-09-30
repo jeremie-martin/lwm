@@ -96,7 +96,7 @@ void WindowManager::publish_current_desktop()
     size_t const monitor_idx = focused_monitor_;
     size_t const workspace_idx = focused_monitor().current_workspace;
     uint32_t const desktop = get_ewmh_desktop_index(monitor_idx, workspace_idx);
-    LOG_TRACE(
+    LWM_LOG_TRACE(
         "request_current_desktop_update: monitor={} workspace={} desktop={}",
         monitor_idx,
         workspace_idx,
@@ -134,43 +134,42 @@ uint32_t WindowManager::get_ewmh_desktop_index(size_t monitor_idx, size_t worksp
 
 void WindowManager::switch_to_ewmh_desktop(uint32_t desktop)
 {
-    LOG_DEBUG("switch_to_ewmh_desktop({}) called, focused_monitor_={}", desktop, focused_monitor_);
 
     // Convert EWMH desktop index to monitor + workspace
     size_t workspaces_per_monitor = config_.workspaces.count;
     auto indices = ewmh_policy::desktop_to_indices(desktop, workspaces_per_monitor);
     if (!indices)
     {
-        LOG_TRACE("switch_to_ewmh_desktop: invalid desktop index");
+        LWM_LOG_TRACE("switch_to_ewmh_desktop: invalid desktop index");
         return;
     }
     size_t monitor_idx = indices->first;
     size_t workspace_idx = indices->second;
 
-    LOG_TRACE("switch_to_ewmh_desktop: target monitor_idx={} workspace_idx={}", monitor_idx, workspace_idx);
+    LWM_LOG_TRACE("switch_to_ewmh_desktop: target monitor_idx={} workspace_idx={}", monitor_idx, workspace_idx);
 
     if (monitor_idx >= monitors_.size())
     {
-        LOG_TRACE("switch_to_ewmh_desktop: invalid monitor index");
+        LWM_LOG_TRACE("switch_to_ewmh_desktop: invalid monitor index");
         return;
     }
 
     auto& monitor = monitors_[monitor_idx];
     if (workspace_idx >= monitor.workspaces.size())
     {
-        LOG_TRACE("switch_to_ewmh_desktop: invalid workspace index");
+        LWM_LOG_TRACE("switch_to_ewmh_desktop: invalid workspace index");
         return;
     }
 
     // Early return if already on target monitor and workspace (matches switch_workspace behavior)
     if (monitor_idx == focused_monitor_ && workspace_idx == monitor.current_workspace)
     {
-        LOG_TRACE("switch_to_ewmh_desktop: already on target, returning");
+        LWM_LOG_TRACE("switch_to_ewmh_desktop: already on target, returning");
         return;
     }
 
     size_t old_workspace = monitor.current_workspace;
-    LOG_DEBUG(
+    LWM_LOG_DEBUG(
         "switch_to_ewmh_desktop: switching from ws {} to ws {} on monitor {}",
         old_workspace,
         workspace_idx,
@@ -185,7 +184,7 @@ void WindowManager::switch_to_ewmh_desktop(uint32_t desktop)
     }
     focus_or_fallback(monitor);
 
-    LOG_DEBUG("switch_to_ewmh_desktop: DONE, now on monitor {} ws {}", focused_monitor_, monitor.current_workspace);
+    LWM_LOG_DEBUG("EWMH desktop switched: monitor={} workspace={}", focused_monitor_, monitor.current_workspace);
 }
 
 }

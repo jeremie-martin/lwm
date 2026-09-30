@@ -34,20 +34,14 @@ target_include_directories(liblwm PUBLIC
 target_link_libraries(liblwm PUBLIC
     PkgConfig::XCB
     tomlplusplus::tomlplusplus
-    spdlog::spdlog_header_only
+    quill::quill
 )
 
 # Keep every logging call available in every build; the owned logger applies runtime gates.
 target_compile_definitions(liblwm PUBLIC
     LWM_VERSION="${PROJECT_VERSION}"
-    SPDLOG_ACTIVE_LEVEL=SPDLOG_LEVEL_TRACE
-    SPDLOG_PREVENT_CHILD_FD
+    QUILL_COMPILE_ACTIVE_LOG_LEVEL=QUILL_COMPILE_ACTIVE_LOG_LEVEL_TRACE_L3
+    QUILL_ENABLE_IMMEDIATE_FLUSH=0
 )
-
-if(LWM_HAS_STD_FORMAT)
-    # Clang 22 rejects spdlog 1.15's bundled fmt consteval checks. Use the
-    # C++23 backend when the standard library provides the required format API.
-    target_compile_definitions(liblwm PUBLIC SPDLOG_USE_STD_FORMAT)
-endif()
 
 set_target_properties(liblwm PROPERTIES OUTPUT_NAME lwm)

@@ -57,7 +57,8 @@ def measure(binary, stalled, requests):
         config.write_text("[workspaces]\ncount = 2\n")
         environment = dict(os.environ, DISPLAY=display, XDG_RUNTIME_DIR=temporary)
         environment.pop("LWM_SOCKET", None)
-        wm = subprocess.Popen([str(binary), "--config", str(config), "--no-log-file", "--log-level", "error"],
+        environment["LWM_LOG_SOCKET"] = str(directory / "unused-journal")
+        wm = subprocess.Popen([str(binary), "--config", str(config), "--log-level", "error"],
                               env=environment, stdout=log, stderr=log)
         cleanup.callback(stop, wm)
         path = directory / "lwm" / ("ipc-" + display.replace(":", "_") + ".sock")

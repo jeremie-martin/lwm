@@ -20,7 +20,7 @@ Required tools and libraries:
   `xcb-sync`, and `x11`
 - `xcb-xtest` and Xvfb for the full test suite
 
-CMake downloads pinned toml++ and spdlog sources on the first configure; test
+CMake downloads pinned toml++ and Quill sources on the first configure; test
 builds also download pinned Catch2 and nlohmann/json sources. JSON parsing is
 a test-only dependency used to validate IPC independently of its implementation.
 
@@ -145,12 +145,33 @@ semantics.
 
 ## Logs
 
-LWM writes INFO-and-higher records to stderr. By default it also writes
-WARN-and-higher records to a private rotating file at
-`$XDG_RUNTIME_DIR/lwm/lwm-<pid>.log`, falling back to `/tmp/lwm-<pid>.log`.
-The file is mode `0600`, rotates at 1 MiB, and keeps three backups. Use
-`--log-level`, `--log-file`, `--no-log-file`, and `--log-color` to change the
-startup policy.
+LWM sends INFO-and-higher diagnostics to the system journal by default:
+
+```sh
+journalctl -b _UID="$(id -u)" SYSLOG_IDENTIFIER=lwm
+lwmctl log status
+```
+
+Use `--log-level trace|debug|info|warn|error|critical|off` to select verbosity.
+`-V` enables DEBUG; `-d all` and `--debug` enable TRACE. For a terminal or a
+pipe, use `--log-target stderr` and `--log-color auto|always|never`. For example:
+
+```sh
+lwm --log-target stderr --log-level debug 2>&1 | tee lwm.log
+```
+
+Direct regular-file redirection is rejected for the stderr target: filesystem
+writes can block even with `O_NONBLOCK`. Journal storage, retention, and access
+are managed by the host's journal configuration. LWM no longer creates private
+rotating files; `--log-file` and `--no-log-file` report a migration error. Existing
+log files are left untouched.
+
+Logging is best effort. A full queue or unavailable/slow destination drops
+records rather than waiting for the consumer. `lwmctl log status` distinguishes
+queue overflow from delivery failures; a successful send means the local socket
+accepted the record, not that it was persisted. Missing journal service does not
+prevent startup. See [IPC.md](IPC.md#logging-status) for counters and
+[ARCHITECTURE.md](ARCHITECTURE.md#logging) for delivery and lifecycle details.
 
 To try LWM without replacing your current window manager, use the
 [nested Xephyr preview](CONTRIBUTING.md#nested-preview).

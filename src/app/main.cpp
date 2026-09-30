@@ -7,10 +7,10 @@
 #include <exception>
 #include <filesystem>
 #include <iostream>
-#include <stdexcept>
 #include <lwm/config/config.hpp>
 #include <lwm/core/log.hpp>
 #include <lwm/wm.hpp>
+#include <stdexcept>
 #include <string>
 #include <unistd.h>
 #include <vector>
@@ -30,7 +30,7 @@ lwm::Config load_config(std::string const& config_path, bool explicit_path)
     {
         if (explicit_path)
             throw std::runtime_error("Explicit config path is empty");
-        LOG_INFO("No config file selected, using defaults");
+        LWM_LOG_INFO("No config file selected, using defaults");
         return lwm::default_config();
     }
 
@@ -42,11 +42,11 @@ lwm::Config load_config(std::string const& config_path, bool explicit_path)
     {
         if (explicit_path)
             throw std::runtime_error("Config file not found: " + config_path);
-        LOG_INFO("No config file found, using defaults");
+        LWM_LOG_INFO("No config file found, using defaults");
         return lwm::default_config();
     }
 
-    LOG_INFO("Loading config from: {}", config_path);
+    LWM_LOG_INFO("Loading config from: {}", config_path);
     auto loaded = lwm::load_config_result(config_path);
     if (!loaded)
         throw std::runtime_error(loaded.error());
@@ -96,7 +96,7 @@ int main(int argc, char* argv[])
 
     try
     {
-        LOG_INFO("Starting LWM window manager");
+        LWM_LOG_INFO("Starting LWM window manager");
 
         std::string config_path = parsed->config_path.value_or(default_config_path());
         bool explicit_config = parsed->config_path.has_value();
@@ -133,20 +133,20 @@ int main(int argc, char* argv[])
                         "WM initialization failed " + std::to_string(recovery_failures) + " times, giving up: " + e.what()
                     );
                 }
-                LOG_ERROR("WM initialization failed, retrying ({}/3): {}", recovery_failures, e.what());
+                LWM_LOG_ERROR("WM initialization failed, retrying ({}/3): {}", recovery_failures, e.what());
                 continue;
             }
 
             std::string binary = restart_binary.empty() ? parsed->restart_argv.front() : restart_binary;
-            LOG_INFO("Restarting: {}", binary);
+            LWM_LOG_INFO("Restarting: {}", binary);
             auto saved_options = lwm::log::prepare_exec();
             execvp(binary.c_str(), restart_argv.data());
             int exec_errno = errno;
 
-            auto restore_result = lwm::log::restore(saved_options);
-            if (!restore_result)
-                std::fprintf(stderr, "lwm: failed to restore logging after exec: %s\n", restore_result.error().c_str());
-            LOG_CRITICAL("exec '{}' failed: {}, recovering", binary, std::strerror(exec_errno));
+            // A failed destination restore leaves logging inactive, visible via log status.
+            // Never fall back to a potentially blocking inherited stderr.
+            (void)lwm::log::restore(saved_options);
+            LWM_LOG_CRITICAL("exec '{}' failed: {}, recovering", binary, std::strerror(exec_errno));
         }
 
         if (runtime_failure)
@@ -157,12 +157,12 @@ int main(int argc, char* argv[])
     }
     catch (std::exception const& e)
     {
-        LOG_CRITICAL("Error: {}", e.what());
+        LWM_LOG_CRITICAL("Error: {}", e.what());
         lwm::log::shutdown();
         return 1;
     }
 
-    LOG_INFO("LWM exiting");
+    LWM_LOG_INFO("LWM exiting");
     lwm::log::shutdown();
     return 0;
 }

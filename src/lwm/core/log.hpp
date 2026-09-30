@@ -1,79 +1,139 @@
 #pragma once
 
+#include <cstring>
 #include <expected>
-#include <filesystem>
-#include <memory>
-#include <optional>
+#include <quill/Frontend.h>
+#include <quill/LogMacros.h>
 #include <string>
 #include <string_view>
 
-#include <spdlog/common.h>
-#include <spdlog/logger.h>
-#include <spdlog/spdlog.h>
-
 namespace lwm::log {
-
 enum class ColorMode
 {
     Auto,
     Always,
     Never
 };
-
+enum class Target
+{
+    Journal,
+    Stderr
+};
 struct LogOptions
 {
-    spdlog::level::level_enum level = spdlog::level::info;
-    std::optional<std::filesystem::path> log_file;
-    bool no_log_file = false;
+    quill::LogLevel level = quill::LogLevel::Info;
+    Target target = Target::Journal;
     ColorMode color = ColorMode::Auto;
-    // Filled by initialize/current_options for the selected default or explicit file.
-    std::optional<std::filesystem::path> resolved_file_path;
 };
+struct FrontOptions : quill::FrontendOptions
+{
+    static constexpr auto queue_type = quill::QueueType::BoundedDropping;
+    static constexpr size_t initial_queue_capacity = 256 * 1024;
+};
+using Frontend = quill::FrontendImpl<FrontOptions>;
+using Logger = Frontend::logger_t;
 
-std::expected<spdlog::level::level_enum, std::string> parse_level(std::string_view value);
-std::expected<ColorMode, std::string> parse_color_mode(std::string_view value);
-std::string level_name(spdlog::level::level_enum level);
+// Encode strings directly into Quill's queue, with a marker only when truncated.
+// The backend decodes the ordinary string-view wire format; it never borrows caller memory.
+struct BoundedString
+{
+    std::string_view value;
+    bool truncated;
+};
+inline constexpr size_t argument_limit = 1024;
+inline constexpr std::string_view truncation_marker = "...[truncated]";
+void record_truncation() noexcept;
+void record_queue_drop() noexcept;
+inline BoundedString bound(std::string_view value)
+{
+    bool truncated = value.size() > argument_limit;
+    if (truncated)
+    {
+        record_truncation();
+        value = value.substr(0, argument_limit - truncation_marker.size());
+    }
+    return { value, truncated };
+}
+template <typename T> decltype(auto) bounded(T&& value)
+{
+    using U = std::remove_cvref_t<T>;
+    if constexpr (std::is_same_v<U, std::string> || std::is_same_v<U, std::string_view>)
+        return bound(value);
+    else if constexpr (std::is_convertible_v<T, char const*>)
+    {
+        char const* text = value;
+        return bound(
+            text ? std::string_view(
+                       text,
+                       strnlen(
+                           text,
+                           std::is_array_v<U> ? std::min(std::extent_v<U>, argument_limit + 1) : argument_limit + 1
+                       )
+                   )
+                 : std::string_view("(null)")
+        );
+    }
+    else
+        return std::forward<T>(value);
+}
 
-/// Return the currently owned logger. The pointer is never null.
-std::shared_ptr<spdlog::logger> active_logger();
-
-/// Build a complete logger and atomically make it active.
-std::expected<void, std::string> initialize(LogOptions options = {});
-
-/// Compatibility entry point for code that does not need startup diagnostics.
-void init();
-
-/// Return the options used by the active logger.
-LogOptions current_options();
-
-/// Flush all sinks owned by the active logger.
-void flush();
-
-/// Flush, then replace the active logger with the stderr fallback before exec/fork.
-/// The returned options can be passed to restore after a failed parent exec.
+// All submissions and lifecycle calls belong to the WM thread. Only sink counters
+// are shared with the worker. Quill's macros keep metadata and disabled-argument gates.
+struct Handle
+{
+    Logger* logger = nullptr;
+    template <quill::LogLevel level> bool should_log_statement() const noexcept
+    {
+        return logger && logger->template should_log_statement<level>();
+    }
+    template <bool immediate, typename... Args> void log_statement(quill::MacroMetadata const* metadata, Args&&... args)
+    {
+        static_assert(!immediate);
+        if (!logger->template log_statement<false>(metadata, bounded(std::forward<Args>(args))...))
+            record_queue_drop();
+    }
+};
+Handle* active_logger() noexcept;
+std::expected<quill::LogLevel, std::string> parse_level(std::string_view);
+std::expected<ColorMode, std::string> parse_color_mode(std::string_view);
+std::expected<Target, std::string> parse_target(std::string_view);
+std::string level_name(quill::LogLevel);
+std::expected<void, std::string> initialize(LogOptions options = { });
 LogOptions prepare_exec();
-
-/// Restore a logger after a failed exec. Errors leave the fallback active.
-std::expected<void, std::string> restore(LogOptions const& options);
-
-/// Return to the stderr fallback without touching spdlog's global registry.
+std::expected<void, std::string> restore(LogOptions const&);
 void shutdown();
-
+std::string status_json();
 } // namespace lwm::log
 
-// These wrappers intentionally do not use spdlog's global/default logger macros.
-// Keeping the source location in the macro preserves the caller's file and line.
-#define LWM_LOG_AT(_level, ...) \
-    do \
-    { \
-        auto _lwm_logger = ::lwm::log::active_logger(); \
-        SPDLOG_LOGGER_CALL(_lwm_logger, (_level), __VA_ARGS__); \
-    } while (false)
-
-#define LOG_TRACE(...) LWM_LOG_AT(::spdlog::level::trace, __VA_ARGS__)
-#define LOG_DEBUG(...) LWM_LOG_AT(::spdlog::level::debug, __VA_ARGS__)
-#define LOG_INFO(...) LWM_LOG_AT(::spdlog::level::info, __VA_ARGS__)
-#define LOG_WARN(...) LWM_LOG_AT(::spdlog::level::warn, __VA_ARGS__)
-#define LOG_ERROR(...) LWM_LOG_AT(::spdlog::level::err, __VA_ARGS__)
-#define LOG_CRITICAL(...) LWM_LOG_AT(::spdlog::level::critical, __VA_ARGS__)
-#define LOG_KEY(state, keysym) LOG_TRACE("Key: state={:#x} keysym={:#x}", state, keysym)
+namespace quill {
+template <> struct Codec<lwm::log::BoundedString> : Codec<std::string_view>
+{
+    static size_t compute_encoded_size(detail::SizeCacheVector&, lwm::log::BoundedString const& arg) noexcept
+    {
+        return sizeof(uint32_t) + arg.value.size() + (arg.truncated ? lwm::log::truncation_marker.size() : 0);
+    }
+    static void
+    encode(std::byte*& buffer, detail::SizeCacheVector const&, uint32_t&, lwm::log::BoundedString const& arg) noexcept
+    {
+        uint32_t size = arg.value.size() + (arg.truncated ? lwm::log::truncation_marker.size() : 0);
+        std::memcpy(buffer, &size, sizeof(size));
+        buffer += sizeof(size);
+        if (!arg.value.empty())
+            std::memcpy(buffer, arg.value.data(), arg.value.size());
+        buffer += arg.value.size();
+        if (arg.truncated)
+        {
+            std::memcpy(buffer, lwm::log::truncation_marker.data(), lwm::log::truncation_marker.size());
+            buffer += lwm::log::truncation_marker.size();
+        }
+    }
+};
+}
+#define LWM_LOG_TRACE(...) QUILL_LOG_TRACE_L3(::lwm::log::active_logger(), __VA_ARGS__)
+#define LWM_LOG_DEBUG(...) QUILL_LOG_DEBUG(::lwm::log::active_logger(), __VA_ARGS__)
+#define LWM_LOG_INFO(...) QUILL_LOG_INFO(::lwm::log::active_logger(), __VA_ARGS__)
+#define LWM_LOG_WARN(...) QUILL_LOG_WARNING(::lwm::log::active_logger(), __VA_ARGS__)
+#define LWM_LOG_ERROR(...) QUILL_LOG_ERROR(::lwm::log::active_logger(), __VA_ARGS__)
+#define LWM_LOG_CRITICAL(...) QUILL_LOG_CRITICAL(::lwm::log::active_logger(), __VA_ARGS__)
+#define LWM_LOG_WARN_LIMIT(interval, ...) QUILL_LOG_WARNING_LIMIT(interval, ::lwm::log::active_logger(), __VA_ARGS__)
+#define LWM_LOG_KEY(state, keysym) LWM_LOG_TRACE("Key: state={:#x} keysym={:#x}", state, keysym)

@@ -22,8 +22,11 @@ std::string WindowManager::run_ipc_command(ipc::Command const& command)
 {
     using enum ipc::CommandId;
     if (command.id != Ping && command.id != Version && command.id != WorkspaceList && command.id != WindowList
-        && command.id != ScratchpadList && command.id != State)
+        && command.id != ScratchpadList && command.id != State && command.id != LogStatus)
         effects_.state_changed |= ipc_.has_subscribers(Event_StateChange);
+    if (command.id == LogStatus)
+        return ok_reply(log::status_json());
+
     if (command.id == Ping)
         return ok_reply("pong");
 

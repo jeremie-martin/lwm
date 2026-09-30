@@ -1,4 +1,5 @@
 #pragma once
+#include "log_collector.hpp"
 
 #include <array>
 #include <catch2/catch_test_macros.hpp>
@@ -881,6 +882,7 @@ public:
         : display_(std::move(display))
         , config_home_(make_temp_dir())
         , runtime_dir_(make_temp_dir())
+        , log_collector_(runtime_dir_ + "/journal")
     {
         std::filesystem::path executable = find_test_executable_path("lwm");
         if (executable.empty())
@@ -899,6 +901,7 @@ public:
                 dup2(diagnostics, STDERR_FILENO);
                 close(diagnostics);
             }
+            setenv("LWM_LOG_SOCKET", log_collector_.path.c_str(), 1);
             unsetenv("LWM_SOCKET");
             if (!display_.empty())
                 setenv("DISPLAY", display_.c_str(), 1);
@@ -945,6 +948,7 @@ public:
         , display_(std::move(other.display_))
         , config_home_(std::move(other.config_home_))
         , runtime_dir_(std::move(other.runtime_dir_))
+        , log_collector_(std::move(other.log_collector_))
     {
         other.pid_ = -1;
         other.config_home_.clear();
@@ -973,6 +977,7 @@ public:
         display_ = std::move(other.display_);
         config_home_ = std::move(other.config_home_);
         runtime_dir_ = std::move(other.runtime_dir_);
+        log_collector_ = std::move(other.log_collector_);
         other.pid_ = -1;
         other.config_home_.clear();
         other.runtime_dir_.clear();
@@ -986,7 +991,10 @@ public:
         siginfo_t info{};
         return waitid(P_PID, pid_, &info, WEXITED | WNOHANG | WNOWAIT) == 0 && info.si_pid == 0;
     }
-    std::string diagnostics() const { return read_text_file(std::filesystem::path(runtime_dir_) / "stderr"); }
+    std::string diagnostics() const
+    {
+        return log_collector_.diagnostics() + read_text_file(std::filesystem::path(runtime_dir_) / "stderr");
+    }
     pid_t pid() const { return pid_; }
     std::filesystem::path config_path() const { return std::filesystem::path(config_home_) / "lwm" / "config.toml"; }
     std::string const& runtime_dir() const { return runtime_dir_; }
@@ -1017,6 +1025,7 @@ private:
     std::string display_;
     std::string config_home_;
     std::string runtime_dir_;
+    LogCollector log_collector_;
 };
 
 // Only missing optional infrastructure may skip; a broken WM must fail.

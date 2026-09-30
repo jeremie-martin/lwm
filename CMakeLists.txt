@@ -33,35 +33,14 @@ FetchContent_Declare(
     GIT_TAG v3.4.0
 )
 
-# spdlog for logging (header-only mode for simplicity)
+# Quill 13.0.0: pin the reviewed source, including its bundled formatter.
 FetchContent_Declare(
-    spdlog
-    GIT_REPOSITORY https://github.com/gabime/spdlog.git
-    GIT_TAG v1.15.0
+    quill
+    GIT_REPOSITORY https://github.com/odygrd/quill.git
+    GIT_TAG eb802a37c7d585840324886a3d8648c9c2159952
 )
-
-include(CheckCXXSourceCompiles)
-check_cxx_source_compiles([=[
-#include <format>
-#if !defined(__cpp_lib_format) || __cpp_lib_format < 202207L
-#error "C++23 std::format is unavailable"
-#endif
-
-int main()
-{
-    auto formatted = std::format("{}", 1);
-    return formatted.empty();
-}
-]=] LWM_HAS_STD_FORMAT)
-
-# Configure spdlog's own targets with the same format backend before they are
-# created.  This matters for the default all-target build, which also builds
-# spdlog's non-header-only target.
-if(LWM_HAS_STD_FORMAT)
-    set(SPDLOG_USE_STD_FORMAT ON CACHE BOOL "Use std::format in spdlog" FORCE)
-endif()
-
-FetchContent_MakeAvailable(tomlplusplus spdlog)
+set(QUILL_DISABLE_NON_PREFIXED_MACROS ON CACHE BOOL "Use only project-prefixed logging macros" FORCE)
+FetchContent_MakeAvailable(tomlplusplus quill)
 
 add_subdirectory(src)
 

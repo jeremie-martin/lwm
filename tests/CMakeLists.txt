@@ -22,9 +22,11 @@ add_executable(lwm_logging_tests
   test_logging.cpp
   ${CMAKE_SOURCE_DIR}/src/app/cli.cpp
 )
-target_link_libraries(lwm_logging_tests PRIVATE liblwm Catch2::Catch2WithMain)
+target_link_libraries(lwm_logging_tests PRIVATE liblwm Catch2::Catch2WithMain PkgConfig::XCB_XTEST nlohmann_json::nlohmann_json)
 target_include_directories(lwm_logging_tests PRIVATE ${CMAKE_SOURCE_DIR}/src ${CMAKE_SOURCE_DIR}/src/app)
 target_compile_definitions(lwm_logging_tests PRIVATE
+  LWM_XORG_CONFIG_PATH="${CMAKE_CURRENT_SOURCE_DIR}/xorg-dummy.conf"
+  LWMCTL_BINARY_PATH="$<TARGET_FILE:lwmctl>"
   LWM_LOG_PROBE_PATH="$<TARGET_FILE:lwm_log_probe>"
   LWM_BINARY_PATH="$<TARGET_FILE:lwm>"
 )

@@ -205,6 +205,7 @@ WindowManager::WindowManager(Config config, std::string config_path)
     window_rules_.load_rules(config_.rules);
     init_scratchpad_state();
     detect_monitors();
+    LWM_LOG_INFO("Managing {} monitor(s)", monitors_.size());
     setup_ewmh();
     setup_ipc();
     is_restart_ = restore_global_restart_state();
@@ -311,12 +312,7 @@ RunResult WindowManager::run()
                 char buf[64];
                 while (read(signal_pipe_[0], buf, sizeof(buf)) > 0)
                 { }
-                LOG_INFO("SIGHUP received, reloading config");
                 auto result = reload_config();
-                if (result)
-                    LOG_INFO("Config reloaded successfully");
-                else
-                    LOG_ERROR("Config reload failed: {}", result.error());
                 emit_config_reload_result(result, "sighup");
                 complete_transition();
             }
@@ -363,7 +359,7 @@ RunResult WindowManager::run()
 
         if (xcb_connection_has_error(conn_.get()))
         {
-            LOG_CRITICAL("X connection error, shutting down");
+            LWM_LOG_CRITICAL("X connection error, shutting down");
             connection_failed = true;
             break;
         }
@@ -396,6 +392,10 @@ void WindowManager::cleanup_ipc()
 
 void WindowManager::emit_config_reload_result(std::expected<void, std::string> const& result, char const* source)
 {
+    if (result)
+        LWM_LOG_INFO("Config reloaded successfully ({})", source);
+    else
+        LWM_LOG_WARN_LIMIT(std::chrono::seconds(5), "Config reload failed ({}): {}", source, result.error());
     if (!ipc_.has_subscribers(Event_ConfigReload))
         return;
     if (result)
@@ -480,7 +480,7 @@ std::expected<void, std::string> WindowManager::apply_config_reload(Config confi
                 continue;
             if (!find_named_scratchpad(named->name))
             {
-                LOG_INFO("Scratchpad '{}' removed from config, restoring window {:#x}", named->name, window);
+                LWM_LOG_INFO("Scratchpad '{}' removed from config, restoring window {:#x}", named->name, window);
                 client.scratchpad.reset();
                 if (client.iconic)
                 {
@@ -908,7 +908,10 @@ void WindowManager::detect_monitors()
 
     if (!res_reply)
     {
-        LOG_WARN("randr: get_screen_resources_current returned no reply, falling back to single monitor");
+        LWM_LOG_WARN_LIMIT(
+            std::chrono::seconds(5),
+            "randr: get_screen_resources_current returned no reply, falling back to single monitor"
+        );
         create_fallback_monitor();
         return;
     }
@@ -923,7 +926,11 @@ void WindowManager::detect_monitors()
 
         if (!out_reply)
         {
-            LOG_WARN("randr: get_output_info(output={:#x}) returned no reply, skipping", outputs[i]);
+            LWM_LOG_WARN_LIMIT(
+                std::chrono::seconds(5),
+                "randr: get_output_info(output={:#x}) returned no reply, skipping",
+                outputs[i]
+            );
             continue;
         }
         if (out_reply->connection != XCB_RANDR_CONNECTION_CONNECTED || out_reply->crtc == XCB_NONE)
@@ -941,7 +948,8 @@ void WindowManager::detect_monitors()
 
         if (!crtc_reply)
         {
-            LOG_WARN(
+            LWM_LOG_WARN_LIMIT(
+                std::chrono::seconds(5),
                 "randr: get_crtc_info(crtc={:#x}, output={}) returned no reply, skipping monitor",
                 out_reply->crtc,
                 output_name
@@ -949,7 +957,8 @@ void WindowManager::detect_monitors()
         }
         else if (crtc_reply->width == 0 || crtc_reply->height == 0)
         {
-            LOG_WARN(
+            LWM_LOG_WARN_LIMIT(
+                std::chrono::seconds(5),
                 "randr: crtc={:#x} (output={}) has zero dimensions ({}x{}), skipping monitor",
                 out_reply->crtc,
                 output_name,
@@ -1059,7 +1068,7 @@ void WindowManager::run_autostart()
 {
     for (auto const& cmd : config_.autostart.commands)
     {
-        LOG_INFO("Autostart: {}", cmd.describe());
+        LWM_LOG_DEBUG("Launching autostart application");
         launch_program(cmd);
     }
 }
@@ -1293,7 +1302,7 @@ void WindowManager::set_fullscreen(Client& client, bool enabled)
 
     if (client.kind() != Client::Kind::Tiled && client.kind() != Client::Kind::Floating)
     {
-        LOG_WARN("set_fullscreen({:#x}): rejected invalid client state", client.id);
+        LWM_LOG_WARN("set_fullscreen({:#x}): rejected invalid client state", client.id);
         // Echo the effective state so the requesting client receives a
         // PropertyNotify reflecting reality, rather than silently dropping
         // the _NET_WM_STATE request.
@@ -1568,7 +1577,7 @@ void WindowManager::iconify_window(xcb_window_t window)
 
     if (client->kind() != Client::Kind::Tiled && client->kind() != Client::Kind::Floating)
     {
-        LOG_WARN("iconify_window({:#x}): rejected invalid client state", window);
+        LWM_LOG_WARN("iconify_window({:#x}): rejected invalid client state", window);
         return;
     }
 
@@ -1594,7 +1603,6 @@ void WindowManager::iconify_window(xcb_window_t window)
         else
             clear_focus();
     }
-
 }
 
 void WindowManager::deiconify_window(xcb_window_t window, bool focus)
@@ -1605,7 +1613,7 @@ void WindowManager::deiconify_window(xcb_window_t window, bool focus)
 
     if (client->kind() != Client::Kind::Tiled && client->kind() != Client::Kind::Floating)
     {
-        LOG_WARN("deiconify_window({:#x}): rejected invalid client state", window);
+        LWM_LOG_WARN("deiconify_window({:#x}): rejected invalid client state", window);
         return;
     }
 
@@ -1651,8 +1659,8 @@ void WindowManager::arrange_monitor(Monitor& monitor)
 {
     size_t monitor_idx = monitor_index(monitor);
 
-    LOG_TRACE(
-        "arrange_monitor({}) called, current_ws={} windows_in_ws={}",
+    LWM_LOG_TRACE(
+        "Arrange monitor: monitor={} workspace={} tiled_windows={}",
         monitor_idx,
         monitor.current_workspace,
         monitor.current().windows.size()
@@ -1691,14 +1699,12 @@ void WindowManager::arrange_monitor(Monitor& monitor)
     // Apply fullscreen geometry for visible fullscreen tiled windows
     for (xcb_window_t window : visible_fullscreen_windows)
     {
-        LOG_DEBUG("arrange_monitor: applying fullscreen geometry for {:#x}", window);
+        LWM_LOG_DEBUG("arrange_monitor: applying fullscreen geometry for {:#x}", window);
         if (auto* client = get_client(window))
             request_geometry(*client);
     }
 
     effects_.stacking = true;
-
-    LOG_TRACE("arrange_monitor: DONE");
 }
 
 void WindowManager::invalidate_all_monitors()
@@ -1731,7 +1737,7 @@ bool WindowManager::launch_program(CommandConfig const& command)
         posix_spawnattr_destroy(&attributes);
     }
     if (error)
-        LOG_ERROR("Cannot launch '{}': {}", command.describe(), std::strerror(error));
+        LWM_LOG_ERROR("Cannot launch application: {}", std::strerror(error));
     return error == 0;
 }
 
@@ -1819,7 +1825,7 @@ Client& WindowManager::require_client(xcb_window_t window)
     auto it = clients_.find(window);
     if (it == clients_.end())
     {
-        LOG_CRITICAL("require_client: window {:#x} not in clients registry", window);
+        LWM_LOG_CRITICAL("require_client: window {:#x} not in clients registry", window);
         std::abort();
     }
     return it->second;
@@ -1830,7 +1836,7 @@ Client const& WindowManager::require_client(xcb_window_t window) const
     auto it = clients_.find(window);
     if (it == clients_.end())
     {
-        LOG_CRITICAL("require_client: window {:#x} not in clients registry", window);
+        LWM_LOG_CRITICAL("require_client: window {:#x} not in clients registry", window);
         std::abort();
     }
     return it->second;
@@ -2501,7 +2507,7 @@ void WindowManager::assign_window_workspace(Client& client, size_t monitor_idx, 
 {
     if (monitor_idx >= monitors_.size() || workspace_idx >= monitors_[monitor_idx].workspaces.size())
     {
-        LOG_WARN("assign_window_workspace: invalid indices monitor={} workspace={}", monitor_idx, workspace_idx);
+        LWM_LOG_WARN("assign_window_workspace: invalid indices monitor={} workspace={}", monitor_idx, workspace_idx);
         return;
     }
 
@@ -2595,7 +2601,7 @@ void WindowManager::add_tiled_to_workspace(Client& client, size_t monitor_idx, s
 {
     if (monitor_idx >= monitors_.size() || workspace_idx >= monitors_[monitor_idx].workspaces.size())
     {
-        LOG_WARN("add_tiled_to_workspace: invalid indices monitor={} workspace={}", monitor_idx, workspace_idx);
+        LWM_LOG_WARN("add_tiled_to_workspace: invalid indices monitor={} workspace={}", monitor_idx, workspace_idx);
         return;
     }
     monitors_[monitor_idx].workspaces[workspace_idx].windows.push_back(client.id);
@@ -2606,7 +2612,11 @@ void WindowManager::remove_tiled_from_workspace(Client const& client, size_t mon
 {
     if (monitor_idx >= monitors_.size() || workspace_idx >= monitors_[monitor_idx].workspaces.size())
     {
-        LOG_WARN("remove_tiled_from_workspace: invalid indices monitor={} workspace={}", monitor_idx, workspace_idx);
+        LWM_LOG_WARN(
+            "remove_tiled_from_workspace: invalid indices monitor={} workspace={}",
+            monitor_idx,
+            workspace_idx
+        );
         return;
     }
     workspace_policy::remove_tiled_window(
@@ -2620,11 +2630,10 @@ void WindowManager::remove_tiled_from_workspace(Client const& client, size_t mon
 void WindowManager::hide_window(Client& client)
 {
     xcb_window_t window = client.id;
-    LOG_TRACE("hide_window({:#x}) called", window);
 
     if (client.hidden)
     {
-        LOG_TRACE("hide_window({:#x}): already hidden, skipping", window);
+        LWM_LOG_TRACE("hide_window({:#x}): already hidden, skipping", window);
         return;
     }
 
@@ -2635,7 +2644,7 @@ void WindowManager::hide_window(Client& client)
     uint32_t values[] = { static_cast<uint32_t>(OFF_SCREEN_X) };
     xcb_configure_window(conn_.get(), window, XCB_CONFIG_WINDOW_X, values);
 
-    LOG_TRACE("hide_window({:#x}): moved to x={}", window, OFF_SCREEN_X);
+    LWM_LOG_TRACE("hide_window({:#x}): moved to x={}", window, OFF_SCREEN_X);
 }
 
 // Clear the flag only. The caller must restore geometry through layout or
@@ -2643,16 +2652,15 @@ void WindowManager::hide_window(Client& client)
 void WindowManager::show_window(Client& client)
 {
     xcb_window_t window = client.id;
-    LOG_TRACE("show_window({:#x}) called", window);
 
     if (!client.hidden)
     {
-        LOG_TRACE("show_window({:#x}): not hidden, skipping", window);
+        LWM_LOG_TRACE("show_window({:#x}): not hidden, skipping", window);
         return;
     }
 
     client.hidden = false;
-    LOG_TRACE("show_window({:#x}): marked as visible", window);
+    LWM_LOG_TRACE("show_window({:#x}): marked as visible", window);
 }
 
 void WindowManager::flush_and_drain_crossing()
@@ -2707,7 +2715,7 @@ void WindowManager::realize_visibility(size_t monitor_idx, xcb_window_t preferre
 {
     if (monitor_idx >= monitors_.size())
     {
-        LOG_WARN("realize_visibility: invalid monitor_idx {}", monitor_idx);
+        LWM_LOG_WARN("realize_visibility: invalid monitor_idx {}", monitor_idx);
         return;
     }
 

@@ -109,6 +109,25 @@ an incomplete request already connected. All 512 pings must succeed in each
 case. Reported latency is descriptive, not a pass/fail threshold. Omit `--check`
 when comparing an older binary with the former single-client limit.
 
+The logging comparison runs real workspace transitions with 40 clients, reports
+IPC percentiles and WM CPU, measures idle worker cost, and fills stderr to test
+backpressure. Use Release builds and an otherwise quiet machine:
+
+```sh
+python3 tests/performance/logging_bench.py --binary build/release/src/app/lwm
+# Optional comparison against a saved pre-Quill executable:
+python3 tests/performance/logging_bench.py --binary build/release/src/app/lwm --baseline /path/to/old/lwm
+```
+
+Results are JSON Lines. `--affinity WM WORKER XSERVER DRIVER` accepts four Linux
+CPU IDs to control placement (use separate physical cores); `--include-off`
+measures the implementation without its worker. Increase `--switches` to reduce
+the effect of CPU accounting's tick resolution. Compare repeated runs, report drops alongside latency,
+and distinguish producer/library microbenchmarks from whole-WM results. This
+comparison includes the logging policy and call-site changes; it cannot isolate
+library overhead or establish a hard latency guarantee.
+
+
 ## Nested preview
 
 For an interactive check, install Xephyr (`xorg-server-xephyr` on Arch Linux,
@@ -120,7 +139,8 @@ For an interactive check, install Xephyr (`xorg-server-xephyr` on Arch Linux,
 
 The script builds Debug, uses display `:100` (which must be free), and seeds
 `test-config/config.toml` from `config.toml.example` if absent. Edit that test
-config to choose installed applications. It also starts `config/polybar.ini`
+config to choose installed applications. WM diagnostics go to the preview
+terminal. It also starts `config/polybar.ini`
 when Polybar is installed. Launch applications with `DISPLAY=:100 <program>`;
 press Enter in the script's terminal to stop the preview.
 
@@ -150,7 +170,12 @@ Test through the real boundary:
 - observable WM behavior belongs in an integration test using
   `tests/x11_test_harness.hpp`;
 - logging lifecycle cases use `tests/log_probe.cpp` so each case has isolated
-  process-global logger state.
+  process-global logger state. `tests/log_collector.hpp` supplies private native
+  journal endpoints; test WMs never write diagnostics into the host journal.
+  Logging tests cover metadata, copied arguments, truncation, lost records,
+  saturated/absent/recreated receivers, closed pipes, descriptor inheritance,
+  and failed exec. The saturated-destination regressions allow one second for
+  completion; this is a test bound, not a hard real-time scheduling guarantee.
 
 If a behavior is difficult to test without mocking an internal WM component,
 move the decision into a pure policy function and keep XCB, filesystem, and IPC

@@ -1,351 +1,165 @@
 #include "lwm/core/log.hpp"
-
-#include <cstdio>
-#include <cstdlib>
+#include <chrono>
+#include <fcntl.h>
 #include <filesystem>
-#include <fstream>
 #include <iostream>
-#include <optional>
-#include <string>
-#include <string_view>
-#include <sys/stat.h>
 #include <sys/wait.h>
+#include <thread>
 #include <unistd.h>
 
-namespace {
-
-namespace fs = std::filesystem;
-
-bool starts_with(std::string_view value, std::string_view prefix)
+int main(int argc, char** argv)
 {
-    return value.size() > prefix.size() && value.starts_with(prefix);
-}
-
-std::optional<bool> inherited_descriptor(fs::path const& expected)
-{
-    try
-    {
-        fs::path normalized = fs::absolute(expected).lexically_normal();
-        for (auto const& entry : fs::directory_iterator("/proc/self/fd"))
-        {
-            std::error_code error;
-            fs::path target = fs::read_symlink(entry.path(), error);
-            if (!error && fs::absolute(target).lexically_normal() == normalized)
-                return true;
-        }
-        return false;
-    }
-    catch (std::filesystem::filesystem_error const&)
-    {
-        return std::nullopt;
-    }
-}
-
-int check_child_descriptor(char const* executable, fs::path const& expected)
-{
-    pid_t child = ::fork();
-    if (child < 0)
-        return 125;
-    if (child == 0)
-    {
-        ::execl(executable, executable, "--inspect-fd", expected.c_str(), nullptr);
-        _exit(127);
-    }
-
-    int status = 0;
-    if (::waitpid(child, &status, 0) != child || !WIFEXITED(status))
-        return 125;
-    int result = WEXITSTATUS(status);
-    return result == 125 ? 125 : result;
-}
-
-} // namespace
-
-int main(int argc, char* argv[])
-{
+    if (argc > 2 && std::string_view(argv[1]) == "check-fd")
+        return fcntl(std::stoi(argv[2]), F_GETFD) < 0 && errno == EBADF ? 0 : 8;
     lwm::log::LogOptions options;
-    size_t burst = 1;
-    bool prepare = false;
-    bool restore = false;
-    bool break_restore = false;
-    bool block_default_file = false;
-    bool symlink_backup = false;
-    bool report_options = false;
-    bool check_child_fd = false;
-    bool post_rotation_record = false;
-    bool emit_records = true;
-    std::optional<fs::path> inspect_path;
-
+    std::string mode = "levels";
     for (int i = 1; i < argc; ++i)
     {
-        std::string_view arg = argv[i] ? argv[i] : "";
-        auto value = [&](std::string_view option) -> std::optional<std::string> {
-            if (i + 1 >= argc)
-            {
-                std::cerr << "missing value for " << option << '\n';
-                return std::nullopt;
-            }
-            return std::string(argv[++i]);
-        };
-
-        if (arg == "--no-file")
-        {
-            options.no_log_file = true;
-            continue;
-        }
-        if (arg == "--file" || starts_with(arg, "--file="))
-        {
-            auto path = arg == "--file" ? value("--file")
-                                        : std::optional<std::string>(std::string(arg.substr(std::string_view("--file=").size())));
-            if (!path)
-                return 2;
-            options.log_file = *path;
-            continue;
-        }
-        if (arg == "--level" || starts_with(arg, "--level="))
-        {
-            auto level_text = arg == "--level" ? value("--level")
-                                                : std::optional<std::string>(std::string(arg.substr(std::string_view("--level=").size())));
-            if (!level_text)
-                return 2;
-            auto level = lwm::log::parse_level(*level_text);
-            if (!level)
-            {
-                std::cerr << level.error() << '\n';
-                return 2;
-            }
-            options.level = *level;
-            continue;
-        }
-        if (arg == "--color" || starts_with(arg, "--color="))
-        {
-            auto color_text = arg == "--color" ? value("--color")
-                                                : std::optional<std::string>(std::string(arg.substr(std::string_view("--color=").size())));
-            if (!color_text)
-                return 2;
-            auto color = lwm::log::parse_color_mode(*color_text);
-            if (!color)
-            {
-                std::cerr << color.error() << '\n';
-                return 2;
-            }
-            options.color = *color;
-            continue;
-        }
-        if (arg == "--burst")
-        {
-            auto count = value("--burst");
-            if (!count)
-                return 2;
-            try
-            {
-                burst = std::stoul(*count);
-            }
-            catch (...)
-            {
-                std::cerr << "invalid burst count\n";
-                return 2;
-            }
-            continue;
-        }
-        if (arg == "--prepare")
-        {
-            prepare = true;
-            continue;
-        }
-        if (arg == "--restore")
-        {
-            restore = true;
-            continue;
-        }
-        if (arg == "--break-restore")
-        {
-            break_restore = true;
-            continue;
-        }
-        if (arg == "--block-default-file")
-        {
-            block_default_file = true;
-            continue;
-        }
-        if (arg == "--symlink-backup")
-        {
-            symlink_backup = true;
-            continue;
-        }
-        if (arg == "--report-options")
-        {
-            report_options = true;
-            continue;
-        }
-        if (arg == "--check-child-fd")
-        {
-            check_child_fd = true;
-            continue;
-        }
-        if (arg == "--post-rotation-record")
-        {
-            post_rotation_record = true;
-            continue;
-        }
-        if (arg == "--no-records")
-        {
-            emit_records = false;
-            continue;
-        }
-        if (arg == "--inspect-fd")
-        {
-            auto path = value("--inspect-fd");
-            if (!path)
-                return 2;
-            inspect_path = *path;
-            continue;
-        }
-        std::cerr << "unknown probe option: " << arg << '\n';
-        return 2;
+        std::string_view arg(argv[i]);
+        if (arg == "--stderr")
+            options.target = lwm::log::Target::Stderr;
+        else if (arg == "--plain")
+            options.color = lwm::log::ColorMode::Never;
+        else if (arg == "--color")
+            options.color = lwm::log::ColorMode::Always;
+        else if (arg == "--trace")
+            options.level = quill::LogLevel::TraceL3;
+        else if (arg == "--off")
+            options.level = quill::LogLevel::None;
+        else
+            mode = arg;
     }
-
-    if (inspect_path)
+    int flags = fcntl(STDERR_FILENO, F_GETFL);
+    auto result = lwm::log::initialize(options);
+    if (!result)
     {
-        auto inherited = inherited_descriptor(*inspect_path);
-        if (!inherited)
-            return 125;
-        return *inherited ? 1 : 0;
+        std::cout << result.error() << '\n';
+        return 1;
     }
-
-    if (block_default_file)
+    if (fcntl(STDERR_FILENO, F_GETFL) != flags)
+        return 3;
+    if (options.level == quill::LogLevel::None
+        && std::distance(std::filesystem::directory_iterator("/proc/self/task"), std::filesystem::directory_iterator())
+            != 1)
+        return 11;
+    if (mode == "levels")
     {
-        char const* runtime = std::getenv("XDG_RUNTIME_DIR");
-        if (!runtime || !*runtime)
-        {
-            std::cerr << "--block-default-file requires XDG_RUNTIME_DIR\n";
-            return 2;
-        }
-        fs::path directory = fs::path(runtime) / "lwm";
-        std::error_code error;
-        fs::create_directories(directory, error);
-        if (error)
-        {
-            std::cerr << "cannot create blocked log directory: " << error.message() << '\n';
-            return 2;
-        }
-        fs::path target = directory / "blocked-target.log";
-        fs::path blocked = directory / ("lwm-" + std::to_string(static_cast<unsigned long long>(::getpid())) + ".log");
-        fs::remove(target, error);
-        fs::remove(blocked, error);
-        std::ofstream(target) << "blocked\n";
-        if (::symlink(target.c_str(), blocked.c_str()) != 0)
-        {
-            std::cerr << "cannot create blocked log path\n";
-            return 2;
-        }
+        int evaluated = 0;
+        LWM_LOG_DEBUG("disabled {}", ++evaluated);
+        LWM_LOG_TRACE("trace");
+        LWM_LOG_DEBUG("debug");
+        LWM_LOG_INFO("info");
+        LWM_LOG_WARN("warn");
+        LWM_LOG_ERROR("error");
+        LWM_LOG_CRITICAL("critical");
+        std::cout << "evaluated=" << evaluated << '\n';
     }
-
-    auto initialized = lwm::log::initialize(options);
-    if (!initialized)
+    else if (mode == "strings")
     {
-        std::cerr << "logging initialization failed: " << initialized.error() << '\n';
-        return 2;
+        std::string text = "owned-before-mutation";
+        LWM_LOG_INFO("{}", text);
+        text.assign("changed");
+        LWM_LOG_INFO("{}", std::string("line one\nPRIORITY=0\nline two\0tail", 33));
+        LWM_LOG_INFO("{}", std::string(1000000, 'x'));
+        LWM_LOG_INFO(
+            "{}{}{}{}{}",
+            std::string(1024, 'y'),
+            std::string(1024, 'y'),
+            std::string(1024, 'y'),
+            std::string(1024, 'y'),
+            std::string(1024, 'y')
+        );
     }
-
-    auto active_options = lwm::log::current_options();
-    auto selected = active_options.resolved_file_path;
-    if (selected)
-        std::cout << "resolved=" << selected->string() << '\n';
-    if (report_options)
+    else if (mode == "boundaries")
     {
-        char const* color = active_options.color == lwm::log::ColorMode::Always
-            ? "always"
-            : active_options.color == lwm::log::ColorMode::Never ? "never" : "auto";
-        std::cout << "level=" << lwm::log::level_name(active_options.level) << '\n'
-                  << "color=" << color << '\n'
-                  << "no_file=" << (active_options.no_log_file ? "1" : "0") << '\n'
-                  << "resolved_present=" << (selected ? "1" : "0") << '\n';
+        char raw[3] = { 'r', 'a', 'w' };
+        char const* empty = nullptr;
+        LWM_LOG_INFO("{}|{}|{}", raw, empty, std::string_view{ });
+        std::string text(1025, 'c');
+        LWM_LOG_INFO("{}", text.c_str());
+        text = "view before mutation";
+        LWM_LOG_INFO("{}", std::string_view(text));
+        text = "after";
     }
-
-    if (symlink_backup)
+    else if (mode == "burst")
     {
-        if (!selected)
-        {
-            std::cerr << "--symlink-backup requires an active log file\n";
-            return 3;
-        }
-        fs::path stem = *selected;
-        fs::path extension = stem.extension();
-        stem.replace_extension();
-        fs::path backup = fs::path(stem.string() + ".2" + extension.string());
-        fs::path target = backup.parent_path() / "rotation-target.log";
-        std::error_code error;
-        fs::remove(target, error);
-        fs::remove(backup, error);
-        std::ofstream(target) << "rotation target\n";
-        if (::symlink(target.c_str(), backup.c_str()) != 0)
-        {
-            std::cerr << "cannot create rotation symlink\n";
-            return 3;
-        }
+        std::string text(1000, 'x');
+        for (int i = 0; i < 100000; ++i) LWM_LOG_INFO("{} {}", i, text);
     }
-
-    if (check_child_fd)
+    else if (mode == "restore")
     {
-        if (!selected)
-        {
-            std::cerr << "descriptor check requires an active log file\n";
-            return 3;
-        }
-        int status = check_child_descriptor(argv[0], *selected);
-        if (status == 125)
-            return 125;
-        if (status != 0)
-        {
-            std::cerr << "log descriptor inherited across exec (status " << status << ")\n";
-            return 4;
-        }
-    }
-
-    if (emit_records)
-    {
-        LOG_TRACE("probe trace");
-        LOG_DEBUG("probe debug");
-        LOG_INFO("probe info");
-        LOG_WARN("probe warn");
-        LOG_ERROR("probe error");
-        LOG_CRITICAL("probe critical");
-        LOG_KEY(0x12, 0x34);
-        for (size_t i = 0; i < burst; ++i)
-            LOG_WARN("probe burst {} {}", i, std::string(50000, 'x'));
-        if (post_rotation_record)
-            LOG_WARN("probe post-rotation record");
-    }
-
-    if (prepare)
-    {
+        LWM_LOG_INFO("before exec");
         auto saved = lwm::log::prepare_exec();
-        LOG_INFO("probe fallback after prepare");
-        if (break_restore)
+        LWM_LOG_INFO("disabled while stopped");
+        if (!lwm::log::restore(saved))
+            return 4;
+        LWM_LOG_INFO("after failed exec");
+    }
+    else if (mode == "failed-restore")
+    {
+        LWM_LOG_INFO("before failed restore");
+        auto saved = lwm::log::prepare_exec();
+        setenv("LWM_LOG_SOCKET", "relative", 1);
+        if (lwm::log::restore(saved))
+            return 12;
+        LWM_LOG_CRITICAL("disabled after failed restore");
+    }
+    else if (mode == "cloexec")
+    {
+        int checked = 0;
+        for (int fd = 3; fd < 128; ++fd)
         {
-            auto path = saved.log_file ? saved.log_file : saved.resolved_file_path;
-            if (path)
+            if (fcntl(fd, F_GETFD) < 0)
+                continue;
+            if (!(fcntl(fd, F_GETFD) & FD_CLOEXEC))
+                return 6;
+            ++checked;
+            std::string number = std::to_string(fd);
+            pid_t child = fork();
+            if (child == 0)
             {
-                std::error_code error;
-                fs::remove(*path, error);
-                ::symlink("/tmp", path->c_str());
+                execl(argv[0], argv[0], "check-fd", number.c_str(), nullptr);
+                _exit(9);
             }
+            int status;
+            if (child < 0 || waitpid(child, &status, 0) != child || !WIFEXITED(status) || WEXITSTATUS(status))
+                return 7;
         }
-        if (restore)
+        if (!checked)
+            return 10;
+    }
+    else if (mode == "backend-error")
+    {
+        LWM_LOG_INFO("{:invalid}", 1);
+        LWM_LOG_INFO("after formatting error");
+    }
+    else if (mode == "rate-limit")
+    {
+        for (int i = 0; i < 20; ++i)
         {
-            auto restored = lwm::log::restore(saved);
-            if (!restored)
-            {
-                std::cerr << "restore failed: " << restored.error() << '\n';
-                LOG_WARN("probe fallback after failed restore");
-                return 3;
-            }
-            LOG_WARN("probe restored after prepare");
+            LWM_LOG_WARN_LIMIT(std::chrono::milliseconds(50), "recurring warning");
+            if (i == 18)
+                std::this_thread::sleep_for(std::chrono::milliseconds(60));
         }
     }
-
+    else if (mode == "paced" || mode == "paced-large")
+    {
+        for (int i = 0; i < 30; ++i)
+        {
+            if (mode == "paced-large")
+                LWM_LOG_INFO(
+                    "paced {} {} {} {} {} END",
+                    i,
+                    std::string(900, 'a'),
+                    std::string(900, 'b'),
+                    std::string(900, 'c'),
+                    std::string(900, 'd')
+                );
+            else
+                LWM_LOG_INFO("paced {}", i);
+            std::this_thread::sleep_for(std::chrono::milliseconds(20));
+        }
+    }
     lwm::log::shutdown();
-    LOG_INFO("probe after shutdown");
-    return 0;
+    std::cout << lwm::log::status_json() << '\n';
 }

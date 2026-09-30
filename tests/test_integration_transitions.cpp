@@ -672,8 +672,13 @@ TEST_CASE(
     auto current = state();
     CHECK(current.at("windows").at("windows").at(0).at("title") == "snapshot-new-title");
     CHECK(current.at("sequence") == changed.at("sequence"));
+    auto logging = send_ipc_command(*path, "log status");
+    REQUIRE(logging);
+    REQUIRE(logging->starts_with("ok "));
+    CHECK(nlohmann::json::parse(logging->substr(3)).at("active") == true);
+    CHECK(state().at("sequence") == current.at("sequence"));
     pollfd descriptor{ subscriber.fd, POLLIN, 0 };
-    CHECK(poll(&descriptor, 1, 30) == 0); // Querying state must not create an event feedback loop.
+    CHECK(poll(&descriptor, 1, 30) == 0); // Read-only state/log queries must not create an event feedback loop.
     auto previous_wm = supporting_wm_window(conn);
     REQUIRE(previous_wm);
     REQUIRE(send_ipc_command(*path, "restart"));

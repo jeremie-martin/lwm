@@ -152,7 +152,7 @@ void WindowManager::handle_event(xcb_generic_event_t const& event)
         case XCB_KEY_PRESS:
         {
             auto const& e = reinterpret_cast<xcb_key_press_event_t const&>(event);
-            LOG_TRACE(
+            LWM_LOG_TRACE(
                 "EVENT: XCB_KEY_PRESS keycode={} time={} state={:#x}",
                 static_cast<int>(e.detail),
                 e.time,
@@ -164,7 +164,7 @@ void WindowManager::handle_event(xcb_generic_event_t const& event)
         case XCB_KEY_RELEASE:
         {
             auto const& e = reinterpret_cast<xcb_key_release_event_t const&>(event);
-            LOG_TRACE(
+            LWM_LOG_TRACE(
                 "EVENT: XCB_KEY_RELEASE keycode={} time={} state={:#x}",
                 static_cast<int>(e.detail),
                 e.time,
@@ -369,7 +369,7 @@ void WindowManager::handle_window_removal(xcb_window_t window)
 
 void WindowManager::handle_enter_notify(xcb_enter_notify_event_t const& e)
 {
-    LOG_TRACE(
+    LWM_LOG_TRACE(
         "EVENT: EnterNotify event={:#x} root_x={} root_y={} mode={} detail={} time={}",
         e.event,
         e.root_x,
@@ -381,7 +381,7 @@ void WindowManager::handle_enter_notify(xcb_enter_notify_event_t const& e)
 
     if (drag_active())
     {
-        LOG_TRACE("EnterNotify: ignored (drag active)");
+        LWM_LOG_TRACE("EnterNotify: ignored (drag active)");
         return;
     }
 
@@ -389,7 +389,7 @@ void WindowManager::handle_enter_notify(xcb_enter_notify_event_t const& e)
     {
         if (e.mode != XCB_NOTIFY_MODE_NORMAL || e.detail == XCB_NOTIFY_DETAIL_INFERIOR)
         {
-            LOG_TRACE(
+            LWM_LOG_TRACE(
                 "EnterNotify: filtered (mode={} detail={})",
                 static_cast<int>(e.mode),
                 static_cast<int>(e.detail)
@@ -403,7 +403,7 @@ void WindowManager::handle_enter_notify(xcb_enter_notify_event_t const& e)
         auto const* client = get_client(e.event);
         if (client && client->hidden)
         {
-            LOG_TRACE("EnterNotify: ignored (window is hidden)");
+            LWM_LOG_TRACE("EnterNotify: ignored (window is hidden)");
             return;
         }
 
@@ -411,7 +411,7 @@ void WindowManager::handle_enter_notify(xcb_enter_notify_event_t const& e)
         {
             if (e.event != active_window_)
             {
-                LOG_DEBUG("EnterNotify: focusing window {:#x}", e.event);
+                LWM_LOG_DEBUG("EnterNotify: focusing window {:#x}", e.event);
                 focus_any_window(e.event);
             }
             return;
@@ -419,7 +419,7 @@ void WindowManager::handle_enter_notify(xcb_enter_notify_event_t const& e)
     }
 
     // Case 2: Entering root or unmanaged window area (gaps/empty space)
-    LOG_TRACE("EnterNotify: updating focused monitor at ({}, {})", e.root_x, e.root_y);
+    LWM_LOG_TRACE("EnterNotify: updating focused monitor at ({}, {})", e.root_x, e.root_y);
     update_focused_monitor_at_point(e.root_x, e.root_y);
 }
 
@@ -450,7 +450,7 @@ void WindowManager::handle_motion_notify(xcb_motion_notify_event_t const& e)
         {
             if (window_under_cursor != active_window_)
             {
-                LOG_DEBUG("MotionNotify: focusing window {:#x} (was {:#x})", window_under_cursor, active_window_);
+                LWM_LOG_DEBUG("MotionNotify: focusing window {:#x} (was {:#x})", window_under_cursor, active_window_);
                 focus_any_window(window_under_cursor);
             }
             return;
@@ -641,7 +641,7 @@ void WindowManager::handle_button_press(xcb_button_press_event_t const& e)
 
 bool WindowManager::is_auto_repeat_toggle(xcb_keysym_t keysym, xcb_timestamp_t time)
 {
-    LOG_TRACE(
+    LWM_LOG_TRACE(
         "KeyPress: keysym={:#x} time={} last_keysym={:#x} last_release_time={}",
         keysym,
         time,
@@ -650,11 +650,11 @@ bool WindowManager::is_auto_repeat_toggle(xcb_keysym_t keysym, xcb_timestamp_t t
     );
     bool same_key = (keysym == last_toggle_keysym_);
     bool same_time = (time == last_toggle_release_time_);
-    LOG_TRACE("check: same_key={} same_time={} would_block={}", same_key, same_time, (same_key && same_time));
+    LWM_LOG_TRACE("check: same_key={} same_time={} would_block={}", same_key, same_time, (same_key && same_time));
 
     if (same_key && same_time)
     {
-        LOG_TRACE("BLOCKED (auto-repeat detected)");
+        LWM_LOG_TRACE("BLOCKED (auto-repeat detected)");
         return true;
     }
 
@@ -676,16 +676,16 @@ void WindowManager::handle_key_press(xcb_key_press_event_t const& e)
 {
     xcb_keysym_t keysym = xcb_key_press_lookup_keysym(conn_.keysyms(), const_cast<xcb_key_press_event_t*>(&e), 0);
 
-    LOG_KEY(e.state, keysym);
+    LWM_LOG_KEY(e.state, keysym);
 
     auto action = keybinds_.resolve(e.state, keysym);
     if (!action)
     {
-        LOG_TRACE("No action for keysym");
+        LWM_LOG_TRACE("No action for keysym");
         return;
     }
 
-    LOG_DEBUG("Action: {}", key_action_event_name(*action));
+    LWM_LOG_DEBUG("Action: {}", key_action_event_name(*action));
 
     bool handled = std::visit(
         Overloaded{
@@ -699,14 +699,12 @@ void WindowManager::handle_key_press(xcb_key_press_event_t const& e)
             [&](ReloadConfigAction const&)
             {
                 auto result = reload_config();
-                if (!result)
-                    LOG_WARN("Config reload failed: {}", result.error());
                 emit_config_reload_result(result, "keybind");
                 return true;
             },
             [&](RestartAction const&)
             {
-                LOG_INFO("Restart triggered by keybind");
+                LWM_LOG_INFO("Restart triggered by keybind");
                 initiate_restart();
                 return true;
             },
@@ -834,13 +832,13 @@ void WindowManager::handle_key_release(xcb_key_release_event_t const& e)
 {
     xcb_keysym_t keysym = xcb_key_press_lookup_keysym(conn_.keysyms(), const_cast<xcb_key_release_event_t*>(&e), 0);
 
-    LOG_TRACE("KeyRelease: keysym={:#x} time={} last_toggle_keysym={:#x}", keysym, e.time, last_toggle_keysym_);
+    LWM_LOG_TRACE("KeyRelease: keysym={:#x} time={} last_toggle_keysym={:#x}", keysym, e.time, last_toggle_keysym_);
 
     // Record timestamp for auto-repeat detection.
     // X11 auto-repeat sends KeyRelease-KeyPress pairs with identical timestamps.
     if (keysym == last_toggle_keysym_)
     {
-        LOG_TRACE("KeyRelease matches toggle key, recording time={}", e.time);
+        LWM_LOG_TRACE("KeyRelease matches toggle key, recording time={}", e.time);
         last_toggle_release_time_ = e.time;
     }
 }
@@ -912,7 +910,7 @@ void WindowManager::handle_change_state_message(xcb_client_message_event_t const
 void WindowManager::handle_current_desktop_message(xcb_client_message_event_t const& e)
 {
     uint32_t desktop = e.data.data32[0];
-    LOG_DEBUG("_NET_CURRENT_DESKTOP request: desktop={}", desktop);
+    LWM_LOG_DEBUG("_NET_CURRENT_DESKTOP request: desktop={}", desktop);
     switch_to_ewmh_desktop(desktop);
 }
 
@@ -1063,7 +1061,7 @@ void WindowManager::handle_active_window_request(xcb_client_message_event_t cons
     xcb_window_t window = e.window;
     uint32_t source = e.data.data32[0];
     uint32_t timestamp = e.data.data32[1];
-    LOG_DEBUG("_NET_ACTIVE_WINDOW request: window={:#x} source={}", window, source);
+    LWM_LOG_DEBUG("_NET_ACTIVE_WINDOW request: window={:#x} source={}", window, source);
 
     auto* request_client = get_client(window);
     if (!request_client)
@@ -1079,7 +1077,7 @@ void WindowManager::handle_active_window_request(xcb_client_message_event_t cons
     {
         if (timestamp == 0)
         {
-            LOG_DEBUG("Focus stealing prevented, timestamp missing");
+            LWM_LOG_DEBUG("Focus stealing prevented, timestamp missing");
             deny_with_attention();
             return;
         }
@@ -1088,7 +1086,7 @@ void WindowManager::handle_active_window_request(xcb_client_message_event_t cons
         if (active_client && active_client->user_time != 0
             && ewmh_policy::timestamp_is_before(timestamp, active_client->user_time))
         {
-            LOG_DEBUG("Focus stealing prevented, setting demands attention");
+            LWM_LOG_DEBUG("Focus stealing prevented, setting demands attention");
             deny_with_attention();
             return;
         }
@@ -1127,7 +1125,7 @@ void WindowManager::handle_active_window_request(xcb_client_message_event_t cons
 void WindowManager::handle_desktop_change(xcb_client_message_event_t const& e)
 {
     uint32_t desktop = e.data.data32[0];
-    LOG_DEBUG("_NET_WM_DESKTOP request: window={:#x} desktop={}", e.window, desktop);
+    LWM_LOG_DEBUG("_NET_WM_DESKTOP request: window={:#x} desktop={}", e.window, desktop);
 
     auto* client = get_client(e.window);
     if (!client)
@@ -1593,6 +1591,15 @@ void WindowManager::handle_randr_screen_change()
 {
     auto previous = std::move(monitors_);
     detect_monitors();
+    if (!std::equal(
+            previous.begin(),
+            previous.end(),
+            monitors_.begin(),
+            monitors_.end(),
+            [](auto const& a, auto const& b)
+            { return a.name == b.name && a.x == b.x && a.y == b.y && a.width == b.width && a.height == b.height; }
+        ))
+        LWM_LOG_INFO("Monitor topology updated: {} monitor(s)", monitors_.size());
     auto destinations = hotplug_policy::preserve_workspaces(previous, monitors_);
     focused_monitor_ = focused_monitor_ < destinations.size() ? destinations[focused_monitor_] : 0;
 

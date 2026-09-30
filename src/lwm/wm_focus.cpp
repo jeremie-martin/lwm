@@ -53,7 +53,7 @@ void WindowManager::focus_or_fallback(Monitor& monitor, bool record_user_time)
 
     size_t monitor_idx = monitor_index(monitor);
 
-    LOG_DEBUG(
+    LWM_LOG_DEBUG(
         "focus_or_fallback: monitor_idx={} current_ws={} ws.focused_window={:#x} "
         "ws.windows.size={} active_window_={:#x}",
         monitor_idx,
@@ -65,7 +65,7 @@ void WindowManager::focus_or_fallback(Monitor& monitor, bool record_user_time)
 
     if (monitor_idx >= monitors_.size())
     {
-        LOG_DEBUG("focus_or_fallback: invalid monitor, clearing focus");
+        LWM_LOG_DEBUG("focus_or_fallback: invalid monitor, clearing focus");
         clear_focus();
         return;
     }
@@ -87,7 +87,7 @@ void WindowManager::focus_or_fallback(Monitor& monitor, bool record_user_time)
         }
     }
 
-    LOG_TRACE(
+    LWM_LOG_TRACE(
         "focus_or_fallback: {} floating candidates, {} sticky tiled candidates",
         floating_candidates.size(),
         sticky_tiled_candidates.size()
@@ -104,16 +104,14 @@ void WindowManager::focus_or_fallback(Monitor& monitor, bool record_user_time)
 
     if (!selection)
     {
-        LOG_DEBUG("focus_or_fallback: no candidate found, clearing focus");
+        LWM_LOG_DEBUG("focus_or_fallback: no candidate found, clearing focus");
         clear_focus();
         return;
     }
 
-    LOG_DEBUG("focus_or_fallback: selected window={:#x} is_floating={}", selection->window, selection->is_floating);
+    LWM_LOG_DEBUG("focus_or_fallback: selected window={:#x} is_floating={}", selection->window, selection->is_floating);
 
     focus_any_window(selection->window, record_user_time);
-
-    LOG_TRACE("focus_or_fallback: DONE");
 }
 
 void WindowManager::repair_focus_after_visibility_change(size_t preferred_monitor, bool record_user_time)

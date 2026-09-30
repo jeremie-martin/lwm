@@ -8,7 +8,7 @@ bool WindowManager::apply_workspace_switch(size_t monitor_idx, size_t target_wor
 {
     if (monitor_idx >= monitors_.size())
     {
-        LOG_TRACE("workspace switch rejected: invalid-monitor");
+        LWM_LOG_TRACE("workspace switch rejected: invalid-monitor");
         return false;
     }
 
@@ -16,7 +16,7 @@ bool WindowManager::apply_workspace_switch(size_t monitor_idx, size_t target_wor
     auto result = workspace_policy::validate_workspace_switch(monitor, target_workspace);
     if (!result)
     {
-        LOG_TRACE("workspace switch rejected");
+        LWM_LOG_TRACE("workspace switch rejected");
         return false;
     }
 
@@ -43,28 +43,20 @@ void WindowManager::switch_workspace(size_t ws)
 {
     if (focused_monitor_ >= monitors_.size())
     {
-        LOG_TRACE("switch_workspace({}) called with invalid focused_monitor={}", ws, focused_monitor_);
+        LWM_LOG_TRACE("switch_workspace({}): invalid focused_monitor={}", ws, focused_monitor_);
         return;
     }
 
-    auto const& monitor = focused_monitor();
-    LOG_TRACE(
-        "switch_workspace({}) called, current={} previous={}",
-        ws,
-        monitor.current_workspace,
-        monitor.previous_workspace
-    );
-
     if (!apply_workspace_switch(focused_monitor_, ws))
     {
-        LOG_TRACE("switch_workspace: transition rejected switch");
+        LWM_LOG_TRACE("switch_workspace: transition rejected switch");
         return;
     }
 
     focus_or_fallback(focused_monitor());
 
-    LOG_TRACE(
-        "switch_workspace: DONE, now current={} previous={}",
+    LWM_LOG_TRACE(
+        "Workspace switched: current={} previous={}",
         focused_monitor().current_workspace,
         focused_monitor().previous_workspace
     );
@@ -74,29 +66,21 @@ void WindowManager::toggle_workspace()
 {
     auto& monitor = focused_monitor();
     size_t workspace_count = monitor.workspaces.size();
-    LOG_TRACE(
-        "toggle_workspace() called, workspace_count={} current={} previous={}",
-        workspace_count,
-        monitor.current_workspace,
-        monitor.previous_workspace
-    );
-
     if (workspace_count <= 1)
     {
-        LOG_TRACE("toggle_workspace: only 1 workspace, returning");
+        LWM_LOG_TRACE("toggle_workspace: only 1 workspace, returning");
         return;
     }
 
     size_t target = monitor.previous_workspace;
     if (target >= workspace_count || target == monitor.current_workspace)
     {
-        LOG_TRACE("toggle_workspace: invalid target={}, returning", target);
+        LWM_LOG_TRACE("toggle_workspace: invalid target={}, returning", target);
         return;
     }
 
-    LOG_TRACE("toggle_workspace: switching to workspace {}", target);
+    LWM_LOG_TRACE("toggle_workspace: switching to workspace {}", target);
     switch_workspace(target);
-    LOG_TRACE("toggle_workspace: DONE");
 }
 
 void WindowManager::move_window_to_workspace(size_t ws)
@@ -166,7 +150,6 @@ void WindowManager::focus_monitor(int direction)
     {
         warp_to_monitor(monitor);
     }
-
 }
 
 void WindowManager::move_window_to_monitor(int direction)
@@ -206,7 +189,6 @@ void WindowManager::move_window_to_monitor(int direction)
         focus_any_window(client->id);
     if (config_.focus.warp_cursor_on_monitor_change)
         warp_to_monitor(target_monitor);
-
 }
 
 }

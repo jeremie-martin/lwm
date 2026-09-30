@@ -39,13 +39,61 @@ server use the same grammar, while tests use independent wire peers. Socket read
 transport server; its command callback runs on this same thread. X events,
 config reloads, and timeouts use the same state-transition helpers.
 
-Logging is an owned service rather than spdlog global state. A non-null
-stderr fallback exists before initialization and after shutdown; the configured
-logger is swapped in only after every sink is ready. Exec restart flushes and
-returns to the fallback before replacing the process.
-Application launches use `posix_spawnp`; owned descriptors are close-on-exec,
-so children inherit stderr but not the private log sink. Logging policy is
-fixed by startup options and is not reloaded from TOML.
+## Logging
+
+`core/log` owns one Quill 13.0.0 frontend specialization and one backend worker.
+The WM thread alone submits records and controls the service lifecycle. The
+project's `LWM_LOG_*` macros preserve static source metadata and Quill's runtime
+gate, so disabled arguments are not evaluated. Enabled arguments are copied into
+a preallocated 256 KiB `BoundedDropping` queue; each string is limited to 1 KiB
+with an explicit truncation marker. Formatting happens on the worker, whose
+transit buffer is limited to 256 events. Fixed call-site format strings and
+bounded arguments keep records small; this is not a general-purpose API for
+untrusted format strings or arbitrarily large custom argument types.
+
+At level `off`, no worker or producer queue is started. Otherwise the worker
+sleeps for up to 100 ms when idle at INFO or higher, or 10 ms at DEBUG/TRACE
+to keep up with verbose traffic. Shutdown wakes it immediately. Immediate flush and Quill signal
+handlers are disabled. The journal sink sends native-protocol datagrams using
+`sendmsg(MSG_DONTWAIT | MSG_NOSIGNAL)` to `/run/systemd/journal/socket`.
+`LWM_LOG_SOCKET` selects another absolute Unix socket path, principally for
+private test collectors. Fields include source location, severity, logging
+instance, original event timestamp (`LWM_TIMESTAMP_NS`), and a length-delimited
+message: embedded newlines cannot inject fields. Each datagram is at most 4 KiB.
+There is one attempt per record; missing, full, or recreated receivers do not
+require a blocking reconnect or fallback path.
+
+The stderr sink opens an independent nonblocking, close-on-exec descriptor via
+`/proc/self/fd/2`; it never changes the launcher's descriptor flags. Terminals,
+pipes, and `/dev/null` are supported. Control characters in messages are escaped.
+A short write retains at most one 4 KiB record; later records are dropped until
+that remainder can be written. Flush and periodic callbacks each make a single
+nonblocking attempt. The worker blocks SIGPIPE on its own thread; a closed pipe
+is a delivery failure. Disk files are deliberately unsupported by this sink.
+
+Shutdown first disables submissions, then stops Quill and drains its finite
+queue. Sink callbacks never wait for consumer capacity; any remaining partial
+stderr record is discarded and counted. Debug invariant failures drain through this path before aborting; unexpected
+crashes can lose queued records. Exec restart follows the same path,
+and failed exec reopens the configured destination and restarts the worker.
+Counters and the logging instance survive a failed exec; successful exec creates
+a new instance. Restore failure leaves logging inactive with its error available
+through IPC, without falling back to blocking stderr. Ordinary startup errors
+before the WM runs still use the CLI's stderr. Application launches use
+`posix_spawnp`; all owned logging descriptors are close-on-exec.
+
+Atomic counters record enqueue rejection, delivery loss, truncation, and backend
+notifications without recursively logging failures. A separate lock protects only
+the latest bounded backend-notification text and its explicit IPC snapshot;
+normal log submissions never take it. A delivery error is not a
+persistence acknowledgement, and Quill notifications include overflow summaries
+as well as formatting/backend errors. Diagnostic logs are separate from
+performance measurement: IPC latency, CPU, and X request counts are measured by
+external tools. Logging policy is fixed by startup options, not TOML reload.
+INFO records describe lifecycle and configuration outcomes; DEBUG adds operational
+context, TRACE adds input and geometry detail. Recurring recoverable RandR and config-reload warnings
+use Quill's rate limiter with occurrence counts. Avoid routine per-window INFO
+records or full command lines in ordinary diagnostics.
 
 ## Layout and geometry
 

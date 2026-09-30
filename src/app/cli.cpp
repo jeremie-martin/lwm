@@ -45,8 +45,7 @@ std::expected<Options, std::string> parse(int argc, char* const argv[])
     bool seen_level = false;
     bool seen_verbose = false;
     bool seen_debug = false;
-    bool seen_file = false;
-    bool seen_no_file = false;
+    bool seen_target = false;
     bool seen_color = false;
     bool positional_allowed = true;
 
@@ -98,7 +97,7 @@ std::expected<Options, std::string> parse(int argc, char* const argv[])
         {
             if (auto result = reject_duplicate(seen_verbose, "--verbose"); !result)
                 return std::unexpected(result.error());
-            options.log.level = spdlog::level::debug;
+            options.log.level = quill::LogLevel::Debug;
             continue;
         }
 
@@ -106,7 +105,7 @@ std::expected<Options, std::string> parse(int argc, char* const argv[])
         {
             if (auto result = reject_duplicate(seen_debug, "--debug"); !result)
                 return std::unexpected(result.error());
-            options.log.level = spdlog::level::trace;
+            options.log.level = quill::LogLevel::TraceL3;
             continue;
         }
 
@@ -126,19 +125,15 @@ std::expected<Options, std::string> parse(int argc, char* const argv[])
                 value = std::string(arg.substr(2));
             if (value != "all")
                 return std::unexpected("invalid -d value '" + value + "' (expected all)");
-            options.log.level = spdlog::level::trace;
+            options.log.level = quill::LogLevel::TraceL3;
             continue;
         }
 
-        if (arg == "--no-log-file")
-        {
-            if (auto result = reject_duplicate(seen_no_file, "--no-log-file"); !result)
-                return std::unexpected(result.error());
-            if (seen_file)
-                return std::unexpected("--no-log-file conflicts with --log-file");
-            options.log.no_log_file = true;
-            continue;
-        }
+        if (arg == "--no-log-file" || arg == "--log-file" || starts_with(arg, "--log-file="))
+            return std::unexpected(
+                "private log files were removed; use --log-target journal (default) or --log-target stderr with a pipe "
+                "to tee"
+            );
 
         if (arg == "--log-level" || starts_with(arg, "--log-level="))
         {
@@ -161,25 +156,18 @@ std::expected<Options, std::string> parse(int argc, char* const argv[])
             continue;
         }
 
-        if (arg == "--log-file" || starts_with(arg, "--log-file="))
+        if (arg == "--log-target" || starts_with(arg, "--log-target="))
         {
-            if (auto result = reject_duplicate(seen_file, "--log-file"); !result)
+            if (auto result = reject_duplicate(seen_target, "--log-target"); !result)
                 return std::unexpected(result.error());
-            if (seen_no_file)
-                return std::unexpected("--log-file conflicts with --no-log-file");
-            std::string value;
-            if (arg == "--log-file")
-            {
-                auto parsed = argument_value(i, argc, argv, "--log-file");
-                if (!parsed)
-                    return std::unexpected(parsed.error());
-                value = std::move(*parsed);
-            }
-            else
-                value = std::string(arg.substr(std::string_view("--log-file=").size()));
-            if (value.empty())
-                return std::unexpected("empty value for --log-file");
-            options.log.log_file = value;
+            auto value = arg == "--log-target" ? argument_value(i, argc, argv, "--log-target")
+                                               : std::expected<std::string, std::string>(std::string(arg.substr(13)));
+            if (!value)
+                return std::unexpected(value.error());
+            auto target = lwm::log::parse_target(*value);
+            if (!target)
+                return std::unexpected(target.error());
+            options.log.target = *target;
             continue;
         }
 
@@ -246,21 +234,21 @@ std::expected<Options, std::string> parse(int argc, char* const argv[])
 
 std::string usage(std::string_view program)
 {
-    return "usage: " + std::string(program) + " [OPTIONS] [CONFIG]\n"
-           "\n"
-           "startup options:\n"
-           "  -h, --help                 show this help\n"
-           "  -v, --version              show the installed version\n"
-           "  -V, --verbose              enable DEBUG logging\n"
-           "  -d all, --debug            enable TRACE logging\n"
-           "      --log-level LEVEL      trace, debug, info, warn, error, critical\n"
-           "      --log-file PATH        write WARN-and-higher records to PATH\n"
-           "      --no-log-file           disable the private error log\n"
-           "      --log-color MODE       auto, always, or never\n"
-           "  -c, --config PATH          select a configuration file\n"
-           "\n"
-           "A single bare CONFIG path is retained for compatibility. Use -- to\n"
-           "terminate option parsing when the path begins with '-'.\n";
+    return "usage: " + std::string(program)
+        + " [OPTIONS] [CONFIG]\n"
+          "\n"
+          "startup options:\n"
+          "  -h, --help                 show this help\n"
+          "  -v, --version              show the installed version\n"
+          "  -V, --verbose              enable DEBUG logging\n"
+          "  -d all, --debug            enable TRACE logging\n"
+          "      --log-level LEVEL      trace, debug, info, warn, error, critical, off\n"
+          "      --log-target TARGET    journal (default) or stderr\n"
+          "      --log-color MODE       auto, always, or never\n"
+          "  -c, --config PATH          select a configuration file\n"
+          "\n"
+          "A single bare CONFIG path is retained for compatibility. Use -- to\n"
+          "terminate option parsing when the path begins with '-'.\n";
 }
 
 } // namespace lwm::cli

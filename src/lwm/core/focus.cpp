@@ -30,7 +30,7 @@ PointerFocusResult pointer_move(std::span<Monitor const> monitors, size_t active
 
     result.transition = PointerTransition::MonitorChangedClearFocus;
     result.new_monitor = *new_monitor;
-    LOG_TRACE("pointer_move: monitor changed from {} to {}", active_monitor, *new_monitor);
+    LWM_LOG_TRACE("pointer_move: monitor changed from {} to {}", active_monitor, *new_monitor);
     return result;
 }
 
