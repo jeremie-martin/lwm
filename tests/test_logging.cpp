@@ -51,6 +51,21 @@ struct Collector
     LogCollector log{ (directory / "journal").string() };
     ~Collector() { fs::remove_all(directory); }
 };
+void fill_journal(LogCollector const& collector)
+{
+    int sender = socket(AF_UNIX, SOCK_DGRAM | SOCK_NONBLOCK | SOCK_CLOEXEC, 0);
+    REQUIRE(sender >= 0);
+    sockaddr_un address{ };
+    address.sun_family = AF_UNIX;
+    std::strcpy(address.sun_path, collector.path.c_str());
+    constexpr std::string_view record = "MESSAGE=backpressure fixture\n";
+    while (sendto(sender, record.data(), record.size(), 0, reinterpret_cast<sockaddr*>(&address), sizeof(address)) >= 0)
+    { }
+    int error = errno;
+    close(sender);
+    REQUIRE(error == EAGAIN);
+}
+
 }
 
 TEST_CASE("Standard journal sink preserves levels and source metadata", "[logging]")
@@ -419,6 +434,8 @@ TEST_CASE("Standard sinks isolate submission from backpressure and drain when th
     {
         CAPTURE(target);
         Collector c;
+        if (target == "journal")
+            fill_journal(c.log);
         ChildProbe child("burst", target, c.log.path);
         // All 100,000 calls must finish while the destination remains unread.
         REQUIRE(wait_for_condition(
@@ -475,6 +492,8 @@ TEST_CASE("Exec replaces a blocked worker without waiting for the destination", 
     for (std::string target : { "full", "journal" })
     {
         Collector c;
+        if (target == "journal")
+            fill_journal(c.log);
         ChildProbe child("exec-blocked", target, c.log.path);
         auto result = child.finish();
         REQUIRE(result.exit_code == 0);
