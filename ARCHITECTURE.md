@@ -12,7 +12,7 @@ belongs in [IPC.md](IPC.md).
 | `src/app/main.cpp`, `cli.*` | process startup, config selection, logging options, exec restart |
 | `src/app/lwmctl.cpp` | supported command-line IPC client |
 | `src/lwm/config/` | strict TOML parsing and built-in defaults |
-| `src/lwm/keybind/` | key binding normalization, grabs, and lookup |
+| `src/lwm/keybind/` | key grabs and lookup in the prepared configuration |
 | `src/lwm/layout/` | pure master-stack and monocle geometry, split ratios, hit testing |
 | `src/lwm/core/log.*` | Quill configuration, standard sinks, process-boundary lifecycle |
 | `src/lwm/core/types.hpp` | domain state: clients, monitors, workspaces, geometry |
@@ -137,6 +137,37 @@ rectangle and border, coalescing duplicate requests without reordering layout
 or client traversal. Off-screen hiding and conflicting ConfigureNotify events
 invalidate that cache. A client's ConfigureRequest creates a separate reply
 obligation, so skipping a geometry write never skips a required acknowledgement.
+
+## Pointer interactions
+
+One optional `Drag` owns an acquired pointer grab, the initiating button, and
+start/latest pointer coordinates. Its operation is either a window move/resize
+or a tiled split resize. Failed acquisition leaves domain state unchanged;
+tiled-to-floating conversion and exiting maximize happen only after acquisition.
+Window drags retain their expected kind and placement. Completion cancels them
+when the client disappears, becomes hidden/fullscreen/maximized, changes kind,
+or is moved elsewhere by another operation. Split drags retain the participants,
+workarea, workspace, and strategy defining their split; layout invalidation
+checks that this context still exists. Config reload, topology reconciliation,
+and restart cancel the interaction before replacing its context.
+
+`tiled_participants()` supplies the same ordered windows to arrangement, split
+hit-testing, and drop targeting: visible members of the current workspace,
+followed by visible sticky members of other workspaces. Fullscreen windows get
+fullscreen geometry rather than layout slots. Drops translate a visible slot
+back to a membership insertion point, excluding the dragged window. Hidden
+members and sticky guests are not reordered. Dropping on the guest suffix
+appends to the destination's current workspace, before its sticky guests in the
+resulting layout.
+
+Window movement and edge-aware resize share pure, saturating geometry arithmetic.
+Floating drags update the normal rectangle. Tiled movement is a temporary
+presentation override, written through `write_geometry()` during completion;
+it does not change membership until release. Cancellation removes that override
+without committing a reorder. Completed floating changes and split adjustments
+remain in place. The initiating button's release applies its final coordinates
+before ending the drag; unrelated releases do not end it. All endings release
+the pointer and request the normal crossing-event drain.
 
 ## State model
 
@@ -292,7 +323,7 @@ replies once after draining ready events.
 This is ordered completion, not rollback or an atomic X-server transaction.
 Helpers may read X hints, refresh workareas needed for placement, and register
 protocol resources while mutating state. Visibility, geometry, focus publication,
-stacking, and event delivery remain owned by completion. Tiled-resize motion
+stacking, and event delivery remain owned by completion. Drag motion
 compression happens in outer dispatch and stops at the first non-motion event.
 A drag handler never recursively dispatches another event.
 

@@ -397,6 +397,7 @@ std::expected<void, std::string> WindowManager::apply_config_reload(Config confi
             state.state = previous->state;
         scratchpads.push_back(std::move(state));
     }
+    end_drag(false);
     config_ = std::move(config);
     named_scratchpads_ = std::move(scratchpads);
     grab_buttons();
@@ -804,6 +805,7 @@ void WindowManager::claim_wm_ownership()
 
 void WindowManager::detect_monitors()
 {
+    end_drag(false);
     monitors_.clear();
 
     if (!conn_.has_randr())
@@ -1563,42 +1565,15 @@ void WindowManager::arrange_monitor(Monitor& monitor)
         monitor.current().windows.size()
     );
 
-    // Membership is unique by invariant. Visit the current workspace first,
-    // then visible sticky clients in the other workspaces, preserving layout order.
-    std::vector<xcb_window_t> visible_windows;
-    visible_windows.reserve(monitor.current().windows.size());
-    std::vector<xcb_window_t> visible_fullscreen_windows;
-    auto collect = [&](Workspace const& workspace, bool current)
-    {
-        for (xcb_window_t window : workspace.windows)
-        {
-            auto const& client = require_client(window);
-            if (client.hidden || (!current && !client.sticky))
-                continue;
-            (client.fullscreen ? visible_fullscreen_windows : visible_windows).push_back(window);
-        }
-    };
-    collect(monitor.current(), true);
-    for (size_t i = 0; i < monitor.workspaces.size(); ++i)
-        if (i != monitor.current_workspace)
-            collect(monitor.workspaces[i], false);
-
+    auto windows = tiled_participants(monitor);
     auto& ws = monitor.current();
-
-    auto slots = layout_.arrange(visible_windows.size(), monitor.working_area(), ws.layout_strategy, ws.split_ratios);
-    for (size_t i = 0; i < visible_windows.size(); ++i)
+    auto slots = layout_.arrange(windows.size(), monitor.working_area(), ws.layout_strategy, ws.split_ratios);
+    size_t slot = 0;
+    for (auto window : windows)
     {
-        auto& client = require_client(visible_windows[i]);
+        auto& client = require_client(window);
+        client.tiled_geometry = slots[slot++];
         request_geometry(client);
-        client.tiled_geometry = slots[i];
-    }
-
-    // Apply fullscreen geometry for visible fullscreen tiled windows
-    for (xcb_window_t window : visible_fullscreen_windows)
-    {
-        LWM_LOG_DEBUG("arrange_monitor: applying fullscreen geometry for {:#x}", window);
-        if (auto* client = get_client(window))
-            request_geometry(*client);
     }
 
     effects_.stacking = true;

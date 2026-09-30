@@ -1,4 +1,4 @@
-#include "x11_test_harness.hpp"
+#include "wm_observations.hpp"
 #include <X11/keysym.h>
 #include <catch2/catch_test_macros.hpp>
 #include <nlohmann/json.hpp>
@@ -329,4 +329,72 @@ TEST_CASE(
     xcb_destroy_window(conn.get(), dock);
     xcb_flush(conn.get());
     check({ 0, 0, 1280, 720, 1280, 0, 1280, 720 });
+}
+
+TEST_CASE(
+    "Integration: a pointer drag crosses outputs and releases on output removal",
+    "[integration][multioutput][.multioutput][drag]"
+)
+{
+    auto* server = std::getenv("LWM_TEST_XSERVER");
+    if (!server || std::strcmp(server, "Xorg") != 0)
+        SKIP("Select the owned Xorg dummy server for multi-output coverage");
+    auto env = TestEnvironment::create();
+    REQUIRE(env);
+    RestoreOutputs restore;
+    auto& conn = env->conn;
+    auto socket = wait_for_ipc_socket_path(conn);
+    REQUIRE(socket);
+    randr({ "--addmode", "DUMMY1", "1280x720" });
+    randr({ "--output", "DUMMY1", "--mode", "1280x720", "--right-of", "DUMMY0" });
+    REQUIRE(wait_for_condition([&] { return query(*socket, "workspace list")["monitors"].size() == 2; }, timeout));
+    auto window = create_window(conn, 10, 10, 200, 150);
+    set_window_type(conn, window, intern_atom(conn.get(), "_NET_WM_WINDOW_TYPE_DIALOG"));
+    map_window(conn, window);
+    REQUIRE(wait_for_active_window(conn, window, timeout));
+    auto monitor = [&]
+    {
+        auto snapshot = query(*socket, "window list");
+        for (auto const& client : snapshot["windows"])
+            if (client["id"] == window)
+                return client["monitor"].get<int>();
+        return -1;
+    };
+    REQUIRE(monitor() == 0);
+    send_client_message(conn, window, intern_atom(conn.get(), "_NET_WM_MOVERESIZE"), 100, 100, 8, 1);
+    observe_title_after_events(conn, window);
+    xcb_test_fake_input(conn.get(), XCB_MOTION_NOTIFY, 0, XCB_CURRENT_TIME, conn.root(), 1500, 200, 0);
+    observe_title_after_events(conn, window);
+    REQUIRE(monitor() == 1);
+    auto grab_status = [&]
+    {
+        auto* reply = xcb_grab_pointer_reply(
+            conn.get(),
+            xcb_grab_pointer(
+                conn.get(),
+                0,
+                conn.root(),
+                XCB_EVENT_MASK_POINTER_MOTION,
+                XCB_GRAB_MODE_ASYNC,
+                XCB_GRAB_MODE_ASYNC,
+                XCB_NONE,
+                XCB_NONE,
+                XCB_CURRENT_TIME
+            ),
+            nullptr
+        );
+        REQUIRE(reply);
+        auto status = reply->status;
+        free(reply);
+        return status;
+    };
+    REQUIRE(grab_status() == XCB_GRAB_STATUS_ALREADY_GRABBED);
+    randr({ "--output", "DUMMY1", "--off" });
+    REQUIRE(wait_for_condition(
+        [&] { return query(*socket, "workspace list")["monitors"].size() == 1 && monitor() == 0; },
+        timeout
+    ));
+    REQUIRE(grab_status() == XCB_GRAB_STATUS_SUCCESS);
+    xcb_ungrab_pointer(conn.get(), XCB_CURRENT_TIME);
+    xcb_flush(conn.get());
 }

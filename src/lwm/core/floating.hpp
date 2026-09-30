@@ -5,6 +5,22 @@
 
 namespace lwm::floating {
 
+enum class ResizeEdge : uint8_t
+{
+    None = 0,
+    Left = 1,
+    Right = 2,
+    Top = 4,
+    Bottom = 8
+};
+constexpr ResizeEdge operator|(ResizeEdge a, ResizeEdge b)
+{
+    return static_cast<ResizeEdge>(static_cast<uint8_t>(a) | static_cast<uint8_t>(b));
+}
+
+// No edges means move. Resizing keeps the opposite edge fixed, within X11 limits.
+Geometry drag_geometry(Geometry start, int32_t dx, int32_t dy, ResizeEdge edges);
+
 Geometry place_floating(Geometry area, uint16_t width, uint16_t height, std::optional<Geometry> parent);
 
 // Derive maximized presentation without overwriting normal placement.

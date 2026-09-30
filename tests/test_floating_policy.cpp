@@ -165,3 +165,24 @@ TEST_CASE("Runtime position hints distinguish assigned desktops from WM publicat
         REQUIRE(target.monitor == 0);
     }
 }
+
+TEST_CASE("Interactive resize clamps moving edges without displacing fixed edges", "[floating][drag]")
+{
+    using E = lwm::floating::ResizeEdge;
+    using lwm::floating::drag_geometry;
+    CHECK(drag_geometry({ 100, 200, 300, 400 }, 1000, 1000, E::Left | E::Top) == Geometry{ 399, 599, 1, 1 });
+    CHECK(
+        drag_geometry({ 100, 200, 300, 400 }, -100000, -100000, E::Left | E::Top)
+        == Geometry{ -32768, -32768, 33168, 33368 }
+    );
+    CHECK(
+        drag_geometry({ 30000, 30000, 60000, 60000 }, -100000, -100000, E::Left | E::Top)
+        == Geometry{ 24465, 24465, 65535, 65535 }
+    );
+    CHECK(
+        drag_geometry({ 100, 200, 300, 400 }, 100000, 100000, E::Right | E::Bottom)
+        == Geometry{ 100, 200, 65535, 65535 }
+    );
+    CHECK(drag_geometry({ 100, 200, 300, 400 }, -100000, -100000, E::Right | E::Bottom) == Geometry{ 100, 200, 1, 1 });
+    CHECK(drag_geometry({ 100, 200, 300, 400 }, 100000, -100000, E::None) == Geometry{ 32767, -32768, 300, 400 });
+}

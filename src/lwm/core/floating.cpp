@@ -30,6 +30,33 @@ Geometry clamp_geometry(Geometry area, Geometry geometry, int32_t target_x, int3
 
 } // namespace
 
+Geometry drag_geometry(Geometry start, int32_t dx, int32_t dy, ResizeEdge edges)
+{
+    if (edges == ResizeEdge::None)
+        return { geometry_coordinate(static_cast<int64_t>(start.x) + dx),
+                 geometry_coordinate(static_cast<int64_t>(start.y) + dy),
+                 start.width,
+                 start.height };
+    auto has = [edges](ResizeEdge edge) { return (static_cast<uint8_t>(edges) & static_cast<uint8_t>(edge)) != 0; };
+    auto resize_axis = [](int16_t& origin, uint16_t& extent, int32_t delta, bool leading, bool trailing)
+    {
+        if (leading)
+        {
+            int64_t far_edge = static_cast<int64_t>(origin) + extent;
+            // Bound the moving edge by both wire ranges and the fixed opposite edge.
+            int64_t lower = std::max<int64_t>(-32768, far_edge - 65535);
+            int64_t upper = std::min<int64_t>(32767, far_edge - 1);
+            origin = static_cast<int16_t>(std::clamp<int64_t>(static_cast<int64_t>(origin) + delta, lower, upper));
+            extent = static_cast<uint16_t>(far_edge - origin);
+        }
+        else if (trailing)
+            extent = geometry_extent(static_cast<int64_t>(extent) + delta);
+    };
+    resize_axis(start.x, start.width, dx, has(ResizeEdge::Left), has(ResizeEdge::Right));
+    resize_axis(start.y, start.height, dy, has(ResizeEdge::Top), has(ResizeEdge::Bottom));
+    return start;
+}
+
 Geometry place_floating(Geometry area, uint16_t width, uint16_t height, std::optional<Geometry> parent)
 {
     int32_t target_x = 0;

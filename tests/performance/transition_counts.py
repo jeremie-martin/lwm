@@ -25,11 +25,39 @@ for name, result, arguments in [
     ("XInternAtom", WINDOW, [DISPLAY, c.c_char_p, INT]),
     ("XChangeProperty", INT, [DISPLAY, WINDOW, WINDOW, WINDOW, INT, INT, c.c_void_p, INT]),
     ("XCloseDisplay", INT, [DISPLAY]),
+    ("XSendEvent", INT, [DISPLAY, WINDOW, INT, c.c_long, c.c_void_p]),
+    ("XGetGeometry", INT, [DISPLAY, WINDOW, c.POINTER(WINDOW), c.POINTER(INT), c.POINTER(INT),
+                           c.POINTER(c.c_uint), c.POINTER(c.c_uint), c.POINTER(c.c_uint), c.POINTER(c.c_uint)]),
     ("XWarpPointer", INT, [DISPLAY, WINDOW, WINDOW, INT, INT, c.c_uint, c.c_uint, INT, INT]),
 ]:
     function = getattr(X, name)
     function.restype = result
     function.argtypes = arguments
+
+
+class PointerEvent(c.Structure):
+    _fields_ = [("type", INT), ("serial", c.c_ulong), ("send_event", INT),
+                ("display", DISPLAY), ("window", WINDOW), ("root", WINDOW),
+                ("subwindow", WINDOW), ("time", c.c_ulong), ("x", INT), ("y", INT),
+                ("x_root", INT), ("y_root", INT), ("state", c.c_uint),
+                ("button", c.c_uint), ("same_screen", INT)]
+
+
+def pointer(display, root, kind, x, y, child=0):
+    event = PointerEvent(type=kind, display=display, window=root, root=root,
+                         subwindow=child, x=x, y=y, x_root=x, y_root=y,
+                         state=64, button=0 if kind == 6 else 1, same_screen=1)
+    mask = 64 if kind == 6 else (4 if kind == 4 else 8)
+    X.XSendEvent(display, root, 0, mask, c.byref(event))
+
+
+def position(display, window):
+    root, x, y = WINDOW(), INT(), INT()
+    width, height, border, depth = (c.c_uint() for _ in range(4))
+    if not X.XGetGeometry(display, window, c.byref(root), c.byref(x), c.byref(y),
+                          c.byref(width), c.byref(height), c.byref(border), c.byref(depth)):
+        raise RuntimeError("Missing drag window")
+    return x.value, y.value
 
 
 def stop(process):
@@ -136,8 +164,9 @@ def measure(binary, library, scenario, operations):
         client_count = 200 if scenario == "workspace" else 10
         for index in range(client_count):
             window = X.XCreateSimpleWindow(display, root, 10 + index % 10 * 20, 10 + index % 10 * 20, 300, 200, 0, 0, 0)
-            value = WINDOW(dialog)
-            X.XChangeProperty(display, window, window_type, atom_type, 32, 0, c.byref(value), 1)
+            if not scenario.startswith("tiled_drag"):
+                value = WINDOW(dialog)
+                X.XChangeProperty(display, window, window_type, atom_type, 32, 0, c.byref(value), 1)
             X.XMapWindow(display, window)
             windows.append(window)
         X.XSync(display, 0)
@@ -145,12 +174,25 @@ def measure(binary, library, scenario, operations):
         target = windows[0]
         ipc(path, f"focus window={target}")
         name_atom, utf8 = atom("_NET_WM_NAME"), atom("UTF8_STRING")
+        dragging = "drag" in scenario
+        if dragging:
+            pointer(display, root, 4, 100, 100, target)
+            marker = c.create_string_buffer(b"drag-started")
+            X.XChangeProperty(display, target, name_atom, utf8, 8, 0, marker, 12)
+            X.XSync(display, 0)
+            wait(lambda: any(client["id"] == target and client["title"] == "drag-started"
+                             for client in json.loads(ipc(path, "window list"))["windows"]), wm, log_path)
         time.sleep(0.05)
+        start_position = position(display, target) if dragging else None
         before = struct.unpack("=6Q", counts_path.read_bytes())
         for index in range(operations):
             if scenario == "workspace":
                 ipc(path, f"workspace switch {index % 2}")
                 continue
+            if dragging:
+                pointer(display, root, 6, 101 + index, 101 + index)
+                if scenario.endswith("burst") and index != operations - 1:
+                    continue
             title = f"title-{index}"
             value = c.create_string_buffer(title.encode())
             X.XChangeProperty(display, target, name_atom, utf8, 8, 0, value, len(title))
@@ -161,12 +203,23 @@ def measure(binary, library, scenario, operations):
                     if client["id"] != target or client["title"] != title:
                         continue
                     enabled = index % 2 == 0
-                    return (scenario == "metadata" or client["sticky"] == enabled) and (
+                    return (scenario == "metadata" or dragging or client["sticky"] == enabled) and (
                         scenario != "sticky_fullscreen" or client["fullscreen"] == enabled
                     )
                 return False
             wait(settled, wm, log_path)
 
+        if dragging:
+            expected = tuple(value + operations for value in start_position)
+            if position(display, target) != expected:
+                raise AssertionError(f"Drag did not reach its final position: {position(display, target)} != {expected}")
+            # A title event after release establishes completion, including a tiled drop.
+            pointer(display, root, 5, 100 + operations, 100 + operations)
+            marker = c.create_string_buffer(b"drag-finished")
+            X.XChangeProperty(display, target, name_atom, utf8, 8, 0, marker, 13)
+            X.XSync(display, 0)
+            wait(lambda: any(client["id"] == target and client["title"] == "drag-finished"
+                             for client in json.loads(ipc(path, "window list"))["windows"]), wm, log_path)
         time.sleep(0.05)
         after = struct.unpack("=6Q", counts_path.read_bytes())
         names = ("get_property", "geometry_configure", "visibility_barrier", "query_tree", "flush", "get_geometry")
@@ -185,6 +238,7 @@ def main():
         subprocess.run(["cc", "-shared", "-fPIC", "-O2", "-o", str(library),
                         str(Path(__file__).with_name("xcb_counts.c")), "-ldl"], check=True)
         scenarios = [(name, 200) for name in ("metadata", "sticky", "sticky_fullscreen", "workspace")]
+        scenarios += [(name, 200) for name in ("floating_drag", "floating_drag_burst", "tiled_drag", "tiled_drag_burst")]
         scenarios += [("dock_startup", count) for count in (10, 40)]
         for scenario, operations in scenarios:
             result = measure(binary, library, scenario, operations)
@@ -196,6 +250,12 @@ def main():
                         raise AssertionError("Repeated dock reads or inactive tracer: " + json.dumps(result))
                     if counts["get_geometry"] != 1:
                         raise AssertionError("Dock refresh must share one root geometry read: " + json.dumps(result))
+                    continue
+                if "drag" in scenario:
+                    if not 1 <= counts["geometry_configure"] <= operations + 20:
+                        raise AssertionError("Inactive or excessive drag geometry: " + json.dumps(result))
+                    if counts["visibility_barrier"] > 2 or counts["query_tree"] > 2:
+                        raise AssertionError("Per-motion reconciliation: " + json.dumps(result))
                     continue
                 operations_flush_budget = result["operations"] * 20
                 reads = result["operations"] * (1 if scenario == "metadata" else 2)

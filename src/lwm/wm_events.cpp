@@ -512,55 +512,30 @@ void WindowManager::handle_button_press(xcb_button_press_event_t const& e)
         if (from_window_grab)
             allow_window_grab(XCB_ALLOW_ASYNC_POINTER);
 
-        if (binding.action == MouseAction::DragWindow)
+        if (binding.action == MouseAction::DragWindow && (is_floating || is_tiled))
         {
-            if (is_floating)
-            {
-                focus_any_window(target);
-                begin_floating_move(target, e.root_x, e.root_y);
-                return true;
-            }
-            if (is_tiled)
-            {
-                focus_any_window(target);
-                begin_tiled_drag(target, e.root_x, e.root_y);
-                return true;
-            }
+            begin_window_drag(target, e.root_x, e.root_y, e.detail);
+            return true;
         }
-        else if (binding.action == MouseAction::ResizeFloating)
+        if (binding.action == MouseAction::ResizeFloating)
         {
-            if (is_floating)
-            {
-                focus_any_window(target);
-                begin_floating_resize(target, e.root_x, e.root_y);
-                return true;
-            }
-            // For tiled windows or root: try tiled split resize first
-            if (auto border_hit = try_hit_split_border(e.root_x, e.root_y))
-            {
-                begin_tiled_resize(border_hit->hit, border_hit->monitor_idx, e.root_x, e.root_y);
-                return true;
-            }
-            // Fallback: convert tiled to floating and resize
-            if (is_tiled)
-            {
-                if (client->fullscreen || client->iconic || showing_desktop_)
+            // Tiled/root clicks prefer a split; otherwise resize a floating window
+            // or convert a tile after successfully acquiring the pointer.
+            if (!is_floating)
+                if (auto hit = try_hit_split_border(e.root_x, e.root_y))
+                {
+                    begin_tiled_resize(hit->hit, hit->monitor_idx, e.root_x, e.root_y, e.detail);
                     return true;
-
-                size_t monitor_idx = client->monitor;
-                if (monitor_idx >= monitors_.size())
-                    return true;
-
-                convert_window_to_floating(target);
-                auto* c = get_client(target);
-                if (!c || c->kind() != Client::Kind::Floating)
-                    return true;
-
-                invalidate_monitor(monitor_idx);
-                effects_.drain_crossing = true;
-
-                focus_any_window(target);
-                begin_floating_resize(target, e.root_x, e.root_y);
+                }
+            if (is_floating || is_tiled)
+            {
+                begin_window_drag(
+                    target,
+                    e.root_x,
+                    e.root_y,
+                    e.detail,
+                    floating::ResizeEdge::Right | floating::ResizeEdge::Bottom
+                );
                 return true;
             }
         }
@@ -629,7 +604,7 @@ void WindowManager::handle_button_press(xcb_button_press_event_t const& e)
                     return;
                 }
 
-                begin_tiled_resize(border_hit->hit, border_hit->monitor_idx, e.root_x, e.root_y);
+                begin_tiled_resize(border_hit->hit, border_hit->monitor_idx, e.root_x, e.root_y, e.detail);
                 return;
             }
         }
@@ -668,7 +643,9 @@ void WindowManager::handle_button_release(xcb_button_release_event_t const& e)
     if (!drag_active())
         return;
 
-    record_drag_position(e.root_x, e.root_y);
+    if (drag_->button && drag_->button != e.detail)
+        return;
+    update_drag(e.root_x, e.root_y);
     end_drag();
 }
 
@@ -1243,28 +1220,34 @@ void WindowManager::handle_moveresize_window(xcb_client_message_event_t const& e
 
 void WindowManager::handle_wm_moveresize(xcb_client_message_event_t const& e)
 {
-    auto const* client = get_client(e.window);
-    if (!client || client->kind() != Client::Kind::Floating)
-        return;
-
-    int16_t x_root = geometry_coordinate(static_cast<int32_t>(e.data.data32[0]));
-    int16_t y_root = geometry_coordinate(static_cast<int32_t>(e.data.data32[1]));
     uint32_t direction = e.data.data32[2];
-
     if (direction == 11)
     {
-        end_drag();
+        if (drag_)
+            if (auto const* move = std::get_if<WindowDrag>(&drag_->operation); move && move->window == e.window)
+                end_drag(false);
+        return;
     }
-    else if (direction == 8)
-    {
-        focus_any_window(e.window);
-        begin_floating_move(e.window, x_root, y_root);
-    }
-    else if (direction <= 7)
-    {
-        focus_any_window(e.window);
-        begin_floating_resize(e.window, x_root, y_root);
-    }
+    auto const* client = get_client(e.window);
+    if (!client || client->kind() != Client::Kind::Floating || direction > 8 || e.data.data32[3] > 255)
+        return;
+    using Edge = floating::ResizeEdge;
+    static constexpr Edge edges[] = { Edge::Top | Edge::Left,
+                                      Edge::Top,
+                                      Edge::Top | Edge::Right,
+                                      Edge::Right,
+                                      Edge::Bottom | Edge::Right,
+                                      Edge::Bottom,
+                                      Edge::Bottom | Edge::Left,
+                                      Edge::Left,
+                                      Edge::None };
+    begin_window_drag(
+        e.window,
+        geometry_coordinate(static_cast<int32_t>(e.data.data32[0])),
+        geometry_coordinate(static_cast<int32_t>(e.data.data32[1])),
+        static_cast<uint8_t>(e.data.data32[3]),
+        edges[direction]
+    );
 }
 
 void WindowManager::handle_showing_desktop(xcb_client_message_event_t const& e)

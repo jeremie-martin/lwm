@@ -357,7 +357,8 @@ TEST_CASE(
     REQUIRE(wait_for_active_window(conn, w2, kTimeout));
     send_client_message(conn, w1, net_active_window, 1, 2500, 0, 0, 0);
     REQUIRE(wait_for_active_window(conn, w1, kTimeout));
-    REQUIRE_FALSE(has_state(conn, w1, net_wm_state_demands_attention));
+    // Active-window publication precedes the deferred _NET_WM_STATE write.
+    REQUIRE(wait_for_condition([&] { return !has_state(conn, w1, net_wm_state_demands_attention); }, kTimeout));
 
     destroy_window(conn, w2);
     destroy_window(conn, w1);

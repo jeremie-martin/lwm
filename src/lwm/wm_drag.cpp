@@ -1,35 +1,23 @@
-// Drag lifecycle: begin_* -> update_drag -> end_drag.
-// Floating move/resize, tiled reorder, and split resize share this state machine.
-
 #include "lwm/core/focus.hpp"
 #include "wm.hpp"
-#include <unordered_set>
+#include <utility>
 
 namespace lwm {
-
-namespace {
-
-template <class... Ts> struct Overloaded : Ts...
-{
-    using Ts::operator()...;
-};
-
-template <class... Ts> Overloaded(Ts...) -> Overloaded<Ts...>;
-
-} // namespace
 
 void WindowManager::set_root_cursor(xcb_cursor_t cursor)
 {
     if (cursor == current_root_cursor_)
         return;
-    uint32_t cursor_val = cursor;
-    xcb_change_window_attributes(conn_.get(), conn_.screen()->root, XCB_CW_CURSOR, &cursor_val);
+    uint32_t value = cursor;
+    xcb_change_window_attributes(conn_.get(), conn_.screen()->root, XCB_CW_CURSOR, &value);
     current_root_cursor_ = cursor;
 }
 
-void WindowManager::grab_pointer_for_drag(xcb_cursor_t cursor)
+bool WindowManager::grab_pointer_for_drag(xcb_cursor_t cursor)
 {
-    xcb_grab_pointer(
+    if (drag_active())
+        return false;
+    auto cookie = xcb_grab_pointer(
         conn_.get(),
         0,
         conn_.screen()->root,
@@ -40,325 +28,241 @@ void WindowManager::grab_pointer_for_drag(xcb_cursor_t cursor)
         cursor,
         XCB_CURRENT_TIME
     );
-    conn_.flush();
+    auto* reply = xcb_grab_pointer_reply(conn_.get(), cookie, nullptr);
+    bool acquired = reply && reply->status == XCB_GRAB_STATUS_SUCCESS;
+    free(reply);
+    return acquired;
 }
 
-size_t WindowManager::visible_tiled_count(Monitor const& monitor) const
+std::vector<xcb_window_t> WindowManager::tiled_participants(Monitor const& monitor) const
 {
-    size_t count = 0;
-    std::unordered_set<xcb_window_t> seen;
-    // workspace.windows entries are guaranteed managed; assert_workspace_consistency enforces it.
-    auto const& ws = monitor.current();
-    for (auto w : ws.windows)
+    std::vector<xcb_window_t> windows;
+    windows.reserve(monitor.current().windows.size());
+    auto collect = [&](Workspace const& workspace, bool current)
     {
-        auto const& c = require_client(w);
-        if (!c.fullscreen && !c.hidden)
+        for (auto window : workspace.windows)
         {
-            ++count;
-            seen.insert(w);
+            auto const& client = require_client(window);
+            if (!client.hidden && !client.fullscreen && (current || client.sticky))
+                windows.push_back(window);
         }
-    }
-    for (auto const& other_ws : monitor.workspaces)
-    {
-        if (&other_ws == &ws)
-            continue;
-        for (auto w : other_ws.windows)
-        {
-            if (seen.contains(w))
-                continue;
-            auto const& c = require_client(w);
-            if (c.sticky && !c.hidden && !c.fullscreen)
-            {
-                ++count;
-                seen.insert(w);
-            }
-        }
-    }
-    return count;
+    };
+    // Unique membership is an invariant; current workspace precedes sticky guests.
+    collect(monitor.current(), true);
+    for (size_t i = 0; i < monitor.workspaces.size(); ++i)
+        if (i != monitor.current_workspace)
+            collect(monitor.workspaces[i], false);
+    return windows;
 }
 
 std::optional<WindowManager::SplitBorderHit> WindowManager::try_hit_split_border(int16_t x, int16_t y)
 {
-    Monitor* mon = monitor_at_point(x, y);
-    if (!mon)
+    auto* monitor = monitor_at_point(x, y);
+    if (!monitor)
         return std::nullopt;
-
-    size_t vis_count = visible_tiled_count(*mon);
-    if (vis_count < 2)
-        return std::nullopt;
-
-    auto& ws = mon->current();
-    auto hit = layout_.hit_test(vis_count, mon->working_area(), ws.layout_strategy, ws.split_ratios, x, y);
+    auto& ws = monitor->current();
+    auto hit = layout_.hit_test(
+        tiled_participants(*monitor).size(),
+        monitor->working_area(),
+        ws.layout_strategy,
+        ws.split_ratios,
+        x,
+        y
+    );
     if (!hit)
         return std::nullopt;
-
-    return SplitBorderHit{ *hit, monitor_index(*mon) };
+    return SplitBorderHit{ *hit, monitor_index(*monitor) };
 }
 
-bool WindowManager::drag_active() const { return !std::holds_alternative<NoDrag>(drag_state_); }
-
-void WindowManager::begin_floating_move(xcb_window_t window, int16_t root_x, int16_t root_y)
+void WindowManager::begin_window_drag(
+    xcb_window_t window,
+    int16_t x,
+    int16_t y,
+    uint8_t button,
+    floating::ResizeEdge edges
+)
 {
     auto* client = get_client(window);
-    if (!client)
+    if (!client || client->hidden || client->iconic || client->fullscreen || showing_desktop_
+        || (client->kind() != Client::Kind::Floating && client->kind() != Client::Kind::Tiled))
         return;
-    if (client->fullscreen)
+    if (!grab_pointer_for_drag())
         return;
-    if (client->kind() != Client::Kind::Floating)
-        return;
-
-    if (client->maximized_horz || client->maximized_vert)
+    focus_any_window(window);
+    // A tiled resize away from a split becomes a floating resize, after acquisition.
+    if (client->kind() == Client::Kind::Tiled && edges != floating::ResizeEdge::None)
     {
-        floating_geometry(*client) = current_window_geometry(window);
+        convert_window_to_floating(window);
+        invalidate_monitor(client->monitor);
+    }
+    if (client->kind() == Client::Kind::Floating && (client->maximized_horz || client->maximized_vert))
+    {
+        floating_geometry(*client) = presentation_geometry(*client);
         set_window_maximized(*client, false, false);
     }
-    drag_state_ = FloatingMove{ window, root_x, root_y, root_x, root_y, floating_geometry(*client) };
-
-    grab_pointer_for_drag();
+    Geometry start = client->kind() == Client::Kind::Floating ? floating_geometry(*client) : client->tiled_geometry;
+    drag_ = Drag{
+        WindowDrag{ window, client->kind(), client->monitor, client->workspace, start, edges },
+        x, y, x, y, button
+    };
 }
 
-void WindowManager::begin_floating_resize(xcb_window_t window, int16_t root_x, int16_t root_y)
+void WindowManager::begin_tiled_resize(SplitHitResult const& hit, size_t monitor, int16_t x, int16_t y, uint8_t button)
 {
-    auto* client = get_client(window);
-    if (!client)
+    auto& mon = monitors_[monitor];
+    auto participants = tiled_participants(mon);
+    auto cursor = hit.direction == SplitDirection::Horizontal ? cursor_resize_h_ : cursor_resize_v_;
+    if (!grab_pointer_for_drag(cursor))
         return;
-    if (client->fullscreen)
-        return;
-    if (client->kind() != Client::Kind::Floating)
-        return;
+    drag_ = Drag{
+        TiledResize{ monitor,
+                    mon.current_workspace,
+                    hit, mon.working_area(),
+                    mon.current().layout_strategy,
+                    std::move(participants) },
+        x,
+        y,
+        x,
+        y,
+        button
+    };
+}
 
-    if (client->maximized_horz || client->maximized_vert)
+void WindowManager::validate_drag(bool layout_changed)
+{
+    if (!drag_)
+        return;
+    bool valid = false;
+    if (auto const* window = std::get_if<WindowDrag>(&drag_->operation))
     {
-        floating_geometry(*client) = current_window_geometry(window);
-        set_window_maximized(*client, false, false);
+        auto const* client = get_client(window->window);
+        valid = client && client->kind() == window->kind && !client->hidden && !client->iconic && !client->fullscreen
+            && !client->maximized_horz && !client->maximized_vert && client->monitor == window->monitor
+            && client->workspace == window->workspace && !showing_desktop_;
     }
-    drag_state_ = FloatingResize{ window, root_x, root_y, root_x, root_y, floating_geometry(*client) };
-
-    grab_pointer_for_drag();
-}
-
-void WindowManager::begin_tiled_drag(xcb_window_t window, int16_t root_x, int16_t root_y)
-{
-    if (showing_desktop_)
-        return;
-    auto const* client = get_client(window);
-    if (!client)
-        return;
-    if (client->fullscreen)
-        return;
-    if (client->kind() != Client::Kind::Tiled)
-        return;
-
-    drag_state_ = TiledMove{ window, root_x, root_y, root_x, root_y, client->tiled_geometry };
-
-    grab_pointer_for_drag();
-}
-
-void WindowManager::begin_tiled_resize(SplitHitResult const& hit, size_t monitor_idx, int16_t root_x, int16_t root_y)
-{
-    drag_state_ = TiledResize{ monitor_idx, monitors_[monitor_idx].current_workspace,
-                               hit.address, hit.direction,
-                               hit.ratio,   hit.available_extent,
-                               root_x,      root_y,
-                               root_x,      root_y };
-
-    xcb_cursor_t resize_cursor = (hit.direction == SplitDirection::Horizontal) ? cursor_resize_h_ : cursor_resize_v_;
-    grab_pointer_for_drag(resize_cursor);
-}
-
-void WindowManager::record_drag_position(int16_t root_x, int16_t root_y)
-{
-    std::visit(
-        Overloaded{ [](NoDrag&) {},
-                    [=](auto& drag)
-                    {
-                        drag.last_root_x = root_x;
-                        drag.last_root_y = root_y;
-                    } },
-        drag_state_
-    );
-}
-
-void WindowManager::update_drag(int16_t root_x, int16_t root_y)
-{
-    if (!drag_active())
-        return;
-
-    bool abort_drag = false;
-    auto update_tiled_resize = [&](TiledResize& tr)
+    else
     {
-        tr.last_root_x = root_x;
-        tr.last_root_y = root_y;
-
-        auto& live = tr;
-        if (live.monitor_idx >= monitors_.size() || monitors_[live.monitor_idx].current_workspace != live.workspace_idx)
+        if (!layout_changed)
+            return;
+        auto const& split = std::get<TiledResize>(drag_->operation);
+        if (split.monitor < monitors_.size())
         {
-            abort_drag = true;
+            auto const& mon = monitors_[split.monitor];
+            valid = mon.current_workspace == split.workspace && mon.working_area() == split.area
+                && mon.current().layout_strategy == split.strategy && tiled_participants(mon) == split.participants;
+        }
+    }
+    if (!valid)
+        end_drag(false);
+}
+
+void WindowManager::update_drag(int16_t x, int16_t y)
+{
+    if (!drag_)
+        return;
+    drag_->last_x = x;
+    drag_->last_y = y;
+    int32_t dx = static_cast<int32_t>(x) - drag_->start_x;
+    int32_t dy = static_cast<int32_t>(y) - drag_->start_y;
+    if (auto* window = std::get_if<WindowDrag>(&drag_->operation))
+    {
+        auto* client = get_client(window->window);
+        if (!client || client->kind() != window->kind)
+        {
+            end_drag(false);
             return;
         }
-
-        int32_t pixel_delta;
-        if (live.direction == SplitDirection::Horizontal)
-            pixel_delta = static_cast<int32_t>(root_x) - static_cast<int32_t>(live.start_root_x);
-        else
-            pixel_delta = static_cast<int32_t>(root_y) - static_cast<int32_t>(live.start_root_y);
-
-        if (live.available_extent <= 0)
-            return;
-
-        double ratio_delta = static_cast<double>(pixel_delta) / static_cast<double>(live.available_extent);
-        double min_r = config_.layout.min_ratio;
-        double new_ratio = std::clamp(live.start_ratio + ratio_delta, min_r, 1.0 - min_r);
-
-        auto& ws = monitors_[live.monitor_idx].current();
-        auto it = ws.split_ratios.find(live.address);
-        if (it != ws.split_ratios.end() && it->second == new_ratio)
-            return;
-
-        ws.split_ratios[live.address] = new_ratio;
-        invalidate_monitor(live.monitor_idx);
-        return;
-    };
-
-    auto update_tiled_move = [&](TiledMove& drag)
-    {
-        drag.last_root_x = root_x;
-        drag.last_root_y = root_y;
-        int32_t dx = static_cast<int32_t>(root_x) - static_cast<int32_t>(drag.start_root_x);
-        int32_t dy = static_cast<int32_t>(root_y) - static_cast<int32_t>(drag.start_root_y);
-        int32_t new_x = static_cast<int32_t>(drag.start_geometry.x) + dx;
-        int32_t new_y = static_cast<int32_t>(drag.start_geometry.y) + dy;
-        uint32_t values[] = { static_cast<uint32_t>(new_x), static_cast<uint32_t>(new_y) };
-        xcb_configure_window(conn_.get(), drag.window, XCB_CONFIG_WINDOW_X | XCB_CONFIG_WINDOW_Y, values);
-        conn_.flush();
-        return;
-    };
-
-    auto update_floating = [&](auto& drag, bool resizing)
-    {
-        drag.last_root_x = root_x;
-        drag.last_root_y = root_y;
-
-        auto* client = get_client(drag.window);
-        if (!client || client->kind() != Client::Kind::Floating)
-            return;
-
-        int32_t dx = static_cast<int32_t>(root_x) - static_cast<int32_t>(drag.start_root_x);
-        int32_t dy = static_cast<int32_t>(root_y) - static_cast<int32_t>(drag.start_root_y);
-
-        Geometry updated = drag.start_geometry;
-        if (resizing)
+        if (window->kind == Client::Kind::Floating)
         {
-            int32_t new_w = static_cast<int32_t>(drag.start_geometry.width) + dx;
-            int32_t new_h = static_cast<int32_t>(drag.start_geometry.height) + dy;
-            updated.width = geometry_extent(new_w);
-            updated.height = geometry_extent(new_h);
+            auto updated = floating::drag_geometry(window->start_geometry, dx, dy, window->edges);
+            if (updated == floating_geometry(*client))
+                return;
+            floating_geometry(*client) = updated;
+            update_floating_monitor_for_geometry(*client);
+            window->monitor = client->monitor;
+            window->workspace = client->workspace;
+            if (active_window_ == client->id && focused_monitor_ != client->monitor)
+            {
+                focused_monitor_ = client->monitor;
+                request_current_desktop_update();
+            }
         }
-        else
-        {
-            updated.x = geometry_coordinate(static_cast<int32_t>(drag.start_geometry.x) + dx);
-            updated.y = geometry_coordinate(static_cast<int32_t>(drag.start_geometry.y) + dy);
-        }
-
-        floating_geometry(*client) = updated;
-
         request_geometry(*client);
-        update_floating_monitor_for_geometry(*client);
-
-        if (active_window_ == drag.window)
-        {
-            focused_monitor_ = client->monitor;
-            request_current_desktop_update();
-        }
-
-        conn_.flush();
-    };
-
-    std::visit(
-        Overloaded{
-            [](NoDrag&) {},
-            update_tiled_resize,
-            update_tiled_move,
-            [&](FloatingMove& drag) { update_floating(drag, false); },
-            [&](FloatingResize& drag) { update_floating(drag, true); },
-        },
-        drag_state_
-    );
-
-    if (abort_drag)
-        end_drag();
-}
-
-void WindowManager::end_drag()
-{
-    if (!drag_active())
-        return;
-
-    bool was_tiled_resize = std::holds_alternative<TiledResize>(drag_state_);
-
-    auto finish_tiled_move = [&](TiledMove const& drag)
+    }
+    else
     {
-        xcb_window_t window = drag.window;
-        auto* client = get_client(window);
-        if (!client || client->kind() != Client::Kind::Tiled)
+        auto const& resize = std::get<TiledResize>(drag_->operation);
+        auto const& split = resize.split;
+        if (split.available_extent <= 0)
             return;
-
-        size_t source_monitor_idx = client->monitor;
-        size_t source_workspace_idx = client->workspace;
-        auto target_monitor = focus::monitor_index_at_point(monitors_, drag.last_root_x, drag.last_root_y);
-        size_t target_monitor_idx = target_monitor.value_or(source_monitor_idx);
-        size_t target_workspace_idx = monitors_[target_monitor_idx].current_workspace;
-        bool same_workspace = source_monitor_idx == target_monitor_idx && source_workspace_idx == target_workspace_idx;
-
-        auto& source_ws = monitors_[source_monitor_idx].workspaces[source_workspace_idx];
-        auto source_it = source_ws.find_window(window);
-        if (source_it == source_ws.windows.end())
+        int32_t delta = split.direction == SplitDirection::Horizontal ? dx : dy;
+        double ratio = std::clamp(
+            split.ratio + static_cast<double>(delta) / split.available_extent,
+            config_.layout.min_ratio,
+            1.0 - config_.layout.min_ratio
+        );
+        auto& ratios = monitors_[resize.monitor].workspaces[resize.workspace].split_ratios;
+        auto it = ratios.find(split.address);
+        if (it != ratios.end() && it->second == ratio)
             return;
+        ratios[split.address] = ratio;
+        invalidate_monitor(resize.monitor);
+    }
+}
 
-        auto& target_ws = monitors_[target_monitor_idx].workspaces[target_workspace_idx];
-        size_t layout_count = target_ws.windows.size();
-        if (!same_workspace)
-            layout_count += 1;
-
-        size_t target_index = 0;
-        if (layout_count > 0)
-        {
-            target_index = layout_.drop_target_index(
-                layout_count,
-                monitors_[target_monitor_idx].working_area(),
-                target_ws.layout_strategy,
-                target_ws.split_ratios,
-                drag.last_root_x,
-                drag.last_root_y
-            );
-        }
-
-        if (move_tiled_client_to_workspace(*client, target_monitor_idx, target_workspace_idx, target_index))
-        {
-            workspace_policy::set_workspace_focus(target_ws, window);
-            effects_.drain_crossing = true;
-            focus_any_window(window);
-        }
-    };
-
-    std::visit(
-        Overloaded{
-            [](NoDrag const&) {},
-            [&](TiledMove const& drag) { finish_tiled_move(drag); },
-            [](TiledResize const&) {},
-            [](FloatingMove const&) {},
-            [](FloatingResize const&) {},
-        },
-        drag_state_
-    );
-
-    drag_state_ = NoDrag{};
+void WindowManager::end_drag(bool commit)
+{
+    if (!drag_)
+        return;
+    auto drag = std::exchange(drag_, std::nullopt);
     xcb_ungrab_pointer(conn_.get(), XCB_CURRENT_TIME);
-
-    if (was_tiled_resize && cursor_default_ != XCB_NONE)
+    if (cursor_default_ != XCB_NONE)
         set_root_cursor(cursor_default_);
-
     effects_.drain_crossing = true;
+
+    auto const* move = std::get_if<WindowDrag>(&drag->operation);
+    if (!move || move->kind != Client::Kind::Tiled)
+        return;
+    auto* client = get_client(move->window);
+    if (!client || client->kind() != Client::Kind::Tiled)
+        return;
+    // Ending the preview always restores layout geometry, even if no drop is committed.
+    request_geometry(*client);
+    if (!commit)
+        return;
+    auto target = focus::monitor_index_at_point(monitors_, drag->last_x, drag->last_y).value_or(client->monitor);
+    auto& mon = monitors_[target];
+    auto& ws = mon.current();
+    auto participants = tiled_participants(mon);
+    std::erase(participants, client->id);
+    size_t slot = layout_.drop_target_index(
+        participants.size() + 1,
+        mon.working_area(),
+        ws.layout_strategy,
+        ws.split_ratios,
+        drag->last_x,
+        drag->last_y
+    );
+    // Layout slots are not membership indices: hidden members have no slot, and
+    // sticky guests belong to another workspace. Drops on the guest suffix append
+    // to the current workspace without moving the guests or hidden members.
+    xcb_window_t anchor =
+        slot < participants.size() && require_client(participants[slot]).workspace == mon.current_workspace
+        ? participants[slot]
+        : XCB_NONE;
+    size_t index = 0;
+    for (auto window : ws.windows)
+    {
+        if (window == anchor)
+            break;
+        if (window != client->id)
+            ++index;
+    }
+    if (move_tiled_client_to_workspace(*client, target, mon.current_workspace, index))
+    {
+        workspace_policy::set_workspace_focus(ws, client->id);
+        focus_any_window(client->id);
+    }
 }
 
-}
+} // namespace lwm

@@ -36,13 +36,21 @@ Geometry WindowManager::presentation_geometry(Client const& client) const
             client.maximized_horz,
             client.maximized_vert
         );
+    if (drag_)
+        if (auto const* move = std::get_if<WindowDrag>(&drag_->operation); move && move->window == client.id)
+            return floating::drag_geometry(
+                move->start_geometry,
+                static_cast<int32_t>(drag_->last_x) - drag_->start_x,
+                static_cast<int32_t>(drag_->last_y) - drag_->start_y,
+                move->edges
+            );
     return client.tiled_geometry;
 }
 
 void WindowManager::dispatch_event(xcb_generic_event_t const& event)
 {
     auto current = event;
-    if ((event.response_type & ~0x80) == XCB_MOTION_NOTIFY && std::holds_alternative<TiledResize>(drag_state_))
+    if ((event.response_type & ~0x80) == XCB_MOTION_NOTIFY && drag_active())
     {
         for (;;)
         {
@@ -115,6 +123,7 @@ void WindowManager::complete_transition()
     for (auto [monitor, preferred] : affected_monitors)
         if (monitor < monitors_.size())
             realize_visibility(monitor, preferred);
+    validate_drag(!affected_monitors.empty());
     if (auto const* active = get_client(active_window_);
         active && (!is_focus_eligible(*active) || !is_visible(*active)))
         repair_focus_after_visibility_change(focused_monitor_, false);
@@ -131,12 +140,14 @@ void WindowManager::complete_transition()
     if (!affected_monitors.empty())
     {
         for (auto const& [window, client] : clients_)
-            if (client.kind() == Client::Kind::Floating && affected_monitors.contains(client.monitor))
+            if ((client.kind() == Client::Kind::Floating || client.fullscreen)
+                && affected_monitors.contains(client.monitor))
                 request_geometry(client);
     }
     // The output cache coalesces duplicates without reordering geometry writes.
     // Keep a split resize's configure requests together on the server.
-    bool resizing_tiles = std::holds_alternative<TiledResize>(drag_state_) && !effects_.geometry.empty();
+    bool resizing_tiles =
+        (drag_ && std::holds_alternative<TiledResize>(drag_->operation)) && !effects_.geometry.empty();
     if (resizing_tiles)
         xcb_grab_server(conn_.get());
     for (auto window : effects_.geometry)

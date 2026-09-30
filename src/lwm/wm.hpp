@@ -4,6 +4,7 @@
 #include "lwm/core/connection.hpp"
 #include "lwm/core/events.hpp"
 #include "lwm/core/ewmh.hpp"
+#include "lwm/core/floating.hpp"
 #include "lwm/core/invariants.hpp"
 #include "lwm/core/ipc_server.hpp"
 #include "lwm/core/policy.hpp"
@@ -71,54 +72,33 @@ public:
     void prepare_restart();
 
 private:
-    struct NoDrag
-    { };
-
-    struct FloatingMove
+    struct WindowDrag
     {
-        xcb_window_t window = XCB_NONE;
-        int16_t start_root_x = 0;
-        int16_t start_root_y = 0;
-        int16_t last_root_x = 0;
-        int16_t last_root_y = 0;
+        xcb_window_t window;
+        Client::Kind kind;
+        size_t monitor;
+        size_t workspace;
         Geometry start_geometry;
-    };
-
-    struct FloatingResize
-    {
-        xcb_window_t window = XCB_NONE;
-        int16_t start_root_x = 0;
-        int16_t start_root_y = 0;
-        int16_t last_root_x = 0;
-        int16_t last_root_y = 0;
-        Geometry start_geometry;
-    };
-
-    struct TiledMove
-    {
-        xcb_window_t window = XCB_NONE;
-        int16_t start_root_x = 0;
-        int16_t start_root_y = 0;
-        int16_t last_root_x = 0;
-        int16_t last_root_y = 0;
-        Geometry start_geometry;
+        floating::ResizeEdge edges;
     };
 
     struct TiledResize
     {
-        size_t monitor_idx = 0;
-        size_t workspace_idx = 0; // abort drag if workspace changes
-        SplitAddress address{};
-        SplitDirection direction = SplitDirection::Horizontal;
-        double start_ratio = 0.5;
-        int32_t available_extent = 0; // total available pixels along split axis
-        int16_t start_root_x = 0;
-        int16_t start_root_y = 0;
-        int16_t last_root_x = 0;
-        int16_t last_root_y = 0;
+        size_t monitor;
+        size_t workspace;
+        SplitHitResult split;
+        Geometry area;
+        LayoutStrategy strategy;
+        std::vector<xcb_window_t> participants;
     };
 
-    using DragState = std::variant<NoDrag, FloatingMove, FloatingResize, TiledMove, TiledResize>;
+    struct Drag
+    {
+        std::variant<WindowDrag, TiledResize> operation;
+        int16_t start_x, start_y;
+        int16_t last_x, last_y;
+        uint8_t button; // Zero accepts any release (unspecified EWMH button).
+    };
 
     Config config_;
     Connection conn_;
@@ -183,7 +163,7 @@ private:
     uint32_t last_input_time_ = XCB_CURRENT_TIME;
     xcb_keysym_t last_toggle_keysym_ = XCB_NO_SYMBOL;
     xcb_timestamp_t last_toggle_release_time_ = 0;
-    DragState drag_state_;
+    std::optional<Drag> drag_;
 
     // Cursor resources for tiled resize hover feedback
     xcb_cursor_t cursor_default_ = XCB_NONE;
@@ -486,18 +466,22 @@ private:
     void send_configure_notify(xcb_window_t window, Geometry const& geom, uint16_t border_width);
     void request_configure_notify(Client const& client);
     void publish_configure_notify(Client const& client);
-    bool drag_active() const;
-    void begin_floating_move(xcb_window_t window, int16_t root_x, int16_t root_y);
-    void begin_floating_resize(xcb_window_t window, int16_t root_x, int16_t root_y);
-    void begin_tiled_drag(xcb_window_t window, int16_t root_x, int16_t root_y);
-    void begin_tiled_resize(SplitHitResult const& hit, size_t monitor_idx, int16_t root_x, int16_t root_y);
-    void record_drag_position(int16_t root_x, int16_t root_y);
-    void update_drag(int16_t root_x, int16_t root_y);
-    void end_drag();
-    void grab_pointer_for_drag(xcb_cursor_t cursor = XCB_NONE);
+    bool drag_active() const { return drag_.has_value(); }
+    void begin_window_drag(
+        xcb_window_t window,
+        int16_t x,
+        int16_t y,
+        uint8_t button,
+        floating::ResizeEdge edges = floating::ResizeEdge::None
+    );
+    void begin_tiled_resize(SplitHitResult const& hit, size_t monitor, int16_t x, int16_t y, uint8_t button);
+    void update_drag(int16_t x, int16_t y);
+    void end_drag(bool commit = true);
+    void validate_drag(bool layout_changed);
+    bool grab_pointer_for_drag(xcb_cursor_t cursor = XCB_NONE);
     void set_root_cursor(xcb_cursor_t cursor);
     void reset_split_ratio(SplitAddress address, size_t monitor_idx);
-    size_t visible_tiled_count(Monitor const& monitor) const;
+    std::vector<xcb_window_t> tiled_participants(Monitor const& monitor) const;
 
     struct SplitBorderHit
     {

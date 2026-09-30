@@ -437,7 +437,7 @@ void WindowManager::clean_restart_properties()
 void WindowManager::prepare_restart()
 {
 
-    end_drag();
+    end_drag(false);
     serialize_restart_state();
 
     // Move all hidden windows back on-screen so they're recoverable if restart fails.

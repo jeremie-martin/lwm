@@ -1325,17 +1325,13 @@ TEST_CASE("Integration: pointer resize saturates an oversized floating extent", 
     REQUIRE(geometry->width == 65530);
     auto atom = intern_atom(conn.get(), "_NET_WM_MOVERESIZE");
     send_client_message(conn, window, atom, 100, 100, 4);
-    REQUIRE(wait_for_condition(
-        [&]
-        {
-            // Repeated motion also handles the first event arriving before the grab.
-            xcb_test_fake_input(conn.get(), XCB_MOTION_NOTIFY, 0, XCB_CURRENT_TIME, conn.root(), 120, 100, 0);
-            xcb_flush(conn.get());
-            auto current = get_window_geometry(conn, window);
-            return current && current->width == 65535 && current->height == 50;
-        },
-        kTimeout
-    ));
+    observe_title_after_events(conn, window);
+    xcb_test_fake_input(conn.get(), XCB_MOTION_NOTIFY, 0, XCB_CURRENT_TIME, conn.root(), 120, 100, 0);
+    observe_title_after_events(conn, window);
+    auto resized = get_window_geometry(conn, window);
+    REQUIRE(resized);
+    CHECK(resized->width == 65535);
+    CHECK(resized->height == 50);
     send_client_message(conn, window, atom, 120, 100, 11);
     destroy_window(conn, window);
 }

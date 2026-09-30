@@ -123,7 +123,11 @@ changes must not rewrite unchanged geometry. A 200-client workspace workload
 also bounds flush calls to catch completion work repeated for each configure
 notification. Startup workloads with 10 and 40 docks bound property reads to
 catch repeated workarea scans during adoption and require one shared root-geometry
-read, independent of dock count. Omit `--check` to record counts without enforcing budgets. These are protocol-work budgets, not latency measurements; measure
+read, independent of dock count. Floating and tiled drag workloads send 200
+motions either individually or in a burst, verify the preview reaches the final
+position, and bound geometry writes and reconciliation. These use synthetic X
+events to control batching; integration tests separately exercise real XTEST
+button grabs. Omit `--check` to record counts without enforcing budgets. These are protocol-work budgets, not latency measurements; measure
 uninstrumented Release builds separately on an otherwise idle machine.
 
 To detect retained X-server clients across repeated restart and failed-exec recovery (also
