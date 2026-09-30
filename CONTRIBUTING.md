@@ -138,6 +138,11 @@ server interaction, not just selection. Latency is reported rather than used as 
 machine-dependent test threshold. A full traversal should visit every client. It defaults to `prev`, which permits
 equivalent-work comparisons with versions whose `next` command alternated between
 two windows; use `--direction next` to measure forward traversal.
+`--transients chain` and `--transients cycle` add reverse-registration parent
+relationships before measuring. For example, `--clients 10 40 100 --operations 200
+--transients cycle` exercises malformed cyclic hints. Compare ordinary clients
+for unchanged-work latency; cycle results also reflect the new deterministic
+ordering policy, so they do not isolate algorithm cost.
 
 To detect retained X-server clients across repeated restart and failed-exec recovery (also
 requires the libXRes runtime library):

@@ -1891,3 +1891,135 @@ focus_prev = true
     REQUIRE(wait_for_x_input_focus(conn, conn.root(), kTimeout));
     for (auto window : { sticky, a, b }) destroy_window(conn, window);
 }
+
+TEST_CASE(
+    "Integration: transient chains and cycles have stable server and published order",
+    "[integration][stacking][transient][stack_order]"
+)
+{
+    auto env = TestEnvironment::create();
+    if (!env)
+        SKIP("X11 unavailable");
+    auto& conn = env->conn;
+    xcb_warp_pointer(conn.get(), XCB_NONE, conn.root(), 0, 0, 0, 0, 0, 0);
+    xcb_flush(conn.get());
+    std::vector<xcb_window_t> windows;
+    for (int i = 0; i < 3; ++i)
+    {
+        auto w = create_window(conn, 20, 20, 200, 150);
+        set_window_type(conn, w, intern_atom(conn.get(), "_NET_WM_WINDOW_TYPE_DIALOG"));
+        map_window(conn, w);
+        windows.push_back(w);
+        REQUIRE(wait_for_active_window(conn, w, kTimeout));
+    }
+    auto [a, b, c] = std::tuple{ windows[0], windows[1], windows[2] };
+    auto require_order = [&](std::vector<xcb_window_t> const& expected)
+    {
+        observe_title_after_events(conn, c);
+        REQUIRE(wait_for_condition(
+            [&]
+            {
+                auto published = get_window_property_windows(
+                    conn.get(),
+                    conn.root(),
+                    intern_atom(conn.get(), "_NET_CLIENT_LIST_STACKING")
+                );
+                if (published != expected)
+                    return false;
+                auto* reply = xcb_query_tree_reply(conn.get(), xcb_query_tree(conn.get(), conn.root()), nullptr);
+                if (!reply)
+                    return false;
+                std::vector<xcb_window_t> actual;
+                auto* children = xcb_query_tree_children(reply);
+                for (int i = 0; i < xcb_query_tree_children_length(reply); ++i)
+                    if (std::ranges::find(windows, children[i]) != windows.end())
+                        actual.push_back(children[i]);
+                free(reply);
+                return actual == expected;
+            },
+            kTimeout
+        ));
+    };
+    set_transient_for(conn, a, b);
+    set_transient_for(conn, b, c);
+    require_order({ c, b, a });
+    set_transient_for(conn, c, a);
+    // a is the lowest base-ranked cycle member; ignore only its parent edge.
+    require_order({ a, c, b });
+    for (int i = 0; i < 3; ++i)
+    {
+        auto reply = run_lwmctl(env->wm, { "focus", "window=" + std::to_string(c) });
+        REQUIRE(reply);
+        REQUIRE(reply->exit_code == 0);
+        require_order({ a, c, b });
+    }
+    set_transient_for(conn, b, b);
+    require_order({ b, a, c });
+    set_transient_for(conn, b, 0x7fffffff);
+    require_order({ b, a, c });
+    set_transient_for(conn, c, b);
+    for (auto target : { a, c })
+    {
+        auto reply = run_lwmctl(env->wm, { "focus", "window=" + std::to_string(target) });
+        REQUIRE(reply);
+        REQUIRE(reply->exit_code == 0);
+        require_order(target == a ? std::vector<xcb_window_t>{ b, c, a } : std::vector<xcb_window_t>{ b, a, c });
+    }
+    set_transient_for(conn, c, a);
+    require_order({ b, a, c });
+    // Removing an actual parent releases its child's ordering constraint.
+    destroy_window(conn, b);
+    windows = { a, c };
+    require_order({ a, c });
+    destroy_window(conn, a);
+    destroy_window(conn, c);
+}
+
+TEST_CASE(
+    "Integration: fullscreen-suppressed clients precede visible desktops in published order",
+    "[integration][stacking][fullscreen][stack_order]"
+)
+{
+    auto env = TestEnvironment::create();
+    if (!env)
+        SKIP("X11 unavailable");
+    auto& conn = env->conn;
+    auto desktop = create_window(conn, 0, 0, 100, 100);
+    set_window_type(conn, desktop, intern_atom(conn.get(), "_NET_WM_WINDOW_TYPE_DESKTOP"));
+    map_window(conn, desktop);
+    auto suppressed = create_window(conn, 10, 10, 200, 150);
+    map_window(conn, suppressed);
+    REQUIRE(wait_for_active_window(conn, suppressed, kTimeout));
+    auto owner = create_window(conn, 20, 20, 200, 150);
+    map_window(conn, owner);
+    REQUIRE(wait_for_active_window(conn, owner, kTimeout));
+    send_client_message(
+        conn,
+        owner,
+        intern_atom(conn.get(), "_NET_WM_STATE"),
+        1,
+        intern_atom(conn.get(), "_NET_WM_STATE_FULLSCREEN")
+    );
+    observe_title_after_events(conn, owner);
+    REQUIRE(is_hidden_offscreen(conn, suppressed));
+    auto order =
+        get_window_property_windows(conn.get(), conn.root(), intern_atom(conn.get(), "_NET_CLIENT_LIST_STACKING"));
+    REQUIRE(order == std::vector<xcb_window_t>{ suppressed, desktop, owner });
+    REQUIRE(is_stacked_above(conn, owner, desktop));
+    REQUIRE(is_stacked_above(conn, desktop, suppressed));
+    auto current_desktop = intern_atom(conn.get(), "_NET_CURRENT_DESKTOP");
+    send_client_message(conn, conn.root(), current_desktop, 1);
+    observe_title_after_events(conn, owner);
+    REQUIRE(is_hidden_offscreen(conn, owner));
+    REQUIRE(
+        get_window_property_windows(conn.get(), conn.root(), intern_atom(conn.get(), "_NET_CLIENT_LIST_STACKING"))
+        == std::vector<xcb_window_t>{ suppressed, owner, desktop }
+    );
+    REQUIRE(is_stacked_above(conn, desktop, owner));
+    REQUIRE(is_stacked_above(conn, owner, suppressed));
+    send_client_message(conn, conn.root(), current_desktop, 0);
+    observe_title_after_events(conn, owner);
+    REQUIRE_FALSE(is_hidden_offscreen(conn, owner));
+    REQUIRE(is_stacked_above(conn, owner, desktop));
+    for (auto w : { owner, suppressed, desktop }) destroy_window(conn, w);
+}

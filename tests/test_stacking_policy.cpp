@@ -1,148 +1,131 @@
-#include "lwm/core/policy.hpp"
+#include "lwm/core/stacking.hpp"
 #include <catch2/catch_test_macros.hpp>
 
 using namespace lwm;
-using namespace lwm::stacking_policy;
-
+using namespace lwm::stacking;
 namespace {
-
-ClientStackInputs make(
-    xcb_window_t id,
-    Tier tier = Tier::Normal,
-    bool is_floating = false,
-    bool is_active = false,
-    uint64_t order = 0,
-    bool visible = true)
+struct Scene
 {
-    ClientStackInputs in;
-    in.id = id;
-    in.visible = visible;
-    in.tier = tier;
-    in.is_floating = is_floating;
-    in.is_active = is_active;
-    in.order = order;
-    return in;
+    std::unordered_map<xcb_window_t, Client> clients;
+    std::vector<Monitor> monitors{ 2 };
+    Scene()
+    {
+        for (auto& m : monitors) m.workspaces.resize(2);
+    }
+    Client& add(xcb_window_t id, bool floating = false, size_t monitor = 0)
+    {
+        Client c;
+        c.id = id;
+        c.order = id;
+        c.monitor = monitor;
+        if (floating)
+            c.state = FloatingState{ };
+        return clients.emplace(id, c).first->second;
+    }
+    std::vector<xcb_window_t> order(xcb_window_t active = XCB_NONE, bool desktop = false) const
+    {
+        return stacking::compute_order(clients, monitors, desktop, active);
+    }
+};
 }
 
-} // namespace
-
-TEST_CASE("compute_tier respects layer precedence", "[stacking][policy]")
+TEST_CASE("Global stacking ranks actual kinds, focus, layers and fullscreen visibility", "[stacking][policy]")
 {
-    REQUIRE(compute_tier(false, false, false, false, false) == Tier::Normal);
-
-    // Below hint sinks to Below.
-    REQUIRE(compute_tier(false, false, false, true, false) == Tier::Below);
-
-    // Above hint or modal lifts to Above.
-    REQUIRE(compute_tier(false, false, true, false, false) == Tier::Above);
-    REQUIRE(compute_tier(false, false, false, false, true) == Tier::Above);
-
-    // Fullscreen wins over Above/Below.
-    REQUIRE(compute_tier(false, true, true, true, true) == Tier::Fullscreen);
-
-    // A window suppressed by another's fullscreen sinks to Below regardless of its own hints.
-    REQUIRE(compute_tier(true, false, true, false, true) == Tier::Below);
+    Scene scene;
+    scene.add(1);
+    scene.add(2, false, 1);
+    scene.add(3, true);
+    scene.add(4, true, 1);
+    REQUIRE(scene.order(1) == std::vector<xcb_window_t>{ 2, 1, 3, 4 });
+    REQUIRE(scene.order(3) == std::vector<xcb_window_t>{ 1, 2, 4, 3 });
+    scene.clients.at(3).layer_hint = LayerHint::Below;
+    scene.clients.at(2).layer_hint = LayerHint::Above;
+    REQUIRE(scene.order() == std::vector<xcb_window_t>{ 3, 1, 4, 2 });
+    scene.add(5).state = DockState{ };
+    scene.add(6).state = DesktopState{ };
+    REQUIRE(scene.order() == std::vector<xcb_window_t>{ 6, 3, 1, 4, 2, 5 });
+    scene.clients.at(2).fullscreen = true;
+    scene.monitors[1].fullscreen_owner = 2;
+    auto order = scene.order();
+    REQUIRE(order == std::vector<xcb_window_t>{ 4, 6, 3, 1, 5, 2 });
+    scene.clients.at(4).transient_for = 2;
+    order = scene.order();
+    REQUIRE(order == std::vector<xcb_window_t>{ 6, 3, 1, 5, 2, 4 });
 }
 
-TEST_CASE("compute_order: floating ranks above tiled in the same tier", "[stacking][policy]")
+TEST_CASE("Hidden clients precede visible clients and do not constrain visible transients", "[stacking][policy]")
 {
-    std::vector<ClientStackInputs> inputs = {
-        make(0x100, Tier::Normal, /*floating=*/false, false, /*order=*/1),
-        make(0x200, Tier::Normal, /*floating=*/true, false, /*order=*/2),
-    };
-    auto order = compute_order(inputs);
-    REQUIRE(order.size() == 2);
-    REQUIRE(order.front() == 0x100); // bottom
-    REQUIRE(order.back() == 0x200);  // top
+    Scene scene;
+    scene.add(1, true).transient_for = 2;
+    scene.add(2).fullscreen = true;
+    scene.add(3, true).modal = true;
+    SECTION("Off workspace") { scene.clients.at(2).workspace = 1; }
+    SECTION("Iconic") { scene.clients.at(2).iconic = true; }
+    auto order = scene.order();
+    REQUIRE(order == std::vector<xcb_window_t>{ 2, 1, 3 });
+    scene.clients.at(1).sticky = true;
+    order = scene.order(XCB_NONE, true);
+    REQUIRE(order.back() == 1);
 }
 
-TEST_CASE("compute_order: ordering is global across monitors", "[stacking][policy]")
+TEST_CASE(
+    "Transient ordering matches exhaustive stable constraint ordering including every four-client cycle",
+    "[stacking][policy]"
+)
 {
-    // Reproduce the original bug: floating window on monitor A, recently raised
-    // tile on monitor B.  Without a global ordering policy, the tile would
-    // remain above the floating window in the X stack.
-    std::vector<ClientStackInputs> inputs = {
-        // Monitor A — tiled parent + floating dialog
-        make(/*id=*/0x101, Tier::Normal, /*floating=*/false, false, /*order=*/1),
-        make(/*id=*/0x102, Tier::Normal, /*floating=*/true,  false, /*order=*/2),
-        // Monitor B — recently mapped tile (highest order) but should NOT be
-        // globally above monitor A's floating dialog.
-        make(/*id=*/0x201, Tier::Normal, /*floating=*/false, false, /*order=*/3),
-    };
-
-    auto order = compute_order(inputs);
-    REQUIRE(order.size() == 3);
-
-    // Tiled windows go to the bottom regardless of monitor; the floating dialog
-    // ends up at the top.
-    REQUIRE(order.back() == 0x102);
-
-    auto rank = [&](xcb_window_t w) {
-        for (size_t i = 0; i < order.size(); ++i)
-            if (order[i] == w) return i;
-        return size_t{ static_cast<size_t>(-1) };
-    };
-
-    REQUIRE(rank(0x102) > rank(0x201));
-    REQUIRE(rank(0x102) > rank(0x101));
+    // Enumerate every functional graph, including missing parents, self-links,
+    // cycles with descendants, disjoint cycles and acyclic chains. An independent
+    // reachability matrix identifies cycles; exhaustive permutations define the
+    // lowest base-priority order satisfying all retained parent constraints.
+    for (unsigned graph = 0; graph < 625; ++graph)
+    {
+        Scene scene;
+        unsigned encoded = graph;
+        bool reach[4][4]{ };
+        unsigned parents[4]{ };
+        for (unsigned i = 0; i < 4; ++i)
+        {
+            parents[i] = encoded % 5;
+            encoded /= 5;
+            scene.add(i + 1, true).transient_for = parents[i] ? parents[i] : 999;
+            if (parents[i])
+                reach[i][parents[i] - 1] = true;
+        }
+        for (unsigned k = 0; k < 4; ++k)
+            for (unsigned i = 0; i < 4; ++i)
+                for (unsigned j = 0; j < 4; ++j) reach[i][j] |= reach[i][k] && reach[k][j];
+        for (unsigned i = 0; i < 4; ++i)
+        {
+            bool first = reach[i][i];
+            for (unsigned j = 0; j < i; ++j) first &= !(reach[i][j] && reach[j][i]);
+            if (first)
+                parents[i] = 0;
+        }
+        std::vector<xcb_window_t> expected{ 1, 2, 3, 4 };
+        bool valid;
+        do
+        {
+            valid = true;
+            for (unsigned i = 0; i < 4; ++i)
+                if (parents[i])
+                    valid &= std::ranges::find(expected, parents[i]) < std::ranges::find(expected, i + 1);
+            if (valid)
+                break;
+        } while (std::next_permutation(expected.begin(), expected.end()));
+        REQUIRE(valid);
+        INFO("parent graph " << graph);
+        auto order = scene.order();
+        REQUIRE(order == expected);
+    }
 }
 
-TEST_CASE("compute_order: tiers strictly dominate kind/active/order", "[stacking][policy]")
+TEST_CASE("Long transient chains use bounded iterative ordering", "[stacking][policy]")
 {
-    std::vector<ClientStackInputs> inputs = {
-        // Active floating in Normal tier, but a Below-tier floating ranks below.
-        make(0x10, Tier::Below,   true,  true,  100),
-        // Floating Above-tier window
-        make(0x20, Tier::Above,   true,  false, 1),
-        // Fullscreen tile
-        make(0x30, Tier::Fullscreen, false, false, 2),
-        // Normal tile
-        make(0x50, Tier::Normal,  false, false, 50),
-    };
-
-    auto order = compute_order(inputs);
-    REQUIRE(order.size() == 4);
-
-    // Bottom up: Below, Normal, Above, Fullscreen.
-    REQUIRE(order[0] == 0x10);
-    REQUIRE(order[1] == 0x50);
-    REQUIRE(order[2] == 0x20);
-    REQUIRE(order[3] == 0x30);
-}
-
-TEST_CASE("compute_order: hidden windows sink below visible ones", "[stacking][policy]")
-{
-    std::vector<ClientStackInputs> inputs = {
-        make(0xA, Tier::Fullscreen, true,  false, 0, /*visible=*/false),
-        make(0xB, Tier::Below,   false, false, 0, /*visible=*/true),
-    };
-    auto order = compute_order(inputs);
-    REQUIRE(order.size() == 2);
-    REQUIRE(order.front() == 0xA); // hidden, regardless of fullscreen tier
-    REQUIRE(order.back() == 0xB);  // visible, regardless of below tier
-}
-
-TEST_CASE("compute_order: active window beats inactive within same tier and kind", "[stacking][policy]")
-{
-    std::vector<ClientStackInputs> inputs = {
-        make(0x1, Tier::Normal, false, false, 10),
-        make(0x2, Tier::Normal, false, true,  5),
-    };
-    auto order = compute_order(inputs);
-    REQUIRE(order.back() == 0x2);
-}
-
-TEST_CASE("compute_order: order field is the ultimate tiebreaker", "[stacking][policy]")
-{
-    std::vector<ClientStackInputs> inputs = {
-        make(0x1, Tier::Normal, true, false, 50),
-        make(0x2, Tier::Normal, true, false, 60),
-        make(0x3, Tier::Normal, true, false, 40),
-    };
-    auto order = compute_order(inputs);
-    REQUIRE(order[0] == 0x3);
-    REQUIRE(order[1] == 0x1);
-    REQUIRE(order[2] == 0x2);
+    Scene scene;
+    for (xcb_window_t i = 1; i <= 10000; ++i) scene.add(i, true).transient_for = i + 1;
+    auto order = scene.order();
+    REQUIRE(order.size() == 10000);
+    for (size_t i = 0; i < order.size(); ++i) REQUIRE(order[i] == 10000 - i);
 }
 
 TEST_CASE("Stack moves produce the requested order with the minimum number of moves", "[stacking][policy]")

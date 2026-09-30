@@ -4,6 +4,7 @@
 #include "lwm/core/ipc.hpp"
 #include "lwm/core/log.hpp"
 #include "lwm/core/policy.hpp"
+#include "lwm/core/stacking.hpp"
 #include "lwm/core/xproperty.hpp"
 #include <algorithm>
 #include <cerrno>
@@ -1783,34 +1784,7 @@ bool WindowManager::is_visible(Client const& client) const
 
 xcb_window_t WindowManager::select_fullscreen_owner_for_monitor(size_t monitor_idx, xcb_window_t preferred_owner) const
 {
-    if (monitor_idx >= monitors_.size() || showing_desktop_)
-        return XCB_NONE;
-
-    std::vector<fullscreen_policy::FullscreenCandidate> candidates;
-    candidates.reserve(clients_.size());
-    for (auto const& [id, client] : clients_)
-    {
-        if (client.monitor != monitor_idx)
-            continue;
-        if (client.kind() != Client::Kind::Tiled && client.kind() != Client::Kind::Floating)
-            continue;
-        candidates.push_back({
-            id,
-            client.fullscreen && !client.iconic && should_be_visible(client),
-            client.order,
-        });
-    }
-
-    if (preferred_owner != XCB_NONE)
-    {
-        for (auto const& candidate : candidates)
-        {
-            if (candidate.window == preferred_owner && candidate.eligible)
-                return preferred_owner;
-        }
-    }
-
-    return fullscreen_policy::select_owner(monitors_[monitor_idx].fullscreen_owner, candidates);
+    return fullscreen_policy::select_owner(clients_, monitors_, monitor_idx, showing_desktop_, preferred_owner);
 }
 
 xcb_window_t WindowManager::effective_fullscreen_owner(size_t monitor) const
@@ -1829,119 +1803,27 @@ bool WindowManager::is_suppressed_by_fullscreen(Client const& client) const
     if (client.iconic || !should_be_visible(client))
         return false;
 
-    auto owner = effective_fullscreen_owner(client.monitor);
-    if (owner == XCB_NONE || owner == client.id)
-        return false;
-    if (client.transient_for == owner)
-        return false;
-    return true;
-}
-
-stacking_policy::Tier WindowManager::compute_stack_tier(Client const& client) const
-{
-    if (client.kind() == Client::Kind::Desktop)
-        return stacking_policy::Tier::Below;
-    if (client.kind() == Client::Kind::Dock)
-        return stacking_policy::Tier::Above;
-
-    return stacking_policy::compute_tier(
-        is_suppressed_by_fullscreen(client),
-        client.fullscreen,
-        client.layer_hint == LayerHint::Above,
-        client.layer_hint == LayerHint::Below,
-        client.modal
-    );
-}
-
-stacking_policy::ClientStackInputs WindowManager::stack_inputs_of(Client const& client) const
-{
-    bool policy_visible = client.kind() == Client::Kind::Tiled || client.kind() == Client::Kind::Floating
-        ? should_be_visible(client)
-        : true;
-    return stacking_policy::ClientStackInputs{
-        client.id,
-        policy_visible,
-        compute_stack_tier(client),
-        client.kind() == Client::Kind::Floating,
-        client.id == active_window_,
-        client.order,
-    };
+    return visibility_policy::is_fullscreen_suppressed(client, effective_fullscreen_owner(client.monitor));
 }
 
 void WindowManager::apply_stacking()
 {
-    std::vector<stacking_policy::ClientStackInputs> inputs;
-    inputs.reserve(clients_.size());
-    for (auto const& [window, client] : clients_) inputs.push_back(stack_inputs_of(client));
+    auto order = stacking::compute_order(clients_, monitors_, showing_desktop_, active_window_);
 
-    auto order = stacking_policy::compute_order(inputs);
-
-    auto position_of = [&order](xcb_window_t w) -> std::optional<size_t>
-    {
-        for (size_t i = 0; i < order.size(); ++i)
-            if (order[i] == w)
-                return i;
-        return std::nullopt;
-    };
-
-    auto transient_can_stack = [this](Client const& client)
-    {
-        if (client.kind() != Client::Kind::Floating || client.transient_for == XCB_NONE)
-            return false;
-        if (!is_visible(client) || is_suppressed_by_fullscreen(client))
-            return false;
-        auto const* parent = get_client(client.transient_for);
-        return parent && is_visible(*parent) && !is_suppressed_by_fullscreen(*parent);
-    };
-
-    for (size_t pass = 0; pass < order.size(); ++pass)
-    {
-        bool changed = false;
-        auto snapshot = order;
-        for (xcb_window_t window : snapshot)
-        {
-            auto const* client = get_client(window);
-            if (!client || !transient_can_stack(*client))
-                continue;
-
-            auto child_pos = position_of(window);
-            auto parent_pos = position_of(client->transient_for);
-            if (!child_pos || !parent_pos || *child_pos > *parent_pos)
-                continue;
-
-            xcb_window_t child = order[*child_pos];
-            order.erase(order.begin() + static_cast<std::ptrdiff_t>(*child_pos));
-            parent_pos = position_of(client->transient_for);
-            if (!parent_pos)
-                continue;
-            order.insert(order.begin() + static_cast<std::ptrdiff_t>(*parent_pos + 1), child);
-            changed = true;
-        }
-        if (!changed)
-            break;
-    }
-
-    std::vector<xcb_window_t> visible;
-    visible.reserve(order.size());
-    for (auto window : order)
-        if (auto const* client = get_client(window); client && stack_inputs_of(*client).visible)
-            visible.push_back(window);
-
-    if (visible.size() > 1)
+    if (order.size() > 1)
     {
         // Read server truth instead of trusting a cached desired order: external
         // restacks must still be repaired, including when our policy is unchanged.
         auto cookie = xcb_query_tree(conn_.get(), conn_.screen()->root);
         auto* reply = xcb_query_tree_reply(conn_.get(), cookie, nullptr);
-        std::vector<stacking_policy::StackMove> moves;
+        std::vector<stacking::StackMove> moves;
         if (reply)
-            moves = stacking_policy::plan_moves(
+            moves = stacking::plan_moves(
                 { xcb_query_tree_children(reply), static_cast<size_t>(xcb_query_tree_children_length(reply)) },
-                visible
+                order
             );
         else
-            for (size_t i = 1; i < visible.size(); ++i)
-                moves.push_back({ visible[i], visible[i - 1], XCB_STACK_MODE_ABOVE });
+            for (size_t i = 1; i < order.size(); ++i) moves.push_back({ order[i], order[i - 1], XCB_STACK_MODE_ABOVE });
         free(reply);
         for (auto const& move : moves)
         {

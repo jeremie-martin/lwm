@@ -1,5 +1,6 @@
 #include "lwm/core/focus.hpp"
 #include "lwm/core/log.hpp"
+#include "lwm/core/policy.hpp"
 #include <algorithm>
 #include <tuple>
 
@@ -22,8 +23,7 @@ bool eligible(Client const& client, Context const& context)
 {
     return accepts_focus(client) && !context.showing_desktop && !client.iconic && client.monitor == context.monitor
         && (client.sticky || client.workspace == context.workspace)
-        && (context.fullscreen_owner == XCB_NONE || context.fullscreen_owner == client.id
-            || context.fullscreen_owner == client.transient_for);
+        && !visibility_policy::is_fullscreen_suppressed(client, context.fullscreen_owner);
 }
 
 xcb_window_t fallback(Clients const& clients, Monitor const& monitor, Context const& context)

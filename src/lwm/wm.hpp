@@ -459,10 +459,8 @@ private:
     bool is_visible(Client const& client) const;
     bool is_suppressed_by_fullscreen(Client const& client) const;
     xcb_window_t effective_fullscreen_owner(size_t monitor) const;
-    stacking_policy::Tier compute_stack_tier(Client const& client) const;
-    stacking_policy::ClientStackInputs stack_inputs_of(Client const& client) const;
     xcb_window_t select_fullscreen_owner_for_monitor(size_t monitor_idx, xcb_window_t preferred_owner = XCB_NONE) const;
-    /// Realize stacking_policy onto X and EWMH _NET_CLIENT_LIST_STACKING in
+    /// Realize the global order onto X and EWMH _NET_CLIENT_LIST_STACKING in
     /// one global pass.  X stacking is a single global order — a per-monitor
     /// pass cannot enforce cross-monitor invariants like floating-above-tile.
     void apply_stacking();

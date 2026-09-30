@@ -14,6 +14,7 @@
 #include <functional>
 #include <optional>
 #include <span>
+#include <tuple>
 #include <unordered_map>
 #include <utility>
 
@@ -75,39 +76,41 @@ inline bool is_window_visible(
     return client_workspace == monitors[client_monitor].current_workspace;
 }
 
+// The caller supplies ownership resolved for the client's visible monitor scope.
+inline bool is_fullscreen_suppressed(Client const& client, xcb_window_t owner)
+{
+    return owner != XCB_NONE && owner != client.id && owner != client.transient_for;
+}
+
 } // namespace lwm::visibility_policy
 
 namespace lwm::fullscreen_policy {
 
-struct FullscreenCandidate
+// Selection reads authoritative placement and state; no candidate snapshot is needed.
+inline xcb_window_t select_owner(
+    std::unordered_map<xcb_window_t, Client> const& clients,
+    std::span<Monitor const> monitors,
+    size_t monitor,
+    bool showing_desktop,
+    xcb_window_t preferred = XCB_NONE
+)
 {
-    xcb_window_t window = XCB_NONE;
-    bool eligible = false;
-    uint64_t order = 0;
-};
-
-inline xcb_window_t
-select_owner(xcb_window_t current_owner, std::span<FullscreenCandidate const> candidates)
-{
-    for (auto const& candidate : candidates)
+    if (monitor >= monitors.size() || showing_desktop)
+        return XCB_NONE;
+    auto eligible = [&](Client const& client)
     {
-        if (candidate.window == current_owner && candidate.eligible)
-            return current_owner;
-    }
-
-    xcb_window_t best = XCB_NONE;
-    uint64_t best_order = 0;
-    for (auto const& candidate : candidates)
-    {
-        if (!candidate.eligible)
-            continue;
-        if (best == XCB_NONE || candidate.order > best_order)
-        {
-            best = candidate.window;
-            best_order = candidate.order;
-        }
-    }
-    return best;
+        return client.monitor == monitor && client.fullscreen && !client.iconic
+            && (client.kind() == Client::Kind::Tiled || client.kind() == Client::Kind::Floating)
+            && (client.sticky || client.workspace == monitors[monitor].current_workspace);
+    };
+    for (auto id : { preferred, monitors[monitor].fullscreen_owner })
+        if (auto it = clients.find(id); it != clients.end() && eligible(it->second))
+            return id;
+    Client const* newest = nullptr;
+    for (auto const& [id, client] : clients)
+        if (eligible(client) && (!newest || std::tie(client.order, client.id) > std::tie(newest->order, newest->id)))
+            newest = &client;
+    return newest ? newest->id : XCB_NONE;
 }
 
 } // namespace lwm::fullscreen_policy
@@ -351,138 +354,3 @@ inline std::vector<size_t> preserve_workspaces(std::span<Monitor> previous, std:
 }
 
 } // namespace lwm::hotplug_policy
-
-namespace lwm::stacking_policy {
-
-/// Stacking tier: defines coarse layering across monitors.
-/// Higher tier = visually on top.  Within a tier, ordering falls back to
-/// (kind_floating, active, order).
-enum class Tier : int
-{
-    Below = 0,      ///< _NET_WM_STATE_BELOW or suppressed by another window's fullscreen
-    Normal = 1,     ///< Default tier for tiled and floating windows
-    Above = 2,      ///< _NET_WM_STATE_ABOVE or modal
-    Fullscreen = 3, ///< Fullscreen owner of its monitor
-};
-
-/// Inputs the policy needs to rank a single client.  Caller-side concerns
-/// (kind, transient_for, etc.) are resolved before building these.
-struct ClientStackInputs
-{
-    xcb_window_t id = XCB_NONE;
-    bool visible = true;     ///< Policy-visible (not iconic, on current workspace)
-    Tier tier = Tier::Normal;
-    bool is_floating = false;
-    bool is_active = false;
-    uint64_t order = 0;
-};
-
-/// Decide which tier a client belongs to.  `is_suppressed_by_fullscreen`
-/// overrides every other state — a window occluded by another fullscreen
-/// owner sinks to Below regardless of its own layer hint.
-inline Tier compute_tier(
-    bool is_suppressed_by_fullscreen,
-    bool is_fullscreen,
-    bool is_above_hint,
-    bool is_below_hint,
-    bool is_modal)
-{
-    if (is_suppressed_by_fullscreen)
-        return Tier::Below;
-    if (is_fullscreen)
-        return Tier::Fullscreen;
-    if (is_above_hint || is_modal)
-        return Tier::Above;
-    if (is_below_hint)
-        return Tier::Below;
-    return Tier::Normal;
-}
-
-/// Compute the global stacking order: bottom-up, hidden first, visible last.
-/// Stable on `order` so equal keys never reshuffle.
-inline std::vector<xcb_window_t> compute_order(std::span<ClientStackInputs const> inputs)
-{
-    auto sort_key = [](ClientStackInputs const& in) {
-        return std::tuple{
-            in.visible ? 1 : 0,
-            static_cast<int>(in.tier),
-            in.is_floating ? 1 : 0,
-            in.is_active ? 1 : 0,
-            static_cast<long long>(in.order),
-        };
-    };
-
-    std::vector<ClientStackInputs> ranked(inputs.begin(), inputs.end());
-    std::stable_sort(ranked.begin(), ranked.end(),
-        [&](auto const& a, auto const& b) { return sort_key(a) < sort_key(b); });
-
-    std::vector<xcb_window_t> result;
-    result.reserve(ranked.size());
-    for (auto const& in : ranked)
-        result.push_back(in.id);
-    return result;
-}
-
-struct StackMove
-{
-    xcb_window_t window;
-    xcb_window_t sibling;
-    uint32_t mode;
-};
-
-// Keep a longest subsequence already in server order. Each other visible
-// managed window needs one move; unrelated root children are not reordered.
-inline std::vector<StackMove>
-plan_moves(std::span<xcb_window_t const> server_order, std::span<xcb_window_t const> desired_order)
-{
-    std::unordered_map<xcb_window_t, size_t> positions;
-    positions.reserve(server_order.size());
-    for (size_t i = 0; i < server_order.size(); ++i) positions.emplace(server_order[i], i);
-    std::vector<xcb_window_t> windows;
-    std::vector<size_t> ranks;
-    for (auto window : desired_order)
-    {
-        auto found = positions.find(window);
-        // A client may have been destroyed since the policy was computed.
-        if (found == positions.end())
-            continue;
-        windows.push_back(window);
-        ranks.push_back(found->second);
-    }
-    if (std::is_sorted(ranks.begin(), ranks.end()))
-        return {};
-    size_t none = windows.size();
-    std::vector<size_t> tails, previous(windows.size(), none);
-    for (size_t i = 0; i < windows.size(); ++i)
-    {
-        auto tail = std::lower_bound(
-            tails.begin(),
-            tails.end(),
-            ranks[i],
-            [&](size_t index, size_t rank) { return ranks[index] < rank; }
-        );
-        if (tail != tails.begin())
-            previous[i] = *(tail - 1);
-        if (tail == tails.end())
-            tails.push_back(i);
-        else
-            *tail = i;
-    }
-    std::vector<bool> keep(windows.size());
-    size_t anchor = tails.back();
-    for (size_t i = anchor; i != none; i = previous[i])
-    {
-        keep[i] = true;
-        anchor = i;
-    }
-    std::vector<StackMove> moves;
-    moves.reserve(windows.size() - tails.size());
-    for (size_t i = 0; i < windows.size(); ++i)
-        if (!keep[i])
-            moves.push_back(
-                { windows[i], i ? windows[i - 1] : windows[anchor], i ? XCB_STACK_MODE_ABOVE : XCB_STACK_MODE_BELOW }
-            );
-    return moves;
-}
-
-} // namespace lwm::stacking_policy

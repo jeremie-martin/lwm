@@ -16,6 +16,7 @@ belongs in [IPC.md](IPC.md).
 | `src/lwm/layout/` | pure master-stack and monocle geometry, split ratios, hit testing |
 | `src/lwm/core/log.*` | Quill configuration, standard sinks, process-boundary lifecycle |
 | `src/lwm/core/types.hpp` | domain state: clients, monitors, workspaces, geometry |
+| `src/lwm/core/stacking.*` | desired global stacking order from clients and resolved fullscreen owners |
 | `src/lwm/core/focus.*` | shared client eligibility, fallback, cycle ordering, and pointer monitor selection |
 | `src/lwm/core/policy.hpp` | pure visibility, workspace, fullscreen, and hotplug decisions |
 | `src/lwm/core/ewmh.*` | EWMH atoms, classification, and property I/O |
@@ -233,9 +234,9 @@ physical visibility.
 ## Fullscreen and stacking
 
 At most one non-iconic, policy-visible tiled or floating client owns fullscreen
-on a monitor. Reconciliation keeps the existing owner when still valid, honors
-an explicitly preferred new owner, otherwise chooses the newest eligible
-managed client. Other policy-visible tiled/floating clients on that monitor are
+on a monitor. Reconciliation honors an eligible explicitly preferred owner, otherwise keeps
+the existing owner when valid, then falls back to the newest eligible managed
+client. Other policy-visible tiled/floating clients on that monitor are
 suppressed and hidden. A managed transient whose `transient_for` is the owner
 is exempt.
 
@@ -244,21 +245,34 @@ is effective only when they return to visible scope. Showing-desktop removes
 fullscreen ownership while active. `_NET_WM_FULLSCREEN_MONITORS` changes
 geometry only and does not create cross-monitor ownership.
 
-`apply_stacking()` is the single global stacking authority. Transitions mark
-stacking dirty; completion reconciles it once, before the crossing-event drain
-and before IPC replies/subscription events. Restacking precedes the drain
-because it can generate crossing events.
-Each reconciliation compares the desired visible order with a fresh root
-`QueryTree` reply. A longest increasing subsequence identifies the windows
-already in order; each remaining window needs one sibling move. This repairs
-external restacks without maintaining a second cached authority for X order.
-Unrelated root children are not themselves moved. It computes the X order and
-`_NET_CLIENT_LIST_STACKING` together. Physically hidden clients sort before
-visible clients. Desktop clients use the Below tier and docks use the
-Above tier; tiled and floating clients use Below, Normal, Above, or Fullscreen
-according to effective state. Within a tier, floating clients are above
-non-floating clients, active preference is applied within each kind, and
-visible transients are placed above visible parents.
+`stacking::compute_order()` computes one bottom-to-top order directly from the
+client registry and resolved monitor fullscreen owners. Its hidden prefix includes
+iconic, off-workspace, and fullscreen-suppressed clients. The same complete order
+drives server reconciliation and EWMH publication. Desktop clients use the Below
+tier and docks use Above. Ordinary clients use Below, Normal, Above, or Fullscreen according to
+effective state. Within a tier, floating clients are above tiled clients, active
+preference is applied within each kind, then registration order and window ID
+break ties.
+
+Visible floating transients must follow their visible managed parents, even
+across tiers. Among windows whose parent constraint is satisfied, the lowest
+base-ranked window is emitted next. Missing or hidden parents impose no
+constraint. Each transient has at most one parent: an iterative parent walk
+identifies cycles and ignores the parent edge of the lowest base-ranked member
+of each cycle (including self-links). Remaining relationships are honored.
+These decisions are local to ordering; client hints are not rewritten. Sorting
+and dependency ordering take O(n log n) time and O(n) temporary space, without
+recursion or repeated repair passes. Windows without visible floating transient
+hints take the direct sorted path without constructing dependency links.
+
+`apply_stacking()` reconciles this result once during completion, before the
+crossing-event drain and IPC publication. It compares the complete desired order
+with a fresh root `QueryTree` reply. A longest increasing subsequence identifies
+windows already in order; each remaining window needs one sibling move. This
+repairs external restacks without a second cached authority for X order.
+Unrelated root children are not themselves moved. Hidden clients participate so
+the published list and actual managed X order agree, and fullscreen-suppressed
+clients cannot sit above their owner even while off-screen.
 
 ## Focus
 

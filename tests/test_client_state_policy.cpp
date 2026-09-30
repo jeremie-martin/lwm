@@ -89,23 +89,39 @@ TEST_CASE("Urgency tracks app and WM sources independently", "[client][state][ur
     REQUIRE_FALSE(urgency.active());
 }
 
-TEST_CASE("Fullscreen owner selector preserves valid owner before falling back by order", "[client][fullscreen]")
+TEST_CASE(
+    "Fullscreen selection reads placement and honors preferred then current then newest owner",
+    "[client][fullscreen]"
+)
 {
-    std::vector<fullscreen_policy::FullscreenCandidate> candidates = {
-        { 0x1000, true, 10 },
-        { 0x2000, true, 30 },
-        { 0x3000, true, 20 },
-    };
-
-    REQUIRE(fullscreen_policy::select_owner(0x1000, candidates) == 0x1000);
-    REQUIRE(fullscreen_policy::select_owner(XCB_NONE, candidates) == 0x2000);
-
-    candidates[1].eligible = false;
-    REQUIRE(fullscreen_policy::select_owner(0x2000, candidates) == 0x3000);
-
-    for (auto& candidate : candidates)
-        candidate.eligible = false;
-    REQUIRE(fullscreen_policy::select_owner(0x1000, candidates) == XCB_NONE);
+    std::unordered_map<xcb_window_t, Client> clients;
+    std::vector<Monitor> monitors(2);
+    for (auto& m : monitors) m.workspaces.resize(2);
+    for (xcb_window_t id : { 1, 2, 3 })
+    {
+        Client client;
+        client.id = id;
+        client.order = id;
+        client.fullscreen = true;
+        clients.emplace(id, client);
+    }
+    monitors[0].fullscreen_owner = 1;
+    auto select = [&](xcb_window_t preferred = XCB_NONE)
+    { return fullscreen_policy::select_owner(clients, monitors, 0, false, preferred); };
+    REQUIRE(select() == 1);
+    REQUIRE(select(2) == 2);
+    clients.at(2).iconic = true;
+    REQUIRE(select(2) == 1);
+    clients.at(1).workspace = 1;
+    REQUIRE(select() == 3);
+    clients.at(3).monitor = 1;
+    REQUIRE(select() == XCB_NONE);
+    clients.at(1).sticky = true;
+    REQUIRE(select() == 1);
+    clients.at(1).state = DockState{ };
+    REQUIRE(select() == XCB_NONE);
+    REQUIRE(fullscreen_policy::select_owner(clients, monitors, 1, true) == XCB_NONE);
+    REQUIRE(fullscreen_policy::select_owner(clients, monitors, 2, false) == XCB_NONE);
 }
 
 TEST_CASE("Tiling state carries only tiled restore data for tiled clients", "[client][state][tiling]")
