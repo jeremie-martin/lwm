@@ -16,8 +16,7 @@ std::optional<Geometry> WindowManager::detach_tiled_to_floating(Client& client)
 {
     std::optional<Geometry> prior_floating = prior_floating_geometry(client);
     Geometry geometry = client.tiled_geometry;
-    remove_tiled_from_workspace(client, client.monitor, client.workspace);
-    set_floating_state(client, geometry);
+    change_client_state(client, FloatingState{ geometry });
     return prior_floating;
 }
 
@@ -254,7 +253,7 @@ void WindowManager::show_named_scratchpad_window(xcb_window_t window, Scratchpad
     int16_t y = static_cast<int16_t>(wa.y + (wa.height - h) / 2);
     floating_geometry(*client) = { x, y, w, h };
 
-    move_floating_client_to_workspace(*client, target_monitor, target_workspace, false);
+    relocate_client(*client, target_monitor, target_workspace);
 
     // A late title/class match may already be visible on the target workspace.
     request_geometry(*client);
@@ -288,16 +287,14 @@ void WindowManager::show_pool_scratchpad_window(xcb_window_t window)
 
     if (restore_tiled)
     {
-        set_tiled_state(*client, restore_prior_floating);
-        add_tiled_to_workspace(*client, target_monitor, target_workspace);
-        invalidate_monitor(old_monitor);
-        invalidate_monitor(target_monitor);
+        relocate_client(*client, target_monitor, target_workspace);
+        change_client_state(*client, TiledState{ restore_prior_floating });
     }
     else
     {
         if (client->kind() == Client::Kind::Tiled)
         {
-            set_floating_state(*client, restore_geometry ? *restore_geometry : client->tiled_geometry);
+            change_client_state(*client, FloatingState{ restore_geometry.value_or(client->tiled_geometry) });
             client->mru_order = next_mru_order_++;
         }
         if (restore_geometry.has_value())
@@ -314,7 +311,7 @@ void WindowManager::show_pool_scratchpad_window(xcb_window_t window)
             }
             floating_geometry(*client) = restored_geometry;
         }
-        move_floating_client_to_workspace(*client, target_monitor, target_workspace, false);
+        relocate_client(*client, target_monitor, target_workspace);
     }
 
     deiconify_window(window, true);

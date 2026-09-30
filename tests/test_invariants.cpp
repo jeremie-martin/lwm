@@ -10,7 +10,9 @@ TEST_CASE("Model validation accepts valid client kinds and independent fullscree
     monitors[0].workspaces[0].windows = { 1 };
     std::unordered_map<xcb_window_t, Client> clients;
     for (xcb_window_t id = 1; id <= 4; ++id) clients[id].id = id;
-    set_floating_state(clients[2], { 10, 20, 300, 200 });
+    clients[2].state = FloatingState{
+        { 10, 20, 300, 200 }
+    };
     clients[3].state = DockState{};
     clients[4].state = DesktopState{};
 
@@ -42,7 +44,7 @@ TEST_CASE("Model validation rejects inconsistent authoritative records", "[clien
     SECTION("Duplicate across workspaces") { monitors[0].workspaces[1].windows.push_back(1); }
     SECTION("Duplicate across monitors") { monitors[1].workspaces[0].windows.push_back(1); }
     SECTION("Unmanaged member") { clients.clear(); }
-    SECTION("Floating member") { set_floating_state(clients[1], {}); }
+    SECTION("Floating member") { clients[1].state = FloatingState{ { } }; }
     SECTION("Dock member") { clients[1].state = DockState{}; }
     SECTION("Desktop member") { clients[1].state = DesktopState{}; }
     SECTION("Missing membership") { monitors[0].workspaces[0].windows.clear(); }
@@ -53,13 +55,13 @@ TEST_CASE("Model validation rejects inconsistent authoritative records", "[clien
     SECTION("Invalid floating monitor")
     {
         monitors[0].workspaces[0].windows.clear();
-        set_floating_state(clients[1], {});
+        clients[1].state = FloatingState{ { } };
         clients[1].monitor = 99;
     }
     SECTION("Invalid floating workspace")
     {
         monitors[0].workspaces[0].windows.clear();
-        set_floating_state(clients[1], {});
+        clients[1].state = FloatingState{ { } };
         clients[1].workspace = 99;
     }
     SECTION("Mismatched registry key") { clients[1].id = 2; }
@@ -93,7 +95,7 @@ TEST_CASE("Model validation checks active focus at completed transitions", "[cli
     monitors[0].workspaces.resize(1);
     std::unordered_map<xcb_window_t, Client> clients;
     clients[1].id = 1;
-    set_floating_state(clients[1], {});
+    clients[1].state = FloatingState{ { } };
     REQUIRE_FALSE(invariants::validate(clients, monitors, 1));
 
     SECTION("Unmanaged focus") { clients.clear(); }
@@ -114,7 +116,7 @@ TEST_CASE("Model validation checks effective fullscreen ownership", "[client][in
     std::unordered_map<xcb_window_t, Client> clients;
     clients[1].id = 1;
     clients[1].fullscreen = true;
-    set_floating_state(clients[1], {});
+    clients[1].state = FloatingState{ { } };
     REQUIRE_FALSE(invariants::validate(clients, monitors));
     SECTION("Missing owner") { clients.clear(); }
     SECTION("Owner no longer fullscreen") { clients[1].fullscreen = false; }

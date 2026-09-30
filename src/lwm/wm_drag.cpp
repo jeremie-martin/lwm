@@ -258,7 +258,7 @@ void WindowManager::end_drag(bool commit)
         if (window != client->id)
             ++index;
     }
-    if (move_tiled_client_to_workspace(*client, target, mon.current_workspace, index))
+    if (relocate_client(*client, target, mon.current_workspace, RelocationGeometry::Preserve, index))
     {
         workspace_policy::set_workspace_focus(ws, client->id);
         focus_any_window(client->id);

@@ -20,7 +20,9 @@ constexpr std::array<uint32_t, 28> floating_record{
 TEST_CASE("Restart client encoder preserves the cross-binary wire contract", "[restart][codec]")
 {
     Client client;
-    set_floating_state(client, { -100, 25, 600, 400 });
+    client.state = FloatingState{
+        { -100, 25, 600, 400 }
+    };
     client.borderless = true;
     client.desktop_pinned = true;
     client.fullscreen = true;

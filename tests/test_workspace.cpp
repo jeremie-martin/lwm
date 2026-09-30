@@ -72,26 +72,6 @@ TEST_CASE("Empty workspace has no focused window", "[workspace]")
     REQUIRE(ws.focused_window == XCB_NONE);
 }
 
-TEST_CASE("Moving window between workspaces via policy preserves data", "[workspace]")
-{
-    Monitor mon;
-    mon.name = "test";
-    init_workspaces(mon);
-    mon.current_workspace = 0;
-
-    mon.workspaces[0].windows.push_back(0x1000);
-    mon.workspaces[0].focused_window = 0x1000;
-
-    auto is_iconic = [](xcb_window_t) { return false; };
-    bool moved = workspace_policy::move_tiled_window(mon, 0x1000, 2, is_iconic);
-
-    REQUIRE(moved);
-    REQUIRE(mon.workspaces[0].windows.empty());
-    REQUIRE(mon.workspaces[0].focused_window == XCB_NONE);
-    REQUIRE(mon.workspaces[2].windows.size() == 1);
-    REQUIRE(mon.workspaces[2].windows[0] == 0x1000);
-    REQUIRE(mon.workspaces[2].focused_window == 0x1000);
-}
 
 TEST_CASE("Working area handles int16_t coordinate boundaries", "[workspace][edge]")
 {

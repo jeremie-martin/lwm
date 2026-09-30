@@ -120,8 +120,11 @@ an LD_PRELOAD tracer in a temporary directory and counts only the WM's requests.
 For 200 title changes, metadata-only updates must perform no geometry writes or
 visibility/stacking reconciliation; sticky and sticky+fullscreen rule changes
 allow at most 200 crossing barriers and 200 QueryTree requests. Sticky-only
-changes must not rewrite unchanged geometry. A 200-client workspace workload
-also bounds flush calls to catch completion work repeated for each configure
+changes must not rewrite unchanged geometry. Two relocation workloads move tiled
+and floating clients between workspaces 200 times, verify final membership, and
+bound geometry writes without fresh geometry reads or repeated reconciliation.
+A 200-client workspace workload also bounds flush calls to catch completion work
+repeated for each configure
 notification. Startup workloads with 10 and 40 docks bound property reads to
 catch repeated workarea scans during adoption and require one shared root-geometry
 read, independent of dock count. Floating and tiled drag workloads send 200

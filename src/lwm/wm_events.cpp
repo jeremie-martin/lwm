@@ -1133,34 +1133,11 @@ void WindowManager::handle_desktop_change(xcb_client_message_event_t const& e)
 
     bool was_active = (active_window_ == e.window);
 
-    if (client->kind() == Client::Kind::Tiled)
-    {
-        size_t source_mon_idx = client->monitor;
-        size_t source_ws_idx = client->workspace;
-
-        if (source_mon_idx >= monitors_.size() || source_ws_idx >= monitors_[source_mon_idx].workspaces.size())
-            return;
-
-        auto& source_ws = monitors_[source_mon_idx].workspaces[source_ws_idx];
-        if (source_ws.find_window(e.window) == source_ws.windows.end())
-            return;
-
-        if (!move_tiled_client_to_workspace(*client, target_monitor, target_workspace))
-            return;
-
-        bool target_ws_visible = !showing_desktop_ && target_workspace == monitors_[target_monitor].current_workspace;
-        if (!target_ws_visible || was_active)
-        {
-            workspace_policy::set_workspace_focus(monitors_[target_monitor].workspaces[target_workspace], e.window);
-        }
-    }
-    else if (client->kind() == Client::Kind::Floating)
-    {
-        if (!move_floating_client_to_workspace(*client, target_monitor, target_workspace, true))
-            return;
-    }
-    else
+    if (!relocate_client(*client, target_monitor, target_workspace, RelocationGeometry::CenterOnMonitorChange))
         return;
+    bool target_ws_visible = !showing_desktop_ && target_workspace == monitors_[target_monitor].current_workspace;
+    if (client->kind() == Client::Kind::Tiled && (!target_ws_visible || was_active))
+        workspace_policy::set_workspace_focus(monitors_[target_monitor].workspaces[target_workspace], e.window);
 
     client->desktop_pinned = true;
     if (was_active)

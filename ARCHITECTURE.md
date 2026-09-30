@@ -31,6 +31,7 @@ belongs in [IPC.md](IPC.md).
 | `src/lwm/wm_events.cpp` | X event dispatch, client messages, property changes, RANDR |
 | `src/lwm/wm_focus.cpp` | focus assignment, fallback, and cycling |
 | `src/lwm/wm_workspace.cpp` | workspace and monitor commands |
+| `src/lwm/wm_placement.cpp` | client relocation, tiled membership, and tiled/floating transitions |
 | `src/lwm/wm_floating.cpp`, `wm_drag.cpp` | floating geometry and pointer-driven move/resize/reorder |
 | `src/lwm/wm_restart.cpp`, `wm_scratchpad.cpp` | exec handoff and scratchpad state |
 
@@ -380,10 +381,23 @@ the same transition helpers in all three paths.
 
 `unmanage_window()` removes all managed kinds: it writes
 `WM_STATE=WithdrawnState`, removes authoritative membership and pending kill
-state, and requests visibility/focus repair and EWMH list publication. Movement
-helpers update both client placement and tiled membership before invalidating
-the source and destination monitors. Direct monitor/workspace writes belong only in
-manage, movement, restart, and hotplug paths.
+state, and requests visibility/focus repair and EWMH list publication.
+
+`wm_placement.cpp` owns ordinary placement and tiled-membership changes.
+`relocate_client()` moves either normal client kind, updates desktop publication,
+and invalidates both affected monitors. Callers choose whether floating geometry
+is preserved or centered when crossing monitors, and choose subsequent focus.
+A tiled reorder within one workspace preserves membership and focus history.
+`change_client_state()` owns tiled/floating conversion: it detaches or attaches
+membership, remembers the old tile slot when floating, and requests geometry and
+allowed-action publication. Commands, rules, dragging, scratchpads, and restart
+restoration use these operations rather than assembling membership edits.
+
+Manage and unmanage use the same tile attachment/removal mechanics at the
+registry boundary. Hotplug is a bulk exception: it rebuilds the workspace graph
+before assigning clients their new monitor/workspace indices. Restart restores
+saved tile order after adopting clients. Neither bulk path replays ordinary moves
+against partially restored membership.
 
 Configuration loading validates and prepares a candidate before changing the WM.
 `Config` owns compiled rule and scratchpad regexes, the resolved keybinding map,

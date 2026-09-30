@@ -101,17 +101,10 @@ void WindowManager::move_window_to_workspace(size_t ws)
         return;
 
     auto source_monitor = client->monitor;
-    if (client->kind() == Client::Kind::Floating)
-    {
-        if (!move_floating_client_to_workspace(*client, source_monitor, ws, false))
-            return;
-    }
-    else
-    {
-        if (!move_tiled_client_to_workspace(*client, source_monitor, ws))
-            return;
+    if (!relocate_client(*client, source_monitor, ws))
+        return;
+    if (client->kind() == Client::Kind::Tiled)
         workspace_policy::set_workspace_focus(monitors_[source_monitor].workspaces[ws], client->id);
-    }
     focus_or_fallback(monitors_[source_monitor]);
 }
 
@@ -169,17 +162,15 @@ void WindowManager::move_window_to_monitor(int direction)
         return;
 
     auto& target_monitor = monitors_[target_idx];
-    if (client->kind() == Client::Kind::Floating)
-    {
-        if (!move_floating_client_to_workspace(*client, target_idx, target_monitor.current_workspace, true))
-            return;
-    }
-    else
-    {
-        if (!move_tiled_client_to_workspace(*client, target_idx, target_monitor.current_workspace))
-            return;
+    if (!relocate_client(
+            *client,
+            target_idx,
+            target_monitor.current_workspace,
+            RelocationGeometry::CenterOnMonitorChange
+        ))
+        return;
+    if (client->kind() == Client::Kind::Tiled)
         workspace_policy::set_workspace_focus(target_monitor.current(), client->id);
-    }
 
     focused_monitor_ = target_idx;
     request_current_desktop_update();

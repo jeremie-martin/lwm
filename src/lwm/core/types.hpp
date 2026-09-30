@@ -327,17 +327,6 @@ inline std::optional<SavedTilePos> const& saved_tiled_pos(Client const& client)
     return std::get<FloatingState>(client.state).saved_tiled_pos;
 }
 
-inline void set_tiled_state(Client& client, std::optional<Geometry> prior_floating = std::nullopt)
-{
-    client.state = TiledState{ prior_floating };
-}
-
-inline void
-set_floating_state(Client& client, Geometry geometry, std::optional<SavedTilePos> saved_position = std::nullopt)
-{
-    client.state = FloatingState{ geometry, saved_position };
-}
-
 inline NamedScratchpadMembership const* scratchpad_named(Client const& client)
 {
     if (!client.scratchpad)

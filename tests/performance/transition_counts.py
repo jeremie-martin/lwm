@@ -43,6 +43,12 @@ class PointerEvent(c.Structure):
                 ("button", c.c_uint), ("same_screen", INT)]
 
 
+class ClientMessage(c.Structure):
+    _fields_ = [("type", INT), ("serial", c.c_ulong), ("send_event", INT),
+                ("display", DISPLAY), ("window", WINDOW), ("message_type", WINDOW),
+                ("format", INT), ("data", c.c_long * 5)]
+
+
 def pointer(display, root, kind, x, y, child=0):
     event = PointerEvent(type=kind, display=display, window=root, root=root,
                          subwindow=child, x=x, y=y, x_root=x, y_root=y,
@@ -164,7 +170,7 @@ def measure(binary, library, scenario, operations):
         client_count = 200 if scenario == "workspace" else 10
         for index in range(client_count):
             window = X.XCreateSimpleWindow(display, root, 10 + index % 10 * 20, 10 + index % 10 * 20, 300, 200, 0, 0, 0)
-            if not scenario.startswith("tiled_drag"):
+            if not scenario.startswith("tiled_"):
                 value = WINDOW(dialog)
                 X.XChangeProperty(display, window, window_type, atom_type, 32, 0, c.byref(value), 1)
             X.XMapWindow(display, window)
@@ -175,6 +181,8 @@ def measure(binary, library, scenario, operations):
         ipc(path, f"focus window={target}")
         name_atom, utf8 = atom("_NET_WM_NAME"), atom("UTF8_STRING")
         dragging = "drag" in scenario
+        relocating = "relocation" in scenario
+        desktop_atom = atom("_NET_WM_DESKTOP")
         if dragging:
             pointer(display, root, 4, 100, 100, target)
             marker = c.create_string_buffer(b"drag-started")
@@ -189,6 +197,11 @@ def measure(binary, library, scenario, operations):
             if scenario == "workspace":
                 ipc(path, f"workspace switch {index % 2}")
                 continue
+            if relocating:
+                event = ClientMessage(type=33, display=display, window=target,
+                                      message_type=desktop_atom, format=32,
+                                      data=(c.c_long * 5)((index + 1) % 2, 2, 0, 0, 0))
+                X.XSendEvent(display, root, 0, (1 << 19) | (1 << 20), c.byref(event))
             if dragging:
                 pointer(display, root, 6, 101 + index, 101 + index)
                 if scenario.endswith("burst") and index != operations - 1:
@@ -202,6 +215,8 @@ def measure(binary, library, scenario, operations):
                 for client in clients:
                     if client["id"] != target or client["title"] != title:
                         continue
+                    if relocating:
+                        return client["workspace"] == (index + 1) % 2
                     enabled = index % 2 == 0
                     return (scenario == "metadata" or dragging or client["sticky"] == enabled) and (
                         scenario != "sticky_fullscreen" or client["fullscreen"] == enabled
@@ -209,6 +224,11 @@ def measure(binary, library, scenario, operations):
                 return False
             wait(settled, wm, log_path)
 
+        if relocating:
+            workspaces = json.loads(ipc(path, "workspace list"))["monitors"][0]["workspaces"]
+            expected = [client_count - operations % 2, operations % 2] if scenario.startswith("tiled_") else [0, 0]
+            if [workspace["window_count"] for workspace in workspaces] != expected:
+                raise AssertionError("Relocation lost or duplicated tiled membership")
         if dragging:
             expected = tuple(value + operations for value in start_position)
             if position(display, target) != expected:
@@ -239,6 +259,7 @@ def main():
                         str(Path(__file__).with_name("xcb_counts.c")), "-ldl"], check=True)
         scenarios = [(name, 200) for name in ("metadata", "sticky", "sticky_fullscreen", "workspace")]
         scenarios += [(name, 200) for name in ("floating_drag", "floating_drag_burst", "tiled_drag", "tiled_drag_burst")]
+        scenarios += [(name, 200) for name in ("tiled_relocation", "floating_relocation")]
         scenarios += [("dock_startup", count) for count in (10, 40)]
         for scenario, operations in scenarios:
             result = measure(binary, library, scenario, operations)
@@ -257,6 +278,12 @@ def main():
                     if counts["visibility_barrier"] > 2 or counts["query_tree"] > 2:
                         raise AssertionError("Per-motion reconciliation: " + json.dumps(result))
                     continue
+                if "relocation" in scenario:
+                    if counts["get_geometry"]:
+                        raise AssertionError("Relocation must use known geometry: " + json.dumps(result))
+                    geometry_budget = operations * (10 if scenario.startswith("tiled_") else 1)
+                    if not operations <= counts["geometry_configure"] <= geometry_budget:
+                        raise AssertionError("Inactive or excessive relocation geometry: " + json.dumps(result))
                 operations_flush_budget = result["operations"] * 20
                 reads = result["operations"] * (1 if scenario == "metadata" else 2)
                 if not result["operations"] - 1 <= counts["get_property"] <= reads:

@@ -194,42 +194,6 @@ fixup_workspace_focus(Workspace& ws, xcb_window_t removed_window, std::function<
     }
 }
 
-inline bool
-remove_tiled_window(Workspace& workspace, xcb_window_t window, std::function<bool(xcb_window_t)> const& is_iconic)
-{
-    auto it = workspace.find_window(window);
-    if (it == workspace.windows.end())
-        return false;
-    workspace.windows.erase(it);
-    remove_from_focus_history(workspace, window);
-    fixup_workspace_focus(workspace, window, is_iconic);
-    return true;
-}
-
-inline bool move_tiled_window(
-    Monitor& monitor,
-    xcb_window_t window,
-    size_t target_ws,
-    std::function<bool(xcb_window_t)> const& is_iconic
-)
-{
-    size_t workspace_count = monitor.workspaces.size();
-    if (workspace_count == 0)
-        return false;
-    if (target_ws >= workspace_count)
-        return false;
-    if (target_ws == monitor.current_workspace)
-        return false;
-
-    if (!remove_tiled_window(monitor.current(), window, is_iconic))
-        return false;
-
-    auto& target = monitor.workspaces[target_ws];
-    target.windows.push_back(window);
-    set_workspace_focus(target, window);
-    return true;
-}
-
 } // namespace lwm::workspace_policy
 
 namespace lwm::classification_policy {

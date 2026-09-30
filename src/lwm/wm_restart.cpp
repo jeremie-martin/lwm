@@ -268,26 +268,10 @@ void WindowManager::apply_restart_client_state(xcb_window_t window)
         client->fullscreen_restore_layer_hint = record->restore_layer;
     client->desktop_pinned = record->desktop_pinned;
 
-    if (saved_kind && *saved_kind == Client::Kind::Floating && client->kind() == Client::Kind::Tiled)
-    {
-        convert_window_to_floating(window);
-        // convert_window_to_floating computes fresh geometry from the tiled position,
-        // overwriting the floating geometry. Restore the saved value.
-        if (auto* c = get_client(window))
-            floating_geometry(*c) = saved_floating_geometry;
-    }
-    else if (saved_kind && *saved_kind == Client::Kind::Tiled && client->kind() == Client::Kind::Floating)
-    {
-        convert_window_to_tiled(window, saved_prior_floating);
-    }
-    else if (saved_kind && *saved_kind == Client::Kind::Tiled)
-    {
-        set_tiled_state(*client, saved_prior_floating);
-    }
-    else if (saved_kind && *saved_kind == Client::Kind::Floating)
-    {
-        floating_geometry(*client) = saved_floating_geometry;
-    }
+    if (saved_kind == Client::Kind::Tiled)
+        change_client_state(*client, TiledState{ saved_prior_floating });
+    else if (saved_kind == Client::Kind::Floating)
+        change_client_state(*client, FloatingState{ saved_floating_geometry });
 
     // Restore scratchpad name
     auto name_cookie = xcb_get_property(conn_.get(), false, window, lwm_restart_scratchpad_name_, utf8_string_, 0, 256);

@@ -1,5 +1,6 @@
 #include "wm_observations.hpp"
 #include <X11/keysym.h>
+#include <array>
 #include <catch2/catch_test_macros.hpp>
 #include <nlohmann/json.hpp>
 #include <xcb/xcb_ewmh.h>
@@ -232,6 +233,14 @@ move_to_workspace = 1
         REQUIRE(reply);
         REQUIRE(reply->starts_with("ok"));
     };
+    auto rectangle = [&](xcb_window_t window)
+    {
+        auto* reply = xcb_get_geometry_reply(conn.get(), xcb_get_geometry(conn.get(), window), nullptr);
+        REQUIRE(reply);
+        std::array<int, 4> result{ reply->x, reply->y, reply->width, reply->height };
+        free(reply);
+        return result;
+    };
     for (bool floating : { false, true })
     {
         CAPTURE(floating);
@@ -246,14 +255,24 @@ move_to_workspace = 1
             for (auto const& client : snapshot["windows"])
                 if (client["id"] == window)
                     return client;
-            return {};
+            return { };
         };
+        auto before = rectangle(window);
         auto source = location()["monitor"].get<size_t>();
         auto destination = 1 - source;
         press(XK_F9);
         REQUIRE(wait_for_condition([&] { return location()["monitor"] == destination; }, timeout));
         REQUIRE(wait_for_active_window(conn, window, timeout));
         CHECK(query(*socket, "workspace list")["focused_monitor"] == destination);
+        auto moved = rectangle(window);
+        if (floating)
+            REQUIRE(
+                moved
+                == std::array<int, 4>{ static_cast<int>(destination) * 1280 + (1280 - before[2]) / 2,
+                                       (720 - before[3]) / 2,
+                                       before[2],
+                                       before[3] }
+            );
         auto workspace = location()["workspace"].get<size_t>();
         command("workspace switch 0");
         command("focus window=" + std::to_string(window));
@@ -264,6 +283,7 @@ move_to_workspace = 1
         REQUIRE(wait_for_condition([&] { return query(*socket, "window list")["focused"] != window; }, timeout));
         command("workspace switch 1");
         REQUIRE(wait_for_active_window(conn, window, timeout));
+        REQUIRE(rectangle(window) == moved);
         command("workspace switch 0");
         destroy_window(conn, window);
     }

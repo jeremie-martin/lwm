@@ -516,26 +516,26 @@ private:
     void request_workarea_update();
     void refresh_workareas();
 
-    // Low-level client location write: updates client fields + EWMH desktop.
-    // Movement/hotplug callers must invalidate source and target monitors.
-    void assign_window_workspace(Client& client, size_t monitor_idx, size_t workspace_idx);
-
-    bool move_tiled_client_to_workspace(
+    // Placement ownership: normal relocation and kind changes maintain tiled
+    // membership, remembered focus, desktop publication and completion effects.
+    enum class RelocationGeometry
+    {
+        Preserve,
+        CenterOnMonitorChange
+    };
+    bool relocate_client(
         Client& client,
-        size_t target_monitor,
-        size_t target_workspace,
-        std::optional<size_t> insert_index = std::nullopt
+        size_t monitor,
+        size_t workspace,
+        RelocationGeometry geometry = RelocationGeometry::Preserve,
+        std::optional<size_t> tile_index = std::nullopt
     );
-    bool move_floating_client_to_workspace(
-        Client& client,
-        size_t target_monitor,
-        size_t target_workspace,
-        bool place_on_monitor_change
-    );
-
-    // Tiled window membership helpers (atomically update workspace list + client fields + EWMH)
-    void add_tiled_to_workspace(Client& client, size_t monitor_idx, size_t workspace_idx);
-    void remove_tiled_from_workspace(Client const& client, size_t monitor_idx, size_t workspace_idx);
+    void change_client_state(Client& client, ClientState state, std::optional<size_t> tile_index = std::nullopt);
+    void attach_tile(Client const& client, std::optional<size_t> index = std::nullopt);
+    std::optional<SavedTilePos> detach_tile(Client const& client);
+    // Raw rebinding is only for placement internals and hotplug's already-rebuilt
+    // workspace graph. Registration initializes placement before adding membership.
+    void assign_window_workspace(Client& client, size_t monitor, size_t workspace);
 
     // Off-screen visibility management
     void hide_window(Client& client);

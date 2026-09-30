@@ -147,7 +147,9 @@ TEST_CASE("Runtime position hints distinguish assigned desktops from WM publicat
     std::vector<Monitor> monitors{ left, right };
     Geometry hinted{ 2200, 100, 400, 300 };
     Client client;
-    set_floating_state(client, Geometry{ 100, 100, 400, 300 });
+    client.state = FloatingState{
+        Geometry{ 100, 100, 400, 300 }
+    };
     client.monitor = 0;
 
     SECTION("An ordinary client may follow its hint to another monitor")

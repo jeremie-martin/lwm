@@ -20,18 +20,11 @@ void WindowManager::apply_rule_target_location(xcb_window_t window, WindowRuleRe
         return;
 
     target_workspace = std::min(target_workspace, monitors_[target_monitor].workspaces.size() - 1);
-    if (movable->kind() == Client::Kind::Floating)
-    {
-        move_floating_client_to_workspace(*movable, target_monitor, target_workspace, true);
-        return;
-    }
-
     if (movable->monitor == target_monitor && movable->workspace == target_workspace)
         return;
-
-    if (!move_tiled_client_to_workspace(*movable, target_monitor, target_workspace))
+    if (!relocate_client(*movable, target_monitor, target_workspace, RelocationGeometry::CenterOnMonitorChange))
         return;
-    if (window == active_window_)
+    if (movable->kind() == Client::Kind::Tiled && window == active_window_)
         workspace_policy::set_workspace_focus(monitors_[target_monitor].workspaces[target_workspace], window);
 }
 
@@ -181,16 +174,10 @@ void WindowManager::relocate_to_transient_parent(xcb_window_t window, xcb_window
     if (parent->monitor >= monitors_.size() || parent->workspace >= monitors_[parent->monitor].workspaces.size())
         return;
 
-    if (client->kind() == Client::Kind::Tiled)
+    if (!relocate_client(*client, parent->monitor, parent->workspace))
+        return;
+    if (client->kind() == Client::Kind::Floating)
     {
-        if (!move_tiled_client_to_workspace(*client, parent->monitor, parent->workspace))
-            return;
-    }
-    else
-    {
-        if (!move_floating_client_to_workspace(*client, parent->monitor, parent->workspace, false))
-            return;
-
         Geometry geometry = current_window_geometry(window);
         Geometry parent_geometry = current_window_geometry(client->transient_for);
         floating_geometry(*client) = floating::place_floating(

@@ -175,7 +175,7 @@ void WindowManager::update_floating_monitor_for_geometry(Client& client, Geometr
     if (!new_monitor || *new_monitor == client.monitor)
         return;
 
-    if (!move_floating_client_to_workspace(client, *new_monitor, monitors_[*new_monitor].current_workspace, false))
+    if (!relocate_client(client, *new_monitor, monitors_[*new_monitor].current_workspace))
         return;
 
     if (active_window_ == client.id && is_suppressed_by_fullscreen(client))

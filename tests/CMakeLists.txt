@@ -54,6 +54,7 @@ add_executable(lwm_tests
   test_integration_scratchpad.cpp
   test_integration_wm_state.cpp
   test_integration_workspace.cpp
+  test_integration_placement.cpp
   test_floating_policy.cpp
   test_keybind_policy.cpp
   test_lwmctl.cpp

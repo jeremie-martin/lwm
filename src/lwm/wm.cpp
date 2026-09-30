@@ -563,16 +563,7 @@ void WindowManager::convert_window_to_floating(xcb_window_t window)
 
     std::optional<Geometry> prior_floating = prior_floating_geometry(*client);
     size_t monitor_idx = client->monitor;
-    size_t workspace_idx = client->workspace;
-    auto& ws = monitors_[monitor_idx].workspaces[workspace_idx];
-    std::optional<SavedTilePos> saved_position;
-    auto pos_it = ws.find_window(window);
-    if (pos_it != ws.windows.end())
-        saved_position = { static_cast<size_t>(std::distance(ws.windows.begin(), pos_it)), monitor_idx, workspace_idx };
-    remove_tiled_from_workspace(*client, monitor_idx, workspace_idx);
-
     client->mru_order = next_mru_order_++;
-    client->suppress_next_configure_request = false;
 
     Geometry geometry = prior_floating ? *prior_floating : current_window_geometry(window);
     if (!prior_floating && (client->hidden || geometry.x <= OFF_SCREEN_X / 2))
@@ -584,11 +575,7 @@ void WindowManager::convert_window_to_floating(xcb_window_t window)
             std::nullopt
         );
     }
-    set_floating_state(*client, geometry, saved_position);
-
-    uint32_t values[] = { kManagedWindowEventMask };
-    xcb_change_window_attributes(conn_.get(), window, XCB_CW_EVENT_MASK, values);
-    request_allowed_actions(*client);
+    change_client_state(*client, FloatingState{ geometry });
 }
 
 void WindowManager::convert_window_to_tiled(xcb_window_t window, std::optional<Geometry> prior_floating)
@@ -598,25 +585,10 @@ void WindowManager::convert_window_to_tiled(xcb_window_t window, std::optional<G
         return;
 
     auto saved_position = saved_tiled_pos(*client);
-    set_tiled_state(*client, prior_floating);
-    client->suppress_next_configure_request = false;
-    size_t monitor_idx = client->monitor;
-    size_t workspace_idx = std::min(client->workspace, monitors_[monitor_idx].workspaces.size() - 1);
-    add_tiled_to_workspace(*client, monitor_idx, workspace_idx);
-    // Restore original position when returning to the same workspace (e.g. type-change round-trip)
-    // so existing windows keep their layout slots instead of being displaced by the re-entering window.
-    if (saved_position && saved_position->monitor == monitor_idx && saved_position->workspace == workspace_idx)
-    {
-        auto& ws_wins = monitors_[monitor_idx].workspaces[workspace_idx].windows;
-        size_t target_pos = saved_position->index;
-        auto it = std::prev(ws_wins.end());  // window was just push_backed by add_tiled_to_workspace
-        if (target_pos + 1 < ws_wins.size()) // only rotate if not already in the right place
-            std::rotate(ws_wins.begin() + target_pos, it, it + 1);
-    }
-
-    uint32_t values[] = { kManagedWindowEventMask };
-    xcb_change_window_attributes(conn_.get(), window, XCB_CW_EVENT_MASK, values);
-    request_allowed_actions(*client);
+    std::optional<size_t> index;
+    if (saved_position && saved_position->monitor == client->monitor && saved_position->workspace == client->workspace)
+        index = saved_position->index;
+    change_client_state(*client, TiledState{ prior_floating }, index);
 }
 
 void WindowManager::toggle_window_float(xcb_window_t window)
@@ -631,20 +603,11 @@ void WindowManager::toggle_window_float(xcb_window_t window)
     if (showing_desktop_)
         return;
 
-    size_t monitor_idx = client->monitor;
-
-    bool toggled_to_floating = client->kind() == Client::Kind::Tiled;
-    if (toggled_to_floating)
-    {
+    if (client->kind() == Client::Kind::Tiled)
         convert_window_to_floating(window);
-        client = get_client(window);
-        if (!client)
-            return;
-    }
     else
     {
         Geometry prior_floating = floating_geometry(*client);
-
         if (client->maximized_horz || client->maximized_vert)
         {
             client->maximized_horz = false;
@@ -652,23 +615,7 @@ void WindowManager::toggle_window_float(xcb_window_t window)
             ewmh_.set_window_state(window, ewmh_.get()->_NET_WM_STATE_MAXIMIZED_HORZ, false);
             ewmh_.set_window_state(window, ewmh_.get()->_NET_WM_STATE_MAXIMIZED_VERT, false);
         }
-
         convert_window_to_tiled(window, prior_floating);
-        client = get_client(window);
-        if (!client)
-            return;
-    }
-
-    invalidate_monitor(monitor_idx);
-    if (toggled_to_floating)
-    {
-        client = get_client(window);
-        if (client && client->kind() == Client::Kind::Floating && should_be_visible(*client) && !client->hidden
-            && !client->fullscreen)
-        {
-            request_geometry(*client);
-            effects_.stacking = true;
-        }
     }
 
     focus_any_window(window);
@@ -1081,7 +1028,7 @@ void WindowManager::manage_client(
     if (initial.classification.kind == WindowClassification::Kind::Floating)
     {
         auto placement = initial_floating_placement(window, initial, target);
-        set_floating_state(candidate, placement.geometry);
+        candidate.state = FloatingState{ placement.geometry };
         candidate.monitor = placement.monitor;
         candidate.workspace = placement.workspace;
         candidate.desktop_pinned = placement.desktop_pinned;
@@ -1103,7 +1050,7 @@ void WindowManager::manage_client(
     clients_.emplace(window, std::move(candidate));
     auto& client = require_client(window);
     if (client.kind() == Client::Kind::Tiled)
-        monitors_[client.monitor].workspaces[client.workspace].windows.push_back(window);
+        attach_tile(client);
 
     uint32_t mask = kManagedWindowEventMask;
     xcb_change_window_attributes(conn_.get(), window, XCB_CW_EVENT_MASK, &mask);
@@ -1130,7 +1077,7 @@ void WindowManager::manage_client(
     else
         apply_rule_result_to_window(window, initial.rule_result, &initial.classification);
     set_window_layer_hint(client, client.layer_hint);
-    assign_window_workspace(client, client.monitor, client.workspace);
+    effects_.desktops.insert(client.id);
     set_iconic_state(window, client.iconic);
     request_allowed_actions(client);
     if (client.urgency.active())
@@ -1155,7 +1102,7 @@ void WindowManager::unmanage_window(xcb_window_t window)
     bool active = window == active_window_;
     if (client->kind() == Client::Kind::Tiled && monitor < monitors_.size()
         && workspace < monitors_[monitor].workspaces.size())
-        remove_tiled_from_workspace(*client, monitor, workspace);
+        detach_tile(*client);
     if (wm_state_ != XCB_NONE)
     {
         uint32_t data[] = { WM_STATE_WITHDRAWN, 0 };
@@ -2193,129 +2140,6 @@ void WindowManager::refresh_workareas()
 
     update_ewmh_workarea();
     invalidate_all_monitors();
-}
-
-void WindowManager::assign_window_workspace(Client& client, size_t monitor_idx, size_t workspace_idx)
-{
-    if (monitor_idx >= monitors_.size() || workspace_idx >= monitors_[monitor_idx].workspaces.size())
-    {
-        LWM_LOG_WARN("assign_window_workspace: invalid indices monitor={} workspace={}", monitor_idx, workspace_idx);
-        return;
-    }
-
-    client.monitor = monitor_idx;
-    client.workspace = workspace_idx;
-    effects_.desktops.insert(client.id);
-}
-
-bool WindowManager::move_tiled_client_to_workspace(
-    Client& client,
-    size_t target_monitor,
-    size_t target_workspace,
-    std::optional<size_t> insert_index
-)
-{
-    if (client.kind() != Client::Kind::Tiled)
-        return false;
-    if (target_monitor >= monitors_.size() || target_workspace >= monitors_[target_monitor].workspaces.size())
-        return false;
-
-    xcb_window_t window = client.id;
-    size_t source_monitor = client.monitor;
-    size_t source_workspace = client.workspace;
-    if (source_monitor == target_monitor && source_workspace == target_workspace && !insert_index.has_value())
-        return true;
-
-    bool same_workspace = source_monitor == target_monitor && source_workspace == target_workspace;
-    auto& source_ws = monitors_[source_monitor].workspaces[source_workspace];
-    auto source_it = source_ws.find_window(window);
-    if (source_it == source_ws.windows.end())
-        return false;
-
-    source_ws.windows.erase(source_it);
-    workspace_policy::remove_from_focus_history(source_ws, window);
-    if (!same_workspace)
-    {
-        workspace_policy::fixup_workspace_focus(
-            source_ws,
-            window,
-            [this](xcb_window_t w) { return window_is_iconic(w); }
-        );
-    }
-
-    assign_window_workspace(client, target_monitor, target_workspace);
-
-    auto& target_ws = monitors_[target_monitor].workspaces[target_workspace];
-    size_t target_index = insert_index.value_or(target_ws.windows.size());
-    target_index = std::min(target_index, target_ws.windows.size());
-    target_ws.windows.insert(target_ws.windows.begin() + static_cast<std::ptrdiff_t>(target_index), window);
-
-    invalidate_monitor(source_monitor);
-    invalidate_monitor(target_monitor);
-
-    return true;
-}
-
-bool WindowManager::move_floating_client_to_workspace(
-    Client& client,
-    size_t target_monitor,
-    size_t target_workspace,
-    bool place_on_monitor_change
-)
-{
-    if (client.kind() != Client::Kind::Floating)
-        return false;
-    if (target_monitor >= monitors_.size() || target_workspace >= monitors_[target_monitor].workspaces.size())
-        return false;
-
-    size_t source_monitor = client.monitor;
-    bool monitor_changed = source_monitor != target_monitor;
-    if (!monitor_changed && client.workspace == target_workspace)
-        return true;
-
-    if (monitor_changed && place_on_monitor_change)
-    {
-        auto& geom = floating_geometry(client);
-        geom =
-            floating::place_floating(monitors_[target_monitor].working_area(), geom.width, geom.height, std::nullopt);
-    }
-
-    assign_window_workspace(client, target_monitor, target_workspace);
-
-    invalidate_monitor(source_monitor);
-    invalidate_monitor(target_monitor);
-    request_geometry(client);
-
-    return true;
-}
-
-void WindowManager::add_tiled_to_workspace(Client& client, size_t monitor_idx, size_t workspace_idx)
-{
-    if (monitor_idx >= monitors_.size() || workspace_idx >= monitors_[monitor_idx].workspaces.size())
-    {
-        LWM_LOG_WARN("add_tiled_to_workspace: invalid indices monitor={} workspace={}", monitor_idx, workspace_idx);
-        return;
-    }
-    monitors_[monitor_idx].workspaces[workspace_idx].windows.push_back(client.id);
-    assign_window_workspace(client, monitor_idx, workspace_idx);
-}
-
-void WindowManager::remove_tiled_from_workspace(Client const& client, size_t monitor_idx, size_t workspace_idx)
-{
-    if (monitor_idx >= monitors_.size() || workspace_idx >= monitors_[monitor_idx].workspaces.size())
-    {
-        LWM_LOG_WARN(
-            "remove_tiled_from_workspace: invalid indices monitor={} workspace={}",
-            monitor_idx,
-            workspace_idx
-        );
-        return;
-    }
-    workspace_policy::remove_tiled_window(
-        monitors_[monitor_idx].workspaces[workspace_idx],
-        client.id,
-        [this](xcb_window_t w) { return window_is_iconic(w); }
-    );
 }
 
 // Keep clients mapped while hidden; UnmapNotify is reserved for withdrawal.
