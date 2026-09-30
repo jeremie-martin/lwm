@@ -1137,3 +1137,64 @@ apply = { workspace = 1 }
     CHECK(rect->y >= 0);
     destroy_window(conn, window);
 }
+
+TEST_CASE(
+    "Integration: restart preserves fullscreen claims across workspace visibility",
+    "[integration][restart][fullscreen]"
+)
+{
+    bool hidden = GENERATE(false, true);
+    bool failed_exec = GENERATE(false, true);
+    CAPTURE(hidden, failed_exec);
+    auto env = TestEnvironment::create("[workspaces]\ncount=2\n");
+    REQUIRE(env);
+    auto& conn = env->conn;
+    auto socket = wait_for_ipc_socket_path(conn);
+    REQUIRE(socket);
+    auto first = create_window(conn, 10, 10, 320, 240);
+    auto second = create_window(conn, 20, 20, 320, 240);
+    map_window(conn, first);
+    REQUIRE(wait_for_active_window(conn, first, timeout));
+    map_window(conn, second);
+    REQUIRE(wait_for_active_window(conn, second, timeout));
+    auto state = intern_atom(conn.get(), "_NET_WM_STATE");
+    auto fullscreen = intern_atom(conn.get(), "_NET_WM_STATE_FULLSCREEN");
+    // The older window claims last: creation/adoption order cannot substitute
+    // for the actual ownership history.
+    send_client_message(conn, second, state, 1, fullscreen);
+    send_client_message(conn, first, state, 1, fullscreen);
+    observe_title_after_events(conn, first);
+    auto expect_owner = [&](xcb_window_t owner, xcb_window_t suppressed)
+    {
+        auto shown = get_window_geometry(conn, owner);
+        auto parked = get_window_geometry(conn, suppressed);
+        REQUIRE(shown);
+        REQUIRE(parked);
+        CHECK(shown->x == 0);
+        CHECK(shown->width == conn.screen()->width_in_pixels);
+        CHECK(parked->x < -1000);
+        CHECK(has_state(conn, owner, fullscreen));
+        CHECK(has_state(conn, suppressed, fullscreen));
+    };
+    expect_owner(first, second);
+    if (hidden)
+        ipc_ok(*socket, "workspace switch 1");
+    auto instance = wm_instance(conn);
+    REQUIRE(instance);
+    ipc_ok(*socket, failed_exec ? "exec /definitely/missing/lwm-restart" : "restart");
+    REQUIRE(wait_for_wm_restart(conn, timeout, *instance));
+    ipc_ok(*socket, "workspace switch 0");
+    expect_owner(first, second);
+    // New claims must outrank every restored claim, then withdrawing one must
+    // reveal the remaining candidate rather than relying on a saved winner.
+    send_client_message(conn, second, state, 1, fullscreen);
+    observe_title_after_events(conn, first);
+    expect_owner(second, first);
+    send_client_message(conn, second, state, 0, fullscreen);
+    observe_title_after_events(conn, first);
+    auto restored = get_window_geometry(conn, first);
+    REQUIRE(restored);
+    CHECK(restored->x == 0);
+    destroy_window(conn, first);
+    destroy_window(conn, second);
+}

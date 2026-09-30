@@ -186,6 +186,7 @@ private:
 
     Client& edit(xcb_window_t id);
     void touch(xcb_window_t id);
+    std::vector<xcb_window_t> fullscreen_claim_order() const;
     Workspace& edit_workspace(size_t monitor, size_t workspace);
     void mutated();
     void set_mode(xcb_window_t id, bool floating);

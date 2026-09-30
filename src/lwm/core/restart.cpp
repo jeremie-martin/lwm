@@ -1,6 +1,7 @@
 #include "restart.hpp"
 #include <bit>
 #include <cstring>
+#include <unordered_set>
 
 namespace lwm::restart {
 namespace {
@@ -201,6 +202,8 @@ std::vector<uint32_t> encode(Snapshot const& snapshot)
     }
     out.count(snapshot.pool.size());
     for (auto window : snapshot.pool) out.word(window);
+    out.count(snapshot.fullscreen_claims.size());
+    for (auto window : snapshot.fullscreen_claims) out.word(window);
     return out.take();
 }
 
@@ -263,6 +266,19 @@ std::optional<Snapshot> decode(std::span<uint32_t const> words)
     }
     snapshot.pool.resize(in.count());
     for (auto& window : snapshot.pool) window = in.word();
+    snapshot.fullscreen_claims.resize(in.count());
+    // Claims name distinct saved clients. Missing live clients are handled at
+    // adoption, not by trusting dangling or duplicate IDs in the wire record.
+    std::unordered_set<xcb_window_t> candidates;
+    for (auto const& client : snapshot.clients)
+        if (client.window != XCB_NONE)
+            candidates.insert(client.window);
+    for (auto& window : snapshot.fullscreen_claims)
+    {
+        window = in.word();
+        if (!candidates.erase(window))
+            return std::nullopt;
+    }
     if (!in.done())
         return std::nullopt;
     return snapshot;

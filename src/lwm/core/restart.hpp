@@ -11,7 +11,7 @@
 // as on a fresh start.
 namespace lwm::restart {
 
-inline constexpr uint32_t format = 4;
+inline constexpr uint32_t format = 5;
 
 struct ClientRecord
 {
@@ -65,6 +65,7 @@ struct Snapshot
     std::vector<ClientRecord> clients; ///< Oldest to newest focus recency
     std::vector<NamedScratchpadRecord> named_scratchpads;
     std::vector<xcb_window_t> pool;
+    std::vector<xcb_window_t> fullscreen_claims; ///< Oldest to newest, including hidden and iconic clients
 
     ClientRecord const* find(xcb_window_t window) const;
     bool operator==(Snapshot const&) const = default;

@@ -388,11 +388,17 @@ decisions.
 Graceful restart encodes `State::snapshot()` into the root property `_LWM_RESTART`:
 focus, showing-desktop, per-workspace layout, ratios, tile order and remembered focus,
 and per-client placement, mode, geometry, preferences, urgency and scratchpad claims.
+The snapshot also records oldest-to-newest fullscreen claims, including hidden and
+iconic clients. Claim order is authoritative even when no owner is currently visible;
+it is independent of focus recency and X stacking/adoption order.
 The next process decodes it before scanning and restores the workspace graph first, so
 windows without a record join the restored current workspace. Adoption places each
 saved client directly from its record instead of replaying rules, and
 `State::restore_membership()` then applies tile order, remembered focus, recency and
-scratchpad claims. Autostart is skipped when a predecessor
+scratchpad claims. Fullscreen counters are rebuilt from the saved claim order, skipping
+clients that disappeared or no longer request fullscreen. Newly adopted fullscreen
+windows without a saved claim come afterward, in their adoption claim order; subsequent
+requests outrank all restored claims. Autostart is skipped when a predecessor
 handed over, even if its snapshot was unusable.
 
 The snapshot is private to one format version. A different format word, a truncated or

@@ -158,6 +158,20 @@ std::vector<xcb_window_t> State::fullscreen_owners() const
     return result;
 }
 
+// Persistence records claim order, not an owner or process-local counter values.
+std::vector<xcb_window_t> State::fullscreen_claim_order() const
+{
+    std::vector<Client const*> clients;
+    for (auto const& [id, client] : clients_)
+        if (client.fullscreen)
+            clients.push_back(&client);
+    std::ranges::sort(clients, [](auto const* a, auto const* b) { return claims_before(*a, *b); });
+    std::vector<xcb_window_t> order;
+    order.reserve(clients.size());
+    for (auto const* client : clients) order.push_back(client->id);
+    return order;
+}
+
 xcb_window_t State::fullscreen_owner(size_t monitor) const { return fullscreen_owners().at(monitor); }
 
 bool State::suppressed(Client const& client, xcb_window_t owner)
@@ -720,6 +734,7 @@ restart::Snapshot State::snapshot() const
         if (slot.window() != XCB_NONE)
             snapshot.named_scratchpads.push_back({ slot.name, slot.window() });
     snapshot.pool = scratchpad_pool_;
+    snapshot.fullscreen_claims = fullscreen_claim_order();
     return snapshot;
 }
 
@@ -746,6 +761,20 @@ void State::restore_workspaces(restart::Snapshot const& snapshot)
 void State::restore_membership(restart::Snapshot const& snapshot)
 {
     mutated();
+    auto adopted_claims = fullscreen_claim_order();
+    next_fullscreen_claim_ = 0;
+    for (auto id : adopted_claims) clients_.at(id).fullscreen_claim = 0;
+    auto restore_claim = [&](xcb_window_t id)
+    {
+        auto it = clients_.find(id);
+        if (it != clients_.end() && it->second.fullscreen && it->second.fullscreen_claim == 0)
+            it->second.fullscreen_claim = ++next_fullscreen_claim_;
+    };
+    for (auto id : snapshot.fullscreen_claims) restore_claim(id);
+    // Windows arriving during handoff have newer claims than the saved clients.
+    // Keep their adoption order; stale saved IDs cannot steal ownership.
+    for (auto id : adopted_claims) restore_claim(id);
+
     for (size_t m = 0; m < std::min(monitors_.size(), snapshot.monitors.size()); ++m)
         for (size_t w = 0; w < std::min(monitors_[m].workspaces.size(), snapshot.monitors[m].workspaces.size()); ++w)
         {

@@ -9,7 +9,8 @@ constexpr auto kTimeout = std::chrono::seconds(2);
 
 nlohmann::json window_entry(std::string const& path, xcb_window_t window)
 {
-    for (auto const& entry : ipc_json(path, "window list").at("windows"))
+    auto snapshot = ipc_json(path, "window list");
+    for (auto const& entry : snapshot.at("windows"))
         if (entry.at("id") == window)
             return entry;
     return nullptr;

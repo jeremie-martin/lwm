@@ -24,6 +24,7 @@ restart::Snapshot sample()
                          { 0x200, 1, 0, Client::Kind::Floating, { -32768, 32767, 65535, 1 }, std::nullopt, { }, 0, false, true } };
     snapshot.named_scratchpads = { { "tëxt with spaces", 0x200 }, { "", 0x100 } };
     snapshot.pool = { 0x300 };
+    snapshot.fullscreen_claims = { 0x200, 0x100 };
     return snapshot;
 }
 
@@ -57,6 +58,17 @@ TEST_CASE("Restart decoding rejects other formats and malformed records", "[rest
     // Oversized counts cannot drive allocation.
     std::vector<uint32_t> huge{ restart::format, 0, 0, 0, 0xFFFFFFFF };
     CHECK_FALSE(restart::decode(huge));
+    // Claims must be unique references to saved clients.
+    for (auto claims : {
+             std::vector<xcb_window_t>{ 0x100, 0x100 },
+             std::vector<xcb_window_t>{ XCB_NONE },
+             std::vector<xcb_window_t>{ 0x999 }
+    })
+    {
+        auto invalid = sample();
+        invalid.fullscreen_claims = claims;
+        CHECK_FALSE(restart::decode(restart::encode(invalid)));
+    }
     // Out-of-range enumerations and ratios are rejected.
     auto snapshot = sample();
     snapshot.monitors[0].workspaces[0].ratios[SplitAddress{ 1 }] = 1.5;
@@ -104,4 +116,71 @@ TEST_CASE("State snapshots restore workspaces, order, recency and scratchpads", 
     CHECK(target.scratchpad_pool() == std::vector<xcb_window_t>{ 3 });
     CHECK(target.require(4).mru_order > target.require(1).mru_order);
     CHECK(saved.preferences.skip_pager == true);
+}
+
+TEST_CASE("Restart claim order is explicit in the wire format", "[restart][codec]")
+{
+    std::vector<uint32_t> words{
+        5, 0, 0,   0,  0, // format, focus, active, desktop, monitor count
+        1,                // client count
+        7, 0, 0,   0,     // id, monitor, workspace, tiled
+        0, 0, 100, 80,    // normal geometry
+        0, 0, 0,   0,  0, // absent remembered floating geometry
+        0, 0, 0,   0,     // unset preferences
+        0, 0, 0,          // urgency, borderless, pinned
+        0, 0,             // named slots, pool
+        1, 7              // oldest-to-newest fullscreen claims
+    };
+    auto decoded = restart::decode(words);
+    REQUIRE(decoded);
+    CHECK(decoded->fullscreen_claims == std::vector<xcb_window_t>{ 7 });
+    CHECK(restart::encode(*decoded) == words);
+}
+
+TEST_CASE("Restart restores claim history independently of focus and adoption order", "[restart][state]")
+{
+    auto source = test::state();
+    for (xcb_window_t id : { 1, 2, 3 }) add(source, id);
+    for (xcb_window_t id : { 2, 3, 1 }) source.fullscreen(id, true);
+    source.iconic(3, true);
+    source.focus(2); // Focus recency is deliberately not fullscreen claim order.
+    source.switch_workspace(0, 1);
+    auto snapshot = source.snapshot();
+    CHECK(snapshot.fullscreen_claims == std::vector<xcb_window_t>{ 2, 3, 1 });
+
+    auto target = test::state();
+    target.restore_workspaces(snapshot);
+    for (xcb_window_t id : { 3, 1, 2 })
+    {
+        add(target, id);
+        target.fullscreen(id, true);
+    }
+    target.iconic(3, true);
+    SECTION("hidden and minimized candidates retain their order")
+    {
+        target.restore_membership(snapshot);
+        CHECK(target.fullscreen_owner(0) == XCB_NONE);
+        target.switch_workspace(0, 0);
+        CHECK(target.fullscreen_owner(0) == 1);
+        target.fullscreen(1, false);
+        CHECK(target.fullscreen_owner(0) == 2);
+        target.iconic(3, false);
+        CHECK(target.fullscreen_owner(0) == 3);
+        target.fullscreen(2, true);
+        CHECK(target.fullscreen_owner(0) == 2);
+    }
+    SECTION("missing clients are skipped and new arrivals retain newer claims")
+    {
+        target.erase(1);
+        target.fullscreen(3, false); // The application withdrew this saved claim.
+        add(target, 4);
+        target.fullscreen(4, true);
+        target.restore_membership(snapshot);
+        target.switch_workspace(0, 0);
+        CHECK(target.fullscreen_owner(0) == 4);
+        target.fullscreen(4, false);
+        CHECK(target.fullscreen_owner(0) == 2);
+        target.fullscreen(2, false);
+        CHECK(target.fullscreen_owner(0) == XCB_NONE);
+    }
 }
