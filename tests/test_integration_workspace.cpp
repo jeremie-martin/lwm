@@ -949,3 +949,76 @@ TEST_CASE("Integration: an unreadable restart snapshot adopts windows afresh", "
     CHECK_FALSE(get_window_property_string(conn.get(), conn.root(), property));
     destroy_window(conn, window);
 }
+
+TEST_CASE("Integration: restart places unrecorded windows on the restored workspace", "[integration][restart]")
+{
+    auto env = TestEnvironment::create("[workspaces]\ncount = 3\n");
+    if (!env)
+        SKIP("Test environment not available");
+    auto& conn = env->conn;
+    auto path = wait_for_ipc_socket_path(conn);
+    REQUIRE(path);
+    REQUIRE(send_ipc_command(*path, "workspace switch 2")->starts_with("ok"));
+    // A viewable window the old WM never managed, like one mapped during the exec gap.
+    auto window = create_window(conn, 10, 10, 200, 150);
+    uint32_t override_redirect = 1;
+    xcb_change_window_attributes(conn.get(), window, XCB_CW_OVERRIDE_REDIRECT, &override_redirect);
+    map_window(conn, window);
+    override_redirect = 0;
+    xcb_change_window_attributes(conn.get(), window, XCB_CW_OVERRIDE_REDIRECT, &override_redirect);
+    xcb_flush(conn.get());
+    auto previous = wm_instance(conn);
+    REQUIRE(previous);
+    REQUIRE(send_ipc_command(*path, "restart"));
+    REQUIRE(wait_for_wm_restart(conn, std::chrono::seconds(5), *previous));
+    REQUIRE(wait_for_condition(
+        [&]
+        {
+            auto reply = send_ipc_command(*path, "window list");
+            return reply && reply->find("\"id\":" + std::to_string(window) + ",\"monitor\":0,\"workspace\":2")
+                != std::string::npos;
+        },
+        kTimeout
+    ));
+    auto geometry = get_window_geometry(conn, window);
+    REQUIRE(geometry);
+    CHECK(geometry->x >= 0);
+    destroy_window(conn, window);
+}
+
+TEST_CASE("Integration: startup replaces client lists left by a previous manager", "[integration][ewmh]")
+{
+    auto& x11 = X11TestEnvironment::instance();
+    if (!x11.available())
+        SKIP("X11 unavailable");
+    X11Connection conn;
+    REQUIRE(conn.ok());
+    xcb_window_t stale = 0x1234567;
+    for (auto name : { "_NET_CLIENT_LIST", "_NET_CLIENT_LIST_STACKING" })
+        xcb_change_property(
+            conn.get(),
+            XCB_PROP_MODE_REPLACE,
+            conn.root(),
+            intern_atom(conn.get(), name),
+            XCB_ATOM_WINDOW,
+            32,
+            1,
+            &stale
+        );
+    xcb_flush(conn.get());
+    LwmProcess wm(x11.display(), "");
+    REQUIRE(wm.running());
+    REQUIRE(wait_for_wm_ready(conn, kTimeout));
+    for (auto name : { "_NET_CLIENT_LIST", "_NET_CLIENT_LIST_STACKING" })
+    {
+        CAPTURE(name);
+        auto* reply = xcb_get_property_reply(
+            conn.get(),
+            xcb_get_property(conn.get(), 0, conn.root(), intern_atom(conn.get(), name), XCB_ATOM_WINDOW, 0, 16),
+            nullptr
+        );
+        REQUIRE(reply);
+        CHECK(xcb_get_property_value_length(reply) == 0);
+        free(reply);
+    }
+}

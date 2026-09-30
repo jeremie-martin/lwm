@@ -120,8 +120,11 @@ explicit crossing-event drain. `complete_transition()` then runs in this order:
 Publication compares the projection with `Output`, the record of what LWM last wrote
 for each window, and with `RootOutput` for the root window. Only differences are sent.
 An external change is handled by forgetting the affected field: a conflicting
-ConfigureNotify forgets geometry, and an application clearing `WM_HINTS` urgency that
-LWM still asserts forgets the published urgency. Inputs to the projection that are not
+ConfigureNotify forgets geometry so the next publication rewrites it (a mismatch is
+usually LWM's own superseded configure, so it does not force one), and an application
+clearing `WM_HINTS` urgency that LWM still asserts forgets and reasserts the published
+urgency. Root lists are written on the first publication even when empty, replacing
+lists left by a previous window manager. Inputs to the projection that are not
 in `State` (a drag preview, reloaded appearance, a forgotten field) mark the
 presentation dirty. `_NET_WM_STATE` updates read the property once, replace only the
 atoms LWM owns, and preserve the rest. An explicit focus request reasserts X input
@@ -384,9 +387,11 @@ decisions.
 Graceful restart encodes `State::snapshot()` into the root property `_LWM_RESTART`:
 focus, showing-desktop, per-workspace layout, ratios, tile order and remembered focus,
 and per-client placement, mode, geometry, preferences, urgency and scratchpad claims.
-The next process decodes it before scanning; adoption places each saved client directly
-from its record instead of replaying rules, and `State::restore()` then applies
-workspace order, recency and scratchpad claims. Autostart is skipped when a predecessor
+The next process decodes it before scanning and restores the workspace graph first, so
+windows without a record join the restored current workspace. Adoption places each
+saved client directly from its record instead of replaying rules, and
+`State::restore_membership()` then applies tile order, remembered focus, recency and
+scratchpad claims. Autostart is skipped when a predecessor
 handed over, even if its snapshot was unusable.
 
 The snapshot is private to one format version. A different format word, a truncated or

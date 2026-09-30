@@ -687,7 +687,7 @@ restart::Snapshot State::snapshot() const
     return snapshot;
 }
 
-void State::restore(restart::Snapshot const& snapshot)
+void State::restore_workspaces(restart::Snapshot const& snapshot)
 {
     mutated();
     focused_monitor_ = snapshot.focused_monitor < monitors_.size() ? snapshot.focused_monitor : 0;
@@ -701,10 +701,20 @@ void State::restore(restart::Snapshot const& snapshot)
         monitor.previous_workspace = std::min(record.previous, last);
         for (size_t w = 0; w < std::min(monitor.workspaces.size(), record.workspaces.size()); ++w)
         {
-            auto& workspace = monitor.workspaces[w];
-            auto const& saved = record.workspaces[w];
-            workspace.layout_strategy = saved.strategy;
-            workspace.split_ratios = saved.ratios;
+            monitor.workspaces[w].layout_strategy = record.workspaces[w].strategy;
+            monitor.workspaces[w].split_ratios = record.workspaces[w].ratios;
+        }
+    }
+}
+
+void State::restore_membership(restart::Snapshot const& snapshot)
+{
+    mutated();
+    for (size_t m = 0; m < std::min(monitors_.size(), snapshot.monitors.size()); ++m)
+        for (size_t w = 0; w < std::min(monitors_[m].workspaces.size(), snapshot.monitors[m].workspaces.size()); ++w)
+        {
+            auto& workspace = monitors_[m].workspaces[w];
+            auto const& saved = snapshot.monitors[m].workspaces[w];
             // Adoption appended tiles in scan order; saved order ranks known members first.
             auto rank = [&](xcb_window_t id)
             { return static_cast<size_t>(std::ranges::find(saved.tiles, id) - saved.tiles.begin()); };
@@ -713,7 +723,6 @@ void State::restore(restart::Snapshot const& snapshot)
                 focused && workspace.find_window(saved.focused) != workspace.windows.end() && !focused->iconic)
                 workspace_policy::set_workspace_focus(workspace, saved.focused);
         }
-    }
     for (auto const& record : snapshot.clients)
         if (find(record.window))
             touch(record.window);

@@ -153,8 +153,10 @@ public:
 
     // Exec handoff
     restart::Snapshot snapshot() const;
-    // Applied after adoption placed each saved client on its recorded workspace.
-    void restore(restart::Snapshot const& snapshot);
+    // Before adoption: the workspace graph that adopted windows are placed into.
+    void restore_workspaces(restart::Snapshot const& snapshot);
+    // After adoption placed each saved client: order, focus memory, recency and claims.
+    void restore_membership(restart::Snapshot const& snapshot);
 
     // Publication reads a frozen model; Debug builds reject mutation meanwhile.
     void freeze() { frozen_ = true; }

@@ -91,15 +91,14 @@ void WindowManager::handle_event(xcb_generic_event_t const& event)
     {
         case XCB_CONFIGURE_NOTIFY:
         {
-            // Someone else configured a managed window: forget what LWM wrote.
+            // A mismatch is usually LWM's own superseded configure, but may be an
+            // external change: forget the written geometry so the next publication
+            // rewrites it, without forcing one now.
             auto const& e = reinterpret_cast<xcb_configure_notify_event_t const&>(event);
             if (auto it = outputs_.find(e.window); it != outputs_.end() && it->second.geometry
                 && (*it->second.geometry != Geometry{ e.x, e.y, e.width, e.height }
                     || it->second.border_width != e.border_width))
-            {
                 it->second.geometry.reset();
-                presentation_dirty_ = true;
-            }
             break;
         }
         case XCB_MAP_REQUEST:

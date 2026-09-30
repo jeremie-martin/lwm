@@ -83,13 +83,15 @@ TEST_CASE("State snapshots restore workspaces, order, recency and scratchpads", 
     auto snapshot = restart::decode(restart::encode(source.snapshot()));
     REQUIRE(snapshot);
 
-    // Adoption registers windows in scan order before the snapshot is applied.
+    // The workspace graph is restored first; adoption then registers windows in
+    // scan order before membership is restored.
     auto target = test::state(2);
     target.configure_scratchpads(std::vector<std::string>{ "term" });
+    target.restore_workspaces(*snapshot);
     for (xcb_window_t id : { 3, 2, 1 }) add(target, id);
     auto const& saved = *snapshot->find(4);
     add(target, 4, { .monitor = saved.monitor, .workspace = saved.workspace, .floating = true, .geometry = saved.geometry });
-    target.restore(*snapshot);
+    target.restore_membership(*snapshot);
 
     auto const& workspace = target.monitors()[0].workspaces[0];
     CHECK(workspace.windows == source.monitors()[0].workspaces[0].windows);

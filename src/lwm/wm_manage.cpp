@@ -35,6 +35,9 @@ char const* classification_name(WindowClassification::Kind kind)
 
 void WindowManager::scan_existing_windows(bool handoff)
 {
+    // Windows without a saved record join the restored current workspace.
+    if (handoff_)
+        state_.restore_workspaces(*handoff_);
     auto* tree = xcb_query_tree_reply(conn_.get(), xcb_query_tree(conn_.get(), conn_.screen()->root), nullptr);
     if (tree)
     {
@@ -56,8 +59,7 @@ void WindowManager::scan_existing_windows(bool handoff)
 
     if (handoff_)
     {
-        // Adoption placed saved clients on their workspaces; restore the rest.
-        state_.restore(*handoff_);
+        state_.restore_membership(*handoff_);
         if (auto const* active = state_.find(handoff_->active); active && state_.focusable(*active))
             focus_window(active->id, false);
         else

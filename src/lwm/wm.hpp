@@ -110,8 +110,9 @@ private:
 
     struct RootOutput
     {
-        std::vector<xcb_window_t> client_list;
-        std::vector<xcb_window_t> stacking;
+        // Unset until first written, so a fresh WM replaces stale lists even when empty.
+        std::optional<std::vector<xcb_window_t>> client_list;
+        std::optional<std::vector<xcb_window_t>> stacking;
         std::optional<xcb_window_t> active;
         std::optional<uint32_t> current_desktop;
         std::optional<bool> showing_desktop;
