@@ -270,9 +270,10 @@ For a panel or other state consumer:
 4. On EOF, errors, or a different instance, discard the old stream and repeat.
 
 `state_change` is an invalidation notification after completion, not a patch. It is
-sent exactly when the exposed list state (workspaces, windows, and scratchpads) differs
-from the state behind the previous notification, including metadata, urgency,
-placement, and scratchpad changes. Read-only commands and no-op actions do not emit it. Individual
+sent when the exposed list state (workspaces, windows, and scratchpads) differs from the
+state behind the previous notification, including metadata, urgency, placement, and
+scratchpad changes. Read-only commands and no-op actions do not emit it; the first
+completed operation after a new subscription may notify without a change. Individual
 focus/map/workspace events remain available for consumers that need those occurrences
 instead of a current-state view. Notifications cover only the fields exposed by the list
 API, not every X property or application state.

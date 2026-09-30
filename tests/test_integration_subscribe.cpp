@@ -153,3 +153,39 @@ TEST_CASE("Integration: subscription preserves monitor direction in key_action e
         CHECK(event.at("action") == action);
     }
 }
+
+TEST_CASE("Integration: bindings and IPC report the same action events", "[integration][subscribe][actions]")
+{
+    auto env = TestEnvironment::create("[[binds]]\nkey = \"super+l\"\nadjust_ratio = 0.05\n");
+    if (!env)
+        SKIP("X11 unavailable");
+    auto& conn = env->conn;
+    if (!extension_available(conn, &xcb_test_id))
+        SKIP("XTEST extension not available");
+    auto path = wait_for_ipc_socket_path(conn);
+    REQUIRE(path);
+    auto first = create_window(conn, 10, 10, 200, 200);
+    auto second = create_window(conn, 10, 10, 200, 200);
+    map_window(conn, first);
+    REQUIRE(wait_for_active_window(conn, first, kTimeout));
+    map_window(conn, second);
+    REQUIRE(wait_for_active_window(conn, second, kTimeout));
+    Subscriber subscriber(*path, "key_action,layout_change");
+    REQUIRE(send_key_chord(conn, XStringToKeysym("Super_L"), XStringToKeysym("l")));
+    auto key = subscriber.event();
+    CHECK(key.at("event") == "key_action");
+    CHECK(key.at("action") == "adjust_ratio");
+    auto by_key = subscriber.event();
+    auto reply = send_ipc_command(*path, "ratio adjust 0.05");
+    REQUIRE(reply);
+    REQUIRE(reply->starts_with("ok"));
+    auto by_ipc = subscriber.event();
+    for (auto const& event : { by_key, by_ipc })
+    {
+        CHECK(event.at("event") == "layout_change");
+        CHECK(event.at("action") == "adjust_ratio");
+        CHECK(event.at("delta") == 0.05);
+    }
+    destroy_window(conn, second);
+    destroy_window(conn, first);
+}

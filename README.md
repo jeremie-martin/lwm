@@ -116,13 +116,16 @@ Reload has these limits:
 
 ## Runtime control
 
-`lwmctl --help` is the command reference. Common examples:
+`lwmctl --help` is the command reference. Every key-binding action except `spawn` is
+also a command, executed by the same code. Common examples:
 
 ```sh
 lwmctl ping
 lwmctl workspace switch 2
 lwmctl layout set monocle
 lwmctl ratio adjust -0.05
+lwmctl window float
+lwmctl window to-workspace 3
 lwmctl window list
 lwmctl state
 lwmctl scratchpad list

@@ -75,6 +75,7 @@ add_executable(lwm_tests
   test_window_rules.cpp
   test_monitor_hotplug.cpp
   test_integration_drag.cpp
+  test_integration_actions.cpp
   test_integration_transitions.cpp
   test_integration_hotplug.cpp
   test_workspace.cpp

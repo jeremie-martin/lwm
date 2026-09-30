@@ -1,5 +1,6 @@
 #include "lwm/core/invariants.hpp"
 #include "lwm/core/log.hpp"
+#include "lwm/core/policy.hpp"
 #include "lwm/core/stacking.hpp"
 #include "wm.hpp"
 #include <algorithm>
@@ -470,7 +471,7 @@ void WindowManager::commit_focus(uint32_t time)
 
 uint32_t WindowManager::desktop_index(size_t monitor, size_t workspace) const
 {
-    return static_cast<uint32_t>(monitor * config_.workspaces.count + workspace);
+    return ewmh_policy::desktop_index(monitor, workspace, config_.workspaces.count);
 }
 
 // Monitor-major flat desktops. Workareas and viewports are relative to the
