@@ -3,36 +3,62 @@
 #include <catch2/catch_test_macros.hpp>
 #include <vector>
 
+using namespace lwm;
 using namespace lwm::ipc;
-TEST_CASE("IPC grammar preserves public command spellings and typed arguments", "[ipc][command]")
+
+TEST_CASE("IPC grammar preserves public command spellings and typed requests", "[ipc][command]")
 {
     // Literal public inputs are independent of the production command inventory.
-    auto check = [](std::vector<std::string> const& argv, std::string const& wire, Command const& expected)
+    auto check = [](std::vector<std::string> const& argv, std::string const& wire, Request const& expected)
     {
         CAPTURE(wire);
         REQUIRE(encode_command(argv) == wire);
         auto decoded = parse_command(wire);
         REQUIRE(decoded);
-        CHECK(decoded->id == expected.id);
-        CHECK(decoded->argument == expected.argument);
+        CHECK(*decoded == expected);
     };
-    check({ "ping" }, "ping", { CommandId::Ping, { } });
-    check({ "exec", "/tmp/a wm" }, "exec /tmp/a wm", { CommandId::Exec, std::string("/tmp/a wm") });
-    check({ "layout", "set", "monocle" }, "layout set monocle", { CommandId::Layout, std::string("monocle") });
+    check({ "ping" }, "ping", Query::Ping);
+    check({ "state" }, "state", Query::State);
+    check({ "exec", "/tmp/a wm" }, "exec /tmp/a wm", Action{ action::Exec{ "/tmp/a wm" } });
+    check({ "layout", "set", "monocle" }, "layout set monocle", Action{ action::SetLayout{ LayoutStrategy::Monocle } });
     check(
         { "scratchpad", "toggle", "a name with spaces" },
         "scratchpad toggle a name with spaces",
-        { CommandId::Toggle, std::string("a name with spaces") }
+        Action{ action::ScratchpadToggle{ "a name with spaces" } }
     );
-    check({ "ratio", "adjust", "+0.25" }, "ratio adjust +0.25", { CommandId::RatioAdjust, 0.25 });
-    check({ "workspace", "switch", "2" }, "workspace switch 2", { CommandId::WorkspaceSwitch, uint32_t{ 2 } });
-    check({ "focus", "window=0x123" }, "focus window=0x123", { CommandId::FocusWindow, uint32_t{ 291 } });
+    check({ "ratio", "adjust", "+0.25" }, "ratio adjust +0.25", Action{ action::AdjustRatio{ 0.25 } });
+    check({ "workspace", "switch", "2" }, "workspace switch 2", Action{ action::SwitchWorkspace{ 2 } });
+    check({ "focus", "window=0x123" }, "focus window=0x123", Action{ action::FocusWindow{ 291 } });
     check(
         { "subscribe", "focus_change", "state_change" },
         "subscribe focus_change,state_change",
-        { CommandId::Subscribe, uint32_t{ lwm::Event_FocusChange | lwm::Event_StateChange } }
+        Subscribe{ Event_FocusChange | Event_StateChange }
     );
-    check({ "subscribe" }, "subscribe", { CommandId::Subscribe, uint32_t{ lwm::Event_All } });
+    check({ "subscribe" }, "subscribe", Subscribe{ Event_All });
+}
+
+TEST_CASE("IPC exposes every key-binding action except process launch", "[ipc][command]")
+{
+    auto request = [](std::string_view text)
+    {
+        auto parsed = parse_command(text);
+        REQUIRE(parsed);
+        return *parsed;
+    };
+    CHECK(request("window close") == Request{ Action{ action::Kill{ } } });
+    CHECK(request("window fullscreen") == Request{ Action{ action::ToggleFullscreen{ } } });
+    CHECK(request("window float") == Request{ Action{ action::ToggleFloat{ } } });
+    CHECK(request("window swap next") == Request{ Action{ action::SwapNext{ } } });
+    CHECK(request("window swap prev") == Request{ Action{ action::SwapPrev{ } } });
+    CHECK(request("window to-workspace 3") == Request{ Action{ action::MoveToWorkspace{ 3 } } });
+    CHECK(request("window to-monitor left") == Request{ Action{ action::MoveToMonitor{ -1 } } });
+    CHECK(request("monitor focus right") == Request{ Action{ action::FocusMonitor{ 1 } } });
+    CHECK(request("workspace toggle") == Request{ Action{ action::ToggleWorkspace{ } } });
+    CHECK(request("workspace next") == Request{ Action{ action::NextWorkspace{ } } });
+    CHECK(request("ratio reset") == Request{ Action{ action::ResetRatios{ } } });
+    CHECK(request("reload-config") == Request{ Action{ action::ReloadConfig{ } } });
+    CHECK(action_name(action::FocusMonitor{ -1 }) == "focus_monitor_left");
+    CHECK(action_name(action::AdjustRatio{ 0.05 }) == "adjust_ratio");
 }
 
 TEST_CASE("IPC grammar rejects invalid arguments before execution", "[ipc][command]")
@@ -47,6 +73,8 @@ TEST_CASE("IPC grammar rejects invalid arguments before execution", "[ipc][comma
                                       "workspace switch -1",
                                       "workspace switch 1junk",
                                       "layout set other",
+                                      "monitor focus up",
+                                      "window to-monitor",
                                       "scratchpad toggle",
                                       "subscribe unknown",
                                       "exec /bin/lwm\nping" })
@@ -57,5 +85,5 @@ TEST_CASE("IPC grammar rejects invalid arguments before execution", "[ipc][comma
     CHECK_FALSE(encode_command(std::vector<std::string>{ "exec", "two", "arguments" }));
     CHECK_FALSE(encode_command(std::vector<std::string>{ "scratchpad", "toggle", "bad\nname" }));
     CHECK(parse_command("  ping  "));
-    CHECK(std::get<uint32_t>(parse_command("focus window=0X123")->argument) == 0x123);
+    CHECK(*parse_command("focus window=0X123") == Request{ Action{ action::FocusWindow{ 0x123 } } });
 }

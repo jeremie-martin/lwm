@@ -1,18 +1,12 @@
 #pragma once
 
-#include "lwm/core/types.hpp"
+#include "lwm/core/state.hpp"
 #include <span>
-#include <unordered_map>
 
 namespace lwm::stacking {
 
-// Monitor fullscreen owners must already be resolved for the current state.
-std::vector<xcb_window_t> compute_order(
-    std::unordered_map<xcb_window_t, Client> const& clients,
-    std::span<Monitor const> monitors,
-    bool showing_desktop,
-    xcb_window_t active
-);
+// One bottom-to-top order for every client and fixture, derived from state.
+std::vector<xcb_window_t> compute_order(State const& state);
 
 struct StackMove
 {

@@ -37,7 +37,7 @@ struct Fixture
     std::filesystem::path directory;
     Server server;
     std::string reply = "ok pong";
-    std::vector<lwm::ipc::CommandId> requests;
+    std::vector<lwm::ipc::Request> requests;
     Fixture()
     {
         char pattern[] = "/tmp/lwm-ipc-test-XXXXXX";
@@ -58,9 +58,9 @@ struct Fixture
         poll(fds.data(), fds.size(), 1);
         server.dispatch(
             fds,
-            [&](lwm::ipc::Command const& request)
+            [&](lwm::ipc::Request const& request)
             {
-                requests.push_back(request.id);
+                requests.push_back(request);
                 return reply;
             }
         );
@@ -106,7 +106,7 @@ TEST_CASE("IPC assembles partial requests and preserves EOF framing", "[ipc][tra
         REQUIRE(shutdown(peer.fd, SHUT_WR) == 0);
     }
     CHECK(f.receive(peer) == "ok pong\n");
-    CHECK(f.requests == std::vector<lwm::ipc::CommandId>{ lwm::ipc::CommandId::Ping });
+    CHECK(f.requests == std::vector<lwm::ipc::Request>{ lwm::ipc::Query::Ping });
 }
 
 TEST_CASE("IPC finishes large replies across partial writes", "[ipc][transport]")

@@ -601,7 +601,7 @@ TEST_CASE(
     destroy_window(conn, first);
 }
 
-TEST_CASE("Integration: maximize requests leave dock and desktop geometry alone", "[integration][transition][geometry]")
+TEST_CASE("Integration: state requests leave dock and desktop windows alone", "[integration][transition][geometry]")
 {
     char const* type = nullptr;
     SECTION("dock") { type = "_NET_WM_WINDOW_TYPE_DOCK"; }
@@ -621,9 +621,16 @@ TEST_CASE("Integration: maximize requests leave dock and desktop geometry alone"
     auto before = geometry(conn, window);
     REQUIRE(before);
     auto horizontal = intern_atom(conn.get(), "_NET_WM_STATE_MAXIMIZED_HORZ");
+    auto marker = create_window(conn, 10, 10, 100, 100);
+    map_window(conn, marker);
+    REQUIRE(wait_for_active_window(conn, marker, timeout));
     send_client_message(conn, window, intern_atom(conn.get(), "_NET_WM_STATE"), 1, horizontal);
-    REQUIRE(wait_for_condition([&] { return has_state(conn, window, horizontal); }, timeout));
+    // A marker on the same connection proves the request was handled.
+    observe_title_after_events(conn, marker);
+    // Fixtures have no maximized presentation, so none is advertised.
+    CHECK_FALSE(has_state(conn, window, horizontal));
     CHECK(geometry(conn, window) == before);
+    destroy_window(conn, marker);
     destroy_window(conn, window);
 }
 
@@ -1069,54 +1076,6 @@ TEST_CASE(
         CHECK(property_has_atom(conn.get(), window, state, fullscreen) == is_fullscreen);
         CHECK(property_has_atom(conn.get(), window, state, above) == (!is_fullscreen && (is_modal || layer == 1)));
         CHECK(property_has_atom(conn.get(), window, state, below) == (!is_fullscreen && !is_modal && layer == -1));
-    }
-    destroy_window(conn, window);
-}
-
-TEST_CASE("Integration: restart handoff works in both directions across binaries", "[.][integration][crossbinary]")
-{
-    auto previous = std::getenv("LWM_TEST_PREVIOUS_BINARY");
-    REQUIRE(previous);
-    REQUIRE(std::filesystem::is_regular_file(previous));
-    auto env = TestEnvironment::create(R"(
-[[rules]]
-apply = { floating = true, below = true, skip_taskbar = true, geometry = { x = 60, y = 70, width = 300, height = 200 } }
-)");
-    REQUIRE(env);
-    auto& conn = env->conn;
-    auto window = create_window(conn, 60, 70, 300, 200);
-    map_window(conn, window);
-    REQUIRE(wait_for_active_window(conn, window, timeout));
-    auto state = intern_atom(conn.get(), "_NET_WM_STATE");
-    auto fullscreen = intern_atom(conn.get(), "_NET_WM_STATE_FULLSCREEN");
-    auto below = intern_atom(conn.get(), "_NET_WM_STATE_BELOW");
-    auto taskbar = intern_atom(conn.get(), "_NET_WM_STATE_SKIP_TASKBAR");
-    auto current = find_test_executable_path("lwm").string();
-    send_client_message(conn, window, state, 0, taskbar, 0, 0, 0);
-    observe_title_after_events(conn, window);
-    // Two old-binary handoffs can reuse the original WM's resource ID. Old
-    // binaries do not maintain the extension; their later choices must win.
-    for (auto const& binary : std::array<std::string, 3>{ previous, previous, current })
-    {
-        send_client_message(conn, window, state, 1, fullscreen, 0, 0, 0);
-        observe_title_after_events(conn, window);
-        auto instance = wm_instance(conn);
-        REQUIRE(instance);
-        auto socket = wait_for_ipc_socket_path(conn);
-        REQUIRE(socket);
-        auto reply = send_ipc_command(*socket, "exec " + binary);
-        REQUIRE(reply);
-        REQUIRE(reply->starts_with("ok "));
-        REQUIRE(wait_for_wm_restart(conn, timeout, *instance));
-        REQUIRE(wait_for_active_window(conn, window, timeout));
-        REQUIRE(property_has_atom(conn.get(), window, state, fullscreen));
-        if (binary == previous)
-            send_client_message(conn, window, state, 1, taskbar, 0, 0, 0);
-        send_client_message(conn, window, state, 0, fullscreen, 0, 0, 0);
-        observe_title_after_events(conn, window);
-        CHECK(property_has_atom(conn.get(), window, state, below));
-        CHECK(property_has_atom(conn.get(), window, state, taskbar));
-        CHECK(geometry(conn, window) == lwm::Geometry{ 60, 70, 300, 200 });
     }
     destroy_window(conn, window);
 }

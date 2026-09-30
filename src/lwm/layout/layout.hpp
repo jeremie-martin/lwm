@@ -24,8 +24,6 @@ struct SplitHitResult
     int32_t cross_max;
 };
 
-Geometry working_area_to_content_rect(Geometry const& area, uint32_t padding, uint32_t border_width);
-
 // Geometry only: arranging, dropping and resizing use the same subdivision.
 class Layout
 {

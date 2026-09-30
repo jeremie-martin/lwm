@@ -1,35 +1,156 @@
-#include "lwm/core/floating.hpp"
+#include "lwm/core/invariants.hpp"
+#include "lwm/core/log.hpp"
+#include "lwm/core/stacking.hpp"
 #include "wm.hpp"
 #include <algorithm>
-#include <utility>
+#include <limits>
 #include <xcb/xcb_icccm.h>
 
 namespace lwm {
 
-void WindowManager::invalidate_monitor(size_t monitor, xcb_window_t preferred)
+// Every operation ends here. Inputs read from X are refreshed, remaining
+// domain consequences are resolved, and then the frozen model is projected
+// onto X: each output is compared with what LWM last wrote and only the
+// difference is sent. Nothing records which parts of the output a mutation
+// affected, so no mutation can forget one.
+void WindowManager::complete_transition()
 {
-    state_.invalidate(monitor, preferred);
+    bool obligations = workareas_dirty_ || !configure_replies_.empty() || !events_.empty() || restack_requested_
+        || drain_requested_ || presentation_dirty_;
+    if (!obligations && state_.revision() == published_revision_)
+        return;
+
+    // Inputs and domain resolution; State may still change.
+    if (std::exchange(workareas_dirty_, false))
+        refresh_workareas();
+    validate_drag();
+    repair_focus();
+    arrange_tiles();
+    auto focus_request = state_.take_focus_request();
+    if (focus_request && state_.find(state_.active_window()))
+        state_.clear_urgency(state_.active_window());
+    published_revision_ = state_.revision();
+
+    // Publication reads a frozen model.
+    state_.freeze();
+    auto owners = state_.fullscreen_owners();
+    for (size_t m = 0; m < std::max(owners.size(), root_.fullscreen_owners.size()); ++m)
+    {
+        auto before = m < root_.fullscreen_owners.size() ? root_.fullscreen_owners[m] : XCB_NONE;
+        auto after = m < owners.size() ? owners[m] : XCB_NONE;
+        if (before != after)
+            LWM_LOG_DEBUG("Fullscreen owner changed: monitor={} window={:#x} -> {:#x}", m, before, after);
+    }
+    root_.fullscreen_owners = owners;
+    // One pass resolves each client's output record and visibility, in registration order.
+    std::vector<Projected> clients;
+    clients.reserve(state_.clients().size());
+    for (auto const& [id, client] : state_.clients())
+        clients.push_back({ &client, &outputs_[id], state_.visible(client, owners[client.monitor]) });
+    std::ranges::sort(clients, { }, [](Projected const& p) { return p.client->order; });
+    bool moved = publish_clients(clients);
+    if (focus_request)
+    {
+        commit_focus(*focus_request);
+        // Explicit focus reasserts the focused state even if a client rewrote it.
+        if (auto it = outputs_.find(state_.active_window()); it != outputs_.end())
+            it->second.states.reset();
+    }
+    bool urgency_changed = false;
+    std::vector<std::pair<xcb_window_t, std::vector<xcb_atom_t>>> states;
+    for (auto const& projected : clients) urgency_changed |= publish_properties(*projected.client, *projected.output, states);
+    publish_window_states(states);
+    publish_fixtures();
+    publish_root(clients, urgency_changed);
+    reconcile_stacking(focus_request.has_value());
+    withdraw_removed();
+    if (drain_requested_ || (moved && !drag_active()))
+        flush_and_drain_crossing();
+    conn_.flush();
+    emit_events(focus_request.has_value());
+    state_.thaw();
+
+    configure_replies_.clear();
+    restack_requested_ = false;
+    drain_requested_ = false;
+    presentation_dirty_ = false;
+    LWM_ASSERT_INVARIANTS(state_);
 }
 
-void WindowManager::request_configure_notify(Client const& client)
+// ---------------------------------------------------------------------------
+// Layout
+// ---------------------------------------------------------------------------
+
+// The same ordered windows drive arrangement, split hit-testing and drop
+// targeting: visible members of the current workspace, then visible sticky
+// members of other workspaces. Fullscreen windows take fullscreen geometry.
+std::vector<xcb_window_t> WindowManager::tiled_participants(Monitor const& monitor) const
 {
-    state_.effects().configure_replies.insert(client.id);
+    size_t index = static_cast<size_t>(&monitor - state_.monitors().data());
+    auto owner = state_.fullscreen_owner(index);
+    std::vector<xcb_window_t> windows;
+    auto collect = [&](Workspace const& workspace, bool current)
+    {
+        for (auto window : workspace.windows)
+        {
+            auto const& client = state_.require(window);
+            if ((current || client.sticky) && !client.fullscreen && state_.visible(client, owner))
+                windows.push_back(window);
+        }
+    };
+    collect(monitor.current(), true);
+    for (size_t i = 0; i < monitor.workspaces.size(); ++i)
+        if (i != monitor.current_workspace)
+            collect(monitor.workspaces[i], false);
+    return windows;
 }
 
-void WindowManager::request_geometry(Client const& client)
+void WindowManager::arrange_tiles()
 {
-    if (client.kind() == Client::Kind::Tiled || client.kind() == Client::Kind::Floating)
-        state_.effects().geometry.push_back(client.id);
+    for (auto const& monitor : state_.monitors())
+    {
+        auto windows = tiled_participants(monitor);
+        auto const& workspace = monitor.current();
+        auto slots =
+            layout_.arrange(windows.size(), monitor.working_area(), workspace.layout_strategy, workspace.split_ratios);
+        for (size_t i = 0; i < windows.size(); ++i) state_.place_tile(windows[i], slots[i]);
+    }
 }
 
+Geometry WindowManager::fullscreen_geometry(Client const& client) const
+{
+    auto const& monitors = state_.monitors();
+    Geometry area = monitors[client.monitor].geometry();
+    if (!client.fullscreen_monitors)
+        return area;
+    auto const& spec = *client.fullscreen_monitors;
+    int32_t min_x = std::numeric_limits<int32_t>::max(), min_y = min_x;
+    int32_t max_x = std::numeric_limits<int32_t>::min(), max_y = max_x;
+    for (auto index : { spec.top, spec.bottom, spec.left, spec.right })
+    {
+        if (index >= monitors.size())
+            continue;
+        auto const& m = monitors[index];
+        min_x = std::min<int32_t>(min_x, m.x);
+        min_y = std::min<int32_t>(min_y, m.y);
+        max_x = std::max<int32_t>(max_x, m.x + m.width);
+        max_y = std::max<int32_t>(max_y, m.y + m.height);
+    }
+    if (min_x > max_x)
+        return area;
+    return { geometry_coordinate(min_x), geometry_coordinate(min_y), geometry_extent(max_x - min_x), geometry_extent(max_y - min_y) };
+}
+
+// Maximize and fullscreen project the normal rectangle; a tiled move preview
+// overrides layout without changing membership.
 Geometry WindowManager::presentation_geometry(Client const& client) const
 {
     if (client.fullscreen)
-        return fullscreen_geometry_for_client(client);
-    if (client.kind() == Client::Kind::Floating)
+        return fullscreen_geometry(client);
+    if (auto const* floating = floating_mode(client))
         return floating::presentation_geometry(
-            floating_geometry(client),
-            monitors_[client.monitor].working_area(),
+            floating->geometry,
+            state_.monitors()[client.monitor].working_area(),
             client.maximized_horz,
             client.maximized_vert
         );
@@ -41,260 +162,508 @@ Geometry WindowManager::presentation_geometry(Client const& client) const
                 static_cast<int32_t>(drag_->last_y) - drag_->start_y,
                 move->edges
             );
-    return client.tiled_geometry;
+    return tiled_mode(client)->layout;
 }
 
-void WindowManager::dispatch_event(
-    xcb_generic_event_t const& event,
-    size_t& remaining,
-    std::chrono::steady_clock::time_point deadline
+uint32_t WindowManager::border_width(Client const& client) const
+{
+    return client.fullscreen || client.borderless ? 0U : config_.appearance.border_width;
+}
+
+uint32_t WindowManager::border_color(Client const& client) const
+{
+    if (client.id == state_.active_window())
+        return config_.appearance.border_color;
+    if (client.urgency.active())
+        return config_.appearance.urgent_border_color;
+    return conn_.screen()->black_pixel;
+}
+
+// ---------------------------------------------------------------------------
+// Client publication
+// ---------------------------------------------------------------------------
+
+// Hides, shows, configures and maps clients. Returns whether anything moved
+// under the pointer: visibility changed or a tile was rearranged.
+bool WindowManager::publish_clients(std::vector<Projected> const& clients)
+{
+    bool moved = false;
+    for (auto const& [client, output, visible] : clients)
+    {
+        if (visible || output->hidden)
+            continue;
+        output->hidden = true;
+        output->geometry.reset();
+        uint32_t x = static_cast<uint32_t>(OFF_SCREEN_X);
+        xcb_configure_window(conn_.get(), client->id, XCB_CONFIG_WINDOW_X, &x);
+        moved = true;
+    }
+    // Keep a split resize's configure requests together on the server.
+    bool resizing_tiles = drag_ && std::holds_alternative<TiledResize>(drag_->operation);
+    if (resizing_tiles)
+        xcb_grab_server(conn_.get());
+    for (auto const& [client, output, visible] : clients)
+    {
+        if (!visible)
+            continue;
+        bool showing = output->hidden;
+        if (!write_geometry(*client, *output, presentation_geometry(*client), border_width(*client)))
+            continue;
+        moved |= showing || client->kind() == Client::Kind::Tiled;
+        // The synthetic ConfigureNotify sent with the write acknowledges any request.
+        configure_replies_.erase(client->id);
+    }
+    if (resizing_tiles)
+        xcb_ungrab_server(conn_.get());
+    for (auto window : configure_replies_)
+        if (auto const* client = state_.find(window))
+            send_configure_notify(window, presentation_geometry(*client), border_width(*client));
+    for (auto const& [client, output, visible] : clients)
+        if (!output->mapped)
+        {
+            xcb_map_window(conn_.get(), client->id);
+            output->mapped = true;
+        }
+    return moved;
+}
+
+// Owns WM-driven configure requests, sync notifications and synthetic
+// ConfigureNotify replies. An unchanged rectangle and border are skipped.
+bool WindowManager::write_geometry(Client const& client, Output& output, Geometry geometry, uint32_t border)
+{
+    geometry.width = std::max<uint16_t>(1, geometry.width);
+    geometry.height = std::max<uint16_t>(1, geometry.height);
+    if (!output.hidden && output.geometry == geometry && output.border_width == border)
+        return false;
+    LWM_LOG_TRACE(
+        "Geometry submitted: window={:#x} x={} y={} width={} height={} border={}",
+        client.id,
+        geometry.x,
+        geometry.y,
+        geometry.width,
+        geometry.height,
+        border
+    );
+    output.hidden = false;
+    output.geometry = geometry;
+    output.border_width = border;
+    if (output.sync_counter)
+    {
+        uint64_t value = ++output.sync_value;
+        send_protocol_message(
+            client.id,
+            ewmh_.get()->_NET_WM_SYNC_REQUEST,
+            last_event_time_,
+            static_cast<uint32_t>(value),
+            static_cast<uint32_t>(value >> 32)
+        );
+    }
+    uint32_t values[] = { static_cast<uint32_t>(geometry.x),
+                          static_cast<uint32_t>(geometry.y),
+                          geometry.width,
+                          geometry.height,
+                          border };
+    xcb_configure_window(
+        conn_.get(),
+        client.id,
+        XCB_CONFIG_WINDOW_X | XCB_CONFIG_WINDOW_Y | XCB_CONFIG_WINDOW_WIDTH | XCB_CONFIG_WINDOW_HEIGHT
+            | XCB_CONFIG_WINDOW_BORDER_WIDTH,
+        values
+    );
+    send_configure_notify(client.id, geometry, border);
+    return true;
+}
+
+void WindowManager::send_configure_notify(xcb_window_t window, Geometry geometry, uint32_t border)
+{
+    xcb_configure_notify_event_t event{ };
+    event.response_type = XCB_CONFIGURE_NOTIFY;
+    event.event = window;
+    event.window = window;
+    event.x = geometry.x;
+    event.y = geometry.y;
+    event.width = std::max<uint16_t>(1, geometry.width);
+    event.height = std::max<uint16_t>(1, geometry.height);
+    event.border_width = static_cast<uint16_t>(border);
+    xcb_send_event(conn_.get(), 0, window, XCB_EVENT_MASK_STRUCTURE_NOTIFY, reinterpret_cast<char*>(&event));
+}
+
+// Per-window properties. Returns whether published urgency changed, which
+// panels observe through a client-list notification.
+bool WindowManager::publish_properties(
+    Client const& client,
+    Output& output,
+    std::vector<std::pair<xcb_window_t, std::vector<xcb_atom_t>>>& states
 )
 {
-    auto current = event;
-    if ((event.response_type & ~0x80) == XCB_MOTION_NOTIFY && drag_active())
+    xcb_window_t id = client.id;
+    if (auto color = border_color(client); output.border_color != color)
     {
-        while (remaining && std::chrono::steady_clock::now() < deadline)
-        {
-            if (deferred_events_.empty())
-            {
-                auto* next = xcb_poll_for_queued_event(conn_.get());
-                if (!next)
-                    break;
-                deferred_events_.push_back(*next);
-                free(next);
-            }
-            auto const& next = deferred_events_.front();
-            if ((next.response_type & ~0x80) != XCB_MOTION_NOTIFY)
-                break;
-            --remaining;
-            current = next;
-            deferred_events_.pop_front();
-        }
+        xcb_change_window_attributes(conn_.get(), id, XCB_CW_BORDER_PIXEL, &color);
+        output.border_color = color;
     }
-    handle_event(current);
-    complete_transition();
+    bool urgency_changed = output.urgent != client.urgency.active();
+    if (urgency_changed)
+        publish_urgency(client, output);
+    uint32_t desktop = client.sticky ? 0xFFFFFFFF : desktop_index(client.monitor, client.workspace);
+    if (output.desktop != desktop)
+    {
+        ewmh_.set_window_desktop(id, desktop);
+        output.desktop = desktop;
+    }
+    uint32_t wm_state = client.iconic ? WM_STATE_ICONIC : WM_STATE_NORMAL;
+    if (output.wm_state != wm_state)
+    {
+        uint32_t data[] = { wm_state, 0 };
+        xcb_change_property(conn_.get(), XCB_PROP_MODE_REPLACE, id, atoms_.wm_state, atoms_.wm_state, 32, 2, data);
+        output.wm_state = wm_state;
+    }
+    if (char const* kind = client_kind_str(client.kind()); output.window_class != kind)
+    {
+        auto* e = ewmh_.get();
+        std::vector<xcb_atom_t> actions = { e->_NET_WM_ACTION_CLOSE,          e->_NET_WM_ACTION_CHANGE_DESKTOP,
+                                            e->_NET_WM_ACTION_MINIMIZE,       e->_NET_WM_ACTION_STICK,
+                                            e->_NET_WM_ACTION_FULLSCREEN,     e->_NET_WM_ACTION_ABOVE,
+                                            e->_NET_WM_ACTION_BELOW,          e->_NET_WM_ACTION_MAXIMIZE_VERT,
+                                            e->_NET_WM_ACTION_MAXIMIZE_HORZ };
+        if (client.kind() == Client::Kind::Floating)
+        {
+            actions.push_back(e->_NET_WM_ACTION_MOVE);
+            actions.push_back(e->_NET_WM_ACTION_RESIZE);
+        }
+        ewmh_.set_allowed_actions(id, actions);
+        publish_window_class(id, kind);
+        output.window_class = kind;
+    }
+    if (output.fullscreen_monitors != client.fullscreen_monitors)
+    {
+        if (auto const& m = client.fullscreen_monitors)
+            xcb_ewmh_set_wm_fullscreen_monitors(ewmh_.get(), id, m->top, m->bottom, m->left, m->right);
+        else if (output.fullscreen_monitors)
+            xcb_delete_property(conn_.get(), id, ewmh_.get()->_NET_WM_FULLSCREEN_MONITORS);
+        output.fullscreen_monitors = client.fullscreen_monitors;
+    }
+    auto* e = ewmh_.get();
+    auto layer = effective_layer(client);
+    std::pair<xcb_atom_t, bool> const owned[] = {
+        { e->_NET_WM_STATE_FULLSCREEN, client.fullscreen },
+        { e->_NET_WM_STATE_ABOVE, layer == LayerHint::Above },
+        { e->_NET_WM_STATE_BELOW, layer == LayerHint::Below },
+        { e->_NET_WM_STATE_STICKY, client.sticky },
+        { e->_NET_WM_STATE_MODAL, client.modal },
+        { e->_NET_WM_STATE_SKIP_TASKBAR, skips_taskbar(client) },
+        { e->_NET_WM_STATE_SKIP_PAGER, skips_pager(client) },
+        { e->_NET_WM_STATE_MAXIMIZED_HORZ, client.maximized_horz },
+        { e->_NET_WM_STATE_MAXIMIZED_VERT, client.maximized_vert },
+        { e->_NET_WM_STATE_HIDDEN, client.iconic },
+        { e->_NET_WM_STATE_DEMANDS_ATTENTION, client.urgency.active() },
+        { atoms_.net_wm_state_focused, id == state_.active_window() },
+    };
+    uint32_t bits = 0;
+    std::vector<xcb_atom_t> enabled;
+    for (size_t i = 0; i < std::size(owned); ++i)
+        if (owned[i].second)
+        {
+            bits |= 1U << i;
+            enabled.push_back(owned[i].first);
+        }
+    if (output.states != bits)
+    {
+        states.emplace_back(id, std::move(enabled));
+        output.states = bits;
+    }
+    return urgency_changed;
 }
 
-void WindowManager::commit_focus(TransitionEffects const& publication)
+void WindowManager::publish_window_states(std::vector<std::pair<xcb_window_t, std::vector<xcb_atom_t>>> const& states)
 {
-    if (!publication.previous_focus)
+    if (states.empty())
         return;
-    auto previous = *publication.previous_focus;
-    if (previous != XCB_NONE && previous != active_window_)
-        ewmh_.set_window_state(previous, net_wm_state_focused_, false);
-    if (auto* old = get_client(previous); old && previous != active_window_)
+    auto* e = ewmh_.get();
+    xcb_atom_t const owned[] = { e->_NET_WM_STATE_FULLSCREEN,     e->_NET_WM_STATE_ABOVE,
+                                 e->_NET_WM_STATE_BELOW,          e->_NET_WM_STATE_STICKY,
+                                 e->_NET_WM_STATE_MODAL,          e->_NET_WM_STATE_SKIP_TASKBAR,
+                                 e->_NET_WM_STATE_SKIP_PAGER,     e->_NET_WM_STATE_MAXIMIZED_HORZ,
+                                 e->_NET_WM_STATE_MAXIMIZED_VERT, e->_NET_WM_STATE_HIDDEN,
+                                 e->_NET_WM_STATE_DEMANDS_ATTENTION, atoms_.net_wm_state_focused };
+    ewmh_.update_window_states(states, owned);
+}
+
+void WindowManager::publish_window_class(xcb_window_t window, char const* kind)
+{
+    xcb_change_property(
+        conn_.get(),
+        XCB_PROP_MODE_REPLACE,
+        window,
+        atoms_.lwm_window_class,
+        ewmh_.get()->UTF8_STRING,
+        8,
+        static_cast<uint32_t>(std::strlen(kind)),
+        kind
+    );
+}
+
+// Mirrors urgency into ICCCM WM_HINTS for panels that read it. An LWM-only
+// write echoes back as PropertyNotify; the echo must not look app-originated.
+void WindowManager::publish_urgency(Client const& client, Output& output)
+{
+    bool urgent = client.urgency.active();
+    output.urgent = urgent;
+    if (!urgent)
+        output.ignore_urgency_echo = false;
+    bool arm_echo = urgent && client.urgency.has(UrgencySource::WmInitiated) && !client.urgency.has(UrgencySource::App);
+    xcb_icccm_wm_hints_t hints{ };
+    bool present =
+        xcb_icccm_get_wm_hints_reply(conn_.get(), xcb_icccm_get_wm_hints(conn_.get(), client.id), &hints, nullptr);
+    if (!present && !urgent)
+        return;
+    if (((hints.flags & XUrgencyHint) != 0) == urgent)
+        return;
+    if (urgent)
+        hints.flags |= XUrgencyHint;
+    else
+        hints.flags &= ~XUrgencyHint;
+    output.ignore_urgency_echo = arm_echo;
+    xcb_icccm_set_wm_hints(conn_.get(), client.id, &hints);
+}
+
+void WindowManager::publish_fixtures()
+{
+    for (auto const& [id, fixture] : state_.fixtures())
     {
-        uint32_t color = border_color_for_client(*old);
-        xcb_change_window_attributes(conn_.get(), previous, XCB_CW_BORDER_PIXEL, &color);
+        auto& output = outputs_[id];
+        if (output.wm_state != WM_STATE_NORMAL)
+        {
+            uint32_t data[] = { WM_STATE_NORMAL, 0 };
+            xcb_change_property(conn_.get(), XCB_PROP_MODE_REPLACE, id, atoms_.wm_state, atoms_.wm_state, 32, 2, data);
+            output.wm_state = WM_STATE_NORMAL;
+        }
+        if (char const* role = fixture_role_str(fixture.role); output.window_class != role)
+        {
+            publish_window_class(id, role);
+            output.window_class = role;
+        }
+        if (!output.mapped)
+        {
+            xcb_map_window(conn_.get(), id);
+            output.mapped = true;
+        }
     }
-    auto* client = get_client(active_window_);
-    if (client)
+}
+
+void WindowManager::commit_focus(uint32_t time)
+{
+    // Explicit same-window focus still reasserts input focus and WM_TAKE_FOCUS.
+    if (auto const* client = state_.find(state_.active_window()))
     {
-        uint32_t color = border_color_for_client(*client);
-        xcb_change_window_attributes(conn_.get(), client->id, XCB_CW_BORDER_PIXEL, &color);
-        send_wm_take_focus(*client, publication.focus_time ? publication.focus_time : last_event_time_);
-        xcb_set_input_focus(conn_.get(), XCB_INPUT_FOCUS_POINTER_ROOT, client->id, publication.focus_time);
-        ewmh_.set_window_state(client->id, net_wm_state_focused_, true);
+        if (client->supports_take_focus)
+            send_protocol_message(client->id, atoms_.wm_take_focus, time ? time : last_event_time_);
+        xcb_set_input_focus(conn_.get(), XCB_INPUT_FOCUS_POINTER_ROOT, client->id, time);
     }
     else
         xcb_set_input_focus(conn_.get(), XCB_INPUT_FOCUS_POINTER_ROOT, conn_.screen()->root, XCB_CURRENT_TIME);
-    ewmh_.set_active_window(active_window_);
 }
 
-void WindowManager::request_urgency_update(Client const& client) { state_.effects().urgency.insert(client.id); }
-void WindowManager::request_allowed_actions(Client const& client)
-{
-    state_.effects().allowed_actions.insert(client.id);
-}
-void WindowManager::request_client_list_update() { state_.effects().client_list = true; }
-void WindowManager::request_current_desktop_update() { state_.effects().current_desktop = true; }
+// ---------------------------------------------------------------------------
+// Root publication
+// ---------------------------------------------------------------------------
 
-void WindowManager::complete_transition()
+uint32_t WindowManager::desktop_index(size_t monitor, size_t workspace) const
 {
-    if (state_.effects() == TransitionEffects{ .state_changed = true } && !ewmh_.has_pending_window_states())
+    return static_cast<uint32_t>(monitor * config_.workspaces.count + workspace);
+}
+
+// Monitor-major flat desktops. Workareas and viewports are relative to the
+// origin of the combined monitor bounds.
+WindowManager::DesktopLayout WindowManager::desktop_layout() const
+{
+    auto const& monitors = state_.monitors();
+    int32_t min_x = monitors.front().x, min_y = monitors.front().y;
+    int32_t max_x = min_x, max_y = min_y;
+    for (auto const& m : monitors)
     {
-        ipc_.emit(Event_StateChange, "{\"event\":\"state_change\"}");
-        state_.effects() = { };
-        LWM_ASSERT_INVARIANTS(clients_, monitors_, active_window_);
+        min_x = std::min<int32_t>(min_x, m.x);
+        min_y = std::min<int32_t>(min_y, m.y);
+        max_x = std::max<int32_t>(max_x, m.x + m.width);
+        max_y = std::max<int32_t>(max_y, m.y + m.height);
+    }
+    DesktopLayout layout;
+    layout.count = static_cast<uint32_t>(monitors.size() * config_.workspaces.count);
+    layout.width = static_cast<uint32_t>(std::max<int32_t>(1, max_x - min_x));
+    layout.height = static_cast<uint32_t>(std::max<int32_t>(1, max_y - min_y));
+    for (auto const& m : monitors)
+    {
+        Geometry area = m.working_area();
+        area.x = static_cast<int16_t>(std::clamp<int32_t>(area.x - min_x, 0, std::numeric_limits<int16_t>::max()));
+        area.y = static_cast<int16_t>(std::clamp<int32_t>(area.y - min_y, 0, std::numeric_limits<int16_t>::max()));
+        std::pair<uint32_t, uint32_t> viewport{ static_cast<uint32_t>(std::max<int32_t>(0, m.x - min_x)),
+                                                static_cast<uint32_t>(std::max<int32_t>(0, m.y - min_y)) };
+        for (auto const& name : config_.workspaces.names)
+        {
+            layout.names.push_back(name);
+            layout.viewports.push_back(viewport);
+            layout.workareas.push_back(area);
+        }
+    }
+    return layout;
+}
+
+void WindowManager::publish_root(std::vector<Projected> const& clients, bool urgency_changed)
+{
+    // Clients arrive in registration order; fixtures merge into it.
+    std::vector<Fixture const*> fixtures;
+    for (auto const& [id, fixture] : state_.fixtures()) fixtures.push_back(&fixture);
+    std::ranges::sort(fixtures, { }, &Fixture::order);
+    std::vector<xcb_window_t> client_list;
+    client_list.reserve(clients.size() + fixtures.size());
+    auto fixture = fixtures.begin();
+    for (auto const& projected : clients)
+    {
+        for (; fixture != fixtures.end() && (*fixture)->order < projected.client->order; ++fixture)
+            client_list.push_back((*fixture)->id);
+        client_list.push_back(projected.client->id);
+    }
+    for (; fixture != fixtures.end(); ++fixture) client_list.push_back((*fixture)->id);
+    // Panels use client-list changes to refresh urgency.
+    if (client_list != root_.client_list || urgency_changed)
+    {
+        ewmh_.update_client_list(client_list);
+        root_.client_list = std::move(client_list);
+    }
+    if (auto layout = desktop_layout(); root_.desktops != layout)
+    {
+        ewmh_.set_number_of_desktops(layout.count);
+        ewmh_.set_desktop_names(layout.names);
+        ewmh_.set_desktop_geometry(layout.width, layout.height);
+        ewmh_.set_desktop_viewport(layout.viewports);
+        ewmh_.set_workarea(layout.workareas);
+        root_.desktops = std::move(layout);
+    }
+    auto const& focused = state_.monitors()[state_.focused_monitor()];
+    if (auto desktop = desktop_index(state_.focused_monitor(), focused.current_workspace); root_.current_desktop != desktop)
+    {
+        ewmh_.set_current_desktop(desktop);
+        root_.current_desktop = desktop;
+    }
+    if (root_.active != state_.active_window())
+    {
+        ewmh_.set_active_window(state_.active_window());
+        root_.active = state_.active_window();
+    }
+    if (root_.showing_desktop != state_.showing_desktop())
+    {
+        ewmh_.set_showing_desktop(state_.showing_desktop());
+        root_.showing_desktop = state_.showing_desktop();
+    }
+}
+
+// A changed desired order, a forwarded restack, or an explicit focus request
+// reads the tree and repairs the server order, including external restacks.
+// Other operations leave an unchanged order alone.
+void WindowManager::reconcile_stacking(bool reassert)
+{
+    auto order = stacking::compute_order(state_);
+    if (order == root_.stacking && !restack_requested_ && !reassert)
         return;
-    }
-    refresh_workareas();
-    // Consume pending ownership preferences once. Later phases use resolved owners.
-    auto affected_monitors = std::exchange(state_.effects().monitors, { });
-    auto layout_monitors = std::exchange(state_.effects().layouts, { });
-    state_.effects().drain_crossing |= (!affected_monitors.empty() || !layout_monitors.empty()) && !drag_active();
-    for (auto [monitor, preferred] : affected_monitors)
-        if (monitor < monitors_.size())
-            realize_visibility(monitor, preferred);
-    validate_drag(!affected_monitors.empty() || !layout_monitors.empty());
-    if (auto const* active = get_client(active_window_); active && !is_focus_candidate(*active))
-        repair_focus_after_visibility_change(focused_monitor_, false);
-    if (active_window_ == XCB_NONE && state_.effects().repair_focus && !state_.effects().previous_focus
-        && !showing_desktop_)
-        focus_or_fallback(focused_monitor(), false);
-    if (affected_monitors.empty() && layout_monitors.empty() && state_.effects() == TransitionEffects{ }
-        && !ewmh_.has_pending_window_states())
+    if (order.size() > 1)
     {
-        LWM_ASSERT_INVARIANTS(clients_, monitors_, active_window_);
-        return;
-    }
-    for (auto [monitor, preferred] : affected_monitors) layout_monitors.insert(monitor);
-    for (auto monitor : layout_monitors)
-        if (monitor < monitors_.size())
-            arrange_monitor(monitors_[monitor]);
-    if (!affected_monitors.empty())
-    {
-        for (auto const& [window, client] : clients_)
-            if ((client.kind() == Client::Kind::Floating || client.fullscreen)
-                && affected_monitors.contains(client.monitor))
-                request_geometry(client);
-    }
-    if (state_.effects().previous_focus && get_client(active_window_))
-        state_.clear_urgency(active_window_);
-    if (state_.effects().previous_focus)
-    {
-        state_.effects().current_desktop = true;
-        state_.effects().stacking = true;
-        if (auto const* client = get_client(active_window_))
-        {
-            if (ipc_.has_subscribers(Event_FocusChange))
-            {
-                queue_event(
-                    Event_FocusChange,
-                    "{\"event\":\"focus_change\",\"window\":" + std::to_string(client->id) + ",\"class\":\""
-                        + json_escape(client->wm_class) + "\",\"title\":\"" + json_escape(client->name) + "\"}"
-                );
-            }
-        }
-    }
-    // Panels use client-list changes to refresh urgency. This dependency is
-    // resolved before publication, never requested by a publisher.
-    state_.effects().client_list |= !state_.effects().urgency.empty();
-    state_.effects().stacking |= state_.effects().client_list;
-    for (auto const& [monitor, change] : state_.effects().workspace_events)
-        if (change.first != change.second && ipc_.has_subscribers(Event_WorkspaceSwitch))
-        {
-            queue_event(
-                Event_WorkspaceSwitch,
-                "{\"event\":\"workspace_switch\",\"monitor\":" + std::to_string(monitor)
-                    + ",\"from\":" + std::to_string(change.first) + ",\"to\":" + std::to_string(change.second) + "}"
+        auto tree = xcb_query_tree_reply(conn_.get(), xcb_query_tree(conn_.get(), conn_.screen()->root), nullptr);
+        std::vector<stacking::StackMove> moves;
+        if (tree)
+            moves = stacking::plan_moves(
+                { xcb_query_tree_children(tree), static_cast<size_t>(xcb_query_tree_children_length(tree)) },
+                order
             );
-        }
-    // Freeze completion work. Publishers may acknowledge X bookkeeping, but
-    // cannot schedule an earlier phase or mutate authoritative domain state.
-    auto publication = state_.begin_publication();
-    std::set<xcb_window_t> seen;
-    std::erase_if(publication.geometry, [&](auto id) { return !seen.insert(id).second; });
-    for (auto [id, visible] : publication.visibility)
-        if (auto const* client = get_client(id))
+        else
+            for (size_t i = 1; i < order.size(); ++i) moves.push_back({ order[i], order[i - 1], XCB_STACK_MODE_ABOVE });
+        free(tree);
+        for (auto const& move : moves)
         {
-            auto& output = state_.presentation(id);
-            output.hidden = !visible;
-            if (!visible)
-            {
-                output.applied_geometry.reset();
-                uint32_t x = static_cast<uint32_t>(OFF_SCREEN_X);
-                xcb_configure_window(conn_.get(), id, XCB_CONFIG_WINDOW_X, &x);
-            }
+            uint32_t values[] = { move.sibling, move.mode };
+            xcb_configure_window(conn_.get(), move.window, XCB_CONFIG_WINDOW_SIBLING | XCB_CONFIG_WINDOW_STACK_MODE, values);
         }
-    if (publication.appearance)
-        publish_appearance();
-    // Keep a split resize's configure requests together on the server.
-    bool resizing_tiles =
-        (drag_ && std::holds_alternative<TiledResize>(drag_->operation)) && !publication.geometry.empty();
-    if (resizing_tiles)
-        xcb_grab_server(conn_.get());
-    for (auto window : publication.geometry)
-        if (auto* client = get_client(window); client && is_visible(*client))
-            if (write_geometry(*client, presentation_geometry(*client), border_width_for_client(*client)))
-                publication.configure_replies.erase(window);
-    if (resizing_tiles)
-        xcb_ungrab_server(conn_.get());
-    for (auto window : publication.configure_replies)
-        if (auto const* client = get_client(window))
-            publish_configure_notify(*client);
-    for (auto window : publication.maps)
-        if (is_managed(window))
-            xcb_map_window(conn_.get(), window);
-    commit_focus(publication);
-    for (auto window : publication.urgency)
-        if (auto* client = get_client(window))
-            publish_urgency(*client);
-    for (auto window : publication.desktops)
-        if (auto* client = get_client(window))
-            ewmh_.set_window_desktop(
-                window,
-                client->sticky ? 0xFFFFFFFF : get_ewmh_desktop_index(client->monitor, client->workspace)
-            );
-    for (auto window : publication.iconic)
-        if (auto* client = get_client(window); client && wm_state_ != XCB_NONE)
+    }
+    if (order != root_.stacking)
+    {
+        ewmh_.update_client_list_stacking(order);
+        root_.stacking = std::move(order);
+    }
+}
+
+// Unmanaged windows are withdrawn: WM_STATE says so and the focused state no
+// longer applies. Other state atoms stay for a later remap.
+void WindowManager::withdraw_removed()
+{
+    std::vector<std::pair<xcb_window_t, std::vector<xcb_atom_t>>> unfocused;
+    for (auto it = outputs_.begin(); it != outputs_.end();)
+    {
+        if (state_.find(it->first) || state_.find_fixture(it->first))
         {
-            uint32_t data[] = { client->iconic ? XCB_ICCCM_WM_STATE_ICONIC : XCB_ICCCM_WM_STATE_NORMAL, 0 };
-            xcb_change_property(conn_.get(), XCB_PROP_MODE_REPLACE, window, wm_state_, wm_state_, 32, 2, data);
+            ++it;
+            continue;
         }
-    for (auto window : publication.allowed_actions)
-        if (auto* client = get_client(window))
-            publish_allowed_actions(*client);
-    if (publication.desktop_metadata)
-        update_ewmh_desktops();
-    else if (publication.workarea_property)
-        update_ewmh_workarea();
-    if (publication.showing_desktop)
-        ewmh_.set_showing_desktop(showing_desktop_);
-    for (auto id : publication.fullscreen_properties)
-        if (auto const* client = get_client(id);
-            client && client->fullscreen_monitors && net_wm_fullscreen_monitors_ != XCB_NONE)
-        {
-            auto const& m = *client->fullscreen_monitors;
-            xcb_ewmh_set_wm_fullscreen_monitors(ewmh_.get(), id, m.top, m.bottom, m.left, m.right);
-        }
-    if (publication.client_list)
-        publish_client_list();
-    if (publication.current_desktop)
-        publish_current_desktop();
-    for (auto id : publication.states)
-        if (auto const* c = get_client(id))
-        {
-            auto* atoms = ewmh_.get();
-            for (auto [atom, enabled] : {
-                     std::pair{     atoms->_NET_WM_STATE_FULLSCREEN,                     c->fullscreen },
-                     {          atoms->_NET_WM_STATE_ABOVE, c->layer_hint == LayerHint::Above },
-                     {          atoms->_NET_WM_STATE_BELOW, c->layer_hint == LayerHint::Below },
-                     {         atoms->_NET_WM_STATE_STICKY,                         c->sticky },
-                     {          atoms->_NET_WM_STATE_MODAL,                          c->modal },
-                     {   atoms->_NET_WM_STATE_SKIP_TASKBAR,                   c->skip_taskbar },
-                     {     atoms->_NET_WM_STATE_SKIP_PAGER,                     c->skip_pager },
-                     { atoms->_NET_WM_STATE_MAXIMIZED_HORZ,                 c->maximized_horz },
-                     { atoms->_NET_WM_STATE_MAXIMIZED_VERT,                 c->maximized_vert },
-                     {         atoms->_NET_WM_STATE_HIDDEN,                         c->iconic }
-            })
-                ewmh_.set_window_state(id, atom, enabled);
-        }
-    ewmh_.flush_window_states();
-    if (publication.stacking)
-        apply_stacking();
-    if (publication.drain_crossing)
-        flush_and_drain_crossing();
+        uint32_t withdrawn[] = { WM_STATE_WITHDRAWN, 0 };
+        xcb_change_property(conn_.get(), XCB_PROP_MODE_REPLACE, it->first, atoms_.wm_state, atoms_.wm_state, 32, 2, withdrawn);
+        if (it->second.states)
+            unfocused.emplace_back(it->first, std::vector<xcb_atom_t>{ });
+        it = outputs_.erase(it);
+    }
+    xcb_atom_t const focused[] = { atoms_.net_wm_state_focused };
+    ewmh_.update_window_states(unfocused, focused);
+}
+
+// A round trip makes the server generate crossing events for what LWM just
+// moved; they are dropped so stale pointer focus cannot override the result.
+// Other events are deferred to the outer loop, which never re-enters handlers.
+void WindowManager::flush_and_drain_crossing()
+{
     conn_.flush();
-    auto priority = [](EventType type)
+    free(xcb_get_input_focus_reply(conn_.get(), xcb_get_input_focus(conn_.get()), nullptr));
+    while (auto* event = xcb_poll_for_queued_event(conn_.get()))
     {
-        if (type == Event_WorkspaceSwitch)
-            return 0;
-        if (type == Event_FocusChange)
-            return 1;
-        if (type == Event_WindowMap || type == Event_WindowUnmap)
-            return 2;
-        return 3;
-    };
-    std::stable_sort(
-        publication.events.begin(),
-        publication.events.end(),
-        [&](auto const& a, auto const& b) { return priority(a.first) < priority(b.first); }
-    );
-    for (auto const& [type, json] : publication.events) ipc_.emit(type, json);
-    ipc_.emit(Event_StateChange, "{\"event\":\"state_change\"}");
-    state_.end_publication();
-    LWM_ASSERT_INVARIANTS(clients_, monitors_, active_window_);
+        uint8_t type = event->response_type & ~0x80;
+        if (type != XCB_ENTER_NOTIFY && type != XCB_LEAVE_NOTIFY && type != XCB_MOTION_NOTIFY)
+            deferred_events_.push_back(*event);
+        free(event);
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Subscription events
+// ---------------------------------------------------------------------------
+
+void WindowManager::queue_event(Event event) { events_.push_back(std::move(event)); }
+
+// Workspace switches and focus are derived from what changed since the last
+// operation; other facts were recorded where they happened. state_change
+// fires when the exposed state snapshot actually differs.
+void WindowManager::emit_events(bool focus_requested)
+{
+    std::vector<Event> events;
+    auto const& monitors = state_.monitors();
+    std::map<std::string, size_t> workspaces;
+    for (size_t m = 0; m < monitors.size(); ++m)
+    {
+        auto current = monitors[m].current_workspace;
+        if (auto it = root_.workspaces.find(monitors[m].name); it != root_.workspaces.end() && it->second != current)
+            events.emplace_back(event::WorkspaceSwitch{ m, it->second, current });
+        workspaces.emplace(monitors[m].name, current);
+    }
+    root_.workspaces = std::move(workspaces);
+    if (auto const* active = state_.find(state_.active_window()); active && focus_requested)
+        events.emplace_back(event::FocusChange{ active->id, active->wm_class, active->name });
+    std::ranges::move(events_, std::back_inserter(events));
+    events_.clear();
+    std::ranges::stable_sort(events, { }, event_priority);
+    for (auto const& event : events)
+        if (auto type = event_type(event); ipc_.has_subscribers(type))
+            ipc_.emit(type, event_json(event));
+    if (ipc_.has_subscribers(Event_StateChange))
+        if (auto snapshot = state_json(); snapshot != root_.snapshot)
+        {
+            root_.snapshot = std::move(snapshot);
+            ipc_.emit(Event_StateChange, "{\"event\":\"state_change\"}");
+        }
 }
 
 } // namespace lwm

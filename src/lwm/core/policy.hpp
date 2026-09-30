@@ -1,12 +1,6 @@
 #pragma once
 
-/**
- * @file policy.hpp
- * @brief Pure policy functions for the window manager's state model.
- *
- * These functions are the executable form of the policies summarized in
- * `ARCHITECTURE.md`; keep behavior changes covered by the corresponding tests.
- */
+// Pure desktop numbering, workspace focus memory, and output rebinding rules.
 
 #include "lwm/core/types.hpp"
 #include <algorithm>
@@ -43,86 +37,6 @@ inline std::optional<std::pair<size_t, size_t>> desktop_to_indices(uint32_t desk
 }
 
 } // namespace lwm::ewmh_policy
-
-namespace lwm::visibility_policy {
-
-inline bool
-is_workspace_visible(bool showing_desktop, size_t monitor_idx, size_t workspace_idx, std::span<Monitor const> monitors)
-{
-    if (showing_desktop)
-        return false;
-    if (monitor_idx >= monitors.size())
-        return false;
-    return workspace_idx == monitors[monitor_idx].current_workspace;
-}
-
-inline bool is_window_visible(
-    bool showing_desktop,
-    bool is_iconic,
-    bool is_sticky,
-    size_t client_monitor,
-    size_t client_workspace,
-    std::span<Monitor const> monitors
-)
-{
-    if (is_iconic)
-        return false;
-    if (client_monitor >= monitors.size())
-        return false;
-    if (is_sticky)
-        return true;
-    if (showing_desktop)
-        return false;
-    return client_workspace == monitors[client_monitor].current_workspace;
-}
-
-// Docks and desktop windows are not workspace members; their monitor and
-// workspace fields carry no placement, so they are always visible.
-inline bool is_client_visible(Client const& client, bool showing_desktop, std::span<Monitor const> monitors)
-{
-    if (client.kind() == Client::Kind::Dock || client.kind() == Client::Kind::Desktop)
-        return true;
-    return is_window_visible(showing_desktop, client.iconic, client.sticky, client.monitor, client.workspace, monitors);
-}
-
-// The caller supplies ownership resolved for the client's visible monitor scope.
-inline bool is_fullscreen_suppressed(Client const& client, xcb_window_t owner)
-{
-    return owner != XCB_NONE && owner != client.id && owner != client.transient_for;
-}
-
-} // namespace lwm::visibility_policy
-
-namespace lwm::fullscreen_policy {
-
-// Selection reads authoritative placement and state; no candidate snapshot is needed.
-inline xcb_window_t select_owner(
-    std::unordered_map<xcb_window_t, Client> const& clients,
-    std::span<Monitor const> monitors,
-    size_t monitor,
-    bool showing_desktop,
-    xcb_window_t preferred = XCB_NONE
-)
-{
-    if (monitor >= monitors.size() || showing_desktop)
-        return XCB_NONE;
-    auto eligible = [&](Client const& client)
-    {
-        return client.monitor == monitor && client.fullscreen && !client.iconic
-            && (client.kind() == Client::Kind::Tiled || client.kind() == Client::Kind::Floating)
-            && (client.sticky || client.workspace == monitors[monitor].current_workspace);
-    };
-    for (auto id : { preferred, monitors[monitor].fullscreen_owner })
-        if (auto it = clients.find(id); it != clients.end() && eligible(it->second))
-            return id;
-    Client const* newest = nullptr;
-    for (auto const& [id, client] : clients)
-        if (eligible(client) && (!newest || std::tie(client.order, client.id) > std::tie(newest->order, newest->id)))
-            newest = &client;
-    return newest ? newest->id : XCB_NONE;
-}
-
-} // namespace lwm::fullscreen_policy
 
 namespace lwm::workspace_policy {
 
@@ -225,8 +139,6 @@ inline std::vector<size_t> preserve_workspaces(std::span<Monitor> previous, std:
             source.workspaces.clear();
             target.current_workspace = source.current_workspace;
             target.previous_workspace = source.previous_workspace;
-            // Reconciliation revalidates this owner against the rebound clients.
-            target.fullscreen_owner = source.fullscreen_owner;
             break;
         }
     }

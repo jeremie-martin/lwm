@@ -63,8 +63,12 @@ cannot be represented by this line protocol.
 
 ## Commands
 
-Monitor- and workspace-relative commands target the focused monitor. Consecutive `focus
-next` / `focus prev` commands retain their starting order, including sticky windows, and
+Queries answer from the current state. Every other command is the same action a key
+binding can perform (see [config.toml.example](config.toml.example)), executed by the
+same code; only `spawn` has no IPC spelling, because IPC callers can start processes
+themselves. Window commands act on the active window and return `error no active window`
+without one. Monitor- and workspace-relative commands target the focused monitor.
+Consecutive `focus next` / `focus prev` commands retain their starting order, including sticky windows, and
 skip windows that are no longer eligible. Ordinary activation, a change of
 monitor/workspace or active window, or a new client registration starts a fresh
 recent-use traversal. Cycling returns an error when no window is eligible, including
@@ -87,10 +91,17 @@ while showing the desktop.
 | `notify-attention window=<xid>` | mark a non-active tiled/floating window urgent |
 | `workspace switch N` | switch to zero-based workspace `N` |
 | `workspace next` / `workspace prev` | switch with wraparound |
+| `workspace toggle` | switch back to the previous workspace |
 | `workspace list` | workspace state as JSON |
+| `monitor focus left` / `monitor focus right` | focus the adjacent monitor |
 | `focus window=<xid>` | focus a window, switching workspace if needed |
 | `focus next` / `focus prev` | cycle eligible windows in recent-use order |
 | `window list` | tiled and floating client state as JSON |
+| `window close` | close the active window |
+| `window fullscreen` / `window float` | toggle fullscreen or floating on the active window |
+| `window swap next` / `window swap prev` | swap the active tile with its neighbor |
+| `window to-workspace N` | move the active window to workspace `N` of its monitor |
+| `window to-monitor left` / `window to-monitor right` | move the active window to the adjacent monitor |
 | `scratchpad stash` | move the active window to the generic pool |
 | `scratchpad cycle` | cycle the generic pool |
 | `scratchpad toggle NAME` | show, hide, or launch a named scratchpad |
@@ -99,8 +110,7 @@ while showing the desktop.
 
 Ratio values must be finite numbers with no trailing characters. `ratio set` rejects
 values outside `[min_ratio, 1 - min_ratio]` from the active configuration; `ratio
-adjust` clamps to that range. All scratchpad commands are also available through
-`lwmctl`. A definite exec failure is logged and leaves the scratchpad retryable.
+adjust` clamps to that range and replies `ratio unchanged` at a bound. A definite exec failure is logged and leaves the scratchpad retryable.
 Successful exec does not guarantee a matching window: `scratchpad cancel-launch NAME`
 clears a pending launch so the user can retry. It is a no-op for an empty or already
 claimed slot and rejects unknown names. It does not terminate a process; a late matching
@@ -200,8 +210,8 @@ name is rejected.
 
 | Event | Fields after `event` |
 | --- | --- |
-| `window_map` | `window`, `class`, `kind`; `monitor` and `workspace` except for a direct-mapped popup |
-| `window_unmap` | `window`, `kind`, `monitor`, `workspace` |
+| `window_map` | `window`, `class`, `kind`; `monitor` and `workspace` for tiled and floating clients |
+| `window_unmap` | `window`, `kind`; `monitor` and `workspace` for tiled and floating clients |
 | `focus_change` | `window`, `class`, `title` |
 | `workspace_switch` | `monitor`, `from`, `to` |
 | `layout_change` | `action`; `value` or `delta` where applicable |
@@ -209,8 +219,16 @@ name is rejected.
 | `key_action` | `action` |
 | `state_change` | no additional fields; refresh a state snapshot |
 
-`config_reload.source` is `ipc`, `sighup`, or `keybind`. LWM does not emit a
-`focus_change` event when focus is cleared.
+`kind` is `tiled`, `floating`, `dock`, `desktop`, or `popup` (direct-mapped, `window_map`
+only). Docks and desktops have no workspace. `config_reload.source` is `ipc`, `sighup`,
+or `keybind`. LWM does not emit a `focus_change` event when focus is cleared.
+
+`key_action.action` is the binding's action name as written in the configuration; the
+monitor actions add their direction (`focus_monitor_left`, `move_to_monitor_right`).
+`layout_change.action` names the layout action (`set_layout` with a string `value`,
+`set_ratio` with a numeric `value`, `adjust_ratio` with a `delta`, `reset_ratios`,
+`swap_next`, `swap_prev`), whether triggered by a binding or IPC, or `resize_split` with
+the new ratio as `value` when a pointer drag of a split ends.
 
 Events are sent after the triggering operation has completed its geometry, focus,
 property, and stacking updates. Within an operation, events are ordered as workspace
@@ -251,9 +269,10 @@ For a panel or other state consumer:
    several pending notifications can share one refresh.
 4. On EOF, errors, or a different instance, discard the old stream and repeat.
 
-`state_change` is an invalidation notification after completion, not a patch or proof
-that a value changed. It covers the exposed list state, including metadata, urgency,
-placement, and scratchpad changes; no-op actions can also emit it. Individual
+`state_change` is an invalidation notification after completion, not a patch. It is
+sent exactly when the exposed list state (workspaces, windows, and scratchpads) differs
+from the state behind the previous notification, including metadata, urgency,
+placement, and scratchpad changes. Read-only commands and no-op actions do not emit it. Individual
 focus/map/workspace events remain available for consumers that need those occurrences
 instead of a current-state view. Notifications cover only the fields exposed by the list
 API, not every X property or application state.

@@ -5,12 +5,12 @@
 using namespace lwm;
 
 namespace {
-struct Fixture
+struct LayoutFixture
 {
     AppearanceConfig appearance;
     LayoutConfig config;
     Layout layout{ appearance, config };
-    Fixture()
+    LayoutFixture()
     {
         appearance.padding = 10;
         appearance.border_width = 2;
@@ -22,7 +22,7 @@ struct Fixture
 
 TEST_CASE("Layout handles empty, single and monocle workspaces", "[layout]")
 {
-    Fixture f;
+    LayoutFixture f;
     Geometry area{ -100, 20, 1000, 500 };
     Geometry content{ -88, 32, 976, 476 };
     CHECK(f.layout.arrange(0, area, LayoutStrategy::MasterStack, {}).empty());
@@ -35,7 +35,7 @@ TEST_CASE("Layout handles empty, single and monocle workspaces", "[layout]")
 
 TEST_CASE("Master-stack preserves pixel rounding and resize boundaries", "[layout]")
 {
-    Fixture f;
+    LayoutFixture f;
     Geometry area{ 0, 0, 1000, 1000 };
     auto slots = f.layout.arrange(4, area, LayoutStrategy::MasterStack, {});
     REQUIRE(slots == std::vector<Geometry>{
@@ -65,7 +65,7 @@ TEST_CASE("Master-stack preserves pixel rounding and resize boundaries", "[layou
 
 TEST_CASE("Saved ratios affect arrangement and hit testing consistently", "[layout]")
 {
-    Fixture f;
+    LayoutFixture f;
     Geometry area{ 0, 0, 1000, 1000 };
     SplitRatioMap ratios{
         { SplitAddress{ 0 }, 0.7 },
@@ -85,7 +85,7 @@ TEST_CASE("Saved ratios affect arrangement and hit testing consistently", "[layo
 
 TEST_CASE("Large layouts have distinct resizable splits beyond the old path limit", "[layout]")
 {
-    Fixture f;
+    LayoutFixture f;
     f.appearance.padding = 0;
     f.appearance.border_width = 0;
     f.config.resize_grab_threshold = 0;
@@ -109,7 +109,7 @@ TEST_CASE("Large layouts have distinct resizable splits beyond the old path limi
 
 TEST_CASE("Tiny workareas preserve nonzero window sizes", "[layout]")
 {
-    Fixture f;
+    LayoutFixture f;
     auto slots = f.layout.arrange(40, { 0, 0, 1, 1 }, LayoutStrategy::MasterStack, { });
     REQUIRE(slots.size() == 40);
     for (auto g : slots)
@@ -119,22 +119,9 @@ TEST_CASE("Tiny workareas preserve nonzero window sizes", "[layout]")
     }
 }
 
-TEST_CASE("Split restart encoding preserves legacy addresses and supports large layouts", "[layout][restart]")
-{
-    CHECK(serialize_split_address({ 0 }).path == 0);
-    CHECK(serialize_split_address({ 3 }).path == 7);
-    for (uint32_t index : { 0u, 1u, 31u, 32u, 255u, 256u, 10000u })
-    {
-        auto wire = serialize_split_address({ index });
-        CHECK(deserialize_split_address(wire.depth, wire.path) == SplitAddress{ index });
-    }
-    CHECK_FALSE(deserialize_split_address(1, 0));
-    CHECK_FALSE(deserialize_split_address(3, 0xFFFFFFFF));
-}
-
 TEST_CASE("Extreme padding and dock struts saturate instead of wrapping", "[layout][bounds]")
 {
-    Fixture f;
+    LayoutFixture f;
     f.appearance.padding = 65535;
     f.appearance.border_width = 65535;
     auto slots = f.layout.arrange(3, { 100, 100, 1000, 1000 }, LayoutStrategy::MasterStack, {});

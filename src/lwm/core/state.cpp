@@ -1,129 +1,90 @@
 #include "state.hpp"
-#include "ewmh.hpp"
+#include "classification.hpp"
 #include "floating.hpp"
 #include "log.hpp"
 #include "policy.hpp"
 #include <algorithm>
 #include <cassert>
+#include <tuple>
 
 namespace lwm {
+
 Client const* State::find(xcb_window_t id) const
 {
     auto it = clients_.find(id);
     return it == clients_.end() ? nullptr : &it->second;
 }
+
 Client const& State::require(xcb_window_t id) const { return clients_.at(id); }
+
+Fixture const* State::find_fixture(xcb_window_t id) const
+{
+    auto it = fixtures_.find(id);
+    return it == fixtures_.end() ? nullptr : &it->second;
+}
+
+void State::mutated()
+{
+    assert(!frozen_);
+    ++revision_;
+}
+
 Client& State::edit(xcb_window_t id)
 {
-    assert(!publishing_);
+    mutated();
     return clients_.at(id);
 }
-ClientPresentation& State::presentation(xcb_window_t id) { return clients_.at(id).presentation; }
-State::TransitionEffects State::begin_publication()
+
+Workspace& State::edit_workspace(size_t monitor, size_t workspace)
 {
-    assert(!publishing_);
-    assert(effects_.monitors.empty() && effects_.layouts.empty() && !effects_.workareas);
-    publishing_ = true;
-    return std::exchange(effects_, { });
+    mutated();
+    return monitors_.at(monitor).workspaces.at(workspace);
 }
-void State::end_publication()
-{
-    assert(publishing_ && effects_ == TransitionEffects{ });
-    publishing_ = false;
-}
-void State::changed(xcb_window_t) { effects_.state_changed = true; }
-void State::request_geometry(xcb_window_t id) { effects_.geometry.push_back(id); }
-void State::invalidate(size_t monitor, xcb_window_t preferred)
-{
-    assert(!publishing_);
-    if (monitor >= monitors_.size())
-        return;
-    auto [it, inserted] = effects_.monitors.try_emplace(monitor, preferred);
-    if (preferred != XCB_NONE)
-        it->second = preferred;
-    effects_.stacking = true;
-}
-void State::focus_monitor(size_t monitor)
-{
-    assert(!publishing_);
-    if (monitor < monitors_.size() && focused_monitor_ != monitor)
-    {
-        focused_monitor_ = monitor;
-        effects_.current_desktop = true;
-    }
-}
-void State::focus(xcb_window_t id, uint32_t time)
-{
-    assert(!publishing_);
-    if (!effects_.previous_focus)
-        effects_.previous_focus = active_window_;
-    effects_.focus_time = time;
-    if (active_window_ != id)
-        LWM_LOG_DEBUG("Focus changed: window={:#x} -> {:#x}", active_window_, id);
-    active_window_ = id;
-    effects_.current_desktop = true;
-    effects_.stacking = true;
-    if (auto const* c = find(id))
-    {
-        focus_monitor(c->monitor);
-        if (c->kind() == Client::Kind::Tiled)
-            remember_focus(c->monitor, c->workspace, id);
-        touch(id);
-    }
-}
-void State::showing_desktop(bool enabled)
-{
-    assert(!publishing_);
-    if (showing_desktop_ == enabled)
-        return;
-    showing_desktop_ = enabled;
-    effects_.showing_desktop = true;
-    for (size_t i = 0; i < monitors_.size(); ++i) invalidate(i);
-}
-void State::restore_focus(size_t monitor, xcb_window_t id, bool desktop)
-{
-    assert(!publishing_);
-    focused_monitor_ = monitor < monitors_.size() ? monitor : 0;
-    active_window_ = id;
-    showing_desktop_ = desktop;
-}
+
+// ---------------------------------------------------------------------------
+// Registry
+// ---------------------------------------------------------------------------
+
 void State::insert(Client client)
 {
-    assert(!publishing_);
-    client.order = next_client_order_++;
+    assert(client.monitor < monitors_.size() && client.workspace < monitors_[client.monitor].workspaces.size());
+    mutated();
+    client.order = next_order_++;
     if (client.kind() == Client::Kind::Floating)
-        client.mru_order = next_mru_order_++;
+        client.mru_order = next_recency_++;
+    if (client.fullscreen)
+        client.fullscreen_claim = ++next_fullscreen_claim_;
     auto [it, inserted] = clients_.emplace(client.id, std::move(client));
     assert(inserted);
-    classification(it->first);
     if (it->second.kind() == Client::Kind::Tiled)
         attach(it->second);
-    effects_.client_list = true;
-    if (it->second.kind() == Client::Kind::Dock)
-        effects_.workareas = true;
-    else
-        invalidate(it->second.monitor);
-    if (it->second.kind() == Client::Kind::Tiled || it->second.kind() == Client::Kind::Floating)
-        effects_.states.insert(it->first);
-    changed(it->first);
 }
+
+void State::insert_fixture(xcb_window_t id, Fixture::Role role)
+{
+    mutated();
+    fixtures_.emplace(id, Fixture{ id, role, next_order_++ });
+}
+
 void State::erase(xcb_window_t id)
 {
-    assert(!publishing_);
+    if (fixtures_.erase(id))
+    {
+        mutated();
+        return;
+    }
     auto const* client = find(id);
     if (!client)
         return;
+    mutated();
     if (client->kind() == Client::Kind::Tiled)
         detach(*client);
-    if (client->kind() == Client::Kind::Dock)
-        effects_.workareas = true;
-    else
-        invalidate(client->monitor);
-    scratchpad(id, std::nullopt);
+    release_scratchpad(id);
+    if (active_window_ == id)
+        active_window_ = XCB_NONE;
     clients_.erase(id);
-    effects_.client_list = true;
-    effects_.state_changed = true;
 }
+
 void State::attach(Client const& client, std::optional<size_t> index)
 {
     auto& windows = monitors_[client.monitor].workspaces[client.workspace].windows;
@@ -131,13 +92,13 @@ void State::attach(Client const& client, std::optional<size_t> index)
     windows.insert(windows.begin() + static_cast<std::ptrdiff_t>(position), client.id);
 }
 
-std::optional<SavedTilePos> State::detach(Client const& client)
+std::optional<TileSlot> State::detach(Client const& client)
 {
     auto& ws = monitors_[client.monitor].workspaces[client.workspace];
     auto it = ws.find_window(client.id);
     if (it == ws.windows.end())
         return std::nullopt;
-    SavedTilePos position{ static_cast<size_t>(it - ws.windows.begin()), client.monitor, client.workspace };
+    TileSlot slot{ static_cast<size_t>(it - ws.windows.begin()), client.monitor, client.workspace };
     ws.windows.erase(it);
     workspace_policy::remove_from_focus_history(ws, client.id);
     workspace_policy::fixup_workspace_focus(
@@ -149,8 +110,115 @@ std::optional<SavedTilePos> State::detach(Client const& client)
             return c && c->iconic;
         }
     );
-    return position;
+    return slot;
 }
+
+// ---------------------------------------------------------------------------
+// Derived views
+// ---------------------------------------------------------------------------
+
+bool State::in_view(Client const& client) const
+{
+    if (client.iconic)
+        return false;
+    return client.sticky || (!showing_desktop_ && client.workspace == monitors_[client.monitor].current_workspace);
+}
+
+namespace {
+bool claims_before(Client const& a, Client const& b)
+{
+    return std::tie(a.fullscreen_claim, a.order, a.id) < std::tie(b.fullscreen_claim, b.order, b.id);
+}
+}
+
+// The most recent fullscreen claim among clients in view owns the monitor.
+xcb_window_t State::fullscreen_owner(size_t monitor) const
+{
+    if (showing_desktop_)
+        return XCB_NONE;
+    Client const* owner = nullptr;
+    for (auto const& [id, client] : clients_)
+        if (client.fullscreen && client.monitor == monitor && in_view(client)
+            && (!owner || claims_before(*owner, client)))
+            owner = &client;
+    return owner ? owner->id : XCB_NONE;
+}
+
+std::vector<xcb_window_t> State::fullscreen_owners() const
+{
+    std::vector<Client const*> owners(monitors_.size(), nullptr);
+    if (!showing_desktop_)
+        for (auto const& [id, client] : clients_)
+            if (client.fullscreen && in_view(client)
+                && (!owners[client.monitor] || claims_before(*owners[client.monitor], client)))
+                owners[client.monitor] = &client;
+    std::vector<xcb_window_t> result;
+    result.reserve(owners.size());
+    for (auto const* owner : owners) result.push_back(owner ? owner->id : XCB_NONE);
+    return result;
+}
+
+bool State::visible(Client const& client) const { return visible(client, fullscreen_owner(client.monitor)); }
+
+bool State::visible(Client const& client, xcb_window_t owner) const
+{
+    return in_view(client) && (owner == XCB_NONE || owner == client.id || owner == client.transient_for);
+}
+
+bool State::focusable(Client const& client) const
+{
+    return accepts_focus(client) && !showing_desktop_ && visible(client);
+}
+
+// ---------------------------------------------------------------------------
+// Focus
+// ---------------------------------------------------------------------------
+
+void State::focus(xcb_window_t id, uint32_t time)
+{
+    mutated();
+    focus_request_ = time;
+    if (active_window_ != id)
+        LWM_LOG_DEBUG("Focus changed: window={:#x} -> {:#x}", active_window_, id);
+    active_window_ = id;
+    if (auto const* c = find(id))
+    {
+        focus_monitor(c->monitor);
+        remember_focus(id);
+        touch(id);
+    }
+}
+
+void State::focus_monitor(size_t monitor)
+{
+    if (monitor < monitors_.size() && focused_monitor_ != monitor)
+    {
+        mutated();
+        focused_monitor_ = monitor;
+    }
+}
+
+// Remembered focus names a tile that could take focus again, never an iconic one.
+void State::remember_focus(xcb_window_t id)
+{
+    auto const& client = require(id);
+    if (client.kind() == Client::Kind::Tiled && !client.iconic)
+        workspace_policy::set_workspace_focus(edit_workspace(client.monitor, client.workspace), id);
+}
+
+void State::touch(xcb_window_t id) { edit(id).mru_order = next_recency_++; }
+
+void State::show_desktop(bool enabled)
+{
+    if (showing_desktop_ == enabled)
+        return;
+    mutated();
+    showing_desktop_ = enabled;
+}
+
+// ---------------------------------------------------------------------------
+// Placement and mode
+// ---------------------------------------------------------------------------
 
 bool State::relocate(
     xcb_window_t id,
@@ -160,11 +228,9 @@ bool State::relocate(
     std::optional<size_t> tile_index
 )
 {
-    auto& client = edit(id);
-    if (client.kind() != Client::Kind::Tiled && client.kind() != Client::Kind::Floating)
-        return false;
     if (monitor >= monitors_.size() || workspace >= monitors_[monitor].workspaces.size())
         return false;
+    auto& client = edit(id);
     bool tiled = client.kind() == Client::Kind::Tiled;
     size_t source = client.monitor;
     if (source == monitor && client.workspace == workspace)
@@ -173,30 +239,24 @@ bool State::relocate(
             return true;
         auto& windows = monitors_[monitor].workspaces[workspace].windows;
         auto from = std::ranges::find(windows, client.id);
-        if (from == windows.end())
-            return false;
         auto target = windows.begin() + static_cast<std::ptrdiff_t>(std::min(*tile_index, windows.size() - 1));
-        // Reordering does not remove membership or discard remembered focus.
+        // Reordering keeps membership and remembered focus.
         if (from < target)
             std::rotate(from, from + 1, target + 1);
         else if (target < from)
             std::rotate(target, from, from + 1);
-        else
-            return true;
-        invalidate(monitor);
         return true;
     }
-    if (tiled && !detach(client))
-        return false;
-    if (!tiled && source != monitor && geometry == RelocationGeometry::CenterOnMonitorChange)
+    if (tiled)
+        detach(client);
+    else if (source != monitor && geometry != RelocationGeometry::Preserve)
     {
-        auto& rectangle = floating_geometry(client);
-        rectangle = floating::place_floating(
-            monitors_[monitor].working_area(),
-            rectangle.width,
-            rectangle.height,
-            std::nullopt
-        );
+        auto& rectangle = floating_mode(client)->geometry;
+        auto from = monitors_[source].working_area();
+        auto to = monitors_[monitor].working_area();
+        rectangle = geometry == RelocationGeometry::Translate
+            ? floating::translate_to_area(rectangle, from, to)
+            : floating::place_floating(to, rectangle.width, rectangle.height, std::nullopt);
     }
     LWM_LOG_DEBUG(
         "Client relocated: window={:#x} monitor={} -> {} workspace={} -> {}",
@@ -208,69 +268,77 @@ bool State::relocate(
     );
     client.monitor = monitor;
     client.workspace = workspace;
-    effects_.desktops.insert(id);
-    changed(id);
     if (tiled)
         attach(client, tile_index);
-    else
-        request_geometry(client.id);
-    invalidate(source);
-    invalidate(monitor);
     return true;
 }
 
-void State::change_kind(xcb_window_t id, ClientState state, std::optional<size_t> tile_index)
+void State::set_mode(xcb_window_t id, bool floating)
 {
     auto& client = edit(id);
-    assert(client.kind() == Client::Kind::Tiled || client.kind() == Client::Kind::Floating);
-    assert(std::holds_alternative<TiledState>(state) || std::holds_alternative<FloatingState>(state));
-    bool was_tiled = client.kind() == Client::Kind::Tiled;
-    bool tiled = std::holds_alternative<TiledState>(state);
-    if (was_tiled && !tiled)
-    {
-        auto& floating = std::get<FloatingState>(state);
-        floating.saved_tiled_pos = detach(client);
-        // Tiled rectangles on unarranged workspaces may be stale requested or hotplug geometry.
-        floating.geometry = floating::recover_to_area(monitors_[client.monitor].working_area(), floating.geometry);
-    }
-    if (!was_tiled && tiled)
-        client.tiled_geometry = floating_geometry(client);
-    if (was_tiled != tiled)
-        LWM_LOG_DEBUG(
-            "Client kind changed: window={:#x} {} -> {}",
-            id,
-            was_tiled ? "tiled" : "floating",
-            tiled ? "tiled" : "floating"
-        );
-    client.state = std::move(state);
-    if (!was_tiled && tiled)
-        attach(client, tile_index);
+    if (floating == (client.kind() == Client::Kind::Floating))
+        return;
+    LWM_LOG_DEBUG("Client kind changed: window={:#x} floating={}", id, floating);
     client.suppress_next_configure_request = false;
-    effects_.allowed_actions.insert(id);
-    changed(id);
-    request_geometry(client.id);
-    invalidate(client.monitor);
+    if (auto* tiled = tiled_mode(client))
+    {
+        // An unarranged tile can still hold an off-monitor initial or hotplug rectangle.
+        auto rectangle = floating::recover_to_area(
+            monitors_[client.monitor].working_area(),
+            tiled->floating.value_or(tiled->layout)
+        );
+        auto slot = detach(client);
+        client.mode = FloatingMode{ rectangle, slot };
+        touch(id);
+        return;
+    }
+    auto const& mode = std::get<FloatingMode>(client.mode);
+    std::optional<size_t> index;
+    if (mode.tile_slot && mode.tile_slot->monitor == client.monitor && mode.tile_slot->workspace == client.workspace)
+        index = mode.tile_slot->index;
+    // Until layout runs, the floating rectangle is also the tile's best known geometry.
+    client.mode = TiledMode{ mode.geometry, mode.geometry };
+    attach(client, index);
+}
+
+void State::floating(xcb_window_t id, bool enabled)
+{
+    edit(id).preferences.floating = enabled;
+    set_mode(id, enabled);
 }
 
 void State::geometry(xcb_window_t id, Geometry rectangle)
 {
-    auto& c = edit(id);
-    if (c.kind() != Client::Kind::Floating || floating_geometry(c) == rectangle)
+    auto* mode = floating_mode(clients_.at(id));
+    if (!mode || mode->geometry == rectangle)
         return;
-    floating_geometry(c) = rectangle;
-    request_geometry(id);
-    effects_.state_changed = true;
+    mutated();
+    mode->geometry = rectangle;
 }
-void State::tiled_geometry(xcb_window_t id, Geometry rectangle)
+
+void State::place_tile(xcb_window_t id, Geometry rectangle)
 {
-    edit(id).tiled_geometry = rectangle;
-    request_geometry(id);
+    assert(!frozen_);
+    // Layout targets are recomputed from state and are not part of the revision.
+    if (auto* mode = tiled_mode(clients_.at(id)))
+        mode->layout = rectangle;
 }
+
+void State::swap_tiles(size_t monitor, size_t a, size_t b)
+{
+    auto& windows = edit_workspace(monitor, monitors_.at(monitor).current_workspace).windows;
+    std::swap(windows.at(a), windows.at(b));
+}
+
+// ---------------------------------------------------------------------------
+// Client state
+// ---------------------------------------------------------------------------
+
 void State::iconic(xcb_window_t id, bool enabled)
 {
-    auto& c = edit(id);
-    if (c.iconic == enabled)
+    if (require(id).iconic == enabled)
         return;
+    auto& c = edit(id);
     c.iconic = enabled;
     if (enabled && c.kind() == Client::Kind::Tiled)
         workspace_policy::fixup_workspace_focus(
@@ -278,355 +346,179 @@ void State::iconic(xcb_window_t id, bool enabled)
             id,
             [this](auto w) { return require(w).iconic; }
         );
-    effects_.states.insert(id);
-    effects_.iconic.insert(id);
-    invalidate(c.monitor, !enabled && c.fullscreen ? id : XCB_NONE);
-    changed(id);
+    // Restoring a fullscreen client makes it the preferred owner again.
+    if (!enabled && c.fullscreen)
+        c.fullscreen_claim = ++next_fullscreen_claim_;
 }
+
 void State::sticky(xcb_window_t id, bool enabled)
 {
-    auto& c = edit(id);
-    if (c.sticky == enabled)
+    if (require(id).sticky == enabled)
         return;
+    auto& c = edit(id);
     c.sticky = enabled;
     if (enabled)
         c.desktop_pinned = false;
-    effects_.states.insert(id);
-    effects_.desktops.insert(id);
-    invalidate(c.monitor);
-    changed(id);
 }
-void State::borderless(xcb_window_t id, bool enabled)
-{
-    auto& c = edit(id);
-    if (c.borderless == enabled)
-        return;
-    c.borderless = enabled;
-    request_geometry(id);
-    effects_.allowed_actions.insert(id);
-    changed(id);
-}
-void State::classification(xcb_window_t id, bool update_mode)
-{
-    auto& c = edit(id);
-    auto defaults = classify_window_type(c.ewmh_type, c.transient_for != XCB_NONE);
-    bool normal = c.kind() == Client::Kind::Tiled || c.kind() == Client::Kind::Floating;
-    bool default_normal =
-        defaults.kind == WindowClassification::Kind::Tiled || defaults.kind == WindowClassification::Kind::Floating;
-    if (!normal || !default_normal)
-        return;
-    if (update_mode && !c.scratchpad)
-        apply_floating(id, c.preferences.floating.value_or(defaults.kind == WindowClassification::Kind::Floating));
-    bool taskbar = c.preferences.skip_taskbar.value_or(defaults.skip_taskbar || c.transient_for != XCB_NONE);
-    bool pager = c.preferences.skip_pager.value_or(defaults.skip_pager || c.transient_for != XCB_NONE);
-    auto layer = c.fullscreen ? LayerHint::Normal
-        : c.modal             ? LayerHint::Above
-                              : c.preferences.layer.value_or(defaults.above ? LayerHint::Above : LayerHint::Normal);
-    if (c.skip_taskbar == taskbar && c.skip_pager == pager && c.layer_hint == layer)
-        return;
-    effects_.stacking |= c.layer_hint != layer;
-    c.skip_taskbar = taskbar;
-    c.skip_pager = pager;
-    c.layer_hint = layer;
-    effects_.states.insert(id);
-    changed(id);
-}
-void State::apply_floating(xcb_window_t id, bool enabled)
-{
-    auto& client = edit(id);
-    if (enabled && client.kind() == Client::Kind::Tiled)
-    {
-        auto rectangle = prior_floating_geometry(client).value_or(client.tiled_geometry);
-        change_kind(id, FloatingState{ rectangle });
-        touch(id);
-    }
-    else if (!enabled && client.kind() == Client::Kind::Floating)
-    {
-        auto rectangle = floating_geometry(client);
-        auto saved = saved_tiled_pos(client);
-        std::optional<size_t> index;
-        if (saved && saved->monitor == client.monitor && saved->workspace == client.workspace)
-            index = saved->index;
-        change_kind(id, TiledState{ rectangle }, index);
-    }
-}
-void State::floating(xcb_window_t id, bool enabled)
-{
-    auto& client = edit(id);
-    if (client.kind() != Client::Kind::Tiled && client.kind() != Client::Kind::Floating)
-        return;
-    client.preferences.floating = enabled;
-    apply_floating(id, enabled);
-    changed(id);
-}
-void State::layer(xcb_window_t id, LayerHint hint)
-{
-    edit(id).preferences.layer = hint;
-    classification(id);
-}
-void State::maximize(xcb_window_t id, bool horizontal, bool vertical)
-{
-    auto& c = edit(id);
-    if (c.fullscreen)
-        horizontal = vertical = false;
-    if (c.maximized_horz == horizontal && c.maximized_vert == vertical)
-        return;
-    c.maximized_horz = horizontal;
-    c.maximized_vert = vertical;
-    if (c.kind() == Client::Kind::Floating)
-        request_geometry(id);
-    effects_.states.insert(id);
-    changed(id);
-}
-void State::modal(xcb_window_t id, bool enabled)
-{
-    auto& c = edit(id);
-    if (c.modal == enabled)
-        return;
-    c.modal = enabled;
-    classification(id);
-    effects_.states.insert(id);
-    changed(id);
-}
+
 void State::fullscreen(xcb_window_t id, bool enabled)
 {
+    if (!enabled && !require(id).fullscreen)
+        return;
     auto& c = edit(id);
-    if (c.kind() != Client::Kind::Tiled && c.kind() != Client::Kind::Floating)
-        return;
-    if (!enabled && !c.fullscreen)
-        return;
-    if (enabled)
-        maximize(id, false, false);
     if (c.fullscreen != enabled)
         LWM_LOG_DEBUG("Fullscreen changed: window={:#x} enabled={}", id, enabled);
+    if (enabled)
+    {
+        // Fullscreen supersedes maximize; an explicit request claims ownership.
+        c.maximized_horz = c.maximized_vert = false;
+        c.fullscreen_claim = ++next_fullscreen_claim_;
+    }
     c.fullscreen = enabled;
-    classification(id);
-    invalidate(c.monitor, enabled ? id : XCB_NONE);
-    effects_.states.insert(id);
-    effects_.repair_focus = true;
-    changed(id);
+    repair_focus_ = true;
 }
-void State::skip_taskbar(xcb_window_t id, bool enabled)
+
+void State::maximize(xcb_window_t id, bool horizontal, bool vertical)
 {
-    edit(id).preferences.skip_taskbar = enabled;
-    classification(id);
+    auto const& current = require(id);
+    if (current.fullscreen)
+        horizontal = vertical = false;
+    if (current.maximized_horz == horizontal && current.maximized_vert == vertical)
+        return;
+    auto& c = edit(id);
+    c.maximized_horz = horizontal;
+    c.maximized_vert = vertical;
 }
-void State::skip_pager(xcb_window_t id, bool enabled)
-{
-    edit(id).preferences.skip_pager = enabled;
-    classification(id);
-}
+
+void State::modal(xcb_window_t id, bool enabled) { edit(id).modal = enabled; }
+void State::borderless(xcb_window_t id, bool enabled) { edit(id).borderless = enabled; }
+void State::layer(xcb_window_t id, LayerHint hint) { edit(id).preferences.layer = hint; }
+void State::skip_taskbar(xcb_window_t id, bool enabled) { edit(id).preferences.skip_taskbar = enabled; }
+void State::skip_pager(xcb_window_t id, bool enabled) { edit(id).preferences.skip_pager = enabled; }
+
 void State::urgency(xcb_window_t id, UrgencySource source, bool enabled)
 {
-    auto& c = edit(id);
-    if (enabled ? c.urgency.add(source) : c.urgency.remove(source))
-    {
-        effects_.urgency.insert(id);
-        changed(id);
-    }
+    auto urgency = require(id).urgency;
+    if (enabled ? urgency.add(source) : urgency.remove(source))
+        edit(id).urgency = urgency;
 }
+
 void State::clear_urgency(xcb_window_t id)
 {
-    if (edit(id).urgency.clear())
-    {
-        effects_.urgency.insert(id);
-        changed(id);
-    }
+    if (require(id).urgency.active())
+        edit(id).urgency.clear();
 }
-void State::scratchpad(xcb_window_t id, std::optional<ScratchpadMembership> membership)
+
+void State::fullscreen_monitors(xcb_window_t id, std::optional<FullscreenMonitors> value)
 {
-    auto& c = edit(id);
-    if (auto const* named = scratchpad_named(c))
-        for (auto& slot : named_scratchpads_)
-            if (slot.name == named->name && slot.window() == id)
-                slot.mark_empty();
-    c.scratchpad = std::move(membership);
-    if (auto const* named = scratchpad_named(c))
-    {
-        std::erase(scratchpad_pool_, id);
-        for (auto& slot : named_scratchpads_)
-            if (slot.name == named->name)
-                slot.mark_claimed(id);
-    }
-    else if (c.scratchpad)
-    {
-        if (std::ranges::find(scratchpad_pool_, id) == scratchpad_pool_.end())
-            scratchpad_pool_.push_back(id);
-    }
-    else
-        std::erase(scratchpad_pool_, id);
-    effects_.state_changed = true;
+    edit(id).fullscreen_monitors = value;
 }
-void State::configure_scratchpads(std::span<std::string const> names)
-{
-    assert(!publishing_);
-    std::vector<NamedScratchpadState> slots;
-    for (auto const& name : names)
-    {
-        auto it = std::ranges::find(named_scratchpads_, name, &NamedScratchpadState::name);
-        slots.push_back(it == named_scratchpads_.end() ? NamedScratchpadState{ name } : *it);
-    }
-    named_scratchpads_ = std::move(slots);
-    for (auto& [id, c] : clients_)
-        if (auto const* named = scratchpad_named(c); named && std::ranges::find(names, named->name) == names.end())
-        {
-            scratchpad(id, std::nullopt);
-            iconic(id, false);
-        }
-}
-void State::scratchpad_pending(std::string_view name, bool pending)
-{
-    assert(!publishing_);
-    for (auto& slot : named_scratchpads_)
-        if (slot.name == name && slot.window() == XCB_NONE)
-        {
-            if (pending)
-                slot.mark_launch_pending();
-            else
-                slot.mark_empty();
-        }
-}
-void State::restore_pool(std::span<xcb_window_t const> ids)
-{
-    assert(!publishing_);
-    scratchpad_pool_.clear();
-    for (auto id : ids)
-        if (auto const* c = find(id);
-            c && !scratchpad_named(*c) && (c->kind() == Client::Kind::Tiled || c->kind() == Client::Kind::Floating))
-        {
-            if (!c->scratchpad)
-                scratchpad(id, VisibleScratchpadPoolMembership{ });
-            else if (std::ranges::find(scratchpad_pool_, id) == scratchpad_pool_.end())
-                scratchpad_pool_.push_back(id);
-        }
-}
+
 void State::pin_desktop(xcb_window_t id, bool pinned) { edit(id).desktop_pinned = pinned; }
 void State::configure_suppression(xcb_window_t id, bool enabled) { edit(id).suppress_next_configure_request = enabled; }
-void State::title(xcb_window_t id, std::string value)
-{
-    edit(id).name = std::move(value);
-    effects_.state_changed = true;
-}
+
+// ---------------------------------------------------------------------------
+// Metadata
+// ---------------------------------------------------------------------------
+
+void State::title(xcb_window_t id, std::string value) { edit(id).name = std::move(value); }
+
 void State::window_class(xcb_window_t id, std::string instance, std::string name)
 {
     auto& c = edit(id);
     c.wm_class_name = std::move(instance);
     c.wm_class = std::move(name);
-    effects_.state_changed = true;
 }
+
+// Type and transient updates change classification defaults. The default mode
+// applies unless the user chose one or a scratchpad owns the representation.
 void State::window_type(xcb_window_t id, WindowType type)
 {
     edit(id).ewmh_type = type;
-    classification(id, true);
+    auto const& c = require(id);
+    if (!c.preferences.floating && !scratchpad_claim(id) && !pooled(id))
+        if (auto floating = default_floating(c))
+            set_mode(id, *floating);
 }
+
 void State::transient(xcb_window_t id, xcb_window_t parent)
 {
-    auto& client = edit(id);
-    client.transient_for = parent;
-    classification(id, true);
-    // Transients of the fullscreen owner are exempt from suppression.
-    invalidate(client.monitor);
+    edit(id).transient_for = parent;
+    auto const& c = require(id);
+    if (!c.preferences.floating && !scratchpad_claim(id) && !pooled(id))
+        if (auto floating = default_floating(c))
+            set_mode(id, *floating);
 }
+
 void State::focus_hints(xcb_window_t id, bool input, bool take_focus)
 {
     auto& c = edit(id);
     c.accepts_input = input;
     c.supports_take_focus = take_focus;
-    effects_.repair_focus = true;
+    repair_focus_ = true;
 }
+
 void State::user_time(xcb_window_t id, uint32_t time, xcb_window_t window)
 {
+    if (auto const& current = require(id); current.user_time == time && current.user_time_window == window)
+        return;
     auto& c = edit(id);
     c.user_time = time;
     c.user_time_window = window;
 }
-void State::fullscreen_monitors(xcb_window_t id, std::optional<FullscreenMonitors> value)
-{
-    auto& c = edit(id);
-    c.fullscreen_monitors = value;
-    if (c.fullscreen)
-        request_geometry(id);
-}
-void State::remember_focus(size_t monitor, size_t workspace, xcb_window_t id)
-{
-    assert(!publishing_);
-    workspace_policy::set_workspace_focus(monitors_[monitor].workspaces[workspace], id);
-}
+
+void State::rule(xcb_window_t id, std::optional<RuleActions> actions) { edit(id).rule = std::move(actions); }
+
+// ---------------------------------------------------------------------------
+// Workspaces and monitors
+// ---------------------------------------------------------------------------
+
 bool State::switch_workspace(size_t monitor, size_t workspace)
 {
-    assert(!publishing_);
     if (monitor >= monitors_.size())
         return false;
     auto& m = monitors_[monitor];
-    auto result = workspace_policy::validate_workspace_switch(m, workspace);
-    if (!result)
+    if (!workspace_policy::validate_workspace_switch(m, workspace))
         return false;
+    mutated();
     LWM_LOG_DEBUG("Workspace changed: monitor={} workspace={} -> {}", monitor, m.current_workspace, workspace);
     m.previous_workspace = m.current_workspace;
     m.current_workspace = workspace;
-    auto [it, inserted] = effects_.workspace_events.try_emplace(monitor, result->old_workspace, workspace);
-    it->second.second = workspace;
-    invalidate(monitor);
-    effects_.current_desktop = true;
-    for (auto const& [id, c] : clients_)
-        if (c.urgency.active() && id != active_window_)
-            effects_.urgency.insert(id);
     return true;
 }
+
 void State::layout(size_t monitor, LayoutStrategy strategy)
 {
-    assert(!publishing_);
-    monitors_[monitor].current().layout_strategy = strategy;
-    effects_.layouts.insert(monitor);
+    edit_workspace(monitor, monitors_.at(monitor).current_workspace).layout_strategy = strategy;
 }
+
 void State::ratio(size_t monitor, SplitAddress address, double value)
 {
-    assert(!publishing_);
-    monitors_[monitor].current().split_ratios[address] = value;
-    effects_.layouts.insert(monitor);
+    edit_workspace(monitor, monitors_.at(monitor).current_workspace).split_ratios[address] = value;
 }
+
 void State::erase_ratio(size_t monitor, SplitAddress address)
 {
-    assert(!publishing_);
-    monitors_[monitor].current().split_ratios.erase(address);
-    effects_.layouts.insert(monitor);
+    edit_workspace(monitor, monitors_.at(monitor).current_workspace).split_ratios.erase(address);
 }
+
 void State::reset_ratios(size_t monitor)
 {
-    assert(!publishing_);
-    monitors_[monitor].current().split_ratios.clear();
-    effects_.layouts.insert(monitor);
+    edit_workspace(monitor, monitors_.at(monitor).current_workspace).split_ratios.clear();
 }
-void State::swap_tiles(size_t monitor, size_t a, size_t b)
-{
-    assert(!publishing_);
-    auto& w = monitors_[monitor].current().windows;
-    std::swap(w[a], w[b]);
-    effects_.layouts.insert(monitor);
-}
-void State::resolve_owner(size_t monitor, xcb_window_t owner)
-{
-    assert(!publishing_);
-    if (monitors_[monitor].fullscreen_owner != owner)
-        LWM_LOG_DEBUG(
-            "Fullscreen owner changed: monitor={} window={:#x} -> {:#x}",
-            monitor,
-            monitors_[monitor].fullscreen_owner,
-            owner
-        );
-    monitors_[monitor].fullscreen_owner = owner;
-}
+
 void State::workarea(size_t monitor, Strut strut)
 {
-    assert(!publishing_);
-    if (monitors_[monitor].strut == strut)
+    if (monitors_.at(monitor).strut == strut)
         return;
+    mutated();
     monitors_[monitor].strut = strut;
-    invalidate(monitor);
 }
+
 void State::replace_monitors(std::vector<Monitor> monitors)
 {
-    assert(!publishing_);
+    assert(!monitors.empty());
+    mutated();
     bool topology_changed = monitors_.size() != monitors.size()
         || !std::ranges::equal(monitors_,
                                monitors,
@@ -650,99 +542,187 @@ void State::replace_monitors(std::vector<Monitor> monitors)
         }
     }
     auto previous = std::move(monitors_);
-    displaced_.clear();
-    for (auto const& [id, c] : clients_)
-        if (c.monitor < previous.size()
-            && !std::ranges::any_of(monitors, [&](auto const& m) { return m.name == previous[c.monitor].name; }))
-            displaced_.insert(id);
     auto destinations = hotplug_policy::preserve_workspaces(previous, monitors);
     focused_monitor_ = focused_monitor_ < destinations.size() ? destinations[focused_monitor_] : 0;
     monitors_ = std::move(monitors);
+    auto survives = [&](size_t index)
+    {
+        return index < previous.size()
+            && std::ranges::any_of(monitors_, [&](auto const& m) { return m.name == previous[index].name; });
+    };
     for (auto& [id, c] : clients_)
     {
+        bool displaced = !survives(c.monitor);
         c.monitor = c.monitor < destinations.size() ? destinations[c.monitor] : 0;
         c.workspace = std::min(c.workspace, monitors_[c.monitor].workspaces.size() - 1);
+        // Monitor indices in the hint may name different outputs now.
         c.fullscreen_monitors.reset();
-        effects_.desktops.insert(id);
-    }
-    for (size_t i = 0; i < monitors_.size(); ++i) invalidate(i);
-}
-void State::fit_floating()
-{
-    assert(!publishing_);
-    for (auto& [id, c] : clients_)
-        if (c.kind() == Client::Kind::Floating)
+        if (auto* mode = floating_mode(c))
         {
-            bool survives = !displaced_.contains(id);
-            auto g = floating_geometry(c);
             auto area = monitors_[c.monitor].working_area();
-            geometry(
-                id,
-                survives ? floating::clamp_to_area(area, g)
-                         : floating::place_floating(area, g.width, g.height, std::nullopt)
-            );
+            mode->geometry = displaced
+                ? floating::place_floating(area, mode->geometry.width, mode->geometry.height, std::nullopt)
+                : floating::clamp_to_area(area, mode->geometry);
         }
+    }
 }
-void State::restore_workspaces(size_t monitor, size_t current, size_t previous)
+
+// ---------------------------------------------------------------------------
+// Scratchpads
+// ---------------------------------------------------------------------------
+
+State::NamedScratchpad const* State::named_scratchpad(std::string_view name) const
 {
-    assert(!publishing_);
-    monitors_[monitor].current_workspace = current;
-    monitors_[monitor].previous_workspace = previous;
-    invalidate(monitor);
+    auto it = std::ranges::find(named_scratchpads_, name, &NamedScratchpad::name);
+    return it == named_scratchpads_.end() ? nullptr : &*it;
 }
-void State::restore_layout(size_t monitor, size_t workspace, LayoutStrategy strategy, SplitRatioMap ratios)
+
+State::NamedScratchpad const* State::scratchpad_claim(xcb_window_t id) const
 {
-    assert(!publishing_);
-    auto& ws = monitors_[monitor].workspaces[workspace];
-    ws.layout_strategy = strategy;
-    ws.split_ratios = std::move(ratios);
-    effects_.layouts.insert(monitor);
+    if (id == XCB_NONE)
+        return nullptr;
+    auto it = std::ranges::find(named_scratchpads_, id, &NamedScratchpad::window);
+    return it == named_scratchpads_.end() ? nullptr : &*it;
 }
-void State::restore_tile_order(std::span<xcb_window_t const> order)
+
+bool State::pooled(xcb_window_t id) const { return std::ranges::find(scratchpad_pool_, id) != scratchpad_pool_.end(); }
+
+void State::release_scratchpad(xcb_window_t id)
 {
-    assert(!publishing_);
-    std::unordered_map<xcb_window_t, size_t> rank;
-    for (size_t i = 0; i < order.size(); ++i) rank[order[i]] = i;
-    for (auto& m : monitors_)
-        for (auto& ws : m.workspaces)
-            std::ranges::stable_sort(
-                ws.windows,
-                [&](auto a, auto b)
-                { return (rank.contains(a) ? rank[a] : SIZE_MAX) < (rank.contains(b) ? rank[b] : SIZE_MAX); }
+    for (auto& slot : named_scratchpads_)
+        if (slot.window() == id)
+            slot.state = NamedScratchpad::Empty{ };
+    std::erase(scratchpad_pool_, id);
+}
+
+// Surviving names keep claims and pending launches; removed names release
+// their windows, which become ordinary visible clients again.
+void State::configure_scratchpads(std::span<std::string const> names)
+{
+    mutated();
+    std::vector<NamedScratchpad> slots;
+    for (auto const& name : names)
+    {
+        auto const* existing = named_scratchpad(name);
+        slots.push_back(existing ? *existing : NamedScratchpad{ name });
+    }
+    std::vector<xcb_window_t> released;
+    for (auto const& slot : named_scratchpads_)
+        if (slot.window() != XCB_NONE && std::ranges::find(names, slot.name) == names.end())
+            released.push_back(slot.window());
+    named_scratchpads_ = std::move(slots);
+    for (auto id : released) iconic(id, false);
+}
+
+void State::claim_scratchpad(std::string_view name, xcb_window_t id)
+{
+    mutated();
+    release_scratchpad(id);
+    auto it = std::ranges::find(named_scratchpads_, name, &NamedScratchpad::name);
+    assert(it != named_scratchpads_.end());
+    it->state = NamedScratchpad::Claimed{ id };
+}
+
+void State::pool_scratchpad(xcb_window_t id)
+{
+    if (scratchpad_claim(id) || pooled(id))
+        return;
+    mutated();
+    scratchpad_pool_.push_back(id);
+}
+
+void State::scratchpad_pending(std::string_view name, bool pending)
+{
+    auto it = std::ranges::find(named_scratchpads_, name, &NamedScratchpad::name);
+    if (it == named_scratchpads_.end() || it->window() != XCB_NONE)
+        return;
+    mutated();
+    if (pending)
+        it->state = NamedScratchpad::LaunchPending{ };
+    else
+        it->state = NamedScratchpad::Empty{ };
+}
+
+// ---------------------------------------------------------------------------
+// Exec handoff
+// ---------------------------------------------------------------------------
+
+restart::Snapshot State::snapshot() const
+{
+    restart::Snapshot snapshot;
+    snapshot.focused_monitor = focused_monitor_;
+    snapshot.active = active_window_;
+    snapshot.showing_desktop = showing_desktop_;
+    for (auto const& monitor : monitors_)
+    {
+        auto& record = snapshot.monitors.emplace_back();
+        record.current = monitor.current_workspace;
+        record.previous = monitor.previous_workspace;
+        for (auto const& workspace : monitor.workspaces)
+            record.workspaces.push_back(
+                { workspace.layout_strategy, workspace.split_ratios, workspace.windows, workspace.focused_window }
             );
+    }
+    std::vector<Client const*> recency;
+    for (auto const& [id, client] : clients_) recency.push_back(&client);
+    std::ranges::sort(recency, {}, [](Client const* c) { return std::tie(c->mru_order, c->order); });
+    for (auto const* c : recency)
+    {
+        auto const* tiled = tiled_mode(*c);
+        snapshot.clients.push_back({ c->id,
+                                     c->monitor,
+                                     c->workspace,
+                                     c->kind(),
+                                     tiled ? tiled->layout : floating_mode(*c)->geometry,
+                                     tiled ? tiled->floating : std::nullopt,
+                                     c->preferences,
+                                     c->urgency.sources,
+                                     c->borderless,
+                                     c->desktop_pinned });
+    }
+    for (auto const& slot : named_scratchpads_)
+        if (slot.window() != XCB_NONE)
+            snapshot.named_scratchpads.push_back({ slot.name, slot.window() });
+    snapshot.pool = scratchpad_pool_;
+    return snapshot;
 }
-void State::restore_client(xcb_window_t id, restart::ClientRecord const& record)
+
+void State::restore(restart::Snapshot const& snapshot)
 {
-    auto& c = edit(id);
-    if (c.kind() == Client::Kind::Tiled)
-        detach(c);
-    c.borderless = record.borderless;
-    c.desktop_pinned = record.desktop_pinned;
-    if (record.kind == Client::Kind::Tiled)
-        c.state = TiledState{ record.prior_floating };
-    else if (record.kind == Client::Kind::Floating)
-        c.state = FloatingState{ record.floating };
-    if (record.hidden_pool_kind == 1)
-        c.scratchpad = HiddenTiledScratchpadPoolMembership{ record.prior_floating };
-    else if (record.hidden_pool_kind == 2)
-        c.scratchpad = HiddenFloatingScratchpadPoolMembership{ record.floating };
-    if (record.urgency)
-        c.urgency.sources = *record.urgency;
-    if (record.preferences)
-        c.preferences = *record.preferences;
-    else if (record.kind)
-        c.preferences.floating = *record.kind == Client::Kind::Floating;
-    if (c.kind() == Client::Kind::Tiled)
-        attach(c);
-    classification(id);
-    invalidate(c.monitor);
-    effects_.states.insert(id);
-    effects_.urgency.insert(id);
-    changed(id);
+    mutated();
+    focused_monitor_ = snapshot.focused_monitor < monitors_.size() ? snapshot.focused_monitor : 0;
+    showing_desktop_ = snapshot.showing_desktop;
+    for (size_t m = 0; m < std::min(monitors_.size(), snapshot.monitors.size()); ++m)
+    {
+        auto& monitor = monitors_[m];
+        auto const& record = snapshot.monitors[m];
+        size_t last = monitor.workspaces.size() - 1;
+        monitor.current_workspace = std::min(record.current, last);
+        monitor.previous_workspace = std::min(record.previous, last);
+        for (size_t w = 0; w < std::min(monitor.workspaces.size(), record.workspaces.size()); ++w)
+        {
+            auto& workspace = monitor.workspaces[w];
+            auto const& saved = record.workspaces[w];
+            workspace.layout_strategy = saved.strategy;
+            workspace.split_ratios = saved.ratios;
+            // Adoption appended tiles in scan order; saved order ranks known members first.
+            auto rank = [&](xcb_window_t id)
+            { return static_cast<size_t>(std::ranges::find(saved.tiles, id) - saved.tiles.begin()); };
+            std::ranges::stable_sort(workspace.windows, {}, rank);
+            if (auto const* focused = find(saved.focused);
+                focused && workspace.find_window(saved.focused) != workspace.windows.end() && !focused->iconic)
+                workspace_policy::set_workspace_focus(workspace, saved.focused);
+        }
+    }
+    for (auto const& record : snapshot.clients)
+        if (find(record.window))
+            touch(record.window);
+    for (auto const& named : snapshot.named_scratchpads)
+        if (find(named.window) && named_scratchpad(named.name))
+            claim_scratchpad(named.name, named.window);
+    for (auto window : snapshot.pool)
+        if (find(window))
+            pool_scratchpad(window);
 }
-void State::touch(xcb_window_t id)
-{
-    edit(id).mru_order = next_mru_order_++;
-    effects_.state_changed = true;
-}
-}
+
+} // namespace lwm

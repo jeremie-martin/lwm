@@ -5,6 +5,7 @@
 
 namespace lwm {
 
+namespace {
 Geometry working_area_to_content_rect(Geometry const& area, uint32_t padding, uint32_t border_width)
 {
     int32_t inset = static_cast<int32_t>(padding + border_width);
@@ -13,8 +14,6 @@ Geometry working_area_to_content_rect(Geometry const& area, uint32_t padding, ui
              static_cast<uint16_t>(std::max<int32_t>(1, area.width - 2 * inset)),
              static_cast<uint16_t>(std::max<int32_t>(1, area.height - 2 * inset)) };
 }
-
-namespace {
 
 // Master-stack is a sequence of cuts, not an arbitrary tree. Visiting cuts
 // directly avoids node allocations, recursion and depth-limited path encoding.

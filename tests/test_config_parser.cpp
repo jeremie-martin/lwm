@@ -121,12 +121,12 @@ apply = { floating = true, scratchpad = "term", center = true }
     REQUIRE(cfg.autostart.commands.front().argv.front() == "/usr/bin/printf");
     REQUIRE(cfg.scratchpads.size() == 1);
     REQUIRE(cfg.keybinds.size() == 8);
-    REQUIRE(action_as<SpawnAction>(cfg.keybinds.at({ XCB_MOD_MASK_4, XK_Return })) != nullptr);
-    auto const* scratchpad_action = action_as<ToggleScratchpadAction>(cfg.keybinds.at({ XCB_MOD_MASK_4, XK_u }));
+    REQUIRE(action_as<action::Spawn>(cfg.keybinds.at({ XCB_MOD_MASK_4, XK_Return })) != nullptr);
+    auto const* scratchpad_action = action_as<action::ScratchpadToggle>(cfg.keybinds.at({ XCB_MOD_MASK_4, XK_u }));
     REQUIRE(scratchpad_action != nullptr);
     REQUIRE(scratchpad_action->name == "term");
     REQUIRE(cfg.rules.size() == 1);
-    REQUIRE(cfg.rules[0].scratchpad == "term");
+    REQUIRE(cfg.rules[0].actions.scratchpad == "term");
 }
 
 TEST_CASE("Config parser recognizes swap_next and swap_prev actions", "[config][keybind]")
@@ -146,9 +146,9 @@ swap_prev = true
     bool saw_prev = false;
     for (auto const& kb : loaded->keybinds)
     {
-        if (action_as<SwapNextAction>(kb.second))
+        if (action_as<action::SwapNext>(kb.second))
             saw_next = true;
-        else if (action_as<SwapPrevAction>(kb.second))
+        else if (action_as<action::SwapPrev>(kb.second))
             saw_prev = true;
     }
     REQUIRE(saw_next);
@@ -202,14 +202,14 @@ count = 3
 
     REQUIRE(loaded.has_value());
     REQUIRE_FALSE(loaded->keybinds.empty());
-    auto const* spawn_action = action_as<SpawnAction>(loaded->keybinds.at({ XCB_MOD_MASK_4, XK_Return }));
+    auto const* spawn_action = action_as<action::Spawn>(loaded->keybinds.at({ XCB_MOD_MASK_4, XK_Return }));
     REQUIRE(spawn_action != nullptr);
     REQUIRE(spawn_action->command.argv.front() == "/usr/bin/ghostty");
 
     size_t switch_bind_count = 0;
     for (auto const& keybind : loaded->keybinds)
     {
-        if (action_as<SwitchWorkspaceAction>(keybind.second))
+        if (action_as<action::SwitchWorkspace>(keybind.second))
             ++switch_bind_count;
     }
     REQUIRE(switch_bind_count == 6);
@@ -239,16 +239,16 @@ keys = ["F1", "F2", "F3"]
 
     for (auto const& keybind : loaded->keybinds)
     {
-        if (auto const* spawn = action_as<SpawnAction>(keybind.second); spawn && keybind.first.keysym == XK_Return)
+        if (auto const* spawn = action_as<action::Spawn>(keybind.second); spawn && keybind.first.keysym == XK_Return)
         {
             saw_terminal_spawn =
                 spawn->command.kind == CommandConfig::Kind::Argv && spawn->command.argv.front() == "/usr/bin/ghostty";
         }
-        if (action_as<FocusMonitorAction>(keybind.second))
+        if (action_as<action::FocusMonitor>(keybind.second))
             saw_focus_monitor = true;
-        if (action_as<SwitchWorkspaceAction>(keybind.second))
+        if (action_as<action::SwitchWorkspace>(keybind.second))
             ++switch_bind_count;
-        if (action_as<MoveToWorkspaceAction>(keybind.second))
+        if (action_as<action::MoveToWorkspace>(keybind.second))
             ++move_bind_count;
     }
 
@@ -433,12 +433,12 @@ keys = ["F1", "F2"]
     REQUIRE(loaded);
     size_t moves = 0;
     for (auto const& [binding, action] : loaded->keybinds)
-        if (std::holds_alternative<MoveToWorkspaceAction>(action))
+        if (std::holds_alternative<action::MoveToWorkspace>(action))
             ++moves;
     CHECK(moves == 2); // Replaces the default super+shift group, regardless of ordering.
     auto const& action = loaded->keybinds.at({ XCB_MOD_MASK_4 | XCB_MOD_MASK_SHIFT, XK_F2 });
-    REQUIRE(std::holds_alternative<MoveToWorkspaceAction>(action));
-    CHECK(std::get<MoveToWorkspaceAction>(action).workspace == 1);
+    REQUIRE(std::holds_alternative<action::MoveToWorkspace>(action));
+    CHECK(std::get<action::MoveToWorkspace>(action).workspace == 1);
 
     for (std::string combo : { "super+", "super++a", "+a", "super+super+a", "ctrl+control+a", "unknown+a" })
     {
@@ -489,4 +489,84 @@ apply = { floating = true }
             );
         }
     CHECK_FALSE(load_from_string("[[rules]]\nmatch = { type = \"unknown\" }\napply = { floating = true }\n"));
+}
+
+TEST_CASE("Bindings accept every WM action with typed, validated values", "[config][keybind]")
+{
+    auto loaded = load_from_string(R"(
+[layout]
+min_ratio = 0.2
+
+[[scratchpads]]
+name = "term"
+spawn = { argv = ["true"] }
+match = { class = "Term" }
+
+[[binds]]
+key = "super+m"
+set_layout = "monocle"
+
+[[binds]]
+key = "super+r"
+set_ratio = 0.4
+
+[[binds]]
+key = "super+l"
+adjust_ratio = 0.05
+
+[[binds]]
+key = "super+e"
+exec = "/usr/local/bin/lwm"
+
+[[binds]]
+key = "super+c"
+cancel_scratchpad_launch = "term"
+
+[[binds]]
+key = "super+n"
+next_workspace = true
+)");
+    REQUIRE(loaded);
+    auto const& binds = loaded->keybinds;
+    CHECK(binds.at({ XCB_MOD_MASK_4, XK_m }) == Action{ action::SetLayout{ LayoutStrategy::Monocle } });
+    CHECK(binds.at({ XCB_MOD_MASK_4, XK_r }) == Action{ action::SetRatio{ 0.4 } });
+    CHECK(binds.at({ XCB_MOD_MASK_4, XK_l }) == Action{ action::AdjustRatio{ 0.05 } });
+    CHECK(binds.at({ XCB_MOD_MASK_4, XK_e }) == Action{ action::Exec{ "/usr/local/bin/lwm" } });
+    CHECK(binds.at({ XCB_MOD_MASK_4, XK_c }) == Action{ action::ScratchpadCancelLaunch{ "term" } });
+    CHECK(binds.at({ XCB_MOD_MASK_4, XK_n }) == Action{ action::NextWorkspace{ } });
+
+    for (auto const* text : { "[[binds]]\nkey = \"super+a\"\nset_layout = \"spiral\"\n",
+                              "[layout]\nmin_ratio = 0.2\n[[binds]]\nkey = \"super+a\"\nset_ratio = 0.9\n",
+                              "[[binds]]\nkey = \"super+a\"\nexec = \"\"\n",
+                              "[[binds]]\nkey = \"super+a\"\ntoggle_scratchpad = \"missing\"\n",
+                              "[[binds]]\nkey = \"super+a\"\nratio_grow = true\n" })
+    {
+        CAPTURE(text);
+        CHECK_FALSE(load_from_string(text));
+    }
+}
+
+TEST_CASE("Rules resolve typed actions when the configuration loads", "[config][rules]")
+{
+    auto loaded = load_from_string(R"(
+[workspaces]
+names = ["web", "code", "chat"]
+
+[[rules]]
+match = { class = "A" }
+apply = { workspace_name = "chat", monitor_name = "HDMI-1", below = true, geometry = { x = 5 } }
+
+[[rules]]
+match = { class = "B" }
+apply = { above = false }
+)");
+    REQUIRE(loaded);
+    auto const& first = loaded->rules[0].actions;
+    CHECK(first.workspace == 2);
+    CHECK(first.monitor == std::variant<size_t, std::string>{ std::string("HDMI-1") });
+    CHECK(first.layer == LayerHint::Below);
+    CHECK(first.geometry == Geometry{ 5, 0, 800, 600 });
+    // An explicit false clears a layer preference rather than leaving it unspecified.
+    CHECK(loaded->rules[1].actions.layer == LayerHint::Normal);
+    CHECK(loaded->layout.strategy == LayoutStrategy::MasterStack);
 }

@@ -1,4 +1,5 @@
 #include "lwm/core/stacking.hpp"
+#include "state_fixture.hpp"
 #include <catch2/catch_test_macros.hpp>
 
 using namespace lwm;
@@ -6,30 +7,23 @@ using namespace lwm::stacking;
 namespace {
 struct Scene
 {
-    std::unordered_map<xcb_window_t, Client> clients;
-    std::vector<Monitor> monitors{ 2 };
-    Scene()
+    State state = test::state(2, 2);
+    // Explicit modes keep transient and type updates from changing defaults.
+    void add(xcb_window_t id, bool floating = false, size_t monitor = 0)
     {
-        for (auto& m : monitors) m.workspaces.resize(2);
+        test::add(state, id, { .monitor = monitor, .floating = floating });
+        state.floating(id, floating);
     }
-    Client& add(xcb_window_t id, bool floating = false, size_t monitor = 0)
+    std::vector<xcb_window_t> order(xcb_window_t active = XCB_NONE)
     {
-        Client c;
-        c.id = id;
-        c.order = id;
-        c.monitor = monitor;
-        if (floating)
-            c.state = FloatingState{ };
-        return clients.emplace(id, c).first->second;
-    }
-    std::vector<xcb_window_t> order(xcb_window_t active = XCB_NONE, bool desktop = false) const
-    {
-        return stacking::compute_order(clients, monitors, desktop, active);
+        if (active != XCB_NONE)
+            state.focus(active);
+        return stacking::compute_order(state);
     }
 };
 }
 
-TEST_CASE("Global stacking ranks actual kinds, focus, layers and fullscreen visibility", "[stacking][policy]")
+TEST_CASE("Global stacking ranks kinds, focus, layers, fixtures and fullscreen visibility", "[stacking][policy]")
 {
     Scene scene;
     scene.add(1);
@@ -38,34 +32,34 @@ TEST_CASE("Global stacking ranks actual kinds, focus, layers and fullscreen visi
     scene.add(4, true, 1);
     REQUIRE(scene.order(1) == std::vector<xcb_window_t>{ 2, 1, 3, 4 });
     REQUIRE(scene.order(3) == std::vector<xcb_window_t>{ 1, 2, 4, 3 });
-    scene.clients.at(3).layer_hint = LayerHint::Below;
-    scene.clients.at(2).layer_hint = LayerHint::Above;
+    scene.state.focus(XCB_NONE);
+    scene.state.layer(3, LayerHint::Below);
+    scene.state.layer(2, LayerHint::Above);
     REQUIRE(scene.order() == std::vector<xcb_window_t>{ 3, 1, 4, 2 });
-    scene.add(5).state = DockState{ };
-    scene.add(6).state = DesktopState{ };
+    scene.state.insert_fixture(5, Fixture::Role::Dock);
+    scene.state.insert_fixture(6, Fixture::Role::Desktop);
     REQUIRE(scene.order() == std::vector<xcb_window_t>{ 6, 3, 1, 4, 2, 5 });
-    scene.clients.at(2).fullscreen = true;
-    scene.monitors[1].fullscreen_owner = 2;
-    auto order = scene.order();
-    REQUIRE(order == std::vector<xcb_window_t>{ 4, 6, 3, 1, 5, 2 });
-    scene.clients.at(4).transient_for = 2;
-    order = scene.order();
-    REQUIRE(order == std::vector<xcb_window_t>{ 6, 3, 1, 5, 2, 4 });
+    scene.state.fullscreen(2, true);
+    REQUIRE(scene.order() == std::vector<xcb_window_t>{ 4, 6, 3, 1, 5, 2 });
+    scene.state.transient(4, 2);
+    REQUIRE(scene.order() == std::vector<xcb_window_t>{ 6, 3, 1, 5, 2, 4 });
 }
 
 TEST_CASE("Hidden clients precede visible clients and do not constrain visible transients", "[stacking][policy]")
 {
     Scene scene;
-    scene.add(1, true).transient_for = 2;
-    scene.add(2).fullscreen = true;
-    scene.add(3, true).modal = true;
-    SECTION("Off workspace") { scene.clients.at(2).workspace = 1; }
-    SECTION("Iconic") { scene.clients.at(2).iconic = true; }
-    auto order = scene.order();
-    REQUIRE(order == std::vector<xcb_window_t>{ 2, 1, 3 });
-    scene.clients.at(1).sticky = true;
-    order = scene.order(XCB_NONE, true);
-    REQUIRE(order.back() == 1);
+    scene.add(1, true);
+    scene.add(2);
+    scene.add(3, true);
+    scene.state.transient(1, 2);
+    scene.state.fullscreen(2, true);
+    scene.state.modal(3, true);
+    SECTION("Off workspace") { scene.state.relocate(2, 0, 1); }
+    SECTION("Iconic") { scene.state.iconic(2, true); }
+    REQUIRE(scene.order() == std::vector<xcb_window_t>{ 2, 1, 3 });
+    scene.state.sticky(1, true);
+    scene.state.show_desktop(true);
+    REQUIRE(scene.order().back() == 1);
 }
 
 TEST_CASE(
@@ -87,7 +81,8 @@ TEST_CASE(
         {
             parents[i] = encoded % 5;
             encoded /= 5;
-            scene.add(i + 1, true).transient_for = parents[i] ? parents[i] : 999;
+            scene.add(i + 1, true);
+            scene.state.transient(i + 1, parents[i] ? parents[i] : 999);
             if (parents[i])
                 reach[i][parents[i] - 1] = true;
         }
@@ -122,7 +117,11 @@ TEST_CASE(
 TEST_CASE("Long transient chains use bounded iterative ordering", "[stacking][policy]")
 {
     Scene scene;
-    for (xcb_window_t i = 1; i <= 10000; ++i) scene.add(i, true).transient_for = i + 1;
+    for (xcb_window_t i = 1; i <= 10000; ++i)
+    {
+        scene.add(i, true);
+        scene.state.transient(i, i + 1);
+    }
     auto order = scene.order();
     REQUIRE(order.size() == 10000);
     for (size_t i = 0; i < order.size(); ++i) REQUIRE(order[i] == 10000 - i);

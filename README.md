@@ -143,7 +143,9 @@ List commands return JSON and subscriptions stream JSON Lines. See [IPC.md](IPC.
 discovery, the raw wire protocol, schemas, and delivery semantics.
 
 Restart prepares a state handoff before replacing the process. If the selected binary
-cannot be executed, LWM reconstructs from that handoff. Startup errors and unexpected
+cannot be executed, LWM reconstructs from that handoff. The handoff format belongs to
+one LWM version: restarting into a version with another format keeps each window's
+workspace but not layouts, modes, or scratchpads. Startup errors and unexpected
 runtime exceptions exit with a nonzero status and a diagnostic; they do not trigger an
 automatic restart loop.
 

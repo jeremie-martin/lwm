@@ -1,6 +1,5 @@
 #pragma once
 
-#include "lwm/core/command.hpp"
 #include <algorithm>
 #include <cstdint>
 #include <limits>
@@ -82,6 +81,8 @@ struct FullscreenMonitors
     uint32_t bottom = 0;
     uint32_t left = 0;
     uint32_t right = 0;
+
+    bool operator==(FullscreenMonitors const&) const = default;
 };
 
 /// EWMH layer preference (`_NET_WM_STATE_ABOVE` / `_BELOW`).
@@ -93,30 +94,6 @@ enum class LayerHint
     Below,
 };
 
-struct NamedScratchpadMembership
-{
-    std::string name;
-};
-
-struct VisibleScratchpadPoolMembership
-{ };
-
-struct HiddenTiledScratchpadPoolMembership
-{
-    std::optional<Geometry> prior_floating;
-};
-
-struct HiddenFloatingScratchpadPoolMembership
-{
-    Geometry restore_geometry;
-};
-
-using ScratchpadMembership = std::variant<
-    NamedScratchpadMembership,
-    VisibleScratchpadPoolMembership,
-    HiddenTiledScratchpadPoolMembership,
-    HiddenFloatingScratchpadPoolMembership>;
-
 // Unset fields follow classification defaults. Explicit requests (rules, user,
 // or application) replace the same preference; they are not competing layers.
 struct ClientPreferences
@@ -125,6 +102,8 @@ struct ClientPreferences
     std::optional<bool> skip_taskbar;
     std::optional<bool> skip_pager;
     std::optional<LayerHint> layer;
+
+    bool operator==(ClientPreferences const&) const = default;
 };
 
 enum class UrgencySource : uint8_t
@@ -165,154 +144,109 @@ struct Urgency
     }
 };
 
-/// Saved position in ws.windows before the last float conversion.
-/// Only valid when monitor/workspace match the conversion target; used to
-/// restore layout order when a window returns to the same workspace as tiled.
-struct SavedTilePos
+/// Typed actions of a window rule. Unset fields leave the window unchanged.
+struct RuleActions
+{
+    std::optional<bool> floating;
+    std::optional<size_t> workspace;
+    std::optional<std::variant<size_t, std::string>> monitor; ///< Index, or output name resolved when applied
+    std::optional<bool> fullscreen;
+    std::optional<LayerHint> layer;
+    std::optional<bool> sticky;
+    std::optional<bool> skip_taskbar;
+    std::optional<bool> skip_pager;
+    std::optional<bool> borderless;
+    std::optional<Geometry> geometry;
+    bool center = false;
+    std::optional<std::string> scratchpad;
+
+    bool operator==(RuleActions const&) const = default;
+};
+
+/// Position in a workspace's tiled order before a tile became floating. It is
+/// honored only when the window returns to tiling on the same workspace.
+struct TileSlot
 {
     size_t index = 0;
     size_t monitor = 0;
     size_t workspace = 0;
 };
 
-struct TiledState
+struct TiledMode
 {
-    std::optional<Geometry> prior_floating;
+    std::optional<Geometry> floating; ///< Floating rectangle to restore when floated again
+    Geometry layout;                  ///< Layout target; the normal rectangle until first arranged
 };
 
-struct FloatingState
+struct FloatingMode
 {
-    Geometry geometry;
-    std::optional<SavedTilePos> saved_tiled_pos;
+    Geometry geometry; ///< Normal rectangle; maximize and fullscreen only project it
+    std::optional<TileSlot> tile_slot;
 };
 
-struct DockState
-{ };
-struct DesktopState
-{ };
+using ClientMode = std::variant<TiledMode, FloatingMode>;
 
-using ClientState = std::variant<TiledState, FloatingState, DockState, DesktopState>;
-
-struct ClientPresentation
-{
-    bool hidden = false;
-    std::optional<Geometry> applied_geometry;
-    uint32_t applied_border = 0;
-    bool ignore_next_wm_hints_urgency_echo = false;
-    uint32_t sync_counter = 0;
-    uint64_t sync_value = 0;
-};
-
-/// Managed-window record owned by State. The state variant
-/// holds kind-specific data and is the authority for kind().
+/// A managed normal window. Placement is always a valid monitor/workspace pair;
+/// docks and desktop windows are Fixtures and never Clients.
 struct Client
 {
-    xcb_window_t id = XCB_NONE;
-
-    /**
-     * @brief Classification of the window type.
-     *
-     * - Tiled: Participates in workspace tiling layout
-     * - Floating: Positioned independently, does not affect tiling
-     * - Dock: Panel/bar that reserves screen edges (strut)
-     * - Desktop: Background/desktop window (_NET_WM_WINDOW_TYPE_DESKTOP)
-     */
     enum class Kind
     {
         Tiled,
-        Floating,
-        Dock,
-        Desktop
+        Floating
     };
-    Kind kind() const
-    {
-        if (std::holds_alternative<TiledState>(state))
-            return Kind::Tiled;
-        if (std::holds_alternative<FloatingState>(state))
-            return Kind::Floating;
-        if (std::holds_alternative<DockState>(state))
-            return Kind::Dock;
-        return Kind::Desktop;
-    }
 
+    xcb_window_t id = XCB_NONE;
     size_t monitor = 0;
     size_t workspace = 0;
+    ClientMode mode = TiledMode{ };
+
+    Kind kind() const { return std::holds_alternative<TiledMode>(mode) ? Kind::Tiled : Kind::Floating; }
 
     std::string name;
     std::string wm_class;
     std::string wm_class_name;
-
-    bool fullscreen = false;                  ///< _NET_WM_STATE_FULLSCREEN
-    LayerHint layer_hint = LayerHint::Normal; ///< _NET_WM_STATE_ABOVE / _BELOW (tri-state)
-    bool iconic = false;                      ///< _NET_WM_STATE_HIDDEN (minimized)
-    bool sticky = false;                      ///< _NET_WM_STATE_STICKY
-    bool maximized_horz = false;              ///< _NET_WM_STATE_MAXIMIZED_HORZ
-    bool maximized_vert = false;              ///< _NET_WM_STATE_MAXIMIZED_VERT
-
-    bool modal = false;                             ///< _NET_WM_STATE_MODAL
-    bool skip_taskbar = false;                      ///< _NET_WM_STATE_SKIP_TASKBAR
-    bool skip_pager = false;                        ///< _NET_WM_STATE_SKIP_PAGER
-    ClientPreferences preferences;
-    Urgency urgency;                                ///< _NET_WM_STATE_DEMANDS_ATTENTION provenance
-    bool borderless = false;                        ///< WM-managed zero-border window
-    WindowType ewmh_type = WindowType::Normal;      ///< Cached EWMH window type
-    bool accepts_input = true;                      ///< Cached WM_HINTS input field (ICCCM default: true)
-    bool supports_take_focus = false;               ///< Cached: WM_PROTOCOLS contains WM_TAKE_FOCUS
-    bool desktop_pinned = false;                    ///< Client supplied a concrete _NET_WM_DESKTOP assignment
-
-    using SavedTilePos = lwm::SavedTilePos;
-
-    ClientState state = TiledState{};
-    ClientPresentation presentation;
-    Geometry tiled_geometry; ///< Layout target; seeded from initial or previous normal geometry
+    WindowType ewmh_type = WindowType::Normal;
     xcb_window_t transient_for = XCB_NONE;
-    bool suppress_next_configure_request =
-        false; ///< Preserve WM-chosen startup placement against one client resize/move request
 
-    std::optional<FullscreenMonitors> fullscreen_monitors;  ///< Multi-monitor fullscreen
+    bool fullscreen = false;     ///< _NET_WM_STATE_FULLSCREEN
+    bool iconic = false;         ///< _NET_WM_STATE_HIDDEN (minimized)
+    bool sticky = false;         ///< _NET_WM_STATE_STICKY
+    bool maximized_horz = false; ///< Retained for any mode; only floating presentation honors it
+    bool maximized_vert = false;
+    bool modal = false;          ///< _NET_WM_STATE_MODAL
+    bool borderless = false;     ///< WM-managed zero-border window
+    ClientPreferences preferences;
+    Urgency urgency;             ///< _NET_WM_STATE_DEMANDS_ATTENTION provenance
+    std::optional<FullscreenMonitors> fullscreen_monitors;
+    bool desktop_pinned = false; ///< Client supplied a concrete _NET_WM_DESKTOP assignment
 
+    bool accepts_input = true;        ///< WM_HINTS input field (ICCCM default: true)
+    bool supports_take_focus = false; ///< WM_PROTOCOLS contains WM_TAKE_FOCUS
+    uint32_t user_time = 0;
+    xcb_window_t user_time_window = XCB_NONE;
+    /// Preserve WM-chosen startup placement against one client move/resize request.
+    bool suppress_next_configure_request = false;
 
-    uint32_t user_time = 0;                   ///< Last user interaction time
-    xcb_window_t user_time_window = XCB_NONE; ///< _NET_WM_USER_TIME_WINDOW
+    uint64_t order = 0;            ///< Registration order (_NET_CLIENT_LIST)
+    uint64_t mru_order = 0;        ///< Focus recency (higher = newer)
+    uint64_t fullscreen_claim = 0; ///< Recency of entering or re-entering fullscreen
 
-    uint64_t order = 0;     ///< Mapping order for _NET_CLIENT_LIST
-    uint64_t mru_order = 0; ///< Focus recency for tiled/floating clients (higher = newer)
-
-    std::optional<ScratchpadMembership> scratchpad; ///< Named or generic scratchpad membership
+    /// Actions of the rule matched at the last manage, metadata change, or
+    /// reload. Metadata changes apply a rule only when this result changes.
+    std::optional<RuleActions> rule;
 };
 
-/// Stable lowercase name for a client kind. Single source of truth for IPC
-/// JSON, the `_LWM_WINDOW_CLASS` property, and any other kind-to-string use.
+/// Stable lowercase name for a client kind shared by IPC JSON and `_LWM_WINDOW_CLASS`.
 inline char const* client_kind_str(Client::Kind kind)
 {
-    switch (kind)
-    {
-        case Client::Kind::Tiled:
-            return "tiled";
-        case Client::Kind::Floating:
-            return "floating";
-        case Client::Kind::Dock:
-            return "dock";
-        case Client::Kind::Desktop:
-            return "desktop";
-    }
-    return "unknown";
+    return kind == Client::Kind::Tiled ? "tiled" : "floating";
 }
 
-inline TiledState* tiled_state(Client& client) { return std::get_if<TiledState>(&client.state); }
-
-inline TiledState const* tiled_state(Client const& client) { return std::get_if<TiledState>(&client.state); }
-
-inline FloatingState* floating_state(Client& client) { return std::get_if<FloatingState>(&client.state); }
-
-inline FloatingState const* floating_state(Client const& client) { return std::get_if<FloatingState>(&client.state); }
-
-inline Geometry& floating_geometry(Client& client) { return std::get<FloatingState>(client.state).geometry; }
-
-inline Geometry const& floating_geometry(Client const& client)
-{
-    return std::get<FloatingState>(client.state).geometry;
-}
+inline TiledMode* tiled_mode(Client& client) { return std::get_if<TiledMode>(&client.mode); }
+inline TiledMode const* tiled_mode(Client const& client) { return std::get_if<TiledMode>(&client.mode); }
+inline FloatingMode* floating_mode(Client& client) { return std::get_if<FloatingMode>(&client.mode); }
+inline FloatingMode const* floating_mode(Client const& client) { return std::get_if<FloatingMode>(&client.mode); }
 
 // Tiled clients retain maximize flags as a preference; only floating presentation honors them.
 inline bool presents_maximized(Client const& client)
@@ -320,56 +254,22 @@ inline bool presents_maximized(Client const& client)
     return client.kind() == Client::Kind::Floating && (client.maximized_horz || client.maximized_vert);
 }
 
-inline std::optional<Geometry>& prior_floating_geometry(Client& client)
+/// Docks and desktop windows: registered, listed and stacked, but outside
+/// workspaces, layout, and focus.
+struct Fixture
 {
-    return std::get<TiledState>(client.state).prior_floating;
-}
+    enum class Role
+    {
+        Dock,
+        Desktop
+    };
 
-inline std::optional<Geometry> const& prior_floating_geometry(Client const& client)
-{
-    return std::get<TiledState>(client.state).prior_floating;
-}
+    xcb_window_t id = XCB_NONE;
+    Role role = Role::Dock;
+    uint64_t order = 0;
+};
 
-inline std::optional<SavedTilePos>& saved_tiled_pos(Client& client)
-{
-    return std::get<FloatingState>(client.state).saved_tiled_pos;
-}
-
-inline std::optional<SavedTilePos> const& saved_tiled_pos(Client const& client)
-{
-    return std::get<FloatingState>(client.state).saved_tiled_pos;
-}
-
-inline NamedScratchpadMembership const* scratchpad_named(Client const& client)
-{
-    if (!client.scratchpad)
-        return nullptr;
-    return std::get_if<NamedScratchpadMembership>(&*client.scratchpad);
-}
-
-inline HiddenFloatingScratchpadPoolMembership const* hidden_floating_pool_scratchpad(Client const& client)
-{
-    if (!client.scratchpad)
-        return nullptr;
-    return std::get_if<HiddenFloatingScratchpadPoolMembership>(&*client.scratchpad);
-}
-
-inline HiddenTiledScratchpadPoolMembership const* hidden_tiled_pool_scratchpad(Client const& client)
-{
-    if (!client.scratchpad)
-        return nullptr;
-    return std::get_if<HiddenTiledScratchpadPoolMembership>(&*client.scratchpad);
-}
-
-inline bool is_hidden_tiled_pool_scratchpad(Client const& client)
-{
-    return hidden_tiled_pool_scratchpad(client) != nullptr;
-}
-
-inline bool is_hidden_pool_scratchpad(Client const& client)
-{
-    return is_hidden_tiled_pool_scratchpad(client) || hidden_floating_pool_scratchpad(client) != nullptr;
-}
+inline char const* fixture_role_str(Fixture::Role role) { return role == Fixture::Role::Dock ? "dock" : "desktop"; }
 
 /// Split 0 divides master and stack; split i > 0 divides stack slot i
 /// from the remaining slots. Identity is stable when the window count changes.
@@ -378,26 +278,6 @@ struct SplitAddress
     uint32_t index = 0;
     auto operator<=>(SplitAddress const&) const = default;
 };
-
-// Preserve the version-3 restart representation for the old right-leaning tree.
-struct SerializedSplitAddress
-{
-    uint32_t depth;
-    uint32_t path;
-};
-
-constexpr SerializedSplitAddress serialize_split_address(SplitAddress address)
-{
-    return { address.index, address.index < 32 ? (uint32_t{ 1 } << address.index) - 1 : UINT32_MAX };
-}
-
-constexpr std::optional<SplitAddress> deserialize_split_address(uint32_t depth, uint32_t path)
-{
-    SplitAddress address{ depth };
-    if (serialize_split_address(address).path != path)
-        return std::nullopt;
-    return address;
-}
 
 using SplitRatioMap = std::map<SplitAddress, double>;
 
@@ -457,7 +337,6 @@ struct Monitor
     size_t current_workspace = 0;
     size_t previous_workspace = 0;
     Strut strut = {};
-    xcb_window_t fullscreen_owner = XCB_NONE; ///< Window owning fullscreen on this monitor (at most one)
 
     Workspace& current() { return workspaces[current_workspace]; }
     Workspace const& current() const { return workspaces[current_workspace]; }
@@ -475,94 +354,5 @@ struct Monitor
                  geometry_extent(static_cast<int64_t>(height) - std::min<uint64_t>(height, vertical)) };
     }
 };
-
-struct KeyBinding
-{
-    uint16_t modifier;
-    xcb_keysym_t keysym;
-
-    auto operator<=>(KeyBinding const&) const = default;
-};
-
-struct KillAction
-{ };
-struct ReloadConfigAction
-{ };
-struct RestartAction
-{ };
-struct ToggleWorkspaceAction
-{ };
-struct ToggleFullscreenAction
-{ };
-struct ToggleFloatAction
-{ };
-struct FocusNextAction
-{ };
-struct FocusPrevAction
-{ };
-struct RatioGrowAction
-{ };
-struct RatioShrinkAction
-{ };
-struct SwapNextAction
-{ };
-struct SwapPrevAction
-{ };
-struct ScratchpadStashAction
-{ };
-struct ScratchpadCycleAction
-{ };
-
-struct SpawnAction
-{
-    CommandConfig command;
-};
-
-struct SwitchWorkspaceAction
-{
-    size_t workspace = 0;
-};
-
-struct MoveToWorkspaceAction
-{
-    size_t workspace = 0;
-};
-
-struct FocusMonitorAction
-{
-    int direction = 0;
-};
-
-struct MoveToMonitorAction
-{
-    int direction = 0;
-};
-
-struct ToggleScratchpadAction
-{
-    std::string name;
-};
-
-using Action = std::variant<
-    KillAction,
-    ReloadConfigAction,
-    RestartAction,
-    ToggleWorkspaceAction,
-    ToggleFullscreenAction,
-    ToggleFloatAction,
-    FocusNextAction,
-    FocusPrevAction,
-    RatioGrowAction,
-    RatioShrinkAction,
-    SwapNextAction,
-    SwapPrevAction,
-    ScratchpadStashAction,
-    ScratchpadCycleAction,
-    SpawnAction,
-    SwitchWorkspaceAction,
-    MoveToWorkspaceAction,
-    FocusMonitorAction,
-    MoveToMonitorAction,
-    ToggleScratchpadAction>;
 
 } // namespace lwm

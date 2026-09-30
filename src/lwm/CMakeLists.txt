@@ -1,8 +1,11 @@
 add_library(liblwm STATIC
+    core/action.cpp
     core/connection.cpp
+    core/events.cpp
     core/signals.cpp
     core/workarea.cpp
     core/log.cpp
+    core/classification.cpp
     core/ewmh.cpp
     core/floating.cpp
     core/stacking.cpp
@@ -15,12 +18,9 @@ add_library(liblwm STATIC
     core/window_rules.cpp
     config/config.cpp
     layout/layout.cpp
-    keybind/keybind.cpp
-    wm_rules.cpp
+    wm_actions.cpp
     wm_focus.cpp
-    wm_floating.cpp
-    wm_workspace.cpp
-    wm_ewmh.cpp
+    wm_manage.cpp
     wm_ipc.cpp
     wm_transition.cpp
     wm.cpp

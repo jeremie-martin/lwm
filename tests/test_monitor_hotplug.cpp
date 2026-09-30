@@ -25,7 +25,6 @@ TEST_CASE("Output reconciliation preserves complete surviving workspace state", 
     ws.focus_history = { 20, 10 };
     ws.layout_strategy = LayoutStrategy::Monocle;
     ws.split_ratios[SplitAddress{ 1 }] = 0.3;
-    old[0].fullscreen_owner = 10;
     std::vector<Monitor> next{ monitor("B"), monitor("A", -1000), monitor("C", 1000) };
     auto destinations = hotplug_policy::preserve_workspaces(old, next);
     REQUIRE(destinations == std::vector<size_t>{ 1, 0 });
@@ -37,7 +36,6 @@ TEST_CASE("Output reconciliation preserves complete surviving workspace state", 
     CHECK(restored.split_ratios.at(SplitAddress{ 1 }) == 0.3);
     CHECK(next[1].current_workspace == 2);
     CHECK(next[1].previous_workspace == 1);
-    CHECK(next[1].fullscreen_owner == 10);
     CHECK(next[1].x == -1000);
     CHECK(next[2].workspaces[2].windows.empty());
 }

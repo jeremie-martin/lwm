@@ -1,128 +1,163 @@
+#include "lwm/core/focus.hpp"
 #include "lwm/core/invariants.hpp"
+#include "state_fixture.hpp"
 #include <catch2/catch_test_macros.hpp>
+#include <random>
 
 using namespace lwm;
+using test::add;
+using test::add_floating;
 
-TEST_CASE("Model validation accepts valid client kinds and independent fullscreen state", "[client][invariants]")
+TEST_CASE("Model validation accepts reachable states with independent fullscreen and iconic state", "[invariants]")
 {
-    std::vector<Monitor> monitors(1);
-    monitors[0].workspaces.resize(2);
-    monitors[0].workspaces[0].windows = { 1 };
-    std::unordered_map<xcb_window_t, Client> clients;
-    for (xcb_window_t id = 1; id <= 4; ++id) clients[id].id = id;
-    clients[2].state = FloatingState{
-        { 10, 20, 300, 200 }
-    };
-    clients[3].state = DockState{};
-    clients[4].state = DesktopState{};
-
-    SECTION("All client kinds") { monitors[0].workspaces[0].focused_window = 1; }
-    SECTION("Minimized fullscreen remains a valid requested state")
-    {
-        clients[1].fullscreen = true;
-        clients[1].iconic = true;
-        clients[2].fullscreen = true;
-        clients[2].iconic = true;
-    }
-    SECTION("Containers do not participate in workspace placement")
-    {
-        clients[3].workspace = 99;
-        clients[4].monitor = 99;
-    }
-    REQUIRE_FALSE(invariants::validate(clients, monitors));
+    auto state = test::state(2);
+    add(state, 1);
+    add_floating(state, 2);
+    add(state, 3, { .monitor = 1, .workspace = 2 });
+    state.insert_fixture(4, Fixture::Role::Dock);
+    state.insert_fixture(5, Fixture::Role::Desktop);
+    state.fullscreen(1, true);
+    state.iconic(1, true);
+    state.fullscreen(2, true);
+    state.pool_scratchpad(3);
+    state.focus(2);
+    CHECK_FALSE(invariants::validate(state));
 }
 
-TEST_CASE("Model validation rejects inconsistent authoritative records", "[client][invariants]")
+TEST_CASE("Model validation rejects focus that completion must repair", "[invariants]")
 {
-    std::vector<Monitor> monitors(2);
-    for (auto& monitor : monitors) monitor.workspaces.resize(2);
-    monitors[0].workspaces[0].windows = { 1 };
-    std::unordered_map<xcb_window_t, Client> clients;
-    clients[1].id = 1;
-
-    SECTION("Duplicate within one workspace") { monitors[0].workspaces[0].windows.push_back(1); }
-    SECTION("Duplicate across workspaces") { monitors[0].workspaces[1].windows.push_back(1); }
-    SECTION("Duplicate across monitors") { monitors[1].workspaces[0].windows.push_back(1); }
-    SECTION("Unmanaged member") { clients.clear(); }
-    SECTION("Floating member") { clients[1].state = FloatingState{ { } }; }
-    SECTION("Dock member") { clients[1].state = DockState{}; }
-    SECTION("Desktop member") { clients[1].state = DesktopState{}; }
-    SECTION("Missing membership") { monitors[0].workspaces[0].windows.clear(); }
-    SECTION("Wrong monitor") { clients[1].monitor = 1; }
-    SECTION("Wrong workspace") { clients[1].workspace = 1; }
-    SECTION("Invalid tiled monitor") { clients[1].monitor = 99; }
-    SECTION("Invalid tiled workspace") { clients[1].workspace = 99; }
-    SECTION("Invalid floating monitor")
+    auto state = test::state();
+    add(state, 1);
+    state.focus(1);
+    REQUIRE_FALSE(invariants::validate(state));
+    SECTION("Unmanaged") { state.focus(99); }
+    SECTION("Iconic") { state.iconic(1, true); }
+    SECTION("Hidden workspace") { state.switch_workspace(0, 1); }
+    SECTION("No input protocol") { state.focus_hints(1, false, false); }
+    SECTION("Suppressed by fullscreen")
     {
-        monitors[0].workspaces[0].windows.clear();
-        clients[1].state = FloatingState{ { } };
-        clients[1].monitor = 99;
+        add(state, 2);
+        state.fullscreen(2, true);
     }
-    SECTION("Invalid floating workspace")
-    {
-        monitors[0].workspaces[0].windows.clear();
-        clients[1].state = FloatingState{ { } };
-        clients[1].workspace = 99;
-    }
-    SECTION("Mismatched registry key") { clients[1].id = 2; }
-    SECTION("Mismatched container key")
-    {
-        clients[2].id = 3;
-        clients[2].state = DockState{};
-    }
-    SECTION("Zero registry key") { clients[0].state = DesktopState{}; }
-    SECTION("Unmanaged workspace focus") { monitors[0].workspaces[0].focused_window = 2; }
-    SECTION("Focus in wrong workspace") { monitors[0].workspaces[1].focused_window = 1; }
-    SECTION("Iconic workspace focus")
-    {
-        monitors[0].workspaces[0].focused_window = 1;
-        clients[1].iconic = true;
-    }
-    SECTION("Invalid current workspace") { monitors[0].current_workspace = 99; }
-    SECTION("Invalid previous workspace") { monitors[0].previous_workspace = 99; }
-    SECTION("Monitor without workspaces") { monitors[1].workspaces.clear(); }
-    REQUIRE(invariants::validate(clients, monitors));
-}
-
-TEST_CASE("Model validation accepts an empty registry without monitors", "[client][invariants]")
-{
-    REQUIRE_FALSE(invariants::validate({}, {}));
-}
-
-TEST_CASE("Model validation checks active focus at completed transitions", "[client][invariants]")
-{
-    std::vector<Monitor> monitors(1);
-    monitors[0].workspaces.resize(1);
-    std::unordered_map<xcb_window_t, Client> clients;
-    clients[1].id = 1;
-    clients[1].state = FloatingState{ { } };
-    REQUIRE_FALSE(invariants::validate(clients, monitors, 1));
-
-    SECTION("Unmanaged focus") { clients.clear(); }
-    SECTION("Iconic focus") { clients[1].iconic = true; }
-    SECTION("Hidden focus") { clients[1].presentation.hidden = true; }
-    SECTION("Dock focus") { clients[1].state = DockState{}; }
-    SECTION("Desktop focus") { clients[1].state = DesktopState{}; }
-    auto violation = invariants::validate(clients, monitors, 1);
+    auto violation = invariants::validate(state);
     REQUIRE(violation);
-    REQUIRE(violation->window == 1);
+    CHECK(violation->window == state.active_window());
 }
 
-TEST_CASE("Model validation checks effective fullscreen ownership", "[client][invariants]")
+// Every sequence of State operations keeps membership, placement and claims
+// consistent. Only focus needs the completion step's repair, emulated here.
+TEST_CASE("Generated State operation sequences preserve model invariants", "[invariants][sequence]")
 {
-    std::vector<Monitor> monitors(2);
-    for (auto& monitor : monitors) monitor.workspaces.resize(2);
-    monitors[0].fullscreen_owner = 1;
-    std::unordered_map<xcb_window_t, Client> clients;
-    clients[1].id = 1;
-    clients[1].fullscreen = true;
-    clients[1].state = FloatingState{ { } };
-    REQUIRE_FALSE(invariants::validate(clients, monitors));
-    SECTION("Missing owner") { clients.clear(); }
-    SECTION("Owner no longer fullscreen") { clients[1].fullscreen = false; }
-    SECTION("Minimized owner") { clients[1].iconic = true; }
-    SECTION("Hidden owner") { clients[1].presentation.hidden = true; }
-    SECTION("Owner on another workspace") { clients[1].workspace = 1; }
-    SECTION("Owner on another monitor") { clients[1].monitor = 1; }
-    REQUIRE(invariants::validate(clients, monitors));
+    std::mt19937 random(12345);
+    auto pick = [&](size_t bound) { return bound ? std::uniform_int_distribution<size_t>(0, bound - 1)(random) : 0; };
+    auto state = test::state(2);
+    state.configure_scratchpads(std::vector<std::string>{ "a", "b" });
+    std::vector<xcb_window_t> windows;
+    xcb_window_t next = 1;
+    std::vector<std::string> trace;
+    for (int step = 0; step < 4000; ++step)
+    {
+        auto const& monitors = state.monitors();
+        size_t monitor = pick(monitors.size());
+        size_t workspace = pick(monitors[monitor].workspaces.size());
+        xcb_window_t window = windows.empty() ? XCB_NONE : windows[pick(windows.size())];
+        switch (pick(windows.empty() ? 1 : 18))
+        {
+            case 0:
+                add(state, next, { .monitor = monitor, .workspace = workspace, .floating = pick(2) == 0 });
+                windows.push_back(next++);
+                trace.push_back("insert");
+                break;
+            case 1:
+                state.erase(window);
+                std::erase(windows, window);
+                trace.push_back("erase");
+                break;
+            case 2:
+                state.relocate(window, monitor, workspace, State::RelocationGeometry(pick(3)), pick(4));
+                trace.push_back("relocate");
+                break;
+            case 3:
+                state.floating(window, pick(2) == 0);
+                trace.push_back("floating");
+                break;
+            case 4:
+                state.iconic(window, pick(2) == 0);
+                trace.push_back("iconic");
+                break;
+            case 5:
+                state.sticky(window, pick(2) == 0);
+                trace.push_back("sticky");
+                break;
+            case 6:
+                state.fullscreen(window, pick(2) == 0);
+                trace.push_back("fullscreen");
+                break;
+            case 7:
+                state.switch_workspace(monitor, workspace);
+                trace.push_back("switch");
+                break;
+            case 8:
+                state.focus(window);
+                trace.push_back("focus");
+                break;
+            case 9:
+                if (auto const& ws = monitors[monitor].current().windows; ws.size() >= 2)
+                    state.swap_tiles(monitor, pick(ws.size()), pick(ws.size()));
+                trace.push_back("swap");
+                break;
+            case 10:
+                state.pool_scratchpad(window);
+                trace.push_back("pool");
+                break;
+            case 11:
+                if (auto const* name = pick(2) ? "a" : "b"; state.named_scratchpad(name))
+                    state.claim_scratchpad(name, window);
+                trace.push_back("claim");
+                break;
+            case 12:
+                state.configure_scratchpads(pick(2) ? std::vector<std::string>{ "a" } : std::vector<std::string>{ "a", "b" });
+                trace.push_back("configure");
+                break;
+            case 13:
+            {
+                std::vector<Monitor> outputs;
+                for (size_t i = 0, count = 1 + pick(3); i < count; ++i)
+                    outputs.push_back(test::monitor("M" + std::to_string(pick(3)), static_cast<int16_t>(i * 1000)));
+                std::ranges::sort(outputs, { }, &Monitor::name);
+                auto [first, last] = std::ranges::unique(outputs, { }, &Monitor::name);
+                outputs.erase(first, last);
+                state.replace_monitors(std::move(outputs));
+                trace.push_back("topology");
+                break;
+            }
+            case 14:
+                state.show_desktop(pick(2) == 0);
+                trace.push_back("desktop");
+                break;
+            case 15:
+                state.window_type(window, pick(2) ? WindowType::Dialog : WindowType::Normal);
+                trace.push_back("type");
+                break;
+            case 16:
+                state.transient(window, pick(2) ? windows[pick(windows.size())] : XCB_NONE);
+                trace.push_back("transient");
+                break;
+            case 17:
+                state.remember_focus(window);
+                trace.push_back("remember");
+                break;
+        }
+        // Completion repairs focus that no longer holds.
+        if (auto const* active = state.find(state.active_window()); active && !state.focusable(*active))
+            state.focus(focus::fallback(state, state.focused_monitor()));
+        else if (state.active_window() != XCB_NONE && !active)
+            state.focus(XCB_NONE);
+        if (auto violation = invariants::validate(state))
+        {
+            std::string recent;
+            for (size_t i = trace.size() > 12 ? trace.size() - 12 : 0; i < trace.size(); ++i) recent += trace[i] + " ";
+            FAIL("step " << step << ": " << violation->message << " (" << violation->window << ") after " << recent);
+        }
+    }
 }

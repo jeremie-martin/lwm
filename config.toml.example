@@ -126,11 +126,11 @@ focus_prev = true
 
 [[binds]]
 key = "super+h"
-ratio_shrink = true
+adjust_ratio = -0.05
 
 [[binds]]
 key = "super+l"
-ratio_grow = true
+adjust_ratio = 0.05
 
 [[binds]]
 key = "super+shift+j"
@@ -160,13 +160,22 @@ reload_config = true
 # | toggle_float = true | boolean true |
 # | focus_next = true | boolean true |
 # | focus_prev = true | boolean true |
-# | ratio_grow = true | boolean true |
-# | ratio_shrink = true | boolean true |
+# | next_workspace = true | boolean true |
+# | prev_workspace = true | boolean true |
+# | set_layout = "monocle" | string "master-stack" or "monocle" |
+# | set_ratio = 0.5 | number within [min_ratio, 1 - min_ratio] |
+# | adjust_ratio = 0.05 | finite number; the result is clamped |
+# | reset_ratios = true | boolean true |
 # | swap_next = true | boolean true |
 # | swap_prev = true | boolean true |
 # | toggle_scratchpad = "terminal" | string named scratchpad |
+# | cancel_scratchpad_launch = "terminal" | string named scratchpad |
 # | scratchpad_stash = true | boolean true |
 # | scratchpad_cycle = true | boolean true |
+# | exec = "/usr/local/bin/lwm" | string binary to restart into |
+#
+# Every action except spawn is also an lwmctl command (see IPC.md), executed
+# identically. The action name is reported by key_action events.
 
 # Generated workspace binding groups. If [[binds]] is absent, the first group
 # for a mode/modifier pair replaces that built-in group. If [[binds]] is

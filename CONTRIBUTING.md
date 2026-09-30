@@ -146,7 +146,6 @@ together with independent IPC callers:
 ```sh
 python3 tests/performance/ipc_load.py build/release/src/app/lwm --x-flood --check
 LWM_TEST_REQUIRE_X11=1 LWM_TEST_SEQUENCE_SEED=89372 LWM_TEST_SEQUENCE_STEPS=3000 build/tests/lwm_tests '[sequence]'
-LWM_TEST_REQUIRE_X11=1 LWM_TEST_PREVIOUS_BINARY=/absolute/path/to/previous/lwm build/tests/lwm_tests '[crossbinary]'
 ```
 
 The load probe starts a separate continuous X producer, waits for actual subscription
@@ -156,8 +155,9 @@ process CPU time and RSS; these are observations, not universal latency threshol
 generated sequence test reports its seed and complete action trace on failure, checks
 one client's protocol state against an independent preference model, and detects
 unexpected process-instance changes. It covers preferences, classification, and restart;
-multi-client geometry, focus, and placement require their own interaction tests.
-Cross-binary handoff explicitly tests both directions through `exec PATH`.
+multi-client geometry, focus, and placement require their own interaction tests. A
+separate unit-level sequence test drives thousands of `State` operations and checks the
+model invariants after each.
 
 [Linux CI](.github/workflows/test.yml) runs Debug, Release, sanitizer, and owned
 multi-output Xorg tests, plus Release request budgets and the flood probe.
@@ -245,22 +245,27 @@ isolated preview.
 
 ## Changing behavior
 
-Follow the [state and completion model](ARCHITECTURE.md#lifecycle-and-transitions). Keep
-mutation and its completion obligations together in `State`. Feature handlers should not
-add their own reconciliation, geometry recovery from X presentation, or publication
-barriers. Choose visibility, layout, or geometry effects according to the dependency
-that changed; use `focus_any_window()` for focus intent.
+Follow the [state and completion model](ARCHITECTURE.md#lifecycle-and-transitions).
+Handlers change `State` through its named operations and do not publish: completion
+projects the whole model onto X and writes only differences. Do not add requests to
+republish something, and do not store a value that can be derived from state. When a
+projection needs an input outside `State`, mark the presentation dirty. When something
+else changes an output LWM owns, forget that field of the `Output` record. Use
+`focus_window()` for focus intent. A user-triggerable operation is an `Action` executed
+by `execute()`, so key bindings and IPC cannot diverge.
 
-At X event boundaries, use `get_client(window)` because the window may be unmanaged or
+At X event boundaries, use `state_.find(window)` because the window may be unmanaged or
 already destroyed. Inside a path that has established managed ownership, use
-`require_client(window)` so an impossible missing client fails at the actual invariant
+`state_.require(window)` so an impossible missing client fails at the actual invariant
 boundary.
 
 ### Test contracts
 
 Test through the real boundary:
 
-- pure decisions belong in a `test_*_policy.cpp` or subsystem unit test;
+- pure decisions belong in a `test_*_policy.cpp` or subsystem unit test; build
+  domain states through `State`'s own operations (`tests/state_fixture.hpp`), so a
+  test starts from a state the WM can reach;
 - observable WM behavior belongs in an integration test using
   `tests/x11_test_harness.hpp`; cover composed geometry transitions without an
   explicit placement override that would mask the default-geometry decision.
@@ -289,9 +294,10 @@ private helper's implementation when an observable contract already owns that be
 Start negative cases from valid state and violate only the intended relationship where
 possible. Otherwise, a different validation check can hide the missing behavior.
 
-For restart compatibility, use fixed wire records and independently stated expected
-values, not just an encoder/decoder round trip. Keep actual adoption and exec tests:
-codec tests cannot establish that the WM applies decoded state. Require
+The restart snapshot is private to one format version: test that every field
+round-trips, that other formats and every truncation are rejected, and keep actual
+adoption and exec tests, because codec tests cannot establish that the WM applies
+decoded state. Require
 nonempty/cardinality checks before range assertions. Choose policy fixtures that
 distinguish competing outcomes: history order should differ from insertion order, and
 invalid rules must actually be selected. Literal protocol examples should check decoded

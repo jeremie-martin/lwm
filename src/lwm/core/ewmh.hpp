@@ -1,40 +1,15 @@
 #pragma once
 
+#include "classification.hpp"
 #include "connection.hpp"
 #include "types.hpp"
 #include "workarea.hpp"
-#include <map>
+#include <span>
 #include <string>
 #include <vector>
 #include <xcb/xcb_ewmh.h>
 
 namespace lwm {
-
-/**
- * @brief Window classification result from EWMH type and properties
- *
- * Classification uses the first recognized `_NET_WM_WINDOW_TYPE` atom and
- * then applies transient status to normal windows.
- */
-struct WindowClassification
-{
-    enum class Kind
-    {
-        Tiled,
-        Floating,
-        Dock,
-        Desktop,
-        Popup
-    };
-
-    Kind kind = Kind::Tiled;
-    bool skip_taskbar = false;
-    bool skip_pager = false;
-    bool above = false; // For UTILITY windows
-    bool is_transient = false;
-};
-
-WindowClassification classify_window_type(WindowType type, bool is_transient);
 
 class Ewmh
 {
@@ -45,10 +20,8 @@ public:
     Ewmh(Ewmh const&) = delete;
     Ewmh& operator=(Ewmh const&) = delete;
 
-    // Root window properties (called once at startup)
-    void init_atoms();
-    void set_supported_atoms();
-    void set_extra_supported_atoms(std::vector<xcb_atom_t> atoms);
+    // Create the supporting window and advertise the supported atoms, including LWM's extensions.
+    void init_atoms(std::vector<xcb_atom_t> const& extra_supported);
     void set_wm_name(std::string const& name);
     void set_number_of_desktops(uint32_t count);
     void set_desktop_names(std::vector<std::string> const& names);
@@ -59,14 +32,16 @@ public:
     // Dynamic updates
     void set_current_desktop(uint32_t desktop);
     void set_active_window(xcb_window_t window);
-    void set_desktop_viewport(std::vector<Monitor> const& monitors, int32_t origin_x, int32_t origin_y);
+    void set_desktop_viewport(std::vector<std::pair<uint32_t, uint32_t>> const& viewports);
 
     // Per-window properties
     void set_window_desktop(xcb_window_t window, uint32_t desktop);
-    // Accumulate updates until the operation boundary; merge with fresh X state.
-    void set_window_state(xcb_window_t window, xcb_atom_t state, bool enabled);
-    void flush_window_states();
-    bool has_pending_window_states() const { return !state_updates_.empty(); }
+    // Replace the atoms LWM owns in each window's _NET_WM_STATE, preserving
+    // atoms owned by other parties. Reads are pipelined across windows.
+    void update_window_states(
+        std::span<std::pair<xcb_window_t, std::vector<xcb_atom_t>> const> updates,
+        std::span<xcb_atom_t const> owned
+    );
 
     void set_frame_extents(xcb_window_t window, uint32_t left, uint32_t right, uint32_t top, uint32_t bottom);
     void set_allowed_actions(xcb_window_t window, std::vector<xcb_atom_t> const& actions);
@@ -75,8 +50,7 @@ public:
     void update_client_list(std::vector<xcb_window_t> const& windows);
     void update_client_list_stacking(std::vector<xcb_window_t> const& windows);
 
-    // Window type detection and classification
-    xcb_atom_t get_window_type(xcb_window_t window) const;
+    // First recognized _NET_WM_WINDOW_TYPE, or Normal.
     WindowType get_window_type_enum(xcb_window_t window) const;
 
     // Strut support
@@ -91,10 +65,8 @@ private:
     Connection& conn_;
     mutable xcb_ewmh_connection_t ewmh_; // mutable: XCB EWMH API isn't const-correct
     xcb_window_t supporting_window_ = XCB_NONE;
-    std::vector<xcb_atom_t> extra_supported_atoms_;
-
     void create_supporting_window();
-    std::map<xcb_window_t, std::map<xcb_atom_t, bool>> state_updates_;
+    xcb_atom_t get_window_type(xcb_window_t window) const;
 };
 
 } // namespace lwm

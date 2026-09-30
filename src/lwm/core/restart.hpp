@@ -1,43 +1,77 @@
 #pragma once
-#include "types.hpp"
-#include <array>
-#include <span>
 
+#include "types.hpp"
+#include <optional>
+#include <span>
+#include <string>
+#include <vector>
+
+// Exec handoff snapshot. The encoding is private to one LWM version: a
+// different format word means the snapshot is ignored and windows are adopted
+// as on a fresh start.
 namespace lwm::restart {
-inline constexpr uint32_t state_version = 3;
-inline constexpr uint32_t ratio_version = 3;
-inline constexpr size_t legacy_client_words = 28;
-inline constexpr size_t preference_words = 5;
-inline constexpr size_t client_words = legacy_client_words + preference_words;
+
+inline constexpr uint32_t format = 4;
 
 struct ClientRecord
 {
+    xcb_window_t window = XCB_NONE;
+    size_t monitor = 0;
+    size_t workspace = 0;
+    Client::Kind kind = Client::Kind::Tiled;
+    Geometry geometry;                ///< Floating normal rectangle, or the tile's layout target
+    std::optional<Geometry> floating; ///< A tile's remembered floating rectangle
+    ClientPreferences preferences;
+    uint8_t urgency = 0;
     bool borderless = false;
-    Geometry floating;
-    std::optional<Geometry> prior_floating;
-    uint32_t hidden_pool_kind = 0;
-    std::optional<Client::Kind> kind;
-    std::optional<uint8_t> urgency;
-    std::optional<ClientPreferences> preferences;
     bool desktop_pinned = false;
+
+    bool operator==(ClientRecord const&) const = default;
 };
-struct GlobalRecord
+
+struct WorkspaceRecord
 {
-    size_t focused_monitor;
-    xcb_window_t active_window;
-    bool showing_desktop;
-    std::vector<std::pair<size_t, size_t>> workspaces;
-};
-struct LayoutRecord
-{
-    size_t monitor;
-    size_t workspace;
-    std::optional<LayoutStrategy> strategy;
+    LayoutStrategy strategy = LayoutStrategy::MasterStack;
     SplitRatioMap ratios;
+    std::vector<xcb_window_t> tiles;
+    xcb_window_t focused = XCB_NONE;
+
+    bool operator==(WorkspaceRecord const&) const = default;
 };
-std::array<uint32_t, client_words> encode_client(Client const& client);
-std::optional<ClientRecord> decode_client(std::span<uint32_t const> words);
-std::optional<GlobalRecord> decode_global(std::span<uint32_t const> words);
-// Keep completed workspace records; a truncated workspace is never partially applied.
-std::vector<LayoutRecord> decode_layouts(std::span<uint32_t const> words);
+
+struct MonitorRecord
+{
+    size_t current = 0;
+    size_t previous = 0;
+    std::vector<WorkspaceRecord> workspaces;
+
+    bool operator==(MonitorRecord const&) const = default;
+};
+
+struct NamedScratchpadRecord
+{
+    std::string name;
+    xcb_window_t window = XCB_NONE;
+
+    bool operator==(NamedScratchpadRecord const&) const = default;
+};
+
+struct Snapshot
+{
+    size_t focused_monitor = 0;
+    xcb_window_t active = XCB_NONE;
+    bool showing_desktop = false;
+    std::vector<MonitorRecord> monitors;
+    std::vector<ClientRecord> clients; ///< Oldest to newest focus recency
+    std::vector<NamedScratchpadRecord> named_scratchpads;
+    std::vector<xcb_window_t> pool;
+
+    ClientRecord const* find(xcb_window_t window) const;
+    bool operator==(Snapshot const&) const = default;
+};
+
+std::vector<uint32_t> encode(Snapshot const& snapshot);
+// Rejects any other format and any record that is incomplete or out of range.
+std::optional<Snapshot> decode(std::span<uint32_t const> words);
+
 } // namespace lwm::restart

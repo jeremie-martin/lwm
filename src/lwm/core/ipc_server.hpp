@@ -19,7 +19,7 @@ class Server
 {
 public:
     using Clock = std::chrono::steady_clock;
-    using Handler = std::function<std::string(Command const&)>;
+    using Handler = std::function<std::string(Request const&)>;
     Server() = default;
     ~Server() { stop(); }
     Server(Server const&) = delete;

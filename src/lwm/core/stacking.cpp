@@ -1,5 +1,6 @@
 #include "lwm/core/stacking.hpp"
-#include "lwm/core/policy.hpp"
+#include "lwm/core/classification.hpp"
+#include <unordered_map>
 #include <algorithm>
 #include <functional>
 #include <tuple>
@@ -16,63 +17,54 @@ enum class Tier
 
 struct Entry
 {
-    Client const* client;
+    xcb_window_t id;
     bool visible;
     Tier tier;
+    bool floating;
+    uint64_t order;
+    xcb_window_t transient_for;
 };
-
-Entry entry(Client const& client, std::span<Monitor const> monitors, bool showing_desktop)
-{
-    if (client.kind() == Client::Kind::Desktop)
-        return { &client, true, Tier::Below };
-    if (client.kind() == Client::Kind::Dock)
-        return { &client, true, Tier::Above };
-    bool visible = visibility_policy::is_client_visible(client, showing_desktop, monitors);
-    bool suppressed =
-        visible && visibility_policy::is_fullscreen_suppressed(client, monitors[client.monitor].fullscreen_owner);
-    Tier tier = suppressed                                      ? Tier::Below
-        : client.fullscreen                                     ? Tier::Fullscreen
-        : client.modal || client.layer_hint == LayerHint::Above ? Tier::Above
-        : client.layer_hint == LayerHint::Below                 ? Tier::Below
-                                                                : Tier::Normal;
-    return { &client, visible && !suppressed, tier };
-}
 }
 
-std::vector<xcb_window_t> compute_order(
-    std::unordered_map<xcb_window_t, Client> const& clients,
-    std::span<Monitor const> monitors,
-    bool showing_desktop,
-    xcb_window_t active
-)
+std::vector<xcb_window_t> compute_order(State const& state)
 {
+    auto owners = state.fullscreen_owners();
+    xcb_window_t active = state.active_window();
     std::vector<Entry> ranked;
-    ranked.reserve(clients.size());
+    ranked.reserve(state.clients().size() + state.fixtures().size());
     std::vector<xcb_window_t> result;
-    result.reserve(clients.size());
+    result.reserve(ranked.capacity());
+    for (auto const& [id, fixture] : state.fixtures())
+        ranked.push_back(
+            { id, true, fixture.role == Fixture::Role::Desktop ? Tier::Below : Tier::Above, false, fixture.order, XCB_NONE }
+        );
     bool has_transients = false;
-    for (auto const& [id, client] : clients)
+    for (auto const& [id, client] : state.clients())
     {
-        auto value = entry(client, monitors, showing_desktop);
-        has_transients |= value.visible && client.kind() == Client::Kind::Floating && client.transient_for != XCB_NONE;
-        ranked.push_back(value);
+        bool in_view = state.in_view(client);
+        auto owner = owners[client.monitor];
+        bool suppressed = in_view && owner != XCB_NONE && owner != id && owner != client.transient_for;
+        auto layer = effective_layer(client);
+        Tier tier = suppressed        ? Tier::Below
+            : client.fullscreen       ? Tier::Fullscreen
+            : layer == LayerHint::Above ? Tier::Above
+            : layer == LayerHint::Below ? Tier::Below
+                                        : Tier::Normal;
+        bool floating = client.kind() == Client::Kind::Floating;
+        bool visible = in_view && !suppressed;
+        has_transients |= visible && floating && client.transient_for != XCB_NONE;
+        ranked.push_back({ id, visible, tier, floating, client.order, client.transient_for });
     }
     auto key = [active](Entry const& value)
-    {
-        auto const& c = *value.client;
-        return std::tuple{
-            value.visible, value.tier, c.kind() == Client::Kind::Floating, c.id == active, c.order, c.id
-        };
-    };
+    { return std::tuple{ value.visible, value.tier, value.floating, value.id == active, value.order, value.id }; };
     std::sort(ranked.begin(), ranked.end(), [&](auto const& a, auto const& b) { return key(a) < key(b); });
     if (!has_transients)
     {
-        for (auto const& value : ranked) result.push_back(value.client->id);
+        for (auto const& value : ranked) result.push_back(value.id);
         return result;
     }
 
-    // Each client has at most one parent. Indices retain base stacking priority;
-    // no client metadata is copied into a second policy model.
+    // Each client has at most one parent. Indices retain base stacking priority.
     size_t const none = ranked.size();
     struct Links
     {
@@ -81,13 +73,12 @@ std::vector<xcb_window_t> compute_order(
     std::vector<Links> links(ranked.size(), { none, none, none, none });
     std::unordered_map<xcb_window_t, size_t> positions;
     positions.reserve(ranked.size());
-    for (size_t i = 0; i < ranked.size(); ++i) positions.emplace(ranked[i].client->id, i);
+    for (size_t i = 0; i < ranked.size(); ++i) positions.emplace(ranked[i].id, i);
     for (size_t i = 0; i < ranked.size(); ++i)
     {
         auto const& value = ranked[i];
-        auto parent = positions.find(value.client->transient_for);
-        if (value.visible && value.client->kind() == Client::Kind::Floating && parent != positions.end()
-            && ranked[parent->second].visible)
+        auto parent = positions.find(value.transient_for);
+        if (value.visible && value.floating && parent != positions.end() && ranked[parent->second].visible)
             links[i].parent = parent->second;
     }
     // Functional graph: each node has at most one parent. A walk marked with
@@ -126,7 +117,7 @@ std::vector<xcb_window_t> compute_order(
         std::pop_heap(ready.begin(), ready.end(), std::greater<>{ });
         size_t current = ready.back();
         ready.pop_back();
-        result.push_back(ranked[current].client->id);
+        result.push_back(ranked[current].id);
         for (size_t child = links[current].child; child != none; child = links[child].sibling)
         {
             ready.push_back(child);

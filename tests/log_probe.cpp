@@ -146,9 +146,9 @@ int main(int argc, char** argv)
     {
         prctl(PR_SET_DUMPABLE, 0);
         std::this_thread::sleep_for(std::chrono::milliseconds(200));
-        std::unordered_map<xcb_window_t, lwm::Client> clients;
-        std::vector<lwm::Monitor> monitors;
-        LWM_ASSERT_INVARIANTS(clients, monitors, 1);
+        lwm::State state;
+        state.focus(1); // An unmanaged active window violates the model.
+        LWM_ASSERT_INVARIANTS(state);
         return 14;
     }
 #endif

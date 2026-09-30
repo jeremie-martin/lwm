@@ -1,12 +1,10 @@
 #pragma once
 
 #include "log.hpp"
-#include "types.hpp"
+#include "state.hpp"
 #include <cstdlib>
 #include <optional>
-#include <unordered_map>
 #include <unordered_set>
-#include <vector>
 
 namespace lwm::invariants {
 
@@ -16,14 +14,12 @@ struct Violation
     xcb_window_t window = XCB_NONE;
 };
 
-// Check relationships between authoritative records. Client kind/state consistency
-// is guaranteed by ClientState; fullscreen and iconic are deliberately independent.
-inline std::optional<Violation> validate(
-    std::unordered_map<xcb_window_t, Client> const& clients,
-    std::vector<Monitor> const& monitors,
-    xcb_window_t active_window = XCB_NONE
-)
+// Relationships the types cannot express. Client mode and fixture roles are
+// consistent by construction; visibility and fullscreen ownership are derived.
+inline std::optional<Violation> validate(State const& state)
 {
+    auto const& clients = state.clients();
+    auto const& monitors = state.monitors();
     std::unordered_set<xcb_window_t> tiled_windows;
     for (size_t m = 0; m < monitors.size(); ++m)
     {
@@ -31,19 +27,6 @@ inline std::optional<Violation> validate(
         if (monitor.current_workspace >= monitor.workspaces.size()
             || monitor.previous_workspace >= monitor.workspaces.size())
             return Violation{ "Monitor has an invalid current or previous workspace" };
-
-        if (monitor.fullscreen_owner != XCB_NONE)
-        {
-            auto it = clients.find(monitor.fullscreen_owner);
-            if (it == clients.end())
-                return Violation{ "Fullscreen owner is unmanaged", monitor.fullscreen_owner };
-            auto const& owner = it->second;
-            if ((owner.kind() != Client::Kind::Tiled && owner.kind() != Client::Kind::Floating) || !owner.fullscreen
-                || owner.iconic || owner.presentation.hidden || owner.monitor != m
-                || (!owner.sticky && owner.workspace != monitor.current_workspace))
-                return Violation{ "Fullscreen owner is ineligible", owner.id };
-        }
-
         for (size_t w = 0; w < monitor.workspaces.size(); ++w)
         {
             auto const& workspace = monitor.workspaces[w];
@@ -51,19 +34,16 @@ inline std::optional<Violation> validate(
             {
                 if (!tiled_windows.insert(window).second)
                     return Violation{ "Window has duplicate tiled membership", window };
-                auto it = clients.find(window);
-                if (it == clients.end())
+                auto const* client = state.find(window);
+                if (!client)
                     return Violation{ "Workspace contains an unmanaged window", window };
-                auto const& client = it->second;
-                if (client.kind() != Client::Kind::Tiled)
+                if (client->kind() != Client::Kind::Tiled)
                     return Violation{ "Workspace contains a non-tiled client", window };
-                if (client.monitor != m || client.workspace != w)
+                if (client->monitor != m || client->workspace != w)
                     return Violation{ "Tiled membership disagrees with client placement", window };
             }
-
-            if (workspace.focused_window != XCB_NONE)
+            if (auto window = workspace.focused_window; window != XCB_NONE)
             {
-                auto window = workspace.focused_window;
                 if (workspace.find_window(window) == workspace.windows.end())
                     return Violation{ "Workspace focus is absent from tiled membership", window };
                 if (clients.at(window).iconic)
@@ -76,23 +56,41 @@ inline std::optional<Violation> validate(
     {
         if (id == XCB_NONE || client.id != id)
             return Violation{ "Client id disagrees with registry key", id };
-        if (client.kind() != Client::Kind::Tiled && client.kind() != Client::Kind::Floating)
-            continue;
+        if (state.find_fixture(id))
+            return Violation{ "Window is both a client and a fixture", id };
         if (client.monitor >= monitors.size() || client.workspace >= monitors[client.monitor].workspaces.size())
             return Violation{ "Client has invalid monitor or workspace placement", id };
         if (client.kind() == Client::Kind::Tiled && !tiled_windows.contains(id))
             return Violation{ "Tiled client is absent from workspace membership", id };
     }
-    if (active_window != XCB_NONE)
+    for (auto const& [id, fixture] : state.fixtures())
+        if (id == XCB_NONE || fixture.id != id)
+            return Violation{ "Fixture id disagrees with registry key", id };
+
+    std::unordered_set<xcb_window_t> scratchpads;
+    for (auto const& slot : state.named_scratchpads())
+        if (auto window = slot.window(); window != XCB_NONE)
+        {
+            if (!state.find(window))
+                return Violation{ "Named scratchpad claims an unmanaged window", window };
+            if (!scratchpads.insert(window).second)
+                return Violation{ "Window has more than one scratchpad claim", window };
+        }
+    for (auto window : state.scratchpad_pool())
     {
-        auto it = clients.find(active_window);
-        if (it == clients.end())
-            return Violation{ "Active window is unmanaged", active_window };
-        auto const& client = it->second;
-        if (client.kind() != Client::Kind::Tiled && client.kind() != Client::Kind::Floating)
-            return Violation{ "Active window is a dock or desktop", active_window };
-        if (client.iconic || client.presentation.hidden)
-            return Violation{ "Active window is iconic or hidden", active_window };
+        if (!state.find(window))
+            return Violation{ "Scratchpad pool contains an unmanaged window", window };
+        if (!scratchpads.insert(window).second)
+            return Violation{ "Window has more than one scratchpad claim", window };
+    }
+
+    if (auto active = state.active_window(); active != XCB_NONE)
+    {
+        auto const* client = state.find(active);
+        if (!client)
+            return Violation{ "Active window is unmanaged", active };
+        if (!state.focusable(*client))
+            return Violation{ "Active window cannot hold focus", active };
     }
     return std::nullopt;
 }
@@ -100,12 +98,12 @@ inline std::optional<Violation> validate(
 } // namespace lwm::invariants
 
 #ifdef NDEBUG
-#    define LWM_ASSERT_INVARIANTS(clients, monitors, active_window) ((void)0)
+#    define LWM_ASSERT_INVARIANTS(state) ((void)0)
 #else
-#    define LWM_ASSERT_INVARIANTS(clients, monitors, active_window)                                      \
+#    define LWM_ASSERT_INVARIANTS(state)                                                                 \
         do                                                                                               \
         {                                                                                                \
-            if (auto violation = lwm::invariants::validate(clients, monitors, active_window))            \
+            if (auto violation = lwm::invariants::validate(state))                                      \
             {                                                                                            \
                 LWM_LOG_ERROR("INVARIANT VIOLATION: {} ({:#x})", violation->message, violation->window); \
                 std::abort();                                                                            \

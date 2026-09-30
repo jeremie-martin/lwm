@@ -1,13 +1,9 @@
 #pragma once
 
 #include "lwm/config/config.hpp"
-#include "lwm/core/ewmh.hpp"
 #include "lwm/core/types.hpp"
-#include <optional>
-#include <regex>
 #include <span>
 #include <string>
-#include <vector>
 
 namespace lwm {
 
@@ -26,42 +22,10 @@ inline WindowMatchInfo window_match_info(Client const& client)
     return { client.wm_class, client.wm_class_name, client.name, client.ewmh_type, client.transient_for != XCB_NONE };
 }
 
-// Optional actions preserve the distinction between unspecified and false.
-struct WindowRuleResult
-{
-    bool matched = false;
+// First matching rule wins.
+RuleActions const* match_window_rules(std::span<WindowRuleConfig const> rules, WindowMatchInfo const& info);
 
-    // Classification override
-    std::optional<bool> floating;
-
-    // Target location (resolved to indices)
-    std::optional<size_t> target_monitor;
-    std::optional<size_t> target_workspace;
-
-    // State flags
-    std::optional<bool> fullscreen;
-    std::optional<LayerHint> layer_hint;
-    std::optional<bool> sticky;
-    std::optional<bool> skip_taskbar;
-    std::optional<bool> skip_pager;
-    std::optional<bool> borderless;
-
-    // Floating geometry
-    std::optional<Geometry> geometry;
-    bool center = false;
-
-    // Scratchpad assignment
-    std::optional<std::string> scratchpad;
-
-    bool operator==(WindowRuleResult const&) const = default;
-};
-
-// First matching rule wins. Resolve placement against the current outputs.
-WindowRuleResult match_window_rules(
-    std::span<WindowRuleConfig const> rules,
-    WindowMatchInfo const& info,
-    std::span<Monitor const> monitors,
-    std::span<std::string const> workspace_names
-);
+// Resolve a rule's monitor against the current outputs; nullopt leaves the monitor unchanged.
+std::optional<size_t> resolve_rule_monitor(RuleActions const& actions, std::span<Monitor const> monitors);
 
 } // namespace lwm

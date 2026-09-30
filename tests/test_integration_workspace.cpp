@@ -844,88 +844,6 @@ TEST_CASE("Integration: monocle layout survives exec restart", "[integration][la
     destroy_window(conn, w1);
 }
 
-TEST_CASE("Integration: version 3 restart handoff survives overlay removal", "[integration][restart][upgrade]")
-{
-    auto& env = X11TestEnvironment::instance();
-    if (!env.available())
-        SKIP("Test environment not available");
-
-    X11Connection conn;
-    REQUIRE(conn.ok());
-
-    xcb_window_t window = create_window(conn, 10, 10, 200, 150);
-    map_window(conn, window);
-
-    xcb_atom_t restart_state = intern_atom(conn.get(), "_LWM_RESTART_STATE");
-    xcb_atom_t restart_client = intern_atom(conn.get(), "_LWM_RESTART_CLIENT");
-    REQUIRE(restart_state != XCB_NONE);
-    REQUIRE(restart_client != XCB_NONE);
-
-    // Reproduce the shortest supported payload emitted by an older version-3
-    // binary. Its client state starts with the retired overlay flag.
-    std::array<uint32_t, 24> client_state{};
-    client_state[0] = 1;
-    client_state[2] = 120;
-    client_state[3] = 130;
-    client_state[4] = 410;
-    client_state[5] = 260;
-    client_state[23] = 2; // Floating
-    xcb_change_property(
-        conn.get(),
-        XCB_PROP_MODE_REPLACE,
-        window,
-        restart_client,
-        XCB_ATOM_CARDINAL,
-        32,
-        client_state.size(),
-        client_state.data()
-    );
-
-    std::array<uint32_t, 7> global_state{
-        3, // Version
-        0, // Focused monitor
-        window,
-        0, // Showing desktop
-        1, // Monitor count
-        1, // Current workspace
-        0, // Previous workspace
-    };
-    xcb_change_property(
-        conn.get(),
-        XCB_PROP_MODE_REPLACE,
-        conn.root(),
-        restart_state,
-        XCB_ATOM_CARDINAL,
-        32,
-        global_state.size(),
-        global_state.data()
-    );
-    xcb_flush(conn.get());
-
-    LwmProcess wm(env.display(), "[workspaces]\ncount = 2\n[appearance]\nborder_width = 2\n");
-    REQUIRE(wm.running());
-    REQUIRE(wait_for_wm_ready(conn, kTimeout));
-
-    REQUIRE(wait_for_condition(
-        [&]()
-        {
-            auto geometry = get_window_geometry(conn, window);
-            return geometry && *geometry == WindowGeometry{ 120, 130, 410, 260 };
-        },
-        kTimeout
-    ));
-    auto border_width = get_window_border_width(conn, window);
-    REQUIRE(border_width.has_value());
-    CHECK(*border_width == 2);
-
-    auto workspaces = run_lwmctl(wm, { "workspace", "list" });
-    REQUIRE(workspaces.has_value());
-    REQUIRE(workspaces->exit_code == 0);
-    REQUIRE(workspaces->stdout_text.find("\"current_workspace\":1") != std::string::npos);
-
-    destroy_window(conn, window);
-}
-
 TEST_CASE("Integration: monocle swap focuses adjacent tiled window", "[integration][layout][monocle][swap]")
 {
     auto test_env = TestEnvironment::create(R"(
@@ -1076,79 +994,37 @@ TEST_CASE("Integration: invalid ratio commands cannot poison layout state", "[in
     destroy_window(conn, window);
 }
 
-TEST_CASE("Integration: malformed restart clients do not contaminate valid peers", "[integration][restart][malformed]")
+TEST_CASE("Integration: an unreadable restart snapshot adopts windows afresh", "[integration][restart][malformed]")
 {
     auto& x11 = X11TestEnvironment::instance();
     if (!x11.available())
         SKIP("X11 unavailable");
     X11Connection conn;
     REQUIRE(conn.ok());
-    auto bad = create_window(conn, 10, 10, 200, 150);
-    auto good = create_window(conn, 10, 10, 200, 150);
-    map_window(conn, bad);
-    map_window(conn, good);
-    auto property = intern_atom(conn.get(), "_LWM_RESTART_CLIENT");
-    std::array<uint32_t, 28> record{};
-    record[1] = 1;
-    record[2] = 40;
-    record[3] = 50;
-    record[4] = 320;
-    record[5] = 180;
-    record[23] = 2;
-    xcb_change_property(
-        conn.get(),
-        XCB_PROP_MODE_REPLACE,
-        good,
-        property,
-        XCB_ATOM_CARDINAL,
-        32,
-        record.size(),
-        record.data()
-    );
-    SECTION("wrong X property format")
-    {
-        xcb_change_property(
-            conn.get(),
-            XCB_PROP_MODE_REPLACE,
-            bad,
-            property,
-            XCB_ATOM_CARDINAL,
-            8,
-            sizeof(record),
-            record.data()
-        );
-    }
-    SECTION("truncated client record")
-    {
-        xcb_change_property(conn.get(), XCB_PROP_MODE_REPLACE, bad, property, XCB_ATOM_CARDINAL, 32, 23, record.data());
-    }
-    auto root_property = intern_atom(conn.get(), "_LWM_RESTART_STATE");
-    std::array<uint32_t, 7> global{ 3, 0, good, 0, 1, 0, 0 };
+    auto window = create_window(conn, 10, 10, 200, 150);
+    map_window(conn, window);
+    auto property = intern_atom(conn.get(), "_LWM_RESTART");
+    std::vector<uint32_t> snapshot;
+    SECTION("another format") { snapshot = { 3, 0, window, 0, 1, 0, 0 }; }
+    SECTION("truncated record") { snapshot = { 4, 0, window }; }
     xcb_change_property(
         conn.get(),
         XCB_PROP_MODE_REPLACE,
         conn.root(),
-        root_property,
+        property,
         XCB_ATOM_CARDINAL,
         32,
-        global.size(),
-        global.data()
+        static_cast<uint32_t>(snapshot.size()),
+        snapshot.data()
     );
     xcb_flush(conn.get());
     LwmProcess wm(x11.display(), "[workspaces]\ncount = 2\n");
     REQUIRE(wm.running());
     REQUIRE(wait_for_wm_ready(conn, kTimeout));
     auto kind = intern_atom(conn.get(), "_LWM_WINDOW_CLASS");
-    REQUIRE(wait_for_condition(
-        [&]
-        {
-            return get_window_property_string(conn.get(), bad, kind) == "tiled"
-                && get_window_property_string(conn.get(), good, kind) == "floating";
-        },
-        kTimeout
-    ));
-    CHECK(get_window_border_width(conn, bad) == 2);
-    CHECK(get_window_border_width(conn, good) == 0);
-    destroy_window(conn, good);
-    destroy_window(conn, bad);
+    REQUIRE(wait_for_condition([&] { return get_window_property_string(conn.get(), window, kind) == "tiled"; }, kTimeout));
+    CHECK(get_window_border_width(conn, window) == 2);
+    // The snapshot is consumed; it cannot affect a later start.
+    CHECK_FALSE(get_window_property_string(conn.get(), conn.root(), property));
+    destroy_window(conn, window);
 }

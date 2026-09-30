@@ -184,7 +184,7 @@ void Server::execute(Client& client, Handler const& handler)
         respond(client, "error " + command.error());
         return;
     }
-    if (command->id == CommandId::Subscribe)
+    if (auto const* subscribe = std::get_if<Subscribe>(&*command))
     {
         auto subscribers =
             std::count_if(clients_.begin(), clients_.end(), [](auto const& c) { return c.fd >= 0 && c.mask; });
@@ -193,7 +193,7 @@ void Server::execute(Client& client, Handler const& handler)
         else
         {
             // Register before acknowledgement. Subsequent events queue behind it.
-            client.mask = std::get<uint32_t>(command->argument);
+            client.mask = subscribe->mask;
             respond(client, "ok subscribed");
         }
     }

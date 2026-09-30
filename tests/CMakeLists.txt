@@ -45,13 +45,11 @@ add_executable(lwm_tests
   test_config_parser.cpp
   test_events_policy.cpp
   test_invariants.cpp
-  test_client_state_policy.cpp
+  test_state.cpp
   test_ewmh_classification.cpp
   test_ewmh_policy.cpp
   test_integration_config_reload.cpp
-  test_focus_cycling_policy.cpp
   test_focus_policy.cpp
-  test_focus_restoration_policy.cpp
   test_integration_client_message.cpp
   test_integration_focus.cpp
   test_integration_focus_input.cpp
@@ -64,7 +62,6 @@ add_executable(lwm_tests
   test_integration_workspace.cpp
   test_integration_placement.cpp
   test_floating_policy.cpp
-  test_keybind_policy.cpp
   test_lwmctl.cpp
   test_ipc_server.cpp
   test_ipc_command.cpp

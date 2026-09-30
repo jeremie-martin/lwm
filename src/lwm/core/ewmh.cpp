@@ -48,14 +48,6 @@ void Ewmh::destroy_for_restart()
     }
 }
 
-void Ewmh::init_atoms()
-{
-    create_supporting_window();
-    set_supported_atoms();
-}
-
-void Ewmh::set_extra_supported_atoms(std::vector<xcb_atom_t> atoms) { extra_supported_atoms_ = std::move(atoms); }
-
 void Ewmh::create_supporting_window()
 {
     supporting_window_ = xcb_generate_id(conn_.get());
@@ -79,9 +71,11 @@ void Ewmh::create_supporting_window()
     xcb_ewmh_set_supporting_wm_check(&ewmh_, supporting_window_, supporting_window_);
 }
 
+
 // Keep advertised atoms aligned with the implemented contract in X11.md.
-void Ewmh::set_supported_atoms()
+void Ewmh::init_atoms(std::vector<xcb_atom_t> const& extra_supported)
 {
+    create_supporting_window();
     std::vector<xcb_atom_t> supported = {
         ewmh_._NET_SUPPORTED,
         ewmh_._NET_SUPPORTING_WM_CHECK,
@@ -153,7 +147,7 @@ void Ewmh::set_supported_atoms()
         ewmh_._NET_WM_USER_TIME,
     };
 
-    supported.insert(supported.end(), extra_supported_atoms_.begin(), extra_supported_atoms_.end());
+    supported.insert(supported.end(), extra_supported.begin(), extra_supported.end());
     xcb_ewmh_set_supported(&ewmh_, 0, supported.size(), supported.data());
 }
 
@@ -201,29 +195,12 @@ void Ewmh::set_current_desktop(uint32_t desktop) { xcb_ewmh_set_current_desktop(
 
 void Ewmh::set_active_window(xcb_window_t window) { xcb_ewmh_set_active_window(&ewmh_, 0, window); }
 
-void Ewmh::set_desktop_viewport(std::vector<Monitor> const& monitors, int32_t origin_x, int32_t origin_y)
+void Ewmh::set_desktop_viewport(std::vector<std::pair<uint32_t, uint32_t>> const& viewports)
 {
-    // For multi-monitor with per-monitor workspaces, we set viewport coordinates
-    // Each workspace maps to a monitor's position
-    std::vector<xcb_ewmh_coordinates_t> viewports;
-
-    for (auto const& monitor : monitors)
-    {
-        for (size_t i = 0; i < monitor.workspaces.size(); ++i)
-        {
-            int32_t offset_x = static_cast<int32_t>(monitor.x) - origin_x;
-            int32_t offset_y = static_cast<int32_t>(monitor.y) - origin_y;
-            viewports.push_back(
-                { static_cast<uint32_t>(std::max<int32_t>(0, offset_x)),
-                  static_cast<uint32_t>(std::max<int32_t>(0, offset_y)) }
-            );
-        }
-    }
-
-    if (!viewports.empty())
-    {
-        xcb_ewmh_set_desktop_viewport(&ewmh_, 0, viewports.size(), viewports.data());
-    }
+    std::vector<xcb_ewmh_coordinates_t> coordinates;
+    for (auto [x, y] : viewports) coordinates.push_back({ x, y });
+    if (!coordinates.empty())
+        xcb_ewmh_set_desktop_viewport(&ewmh_, 0, coordinates.size(), coordinates.data());
 }
 
 void Ewmh::set_window_desktop(xcb_window_t window, uint32_t desktop)
@@ -251,36 +228,27 @@ void Ewmh::update_client_list_stacking(std::vector<xcb_window_t> const& windows)
     xcb_ewmh_set_client_list_stacking(&ewmh_, 0, windows.size(), const_cast<xcb_window_t*>(windows.data()));
 }
 
-void Ewmh::set_window_state(xcb_window_t window, xcb_atom_t state, bool enabled)
-{
-    if (window != XCB_NONE && state != XCB_NONE)
-        state_updates_[window][state] = enabled;
-}
-
-void Ewmh::flush_window_states()
+void Ewmh::update_window_states(
+    std::span<std::pair<xcb_window_t, std::vector<xcb_atom_t>> const> updates,
+    std::span<xcb_atom_t const> owned
+)
 {
     std::vector<xcb_get_property_cookie_t> cookies;
-    cookies.reserve(state_updates_.size());
-    for (auto const& [window, updates] : state_updates_) cookies.push_back(xcb_ewmh_get_wm_state(&ewmh_, window));
-    size_t i = 0;
-    for (auto const& [window, updates] : state_updates_)
+    cookies.reserve(updates.size());
+    for (auto const& [window, enabled] : updates) cookies.push_back(xcb_ewmh_get_wm_state(&ewmh_, window));
+    for (size_t i = 0; i < updates.size(); ++i)
     {
-        xcb_ewmh_get_atoms_reply_t reply{};
+        auto const& [window, enabled] = updates[i];
         std::vector<xcb_atom_t> atoms;
-        if (xcb_ewmh_get_wm_state_reply(&ewmh_, cookies[i++], &reply, nullptr))
+        xcb_ewmh_get_atoms_reply_t reply{ };
+        if (xcb_ewmh_get_wm_state_reply(&ewmh_, cookies[i], &reply, nullptr))
         {
             atoms.assign(reply.atoms, reply.atoms + reply.atoms_len);
             xcb_ewmh_get_atoms_reply_wipe(&reply);
         }
         auto previous = atoms;
-        for (auto [atom, enabled] : updates)
-        {
-            bool present = std::ranges::find(atoms, atom) != atoms.end();
-            if (enabled && !present)
-                atoms.push_back(atom);
-            else if (!enabled)
-                std::erase(atoms, atom);
-        }
+        std::erase_if(atoms, [&](xcb_atom_t atom) { return std::ranges::find(owned, atom) != owned.end(); });
+        atoms.insert(atoms.end(), enabled.begin(), enabled.end());
         if (atoms == previous)
             continue;
         if (atoms.empty())
@@ -288,7 +256,6 @@ void Ewmh::flush_window_states()
         else
             xcb_ewmh_set_wm_state(&ewmh_, window, atoms.size(), atoms.data());
     }
-    state_updates_.clear();
 }
 
 xcb_atom_t Ewmh::get_window_type(xcb_window_t window) const
@@ -308,67 +275,6 @@ xcb_atom_t Ewmh::get_window_type(xcb_window_t window) const
     }
     xcb_ewmh_get_atoms_reply_wipe(&types);
     return type;
-}
-
-WindowClassification classify_window_type(WindowType type, bool is_transient)
-{
-    WindowClassification result;
-    result.is_transient = is_transient;
-
-    switch (type)
-    {
-        case WindowType::Desktop:
-            result.kind = WindowClassification::Kind::Desktop;
-            result.skip_taskbar = true;
-            result.skip_pager = true;
-            return result;
-        case WindowType::Dock:
-            result.kind = WindowClassification::Kind::Dock;
-            result.skip_taskbar = true;
-            result.skip_pager = true;
-            return result;
-        case WindowType::Toolbar:
-        case WindowType::Menu:
-        case WindowType::Splash:
-            result.kind = WindowClassification::Kind::Floating;
-            result.skip_taskbar = true;
-            result.skip_pager = true;
-            return result;
-        case WindowType::Utility:
-            result.kind = WindowClassification::Kind::Floating;
-            result.skip_taskbar = true;
-            result.skip_pager = true;
-            result.above = true;
-            return result;
-        case WindowType::Dialog:
-            result.kind = WindowClassification::Kind::Floating;
-            return result;
-        case WindowType::DropdownMenu:
-        case WindowType::PopupMenu:
-        case WindowType::Tooltip:
-        case WindowType::Notification:
-        case WindowType::Combo:
-        case WindowType::Dnd:
-            result.kind = WindowClassification::Kind::Popup;
-            result.skip_taskbar = true;
-            result.skip_pager = true;
-            return result;
-        case WindowType::Normal:
-            break;
-    }
-
-    if (is_transient)
-    {
-        result.kind = WindowClassification::Kind::Floating;
-        result.skip_taskbar = true;
-        result.skip_pager = true;
-    }
-    else
-    {
-        result.kind = WindowClassification::Kind::Tiled;
-    }
-
-    return result;
 }
 
 WindowType Ewmh::get_window_type_enum(xcb_window_t window) const

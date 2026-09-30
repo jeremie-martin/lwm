@@ -1,6 +1,5 @@
 #pragma once
 
-#include <sstream>
 #include <string>
 #include <utility>
 #include <vector>
@@ -18,6 +17,8 @@ struct CommandConfig
     Kind kind = Kind::Shell;
     std::string shell;
     std::vector<std::string> argv;
+
+    bool operator==(CommandConfig const&) const = default;
 
     static CommandConfig shell_command(std::string value)
     {
@@ -38,21 +39,6 @@ struct CommandConfig
     bool empty() const
     {
         return kind == Kind::Shell ? shell.empty() : argv.empty();
-    }
-
-    std::string describe() const
-    {
-        if (kind == Kind::Shell)
-            return shell;
-
-        std::ostringstream out;
-        for (size_t i = 0; i < argv.size(); ++i)
-        {
-            if (i != 0)
-                out << ' ';
-            out << argv[i];
-        }
-        return out.str();
     }
 };
 

@@ -1,6 +1,6 @@
 #pragma once
 
-#include "lwm/core/command.hpp"
+#include "lwm/core/action.hpp"
 #include "lwm/core/types.hpp"
 #include <cstddef>
 #include <cstdint>
@@ -12,14 +12,6 @@
 #include <vector>
 
 namespace lwm {
-
-struct RuleGeometry
-{
-    std::optional<int16_t> x;
-    std::optional<int16_t> y;
-    std::optional<uint16_t> width;
-    std::optional<uint16_t> height;
-};
 
 // Configuration owns the compiled patterns used by rules and scratchpads.
 struct WindowMatcher
@@ -42,24 +34,16 @@ struct WindowRuleConfig
     // Matching criteria (all optional, AND logic - all specified must match)
     WindowMatcher match;
     std::optional<WindowType> type;
-    std::optional<bool> transient;               // Require transient (true) or non-transient (false)
+    std::optional<bool> transient; // Require transient (true) or non-transient (false)
+    RuleActions actions;
+};
 
-    // Actions
-    std::optional<bool> floating;              // Force floating (true) or tiled (false)
-    std::optional<int> workspace;              // Target workspace (index)
-    std::optional<std::string> workspace_name; // Target workspace (by name)
-    std::optional<int> monitor;                // Target monitor (index)
-    std::optional<std::string> monitor_name;   // Target monitor (by name like "HDMI-1")
-    std::optional<bool> fullscreen;            // Fullscreen state override
-    std::optional<bool> above;                 // Above-layer preference
-    std::optional<bool> below;                 // Below-layer preference
-    std::optional<bool> sticky;                // Visible on all workspaces of the owning monitor
-    std::optional<bool> skip_taskbar;          // Exclude from taskbar
-    std::optional<bool> skip_pager;            // Exclude from pager
-    std::optional<bool> borderless;            // Zero border for tiled or floating windows
-    std::optional<RuleGeometry> geometry;      // Floating geometry
-    std::optional<bool> center;
-    std::optional<std::string> scratchpad; ///< Assign to named scratchpad
+struct KeyBinding
+{
+    uint16_t modifier;
+    xcb_keysym_t keysym;
+
+    auto operator<=>(KeyBinding const&) const = default;
 };
 
 enum class MouseAction
@@ -91,19 +75,12 @@ struct FocusConfig
 struct WorkspacesConfig
 {
     size_t count = 10;
-    std::vector<std::string> names;
-
-    /// Display name for a per-monitor workspace index: configured name, or the
-    /// 1-based index as fallback. Shared by _NET_DESKTOP_NAMES and IPC JSON.
-    std::string display_name(size_t index) const
-    {
-        return index < names.size() ? names[index] : std::to_string(index + 1);
-    }
+    std::vector<std::string> names; ///< Exactly `count` display labels
 };
 
 struct LayoutConfig
 {
-    std::string strategy = "master-stack";
+    LayoutStrategy strategy = LayoutStrategy::MasterStack;
     double default_ratio = 0.5;
     double min_ratio = 0.1;
     uint32_t resize_grab_threshold = 8; // pixels from split border to trigger resize

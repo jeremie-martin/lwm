@@ -1,5 +1,5 @@
 #include <catch2/catch_test_macros.hpp>
-#include "lwm/core/ewmh.hpp"
+#include "lwm/core/classification.hpp"
 
 using namespace lwm;
 
@@ -10,7 +10,6 @@ TEST_CASE("Desktop windows are classified as desktop", "[ewmh][classification]")
     REQUIRE(result.kind == WindowClassification::Kind::Desktop);
     REQUIRE(result.skip_taskbar);
     REQUIRE(result.skip_pager);
-    REQUIRE_FALSE(result.is_transient);
 }
 
 TEST_CASE("Dock windows ignore transient flag", "[ewmh][classification]")
@@ -20,7 +19,6 @@ TEST_CASE("Dock windows ignore transient flag", "[ewmh][classification]")
     REQUIRE(result.kind == WindowClassification::Kind::Dock);
     REQUIRE(result.skip_taskbar);
     REQUIRE(result.skip_pager);
-    REQUIRE(result.is_transient);
 }
 
 TEST_CASE("Utility windows float above and skip taskbar", "[ewmh][classification]")
@@ -84,5 +82,38 @@ TEST_CASE("Normal windows honor transient flag", "[ewmh][classification]")
     REQUIRE(transient.kind == WindowClassification::Kind::Floating);
     REQUIRE(transient.skip_taskbar);
     REQUIRE(transient.skip_pager);
-    REQUIRE(transient.is_transient);
+}
+
+TEST_CASE("Effective values let preferences override defaults and state project the layer", "[classification]")
+{
+    Client client;
+    client.ewmh_type = WindowType::Utility;
+    CHECK(effective_layer(client) == LayerHint::Above);
+    CHECK(skips_taskbar(client));
+    CHECK(default_floating(client) == true);
+
+    client.preferences.layer = LayerHint::Below;
+    client.preferences.skip_taskbar = false;
+    CHECK(effective_layer(client) == LayerHint::Below);
+    CHECK_FALSE(skips_taskbar(client));
+
+    // Modal and fullscreen project the layer without erasing the preference.
+    client.modal = true;
+    CHECK(effective_layer(client) == LayerHint::Above);
+    client.fullscreen = true;
+    CHECK(effective_layer(client) == LayerHint::Normal);
+    client.modal = client.fullscreen = false;
+    CHECK(effective_layer(client) == LayerHint::Below);
+
+    // Transients skip taskbar and pager by default, including dialogs.
+    Client dialog;
+    dialog.ewmh_type = WindowType::Dialog;
+    CHECK_FALSE(skips_pager(dialog));
+    dialog.transient_for = 42;
+    CHECK(skips_pager(dialog));
+
+    // Runtime conversion into dock, desktop or popup types has no normal default.
+    Client dock;
+    dock.ewmh_type = WindowType::Dock;
+    CHECK_FALSE(default_floating(dock));
 }
