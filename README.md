@@ -164,7 +164,12 @@ enables DEBUG; `-d all` and `--debug` enable TRACE. For a terminal or a pipe, us
 lwm --log-target stderr --log-level debug 2>&1 | tee lwm.log
 ```
 
-The stderr target supports terminals, pipes, and ordinary file redirection. Journal
+Use DEBUG to investigate window classification, placement, focus and fullscreen
+ownership; use TRACE when you also need key-binding decisions and submitted geometry.
+Records identify windows by XID, which can be matched to `lwmctl window list`.
+Launch diagnostics identify the executable without recording command arguments.
+
+The stderr target includes timestamps and supports terminals, pipes, and ordinary file redirection. Journal
 storage, retention, and access are managed by the host's journal configuration. For a
 file, redirect stderr as shown above; LWM does not manage log-file rotation.
 

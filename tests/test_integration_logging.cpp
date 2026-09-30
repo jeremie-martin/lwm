@@ -3,9 +3,11 @@
 
 #include <catch2/catch_test_macros.hpp>
 
+#include <cerrno>
 #include <chrono>
 #include <filesystem>
 #include <fstream>
+#include <sstream>
 #include <string>
 #include <thread>
 
@@ -101,6 +103,7 @@ TEST_CASE("Integration: standard logging survives failed exec and real restart",
     REQUIRE(status);
     REQUIRE(WIFEXITED(*status));
     REQUIRE(WEXITSTATUS(*status) == 0);
+    REQUIRE(wm.diagnostics().find("WM_S0 ownership transferred") != std::string::npos);
 }
 
 TEST_CASE(
@@ -179,4 +182,113 @@ TEST_CASE(
         }
     );
     wm.stop();
+}
+
+TEST_CASE("Integration: launch failures identify the command without disclosing arguments", "[integration][logging]")
+{
+    auto& environment = X11TestEnvironment::instance();
+    if (!environment.available())
+        SKIP("Xvfb not available");
+    X11Connection connection;
+    REQUIRE(connection.ok());
+    LwmProcess wm(
+        environment.display(),
+        R"(
+[autostart]
+commands = [{ argv = ["/definitely/missing/lwm-application", "private-argument"] }]
+)",
+        { "--log-level", "debug" }
+    );
+    REQUIRE(wait_for_wm_ready(connection, std::chrono::seconds(2)));
+    REQUIRE(wait_for_condition(
+        [&] { return wm.diagnostics().find("WM ready:") != std::string::npos; },
+        std::chrono::seconds(2)
+    ));
+    auto diagnostics = wm.diagnostics();
+    REQUIRE(
+        diagnostics.find("Launch failed: source=autostart executable=/definitely/missing/lwm-application")
+        != std::string::npos
+    );
+    REQUIRE(diagnostics.find("stage=spawn code=" + std::to_string(ENOENT)) != std::string::npos);
+    REQUIRE(diagnostics.find("private-argument") == std::string::npos);
+    auto ping = run_lwmctl(wm, { "ping" });
+    REQUIRE(ping);
+    REQUIRE(ping->exit_code == 0);
+}
+
+TEST_CASE("Integration: asynchronous X failures retain protocol context", "[integration][logging]")
+{
+    auto& environment = X11TestEnvironment::instance();
+    if (!environment.available())
+        SKIP("Xvfb not available");
+    X11Connection connection;
+    REQUIRE(connection.ok());
+    bool resource_race = false;
+    SECTION("invalid raw restack is a warning") { }
+    SECTION("destroyed resource is debug context") { resource_race = true; }
+    LwmProcess wm(environment.display(), { }, { "--log-level", resource_race ? "debug" : "warn" });
+    REQUIRE(wait_for_wm_ready(connection, std::chrono::seconds(2)));
+    auto window = create_window(connection, 0, 0, 100, 100);
+    if (resource_race)
+    {
+        xcb_destroy_window(connection.get(), window);
+        // The WM responds with ChangeProperty on this now-missing resource.
+        send_client_message(connection, window, intern_atom(connection.get(), "_NET_REQUEST_FRAME_EXTENTS"), 0);
+    }
+    else
+    {
+        // An unmapped, unmanaged window takes the raw ConfigureWindow path.
+        send_client_message(connection, window, intern_atom(connection.get(), "_NET_RESTACK_WINDOW"), 0, 0, 999);
+    }
+    auto expected = resource_race ? "X resource error: code=3 opcode=18:0" : "X protocol error: code=2 opcode=12:0";
+    REQUIRE(wait_for_condition(
+        [&] { return wm.diagnostics().find(expected) != std::string::npos; },
+        std::chrono::seconds(2)
+    ));
+    auto diagnostics = wm.diagnostics();
+    REQUIRE(diagnostics.find("resource=0x") != std::string::npos);
+    REQUIRE(diagnostics.find("sequence=") != std::string::npos);
+    auto ping = run_lwmctl(wm, { "ping" });
+    REQUIRE(ping);
+    REQUIRE(ping->exit_code == 0);
+}
+
+TEST_CASE("Integration: fullscreen diagnostics identify requests and resolved ownership", "[integration][logging]")
+{
+    auto& environment = X11TestEnvironment::instance();
+    if (!environment.available())
+        SKIP("Xvfb not available");
+    X11Connection connection;
+    REQUIRE(connection.ok());
+    LwmProcess wm(environment.display(), { }, { "--log-level", "debug" });
+    REQUIRE(wait_for_wm_ready(connection, std::chrono::seconds(2)));
+    auto window = create_window(connection, 20, 20, 320, 240);
+    map_window(connection, window);
+    REQUIRE(wait_for_active_window(connection, window, std::chrono::seconds(2)));
+    auto state = intern_atom(connection.get(), "_NET_WM_STATE");
+    auto fullscreen = intern_atom(connection.get(), "_NET_WM_STATE_FULLSCREEN");
+    std::ostringstream id;
+    id << "0x" << std::hex << window;
+    send_client_message(connection, window, state, 1, fullscreen);
+    REQUIRE(wait_for_condition(
+        [&]
+        {
+            auto diagnostics = wm.diagnostics();
+            return diagnostics.find("Fullscreen changed: window=" + id.str() + " enabled=true") != std::string::npos
+                && diagnostics.find("Fullscreen owner changed: monitor=0 window=0x0 -> " + id.str())
+                != std::string::npos;
+        },
+        std::chrono::seconds(2)
+    ));
+    send_client_message(connection, window, state, 0, fullscreen);
+    REQUIRE(wait_for_condition(
+        [&]
+        {
+            auto diagnostics = wm.diagnostics();
+            return diagnostics.find("Fullscreen changed: window=" + id.str() + " enabled=false") != std::string::npos
+                && diagnostics.find("Fullscreen owner changed: monitor=0 window=" + id.str() + " -> 0x0")
+                != std::string::npos;
+        },
+        std::chrono::seconds(2)
+    ));
 }

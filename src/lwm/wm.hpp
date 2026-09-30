@@ -299,7 +299,7 @@ private:
     void focus_monitor(int direction); // -1 = left, +1 = right
     void move_window_to_monitor(int direction);
 
-    bool launch_program(CommandConfig const& command);
+    bool launch_program(CommandConfig const& command, std::string_view source);
     /// Returns true when the ratio actually changed (false: no focused
     /// monitor, or already clamped at the bound).
     bool adjust_master_ratio(double delta);

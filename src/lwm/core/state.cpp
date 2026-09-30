@@ -1,6 +1,7 @@
 #include "state.hpp"
 #include "ewmh.hpp"
 #include "floating.hpp"
+#include "log.hpp"
 #include "policy.hpp"
 #include <algorithm>
 #include <cassert>
@@ -57,6 +58,8 @@ void State::focus(xcb_window_t id, uint32_t time)
     if (!effects_.previous_focus)
         effects_.previous_focus = active_window_;
     effects_.focus_time = time;
+    if (active_window_ != id)
+        LWM_LOG_DEBUG("Focus changed: window={:#x} -> {:#x}", active_window_, id);
     active_window_ = id;
     effects_.current_desktop = true;
     effects_.stacking = true;
@@ -195,6 +198,14 @@ bool State::relocate(
             std::nullopt
         );
     }
+    LWM_LOG_DEBUG(
+        "Client relocated: window={:#x} monitor={} -> {} workspace={} -> {}",
+        id,
+        source,
+        monitor,
+        client.workspace,
+        workspace
+    );
     client.monitor = monitor;
     client.workspace = workspace;
     effects_.desktops.insert(id);
@@ -219,6 +230,13 @@ void State::change_kind(xcb_window_t id, ClientState state, std::optional<size_t
         std::get<FloatingState>(state).saved_tiled_pos = detach(client);
     if (!was_tiled && tiled)
         client.tiled_geometry = floating_geometry(client);
+    if (was_tiled != tiled)
+        LWM_LOG_DEBUG(
+            "Client kind changed: window={:#x} {} -> {}",
+            id,
+            was_tiled ? "tiled" : "floating",
+            tiled ? "tiled" : "floating"
+        );
     client.state = std::move(state);
     if (!was_tiled && tiled)
         attach(client, tile_index);
@@ -374,6 +392,8 @@ void State::fullscreen(xcb_window_t id, bool enabled)
         return;
     if (enabled)
         maximize(id, false, false);
+    if (c.fullscreen != enabled)
+        LWM_LOG_DEBUG("Fullscreen changed: window={:#x} enabled={}", id, enabled);
     c.fullscreen = enabled;
     classification(id);
     invalidate(c.monitor, enabled ? id : XCB_NONE);
@@ -536,6 +556,7 @@ bool State::switch_workspace(size_t monitor, size_t workspace)
     auto result = workspace_policy::validate_workspace_switch(m, workspace);
     if (!result)
         return false;
+    LWM_LOG_DEBUG("Workspace changed: monitor={} workspace={} -> {}", monitor, m.current_workspace, workspace);
     m.previous_workspace = m.current_workspace;
     m.current_workspace = workspace;
     auto [it, inserted] = effects_.workspace_events.try_emplace(monitor, result->old_workspace, workspace);
@@ -581,6 +602,13 @@ void State::swap_tiles(size_t monitor, size_t a, size_t b)
 void State::resolve_owner(size_t monitor, xcb_window_t owner)
 {
     assert(!publishing_);
+    if (monitors_[monitor].fullscreen_owner != owner)
+        LWM_LOG_DEBUG(
+            "Fullscreen owner changed: monitor={} window={:#x} -> {:#x}",
+            monitor,
+            monitors_[monitor].fullscreen_owner,
+            owner
+        );
     monitors_[monitor].fullscreen_owner = owner;
 }
 void State::workarea(size_t monitor, Strut strut)
@@ -594,6 +622,28 @@ void State::workarea(size_t monitor, Strut strut)
 void State::replace_monitors(std::vector<Monitor> monitors)
 {
     assert(!publishing_);
+    bool topology_changed = monitors_.size() != monitors.size()
+        || !std::ranges::equal(monitors_,
+                               monitors,
+                               [](auto const& a, auto const& b)
+                               { return a.name == b.name && a.geometry() == b.geometry(); });
+    if (topology_changed)
+    {
+        LWM_LOG_INFO("Monitor topology changed: count={} -> {}", monitors_.size(), monitors.size());
+        for (size_t i = 0; i < monitors.size(); ++i)
+        {
+            auto const& m = monitors[i];
+            LWM_LOG_INFO(
+                "Monitor: index={} name={} x={} y={} width={} height={}",
+                i,
+                m.name,
+                m.x,
+                m.y,
+                m.width,
+                m.height
+            );
+        }
+    }
     auto previous = std::move(monitors_);
     displaced_.clear();
     for (auto const& [id, c] : clients_)

@@ -170,7 +170,6 @@ WindowManager::WindowManager(Config config, SignalPipe& signals, std::string con
     }
     init_scratchpad_state();
     detect_monitors();
-    LWM_LOG_INFO("Managing {} monitor(s)", monitors_.size());
     setup_ewmh();
     setup_ipc();
     is_restart_ = restore_global_restart_state();
@@ -198,6 +197,13 @@ WindowManager::WindowManager(Config config, SignalPipe& signals, std::string con
     keybinds_.grab_keys(conn_.screen()->root);
     request_client_list_update();
     complete_transition();
+    LWM_LOG_INFO(
+        "WM ready: monitors={} clients={} restart={} active_window={:#x}",
+        monitors_.size(),
+        clients_.size(),
+        is_restart_,
+        active_window_
+    );
 }
 
 WindowManager::~WindowManager()
@@ -315,9 +321,9 @@ RunResult WindowManager::run()
         // Flush direct protocol replies even when no managed transition was needed.
         conn_.flush();
 
-        if (xcb_connection_has_error(conn_.get()))
+        if (int error = xcb_connection_has_error(conn_.get()))
         {
-            LWM_LOG_CRITICAL("X connection error, shutting down");
+            LWM_LOG_CRITICAL("X connection failed: code={}; shutting down", error);
             connection_failed = true;
             break;
         }
@@ -866,8 +872,7 @@ void WindowManager::run_autostart()
 {
     for (auto const& cmd : config_.autostart.commands)
     {
-        LWM_LOG_DEBUG("Launching autostart application");
-        launch_program(cmd);
+        launch_program(cmd, "autostart");
     }
 }
 
@@ -1261,10 +1266,12 @@ void WindowManager::kill_window(xcb_window_t window)
         conn_.flush();
 
         send_wm_ping(window, last_event_time_);
+        LWM_LOG_DEBUG("Close requested: window={:#x} protocol=WM_DELETE_WINDOW", window);
         pending_kills_[window] = std::chrono::steady_clock::now() + KILL_TIMEOUT;
         return;
     }
 
+    LWM_LOG_DEBUG("Close: window={:#x} has no WM_DELETE_WINDOW; killing client connection", window);
     // Window doesn't support graceful close - force kill immediately
     xcb_kill_client(conn_.get(), window);
     conn_.flush();
@@ -1297,7 +1304,7 @@ void WindowManager::invalidate_all_monitors()
     for (size_t monitor = 0; monitor < monitors_.size(); ++monitor) invalidate_monitor(monitor);
 }
 
-bool WindowManager::launch_program(CommandConfig const& command)
+bool WindowManager::launch_program(CommandConfig const& command, std::string_view source)
 {
     if (command.empty())
         return false;
@@ -1312,17 +1319,31 @@ bool WindowManager::launch_program(CommandConfig const& command)
     // posix_spawn reports exec failure to the parent. Owned WM descriptors are
     // CLOEXEC; stderr is inherited so the application can report its own errors.
     posix_spawnattr_t attributes;
+    char const* stage = "attributes";
     int error = posix_spawnattr_init(&attributes);
     if (!error)
     {
+        stage = "session";
         error = posix_spawnattr_setflags(&attributes, POSIX_SPAWN_SETSID);
         pid_t child;
         if (!error)
+        {
+            stage = "spawn";
             error = posix_spawnp(&child, argv.front(), nullptr, &attributes, argv.data(), environ);
+        }
         posix_spawnattr_destroy(&attributes);
     }
     if (error)
-        LWM_LOG_ERROR("Cannot launch application: {}", std::strerror(error));
+        LWM_LOG_ERROR(
+            "Launch failed: source={} executable={} stage={} code={} error={}",
+            source,
+            argv.front(),
+            stage,
+            error,
+            std::strerror(error)
+        );
+    else
+        LWM_LOG_DEBUG("Launched: source={} executable={}", source, argv.front());
     return error == 0;
 }
 
@@ -1700,6 +1721,15 @@ bool WindowManager::write_geometry(Client const& client, Geometry geometry, uint
     if (state_.presentation(client.id).applied_geometry == geometry
         && state_.presentation(client.id).applied_border == border_width)
         return false;
+    LWM_LOG_TRACE(
+        "Geometry submitted: window={:#x} x={} y={} width={} height={} border={}",
+        client.id,
+        geometry.x,
+        geometry.y,
+        geometry.width,
+        geometry.height,
+        border_width
+    );
     state_.presentation(client.id).applied_geometry = geometry;
     state_.presentation(client.id).applied_border = border_width;
     uint32_t color = border_color_for_client(client);

@@ -477,12 +477,33 @@ queue overflow in summaries, so notifications are not a lost-record counter. Mis
 journal service is silently accepted by libsystemd. Neither sink confirms durable
 storage. Initialization failure is a startup error reported by the CLI on stderr.
 
-Logging policy is fixed by startup options, not TOML reload. INFO describes lifecycle
-and configuration outcomes; DEBUG adds operational context; TRACE adds input and
-geometry detail. Recurring recoverable RandR and config-reload warnings use Quill's rate
-limiter with occurrence counts. Avoid per-window INFO narration and full command lines
-in ordinary diagnostics. Measure performance with external IPC, CPU, and X request tools
-rather than diagnostic logs.
+Logging policy is fixed by startup options, not TOML reload:
+
+- INFO records process readiness, configuration outcomes, changed monitor topology,
+  restart and shutdown reasons. Ordinary window operations do not produce INFO records.
+- WARN/ERROR identify actionable failures. Launch failures include the executable,
+  origin, failing stage and error code, without arguments or shell contents. Spawning
+  a shell successfully does not imply that commands inside it succeeded; those errors
+  remain the shell's responsibility on inherited stderr.
+- DEBUG records state changes at their owning boundary: focus, workspace, client
+  placement and kind, fullscreen requests and resolved ownership. Classification
+  records show natural versus rule-resolved kind and transient parent, without titles.
+- TRACE records binding resolution, repeat suppression and submitted geometry. A
+  submitted rectangle is not an acknowledgement from the X server. Unchanged geometry
+  produces no submission record. Raw key releases and intermediate repeat predicates
+  are not narrated.
+
+Asynchronous X errors include numeric error code, major/minor request opcode,
+resource and full sequence number. BadWindow and BadDrawable can arise from client
+teardown races and are DEBUG; other errors are WARN. Each category has a five-second
+Quill rate limit, as do recurring RandR and config-reload warnings. Suppression bounds
+noise but can hide distinct errors within the interval; the retained record is not
+an inventory of every failed request. No diagnostic lookup adds X round trips.
+
+Stderr records include time, severity and source location; journal records use native
+journal timestamps and metadata. Logs are best-effort explanations, not an audit trail
+or a state database. Use IPC snapshots for current state and external IPC, CPU and X
+request tools for performance measurement.
 
 ## Invariants
 

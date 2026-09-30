@@ -110,7 +110,11 @@ int main(int argc, char* argv[])
         for (std::string& argument : parsed->restart_argv) restart_argv.push_back(argument.data());
         restart_argv.push_back(nullptr);
 
-        LWM_LOG_INFO("Starting LWM window manager");
+        LWM_LOG_INFO(
+            "Starting LWM: version={} display={}",
+            LWM_VERSION,
+            std::getenv("DISPLAY") ? std::getenv("DISPLAY") : "default"
+        );
 
         std::string config_path = parsed->config_path.value_or(default_config_path());
         bool explicit_config = parsed->config_path.has_value();

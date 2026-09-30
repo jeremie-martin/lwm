@@ -14,17 +14,11 @@ void WindowManager::switch_workspace(size_t ws)
 
     if (!state_.switch_workspace(focused_monitor_, ws))
     {
-        LWM_LOG_TRACE("switch_workspace: transition rejected switch");
+        LWM_LOG_TRACE("Workspace unchanged: monitor={} requested={}", focused_monitor_, ws);
         return;
     }
 
     focus_or_fallback(focused_monitor());
-
-    LWM_LOG_TRACE(
-        "Workspace switched: current={} previous={}",
-        focused_monitor().current_workspace,
-        focused_monitor().previous_workspace
-    );
 }
 
 void WindowManager::toggle_workspace()
@@ -44,7 +38,6 @@ void WindowManager::toggle_workspace()
         return;
     }
 
-    LWM_LOG_TRACE("toggle_workspace: switching to workspace {}", target);
     switch_workspace(target);
 }
 

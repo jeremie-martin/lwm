@@ -95,12 +95,7 @@ void WindowManager::publish_current_desktop()
     size_t const monitor_idx = focused_monitor_;
     size_t const workspace_idx = focused_monitor().current_workspace;
     uint32_t const desktop = get_ewmh_desktop_index(monitor_idx, workspace_idx);
-    LWM_LOG_TRACE(
-        "request_current_desktop_update: monitor={} workspace={} desktop={}",
-        monitor_idx,
-        workspace_idx,
-        desktop
-    );
+    LWM_LOG_TRACE("Desktop published: monitor={} workspace={} desktop={}", monitor_idx, workspace_idx, desktop);
     ewmh_.set_current_desktop(desktop);
 }
 
@@ -167,14 +162,6 @@ void WindowManager::switch_to_ewmh_desktop(uint32_t desktop)
         return;
     }
 
-    size_t old_workspace = monitor.current_workspace;
-    LWM_LOG_DEBUG(
-        "switch_to_ewmh_desktop: switching from ws {} to ws {} on monitor {}",
-        old_workspace,
-        workspace_idx,
-        monitor_idx
-    );
-
     state_.focus_monitor(monitor_idx);
     if (!state_.switch_workspace(monitor_idx, workspace_idx))
     {
@@ -183,7 +170,6 @@ void WindowManager::switch_to_ewmh_desktop(uint32_t desktop)
     }
     focus_or_fallback(monitor);
 
-    LWM_LOG_DEBUG("EWMH desktop switched: monitor={} workspace={}", focused_monitor_, monitor.current_workspace);
 }
 
 }

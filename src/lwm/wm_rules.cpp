@@ -1,4 +1,5 @@
 #include "lwm/core/floating.hpp"
+#include "lwm/core/log.hpp"
 #include "lwm/core/policy.hpp"
 #include "wm.hpp"
 #include <algorithm>
@@ -52,6 +53,7 @@ void WindowManager::apply_rule_result_to_window(xcb_window_t window, WindowRuleR
     auto* client = get_client(window);
     if (!client)
         return;
+    LWM_LOG_DEBUG("Applying matched rules: window={:#x}", window);
     if (rule_result.floating.has_value())
         state_.floating(window, *rule_result.floating);
 
@@ -129,6 +131,25 @@ ClassificationResult WindowManager::classify_managed_window(xcb_window_t window,
     match_info.is_transient = has_transient;
     auto classification = classify_window_type(match_info.ewmh_type, has_transient);
     auto rule_result = match_window_rules(config_.rules, match_info, monitors_, config_.workspaces.names);
+    auto kind_name = [](WindowClassification::Kind kind)
+    {
+        using enum WindowClassification::Kind;
+        switch (kind)
+        {
+            case Tiled:
+                return "tiled";
+            case Floating:
+                return "floating";
+            case Dock:
+                return "dock";
+            case Desktop:
+                return "desktop";
+            case Popup:
+                return "popup";
+        }
+        return "unknown";
+    };
+    auto original_kind = classification.kind;
 
     if (rule_result.matched && classification.kind != WindowClassification::Kind::Dock
         && classification.kind != WindowClassification::Kind::Desktop
@@ -141,6 +162,14 @@ ClassificationResult WindowManager::classify_managed_window(xcb_window_t window,
         }
     }
 
+    LWM_LOG_DEBUG(
+        "Classification resolved: window={:#x} transient_for={:#x} natural={} resolved={} rules_matched={}",
+        window,
+        transient,
+        kind_name(original_kind),
+        kind_name(classification.kind),
+        rule_result.matched
+    );
     return { classification, std::move(rule_result), transient, std::move(match_info) };
 }
 

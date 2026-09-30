@@ -63,4 +63,9 @@ std::string status_json();
         if (auto* lwm_logger = ::lwm::log::active_logger())             \
             QUILL_LOG_WARNING_LIMIT(interval, lwm_logger, __VA_ARGS__); \
     } while (false)
-#define LWM_LOG_KEY(state, keysym) LWM_LOG_TRACE("Key: state={:#x} keysym={:#x}", state, keysym)
+#define LWM_LOG_DEBUG_LIMIT(interval, ...)                            \
+    do                                                                \
+    {                                                                 \
+        if (auto* lwm_logger = ::lwm::log::active_logger())           \
+            QUILL_LOG_DEBUG_LIMIT(interval, lwm_logger, __VA_ARGS__); \
+    } while (false)

@@ -39,44 +39,44 @@ template <class... Ts> struct Overloaded : Ts...
 
 template <class... Ts> Overloaded(Ts...) -> Overloaded<Ts...>;
 
-std::string key_action_event_name(Action const& action)
+char const* key_action_event_name(Action const& action)
 {
     return std::visit(
         Overloaded{
-            [](KillAction const&) { return std::string("kill"); },
-            [](ReloadConfigAction const&) { return std::string("reload_config"); },
-            [](RestartAction const&) { return std::string("restart"); },
-            [](ToggleWorkspaceAction const&) { return std::string("toggle_workspace"); },
-            [](ToggleFullscreenAction const&) { return std::string("toggle_fullscreen"); },
-            [](ToggleFloatAction const&) { return std::string("toggle_float"); },
-            [](FocusNextAction const&) { return std::string("focus_next"); },
-            [](FocusPrevAction const&) { return std::string("focus_prev"); },
-            [](RatioGrowAction const&) { return std::string("ratio_grow"); },
-            [](RatioShrinkAction const&) { return std::string("ratio_shrink"); },
-            [](SwapNextAction const&) { return std::string("swap_next"); },
-            [](SwapPrevAction const&) { return std::string("swap_prev"); },
-            [](ScratchpadStashAction const&) { return std::string("scratchpad_stash"); },
-            [](ScratchpadCycleAction const&) { return std::string("scratchpad_cycle"); },
-            [](SpawnAction const&) { return std::string("spawn"); },
-            [](SwitchWorkspaceAction const&) { return std::string("switch_workspace"); },
-            [](MoveToWorkspaceAction const&) { return std::string("move_to_workspace"); },
+            [](KillAction const&) { return "kill"; },
+            [](ReloadConfigAction const&) { return "reload_config"; },
+            [](RestartAction const&) { return "restart"; },
+            [](ToggleWorkspaceAction const&) { return "toggle_workspace"; },
+            [](ToggleFullscreenAction const&) { return "toggle_fullscreen"; },
+            [](ToggleFloatAction const&) { return "toggle_float"; },
+            [](FocusNextAction const&) { return "focus_next"; },
+            [](FocusPrevAction const&) { return "focus_prev"; },
+            [](RatioGrowAction const&) { return "ratio_grow"; },
+            [](RatioShrinkAction const&) { return "ratio_shrink"; },
+            [](SwapNextAction const&) { return "swap_next"; },
+            [](SwapPrevAction const&) { return "swap_prev"; },
+            [](ScratchpadStashAction const&) { return "scratchpad_stash"; },
+            [](ScratchpadCycleAction const&) { return "scratchpad_cycle"; },
+            [](SpawnAction const&) { return "spawn"; },
+            [](SwitchWorkspaceAction const&) { return "switch_workspace"; },
+            [](MoveToWorkspaceAction const&) { return "move_to_workspace"; },
             [](FocusMonitorAction const& action)
             {
                 if (action.direction < 0)
-                    return std::string("focus_monitor_left");
+                    return "focus_monitor_left";
                 if (action.direction > 0)
-                    return std::string("focus_monitor_right");
-                return std::string("focus_monitor");
+                    return "focus_monitor_right";
+                return "focus_monitor";
             },
             [](MoveToMonitorAction const& action)
             {
                 if (action.direction < 0)
-                    return std::string("move_to_monitor_left");
+                    return "move_to_monitor_left";
                 if (action.direction > 0)
-                    return std::string("move_to_monitor_right");
-                return std::string("move_to_monitor");
+                    return "move_to_monitor_right";
+                return "move_to_monitor";
             },
-            [](ToggleScratchpadAction const&) { return std::string("toggle_scratchpad"); },
+            [](ToggleScratchpadAction const&) { return "toggle_scratchpad"; },
         },
         action
     );
@@ -87,6 +87,33 @@ std::string key_action_event_name(Action const& action)
 void WindowManager::handle_event(xcb_generic_event_t const& event)
 {
     uint8_t response_type = event.response_type & ~0x80;
+    if (response_type == 0)
+    {
+        auto const& error = reinterpret_cast<xcb_generic_error_t const&>(event);
+        // Unchecked requests can race with client destruction. Keep those visible
+        // at DEBUG, without letting a broken client flood the diagnostic queue.
+        if (error.error_code == XCB_WINDOW || error.error_code == XCB_DRAWABLE)
+            LWM_LOG_DEBUG_LIMIT(
+                std::chrono::seconds(5),
+                "X resource error: code={} opcode={}:{} resource={:#x} sequence={}",
+                error.error_code,
+                error.major_code,
+                error.minor_code,
+                error.resource_id,
+                error.full_sequence
+            );
+        else
+            LWM_LOG_WARN_LIMIT(
+                std::chrono::seconds(5),
+                "X protocol error: code={} opcode={}:{} resource={:#x} sequence={}",
+                error.error_code,
+                error.major_code,
+                error.minor_code,
+                error.resource_id,
+                error.full_sequence
+            );
+        return;
+    }
     uint32_t event_time = extract_event_time(response_type, event);
     if (event_time != 0)
     {
@@ -152,24 +179,12 @@ void WindowManager::handle_event(xcb_generic_event_t const& event)
         case XCB_KEY_PRESS:
         {
             auto const& e = reinterpret_cast<xcb_key_press_event_t const&>(event);
-            LWM_LOG_TRACE(
-                "EVENT: XCB_KEY_PRESS keycode={} time={} state={:#x}",
-                static_cast<int>(e.detail),
-                e.time,
-                e.state
-            );
             handle_key_press(e);
             break;
         }
         case XCB_KEY_RELEASE:
         {
             auto const& e = reinterpret_cast<xcb_key_release_event_t const&>(event);
-            LWM_LOG_TRACE(
-                "EVENT: XCB_KEY_RELEASE keycode={} time={} state={:#x}",
-                static_cast<int>(e.detail),
-                e.time,
-                e.state
-            );
             handle_key_release(e);
             break;
         }
@@ -188,6 +203,7 @@ void WindowManager::handle_event(xcb_generic_event_t const& event)
             // Another WM is taking over - exit gracefully (ICCCM)
             if (e.selection == wm_s0_)
             {
+                LWM_LOG_INFO("Stopping: WM_S0 ownership transferred to another manager");
                 running_ = false;
             }
             break;
@@ -406,7 +422,6 @@ void WindowManager::handle_enter_notify(xcb_enter_notify_event_t const& e)
         {
             if (e.event != active_window_)
             {
-                LWM_LOG_DEBUG("EnterNotify: focusing window {:#x}", e.event);
                 focus_any_window(e.event);
             }
             return;
@@ -445,7 +460,6 @@ void WindowManager::handle_motion_notify(xcb_motion_notify_event_t const& e)
         {
             if (window_under_cursor != active_window_)
             {
-                LWM_LOG_DEBUG("MotionNotify: focusing window {:#x} (was {:#x})", window_under_cursor, active_window_);
                 focus_any_window(window_under_cursor);
             }
             return;
@@ -611,20 +625,11 @@ void WindowManager::handle_button_press(xcb_button_press_event_t const& e)
 
 bool WindowManager::is_auto_repeat_toggle(xcb_keysym_t keysym, xcb_timestamp_t time)
 {
-    LWM_LOG_TRACE(
-        "KeyPress: keysym={:#x} time={} last_keysym={:#x} last_release_time={}",
-        keysym,
-        time,
-        last_toggle_keysym_,
-        last_toggle_release_time_
-    );
     bool same_key = (keysym == last_toggle_keysym_);
     bool same_time = (time == last_toggle_release_time_);
-    LWM_LOG_TRACE("check: same_key={} same_time={} would_block={}", same_key, same_time, (same_key && same_time));
-
     if (same_key && same_time)
     {
-        LWM_LOG_TRACE("BLOCKED (auto-repeat detected)");
+        LWM_LOG_TRACE("Key repeat suppressed: keysym={:#x} time={}", keysym, time);
         return true;
     }
 
@@ -648,16 +653,20 @@ void WindowManager::handle_key_press(xcb_key_press_event_t const& e)
 {
     xcb_keysym_t keysym = xcb_key_press_lookup_keysym(conn_.keysyms(), const_cast<xcb_key_press_event_t*>(&e), 0);
 
-    LWM_LOG_KEY(e.state, keysym);
-
     auto action = keybinds_.resolve(e.state, keysym);
     if (!action)
     {
-        LWM_LOG_TRACE("No action for keysym");
+        LWM_LOG_TRACE("Key unbound: keysym={:#x} modifiers={:#x}", keysym, e.state);
         return;
     }
 
-    LWM_LOG_DEBUG("Action: {}", key_action_event_name(*action));
+    LWM_LOG_TRACE(
+        "Key action: action={} keysym={:#x} modifiers={:#x} window={:#x}",
+        key_action_event_name(*action),
+        keysym,
+        e.state,
+        active_window_
+    );
 
     bool handled = std::visit(
         Overloaded{
@@ -757,7 +766,7 @@ void WindowManager::handle_key_press(xcb_key_press_event_t const& e)
             },
             [&](SpawnAction const& spawn)
             {
-                launch_program(spawn.command);
+                launch_program(spawn.command, "keybind");
                 return true;
             },
             [&](SwitchWorkspaceAction const& switch_workspace_action)
@@ -804,13 +813,10 @@ void WindowManager::handle_key_release(xcb_key_release_event_t const& e)
 {
     xcb_keysym_t keysym = xcb_key_press_lookup_keysym(conn_.keysyms(), const_cast<xcb_key_release_event_t*>(&e), 0);
 
-    LWM_LOG_TRACE("KeyRelease: keysym={:#x} time={} last_toggle_keysym={:#x}", keysym, e.time, last_toggle_keysym_);
-
     // Record timestamp for auto-repeat detection.
     // X11 auto-repeat sends KeyRelease-KeyPress pairs with identical timestamps.
     if (keysym == last_toggle_keysym_)
     {
-        LWM_LOG_TRACE("KeyRelease matches toggle key, recording time={}", e.time);
         last_toggle_release_time_ = e.time;
     }
 }
@@ -1009,7 +1015,7 @@ void WindowManager::handle_active_window_request(xcb_client_message_event_t cons
     {
         if (timestamp == 0)
         {
-            LWM_LOG_DEBUG("Focus stealing prevented, timestamp missing");
+            LWM_LOG_DEBUG("Activation rejected: window={:#x} reason=missing-timestamp", window);
             deny_with_attention();
             return;
         }
@@ -1018,7 +1024,7 @@ void WindowManager::handle_active_window_request(xcb_client_message_event_t cons
         if (active_client && active_client->user_time != 0
             && ewmh_policy::timestamp_is_before(timestamp, active_client->user_time))
         {
-            LWM_LOG_DEBUG("Focus stealing prevented, setting demands attention");
+            LWM_LOG_DEBUG("Activation rejected: window={:#x} reason=stale-timestamp; requesting attention", window);
             deny_with_attention();
             return;
         }
@@ -1502,6 +1508,7 @@ void WindowManager::handle_timeouts()
     {
         if (it->second <= now)
         {
+            LWM_LOG_WARN("Close timed out: window={:#x}; killing client connection", it->first);
             xcb_kill_client(conn_.get(), it->first);
             it = pending_kills_.erase(it);
         }

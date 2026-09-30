@@ -129,8 +129,9 @@ std::expected<void, std::string> initialize(LogOptions config)
         logger = Frontend::create_or_get_logger(
             "lwm",
             sink,
-            quill::PatternFormatterOptions{
-                config.target == Target::Journal ? "%(message)" : "%(log_level) [%(short_source_location)] %(message)" }
+            quill::PatternFormatterOptions{ config.target == Target::Journal
+                                                ? "%(message)"
+                                                : "%(time) %(log_level) [%(short_source_location)] %(message)" }
         );
         logger->set_log_level(config.level);
         return { };

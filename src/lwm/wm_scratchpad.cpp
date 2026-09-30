@@ -76,7 +76,7 @@ void WindowManager::toggle_named_scratchpad(std::string_view name)
             return;
         }
         LWM_LOG_DEBUG("Scratchpad '{}': launching", name);
-        if (launch_program(config->spawn))
+        if (launch_program(config->spawn, "scratchpad"))
             state_.scratchpad_pending(name);
         return;
     }
