@@ -1,4 +1,4 @@
-#include "x11_test_harness.hpp"
+#include "wm_observations.hpp"
 #include <algorithm>
 #include <catch2/catch_test_macros.hpp>
 #include <chrono>
@@ -14,42 +14,6 @@ using namespace lwm::test;
 namespace {
 
 constexpr auto kTimeout = std::chrono::seconds(2);
-
-std::vector<xcb_atom_t> get_window_property_atoms(xcb_connection_t* conn, xcb_window_t window, xcb_atom_t atom)
-{
-    auto cookie = xcb_get_property(conn, 0, window, atom, XCB_ATOM_ATOM, 0, 64);
-    auto* reply = xcb_get_property_reply(conn, cookie, nullptr);
-    if (!reply)
-        return {};
-
-    std::vector<xcb_atom_t> result;
-    auto* atoms = static_cast<xcb_atom_t*>(xcb_get_property_value(reply));
-    int len = xcb_get_property_value_length(reply) / 4;
-    result.assign(atoms, atoms + len);
-    free(reply);
-    return result;
-}
-
-std::vector<xcb_window_t> get_window_property_windows(xcb_connection_t* conn, xcb_window_t window, xcb_atom_t atom)
-{
-    auto cookie = xcb_get_property(conn, 0, window, atom, XCB_ATOM_WINDOW, 0, 64);
-    auto* reply = xcb_get_property_reply(conn, cookie, nullptr);
-    if (!reply)
-        return {};
-
-    std::vector<xcb_window_t> result;
-    auto* windows = static_cast<xcb_window_t*>(xcb_get_property_value(reply));
-    int len = xcb_get_property_value_length(reply) / 4;
-    result.assign(windows, windows + len);
-    free(reply);
-    return result;
-}
-
-bool property_has_atom(xcb_connection_t* conn, xcb_window_t window, xcb_atom_t property, xcb_atom_t atom)
-{
-    auto atoms = get_window_property_atoms(conn, window, property);
-    return std::ranges::find(atoms, atom) != atoms.end();
-}
 
 struct WindowGeometry
 {
@@ -755,16 +719,14 @@ TEST_CASE(
         &updated_user_time
     );
     xcb_flush(conn.get());
-    REQUIRE(wait_for_condition(
-        [&]()
-        {
-            send_client_message(conn, w2, net_active_window, 1, 2500, 0, 0, 0);
-            send_client_message(conn, w1, net_active_window, 1, 1500, 0, 0, 0);
-            return is_active_window(conn, w2)
-                && property_has_atom(conn.get(), w1, net_wm_state, net_wm_state_demands_attention);
-        },
-        kTimeout
-    ));
+    observe_title_after_events(conn, w2);
+    send_client_message(conn, w1, net_active_window, 1, 1500, 0, 0, 0);
+    // Attention is an observable consequence of rejection, not a preexisting state.
+    REQUIRE(wait_for_condition([&] { return has_state(conn, w1, net_wm_state_demands_attention); }, kTimeout));
+    REQUIRE(wait_for_active_window(conn, w2, kTimeout));
+    send_client_message(conn, w1, net_active_window, 1, 2500, 0, 0, 0);
+    REQUIRE(wait_for_active_window(conn, w1, kTimeout));
+    REQUIRE_FALSE(has_state(conn, w1, net_wm_state_demands_attention));
 
     destroy_window(conn, w2);
     destroy_window(conn, w1);
@@ -834,6 +796,7 @@ TEST_CASE(
     ));
 
     set_wm_initial_state_and_urgency(conn, window, XCB_ICCCM_WM_STATE_NORMAL);
+    observe_title_after_events(conn, window);
     REQUIRE(wait_for_condition(
         [&]()
         {

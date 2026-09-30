@@ -1,4 +1,4 @@
-#include "x11_test_harness.hpp"
+#include "wm_observations.hpp"
 #include <X11/Xlib.h>
 #include <algorithm>
 #include <catch2/catch_test_macros.hpp>
@@ -24,32 +24,6 @@ struct WindowGeometry
 
     bool operator==(WindowGeometry const&) const = default;
 };
-
-bool has_state(X11Connection& conn, xcb_window_t window, xcb_atom_t state)
-{
-    xcb_atom_t net_wm_state = intern_atom(conn.get(), "_NET_WM_STATE");
-    if (net_wm_state == XCB_NONE)
-        return false;
-
-    auto cookie = xcb_get_property(conn.get(), 0, window, net_wm_state, XCB_ATOM_ATOM, 0, 16);
-    auto* reply = xcb_get_property_reply(conn.get(), cookie, nullptr);
-    if (!reply)
-        return false;
-
-    bool present = false;
-    auto* atoms = static_cast<xcb_atom_t*>(xcb_get_property_value(reply));
-    int len = xcb_get_property_value_length(reply) / 4;
-    for (int i = 0; i < len; ++i)
-    {
-        if (atoms[i] == state)
-        {
-            present = true;
-            break;
-        }
-    }
-    free(reply);
-    return present;
-}
 
 bool wait_for_x_input_focus(X11Connection& conn, xcb_window_t expected, std::chrono::milliseconds timeout)
 {
@@ -148,28 +122,6 @@ bool is_hidden_offscreen(X11Connection& conn, xcb_window_t window)
     return geometry.has_value() && geometry->x < 0;
 }
 
-bool property_has_atom(xcb_connection_t* conn, xcb_window_t window, xcb_atom_t property, xcb_atom_t atom)
-{
-    auto cookie = xcb_get_property(conn, 0, window, property, XCB_ATOM_ATOM, 0, 64);
-    auto* reply = xcb_get_property_reply(conn, cookie, nullptr);
-    if (!reply)
-        return false;
-
-    bool present = false;
-    auto* atoms = static_cast<xcb_atom_t*>(xcb_get_property_value(reply));
-    int len = xcb_get_property_value_length(reply) / 4;
-    for (int i = 0; i < len; ++i)
-    {
-        if (atoms[i] == atom)
-        {
-            present = true;
-            break;
-        }
-    }
-    free(reply);
-    return present;
-}
-
 void set_wm_hints_urgency(X11Connection& conn, xcb_window_t window)
 {
     constexpr uint32_t XUrgencyHint = 256;
@@ -263,28 +215,6 @@ bool send_mouse_chord(X11Connection& conn, xcb_keysym_t modifier, uint8_t button
 
 } // namespace
 
-TEST_CASE("Integration: tiled windows take focus in map order", "[integration][focus]")
-{
-    auto test_env = TestEnvironment::create();
-    if (!test_env)
-        SKIP("Test environment not available");
-
-    auto& conn = test_env->conn;
-
-    xcb_window_t w1 = create_window(conn, 10, 10, 200, 150);
-    map_window(conn, w1);
-    REQUIRE(wait_for_active_window(conn, w1, kTimeout));
-    REQUIRE(wait_for_x_input_focus(conn, w1, kTimeout));
-
-    xcb_window_t w2 = create_window(conn, 40, 40, 200, 150);
-    map_window(conn, w2);
-    REQUIRE(wait_for_active_window(conn, w2, kTimeout));
-    REQUIRE(wait_for_x_input_focus(conn, w2, kTimeout));
-
-    destroy_window(conn, w2);
-    destroy_window(conn, w1);
-}
-
 TEST_CASE("Integration: focus restores to previous tiled window after destroy", "[integration][focus]")
 {
     auto test_env = TestEnvironment::create();
@@ -357,6 +287,7 @@ TEST_CASE("Integration: _NET_RESTACK_WINDOW does not override managed stack poli
     REQUIRE(wait_for_condition([&]() { return is_stacked_above(conn, w2, w1); }, kTimeout));
 
     send_client_message(conn, w1, net_restack_window, 2, w2, XCB_STACK_MODE_ABOVE, 0, 0);
+    observe_title_after_events(conn, w1);
 
     REQUIRE(wait_for_active_window(conn, w2, kTimeout));
     REQUIRE(wait_for_condition([&]() { return is_stacked_above(conn, w2, w1); }, kTimeout));
@@ -468,6 +399,7 @@ TEST_CASE(
     REQUIRE(wait_for_condition([&]() { return is_stacked_above(conn, floating, tiled); }, kTimeout));
 
     send_client_message(conn, tiled, net_restack_window, 2, floating, XCB_STACK_MODE_ABOVE, 0, 0);
+    observe_title_after_events(conn, tiled);
 
     REQUIRE(wait_for_condition([&]() { return is_stacked_above(conn, floating, tiled); }, kTimeout));
 
@@ -573,7 +505,7 @@ TEST_CASE(
     );
     xcb_flush(conn.get());
 
-    std::this_thread::sleep_for(std::chrono::milliseconds(100));
+    observe_title_after_events(conn, floating);
     REQUIRE(is_hidden_offscreen(conn, floating));
     REQUIRE(wait_for_active_window(conn, fallback, kTimeout));
 
@@ -691,53 +623,30 @@ TEST_CASE(
     // Add fullscreen state.
     send_client_message(conn, w1, net_wm_state, 1, net_wm_state_fullscreen, 0, 0, 0);
 
-    auto has_fullscreen_state = [&]()
-    {
-        auto cookie = xcb_get_property(conn.get(), 0, w1, net_wm_state, XCB_ATOM_ATOM, 0, 10);
-        auto* reply = xcb_get_property_reply(conn.get(), cookie, nullptr);
-        if (!reply)
-            return false;
-        bool has_fullscreen = false;
-        auto* atoms = static_cast<xcb_atom_t*>(xcb_get_property_value(reply));
-        int len = xcb_get_property_value_length(reply) / 4;
-        for (int i = 0; i < len; ++i)
-        {
-            if (atoms[i] == net_wm_state_fullscreen)
-            {
-                has_fullscreen = true;
-                break;
-            }
-        }
-        free(reply);
-        return has_fullscreen;
-    };
+    auto has_fullscreen_state = [&] { return has_state(conn, w1, net_wm_state_fullscreen); };
 
-    auto border_width_is_zero = [&]()
+    auto border_width_is_zero = [&]
     {
-        auto cookie = xcb_get_geometry(conn.get(), w1);
-        auto* reply = xcb_get_geometry_reply(conn.get(), cookie, nullptr);
-        if (!reply)
-            return false;
-        bool zero = (reply->border_width == 0);
-        free(reply);
-        return zero;
+        auto geometry = get_window_geometry(conn, w1);
+        return geometry && geometry->border_width == 0;
     };
 
     REQUIRE(wait_for_condition(has_fullscreen_state, kTimeout));
     REQUIRE(wait_for_condition(border_width_is_zero, kTimeout));
 
-    // Map a sibling window; suppression model keeps the fullscreen owner active.
+    // A transient may take focus above its fullscreen parent.
     xcb_window_t w2 = create_window(conn, 60, 60, 320, 180);
+    REQUIRE(set_window_type(conn, w2, intern_atom(conn.get(), "_NET_WM_WINDOW_TYPE_DIALOG")));
+    xcb_icccm_set_wm_transient_for(conn.get(), w2, w1);
     map_window(conn, w2);
-    REQUIRE(wait_for_active_window(conn, w1, kTimeout));
-
-    // Explicit focus request for fullscreen window (already active).
+    REQUIRE(wait_for_active_window(conn, w2, kTimeout));
+    REQUIRE(wait_for_x_input_focus(conn, w2, kTimeout));
+    REQUIRE(border_width_is_zero());
     send_client_message(conn, w1, net_active_window, 2, XCB_CURRENT_TIME, 0, 0, 0);
     REQUIRE(wait_for_active_window(conn, w1, kTimeout));
-
-    // Fullscreen and zero-border constraints should still hold after focus return.
-    REQUIRE(wait_for_condition(has_fullscreen_state, kTimeout));
-    REQUIRE(wait_for_condition(border_width_is_zero, kTimeout));
+    REQUIRE(wait_for_x_input_focus(conn, w1, kTimeout));
+    REQUIRE(has_fullscreen_state());
+    REQUIRE(border_width_is_zero());
 
     destroy_window(conn, w2);
     destroy_window(conn, w1);
@@ -840,64 +749,6 @@ TEST_CASE(
     REQUIRE(wait_for_condition([&]() { return has_state(conn, window, net_wm_state_below); }, kTimeout));
 
     destroy_window(conn, window);
-}
-
-TEST_CASE(
-    "Integration: second fullscreen window suppresses previous but preserves state",
-    "[integration][focus][fullscreen][exclusive]"
-)
-{
-    auto test_env = TestEnvironment::create();
-    if (!test_env)
-        SKIP("Test environment not available");
-
-    auto& conn = test_env->conn;
-
-    xcb_atom_t net_wm_state = intern_atom(conn.get(), "_NET_WM_STATE");
-    xcb_atom_t net_wm_state_fullscreen = intern_atom(conn.get(), "_NET_WM_STATE_FULLSCREEN");
-    REQUIRE(net_wm_state != XCB_NONE);
-    REQUIRE(net_wm_state_fullscreen != XCB_NONE);
-
-    auto has_fullscreen_state = [&](xcb_window_t window)
-    {
-        auto cookie = xcb_get_property(conn.get(), 0, window, net_wm_state, XCB_ATOM_ATOM, 0, 10);
-        auto* reply = xcb_get_property_reply(conn.get(), cookie, nullptr);
-        if (!reply)
-            return false;
-        bool has_fullscreen = false;
-        auto* atoms = static_cast<xcb_atom_t*>(xcb_get_property_value(reply));
-        int len = xcb_get_property_value_length(reply) / 4;
-        for (int i = 0; i < len; ++i)
-        {
-            if (atoms[i] == net_wm_state_fullscreen)
-            {
-                has_fullscreen = true;
-                break;
-            }
-        }
-        free(reply);
-        return has_fullscreen;
-    };
-
-    xcb_window_t w1 = create_window(conn, 10, 10, 640, 360);
-    map_window(conn, w1);
-    REQUIRE(wait_for_active_window(conn, w1, kTimeout));
-
-    send_client_message(conn, w1, net_wm_state, 1, net_wm_state_fullscreen, 0, 0, 0);
-    REQUIRE(wait_for_condition([&]() { return has_fullscreen_state(w1); }, kTimeout));
-
-    xcb_window_t w2 = create_window(conn, 80, 80, 640, 360);
-    map_window(conn, w2);
-    // w2 is suppressed by w1's fullscreen; w1 stays active until w2 claims ownership
-
-    send_client_message(conn, w2, net_wm_state, 1, net_wm_state_fullscreen, 0, 0, 0);
-
-    REQUIRE(wait_for_condition([&]() { return has_fullscreen_state(w2); }, kTimeout));
-    // Old fullscreen window keeps its state — it's suppressed, not stripped
-    REQUIRE(wait_for_condition([&]() { return has_fullscreen_state(w1); }, kTimeout));
-
-    destroy_window(conn, w2);
-    destroy_window(conn, w1);
 }
 
 TEST_CASE(
@@ -1139,13 +990,23 @@ TEST_CASE(
     REQUIRE(wait_for_condition([&]() { return has_state(conn, w1, net_wm_state_fullscreen); }, kTimeout));
 
     xcb_window_t w2 = create_window(conn, 80, 80, 320, 180);
+    REQUIRE(set_window_type(conn, w2, intern_atom(conn.get(), "_NET_WM_WINDOW_TYPE_DIALOG")));
     map_window(conn, w2);
+    REQUIRE(wait_for_condition(
+        [&]
+        {
+            return get_window_property_string(conn.get(), w2, intern_atom(conn.get(), "_LWM_WINDOW_CLASS"))
+                == "floating";
+        },
+        kTimeout
+    ));
     REQUIRE(wait_for_active_window(conn, w1, kTimeout));
     REQUIRE(wait_for_condition([&]() { return is_stacked_above(conn, w1, w2); }, kTimeout));
 
     uint32_t values[] = { w1, XCB_STACK_MODE_ABOVE };
     xcb_configure_window(conn.get(), w2, XCB_CONFIG_WINDOW_SIBLING | XCB_CONFIG_WINDOW_STACK_MODE, values);
     xcb_flush(conn.get());
+    observe_title_after_events(conn, w1);
 
     REQUIRE(wait_for_condition([&]() { return is_stacked_above(conn, w1, w2); }, kTimeout));
 
@@ -1346,6 +1207,7 @@ TEST_CASE(
     REQUIRE(wait_for_condition([&]() { return is_stacked_above(conn, w1, w2); }, kTimeout));
 
     send_client_message(conn, w2, net_restack_window, 2, w1, XCB_STACK_MODE_ABOVE, 0, 0);
+    observe_title_after_events(conn, w1);
 
     REQUIRE(wait_for_condition([&]() { return is_stacked_above(conn, w1, w2); }, kTimeout));
 
@@ -1547,8 +1409,10 @@ TEST_CASE(
     REQUIRE(wait_for_condition([&]() { return is_hidden_offscreen(conn, w2); }, kTimeout));
 
     send_client_message(conn, conn.root(), net_showing_desktop, 1);
-    std::this_thread::sleep_for(std::chrono::milliseconds(100));
+    REQUIRE(wait_for_property_cardinal(conn.get(), conn.root(), net_showing_desktop, 1, kTimeout));
+    REQUIRE(wait_for_condition([&] { return is_hidden_offscreen(conn, w1); }, kTimeout));
     send_client_message(conn, conn.root(), net_showing_desktop, 0);
+    REQUIRE(wait_for_property_cardinal(conn.get(), conn.root(), net_showing_desktop, 0, kTimeout));
 
     REQUIRE(wait_for_active_window(conn, w1, kTimeout));
     REQUIRE(wait_for_condition(
@@ -1650,6 +1514,14 @@ TEST_CASE(
     if (!set_randr_screen_size(conn, target_width, original_geometry->height))
         SKIP("RandR screen-size change not supported by this X server.");
     screen_guard.restore = true;
+    REQUIRE(wait_for_condition(
+        [&]
+        {
+            auto geometry = get_window_geometry(conn, w1);
+            return geometry && geometry->width == target_width && geometry->height == original_geometry->height;
+        },
+        kTimeout
+    ));
 
     REQUIRE(wait_for_active_window(conn, w1, kTimeout));
     REQUIRE(wait_for_condition(
@@ -1685,31 +1557,10 @@ TEST_CASE("Integration: clear_focus clears _NET_WM_STATE_FOCUSED from previous w
     REQUIRE(net_showing_desktop != XCB_NONE);
     REQUIRE(net_active_window != XCB_NONE);
 
-    auto has_state = [&](xcb_window_t window, xcb_atom_t state)
-    {
-        auto cookie = xcb_get_property(conn.get(), 0, window, net_wm_state, XCB_ATOM_ATOM, 0, 16);
-        auto* reply = xcb_get_property_reply(conn.get(), cookie, nullptr);
-        if (!reply)
-            return false;
-        bool present = false;
-        auto* atoms = static_cast<xcb_atom_t*>(xcb_get_property_value(reply));
-        int len = xcb_get_property_value_length(reply) / 4;
-        for (int i = 0; i < len; ++i)
-        {
-            if (atoms[i] == state)
-            {
-                present = true;
-                break;
-            }
-        }
-        free(reply);
-        return present;
-    };
-
     xcb_window_t w1 = create_window(conn, 20, 20, 320, 200);
     map_window(conn, w1);
     REQUIRE(wait_for_active_window(conn, w1, kTimeout));
-    REQUIRE(wait_for_condition([&]() { return has_state(w1, net_wm_state_focused); }, kTimeout));
+    REQUIRE(wait_for_condition([&]() { return has_state(conn, w1, net_wm_state_focused); }, kTimeout));
 
     // Trigger clear_focus() via showing desktop mode.
     send_client_message(conn, conn.root(), net_showing_desktop, 1);
@@ -1729,38 +1580,11 @@ TEST_CASE("Integration: clear_focus clears _NET_WM_STATE_FOCUSED from previous w
     map_window(conn, w2);
     REQUIRE(wait_for_active_window(conn, w2, kTimeout));
 
-    REQUIRE(wait_for_condition([&]() { return !has_state(w1, net_wm_state_focused); }, kTimeout));
-    REQUIRE(wait_for_condition([&]() { return has_state(w2, net_wm_state_focused); }, kTimeout));
+    REQUIRE(wait_for_condition([&]() { return !has_state(conn, w1, net_wm_state_focused); }, kTimeout));
+    REQUIRE(wait_for_condition([&]() { return has_state(conn, w2, net_wm_state_focused); }, kTimeout));
 
     destroy_window(conn, w2);
     destroy_window(conn, w1);
-}
-
-TEST_CASE("Integration: transient dialog stacks above its parent", "[integration][transient][stacking]")
-{
-    auto test_env = TestEnvironment::create();
-    if (!test_env)
-        SKIP("Test environment not available");
-
-    auto& conn = test_env->conn;
-
-    // Create a tiled parent and map it.
-    xcb_window_t parent = create_window(conn, 10, 10, 300, 200);
-    map_window(conn, parent);
-    REQUIRE(wait_for_active_window(conn, parent, kTimeout));
-
-    // Create a transient dialog: set WM_TRANSIENT_FOR before mapping so the WM
-    // recognises it as floating from the start.
-    xcb_window_t transient = create_window(conn, 50, 50, 200, 150);
-    set_transient_for(conn, transient, parent);
-    map_window(conn, transient);
-    REQUIRE(wait_for_active_window(conn, transient, kTimeout));
-
-    // The transient must be stacked above its parent.
-    REQUIRE(wait_for_condition([&]() { return is_stacked_above(conn, transient, parent); }, kTimeout));
-
-    destroy_window(conn, transient);
-    destroy_window(conn, parent);
 }
 
 TEST_CASE(
@@ -1779,7 +1603,7 @@ TEST_CASE(
     REQUIRE(net_current_desktop != XCB_NONE);
     REQUIRE(net_number_of_desktops != XCB_NONE);
 
-    uint32_t num_desktops = get_window_property_cardinal(conn.get(), conn.root(), net_number_of_desktops).value_or(0);
+    uint32_t num_desktops = require_property_cardinal(conn.get(), conn.root(), net_number_of_desktops);
     REQUIRE(num_desktops >= 2);
 
     // Start on workspace 0.

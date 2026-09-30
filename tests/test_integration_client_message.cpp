@@ -1,4 +1,4 @@
-#include "x11_test_harness.hpp"
+#include "wm_observations.hpp"
 #include <catch2/catch_test_macros.hpp>
 #include <chrono>
 #include <optional>
@@ -8,32 +8,6 @@ using namespace lwm::test;
 namespace {
 
 constexpr auto kTimeout = std::chrono::seconds(2);
-
-bool has_state(X11Connection& conn, xcb_window_t window, xcb_atom_t state)
-{
-    xcb_atom_t net_wm_state = intern_atom(conn.get(), "_NET_WM_STATE");
-    if (net_wm_state == XCB_NONE)
-        return false;
-
-    auto cookie = xcb_get_property(conn.get(), 0, window, net_wm_state, XCB_ATOM_ATOM, 0, 16);
-    auto* reply = xcb_get_property_reply(conn.get(), cookie, nullptr);
-    if (!reply)
-        return false;
-
-    bool present = false;
-    auto* atoms = static_cast<xcb_atom_t*>(xcb_get_property_value(reply));
-    int len = xcb_get_property_value_length(reply) / 4;
-    for (int i = 0; i < len; ++i)
-    {
-        if (atoms[i] == state)
-        {
-            present = true;
-            break;
-        }
-    }
-    free(reply);
-    return present;
-}
 
 } // namespace
 
@@ -84,11 +58,11 @@ TEST_CASE(
     REQUIRE(net_number_of_desktops != XCB_NONE);
 
     // Verify initial state (workspace 0)
-    uint32_t num_desktops = get_window_property_cardinal(conn.get(), conn.root(), net_number_of_desktops).value_or(0);
+    uint32_t num_desktops = require_property_cardinal(conn.get(), conn.root(), net_number_of_desktops);
     REQUIRE(num_desktops == 2);
 
-    uint32_t w1_desktop = get_window_property_cardinal(conn.get(), w1, net_wm_desktop).value_or(0);
-    uint32_t w2_desktop = get_window_property_cardinal(conn.get(), w2, net_wm_desktop).value_or(0);
+    uint32_t w1_desktop = require_property_cardinal(conn.get(), w1, net_wm_desktop);
+    uint32_t w2_desktop = require_property_cardinal(conn.get(), w2, net_wm_desktop);
     REQUIRE(w1_desktop == 0);
     REQUIRE(w2_desktop == 0);
 
@@ -97,7 +71,7 @@ TEST_CASE(
 
     REQUIRE(wait_for_property_cardinal(conn.get(), w1, net_wm_desktop, 1, kTimeout));
 
-    w2_desktop = get_window_property_cardinal(conn.get(), w2, net_wm_desktop).value_or(0);
+    w2_desktop = require_property_cardinal(conn.get(), w2, net_wm_desktop);
     REQUIRE(w2_desktop == 0);
 
     // Switch to workspace 1 to verify w1 is still there
@@ -139,8 +113,8 @@ TEST_CASE(
     REQUIRE(net_wm_desktop != XCB_NONE);
     REQUIRE(net_number_of_desktops != XCB_NONE);
 
-    uint32_t num_desktops = get_window_property_cardinal(conn.get(), conn.root(), net_number_of_desktops).value_or(0);
-    uint32_t initial_desktop = get_window_property_cardinal(conn.get(), w1, net_wm_desktop).value_or(0);
+    uint32_t num_desktops = require_property_cardinal(conn.get(), conn.root(), net_number_of_desktops);
+    uint32_t initial_desktop = require_property_cardinal(conn.get(), w1, net_wm_desktop);
 
     REQUIRE(num_desktops == 2);
     REQUIRE(initial_desktop == 0);
@@ -148,10 +122,9 @@ TEST_CASE(
     // Try to move to non-existent workspace (desktop 99)
     send_net_wm_desktop(conn, w1, 99);
 
-    // Wait a bit to ensure the message is processed
-    std::this_thread::sleep_for(std::chrono::milliseconds(100));
+    observe_title_after_events(conn, w1);
 
-    uint32_t final_desktop = get_window_property_cardinal(conn.get(), w1, net_wm_desktop).value_or(0);
+    uint32_t final_desktop = require_property_cardinal(conn.get(), w1, net_wm_desktop);
     REQUIRE(final_desktop == initial_desktop);
 
     REQUIRE(wait_for_active_window(conn, w1, kTimeout));
@@ -177,8 +150,7 @@ TEST_CASE("Integration: client message to invalid window ID is ignored", "[integ
     xcb_atom_t net_wm_desktop = intern_atom(conn.get(), "_NET_WM_DESKTOP");
 
     send_net_wm_desktop(conn, 0xDEADBEEF, 1);
-
-    std::this_thread::sleep_for(std::chrono::milliseconds(100));
+    observe_title_after_events(conn, w1);
 
     auto ping = run_lwmctl(wm, { "ping" });
     REQUIRE(ping.has_value());
@@ -259,34 +231,18 @@ TEST_CASE(
     REQUIRE(net_wm_state != XCB_NONE);
     REQUIRE(net_wm_state_sticky != XCB_NONE);
 
-    uint32_t initial_desktop = get_window_property_cardinal(conn.get(), w1, net_wm_desktop).value_or(0);
+    uint32_t initial_desktop = require_property_cardinal(conn.get(), w1, net_wm_desktop);
 
     // Move window to 0xFFFFFFFF to set sticky
     send_net_wm_desktop(conn, w1, 0xFFFFFFFF);
 
-    // Wait a bit for the message to be processed
-    std::this_thread::sleep_for(std::chrono::milliseconds(100));
+    REQUIRE(wait_for_property_cardinal(conn.get(), w1, net_wm_desktop, 0xFFFFFFFF, kTimeout));
 
     // Per EWMH spec, sticky windows have _NET_WM_DESKTOP = 0xFFFFFFFF
-    uint32_t final_desktop = get_window_property_cardinal(conn.get(), w1, net_wm_desktop).value_or(0);
+    uint32_t final_desktop = require_property_cardinal(conn.get(), w1, net_wm_desktop);
     REQUIRE(final_desktop == 0xFFFFFFFF);
 
-    // Window should have sticky state set
-    auto cookie = xcb_get_property(conn.get(), 0, w1, net_wm_state, XCB_ATOM_ATOM, 0, 10);
-    auto* reply = xcb_get_property_reply(conn.get(), cookie, nullptr);
-    if (reply)
-    {
-        bool has_sticky = false;
-        xcb_atom_t* atoms = static_cast<xcb_atom_t*>(xcb_get_property_value(reply));
-        int len = xcb_get_property_value_length(reply) / 4;
-        for (int i = 0; i < len; i++)
-        {
-            if (atoms[i] == net_wm_state_sticky)
-                has_sticky = true;
-        }
-        free(reply);
-        REQUIRE(has_sticky);
-    }
+    REQUIRE(has_state(conn, w1, net_wm_state_sticky));
 
     destroy_window(conn, w1);
 }
@@ -316,8 +272,8 @@ TEST_CASE(
     REQUIRE(wait_for_condition([&]() { return has_state(conn, window, net_wm_state_sticky); }, kTimeout));
 
     send_net_wm_desktop(conn, window, 99);
-    std::this_thread::sleep_for(std::chrono::milliseconds(100));
-    REQUIRE(get_window_property_cardinal(conn.get(), window, net_wm_desktop).value_or(0) == 0xFFFFFFFF);
+    observe_title_after_events(conn, window);
+    REQUIRE(require_property_cardinal(conn.get(), window, net_wm_desktop) == 0xFFFFFFFF);
     REQUIRE(has_state(conn, window, net_wm_state_sticky));
 
     destroy_window(conn, window);
@@ -344,27 +300,6 @@ TEST_CASE(
     REQUIRE(net_wm_user_time_window != XCB_NONE);
     REQUIRE(net_wm_state != XCB_NONE);
     REQUIRE(net_wm_state_demands_attention != XCB_NONE);
-
-    auto has_state = [&](xcb_window_t window, xcb_atom_t state)
-    {
-        auto cookie = xcb_get_property(conn.get(), 0, window, net_wm_state, XCB_ATOM_ATOM, 0, 16);
-        auto* reply = xcb_get_property_reply(conn.get(), cookie, nullptr);
-        if (!reply)
-            return false;
-        bool present = false;
-        auto* atoms = static_cast<xcb_atom_t*>(xcb_get_property_value(reply));
-        int len = xcb_get_property_value_length(reply) / 4;
-        for (int i = 0; i < len; ++i)
-        {
-            if (atoms[i] == state)
-            {
-                present = true;
-                break;
-            }
-        }
-        free(reply);
-        return present;
-    };
 
     xcb_window_t w1 = create_window(conn, 10, 10, 220, 160);
     map_window(conn, w1);
@@ -415,16 +350,14 @@ TEST_CASE(
     xcb_flush(conn.get());
 
     // Application request with stale timestamp should be denied once the WM has observed the helper update.
-    REQUIRE(wait_for_condition(
-        [&]()
-        {
-            send_client_message(conn, w2, net_active_window, 1, 2500, 0, 0, 0);
-            send_client_message(conn, w1, net_active_window, 1, 1500, 0, 0, 0);
-            auto active = get_window_property_window(conn.get(), conn.root(), net_active_window);
-            return active && *active == w2 && has_state(w1, net_wm_state_demands_attention);
-        },
-        kTimeout
-    ));
+    observe_title_after_events(conn, w2);
+    send_client_message(conn, w1, net_active_window, 1, 1500, 0, 0, 0);
+    // Attention is an observable consequence of rejection, not a preexisting state.
+    REQUIRE(wait_for_condition([&] { return has_state(conn, w1, net_wm_state_demands_attention); }, kTimeout));
+    REQUIRE(wait_for_active_window(conn, w2, kTimeout));
+    send_client_message(conn, w1, net_active_window, 1, 2500, 0, 0, 0);
+    REQUIRE(wait_for_active_window(conn, w1, kTimeout));
+    REQUIRE_FALSE(has_state(conn, w1, net_wm_state_demands_attention));
 
     destroy_window(conn, w2);
     destroy_window(conn, w1);

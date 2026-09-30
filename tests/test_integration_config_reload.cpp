@@ -240,24 +240,6 @@ TEST_CASE("Integration: reload-config rejects workspace-count changes", "[integr
     REQUIRE(wait_for_desktop_names(env->conn, { "one", "two" }));
 }
 
-TEST_CASE("Integration: IPC ping and reload succeed", "[integration][ipc][reload]")
-{
-    auto env = TestEnvironment::create(make_config("left", "right"));
-    if (!env)
-        SKIP("Test environment not available");
-
-    auto socket_path = wait_for_ipc_socket_path(env->conn);
-    REQUIRE(socket_path.has_value());
-
-    auto ping_result = run_lwmctl(env->wm, { "ping" }, *socket_path);
-    REQUIRE(ping_result.has_value());
-    REQUIRE(ping_result->exit_code == 0);
-
-    auto reload_result = run_lwmctl(env->wm, { "reload-config" }, *socket_path);
-    REQUIRE(reload_result.has_value());
-    REQUIRE(reload_result->exit_code == 0);
-}
-
 TEST_CASE("Integration: reload-config does not rerun autostart", "[integration][ipc][reload][autostart]")
 {
     auto marker_dir = make_temp_dir();

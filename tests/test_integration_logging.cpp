@@ -84,9 +84,23 @@ TEST_CASE("Integration: standard logging survives failed exec and real restart",
         std::chrono::seconds(1)
     ));
     REQUIRE(command({ "ping" }).find("pong") != std::string::npos);
-    auto start = std::chrono::steady_clock::now();
-    wm.stop();
-    REQUIRE(std::chrono::steady_clock::now() - start < std::chrono::seconds(1));
+    REQUIRE(wm.running());
+    // ICCCM manager-selection takeover is LWM's orderly shutdown path.
+    auto replacement = create_window(connection, 0, 0, 1, 1);
+    auto selection = intern_atom(connection.get(), "WM_S0");
+    auto owner_cookie = xcb_get_selection_owner(connection.get(), selection);
+    auto* owner = xcb_get_selection_owner_reply(connection.get(), owner_cookie, nullptr);
+    REQUIRE(owner);
+    auto previous_owner = owner->owner;
+    free(owner);
+    REQUIRE(previous_owner != XCB_NONE);
+    REQUIRE(previous_owner != replacement);
+    xcb_set_selection_owner(connection.get(), replacement, selection, XCB_CURRENT_TIME);
+    xcb_flush(connection.get());
+    auto status = wm.wait_for_exit(std::chrono::seconds(1));
+    REQUIRE(status);
+    REQUIRE(WIFEXITED(*status));
+    REQUIRE(WEXITSTATUS(*status) == 0);
 }
 
 TEST_CASE(

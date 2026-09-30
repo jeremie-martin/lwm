@@ -18,22 +18,6 @@ std::optional<lwm::Geometry> geometry(X11Connection& conn, xcb_window_t window)
     return result;
 }
 
-bool has_state(X11Connection& conn, xcb_window_t window, xcb_atom_t atom)
-{
-    auto* reply = xcb_get_property_reply(
-        conn.get(),
-        xcb_get_property(conn.get(), 0, window, intern_atom(conn.get(), "_NET_WM_STATE"), XCB_ATOM_ATOM, 0, 128),
-        nullptr
-    );
-    if (!reply)
-        return false;
-    auto* atoms = static_cast<xcb_atom_t*>(xcb_get_property_value(reply));
-    bool found = std::find(atoms, atoms + xcb_get_property_value_length(reply) / 4, atom)
-        != atoms + xcb_get_property_value_length(reply) / 4;
-    free(reply);
-    return found;
-}
-
 void title(X11Connection& conn, xcb_window_t window, std::string const& value)
 {
     xcb_change_property(

@@ -14,7 +14,7 @@ belongs in [IPC.md](IPC.md).
 | `src/lwm/config/` | strict TOML parsing and built-in defaults |
 | `src/lwm/keybind/` | key binding normalization, grabs, and lookup |
 | `src/lwm/layout/` | pure master-stack and monocle geometry, split ratios, hit testing |
-| `src/lwm/core/log.*` | owned logger, secure rotating sink, process-boundary lifecycle |
+| `src/lwm/core/log.*` | Quill configuration, standard sinks, process-boundary lifecycle |
 | `src/lwm/core/types.hpp` | domain state: clients, monitors, workspaces, geometry |
 | `src/lwm/core/policy.hpp` | pure visibility, focus, workspace, fullscreen, and hotplug decisions |
 | `src/lwm/core/ewmh.*` | EWMH atoms, classification, and property I/O |

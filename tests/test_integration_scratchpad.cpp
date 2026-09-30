@@ -320,28 +320,14 @@ TEST_CASE("Integration: floating scratchpad preserves kind and geometry across r
     REQUIRE(geom_before.has_value());
     REQUIRE(geom_before->x >= 0);
 
-    // Trigger restart via IPC
-    auto restart_result = send_ipc_command(*socket_path, "restart");
-    // The connection may be dropped mid-restart, so don't require a reply
-
-    // Wait for the new WM instance to become ready
-    REQUIRE(wait_for_wm_ready(conn, std::chrono::seconds(5)));
-    std::this_thread::sleep_for(std::chrono::milliseconds(200));
-
-    // After restart: scratchpad should still be floating with the same geometry
-    auto geom_after = get_window_geometry(conn, sp);
-    REQUIRE(geom_after.has_value());
-    CHECK(geom_after->x == geom_before->x);
-    CHECK(geom_after->y == geom_before->y);
-    CHECK(geom_after->width == geom_before->width);
-    CHECK(geom_after->height == geom_before->height);
-
-    // The window should NOT have been moved to a tiled position.
-    // Tiled windows on a 1280x720 Xvfb with 1 workspace fill the full working area
-    // minus padding, so a tiled window's x would be the padding value.
-    // The floating scratchpad should be centered, which is a different x.
-    // As a basic check: the geometry should not have changed at all.
-    REQUIRE(*geom_after == *geom_before);
+    auto previous = supporting_wm_window(conn);
+    REQUIRE(previous);
+    REQUIRE(send_ipc_command(*socket_path, "restart") == "ok restarting");
+    REQUIRE(wait_for_wm_ready(conn, std::chrono::seconds(5), *previous));
+    REQUIRE(wait_for_active_window(conn, sp, kTimeout));
+    REQUIRE(get_window_geometry(conn, sp) == geom_before);
+    auto kind = intern_atom(conn.get(), "_LWM_WINDOW_CLASS");
+    REQUIRE(get_window_property_string(conn.get(), sp, kind) == "floating");
 
     destroy_window(conn, sp);
     destroy_window(conn, tiled);
@@ -610,7 +596,7 @@ TEST_CASE(
     auto env = TestEnvironment::create(R"(
 [[scratchpads]]
 name = "late"
-spawn = { argv = ["/bin/true"] }
+spawn = { shell = 'printf "launch\n" >> "$XDG_RUNTIME_DIR/launches"' }
 match = { class = "LaunchTest" }
 )");
     if (!env)
@@ -618,7 +604,16 @@ match = { class = "LaunchTest" }
     auto socket = wait_for_ipc_socket_path(env->conn);
     REQUIRE(socket);
     REQUIRE(send_ipc_command(*socket, "scratchpad toggle late") == "ok");
+    auto launches = std::filesystem::path(env->wm.runtime_dir()) / "launches";
+    REQUIRE(wait_for_condition([&] { return read_text_file(launches) == "launch\n"; }, kTimeout));
     REQUIRE(send_ipc_command(*socket, "scratchpad toggle late") == "ok");
+    // The acknowledged toggle has returned from spawning. Wait for any child
+    // to finish before counting invocations, so scheduling cannot hide a duplicate.
+    auto children = std::filesystem::path("/proc") / std::to_string(env->wm.pid()) / "task"
+        / std::to_string(env->wm.pid()) / "children";
+    REQUIRE(std::filesystem::exists(children));
+    REQUIRE(wait_for_condition([&] { return read_text_file(children).empty(); }, kTimeout));
+    REQUIRE(read_text_file(launches) == "launch\n");
     auto state = send_ipc_command(*socket, "scratchpad list");
     REQUIRE(state);
     CHECK(state->find("\"pending\":true") != std::string::npos);

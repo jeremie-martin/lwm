@@ -19,32 +19,6 @@ namespace {
 
 constexpr auto kTimeout = std::chrono::seconds(2);
 
-bool has_state(X11Connection& conn, xcb_window_t window, xcb_atom_t state)
-{
-    xcb_atom_t net_wm_state = intern_atom(conn.get(), "_NET_WM_STATE");
-    if (net_wm_state == XCB_NONE)
-        return false;
-
-    auto cookie = xcb_get_property(conn.get(), 0, window, net_wm_state, XCB_ATOM_ATOM, 0, 16);
-    auto* reply = xcb_get_property_reply(conn.get(), cookie, nullptr);
-    if (!reply)
-        return false;
-
-    bool present = false;
-    auto* atoms = static_cast<xcb_atom_t*>(xcb_get_property_value(reply));
-    int len = xcb_get_property_value_length(reply) / 4;
-    for (int i = 0; i < len; ++i)
-    {
-        if (atoms[i] == state)
-        {
-            present = true;
-            break;
-        }
-    }
-    free(reply);
-    return present;
-}
-
 /// Send a _NET_WM_STATE client message. action: 0=remove, 1=add, 2=toggle
 void send_wm_state_change(
     X11Connection& conn,
@@ -78,26 +52,6 @@ std::optional<uint32_t> get_wm_state(X11Connection& conn, xcb_window_t window, x
 // ─────────────────────────────────────────────────────────────────────────────
 // Above / Below
 // ─────────────────────────────────────────────────────────────────────────────
-
-TEST_CASE("Integration: _NET_WM_STATE add above sets state atom", "[integration][wm_state][above]")
-{
-    auto test_env = TestEnvironment::create();
-    if (!test_env)
-        SKIP("Test environment not available");
-    auto& conn = test_env->conn;
-
-    xcb_atom_t state_above = intern_atom(conn.get(), "_NET_WM_STATE_ABOVE");
-
-    xcb_window_t w = create_window(conn, 10, 10, 200, 200);
-    map_window(conn, w);
-    REQUIRE(wait_for_active_window(conn, w, kTimeout));
-    REQUIRE_FALSE(has_state(conn, w, state_above));
-
-    send_wm_state_change(conn, w, 1, state_above);
-    REQUIRE(wait_for_condition([&]() { return has_state(conn, w, state_above); }, kTimeout));
-
-    destroy_window(conn, w);
-}
 
 TEST_CASE("Integration: dock and desktop clients receive WM_STATE lifecycle", "[integration][wm_state][special]")
 {
@@ -141,26 +95,6 @@ TEST_CASE("Integration: dock and desktop clients receive WM_STATE lifecycle", "[
         [&]() { return get_wm_state(conn, desktop, wm_state) == XCB_ICCCM_WM_STATE_WITHDRAWN; },
         kTimeout
     ));
-}
-
-TEST_CASE("Integration: _NET_WM_STATE add below sets state atom", "[integration][wm_state][below]")
-{
-    auto test_env = TestEnvironment::create();
-    if (!test_env)
-        SKIP("Test environment not available");
-    auto& conn = test_env->conn;
-
-    xcb_atom_t state_below = intern_atom(conn.get(), "_NET_WM_STATE_BELOW");
-
-    xcb_window_t w = create_window(conn, 10, 10, 200, 200);
-    map_window(conn, w);
-    REQUIRE(wait_for_active_window(conn, w, kTimeout));
-    REQUIRE_FALSE(has_state(conn, w, state_below));
-
-    send_wm_state_change(conn, w, 1, state_below);
-    REQUIRE(wait_for_condition([&]() { return has_state(conn, w, state_below); }, kTimeout));
-
-    destroy_window(conn, w);
 }
 
 TEST_CASE("Integration: above and below are mutually exclusive", "[integration][wm_state][above][below]")

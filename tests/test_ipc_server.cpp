@@ -1,4 +1,5 @@
 #include "lwm/core/ipc_server.hpp"
+#include "test_resources.hpp"
 #include <algorithm>
 #include <catch2/catch_test_macros.hpp>
 #include <cerrno>
@@ -15,15 +16,10 @@ using lwm::ipc::Server;
 namespace {
 struct Peer
 {
-    int fd = -1;
-    ~Peer()
-    {
-        if (fd >= 0)
-            close(fd);
-    }
+    lwm::test::TestFd connection{ socket(AF_UNIX, SOCK_STREAM | SOCK_CLOEXEC | SOCK_NONBLOCK, 0) };
+    int fd = connection.fd;
     explicit Peer(std::string const& path)
     {
-        fd = socket(AF_UNIX, SOCK_STREAM | SOCK_CLOEXEC | SOCK_NONBLOCK, 0);
         REQUIRE(fd >= 0);
         sockaddr_un address{};
         address.sun_family = AF_UNIX;

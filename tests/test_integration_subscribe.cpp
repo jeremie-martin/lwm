@@ -19,7 +19,7 @@ struct CliSubscriber
     std::unique_ptr<FILE, int (*)(FILE*)> errors{ tmpfile(), fclose };
     pid_t pid = -1;
 
-    explicit CliSubscriber(LwmProcess const& wm)
+    explicit CliSubscriber(std::string const& socket)
     {
         REQUIRE(errors);
         REQUIRE(fcntl(fileno(errors.get()), F_SETFD, FD_CLOEXEC) == 0);
@@ -36,9 +36,15 @@ struct CliSubscriber
                 _exit(126);
             output.reset();
             writer.reset();
-            setenv("DISPLAY", wm.display().c_str(), 1);
-            setenv("XDG_RUNTIME_DIR", wm.runtime_dir().c_str(), 1);
-            execl(executable.c_str(), executable.c_str(), "subscribe", "window_map", nullptr);
+            execl(
+                executable.c_str(),
+                executable.c_str(),
+                "--socket",
+                socket.c_str(),
+                "subscribe",
+                "window_map",
+                nullptr
+            );
             _exit(127);
         }
     }
@@ -136,7 +142,9 @@ TEST_CASE("Integration: lwmctl subscribe exits when stdout consumer closes", "[i
     if (!env)
         SKIP("X11 unavailable");
     auto& conn = env->conn;
-    CliSubscriber child(env->wm);
+    auto socket = wait_for_ipc_socket_path(conn);
+    REQUIRE(socket);
+    CliSubscriber child(*socket);
 
     // The CLI intentionally hides the acknowledgement. Generate real events
     // until one is delivered, rather than guessing when it has subscribed.

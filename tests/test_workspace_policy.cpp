@@ -277,19 +277,20 @@ TEST_CASE("remove_tiled_window from empty workspace returns false", "[workspace]
     REQUIRE(ws.focused_window == XCB_NONE);
 }
 
-TEST_CASE("remove_tiled_window removing sole window clears focus", "[workspace][policy]")
+TEST_CASE("remove_tiled_window exhausts membership and remembered focus", "[workspace][policy]")
 {
     Workspace ws;
-    ws.windows = { 0x1000 };
+    ws.windows = { 0x1000, 0x2000 };
     ws.focused_window = 0x1000;
-
+    ws.focus_history = { 0x1000, 0x2000 };
     auto is_iconic = [](xcb_window_t) { return false; };
-
-    bool removed = workspace_policy::remove_tiled_window(ws, 0x1000, is_iconic);
-
-    REQUIRE(removed);
+    REQUIRE(workspace_policy::remove_tiled_window(ws, 0x1000, is_iconic));
+    REQUIRE(ws.windows == std::vector<xcb_window_t>{ 0x2000 });
+    REQUIRE(ws.focused_window == 0x2000);
+    REQUIRE(workspace_policy::remove_tiled_window(ws, 0x2000, is_iconic));
     REQUIRE(ws.windows.empty());
     REQUIRE(ws.focused_window == XCB_NONE);
+    REQUIRE(ws.focus_history.empty());
 }
 
 TEST_CASE("remove_tiled_window picks last non-iconic via reverse iteration", "[workspace][policy]")

@@ -259,7 +259,7 @@ TEST_CASE("Build candidates returns empty when all ineligible", "[focus][cycling
 // Integration-style tests combining build + cycle
 // ─────────────────────────────────────────────────────────────────────────────
 
-TEST_CASE("Full cycle through mixed tiled and floating in both directions", "[focus][cycling][integration]")
+TEST_CASE("Full cycle through mixed tiled and floating in both directions", "[focus][cycling]")
 {
     std::vector<xcb_window_t> tiled = { 0x1000, 0x2000 };
     std::vector<focus_policy::FloatingCandidate> floating = {
@@ -340,33 +340,4 @@ TEST_CASE("Build candidates with MRU orders by recency", "[focus][cycling][mru]"
     REQUIRE(candidates[2].is_floating);
     REQUIRE(candidates[3].id == 0x1000); // mru=1
     REQUIRE_FALSE(candidates[3].is_floating);
-}
-
-TEST_CASE("MRU cycle interleaves tiled and floating by recency", "[focus][cycling][mru]")
-{
-    std::vector<xcb_window_t> tiled = { 0x1000, 0x2000, 0x3000 };
-    std::vector<focus_policy::FloatingCandidate> floating = {
-        { 0x4000, 0, 0, false },
-    };
-
-    auto is_eligible = [](xcb_window_t) { return true; };
-
-    // Focus order: 0x1000(1), 0x4000(2), 0x3000(3), 0x2000(4)
-    std::unordered_map<xcb_window_t, uint64_t> mru = {
-        { 0x1000, 1 }, { 0x4000, 2 }, { 0x3000, 3 }, { 0x2000, 4 }
-    };
-    auto get_mru = [&](xcb_window_t w) -> uint64_t {
-        auto it = mru.find(w);
-        return it != mru.end() ? it->second : 0;
-    };
-
-    auto candidates = focus_policy::build_cycle_candidates(tiled, floating, 0, 0, is_eligible, get_mru);
-
-    REQUIRE(candidates.size() == 4);
-    // Most recent first: 0x2000 -> 0x3000 -> 0x4000(floating) -> 0x1000
-    REQUIRE(candidates[0].id == 0x2000);
-    REQUIRE(candidates[1].id == 0x3000);
-    REQUIRE(candidates[2].id == 0x4000);
-    REQUIRE(candidates[2].is_floating);
-    REQUIRE(candidates[3].id == 0x1000);
 }

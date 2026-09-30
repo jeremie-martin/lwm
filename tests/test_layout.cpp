@@ -110,7 +110,9 @@ TEST_CASE("Large layouts have distinct resizable splits beyond the old path limi
 TEST_CASE("Tiny workareas preserve nonzero window sizes", "[layout]")
 {
     Fixture f;
-    for (auto g : f.layout.arrange(40, { 0, 0, 1, 1 }, LayoutStrategy::MasterStack, {}))
+    auto slots = f.layout.arrange(40, { 0, 0, 1, 1 }, LayoutStrategy::MasterStack, { });
+    REQUIRE(slots.size() == 40);
+    for (auto g : slots)
     {
         CHECK(g.width >= 1);
         CHECK(g.height >= 1);
@@ -136,6 +138,7 @@ TEST_CASE("Extreme padding and dock struts saturate instead of wrapping", "[layo
     f.appearance.padding = 65535;
     f.appearance.border_width = 65535;
     auto slots = f.layout.arrange(3, { 100, 100, 1000, 1000 }, LayoutStrategy::MasterStack, {});
+    REQUIRE(slots.size() == 3);
     for (auto g : slots)
     {
         CHECK(g.x == 32767);

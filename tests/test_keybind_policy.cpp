@@ -28,29 +28,9 @@ KeybindConfig make_spawn_bind(std::string mod, std::string key, std::string comm
     return keybind;
 }
 
-KeybindConfig
-make_action_bind(std::string mod, std::string key, std::string action, int workspace = -1, int direction = 0)
+KeybindConfig make_action_bind(std::string mod, std::string key, Action action)
 {
-    KeybindConfig keybind;
-    keybind.mod = std::move(mod);
-    keybind.key = std::move(key);
-    if (action == "kill")
-        keybind.action = KillAction{};
-    else if (action == "switch_workspace")
-        keybind.action = SwitchWorkspaceAction{ static_cast<size_t>(workspace) };
-    else if (action == "move_to_workspace")
-        keybind.action = MoveToWorkspaceAction{ static_cast<size_t>(workspace) };
-    else if (action == "focus_monitor")
-        keybind.action = FocusMonitorAction{ direction };
-    else if (action == "move_to_monitor")
-        keybind.action = MoveToMonitorAction{ direction };
-    else if (action == "toggle_fullscreen")
-        keybind.action = ToggleFullscreenAction{};
-    else if (action == "focus_next")
-        keybind.action = FocusNextAction{};
-    else if (action == "focus_prev")
-        keybind.action = FocusPrevAction{};
-    return keybind;
+    return { std::move(mod), std::move(key), std::move(action) };
 }
 
 template <typename T> T const* action_as(Action const& action) { return std::get_if<T>(&action); }
@@ -98,79 +78,40 @@ std::unique_ptr<Connection> make_connection()
 // Modifier parsing tests (no X11 needed)
 // ─────────────────────────────────────────────────────────────────────────────
 
-TEST_CASE("KeybindManager::parse_modifier handles single modifiers", "[keybind]")
+TEST_CASE("KeybindManager parses modifier names, combinations and malformed input", "[keybind]")
 {
-    REQUIRE(KeybindManager::parse_modifier("super") == XCB_MOD_MASK_4);
-    REQUIRE(KeybindManager::parse_modifier("shift") == XCB_MOD_MASK_SHIFT);
-    REQUIRE(KeybindManager::parse_modifier("ctrl") == XCB_MOD_MASK_CONTROL);
-    REQUIRE(KeybindManager::parse_modifier("control") == XCB_MOD_MASK_CONTROL);
-    REQUIRE(KeybindManager::parse_modifier("alt") == XCB_MOD_MASK_1);
+    for (auto const& [text, expected] : std::vector<std::pair<std::string, uint16_t>>{
+             {                "super",                                                                XCB_MOD_MASK_4 },
+             {                "shift",                                                            XCB_MOD_MASK_SHIFT },
+             {                 "ctrl",                                                          XCB_MOD_MASK_CONTROL },
+             {              "control",                                                          XCB_MOD_MASK_CONTROL },
+             {                  "alt",                                                                XCB_MOD_MASK_1 },
+             {          "super+shift",                                         (XCB_MOD_MASK_4 | XCB_MOD_MASK_SHIFT) },
+             {           "super+ctrl",                                       (XCB_MOD_MASK_4 | XCB_MOD_MASK_CONTROL) },
+             {            "super+alt",                                             (XCB_MOD_MASK_4 | XCB_MOD_MASK_1) },
+             {           "shift+ctrl",                                   (XCB_MOD_MASK_SHIFT | XCB_MOD_MASK_CONTROL) },
+             {             "ctrl+alt",                                       (XCB_MOD_MASK_CONTROL | XCB_MOD_MASK_1) },
+             {     "super+shift+ctrl",                  (XCB_MOD_MASK_4 | XCB_MOD_MASK_SHIFT | XCB_MOD_MASK_CONTROL) },
+             {      "super+shift+alt",                        (XCB_MOD_MASK_4 | XCB_MOD_MASK_SHIFT | XCB_MOD_MASK_1) },
+             {       "super+ctrl+alt",                      (XCB_MOD_MASK_4 | XCB_MOD_MASK_CONTROL | XCB_MOD_MASK_1) },
+             {       "shift+ctrl+alt",                  (XCB_MOD_MASK_SHIFT | XCB_MOD_MASK_CONTROL | XCB_MOD_MASK_1) },
+             { "super+shift+ctrl+alt", (XCB_MOD_MASK_4 | XCB_MOD_MASK_SHIFT | XCB_MOD_MASK_CONTROL | XCB_MOD_MASK_1) },
+             {              "unknown",                                                                             0 },
+             {        "super+unknown",                                                                XCB_MOD_MASK_4 },
+             {                     "",                                                                             0 },
+             {     "shift+super+ctrl",                  (XCB_MOD_MASK_4 | XCB_MOD_MASK_SHIFT | XCB_MOD_MASK_CONTROL) },
+             {     "ctrl+shift+super",                  (XCB_MOD_MASK_4 | XCB_MOD_MASK_SHIFT | XCB_MOD_MASK_CONTROL) },
+             {               "super+",                                                                XCB_MOD_MASK_4 },
+             {         "super+shift+",                                         (XCB_MOD_MASK_4 | XCB_MOD_MASK_SHIFT) },
+             {                    "+",                                                                             0 },
+             {                   "++",                                                                             0 },
+             {                  "+++",                                                                             0 },
+    })
+    {
+        CAPTURE(text);
+        CHECK(KeybindManager::parse_modifier(text) == expected);
+    }
 }
-
-TEST_CASE("KeybindManager::parse_modifier handles combined modifiers", "[keybind]")
-{
-    REQUIRE(KeybindManager::parse_modifier("super+shift") == (XCB_MOD_MASK_4 | XCB_MOD_MASK_SHIFT));
-    REQUIRE(KeybindManager::parse_modifier("super+ctrl") == (XCB_MOD_MASK_4 | XCB_MOD_MASK_CONTROL));
-    REQUIRE(KeybindManager::parse_modifier("super+alt") == (XCB_MOD_MASK_4 | XCB_MOD_MASK_1));
-    REQUIRE(KeybindManager::parse_modifier("shift+ctrl") == (XCB_MOD_MASK_SHIFT | XCB_MOD_MASK_CONTROL));
-    REQUIRE(KeybindManager::parse_modifier("ctrl+alt") == (XCB_MOD_MASK_CONTROL | XCB_MOD_MASK_1));
-}
-
-TEST_CASE("KeybindManager::parse_modifier handles triple modifiers", "[keybind]")
-{
-    REQUIRE(
-        KeybindManager::parse_modifier("super+shift+ctrl")
-        == (XCB_MOD_MASK_4 | XCB_MOD_MASK_SHIFT | XCB_MOD_MASK_CONTROL)
-    );
-    REQUIRE(
-        KeybindManager::parse_modifier("super+shift+alt") == (XCB_MOD_MASK_4 | XCB_MOD_MASK_SHIFT | XCB_MOD_MASK_1)
-    );
-    REQUIRE(
-        KeybindManager::parse_modifier("super+ctrl+alt") == (XCB_MOD_MASK_4 | XCB_MOD_MASK_CONTROL | XCB_MOD_MASK_1)
-    );
-    REQUIRE(
-        KeybindManager::parse_modifier("shift+ctrl+alt") == (XCB_MOD_MASK_SHIFT | XCB_MOD_MASK_CONTROL | XCB_MOD_MASK_1)
-    );
-}
-
-TEST_CASE("KeybindManager::parse_modifier handles all four modifiers", "[keybind]")
-{
-    REQUIRE(
-        KeybindManager::parse_modifier("super+shift+ctrl+alt")
-        == (XCB_MOD_MASK_4 | XCB_MOD_MASK_SHIFT | XCB_MOD_MASK_CONTROL | XCB_MOD_MASK_1)
-    );
-}
-
-TEST_CASE("KeybindManager::parse_modifier handles unknown modifiers gracefully", "[keybind]")
-{
-    REQUIRE(KeybindManager::parse_modifier("unknown") == 0);
-    REQUIRE(KeybindManager::parse_modifier("super+unknown") == XCB_MOD_MASK_4);
-    REQUIRE(KeybindManager::parse_modifier("") == 0);
-}
-
-TEST_CASE("KeybindManager::parse_modifier is order-independent", "[keybind]")
-{
-    uint16_t expected = XCB_MOD_MASK_4 | XCB_MOD_MASK_SHIFT | XCB_MOD_MASK_CONTROL;
-    REQUIRE(KeybindManager::parse_modifier("super+shift+ctrl") == expected);
-    REQUIRE(KeybindManager::parse_modifier("shift+super+ctrl") == expected);
-    REQUIRE(KeybindManager::parse_modifier("ctrl+shift+super") == expected);
-}
-
-TEST_CASE("KeybindManager::parse_modifier handles malformed modifier strings", "[keybind][edge]")
-{
-    // Trailing plus sign - ignored
-    REQUIRE(KeybindManager::parse_modifier("super+") == XCB_MOD_MASK_4);
-    REQUIRE(KeybindManager::parse_modifier("super+shift+") == (XCB_MOD_MASK_4 | XCB_MOD_MASK_SHIFT));
-
-    // Only plus signs - returns 0 (no valid modifiers)
-    REQUIRE(KeybindManager::parse_modifier("+") == 0);
-    REQUIRE(KeybindManager::parse_modifier("++") == 0);
-    REQUIRE(KeybindManager::parse_modifier("+++") == 0);
-}
-
-// ─────────────────────────────────────────────────────────────────────────────
-// Command payload tests (requires X11)
-// ─────────────────────────────────────────────────────────────────────────────
 
 TEST_CASE("KeybindManager preserves shell command payloads for spawn actions", "[keybind]")
 {
@@ -215,9 +156,9 @@ TEST_CASE("KeybindManager::resolve handles multiple bindings across keys, modifi
     Config cfg = make_empty_config();
     cfg.keybinds.push_back(make_spawn_bind("super", "a", "terminal"));
     cfg.keybinds.push_back(make_spawn_bind("super", "b", "browser"));
-    cfg.keybinds.push_back(make_action_bind("super+shift", "a", "kill"));
-    cfg.keybinds.push_back(make_action_bind("super", "1", "switch_workspace", 0));
-    cfg.keybinds.push_back(make_action_bind("super+shift", "1", "move_to_workspace", 0));
+    cfg.keybinds.push_back(make_action_bind("super+shift", "a", KillAction{ }));
+    cfg.keybinds.push_back(make_action_bind("super", "1", SwitchWorkspaceAction{ 0 }));
+    cfg.keybinds.push_back(make_action_bind("super+shift", "1", MoveToWorkspaceAction{ 0 }));
 
     auto conn = make_connection();
     KeybindManager mgr(*conn, cfg);
@@ -314,35 +255,55 @@ TEST_CASE("KeybindManager handles invalid key names in config", "[keybind]")
     REQUIRE_FALSE(result.has_value());
 }
 
-TEST_CASE("KeybindManager handles all action types", "[keybind]")
+TEST_CASE("KeybindManager resolves configured actions and their payloads", "[keybind]")
 {
     if (!ensure_x11_environment())
         SKIP("X11 environment not available");
 
     Config cfg = make_empty_config();
     cfg.keybinds.push_back(make_spawn_bind("super", "a", "terminal"));
-    cfg.keybinds.push_back(make_action_bind("super", "q", "kill"));
-    cfg.keybinds.push_back(make_action_bind("super", "1", "switch_workspace", 0));
-    cfg.keybinds.push_back(make_action_bind("super+shift", "1", "move_to_workspace", 0));
-    cfg.keybinds.push_back(make_action_bind("super", "Left", "focus_monitor", -1, -1));
-    cfg.keybinds.push_back(make_action_bind("super+shift", "Left", "move_to_monitor", -1, -1));
-    cfg.keybinds.push_back(make_action_bind("super", "f", "toggle_fullscreen"));
-    cfg.keybinds.push_back(make_action_bind("super", "j", "focus_next"));
-    cfg.keybinds.push_back(make_action_bind("super", "k", "focus_prev"));
+    cfg.keybinds.push_back(make_action_bind("super", "q", KillAction{ }));
+    cfg.keybinds.push_back(make_action_bind("super", "1", SwitchWorkspaceAction{ 0 }));
+    cfg.keybinds.push_back(make_action_bind("super+shift", "1", MoveToWorkspaceAction{ 0 }));
+    cfg.keybinds.push_back(make_action_bind("super", "Left", FocusMonitorAction{ -1 }));
+    cfg.keybinds.push_back(make_action_bind("super+shift", "Left", MoveToMonitorAction{ -1 }));
+    cfg.keybinds.push_back(make_action_bind("super", "f", ToggleFullscreenAction{ }));
+    cfg.keybinds.push_back(make_action_bind("super", "j", FocusNextAction{ }));
+    cfg.keybinds.push_back(make_action_bind("super", "k", FocusPrevAction{ }));
 
     auto conn = make_connection();
     KeybindManager mgr(*conn, cfg);
 
     uint16_t super = XCB_MOD_MASK_4;
 
-    REQUIRE(action_as<SpawnAction>(*mgr.resolve(super, XStringToKeysym("a"))) != nullptr);
-    REQUIRE(action_as<KillAction>(*mgr.resolve(super, XStringToKeysym("q"))) != nullptr);
-    REQUIRE(action_as<SwitchWorkspaceAction>(*mgr.resolve(super, XStringToKeysym("1"))) != nullptr);
+    auto spawn = mgr.resolve(super, XStringToKeysym("a"));
+    REQUIRE(spawn);
+    REQUIRE(action_as<SpawnAction>(*spawn) != nullptr);
+    auto resolved_q = mgr.resolve(super, XStringToKeysym("q"));
+    REQUIRE(resolved_q);
+    REQUIRE(action_as<KillAction>(*resolved_q));
+    auto resolved_workspace = mgr.resolve(super, XStringToKeysym("1"));
+    REQUIRE(resolved_workspace);
+    REQUIRE(action_as<SwitchWorkspaceAction>(*resolved_workspace));
     auto left_monitor = mgr.resolve(super, XStringToKeysym("Left"));
     REQUIRE(left_monitor.has_value());
     REQUIRE(action_as<FocusMonitorAction>(*left_monitor) != nullptr);
     REQUIRE(action_as<FocusMonitorAction>(*left_monitor)->direction == -1);
-    REQUIRE(action_as<ToggleFullscreenAction>(*mgr.resolve(super, XStringToKeysym("f"))) != nullptr);
-    REQUIRE(action_as<FocusNextAction>(*mgr.resolve(super, XStringToKeysym("j"))) != nullptr);
-    REQUIRE(action_as<FocusPrevAction>(*mgr.resolve(super, XStringToKeysym("k"))) != nullptr);
+    auto resolved_f = mgr.resolve(super, XStringToKeysym("f"));
+    REQUIRE(resolved_f);
+    REQUIRE(action_as<ToggleFullscreenAction>(*resolved_f));
+    auto resolved_j = mgr.resolve(super, XStringToKeysym("j"));
+    REQUIRE(resolved_j);
+    REQUIRE(action_as<FocusNextAction>(*resolved_j));
+    auto resolved_k = mgr.resolve(super, XStringToKeysym("k"));
+    REQUIRE(resolved_k);
+    REQUIRE(action_as<FocusPrevAction>(*resolved_k));
+    auto move_workspace = mgr.resolve(super | XCB_MOD_MASK_SHIFT, XStringToKeysym("1"));
+    REQUIRE(move_workspace);
+    REQUIRE(action_as<MoveToWorkspaceAction>(*move_workspace));
+    CHECK(action_as<MoveToWorkspaceAction>(*move_workspace)->workspace == 0);
+    auto move_monitor = mgr.resolve(super | XCB_MOD_MASK_SHIFT, XStringToKeysym("Left"));
+    REQUIRE(move_monitor);
+    REQUIRE(action_as<MoveToMonitorAction>(*move_monitor));
+    CHECK(action_as<MoveToMonitorAction>(*move_monitor)->direction == -1);
 }

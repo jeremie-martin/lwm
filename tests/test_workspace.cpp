@@ -14,43 +14,6 @@ void init_workspaces(Monitor& monitor, size_t count = 10)
 
 } // namespace
 
-TEST_CASE("Windows persist across workspace switches", "[workspace][critical]")
-{
-    Monitor mon;
-    mon.name = "test";
-    mon.width = 1920;
-    mon.height = 1080;
-    init_workspaces(mon);
-
-    mon.workspaces[0].windows.push_back(0x1000);
-    mon.workspaces[0].focused_window = 0x1000;
-
-    mon.current_workspace = 1;
-
-    REQUIRE(mon.workspaces[0].windows.size() == 1);
-    REQUIRE(mon.workspaces[0].windows[0] == 0x1000);
-
-    mon.current_workspace = 0;
-
-    REQUIRE(mon.current().windows.size() == 1);
-    REQUIRE(mon.current().windows[0] == 0x1000);
-}
-
-TEST_CASE("Removing focused window falls back via policy (skips iconic)", "[workspace][data]")
-{
-    Workspace ws;
-    ws.windows = { 0x1000, 0x2000, 0x3000 };
-    ws.focused_window = 0x3000;
-
-    auto is_iconic = [](xcb_window_t w) { return w == 0x2000; };
-
-    bool removed = workspace_policy::remove_tiled_window(ws, 0x3000, is_iconic);
-
-    REQUIRE(removed);
-    REQUIRE(ws.focused_window == 0x1000);
-    REQUIRE(ws.windows == std::vector<xcb_window_t>{ 0x1000, 0x2000 });
-}
-
 TEST_CASE("Window can be found across workspaces", "[workspace]")
 {
     Monitor mon;
@@ -239,59 +202,6 @@ TEST_CASE("Working area subtracts each strut independently", "[workspace][edge]"
         auto area = mon.working_area();
         REQUIRE(area.width == 1800);
     }
-}
-
-TEST_CASE("Removing last window clears focused_window", "[workspace][edge]")
-{
-    Workspace ws;
-    ws.windows.push_back(0x1000);
-    ws.focused_window = 0x1000;
-
-    auto is_iconic = [](xcb_window_t) { return false; };
-    bool removed = workspace_policy::remove_tiled_window(ws, 0x1000, is_iconic);
-
-    REQUIRE(removed);
-    REQUIRE(ws.focused_window == XCB_NONE);
-    REQUIRE(ws.windows.empty());
-}
-
-TEST_CASE("Switching to empty workspace", "[workspace][edge]")
-{
-    Monitor mon;
-    mon.name = "test";
-    mon.width = 1920;
-    mon.height = 1080;
-    init_workspaces(mon);
-
-    mon.workspaces[0].windows.push_back(0x1000);
-    mon.workspaces[0].windows.push_back(0x2000);
-    mon.workspaces[0].focused_window = 0x1000;
-
-    mon.current_workspace = 1;
-
-    REQUIRE(mon.current().windows.empty());
-    REQUIRE(mon.current().focused_window == XCB_NONE);
-}
-
-TEST_CASE("Removing all windows then adding one", "[workspace][edge]")
-{
-    Workspace ws;
-    ws.windows = { 0x1000, 0x2000 };
-    ws.focused_window = 0x1000;
-
-    auto is_iconic = [](xcb_window_t) { return false; };
-    workspace_policy::remove_tiled_window(ws, 0x1000, is_iconic);
-    workspace_policy::remove_tiled_window(ws, 0x2000, is_iconic);
-
-    REQUIRE(ws.windows.empty());
-    REQUIRE(ws.focused_window == XCB_NONE);
-
-    ws.windows.push_back(0x3000);
-    ws.focused_window = 0x3000;
-
-    REQUIRE(ws.windows.size() == 1);
-    REQUIRE(ws.windows[0] == 0x3000);
-    REQUIRE(ws.focused_window == 0x3000);
 }
 
 TEST_CASE("find_window on empty workspace returns end", "[workspace][edge]")

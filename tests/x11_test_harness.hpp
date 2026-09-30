@@ -1,5 +1,6 @@
 #pragma once
 
+#include <algorithm>
 #include <array>
 #include <catch2/catch_test_macros.hpp>
 #include <cerrno>
@@ -12,6 +13,7 @@
 #include <fstream>
 #include <functional>
 #include <iterator>
+#include <memory>
 #include <optional>
 #include <string>
 #include <string_view>
@@ -348,6 +350,54 @@ inline xcb_atom_t intern_atom(xcb_connection_t* conn, char const* name)
     return atom;
 }
 
+// Missing properties and failed X requests are different outcomes. Negative
+// assertions must never turn a failed request or a malformed value into absence.
+inline std::optional<std::vector<uint32_t>>
+read_property32(xcb_connection_t* conn, xcb_window_t window, xcb_atom_t atom, xcb_atom_t type)
+{
+    auto cookie = xcb_get_property(conn, 0, window, atom, XCB_GET_PROPERTY_TYPE_ANY, 0, 65536);
+    std::unique_ptr<xcb_get_property_reply_t, decltype(&free)> reply(
+        xcb_get_property_reply(conn, cookie, nullptr),
+        &free
+    );
+    REQUIRE(reply);
+    if (reply->type == XCB_NONE)
+        return std::nullopt;
+    REQUIRE(reply->type == type);
+    REQUIRE(reply->format == 32);
+    REQUIRE(reply->bytes_after == 0);
+    auto count = xcb_get_property_value_length(reply.get()) / 4;
+    auto* values = static_cast<uint32_t*>(xcb_get_property_value(reply.get()));
+    return std::vector<uint32_t>(values, values + count);
+}
+
+inline std::vector<xcb_atom_t> get_window_property_atoms(xcb_connection_t* conn, xcb_window_t window, xcb_atom_t atom)
+{
+    auto values = read_property32(conn, window, atom, XCB_ATOM_ATOM);
+    REQUIRE(values);
+    return *values;
+}
+
+inline std::vector<xcb_window_t>
+get_window_property_windows(xcb_connection_t* conn, xcb_window_t window, xcb_atom_t atom)
+{
+    auto values = read_property32(conn, window, atom, XCB_ATOM_WINDOW);
+    REQUIRE(values);
+    return *values;
+}
+
+inline bool property_has_atom(xcb_connection_t* conn, xcb_window_t window, xcb_atom_t property, xcb_atom_t atom)
+{
+    auto atoms = read_property32(conn, window, property, XCB_ATOM_ATOM);
+    return atoms && std::ranges::find(*atoms, atom) != atoms->end();
+}
+
+inline bool has_state(X11Connection& conn, xcb_window_t window, xcb_atom_t state)
+{
+    return property_has_atom(conn.get(), window, intern_atom(conn.get(), "_NET_WM_STATE"), state);
+}
+
+// Readiness probes may follow a supporting-window ID destroyed during restart.
 inline std::optional<xcb_window_t>
 get_window_property_window(xcb_connection_t* conn, xcb_window_t window, xcb_atom_t atom)
 {
@@ -357,7 +407,7 @@ get_window_property_window(xcb_connection_t* conn, xcb_window_t window, xcb_atom
         return std::nullopt;
 
     std::optional<xcb_window_t> result;
-    if (xcb_get_property_value_length(reply) >= 4)
+    if (reply->type == XCB_ATOM_WINDOW && reply->format == 32 && xcb_get_property_value_length(reply) == 4)
     {
         result = *static_cast<xcb_window_t*>(xcb_get_property_value(reply));
     }
@@ -486,18 +536,18 @@ inline void destroy_window(X11Connection& conn, xcb_window_t window)
 inline std::optional<uint32_t>
 get_window_property_cardinal(xcb_connection_t* conn, xcb_window_t window, xcb_atom_t atom)
 {
-    auto cookie = xcb_get_property(conn, 0, window, atom, XCB_ATOM_CARDINAL, 0, 1);
-    auto* reply = xcb_get_property_reply(conn, cookie, nullptr);
-    if (!reply)
+    auto values = read_property32(conn, window, atom, XCB_ATOM_CARDINAL);
+    if (!values)
         return std::nullopt;
+    REQUIRE(values->size() == 1);
+    return values->front();
+}
 
-    std::optional<uint32_t> result;
-    if (xcb_get_property_value_length(reply) >= 4)
-    {
-        result = *static_cast<uint32_t*>(xcb_get_property_value(reply));
-    }
-    free(reply);
-    return result;
+inline uint32_t require_property_cardinal(xcb_connection_t* conn, xcb_window_t window, xcb_atom_t atom)
+{
+    auto value = get_window_property_cardinal(conn, window, atom);
+    REQUIRE(value);
+    return *value;
 }
 
 inline bool wait_for_property_cardinal(
@@ -522,20 +572,18 @@ inline std::optional<std::string>
 get_window_property_string(xcb_connection_t* conn, xcb_window_t window, xcb_atom_t atom)
 {
     auto cookie = xcb_get_property(conn, 0, window, atom, XCB_GET_PROPERTY_TYPE_ANY, 0, 4096);
-    auto* reply = xcb_get_property_reply(conn, cookie, nullptr);
-    if (!reply)
+    std::unique_ptr<xcb_get_property_reply_t, decltype(&free)> reply(
+        xcb_get_property_reply(conn, cookie, nullptr),
+        &free
+    );
+    REQUIRE(reply);
+    if (reply->type == XCB_NONE)
         return std::nullopt;
-
-    std::optional<std::string> result;
-    int length = xcb_get_property_value_length(reply);
-    if (length > 0)
-    {
-        char const* data = static_cast<char const*>(xcb_get_property_value(reply));
-        result = std::string(data, data + length);
-    }
-
-    free(reply);
-    return result;
+    REQUIRE(reply->format == 8);
+    REQUIRE((reply->type == XCB_ATOM_STRING || reply->type == intern_atom(conn, "UTF8_STRING")));
+    REQUIRE(reply->bytes_after == 0);
+    auto const* data = static_cast<char const*>(xcb_get_property_value(reply.get()));
+    return std::string(data, xcb_get_property_value_length(reply.get()));
 }
 
 inline std::vector<std::string>
@@ -543,7 +591,7 @@ get_window_property_strings(xcb_connection_t* conn, xcb_window_t window, xcb_ato
 {
     auto raw = get_window_property_string(conn, window, atom);
     if (!raw)
-        return {};
+        return { };
 
     std::vector<std::string> result;
     std::string current;
@@ -755,7 +803,8 @@ struct CommandResult
 inline std::optional<CommandResult> run_command(
     std::filesystem::path const& executable,
     std::vector<std::string> const& args,
-    std::vector<std::pair<std::string, std::string>> const& env_overrides = {}
+    std::vector<std::pair<std::string, std::string>> const& env_overrides = { },
+    std::vector<std::string> const& unset_env = { }
 )
 {
     if (!std::filesystem::exists(executable))
@@ -788,6 +837,7 @@ inline std::optional<CommandResult> run_command(
         close(stderr_pipe[0]);
         close(stderr_pipe[1]);
 
+        for (auto const& key : unset_env) unsetenv(key.c_str());
         for (auto const& [key, value] : env_overrides)
         {
             setenv(key.c_str(), value.c_str(), 1);
@@ -999,16 +1049,25 @@ public:
 
     bool write_config(std::string_view content) const { return write_text_file(config_path(), content); }
 
+    std::optional<int> wait_for_exit(std::chrono::milliseconds timeout)
+    {
+        if (pid_ <= 0)
+            return std::nullopt;
+        int status = 0;
+        bool exited = wait_for_condition([&] { return waitpid(pid_, &status, WNOHANG) == pid_; }, timeout);
+        if (!exited)
+            return std::nullopt;
+        pid_ = -1;
+        return status;
+    }
+
     void stop()
     {
         if (pid_ <= 0)
             return;
 
         kill(pid_, SIGTERM);
-        bool exited = wait_for_condition(
-            [this]() { return waitpid(pid_, nullptr, WNOHANG) > 0; },
-            std::chrono::milliseconds(1000)
-        );
+        bool exited = wait_for_exit(std::chrono::milliseconds(1000)).has_value();
         if (!exited)
         {
             kill(pid_, SIGKILL);
@@ -1079,7 +1138,7 @@ run_lwmctl(LwmProcess const& wm, std::vector<std::string> const& args, std::stri
     if (!socket_path.empty())
         env.emplace_back("LWM_SOCKET", std::move(socket_path));
 
-    return run_command(lwmctl_executable_path(), args, env);
+    return run_command(lwmctl_executable_path(), args, env, { "LWM_SOCKET" });
 }
 
 } // namespace lwm::test

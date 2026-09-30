@@ -375,30 +375,6 @@ bool send_key_chord(X11Connection& conn, xcb_keysym_t modifier, xcb_keysym_t key
 
 } // namespace
 
-TEST_CASE("Integration: workspace switch updates _NET_CURRENT_DESKTOP", "[integration][workspace]")
-{
-    auto test_env = TestEnvironment::create("[workspaces]\ncount = 2\n");
-    if (!test_env)
-        SKIP("Test environment not available");
-
-    auto& conn = test_env->conn;
-
-    xcb_atom_t net_current_desktop = intern_atom(conn.get(), "_NET_CURRENT_DESKTOP");
-    xcb_atom_t net_number_of_desktops = intern_atom(conn.get(), "_NET_NUMBER_OF_DESKTOPS");
-    REQUIRE(net_current_desktop != XCB_NONE);
-    REQUIRE(net_number_of_desktops != XCB_NONE);
-
-    uint32_t num_desktops = get_window_property_cardinal(conn.get(), conn.root(), net_number_of_desktops).value_or(0);
-    uint32_t initial_desktop = get_window_property_cardinal(conn.get(), conn.root(), net_current_desktop).value_or(0);
-
-    REQUIRE(num_desktops == 2);
-    REQUIRE(initial_desktop == 0);
-
-    send_client_message(conn, conn.root(), net_current_desktop, 1);
-
-    REQUIRE(wait_for_property_cardinal(conn.get(), conn.root(), net_current_desktop, 1, kTimeout));
-}
-
 TEST_CASE("Integration: workspace switch back and forth", "[integration][workspace]")
 {
     auto test_env = TestEnvironment::create("[workspaces]\ncount = 2\n");
@@ -412,8 +388,9 @@ TEST_CASE("Integration: workspace switch back and forth", "[integration][workspa
     REQUIRE(net_current_desktop != XCB_NONE);
     REQUIRE(net_number_of_desktops != XCB_NONE);
 
-    uint32_t num_desktops = get_window_property_cardinal(conn.get(), conn.root(), net_number_of_desktops).value_or(0);
+    uint32_t num_desktops = require_property_cardinal(conn.get(), conn.root(), net_number_of_desktops);
     REQUIRE(num_desktops == 2);
+    REQUIRE(require_property_cardinal(conn.get(), conn.root(), net_current_desktop) == 0);
 
     send_client_message(conn, conn.root(), net_current_desktop, 1);
     REQUIRE(wait_for_property_cardinal(conn.get(), conn.root(), net_current_desktop, 1, kTimeout));
@@ -437,21 +414,21 @@ TEST_CASE("Integration: windows persist across workspace switches", "[integratio
     REQUIRE(net_wm_desktop != XCB_NONE);
     REQUIRE(net_number_of_desktops != XCB_NONE);
 
-    uint32_t num_desktops = get_window_property_cardinal(conn.get(), conn.root(), net_number_of_desktops).value_or(0);
+    uint32_t num_desktops = require_property_cardinal(conn.get(), conn.root(), net_number_of_desktops);
     REQUIRE(num_desktops == 2);
 
     xcb_window_t w1 = create_window(conn, 10, 10, 200, 150);
     map_window(conn, w1);
     REQUIRE(wait_for_active_window(conn, w1, kTimeout));
 
-    uint32_t initial_desktop = get_window_property_cardinal(conn.get(), conn.root(), net_current_desktop).value_or(0);
-    uint32_t w1_desktop = get_window_property_cardinal(conn.get(), w1, net_wm_desktop).value_or(0);
+    uint32_t initial_desktop = require_property_cardinal(conn.get(), conn.root(), net_current_desktop);
+    uint32_t w1_desktop = require_property_cardinal(conn.get(), w1, net_wm_desktop);
     REQUIRE(w1_desktop == initial_desktop);
 
     send_client_message(conn, conn.root(), net_current_desktop, 1);
     REQUIRE(wait_for_property_cardinal(conn.get(), conn.root(), net_current_desktop, 1, kTimeout));
 
-    w1_desktop = get_window_property_cardinal(conn.get(), w1, net_wm_desktop).value_or(0);
+    w1_desktop = require_property_cardinal(conn.get(), w1, net_wm_desktop);
     REQUIRE(w1_desktop == initial_desktop);
 
     send_client_message(conn, conn.root(), net_current_desktop, initial_desktop);
@@ -483,7 +460,7 @@ TEST_CASE(
     REQUIRE(net_wm_state_fullscreen != XCB_NONE);
     REQUIRE(net_number_of_desktops != XCB_NONE);
 
-    uint32_t num_desktops = get_window_property_cardinal(conn.get(), conn.root(), net_number_of_desktops).value_or(0);
+    uint32_t num_desktops = require_property_cardinal(conn.get(), conn.root(), net_number_of_desktops);
     REQUIRE(num_desktops == 2);
 
     // Create window and make it fullscreen
@@ -517,7 +494,7 @@ TEST_CASE(
     REQUIRE(wait_for_condition(check_fullscreen, kTimeout));
 
     // Get initial desktop
-    uint32_t initial_desktop = get_window_property_cardinal(conn.get(), conn.root(), net_current_desktop).value_or(0);
+    uint32_t initial_desktop = require_property_cardinal(conn.get(), conn.root(), net_current_desktop);
 
     // Switch to workspace 1
     send_client_message(conn, conn.root(), net_current_desktop, 1);
@@ -589,7 +566,7 @@ TEST_CASE(
     REQUIRE(net_wm_state_hidden != XCB_NONE);
     REQUIRE(wm_state != XCB_NONE);
 
-    uint32_t num_desktops = get_window_property_cardinal(conn.get(), conn.root(), net_number_of_desktops).value_or(0);
+    uint32_t num_desktops = require_property_cardinal(conn.get(), conn.root(), net_number_of_desktops);
     REQUIRE(num_desktops >= 2);
 
     xcb_window_t w1 = create_window(conn, 10, 10, 200, 150);

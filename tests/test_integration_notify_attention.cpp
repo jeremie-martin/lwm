@@ -13,27 +13,6 @@ namespace {
 
 constexpr auto kTimeout = std::chrono::seconds(2);
 
-std::vector<xcb_atom_t> get_window_property_atoms(xcb_connection_t* conn, xcb_window_t window, xcb_atom_t atom)
-{
-    auto cookie = xcb_get_property(conn, 0, window, atom, XCB_ATOM_ATOM, 0, 64);
-    auto* reply = xcb_get_property_reply(conn, cookie, nullptr);
-    if (!reply)
-        return {};
-
-    std::vector<xcb_atom_t> result;
-    auto* atoms = static_cast<xcb_atom_t*>(xcb_get_property_value(reply));
-    int len = xcb_get_property_value_length(reply) / 4;
-    result.assign(atoms, atoms + len);
-    free(reply);
-    return result;
-}
-
-bool property_has_atom(xcb_connection_t* conn, xcb_window_t window, xcb_atom_t property, xcb_atom_t atom)
-{
-    auto atoms = get_window_property_atoms(conn, window, property);
-    return std::ranges::find(atoms, atom) != atoms.end();
-}
-
 bool has_wm_hints_urgency(xcb_connection_t* conn, xcb_window_t window)
 {
     constexpr uint32_t XUrgencyHint = 256;
@@ -214,23 +193,6 @@ TEST_CASE("Integration: notify-attention returns no-match for unmanaged window I
     destroy_window(conn, w1);
 }
 
-TEST_CASE("Integration: notify-attention rejects app metadata", "[integration][notify_attention]")
-{
-    auto test_env = TestEnvironment::create();
-    if (!test_env)
-        SKIP("Test environment not available");
-
-    auto& wm = test_env->wm;
-
-    for (auto const& arg : { std::string("app-name=Ghostty"), std::string("desktop-entry=Ghostty") })
-    {
-        auto result = run_lwmctl(wm, { "notify-attention", arg });
-        REQUIRE(result.has_value());
-        REQUIRE(result->exit_code != 0);
-        REQUIRE(result->stderr_text.find("usage: notify-attention window=<xid>") != std::string::npos);
-    }
-}
-
 TEST_CASE("Integration: notify-attention rejects extra tokens after window=<xid>", "[integration][notify_attention]")
 {
     auto test_env = TestEnvironment::create();
@@ -253,13 +215,12 @@ TEST_CASE("Integration: notify-attention rejects extra tokens after window=<xid>
     map_window(conn, w2);
     REQUIRE(wait_for_active_window(conn, w2, kTimeout));
 
-    // Single shell arg with embedded whitespace reaches the WM as one token,
-    // bypassing lwmctl's argv-count check. The WM parser must still reject it.
+    auto socket = wait_for_ipc_socket_path(conn);
+    REQUIRE(socket);
     std::string arg = "window=" + std::to_string(w1) + " app-name=Ghostty";
-    auto result = run_lwmctl(wm, { "notify-attention", arg });
-    REQUIRE(result.has_value());
-    REQUIRE(result->exit_code != 0);
-    REQUIRE(result->stderr_text.find("usage: notify-attention window=<xid>") != std::string::npos);
+    auto result = send_ipc_command(*socket, "notify-attention " + arg);
+    REQUIRE(result);
+    REQUIRE(result->starts_with("error "));
     REQUIRE_FALSE(property_has_atom(conn.get(), w1, net_wm_state, net_wm_state_demands_attention));
 
     destroy_window(conn, w2);

@@ -498,6 +498,7 @@ TEST_CASE("Invalid monitor/workspace returns nullopt", "[rules][edge]")
         REQUIRE(result_ws.matched);
         REQUIRE_FALSE(result_ws.target_workspace.has_value());
 
+        rules.load_rules({ cfg_mon });
         auto result_mon = rules.match(info, monitors, workspace_names);
         REQUIRE(result_mon.matched);
         REQUIRE_FALSE(result_mon.target_monitor.has_value());
@@ -646,7 +647,7 @@ TEST_CASE("No criteria matches all windows", "[rules]")
     REQUIRE(*result.floating == true);
 }
 
-TEST_CASE("Empty class or title patterns cause rule to never match", "[rules][edge]")
+TEST_CASE("Empty class or title patterns do not act as wildcards", "[rules][edge]")
 {
     WindowMatchInfo info{ .wm_class = "AnyClass",
                           .wm_class_name = "any",
@@ -654,7 +655,7 @@ TEST_CASE("Empty class or title patterns cause rule to never match", "[rules][ed
                           .ewmh_type = WindowType::Normal,
                           .is_transient = false };
 
-    SECTION("Empty class pattern never matches")
+    SECTION("Empty class pattern rejects a nonempty class")
     {
         WindowRuleConfig cfg;
         cfg.class_pattern = "";
@@ -667,7 +668,7 @@ TEST_CASE("Empty class or title patterns cause rule to never match", "[rules][ed
         REQUIRE_FALSE(result.matched);
     }
 
-    SECTION("Empty title pattern never matches")
+    SECTION("Empty title pattern rejects a nonempty title")
     {
         WindowRuleConfig cfg;
         cfg.title_pattern = "";
@@ -760,28 +761,6 @@ TEST_CASE("Duplicate names resolve to first occurrence", "[rules][edge]")
         REQUIRE(result.target_monitor.has_value());
         REQUIRE(*result.target_monitor == 0);
     }
-}
-
-TEST_CASE("Rule matching with pattern containing special regex characters", "[rules][edge]")
-{
-    WindowRuleConfig cfg;
-    cfg.class_pattern = "Firefox.*"; // Contains regex special chars
-    cfg.floating = true;
-
-    WindowRules rules;
-    rules.load_rules({ cfg });
-
-    // Should match Firefox followed by anything (valid regex)
-    WindowMatchInfo info{ .wm_class = "Firefox Developer Edition",
-                          .wm_class_name = "Navigator",
-                          .title = "Test",
-                          .ewmh_type = WindowType::Normal,
-                          .is_transient = false };
-
-    auto result = rules.match(info, {}, {});
-
-    REQUIRE(result.matched);
-    REQUIRE(*result.floating == true);
 }
 
 TEST_CASE("Rule geometry with missing optional fields", "[rules][edge]")

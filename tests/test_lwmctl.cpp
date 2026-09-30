@@ -1,3 +1,4 @@
+#include "test_resources.hpp"
 #include "x11_test_harness.hpp"
 #include <catch2/catch_test_macros.hpp>
 #include <sys/socket.h>
@@ -27,32 +28,33 @@ struct ReplyServer
         REQUIRE(created);
         directory = created;
         path = directory + "/ipc.sock";
-        int listener = socket(AF_UNIX, SOCK_STREAM | SOCK_CLOEXEC, 0);
+        TestFd listener_owner{ socket(AF_UNIX, SOCK_STREAM | SOCK_CLOEXEC, 0) };
+        int listener = listener_owner.fd;
         REQUIRE(listener >= 0);
         sockaddr_un address{};
         address.sun_family = AF_UNIX;
         std::strcpy(address.sun_path, path.c_str());
         REQUIRE(bind(listener, reinterpret_cast<sockaddr*>(&address), sizeof(address)) == 0);
         REQUIRE(listen(listener, 1) == 0);
-        std::vector<int> queued;
+        std::vector<TestFd> queued;
         if (backlog_delay_ms)
         {
             // Linux permits backlog + 1 queued connections. Verify saturation before launching the CLI.
             for (int i = 0; i < 3; ++i)
             {
-                int fd = socket(AF_UNIX, SOCK_STREAM | SOCK_NONBLOCK | SOCK_CLOEXEC, 0);
+                TestFd owner{ socket(AF_UNIX, SOCK_STREAM | SOCK_NONBLOCK | SOCK_CLOEXEC, 0) };
+                int fd = owner.fd;
                 REQUIRE(fd >= 0);
                 int result = connect(fd, reinterpret_cast<sockaddr*>(&address), sizeof(address));
                 if (i < 2)
                 {
                     REQUIRE(result == 0);
-                    queued.push_back(fd);
+                    queued.push_back(std::move(owner));
                 }
                 else
                 {
                     CHECK(result == -1);
                     CHECK(errno == EAGAIN);
-                    close(fd);
                 }
             }
         }
@@ -63,9 +65,9 @@ struct ReplyServer
             if (backlog_delay_ms)
             {
                 std::this_thread::sleep_for(std::chrono::milliseconds(backlog_delay_ms));
-                for (int queued_fd : queued)
+                for (auto& queued_fd : queued)
                 {
-                    close(queued_fd);
+                    queued_fd.reset();
                     int accepted = accept(listener, nullptr, nullptr);
                     if (accepted < 0)
                         _exit(5);
@@ -100,8 +102,8 @@ struct ReplyServer
             close(fd);
             _exit(0);
         }
-        for (int fd : queued) close(fd);
-        close(listener);
+        queued.clear();
+        listener_owner.reset();
         REQUIRE(child > 0);
     }
     ~ReplyServer()
@@ -245,5 +247,17 @@ TEST_CASE("lwmctl waits for Unix listener capacity within its connection deadlin
         CHECK(result->stderr_text.find("timed out") != std::string::npos);
         CHECK(elapsed >= std::chrono::milliseconds(100));
         CHECK(elapsed < std::chrono::seconds(1));
+    }
+}
+
+TEST_CASE("lwmctl rejects notification metadata before connecting", "[ipc][lwmctl]")
+{
+    for (auto const& arg : { "app-name=Ghostty", "desktop-entry=Ghostty", "window=123 app-name=Ghostty" })
+    {
+        auto result =
+            run_command(LWMCTL_BINARY_PATH, { "--socket", "/nonexistent/lwm-test.sock", "notify-attention", arg });
+        REQUIRE(result);
+        REQUIRE(result->exit_code == 1);
+        REQUIRE(result->stderr_text.find("usage: notify-attention window=<xid>") != std::string::npos);
     }
 }

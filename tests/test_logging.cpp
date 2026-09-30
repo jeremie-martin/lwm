@@ -1,3 +1,4 @@
+#include "test_resources.hpp"
 #include "cli.hpp"
 #include "log_collector.hpp"
 #include "lwm/core/log.hpp"
@@ -347,12 +348,15 @@ struct ChildProbe
 {
     fs::path directory = make_temp_directory();
     pid_t pid = -1;
-    int reader = -1;
+    lwm::test::TestFd reader_owner;
+    int& reader = reader_owner.fd;
     ChildProbe(std::string const& mode, std::string const& destination, std::string const& socket = "")
     {
-        int output = open((directory / "stdout").c_str(), O_CREAT | O_WRONLY | O_CLOEXEC, 0600);
+        lwm::test::TestFd output_owner{ open((directory / "stdout").c_str(), O_CREAT | O_WRONLY | O_CLOEXEC, 0600) };
+        int output = output_owner.fd;
         REQUIRE(output >= 0);
-        int error;
+        lwm::test::TestFd error_owner;
+        int& error = error_owner.fd;
         if (destination == "full" || destination == "closed")
         {
             int pipefd[2];
@@ -396,8 +400,6 @@ struct ChildProbe
             );
             _exit(127);
         }
-        close(output);
-        close(error);
     }
     ~ChildProbe()
     {
@@ -406,8 +408,6 @@ struct ChildProbe
             kill(pid, SIGKILL);
             waitpid(pid, nullptr, 0);
         }
-        if (reader >= 0)
-            close(reader);
         fs::remove_all(directory);
     }
     std::string output() { return read_text_file(directory / "stdout"); }

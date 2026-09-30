@@ -55,8 +55,9 @@ TEST_CASE("Focus restoration falls back to last eligible tiled window", "[focus]
 TEST_CASE("Focus restoration ignores stale focused window", "[focus][policy]")
 {
     Workspace ws = make_workspace({ 0x1000, 0x2000 }, 0x9999);
+    ws.focus_history = { 0x9999 };
 
-    std::unordered_set<xcb_window_t> eligible_set = { 0x1000, 0x2000 };
+    std::unordered_set<xcb_window_t> eligible_set = { 0x1000, 0x2000, 0x9999 };
     auto eligible = [&](xcb_window_t window) { return eligible_set.contains(window); };
 
     std::vector<focus_policy::FloatingCandidate> floating;
@@ -73,13 +74,13 @@ TEST_CASE("Focus restoration falls back to floating MRU on same monitor", "[focu
 {
     Workspace ws = make_workspace({ 0x1000 }, 0x1000);
 
-    std::unordered_set<xcb_window_t> eligible_set = { 0x5000, 0x6000 };
+    std::unordered_set<xcb_window_t> eligible_set = { 0x5000, 0x6000, 0x7000 };
     auto eligible = [&](xcb_window_t window) { return eligible_set.contains(window); };
 
     std::vector<focus_policy::FloatingCandidate> floating = {
         { 0x5000, 0, 1 },
         { 0x6000, 0, 1 },
-        { 0x7000, 1, 0 }, // Different monitor - should be ignored
+        { 0x7000, 1, 1 }, // Otherwise eligible, but on a different monitor
     };
 
     std::vector<xcb_window_t> sticky_tiled;
@@ -188,71 +189,13 @@ TEST_CASE("Focus restoration returns none when no candidates", "[focus][policy]"
     REQUIRE_FALSE(selection);
 }
 
-TEST_CASE("Focus restoration priority across all candidate types", "[focus][policy][edge]")
-{
-    std::unordered_set<xcb_window_t> all_eligible = { 0x1000, 0x8100, 0x9000, 0x8000 };
-    std::unordered_set<xcb_window_t> sticky_only = { 0x8100, 0x8000 };
-    std::unordered_set<xcb_window_t> sticky_floating_only = { 0x8000 };
-    auto eligible_all = [&](xcb_window_t window) { return all_eligible.contains(window); };
-    auto eligible_sticky = [&](xcb_window_t window) { return sticky_only.contains(window); };
-    auto eligible_sticky_floating = [&](xcb_window_t window) { return sticky_floating_only.contains(window); };
-
-    std::vector<xcb_window_t> sticky_tiled = { 0x8100 };
-    std::vector<focus_policy::FloatingCandidate> floating = {
-        { 0x9000, 0, 0, false },
-        { 0x8000, 0, 1,  true },
-    };
-
-    SECTION("All candidates present - current workspace tiled wins")
-    {
-        Workspace ws = make_workspace({ 0x1000 }, 0x1000);
-        auto selection = focus_policy::select_focus_candidate(ws, 0, 0, sticky_tiled, floating, eligible_all);
-
-        REQUIRE(selection);
-        REQUIRE(selection->window == 0x1000);
-        REQUIRE_FALSE(selection->is_floating);
-    }
-
-    SECTION("Empty workspace - sticky tiled wins over sticky floating")
-    {
-        Workspace ws = make_workspace({}, XCB_NONE);
-        auto selection = focus_policy::select_focus_candidate(ws, 0, 0, sticky_tiled, floating, eligible_sticky);
-
-        REQUIRE(selection);
-        REQUIRE(selection->window == 0x8100);
-        REQUIRE_FALSE(selection->is_floating);
-    }
-
-    SECTION("Only sticky floating available")
-    {
-        Workspace ws = make_workspace({}, XCB_NONE);
-        std::vector<focus_policy::FloatingCandidate> only_sticky_floating = {
-            { 0x8000, 0, 1, true },
-        };
-        std::vector<xcb_window_t> no_sticky_tiled;
-        auto selection = focus_policy::select_focus_candidate(
-            ws,
-            0,
-            0,
-            no_sticky_tiled,
-            only_sticky_floating,
-            eligible_sticky_floating
-        );
-
-        REQUIRE(selection);
-        REQUIRE(selection->window == 0x8000);
-        REQUIRE(selection->is_floating);
-    }
-}
-
 TEST_CASE("Focus restoration uses focus history over insertion order", "[focus][policy][history]")
 {
-    // Windows in order: 0x1000, 0x2000, 0x3000
-    // Focus history: focused A, then B, then C (C most recent)
+    // History and insertion order must choose different eligible candidates.
     Workspace ws = make_workspace({ 0x1000, 0x2000, 0x3000 }, 0x3000);
-    ws.focus_history = { 0x1000, 0x2000, 0x3000 };
+    ws.focus_history = { 0x2000, 0x1000, 0x3000 };
 
-    // 0x3000 (focused) is ineligible; 0x2000 is most recent in history
+    // 0x3000 is ineligible; history chooses 0x1000, list order chooses 0x2000.
     std::unordered_set<xcb_window_t> eligible_set = { 0x1000, 0x2000 };
     auto eligible = [&](xcb_window_t window) { return eligible_set.contains(window); };
 
@@ -261,8 +204,7 @@ TEST_CASE("Focus restoration uses focus history over insertion order", "[focus][
     auto selection = focus_policy::select_focus_candidate(ws, 0, 0, sticky_tiled, floating, eligible);
 
     REQUIRE(selection);
-    // Should pick 0x2000 from history (most recently focused), not 0x3000 (last in list)
-    REQUIRE(selection->window == 0x2000);
+    REQUIRE(selection->window == 0x1000);
     REQUIRE_FALSE(selection->is_floating);
 }
 

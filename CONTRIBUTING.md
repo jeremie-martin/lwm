@@ -62,12 +62,32 @@ tests use real Unix sockets, including partial writes and stalled clients. IPC
 JSON is checked with the test-only nlohmann/json parser, not a local parser or
 production serialization helpers.
 
+For negative X-event assertions, establish that the WM processed the request before
+checking that state stayed unchanged. `observe_title_after_events()` in
+`tests/wm_observations.hpp` writes a unique title on the same X connection and
+observes it in the WM's IPC snapshot. Use it only on managed fixtures whose title
+does not participate in rules. It establishes handling of earlier events on that
+connection, not completion of unrelated asynchronous work. Prefer the actual
+changed outcome for positive assertions; do not issue actions repeatedly inside
+polling predicates. Restart tests must observe a new WM identity before checking
+restored state.
+
+Shared property readers validate X replies and property types. Use optional
+values for legitimately absent properties and require values that are part of
+the contract; a missing property must not silently become zero or an empty list.
+Use `LwmProcess::wait_for_exit()` and inspect the wait status to test normal
+shutdown. `stop()` is best-effort fixture cleanup and may force termination.
+`run_lwmctl()` clears inherited socket overrides before selecting the fixture.
+
 Subscription tests use `Subscriber` in `tests/ipc_subscription.hpp`: it waits
 for the real server acknowledgement and retains coalesced and partial lines.
 Use the actual CLI only when its process or output behavior is the contract.
 Since the CLI hides acknowledgements, establish its readiness by receiving a
 real event; do not assume a fixed sleep means it has subscribed. Test children
-and descriptors must be released even when an assertion fails.
+and descriptors must be released even when an assertion fails. `TestFd` in
+`tests/test_resources.hpp` also protects descriptors acquired during fixture
+construction. CTest enforces a 60-second per-case timeout; direct Catch runs
+(including `make test`) rely on bounded fixture operations.
 
 Set `LWM_TEST_XSERVER=Xephyr` to run the same integration tests in an owned
 nested Xephyr server; `DISPLAY` must point to its parent X server. This does not
@@ -205,6 +225,10 @@ check can hide the missing behavior.
 For restart compatibility, use fixed wire records and independently stated
 expected values, not just an encoder/decoder round trip. Keep actual adoption
 and exec tests: codec tests cannot establish that the WM applies decoded state.
+Require nonempty/cardinality checks before range assertions. Choose policy fixtures
+that distinguish competing outcomes: history order should differ from insertion
+order, and invalid rules must actually be selected. Literal protocol examples
+should check decoded argument values as well as command names.
 For important regressions, check the test against the broken revision or a
 focused, temporary mutation of the relevant behavior. Confirm it fails at the
 intended assertion, then restore production code and run the normal checks.

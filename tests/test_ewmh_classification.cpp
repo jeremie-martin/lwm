@@ -42,15 +42,6 @@ TEST_CASE("Dialog windows float without forcing skip flags", "[ewmh][classificat
     REQUIRE_FALSE(result.skip_pager);
 }
 
-TEST_CASE("Popup types are classified as popup", "[ewmh][classification]")
-{
-    auto result = classify_window_type(WindowType::Tooltip, false);
-
-    REQUIRE(result.kind == WindowClassification::Kind::Popup);
-    REQUIRE(result.skip_taskbar);
-    REQUIRE(result.skip_pager);
-}
-
 TEST_CASE("Menu, Toolbar, and Splash windows float and skip taskbar", "[ewmh][classification]")
 {
     for (auto type : { WindowType::Menu, WindowType::Toolbar, WindowType::Splash })
@@ -66,8 +57,12 @@ TEST_CASE("Menu, Toolbar, and Splash windows float and skip taskbar", "[ewmh][cl
 
 TEST_CASE("All popup-class types are classified as popup", "[ewmh][classification]")
 {
-    for (auto type : { WindowType::DropdownMenu, WindowType::PopupMenu, WindowType::Notification,
-                       WindowType::Combo, WindowType::Dnd })
+    for (auto type : { WindowType::DropdownMenu,
+                       WindowType::PopupMenu,
+                       WindowType::Notification,
+                       WindowType::Combo,
+                       WindowType::Dnd,
+                       WindowType::Tooltip })
     {
         CAPTURE(type);
         auto result = classify_window_type(type, false);

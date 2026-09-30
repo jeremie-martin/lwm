@@ -1,7 +1,9 @@
 #include "lwm/config/config.hpp"
+#include "test_resources.hpp"
 #include <catch2/catch_test_macros.hpp>
 #include <cstdio>
 #include <filesystem>
+#include <memory>
 #include <optional>
 #include <string>
 #include <unistd.h>
@@ -21,14 +23,23 @@ public:
         std::vector<char> buffer(pattern.begin(), pattern.end());
         buffer.push_back('\0');
 
-        int fd = mkstemps(buffer.data(), 5);
-        REQUIRE(fd >= 0);
+        lwm::test::TestFd fd{ mkstemps(buffer.data(), 5) };
+        REQUIRE(fd.fd >= 0);
 
         path_ = buffer.data();
-        FILE* file = fdopen(fd, "w");
-        REQUIRE(file != nullptr);
-        REQUIRE(std::fwrite(contents.data(), 1, contents.size(), file) == contents.size());
-        REQUIRE(std::fclose(file) == 0);
+        try
+        {
+            std::unique_ptr<FILE, decltype(&fclose)> file(fdopen(fd.fd, "w"), &fclose);
+            REQUIRE(file);
+            fd.fd = -1; // fdopen transfers ownership to FILE.
+            REQUIRE(std::fwrite(contents.data(), 1, contents.size(), file.get()) == contents.size());
+            REQUIRE(std::fclose(file.release()) == 0);
+        }
+        catch (...)
+        {
+            unlink(path_.c_str());
+            throw;
+        }
     }
 
     ~TempConfigFile()

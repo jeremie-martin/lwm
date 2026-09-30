@@ -1,52 +1,40 @@
+#include "lwm/core/events.hpp"
 #include "lwm/core/ipc_command.hpp"
 #include <catch2/catch_test_macros.hpp>
 #include <vector>
 
 using namespace lwm::ipc;
-TEST_CASE("IPC command definitions drive CLI encoding and typed wire parsing", "[ipc][command]")
+TEST_CASE("IPC grammar preserves public command spellings and typed arguments", "[ipc][command]")
 {
-    for (auto const& spec : command_specs())
+    // Literal public inputs are independent of the production command inventory.
+    auto check = [](std::vector<std::string> const& argv, std::string const& wire, Command const& expected)
     {
-        CAPTURE(spec.name);
-        std::vector<std::string> args;
-        std::string name(spec.name);
-        size_t start = 0;
-        while (start < name.size())
-        {
-            auto end = name.find(' ', start);
-            args.push_back(name.substr(start, end - start));
-            if (end == name.npos)
-                break;
-            start = end + 1;
-        }
-        switch (spec.argument)
-        {
-            case Argument::None:
-                break;
-            case Argument::Text:
-                args.push_back(spec.id == CommandId::Layout ? "monocle" : "a name with spaces");
-                break;
-            case Argument::Number:
-                args.push_back("+0.25");
-                break;
-            case Argument::Index:
-                args.push_back("2");
-                break;
-            case Argument::Window:
-                args.push_back("window=0x123");
-                break;
-            case Argument::Filter:
-                args.push_back("focus_change");
-                args.push_back("state_change");
-                break;
-        }
-        auto encoded = encode_command(args);
-        REQUIRE(encoded);
-        auto decoded = parse_command(*encoded);
+        CAPTURE(wire);
+        REQUIRE(encode_command(argv) == wire);
+        auto decoded = parse_command(wire);
         REQUIRE(decoded);
-        CHECK(decoded->id == spec.id);
-    }
+        CHECK(decoded->id == expected.id);
+        CHECK(decoded->argument == expected.argument);
+    };
+    check({ "ping" }, "ping", { CommandId::Ping, { } });
+    check({ "exec", "/tmp/a wm" }, "exec /tmp/a wm", { CommandId::Exec, std::string("/tmp/a wm") });
+    check({ "layout", "set", "monocle" }, "layout set monocle", { CommandId::Layout, std::string("monocle") });
+    check(
+        { "scratchpad", "toggle", "a name with spaces" },
+        "scratchpad toggle a name with spaces",
+        { CommandId::Toggle, std::string("a name with spaces") }
+    );
+    check({ "ratio", "adjust", "+0.25" }, "ratio adjust +0.25", { CommandId::RatioAdjust, 0.25 });
+    check({ "workspace", "switch", "2" }, "workspace switch 2", { CommandId::WorkspaceSwitch, uint32_t{ 2 } });
+    check({ "focus", "window=0x123" }, "focus window=0x123", { CommandId::FocusWindow, uint32_t{ 291 } });
+    check(
+        { "subscribe", "focus_change", "state_change" },
+        "subscribe focus_change,state_change",
+        { CommandId::Subscribe, uint32_t{ lwm::Event_FocusChange | lwm::Event_StateChange } }
+    );
+    check({ "subscribe" }, "subscribe", { CommandId::Subscribe, uint32_t{ lwm::Event_All } });
 }
+
 TEST_CASE("IPC grammar rejects invalid arguments before execution", "[ipc][command]")
 {
     for (std::string_view command : { "ping extra",

@@ -1,5 +1,6 @@
 #pragma once
 
+#include "test_resources.hpp"
 #include "x11_test_harness.hpp"
 #include <nlohmann/json.hpp>
 
@@ -45,26 +46,10 @@ private:
     std::string pending_;
 };
 
-struct TestFd
-{
-    int fd = -1;
-    explicit TestFd(int value = -1)
-        : fd(value)
-    { }
-    TestFd(TestFd const&) = delete;
-    TestFd& operator=(TestFd const&) = delete;
-    ~TestFd() { reset(); }
-    void reset()
-    {
-        if (fd >= 0)
-            close(std::exchange(fd, -1));
-    }
-};
-
 // A real server acknowledgement establishes readiness, without timing assumptions.
 struct Subscriber
 {
-    TestFd connection{ socket(AF_UNIX, SOCK_STREAM | SOCK_CLOEXEC, 0) };
+    TestFd connection{ socket(AF_UNIX, SOCK_STREAM | SOCK_CLOEXEC | SOCK_NONBLOCK, 0) };
     int fd = connection.fd;
     LineReader reader;
 
