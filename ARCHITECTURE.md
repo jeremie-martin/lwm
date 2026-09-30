@@ -352,7 +352,9 @@ There are separate effect sets for monitor visibility/ownership reconciliation,
 layout changes, and client geometry. Changing a split ratio does not require a
 visibility scan or stacking reconciliation. Pure floating geometry does not
 invalidate unrelated layouts. Membership and visibility changes affect the
-source/destination monitors. `request_*` helpers record output obligations;
+source/destination monitors. Transient-parent changes invalidate the client’s
+monitor even without relocation: the relationship determines whether fullscreen
+suppresses the client. `request_*` helpers record output obligations;
 `publish_*` helpers write them. `queue_event()` constructs JSON only for interested
 subscribers.
 

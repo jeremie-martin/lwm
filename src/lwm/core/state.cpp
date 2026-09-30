@@ -487,9 +487,11 @@ void State::window_type(xcb_window_t id, WindowType type)
 }
 void State::transient(xcb_window_t id, xcb_window_t parent)
 {
-    edit(id).transient_for = parent;
+    auto& client = edit(id);
+    client.transient_for = parent;
     classification(id, true);
-    effects_.stacking = true;
+    // Transients of the fullscreen owner are exempt from suppression.
+    invalidate(client.monitor);
 }
 void State::focus_hints(xcb_window_t id, bool input, bool take_focus)
 {

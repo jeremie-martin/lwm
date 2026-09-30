@@ -36,6 +36,49 @@ void title(X11Connection& conn, xcb_window_t window, std::string const& value)
 }
 
 TEST_CASE(
+    "Integration: transient parent changes reconcile fullscreen visibility",
+    "[integration][transition][property][fullscreen]"
+)
+{
+    bool initially_transient = false;
+    SECTION("Attach a suppressed dialog to the fullscreen owner") { initially_transient = false; }
+    SECTION("Detach a visible dialog from the fullscreen owner") { initially_transient = true; }
+    auto env = TestEnvironment::create();
+    if (!env)
+        SKIP("X11 unavailable");
+    auto& conn = env->conn;
+    auto owner = create_window(conn, 20, 30, 400, 300);
+    map_window(conn, owner);
+    REQUIRE(wait_for_active_window(conn, owner, timeout));
+    auto dialog = create_window(conn, 60, 70, 320, 240);
+    set_window_type(conn, dialog, intern_atom(conn.get(), "_NET_WM_WINDOW_TYPE_DIALOG"));
+    if (initially_transient)
+        xcb_icccm_set_wm_transient_for(conn.get(), dialog, owner);
+    map_window(conn, dialog);
+    REQUIRE(wait_for_active_window(conn, dialog, timeout));
+    auto fullscreen = intern_atom(conn.get(), "_NET_WM_STATE_FULLSCREEN");
+    send_client_message(conn, owner, intern_atom(conn.get(), "_NET_WM_STATE"), 1, fullscreen);
+    REQUIRE(wait_for_condition([&] { return has_state(conn, owner, fullscreen); }, timeout));
+    auto has_visibility = [&](bool visible)
+    {
+        auto rect = geometry(conn, dialog);
+        return rect && rect->width == 320 && rect->height == 240
+            && (visible ? rect->x >= 0 && rect->y >= 0 : rect->x < -10000);
+    };
+    REQUIRE(wait_for_condition([&] { return has_visibility(initially_transient); }, timeout));
+
+    if (initially_transient)
+        xcb_delete_property(conn.get(), dialog, intern_atom(conn.get(), "WM_TRANSIENT_FOR"));
+    else
+        xcb_icccm_set_wm_transient_for(conn.get(), dialog, owner);
+    observe_title_after_events(conn, dialog);
+    REQUIRE(wait_for_condition([&] { return has_visibility(!initially_transient); }, timeout));
+    REQUIRE(has_state(conn, owner, fullscreen));
+    destroy_window(conn, dialog);
+    destroy_window(conn, owner);
+}
+
+TEST_CASE(
     "Integration: reclassifying an unarranged client preserves its initial geometry",
     "[integration][transition][geometry][property]"
 )
