@@ -163,7 +163,7 @@ void WindowManager::manage_fixture(xcb_window_t window, Fixture::Role role, bool
 // Client registration
 // ---------------------------------------------------------------------------
 
-void WindowManager::read_initial_state(Client& client, bool honor_initial_state)
+bool WindowManager::read_initial_state(Client& client, bool honor_initial_state)
 {
     auto* ewmh = ewmh_.get();
     xcb_ewmh_get_atoms_reply_t states;
@@ -201,6 +201,7 @@ void WindowManager::read_initial_state(Client& client, bool honor_initial_state)
     if (client.fullscreen)
         client.maximized_horz = client.maximized_vert = false;
 
+    bool hinted_urgent = false;
     xcb_icccm_wm_hints_t hints;
     if (xcb_icccm_get_wm_hints_reply(conn_.get(), xcb_icccm_get_wm_hints(conn_.get(), client.id), &hints, nullptr))
     {
@@ -209,13 +210,15 @@ void WindowManager::read_initial_state(Client& client, bool honor_initial_state)
         if (honor_initial_state && (hints.flags & XCB_ICCCM_WM_HINT_STATE)
             && hints.initial_state == XCB_ICCCM_WM_STATE_ICONIC)
             client.iconic = true;
-        if (hints.flags & XUrgencyHint)
+        hinted_urgent = (hints.flags & XUrgencyHint) != 0;
+        if (hinted_urgent)
             client.urgency.add(UrgencySource::App);
     }
     client.supports_take_focus = supports_protocol(client.id, atoms_.wm_take_focus);
     client.user_time_window = read_user_time_window(client.id);
     client.user_time = read_user_time(client.id, client.user_time_window);
     client.fullscreen_monitors = read_fullscreen_monitors(client.id);
+    return hinted_urgent;
 }
 
 // A concrete _NET_WM_DESKTOP places the client; a missing or sticky hint means
@@ -230,11 +233,10 @@ Client WindowManager::initial_client(xcb_window_t window, ClassificationResult c
     {
         if (*desktop == 0xFFFFFFFF)
             client.sticky = true;
-        else if (auto indices = ewmh_policy::desktop_to_indices(*desktop, config_.workspaces.count);
-                 indices && indices->first < state_.monitors().size())
+        else if (auto placement =
+                     ewmh_policy::desktop_placement(*desktop, config_.workspaces.count, state_.monitors().size()))
         {
-            client.monitor = indices->first;
-            client.workspace = indices->second;
+            std::tie(client.monitor, client.workspace) = *placement;
             client.desktop_pinned = true;
         }
         else
@@ -268,44 +270,48 @@ Geometry WindowManager::initial_floating_geometry(xcb_window_t window, Classific
         }
         parent_geometry = placement_parent_geometry(initial.transient_for);
     }
-
     auto geometry = read_window_geometry(window).value_or(Geometry{ 0, 0, 300, 200 });
-    std::optional<std::pair<int16_t, int16_t>> position;
-    xcb_size_hints_t hints;
-    if (xcb_icccm_get_wm_normal_hints_reply(conn_.get(), xcb_icccm_get_wm_normal_hints(conn_.get(), window), &hints, nullptr))
-    {
-        // User positions always apply; program positions only for untransient windows.
-        if ((hints.flags & XCB_ICCCM_SIZE_HINT_US_POSITION) || ((hints.flags & XCB_ICCCM_SIZE_HINT_P_POSITION) && !transient))
-            position = { geometry_coordinate(hints.x), geometry_coordinate(hints.y) };
-        if (hints.flags & (XCB_ICCCM_SIZE_HINT_US_SIZE | XCB_ICCCM_SIZE_HINT_P_SIZE))
-        {
-            if (hints.width > 0)
-                geometry.width = geometry_extent(hints.width);
-            if (hints.height > 0)
-                geometry.height = geometry_extent(hints.height);
-        }
-    }
-    geometry.width = std::max<uint16_t>(1, geometry.width);
-    geometry.height = std::max<uint16_t>(1, geometry.height);
+    auto hints = read_size_hints(window, transient);
+    geometry.width = std::max<uint16_t>(1, hints.width.value_or(geometry.width));
+    geometry.height = std::max<uint16_t>(1, hints.height.value_or(geometry.height));
 
     auto const& monitors = state_.monitors();
-    if (position)
+    if (hints.position)
     {
-        Geometry hinted{ position->first, position->second, geometry.width, geometry.height };
-        if (!transient && !candidate.desktop_pinned)
-            if (auto monitor = focus::monitor_index_at_point(
-                    monitors,
-                    static_cast<int32_t>(hinted.x) + hinted.width / 2,
-                    static_cast<int32_t>(hinted.y) + hinted.height / 2
-                ))
+        Geometry hinted{ hints.position->first, hints.position->second, geometry.width, geometry.height };
+        auto target =
+            floating::resolve_position_hint(monitors, candidate.monitor, transient || candidate.desktop_pinned, hinted);
+        if (target.accepted)
+        {
+            if (target.monitor != candidate.monitor)
             {
-                candidate.monitor = *monitor;
-                candidate.workspace = monitors[*monitor].current_workspace;
+                candidate.monitor = target.monitor;
+                candidate.workspace = monitors[target.monitor].current_workspace;
             }
-        if (floating::hint_targets_monitor(monitors[candidate.monitor].geometry(), hinted.x, hinted.y, hinted.width, hinted.height))
             return hinted;
+        }
     }
     return floating::place_floating(monitors[candidate.monitor].working_area(), geometry.width, geometry.height, parent_geometry);
+}
+
+// Position hints of anchored (transient) windows count only when the user supplied them.
+WindowManager::SizeHints WindowManager::read_size_hints(xcb_window_t window, bool anchored) const
+{
+    SizeHints result;
+    xcb_size_hints_t hints;
+    if (!xcb_icccm_get_wm_normal_hints_reply(conn_.get(), xcb_icccm_get_wm_normal_hints(conn_.get(), window), &hints, nullptr))
+        return result;
+    if ((hints.flags & XCB_ICCCM_SIZE_HINT_US_POSITION) || ((hints.flags & XCB_ICCCM_SIZE_HINT_P_POSITION) && !anchored))
+        result.position = { geometry_coordinate(hints.x), geometry_coordinate(hints.y) };
+    // Nonpositive sizes keep the current extent; oversized ones saturate.
+    if (hints.flags & (XCB_ICCCM_SIZE_HINT_US_SIZE | XCB_ICCCM_SIZE_HINT_P_SIZE))
+    {
+        if (hints.width > 0)
+            result.width = geometry_extent(hints.width);
+        if (hints.height > 0)
+            result.height = geometry_extent(hints.height);
+    }
+    return result;
 }
 
 void WindowManager::manage_client(xcb_window_t window, ClassificationResult const& initial, bool start_iconic, bool adopting)
@@ -314,7 +320,7 @@ void WindowManager::manage_client(xcb_window_t window, ClassificationResult cons
     if (std::exchange(workareas_dirty_, false))
         refresh_workareas();
     Client candidate = initial_client(window, initial);
-    read_initial_state(candidate, !adopting);
+    bool hinted_urgent = read_initial_state(candidate, !adopting);
     candidate.iconic |= start_iconic;
 
     auto const* saved = adopting && handoff_ ? handoff_->find(window) : nullptr;
@@ -353,7 +359,10 @@ void WindowManager::manage_client(xcb_window_t window, ClassificationResult cons
     );
     ewmh_.set_frame_extents(window, 0, 0, 0, 0);
     read_sync_counter(window);
-    outputs_[window].mapped = adopting;
+    auto& output = outputs_[window];
+    output.mapped = adopting;
+    // Publication writes WM_HINTS only when urgency differs from what it already says.
+    output.urgent = hinted_urgent;
 
     // The matched rule is remembered either way, so later metadata changes
     // apply rules only when the result changes.
@@ -417,11 +426,12 @@ void WindowManager::apply_rule(xcb_window_t window, RuleActions const& rule)
     {
         auto geometry = rule.geometry.value_or(floating->geometry);
         if (rule.center)
-        {
-            Geometry area = state_.monitors()[client.monitor].working_area();
-            geometry.x = static_cast<int16_t>(area.x + (area.width - geometry.width) / 2);
-            geometry.y = static_cast<int16_t>(area.y + (area.height - geometry.height) / 2);
-        }
+            geometry = floating::place_floating(
+                state_.monitors()[client.monitor].working_area(),
+                geometry.width,
+                geometry.height,
+                std::nullopt
+            );
         state_.geometry(window, geometry);
         state_.configure_suppression(window, rule.geometry || rule.center);
     }
@@ -437,7 +447,7 @@ void WindowManager::apply_rule(xcb_window_t window, RuleActions const& rule)
     if (rule.borderless)
         state_.borderless(window, *rule.borderless);
     if (rule.fullscreen)
-        set_fullscreen(window, *rule.fullscreen);
+        state_.fullscreen(window, *rule.fullscreen);
 }
 
 // Metadata changes apply a rule only when its result changes; losing a match
@@ -460,11 +470,8 @@ void WindowManager::reevaluate_metadata(xcb_window_t window)
 // Explicit reload reapplies every matching rule, including unchanged placement.
 void WindowManager::reapply_rules()
 {
-    std::vector<Client const*> clients;
-    for (auto const& [id, client] : state_.clients()) clients.push_back(&client);
-    std::ranges::sort(clients, { }, &Client::order);
     std::vector<xcb_window_t> order;
-    for (auto const* client : clients) order.push_back(client->id);
+    for (auto const* client : state_.clients_by_order()) order.push_back(client->id);
     for (auto window : order)
     {
         auto const* rule = match_window_rules(config_.rules, window_match_info(state_.require(window)));
@@ -511,12 +518,7 @@ void WindowManager::follow_floating_geometry(xcb_window_t window)
     auto const* floating = floating_mode(client);
     if (!floating)
         return;
-    auto const& g = floating->geometry;
-    auto monitor = focus::monitor_index_at_point(
-        state_.monitors(),
-        static_cast<int32_t>(g.x) + g.width / 2,
-        static_cast<int32_t>(g.y) + g.height / 2
-    );
+    auto monitor = floating::monitor_at_center(state_.monitors(), floating->geometry);
     if (!monitor || *monitor == client.monitor)
         return;
     state_.relocate(window, *monitor, state_.monitors()[*monitor].current_workspace);

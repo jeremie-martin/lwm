@@ -98,41 +98,29 @@ PositionHintResolution resolve_position_hint(
     std::vector<Monitor> const& monitors,
     size_t assigned_monitor,
     bool constrained_to_assigned_monitor,
-    Geometry hinted_geometry)
+    Geometry hinted_geometry
+)
 {
     size_t fallback_monitor = assigned_monitor < monitors.size() ? assigned_monitor : 0;
     if (monitors.empty())
         return { false, fallback_monitor };
-
     if (constrained_to_assigned_monitor)
     {
-        return {
-            hint_targets_monitor(
-                monitors[fallback_monitor].geometry(),
-                hinted_geometry.x,
-                hinted_geometry.y,
-                hinted_geometry.width,
-                hinted_geometry.height
-            ),
-            fallback_monitor,
-        };
+        auto const& g = hinted_geometry;
+        return { hint_targets_monitor(monitors[fallback_monitor].geometry(), g.x, g.y, g.width, g.height),
+                 fallback_monitor };
     }
-
-    for (size_t monitor = 0; monitor < monitors.size(); ++monitor)
-    {
-        if (hint_targets_monitor(
-                monitors[monitor].geometry(),
-                hinted_geometry.x,
-                hinted_geometry.y,
-                hinted_geometry.width,
-                hinted_geometry.height
-            ))
-        {
-            return { true, monitor };
-        }
-    }
-
+    if (auto monitor = monitor_at_center(monitors, hinted_geometry))
+        return { true, *monitor };
     return { false, fallback_monitor };
+}
+
+std::optional<size_t> monitor_at_center(std::span<Monitor const> monitors, Geometry geometry)
+{
+    for (size_t i = 0; i < monitors.size(); ++i)
+        if (hint_targets_monitor(monitors[i].geometry(), geometry.x, geometry.y, geometry.width, geometry.height))
+            return i;
+    return std::nullopt;
 }
 
 bool hint_targets_monitor(Geometry monitor, int16_t x, int16_t y, uint16_t width, uint16_t height)

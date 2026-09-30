@@ -147,14 +147,9 @@ void WindowManager::update_drag(int16_t x, int16_t y)
     if (split.available_extent <= 0)
         return;
     int32_t delta = split.direction == SplitDirection::Horizontal ? dx : dy;
-    double ratio = std::clamp(
-        split.ratio + static_cast<double>(delta) / split.available_extent,
-        config_.layout.min_ratio,
-        1.0 - config_.layout.min_ratio
-    );
-    auto const& ratios = state_.monitors()[resize.monitor].workspaces[resize.workspace].split_ratios;
-    if (auto it = ratios.find(split.address); it == ratios.end() || it->second != ratio)
-        state_.ratio(resize.monitor, split.address, ratio);
+    double ratio = config_.layout.clamp_ratio(split.ratio + static_cast<double>(delta) / split.available_extent);
+    // Validation guarantees the resized workspace is still current.
+    state_.ratio(resize.monitor, split.address, ratio);
 }
 
 void WindowManager::end_drag(bool commit)
@@ -213,10 +208,5 @@ void WindowManager::end_drag(bool commit)
     }
 }
 
-void WindowManager::reset_split_ratio(SplitAddress address, size_t monitor)
-{
-    if (state_.monitors()[monitor].current().split_ratios.contains(address))
-        state_.erase_ratio(monitor, address);
-}
 
 } // namespace lwm

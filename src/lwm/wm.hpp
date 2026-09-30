@@ -10,6 +10,7 @@
 #include "lwm/core/state.hpp"
 #include "lwm/core/window_rules.hpp"
 #include "lwm/layout/layout.hpp"
+#include <array>
 #include <chrono>
 #include <xcb/sync.h>
 #include <deque>
@@ -120,6 +121,8 @@ private:
         std::vector<xcb_window_t> fullscreen_owners; ///< Logged ownership per monitor
         std::map<std::string, size_t> workspaces; ///< Current workspace per output name
         std::string snapshot;                     ///< State payload behind the last state_change
+        uint64_t snapshot_revision = UINT64_MAX;  ///< Revision the snapshot was taken at
+        uint64_t subscriptions = 0;               ///< Subscriptions seen when the snapshot was taken
     };
 
     struct WindowDrag
@@ -150,13 +153,15 @@ private:
         uint8_t button; // Zero accepts any release (unspecified EWMH button).
     };
 
-    struct FocusCycle
+    struct FocusTraversal
     {
         size_t monitor, workspace;
         uint64_t next_recency, next_order;
         xcb_window_t current;
         std::vector<xcb_window_t> order;
     };
+
+    using StateUpdates = std::vector<std::pair<xcb_window_t, std::vector<xcb_atom_t>>>;
 
     // One client as seen by a completion pass.
     struct Projected
@@ -201,7 +206,7 @@ private:
 
     std::deque<xcb_generic_event_t> deferred_events_;
     std::unordered_map<xcb_window_t, std::chrono::steady_clock::time_point> pending_kills_;
-    std::optional<FocusCycle> focus_cycle_;
+    std::optional<FocusTraversal> focus_cycle_;
     std::optional<Drag> drag_;
     bool running_ = true;
     bool restarting_ = false;
@@ -263,9 +268,17 @@ private:
     void manage_window(xcb_window_t window, bool adopting);
     void manage_client(xcb_window_t window, ClassificationResult const& initial, bool start_iconic, bool adopting);
     void manage_fixture(xcb_window_t window, Fixture::Role role, bool adopting);
-    void read_initial_state(Client& client, bool honor_initial_state);
+    // Returns whether WM_HINTS currently carries the urgency flag.
+    bool read_initial_state(Client& client, bool honor_initial_state);
     Client initial_client(xcb_window_t window, ClassificationResult const& initial);
     Geometry initial_floating_geometry(xcb_window_t window, ClassificationResult const& initial, Client& candidate);
+    struct SizeHints
+    {
+        std::optional<std::pair<int16_t, int16_t>> position;
+        std::optional<uint16_t> width;
+        std::optional<uint16_t> height;
+    };
+    SizeHints read_size_hints(xcb_window_t window, bool anchored) const;
     void unmanage_window(xcb_window_t window);
     void apply_rule(xcb_window_t window, RuleActions const& rule);
     void reevaluate_metadata(xcb_window_t window);
@@ -276,8 +289,9 @@ private:
 
     // wm_transition.cpp: operation completion and publication
     void complete_transition();
-    void arrange_tiles();
+    void arrange_tiles(std::span<xcb_window_t const> owners);
     std::vector<xcb_window_t> tiled_participants(Monitor const& monitor) const;
+    std::vector<xcb_window_t> tiled_participants(Monitor const& monitor, xcb_window_t owner) const;
     Geometry presentation_geometry(Client const& client) const;
     Geometry fullscreen_geometry(Client const& client) const;
     uint32_t border_width(Client const& client) const;
@@ -285,18 +299,14 @@ private:
     bool publish_clients(std::vector<Projected> const& clients);
     bool write_geometry(Client const& client, Output& output, Geometry geometry, uint32_t border);
     void send_configure_notify(xcb_window_t window, Geometry geometry, uint32_t border);
-    bool publish_properties(
-        Client const& client,
-        Output& output,
-        std::vector<std::pair<xcb_window_t, std::vector<xcb_atom_t>>>& states
-    );
-    void publish_window_states(std::vector<std::pair<xcb_window_t, std::vector<xcb_atom_t>>> const& states);
+    bool publish_properties(Client const& client, Output& output, StateUpdates& states);
+    std::array<xcb_atom_t, 12> owned_state_atoms() const;
     void publish_window_class(xcb_window_t window, char const* kind);
     void publish_urgency(Client const& client, Output& output);
     void publish_fixtures();
     void publish_root(std::vector<Projected> const& clients, bool urgency_changed);
     DesktopLayout desktop_layout() const;
-    void reconcile_stacking(bool reassert);
+    void reconcile_stacking(std::span<xcb_window_t const> owners, bool reassert);
     void withdraw_removed();
     void commit_focus(uint32_t time);
     void flush_and_drain_crossing();
@@ -332,7 +342,6 @@ private:
 
     // wm_actions.cpp: the one executor for key bindings and IPC
     std::expected<std::string, std::string> execute(Action const& action, std::string_view source);
-    void set_fullscreen(xcb_window_t window, bool enabled);
     void toggle_float(xcb_window_t window);
     void iconify_window(xcb_window_t window);
     void deiconify_window(xcb_window_t window, bool focus);
@@ -363,7 +372,6 @@ private:
     void end_drag(bool commit = true);
     void validate_drag();
     std::optional<SplitBorderHit> hit_split_border(int16_t x, int16_t y) const;
-    void reset_split_ratio(SplitAddress address, size_t monitor);
 
     // wm_scratchpad.cpp
     void configure_scratchpads();

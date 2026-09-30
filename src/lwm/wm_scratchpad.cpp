@@ -131,15 +131,9 @@ void WindowManager::show_named_scratchpad(xcb_window_t window, ScratchpadConfig 
     size_t workspace = state_.monitors()[monitor].current_workspace;
     state_.floating(window, true);
     Geometry area = state_.monitors()[monitor].working_area();
-    auto width = static_cast<uint16_t>(area.width * config.width);
-    auto height = static_cast<uint16_t>(area.height * config.height);
-    state_.geometry(
-        window,
-        { static_cast<int16_t>(area.x + (area.width - width) / 2),
-          static_cast<int16_t>(area.y + (area.height - height) / 2),
-          width,
-          height }
-    );
+    auto width = geometry_extent(static_cast<int64_t>(area.width * config.width));
+    auto height = geometry_extent(static_cast<int64_t>(area.height * config.height));
+    state_.geometry(window, floating::place_floating(area, width, height, std::nullopt));
     state_.relocate(window, monitor, workspace);
     deiconify_window(window, true);
 }

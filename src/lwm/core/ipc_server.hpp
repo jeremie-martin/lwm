@@ -35,6 +35,8 @@ public:
     void expire();
     void emit(EventType type, std::string_view json);
     uint64_t sequence() const { return sequence_; }
+    // Counts accepted subscriptions, so the owner can take a baseline for new subscribers.
+    uint64_t subscriptions() const { return subscriptions_; }
     std::string const& instance() const { return instance_; }
 
 private:
@@ -52,6 +54,7 @@ private:
     int listener_ = -1;
     std::vector<Client> clients_;
     uint64_t sequence_ = 0;
+    uint64_t subscriptions_ = 0;
     std::string instance_;
 
     void accept_clients();

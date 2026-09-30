@@ -48,13 +48,13 @@ TEST_CASE("IPC exposes every key-binding action except process launch", "[ipc][c
     CHECK(request("window close") == Request{ Action{ action::Kill{ } } });
     CHECK(request("window fullscreen") == Request{ Action{ action::ToggleFullscreen{ } } });
     CHECK(request("window float") == Request{ Action{ action::ToggleFloat{ } } });
-    CHECK(request("window swap next") == Request{ Action{ action::SwapNext{ } } });
-    CHECK(request("window swap prev") == Request{ Action{ action::SwapPrev{ } } });
+    CHECK(request("window swap next") == Request{ Action{ action::SwapTile{ 1 } } });
+    CHECK(request("window swap prev") == Request{ Action{ action::SwapTile{ -1 } } });
     CHECK(request("window to-workspace 3") == Request{ Action{ action::MoveToWorkspace{ 3 } } });
     CHECK(request("window to-monitor left") == Request{ Action{ action::MoveToMonitor{ -1 } } });
     CHECK(request("monitor focus right") == Request{ Action{ action::FocusMonitor{ 1 } } });
     CHECK(request("workspace toggle") == Request{ Action{ action::ToggleWorkspace{ } } });
-    CHECK(request("workspace next") == Request{ Action{ action::NextWorkspace{ } } });
+    CHECK(request("workspace next") == Request{ Action{ action::CycleWorkspace{ 1 } } });
     CHECK(request("ratio reset") == Request{ Action{ action::ResetRatios{ } } });
     CHECK(request("reload-config") == Request{ Action{ action::ReloadConfig{ } } });
     CHECK(action_name(action::FocusMonitor{ -1 }) == "focus_monitor_left");

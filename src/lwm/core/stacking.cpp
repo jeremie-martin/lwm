@@ -26,9 +26,8 @@ struct Entry
 };
 }
 
-std::vector<xcb_window_t> compute_order(State const& state)
+std::vector<xcb_window_t> compute_order(State const& state, std::span<xcb_window_t const> owners)
 {
-    auto owners = state.fullscreen_owners();
     xcb_window_t active = state.active_window();
     std::vector<Entry> ranked;
     ranked.reserve(state.clients().size() + state.fixtures().size());
@@ -42,8 +41,7 @@ std::vector<xcb_window_t> compute_order(State const& state)
     for (auto const& [id, client] : state.clients())
     {
         bool in_view = state.in_view(client);
-        auto owner = owners[client.monitor];
-        bool suppressed = in_view && owner != XCB_NONE && owner != id && owner != client.transient_for;
+        bool suppressed = in_view && State::suppressed(client, owners[client.monitor]);
         auto layer = effective_layer(client);
         Tier tier = suppressed        ? Tier::Below
             : client.fullscreen       ? Tier::Fullscreen

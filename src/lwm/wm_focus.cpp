@@ -60,7 +60,7 @@ bool WindowManager::cycle_focus(bool forward)
     if (!focus_cycle_ || focus_cycle_->monitor != monitor || focus_cycle_->workspace != workspace
         || focus_cycle_->next_recency != state_.next_recency() || focus_cycle_->next_order != state_.next_order()
         || focus_cycle_->current != state_.active_window())
-        focus_cycle_ = FocusCycle{
+        focus_cycle_ = FocusTraversal{
             monitor, workspace, state_.next_recency(), state_.next_order(), state_.active_window(), focus::recent_order(state_)
         };
     auto target = focus::cycle_target(focus_cycle_->order, state_, monitor, state_.active_window(), forward);

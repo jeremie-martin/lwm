@@ -2,6 +2,7 @@
 
 #include "types.hpp"
 #include <optional>
+#include <span>
 
 namespace lwm::floating {
 
@@ -40,6 +41,9 @@ PositionHintResolution resolve_position_hint(
     bool constrained_to_assigned_monitor,
     Geometry hinted_geometry
 );
+
+// The monitor containing the rectangle's center.
+std::optional<size_t> monitor_at_center(std::span<Monitor const> monitors, Geometry geometry);
 
 // True if a window of (width,height) placed at (x,y) belongs to `monitor` —
 // i.e. its center point lies within the monitor's full geometry rectangle.

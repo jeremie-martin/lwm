@@ -57,6 +57,7 @@ public:
     Fixtures const& fixtures() const { return fixtures_; }
     std::vector<Monitor> const& monitors() const { return monitors_; }
     Client const* find(xcb_window_t id) const;
+    std::vector<Client const*> clients_by_order() const;
     Client const& require(xcb_window_t id) const;
     Fixture const* find_fixture(xcb_window_t id) const;
     // The candidate's placement must be valid; tiled clients join their workspace.
@@ -65,12 +66,16 @@ public:
     void erase(xcb_window_t id);
 
     // Derived views
+    // A placement is shown when it is its monitor's current workspace and the desktop is not shown.
+    bool shows(size_t monitor, size_t workspace) const;
     bool in_view(Client const& client) const;
     xcb_window_t fullscreen_owner(size_t monitor) const;
     std::vector<xcb_window_t> fullscreen_owners() const;
     bool visible(Client const& client) const;
     // Hot loops resolve the client's monitor owner once.
     bool visible(Client const& client, xcb_window_t owner) const;
+    // Another window owns fullscreen here and this client is not its transient.
+    static bool suppressed(Client const& client, xcb_window_t owner);
     static bool accepts_focus(Client const& client) { return client.accepts_input || client.supports_take_focus; }
     bool focusable(Client const& client) const;
     uint64_t revision() const { return revision_; }
@@ -184,6 +189,17 @@ private:
     Workspace& edit_workspace(size_t monitor, size_t workspace);
     void mutated();
     void set_mode(xcb_window_t id, bool floating);
+    void apply_default_mode(xcb_window_t id);
+    // Records a field change; an unchanged value is not a mutation.
+    template <typename T, typename V> bool assign(xcb_window_t id, T Client::* field, V&& value)
+    {
+        auto& client = clients_.at(id);
+        if (client.*field == value)
+            return false;
+        mutated();
+        client.*field = std::forward<V>(value);
+        return true;
+    }
     void attach(Client const& client, std::optional<size_t> index = std::nullopt);
     std::optional<TileSlot> detach(Client const& client);
     void release_scratchpad(xcb_window_t id);

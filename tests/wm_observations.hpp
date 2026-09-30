@@ -3,6 +3,24 @@
 #include <nlohmann/json.hpp>
 
 namespace lwm::test {
+// Sends an IPC command that must succeed and returns its complete reply.
+inline std::string ipc_ok(std::string const& socket, std::string const& command)
+{
+    auto reply = send_ipc_command(socket, command);
+    REQUIRE(reply);
+    INFO(command << " -> " << *reply);
+    REQUIRE(reply->starts_with("ok"));
+    return *reply;
+}
+
+// Sends a query that must succeed and returns its JSON value.
+inline nlohmann::json ipc_json(std::string const& socket, std::string const& command)
+{
+    auto reply = ipc_ok(socket, command);
+    REQUIRE(reply.starts_with("ok "));
+    return nlohmann::json::parse(reply.substr(3));
+}
+
 // X resource IDs can be reused immediately after disconnect. IPC's instance
 // identifies a WM lifetime even when its supporting-window ID is reused.
 inline std::optional<std::string> wm_instance(X11Connection& conn)

@@ -142,17 +142,8 @@ swap_prev = true
 )");
 
     REQUIRE(loaded.has_value());
-    bool saw_next = false;
-    bool saw_prev = false;
-    for (auto const& kb : loaded->keybinds)
-    {
-        if (action_as<action::SwapNext>(kb.second))
-            saw_next = true;
-        else if (action_as<action::SwapPrev>(kb.second))
-            saw_prev = true;
-    }
-    REQUIRE(saw_next);
-    REQUIRE(saw_prev);
+    CHECK(loaded->keybinds.at({ XCB_MOD_MASK_4 | XCB_MOD_MASK_SHIFT, XK_j }) == Action{ action::SwapTile{ 1 } });
+    CHECK(loaded->keybinds.at({ XCB_MOD_MASK_4 | XCB_MOD_MASK_SHIFT, XK_k }) == Action{ action::SwapTile{ -1 } });
 }
 
 TEST_CASE("Config parser rejects unknown layout strategies", "[config][layout]")
@@ -533,7 +524,7 @@ next_workspace = true
     CHECK(binds.at({ XCB_MOD_MASK_4, XK_l }) == Action{ action::AdjustRatio{ 0.05 } });
     CHECK(binds.at({ XCB_MOD_MASK_4, XK_e }) == Action{ action::Exec{ "/usr/local/bin/lwm" } });
     CHECK(binds.at({ XCB_MOD_MASK_4, XK_c }) == Action{ action::ScratchpadCancelLaunch{ "term" } });
-    CHECK(binds.at({ XCB_MOD_MASK_4, XK_n }) == Action{ action::NextWorkspace{ } });
+    CHECK(binds.at({ XCB_MOD_MASK_4, XK_n }) == Action{ action::CycleWorkspace{ 1 } });
 
     for (auto const* text : { "[[binds]]\nkey = \"super+a\"\nset_layout = \"spiral\"\n",
                               "[layout]\nmin_ratio = 0.2\n[[binds]]\nkey = \"super+a\"\nset_ratio = 0.9\n",

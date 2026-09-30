@@ -36,6 +36,16 @@ inline std::optional<std::pair<size_t, size_t>> desktop_to_indices(uint32_t desk
     return std::pair<size_t, size_t>{ monitor_idx, workspace_idx };
 }
 
+// A concrete desktop on an existing monitor; the sticky value and other monitors are not placements.
+inline std::optional<std::pair<size_t, size_t>>
+desktop_placement(uint32_t desktop, size_t workspaces_per_monitor, size_t monitor_count)
+{
+    auto indices = desktop == 0xFFFFFFFF ? std::nullopt : desktop_to_indices(desktop, workspaces_per_monitor);
+    if (!indices || indices->first >= monitor_count)
+        return std::nullopt;
+    return indices;
+}
+
 } // namespace lwm::ewmh_policy
 
 namespace lwm::workspace_policy {

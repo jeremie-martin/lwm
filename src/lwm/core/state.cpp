@@ -17,6 +17,15 @@ Client const* State::find(xcb_window_t id) const
 
 Client const& State::require(xcb_window_t id) const { return clients_.at(id); }
 
+std::vector<Client const*> State::clients_by_order() const
+{
+    std::vector<Client const*> ordered;
+    ordered.reserve(clients_.size());
+    for (auto const& [id, client] : clients_) ordered.push_back(&client);
+    std::ranges::sort(ordered, { }, &Client::order);
+    return ordered;
+}
+
 Fixture const* State::find_fixture(xcb_window_t id) const
 {
     auto it = fixtures_.find(id);
@@ -117,11 +126,14 @@ std::optional<TileSlot> State::detach(Client const& client)
 // Derived views
 // ---------------------------------------------------------------------------
 
+bool State::shows(size_t monitor, size_t workspace) const
+{
+    return !showing_desktop_ && workspace == monitors_[monitor].current_workspace;
+}
+
 bool State::in_view(Client const& client) const
 {
-    if (client.iconic)
-        return false;
-    return client.sticky || (!showing_desktop_ && client.workspace == monitors_[client.monitor].current_workspace);
+    return !client.iconic && (client.sticky || shows(client.monitor, client.workspace));
 }
 
 namespace {
@@ -131,19 +143,7 @@ bool claims_before(Client const& a, Client const& b)
 }
 }
 
-// The most recent fullscreen claim among clients in view owns the monitor.
-xcb_window_t State::fullscreen_owner(size_t monitor) const
-{
-    if (showing_desktop_)
-        return XCB_NONE;
-    Client const* owner = nullptr;
-    for (auto const& [id, client] : clients_)
-        if (client.fullscreen && client.monitor == monitor && in_view(client)
-            && (!owner || claims_before(*owner, client)))
-            owner = &client;
-    return owner ? owner->id : XCB_NONE;
-}
-
+// The most recent fullscreen claim among clients in view owns each monitor.
 std::vector<xcb_window_t> State::fullscreen_owners() const
 {
     std::vector<Client const*> owners(monitors_.size(), nullptr);
@@ -158,11 +158,18 @@ std::vector<xcb_window_t> State::fullscreen_owners() const
     return result;
 }
 
+xcb_window_t State::fullscreen_owner(size_t monitor) const { return fullscreen_owners().at(monitor); }
+
+bool State::suppressed(Client const& client, xcb_window_t owner)
+{
+    return owner != XCB_NONE && owner != client.id && owner != client.transient_for;
+}
+
 bool State::visible(Client const& client) const { return visible(client, fullscreen_owner(client.monitor)); }
 
 bool State::visible(Client const& client, xcb_window_t owner) const
 {
-    return in_view(client) && (owner == XCB_NONE || owner == client.id || owner == client.transient_for);
+    return in_view(client) && !suppressed(client, owner);
 }
 
 bool State::focusable(Client const& client) const
@@ -303,7 +310,9 @@ void State::set_mode(xcb_window_t id, bool floating)
 
 void State::floating(xcb_window_t id, bool enabled)
 {
-    edit(id).preferences.floating = enabled;
+    auto preferences = require(id).preferences;
+    preferences.floating = enabled;
+    assign(id, &Client::preferences, preferences);
     set_mode(id, enabled);
 }
 
@@ -390,11 +399,29 @@ void State::maximize(xcb_window_t id, bool horizontal, bool vertical)
     c.maximized_vert = vertical;
 }
 
-void State::modal(xcb_window_t id, bool enabled) { edit(id).modal = enabled; }
-void State::borderless(xcb_window_t id, bool enabled) { edit(id).borderless = enabled; }
-void State::layer(xcb_window_t id, LayerHint hint) { edit(id).preferences.layer = hint; }
-void State::skip_taskbar(xcb_window_t id, bool enabled) { edit(id).preferences.skip_taskbar = enabled; }
-void State::skip_pager(xcb_window_t id, bool enabled) { edit(id).preferences.skip_pager = enabled; }
+void State::modal(xcb_window_t id, bool enabled) { assign(id, &Client::modal, enabled); }
+void State::borderless(xcb_window_t id, bool enabled) { assign(id, &Client::borderless, enabled); }
+
+void State::layer(xcb_window_t id, LayerHint hint)
+{
+    auto preferences = require(id).preferences;
+    preferences.layer = hint;
+    assign(id, &Client::preferences, preferences);
+}
+
+void State::skip_taskbar(xcb_window_t id, bool enabled)
+{
+    auto preferences = require(id).preferences;
+    preferences.skip_taskbar = enabled;
+    assign(id, &Client::preferences, preferences);
+}
+
+void State::skip_pager(xcb_window_t id, bool enabled)
+{
+    auto preferences = require(id).preferences;
+    preferences.skip_pager = enabled;
+    assign(id, &Client::preferences, preferences);
+}
 
 void State::urgency(xcb_window_t id, UrgencySource source, bool enabled)
 {
@@ -411,39 +438,44 @@ void State::clear_urgency(xcb_window_t id)
 
 void State::fullscreen_monitors(xcb_window_t id, std::optional<FullscreenMonitors> value)
 {
-    edit(id).fullscreen_monitors = value;
+    assign(id, &Client::fullscreen_monitors, value);
 }
 
-void State::pin_desktop(xcb_window_t id, bool pinned) { edit(id).desktop_pinned = pinned; }
-void State::configure_suppression(xcb_window_t id, bool enabled) { edit(id).suppress_next_configure_request = enabled; }
+void State::pin_desktop(xcb_window_t id, bool pinned) { assign(id, &Client::desktop_pinned, pinned); }
+
+void State::configure_suppression(xcb_window_t id, bool enabled)
+{
+    assign(id, &Client::suppress_next_configure_request, enabled);
+}
 
 // ---------------------------------------------------------------------------
 // Metadata
 // ---------------------------------------------------------------------------
 
-void State::title(xcb_window_t id, std::string value) { edit(id).name = std::move(value); }
+void State::title(xcb_window_t id, std::string value) { assign(id, &Client::name, std::move(value)); }
 
 void State::window_class(xcb_window_t id, std::string instance, std::string name)
 {
-    auto& c = edit(id);
-    c.wm_class_name = std::move(instance);
-    c.wm_class = std::move(name);
+    assign(id, &Client::wm_class_name, std::move(instance));
+    assign(id, &Client::wm_class, std::move(name));
 }
 
-// Type and transient updates change classification defaults. The default mode
-// applies unless the user chose one or a scratchpad owns the representation.
 void State::window_type(xcb_window_t id, WindowType type)
 {
-    edit(id).ewmh_type = type;
-    auto const& c = require(id);
-    if (!c.preferences.floating && !scratchpad_claim(id) && !pooled(id))
-        if (auto floating = default_floating(c))
-            set_mode(id, *floating);
+    if (assign(id, &Client::ewmh_type, type))
+        apply_default_mode(id);
 }
 
 void State::transient(xcb_window_t id, xcb_window_t parent)
 {
-    edit(id).transient_for = parent;
+    if (assign(id, &Client::transient_for, parent))
+        apply_default_mode(id);
+}
+
+// Type and transient updates change classification defaults. The default mode
+// applies unless the user chose one or a scratchpad owns the representation.
+void State::apply_default_mode(xcb_window_t id)
+{
     auto const& c = require(id);
     if (!c.preferences.floating && !scratchpad_claim(id) && !pooled(id))
         if (auto floating = default_floating(c))
@@ -452,22 +484,21 @@ void State::transient(xcb_window_t id, xcb_window_t parent)
 
 void State::focus_hints(xcb_window_t id, bool input, bool take_focus)
 {
-    auto& c = edit(id);
-    c.accepts_input = input;
-    c.supports_take_focus = take_focus;
-    repair_focus_ = true;
+    bool changed = assign(id, &Client::accepts_input, input);
+    changed |= assign(id, &Client::supports_take_focus, take_focus);
+    repair_focus_ |= changed;
 }
 
+// Activation-time bookkeeping is not exposed or published, so it is not a revision.
 void State::user_time(xcb_window_t id, uint32_t time, xcb_window_t window)
 {
-    if (auto const& current = require(id); current.user_time == time && current.user_time_window == window)
-        return;
-    auto& c = edit(id);
+    assert(!frozen_);
+    auto& c = clients_.at(id);
     c.user_time = time;
     c.user_time_window = window;
 }
 
-void State::rule(xcb_window_t id, std::optional<RuleActions> actions) { edit(id).rule = std::move(actions); }
+void State::rule(xcb_window_t id, std::optional<RuleActions> actions) { assign(id, &Client::rule, std::move(actions)); }
 
 // ---------------------------------------------------------------------------
 // Workspaces and monitors
@@ -489,22 +520,27 @@ bool State::switch_workspace(size_t monitor, size_t workspace)
 
 void State::layout(size_t monitor, LayoutStrategy strategy)
 {
-    edit_workspace(monitor, monitors_.at(monitor).current_workspace).layout_strategy = strategy;
+    if (monitors_.at(monitor).current().layout_strategy != strategy)
+        edit_workspace(monitor, monitors_[monitor].current_workspace).layout_strategy = strategy;
 }
 
 void State::ratio(size_t monitor, SplitAddress address, double value)
 {
-    edit_workspace(monitor, monitors_.at(monitor).current_workspace).split_ratios[address] = value;
+    auto const& ratios = monitors_.at(monitor).current().split_ratios;
+    if (auto it = ratios.find(address); it == ratios.end() || it->second != value)
+        edit_workspace(monitor, monitors_[monitor].current_workspace).split_ratios[address] = value;
 }
 
 void State::erase_ratio(size_t monitor, SplitAddress address)
 {
-    edit_workspace(monitor, monitors_.at(monitor).current_workspace).split_ratios.erase(address);
+    if (monitors_.at(monitor).current().split_ratios.contains(address))
+        edit_workspace(monitor, monitors_[monitor].current_workspace).split_ratios.erase(address);
 }
 
 void State::reset_ratios(size_t monitor)
 {
-    edit_workspace(monitor, monitors_.at(monitor).current_workspace).split_ratios.clear();
+    if (!monitors_.at(monitor).current().split_ratios.empty())
+        edit_workspace(monitor, monitors_[monitor].current_workspace).split_ratios.clear();
 }
 
 void State::workarea(size_t monitor, Strut strut)

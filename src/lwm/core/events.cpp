@@ -1,3 +1,4 @@
+#include "lwm/core/overloaded.hpp"
 #include "events.hpp"
 #include <cstdio>
 
@@ -74,13 +75,6 @@ std::string json_escape(std::string_view input)
 }
 
 namespace {
-template <class... Ts> struct Overloaded : Ts...
-{
-    using Ts::operator()...;
-};
-
-std::string quoted(std::string_view text) { return "\"" + json_escape(text) + "\""; }
-
 std::string placement_json(std::optional<Placement> const& placement)
 {
     if (!placement)
@@ -133,35 +127,35 @@ std::string event_json(Event const& event)
             [](event::FocusChange const& e)
             {
                 return "{\"event\":\"focus_change\",\"window\":" + std::to_string(e.window)
-                    + ",\"class\":" + quoted(e.wm_class) + ",\"title\":" + quoted(e.title) + "}";
+                    + ",\"class\":" + json_string(e.wm_class) + ",\"title\":" + json_string(e.title) + "}";
             },
             [](event::WindowMap const& e)
             {
                 return "{\"event\":\"window_map\",\"window\":" + std::to_string(e.window)
-                    + ",\"class\":" + quoted(e.wm_class) + ",\"kind\":" + quoted(e.kind)
+                    + ",\"class\":" + json_string(e.wm_class) + ",\"kind\":" + json_string(e.kind)
                     + placement_json(e.placement) + "}";
             },
             [](event::WindowUnmap const& e)
             {
                 return "{\"event\":\"window_unmap\",\"window\":" + std::to_string(e.window) + ",\"kind\":"
-                    + quoted(e.kind) + placement_json(e.placement) + "}";
+                    + json_string(e.kind) + placement_json(e.placement) + "}";
             },
             [](event::LayoutChange const& e)
             {
-                std::string json = "{\"event\":\"layout_change\",\"action\":" + quoted(e.action);
+                std::string json = "{\"event\":\"layout_change\",\"action\":" + json_string(e.action);
                 if (e.value)
                     json += ",\"value\":" + *e.value;
                 if (e.delta)
                     json += ",\"delta\":" + std::to_string(*e.delta);
                 return json + "}";
             },
-            [](event::KeyAction const& e) { return "{\"event\":\"key_action\",\"action\":" + quoted(e.action) + "}"; },
+            [](event::KeyAction const& e) { return "{\"event\":\"key_action\",\"action\":" + json_string(e.action) + "}"; },
             [](event::ConfigReload const& e)
             {
-                std::string json = "{\"event\":\"config_reload\",\"success\":" + std::string(e.success ? "true" : "false")
-                    + ",\"source\":" + quoted(e.source);
+                std::string json = "{\"event\":\"config_reload\",\"success\":" + std::string(json_bool(e.success))
+                    + ",\"source\":" + json_string(e.source);
                 if (!e.success)
-                    json += ",\"error\":" + quoted(e.error);
+                    json += ",\"error\":" + json_string(e.error);
                 return json + "}";
             },
         },

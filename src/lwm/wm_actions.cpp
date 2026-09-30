@@ -1,3 +1,4 @@
+#include "lwm/core/overloaded.hpp"
 #include "lwm/core/log.hpp"
 #include "lwm/core/policy.hpp"
 #include "wm.hpp"
@@ -7,14 +8,7 @@ namespace lwm {
 
 namespace {
 
-template <class... Ts> struct Overloaded : Ts...
-{
-    using Ts::operator()...;
-};
-
 using Result = std::expected<std::string, std::string>;
-
-std::string json_number(double value) { return std::to_string(value); }
 
 } // namespace
 
@@ -26,18 +20,22 @@ Result WindowManager::execute(Action const& action, std::string_view source)
     xcb_window_t active = state_.active_window();
     size_t monitor = state_.focused_monitor();
     auto const& focused = state_.monitors()[monitor];
-    auto require_active = [&]() -> std::expected<void, std::string>
+    bool has_active = state_.find(active) != nullptr;
+    auto const no_active = std::unexpected(std::string("no active window"));
+    auto restart = [&](std::string binary) -> Result
     {
-        if (!state_.find(active))
-            return std::unexpected("no active window");
-        return { };
+        LWM_LOG_INFO("Restart requested: source={} binary={}", source, binary.empty() ? "current" : binary);
+        restarting_ = true;
+        restart_binary_ = std::move(binary);
+        running_ = false;
+        return "restarting";
     };
     return std::visit(
         Overloaded{
             [&](Kill const&) -> Result
             {
-                if (auto ok = require_active(); !ok)
-                    return std::unexpected(ok.error());
+                if (!has_active)
+                    return no_active;
                 kill_window(active);
                 return "";
             },
@@ -49,22 +47,8 @@ Result WindowManager::execute(Action const& action, std::string_view source)
                     return std::unexpected(result.error());
                 return "reloaded";
             },
-            [&](Restart const&) -> Result
-            {
-                LWM_LOG_INFO("Restart requested ({})", source);
-                restarting_ = true;
-                restart_binary_.clear();
-                running_ = false;
-                return "restarting";
-            },
-            [&](Exec const& exec) -> Result
-            {
-                LWM_LOG_INFO("Restart with {} requested ({})", exec.binary, source);
-                restarting_ = true;
-                restart_binary_ = exec.binary;
-                running_ = false;
-                return "restarting";
-            },
+            [&](Restart const&) { return restart({ }); },
+            [&](Exec const& exec) { return restart(exec.binary); },
             [&](Spawn const& spawn) -> Result
             {
                 if (!launch_program(spawn.command, source))
@@ -73,27 +57,21 @@ Result WindowManager::execute(Action const& action, std::string_view source)
             },
             [&](ToggleFullscreen const&) -> Result
             {
-                if (auto ok = require_active(); !ok)
-                    return std::unexpected(ok.error());
-                set_fullscreen(active, !state_.require(active).fullscreen);
+                if (!has_active)
+                    return no_active;
+                state_.fullscreen(active, !state_.require(active).fullscreen);
                 return "";
             },
             [&](ToggleFloat const&) -> Result
             {
-                if (auto ok = require_active(); !ok)
-                    return std::unexpected(ok.error());
+                if (!has_active)
+                    return no_active;
                 toggle_float(active);
                 return "";
             },
-            [&](FocusNext const&) -> Result
+            [&](FocusCycle const& cycle) -> Result
             {
-                if (!cycle_focus(true))
-                    return std::unexpected("no focus candidates");
-                return std::to_string(state_.active_window());
-            },
-            [&](FocusPrev const&) -> Result
-            {
-                if (!cycle_focus(false))
+                if (!cycle_focus(cycle.forward))
                     return std::unexpected("no focus candidates");
                 return std::to_string(state_.active_window());
             },
@@ -116,8 +94,8 @@ Result WindowManager::execute(Action const& action, std::string_view source)
             },
             [&](MoveToMonitor const& move) -> Result
             {
-                if (auto ok = require_active(); !ok)
-                    return std::unexpected(ok.error());
+                if (!has_active)
+                    return no_active;
                 move_active_to_monitor(move.direction);
                 return "";
             },
@@ -134,16 +112,12 @@ Result WindowManager::execute(Action const& action, std::string_view source)
                     switch_workspace(focused.previous_workspace);
                 return std::to_string(state_.monitors()[monitor].current_workspace);
             },
-            [&](NextWorkspace const&) -> Result
+            [&](CycleWorkspace const& cycle) -> Result
             {
-                size_t target = (focused.current_workspace + 1) % focused.workspaces.size();
-                switch_workspace(target);
-                return std::to_string(target);
-            },
-            [&](PrevWorkspace const&) -> Result
-            {
-                size_t count = focused.workspaces.size();
-                size_t target = (focused.current_workspace + count - 1) % count;
+                auto count = static_cast<int>(focused.workspaces.size());
+                auto target = static_cast<size_t>(
+                    ((static_cast<int>(focused.current_workspace) + cycle.step) % count + count) % count
+                );
                 switch_workspace(target);
                 return std::to_string(target);
             },
@@ -151,20 +125,14 @@ Result WindowManager::execute(Action const& action, std::string_view source)
             {
                 if (target.workspace >= focused.workspaces.size())
                     return std::unexpected("workspace out of range");
-                if (auto ok = require_active(); !ok)
-                    return std::unexpected(ok.error());
+                if (!has_active)
+                    return no_active;
                 move_active_to_workspace(target.workspace);
                 return "";
             },
-            [&](SwapNext const&) -> Result
+            [&](SwapTile const& swap) -> Result
             {
-                swap_active_tile(1);
-                layout_changed(action);
-                return "";
-            },
-            [&](SwapPrev const&) -> Result
-            {
-                swap_active_tile(-1);
+                swap_active_tile(swap.offset);
                 layout_changed(action);
                 return "";
             },
@@ -173,27 +141,26 @@ Result WindowManager::execute(Action const& action, std::string_view source)
                 std::string name = layout_strategy_str(layout.strategy);
                 state_.layout(monitor, layout.strategy);
                 drain_requested_ = true;
-                layout_changed(action, "\"" + name + "\"");
+                layout_changed(action, json_string(name));
                 return "layout set to " + name;
             },
             [&](SetRatio const& ratio) -> Result
             {
                 double min = config_.layout.min_ratio;
-                if (ratio.value < min || ratio.value > 1.0 - min)
+                if (!config_.layout.accepts_ratio(ratio.value))
                     return std::unexpected(
                         "ratio out of range [" + std::to_string(min) + ", " + std::to_string(1.0 - min) + "]"
                     );
                 state_.ratio(monitor, SplitAddress{ 0 }, ratio.value);
-                layout_changed(action, json_number(ratio.value));
+                layout_changed(action, std::to_string(ratio.value));
                 return "ratio set";
             },
             [&](AdjustRatio const& adjust) -> Result
             {
-                double min = config_.layout.min_ratio;
                 auto const& ratios = focused.current().split_ratios;
                 auto it = ratios.find(SplitAddress{ 0 });
                 double current = it == ratios.end() ? config_.layout.default_ratio : it->second;
-                double adjusted = std::clamp(current + adjust.delta, min, 1.0 - min);
+                double adjusted = config_.layout.clamp_ratio(current + adjust.delta);
                 if (adjusted == current)
                     return "ratio unchanged";
                 state_.ratio(monitor, SplitAddress{ 0 }, adjusted);
@@ -208,8 +175,8 @@ Result WindowManager::execute(Action const& action, std::string_view source)
             },
             [&](ScratchpadStash const&) -> Result
             {
-                if (auto ok = require_active(); !ok)
-                    return std::unexpected(ok.error());
+                if (!has_active)
+                    return no_active;
                 stash_window(active);
                 return "";
             },
@@ -253,8 +220,6 @@ void WindowManager::layout_changed(Action const& action, std::optional<std::stri
 // ---------------------------------------------------------------------------
 // Window state
 // ---------------------------------------------------------------------------
-
-void WindowManager::set_fullscreen(xcb_window_t window, bool enabled) { state_.fullscreen(window, enabled); }
 
 void WindowManager::toggle_float(xcb_window_t window)
 {
@@ -309,10 +274,10 @@ void WindowManager::switch_workspace(size_t workspace)
 void WindowManager::switch_to_desktop(uint32_t desktop)
 {
     LWM_LOG_DEBUG("_NET_CURRENT_DESKTOP request: desktop={}", desktop);
-    auto indices = ewmh_policy::desktop_to_indices(desktop, config_.workspaces.count);
-    if (!indices || indices->first >= state_.monitors().size())
+    auto placement = ewmh_policy::desktop_placement(desktop, config_.workspaces.count, state_.monitors().size());
+    if (!placement)
         return;
-    auto [monitor, workspace] = *indices;
+    auto [monitor, workspace] = *placement;
     if (monitor == state_.focused_monitor() && workspace == state_.monitors()[monitor].current_workspace)
         return;
     state_.focus_monitor(monitor);

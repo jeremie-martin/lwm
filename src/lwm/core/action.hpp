@@ -42,13 +42,11 @@ struct ToggleFloat
 {
     bool operator==(ToggleFloat const&) const = default;
 };
-struct FocusNext
+// Steps through recently used windows; forward is the next older one.
+struct FocusCycle
 {
-    bool operator==(FocusNext const&) const = default;
-};
-struct FocusPrev
-{
-    bool operator==(FocusPrev const&) const = default;
+    bool forward = true;
+    bool operator==(FocusCycle const&) const = default;
 };
 struct FocusWindow
 {
@@ -74,26 +72,22 @@ struct ToggleWorkspace
 {
     bool operator==(ToggleWorkspace const&) const = default;
 };
-struct NextWorkspace
+// Switches to the adjacent workspace with wraparound.
+struct CycleWorkspace
 {
-    bool operator==(NextWorkspace const&) const = default;
-};
-struct PrevWorkspace
-{
-    bool operator==(PrevWorkspace const&) const = default;
+    int step = 1;
+    bool operator==(CycleWorkspace const&) const = default;
 };
 struct MoveToWorkspace
 {
     size_t workspace = 0;
     bool operator==(MoveToWorkspace const&) const = default;
 };
-struct SwapNext
+// Swaps the active tile with the one `offset` positions away, with wraparound.
+struct SwapTile
 {
-    bool operator==(SwapNext const&) const = default;
-};
-struct SwapPrev
-{
-    bool operator==(SwapPrev const&) const = default;
+    int offset = 1;
+    bool operator==(SwapTile const&) const = default;
 };
 struct SetLayout
 {
@@ -147,18 +141,15 @@ using Action = std::variant<
     action::Spawn,
     action::ToggleFullscreen,
     action::ToggleFloat,
-    action::FocusNext,
-    action::FocusPrev,
+    action::FocusCycle,
     action::FocusWindow,
     action::FocusMonitor,
     action::MoveToMonitor,
     action::SwitchWorkspace,
     action::ToggleWorkspace,
-    action::NextWorkspace,
-    action::PrevWorkspace,
+    action::CycleWorkspace,
     action::MoveToWorkspace,
-    action::SwapNext,
-    action::SwapPrev,
+    action::SwapTile,
     action::SetLayout,
     action::SetRatio,
     action::AdjustRatio,

@@ -1,4 +1,5 @@
 #include "lwm/core/window_rules.hpp"
+#include "state_fixture.hpp"
 #include <catch2/catch_test_macros.hpp>
 
 using namespace lwm;
@@ -17,13 +18,6 @@ WindowRuleConfig rule(std::optional<std::string> wm_class, bool floating)
         config.match.class_regex.emplace(*wm_class);
     config.actions.floating = floating;
     return config;
-}
-
-Monitor named(std::string name)
-{
-    Monitor monitor;
-    monitor.name = std::move(name);
-    return monitor;
 }
 
 } // namespace
@@ -62,7 +56,7 @@ TEST_CASE("The first matching rule supplies all actions", "[rules]")
 
 TEST_CASE("Rule monitors resolve against current outputs when applied", "[rules]")
 {
-    std::vector monitors{ named("DP-1"), named("HDMI-1"), named("HDMI-1") };
+    std::vector monitors{ test::monitor("DP-1"), test::monitor("HDMI-1"), test::monitor("HDMI-1") };
     RuleActions actions;
     CHECK_FALSE(resolve_rule_monitor(actions, monitors));
     actions.monitor = size_t{ 1 };

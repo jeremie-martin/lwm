@@ -272,8 +272,7 @@ For a panel or other state consumer:
 `state_change` is an invalidation notification after completion, not a patch. It is
 sent when the exposed list state (workspaces, windows, and scratchpads) differs from the
 state behind the previous notification, including metadata, urgency, placement, and
-scratchpad changes. Read-only commands and no-op actions do not emit it; the first
-completed operation after a new subscription may notify without a change. Individual
+scratchpad changes. Read-only commands and no-op actions do not emit it. Individual
 focus/map/workspace events remain available for consumers that need those occurrences
 instead of a current-state view. Notifications cover only the fields exposed by the list
 API, not every X property or application state.

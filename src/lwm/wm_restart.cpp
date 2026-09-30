@@ -64,8 +64,7 @@ void WindowManager::prepare_restart()
     cleanup_ipc();
 
     // A round trip guarantees the server processed the release before exec.
-    conn_.flush();
-    free(xcb_get_input_focus_reply(conn_.get(), xcb_get_input_focus(conn_.get()), nullptr));
+    conn_.sync();
 }
 
 } // namespace lwm

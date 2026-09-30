@@ -18,9 +18,6 @@ namespace {
 
 constexpr auto KILL_TIMEOUT = std::chrono::seconds(5);
 
-// Bindings ignore Num Lock and Caps Lock, so each grab covers their combinations.
-constexpr uint16_t kLockMasks[] = { 0, XCB_MOD_MASK_2, XCB_MOD_MASK_LOCK, XCB_MOD_MASK_2 | XCB_MOD_MASK_LOCK };
-
 template <typename T> using Reply = std::unique_ptr<T, decltype(&free)>;
 template <typename T> Reply<T> reply(T* value) { return { value, &free }; }
 
@@ -199,7 +196,7 @@ void WindowManager::grab_buttons()
     xcb_window_t root = conn_.screen()->root;
     xcb_ungrab_button(conn_.get(), XCB_BUTTON_INDEX_ANY, root, XCB_MOD_MASK_ANY);
     for (auto const& binding : config_.mousebinds)
-        for (uint16_t lock : kLockMasks)
+        for (uint16_t lock : kIgnoredModifierCombinations)
             xcb_grab_button(
                 conn_.get(),
                 0,
@@ -223,7 +220,7 @@ void WindowManager::grab_keys()
     {
         auto keycodes = reply(xcb_key_symbols_get_keycode(conn_.keysyms(), binding.keysym));
         for (auto* keycode = keycodes.get(); keycode && *keycode != XCB_NO_SYMBOL; ++keycode)
-            for (uint16_t lock : kLockMasks)
+            for (uint16_t lock : kIgnoredModifierCombinations)
                 xcb_grab_key(conn_.get(), 1, root, binding.modifier | lock, *keycode, XCB_GRAB_MODE_ASYNC, XCB_GRAB_MODE_ASYNC);
     }
 }
@@ -418,6 +415,12 @@ RunResult WindowManager::run()
                     return response;
                 }
             );
+            // A new subscriber compares later changes with the state it could query now.
+            if (std::exchange(root_.subscriptions, ipc_.subscriptions()) != ipc_.subscriptions())
+            {
+                root_.snapshot = state_json();
+                root_.snapshot_revision = state_.revision();
+            }
         }
 
         // Bounded batches keep IPC, signals and deadlines responsive under X load.

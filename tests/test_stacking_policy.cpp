@@ -18,7 +18,7 @@ struct Scene
     {
         if (active != XCB_NONE)
             state.focus(active);
-        return stacking::compute_order(state);
+        return stacking::compute_order(state, state.fullscreen_owners());
     }
 };
 }

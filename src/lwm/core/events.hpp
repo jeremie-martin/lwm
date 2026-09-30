@@ -43,6 +43,9 @@ uint32_t parse_event_filter(std::string_view filter);
 
 /// Escape a string for JSON output (handles quotes, backslashes, control chars).
 std::string json_escape(std::string_view input);
+/// A quoted, escaped JSON string.
+inline std::string json_string(std::string_view input) { return "\"" + json_escape(input) + "\""; }
+inline char const* json_bool(bool value) { return value ? "true" : "false"; }
 
 struct Placement
 {

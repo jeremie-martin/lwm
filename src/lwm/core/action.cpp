@@ -1,13 +1,7 @@
 #include "action.hpp"
+#include "lwm/core/overloaded.hpp"
 
 namespace lwm {
-
-namespace {
-template <class... Ts> struct Overloaded : Ts...
-{
-    using Ts::operator()...;
-};
-}
 
 std::string_view action_name(Action const& action)
 {
@@ -21,8 +15,7 @@ std::string_view action_name(Action const& action)
             [](Spawn const&) -> std::string_view { return "spawn"; },
             [](ToggleFullscreen const&) -> std::string_view { return "toggle_fullscreen"; },
             [](ToggleFloat const&) -> std::string_view { return "toggle_float"; },
-            [](FocusNext const&) -> std::string_view { return "focus_next"; },
-            [](FocusPrev const&) -> std::string_view { return "focus_prev"; },
+            [](FocusCycle const& a) -> std::string_view { return a.forward ? "focus_next" : "focus_prev"; },
             [](FocusWindow const&) -> std::string_view { return "focus_window"; },
             [](FocusMonitor const& a) -> std::string_view
             { return a.direction < 0 ? "focus_monitor_left" : "focus_monitor_right"; },
@@ -30,11 +23,10 @@ std::string_view action_name(Action const& action)
             { return a.direction < 0 ? "move_to_monitor_left" : "move_to_monitor_right"; },
             [](SwitchWorkspace const&) -> std::string_view { return "switch_workspace"; },
             [](ToggleWorkspace const&) -> std::string_view { return "toggle_workspace"; },
-            [](NextWorkspace const&) -> std::string_view { return "next_workspace"; },
-            [](PrevWorkspace const&) -> std::string_view { return "prev_workspace"; },
+            [](CycleWorkspace const& a) -> std::string_view
+            { return a.step > 0 ? "next_workspace" : "prev_workspace"; },
             [](MoveToWorkspace const&) -> std::string_view { return "move_to_workspace"; },
-            [](SwapNext const&) -> std::string_view { return "swap_next"; },
-            [](SwapPrev const&) -> std::string_view { return "swap_prev"; },
+            [](SwapTile const& a) -> std::string_view { return a.offset > 0 ? "swap_next" : "swap_prev"; },
             [](SetLayout const&) -> std::string_view { return "set_layout"; },
             [](SetRatio const&) -> std::string_view { return "set_ratio"; },
             [](AdjustRatio const&) -> std::string_view { return "adjust_ratio"; },

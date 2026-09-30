@@ -134,7 +134,8 @@ changed.
 Workspace switches and focus changes for subscribers are derived the same way: the
 current workspace per output name and an explicit focus request are compared with the
 last completion. Other events are typed facts recorded where they happen and serialized
-in one place. `state_change` is emitted when the exposed state snapshot differs from the
+in one place. A new subscription records the exposed state as its baseline, and
+`state_change` is emitted when the exposed state snapshot differs from the
 last one sent.
 
 The outer loop flushes direct protocol replies after each bounded event batch. A batch

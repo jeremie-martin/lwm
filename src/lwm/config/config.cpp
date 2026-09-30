@@ -332,7 +332,7 @@ ParseResult<std::string> parse_scratchpad_name(toml::node const& node, std::stri
 ParseResult<double> parse_ratio(toml::node const& node, std::string const& context, LayoutConfig const& layout)
 {
     LWM_TRYV(value, expect_number(node, context));
-    if (value < layout.min_ratio || value > 1.0 - layout.min_ratio)
+    if (!layout.accepts_ratio(value))
         return std::unexpected(context + " must respect min_ratio bounds");
     return value;
 }
@@ -350,26 +350,15 @@ ParseResult<Action> parse_bind_action(
 {
     std::string const field = context + "." + std::string(name);
     using namespace action;
-    static std::pair<std::string_view, Action> const flags[] = {
-        { "kill", Kill{ } },
-        { "reload_config", ReloadConfig{ } },
-        { "restart", Restart{ } },
-        { "toggle_fullscreen", ToggleFullscreen{ } },
-        { "toggle_float", ToggleFloat{ } },
-        { "focus_next", FocusNext{ } },
-        { "focus_prev", FocusPrev{ } },
-        { "toggle_workspace", ToggleWorkspace{ } },
-        { "next_workspace", NextWorkspace{ } },
-        { "prev_workspace", PrevWorkspace{ } },
-        { "swap_next", SwapNext{ } },
-        { "swap_prev", SwapPrev{ } },
-        { "reset_ratios", ResetRatios{ } },
-        { "scratchpad_stash", ScratchpadStash{ } },
-        { "scratchpad_cycle", ScratchpadCycle{ } },
+    // Actions without a value are enabled with `name = true`; names come from action_name().
+    static Action const flags[] = {
+        Kill{ },         ReloadConfig{ },       Restart{ },         ToggleFullscreen{ }, ToggleFloat{ },
+        FocusCycle{ true }, FocusCycle{ false }, ToggleWorkspace{ }, CycleWorkspace{ 1 }, CycleWorkspace{ -1 },
+        SwapTile{ 1 },    SwapTile{ -1 },        ResetRatios{ },     ScratchpadStash{ },  ScratchpadCycle{ },
     };
-    for (auto const& [key, action] : flags)
+    for (auto const& action : flags)
     {
-        if (name != key)
+        if (action_name(action) != name)
             continue;
         LWM_TRYV(enabled, expect_bool(value, field));
         if (!enabled)
@@ -844,8 +833,8 @@ void add_default_keybinds(Config& config)
     bind(super_shift, "Right", MoveToMonitor{ 1 });
     bind(super, "f", ToggleFullscreen{ });
     bind(super_shift, "f", ToggleFloat{ });
-    bind(super, "j", FocusNext{ });
-    bind(super, "k", FocusPrev{ });
+    bind(super, "j", FocusCycle{ true });
+    bind(super, "k", FocusCycle{ false });
     bind(super, "h", AdjustRatio{ -0.05 });
     bind(super, "l", AdjustRatio{ 0.05 });
 }

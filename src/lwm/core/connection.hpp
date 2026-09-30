@@ -1,5 +1,6 @@
 #pragma once
 
+#include <cstdlib>
 #include <memory>
 #include <xcb/randr.h>
 #include <xcb/xcb.h>
@@ -26,6 +27,12 @@ public:
     uint8_t randr_event_base() const { return randr_event_base_; }
 
     void flush() { xcb_flush(conn_.get()); }
+    // Flush and wait until the server has processed every earlier request.
+    void sync()
+    {
+        flush();
+        free(xcb_get_input_focus_reply(conn_.get(), xcb_get_input_focus(conn_.get()), nullptr));
+    }
 
 private:
     std::unique_ptr<xcb_connection_t, decltype(&xcb_disconnect)> conn_;

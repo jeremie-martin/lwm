@@ -2,6 +2,7 @@
 
 #include "lwm/core/action.hpp"
 #include "lwm/core/types.hpp"
+#include <algorithm>
 #include <cstddef>
 #include <cstdint>
 #include <expected>
@@ -37,6 +38,12 @@ struct WindowRuleConfig
     std::optional<bool> transient; // Require transient (true) or non-transient (false)
     RuleActions actions;
 };
+
+// Num Lock and Caps Lock never affect bindings: matching strips them, and
+// grabs cover each combination of them.
+constexpr uint16_t kIgnoredModifiers = XCB_MOD_MASK_2 | XCB_MOD_MASK_LOCK;
+constexpr uint16_t kIgnoredModifierCombinations[] = { 0, XCB_MOD_MASK_2, XCB_MOD_MASK_LOCK, kIgnoredModifiers };
+constexpr uint16_t binding_modifiers(uint16_t state) { return state & ~kIgnoredModifiers; }
 
 struct KeyBinding
 {
@@ -83,6 +90,9 @@ struct LayoutConfig
     LayoutStrategy strategy = LayoutStrategy::MasterStack;
     double default_ratio = 0.5;
     double min_ratio = 0.1;
+    // Split ratios stay within [min_ratio, 1 - min_ratio].
+    bool accepts_ratio(double ratio) const { return ratio >= min_ratio && ratio <= 1.0 - min_ratio; }
+    double clamp_ratio(double ratio) const { return std::clamp(ratio, min_ratio, 1.0 - min_ratio); }
     uint32_t resize_grab_threshold = 8; // pixels from split border to trigger resize
 };
 

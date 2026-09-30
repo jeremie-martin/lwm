@@ -194,6 +194,7 @@ void Server::execute(Client& client, Handler const& handler)
         {
             // Register before acknowledgement. Subsequent events queue behind it.
             client.mask = subscribe->mask;
+            ++subscriptions_;
             respond(client, "ok subscribed");
         }
     }
