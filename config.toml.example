@@ -43,7 +43,7 @@ count = 10
 # labels and excess names are discarded.
 names = ["1", "2", "3", "4", "5", "6", "7", "8", "9", "10"]
 
-# Commands run once when LWM starts. Use:
+# Commands run on fresh startup, not on reload or exec restart. Use:
 # - { ref = "name" } to reuse an entry from [commands]
 # - { argv = ["cmd", "--flag"] } for structured execution without a shell
 # - { shell = "cd ~/proj && make run" } for explicit /bin/sh -c execution

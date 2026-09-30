@@ -135,8 +135,7 @@ void WindowManager::stash_to_scratchpad(xcb_window_t window)
 
 xcb_window_t WindowManager::find_visible_pool_window() const
 {
-    // scratchpad_pool_ entries are guaranteed managed: release_scratchpad_window runs
-    // before unmanage erases from clients_.
+    // State::erase removes pool membership before erasing the client.
     for (auto it = scratchpad_pool_.rbegin(); it != scratchpad_pool_.rend(); ++it)
     {
         auto const& client = require_client(*it);

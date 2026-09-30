@@ -2,6 +2,7 @@
 #include "events.hpp"
 #include "restart.hpp"
 #include "types.hpp"
+#include <cassert>
 #include <map>
 #include <set>
 #include <span>
@@ -9,8 +10,8 @@
 #include <utility>
 
 namespace lwm {
-// The only writer of managed domain records. Transport and policy readers get
-// const views; changes and their completion obligations are recorded together.
+// Owns managed domain records and records completion obligations with mutations.
+// Transport and policy readers receive const views.
 class State
 {
 public:
@@ -114,7 +115,7 @@ public:
     void iconic(xcb_window_t id, bool enabled);
     void sticky(xcb_window_t id, bool enabled);
     void borderless(xcb_window_t id, bool enabled);
-    void floating_preference(xcb_window_t id, bool enabled);
+    void floating(xcb_window_t id, bool enabled);
     void layer(xcb_window_t id, LayerHint hint);
     void maximize(xcb_window_t id, bool horizontal, bool vertical);
     void modal(xcb_window_t id, bool enabled);
@@ -141,7 +142,6 @@ public:
     void reset_ratios(size_t monitor);
     void swap_tiles(size_t monitor, size_t a, size_t b);
     void invalidate(size_t monitor, xcb_window_t preferred = XCB_NONE);
-    void request_geometry(xcb_window_t id);
     void resolve_owner(size_t monitor, xcb_window_t owner);
     void workarea(size_t monitor, Strut strut);
     void fit_floating();
@@ -158,7 +158,13 @@ public:
 
     // The coordinator consumes obligations and adds transport-only work. This
     // API never grants writable access to managed records or workspace graphs.
-    TransitionEffects& effects() { return effects_; }
+    // Writable pending-effects access is checked against publication in Debug.
+    TransitionEffects& effects()
+    {
+        assert(!publishing_);
+        return effects_;
+    }
+    TransitionEffects const& effects() const { return effects_; }
     TransitionEffects begin_publication();
     void end_publication();
 
@@ -176,9 +182,11 @@ private:
     uint64_t next_client_order_ = 0;
     uint64_t next_mru_order_ = 0;
     Client& edit(xcb_window_t id);
+    void apply_floating(xcb_window_t id, bool enabled);
     void classification(xcb_window_t id, bool update_mode = false);
     void attach(Client const& client, std::optional<size_t> index = std::nullopt);
     std::optional<SavedTilePos> detach(Client const& client);
+    void request_geometry(xcb_window_t id);
     void changed(xcb_window_t id);
 };
 }

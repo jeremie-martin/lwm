@@ -15,7 +15,7 @@ std::string error_reply(std::string const& message) { return "error " + message;
 
 void WindowManager::queue_event(EventType type, std::string json)
 {
-    effects_.events.emplace_back(type, std::move(json));
+    state_.effects().events.emplace_back(type, std::move(json));
 }
 
 std::string WindowManager::run_ipc_command(ipc::Command const& command)
@@ -23,7 +23,7 @@ std::string WindowManager::run_ipc_command(ipc::Command const& command)
     using enum ipc::CommandId;
     if (command.id != Ping && command.id != Version && command.id != WorkspaceList && command.id != WindowList
         && command.id != ScratchpadList && command.id != State && command.id != LogStatus)
-        effects_.state_changed |= ipc_.has_subscribers(Event_StateChange);
+        state_.effects().state_changed |= ipc_.has_subscribers(Event_StateChange);
     if (command.id == LogStatus)
         return ok_reply(log::status_json());
 
@@ -65,7 +65,7 @@ std::string WindowManager::run_ipc_command(ipc::Command const& command)
         if (!strategy)
             return error_reply("unknown layout: " + name);
         state_.layout(focused_monitor_, *strategy);
-        effects_.drain_crossing = true;
+        state_.effects().drain_crossing = true;
         std::string strategy_name = layout_strategy_str(*strategy);
         if (ipc_.has_subscribers(Event_LayoutChange))
         {

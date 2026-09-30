@@ -203,7 +203,7 @@ struct ClientPresentation
     uint64_t sync_value = 0;
 };
 
-/// Managed-window record owned by WindowManager::clients_. The state variant
+/// Managed-window record owned by State. The state variant
 /// holds kind-specific data and is the authority for kind().
 struct Client
 {
@@ -264,7 +264,7 @@ struct Client
 
     ClientState state = TiledState{};
     ClientPresentation presentation;
-    Geometry tiled_geometry; ///< Latest layout target; initially the client rectangle
+    Geometry tiled_geometry; ///< Layout target; seeded from initial or previous normal geometry
     xcb_window_t transient_for = XCB_NONE;
     bool suppress_next_configure_request =
         false; ///< Preserve WM-chosen startup placement against one client resize/move request

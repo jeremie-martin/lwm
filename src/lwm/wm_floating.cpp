@@ -26,13 +26,7 @@ WindowManager::FloatingPlacement WindowManager::initial_floating_placement(
             workspace_idx = parent->workspace;
         }
 
-        auto geom_cookie = xcb_get_geometry(conn_.get(), *transient);
-        auto* geom_reply = xcb_get_geometry_reply(conn_.get(), geom_cookie, nullptr);
-        if (geom_reply)
-        {
-            parent_geom = Geometry{ geom_reply->x, geom_reply->y, geom_reply->width, geom_reply->height };
-            free(geom_reply);
-        }
+        parent_geom = placement_parent_geometry(*transient);
     }
 
     bool desktop_pinned = desktop_target.kind == WindowManager::DesktopResolution::Resolved;
@@ -88,16 +82,9 @@ WindowManager::FloatingPlacement WindowManager::initial_floating_placement(
         }
     }
 
-    uint32_t width = 300;
-    uint32_t height = 200;
-    auto geom_cookie = xcb_get_geometry(conn_.get(), window);
-    auto* geom_reply = xcb_get_geometry_reply(conn_.get(), geom_cookie, nullptr);
-    if (geom_reply)
-    {
-        width = geom_reply->width;
-        height = geom_reply->height;
-        free(geom_reply);
-    }
+    auto initial_geometry = read_window_geometry(window).value_or(Geometry{ 0, 0, 300, 200 });
+    uint32_t width = initial_geometry.width;
+    uint32_t height = initial_geometry.height;
     if (has_size_hint)
     {
         if (hinted_width > 0)

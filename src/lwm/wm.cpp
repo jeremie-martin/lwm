@@ -404,13 +404,13 @@ std::expected<void, std::string> WindowManager::apply_config_reload(Config confi
     init_scratchpad_state();
     grab_buttons();
     regrab_all_keys();
-    effects_.desktop_metadata = true;
+    state_.effects().desktop_metadata = true;
     reapply_rules_to_existing_windows();
     invalidate_all_monitors();
 
     repair_focus_after_visibility_change(focused_monitor_);
 
-    effects_.appearance = true;
+    state_.effects().appearance = true;
 
     return {};
 }
@@ -508,69 +508,22 @@ void WindowManager::publish_lwm_window_class(Client const& client)
     );
 }
 
-Geometry WindowManager::current_window_geometry(xcb_window_t window) const
+std::optional<Geometry> WindowManager::read_window_geometry(xcb_window_t window) const
 {
-    Geometry fallback = { 0, 0, 300, 200 };
-    if (auto const* client = get_client(window); client && client->kind() == Client::Kind::Floating)
-        fallback = floating_geometry(*client);
-
-    auto geom_cookie = xcb_get_geometry(conn_.get(), window);
-    auto* geom_reply = xcb_get_geometry_reply(conn_.get(), geom_cookie, nullptr);
-    if (!geom_reply)
-        return fallback;
-
-    Geometry geometry = {
-        .x = geom_reply->x,
-        .y = geom_reply->y,
-        .width = static_cast<uint16_t>(std::max<uint16_t>(1, geom_reply->width)),
-        .height = static_cast<uint16_t>(std::max<uint16_t>(1, geom_reply->height)),
-    };
-    free(geom_reply);
-    return geometry;
+    auto* reply = xcb_get_geometry_reply(conn_.get(), xcb_get_geometry(conn_.get(), window), nullptr);
+    if (!reply)
+        return std::nullopt;
+    Geometry rectangle{ reply->x, reply->y, reply->width, reply->height };
+    free(reply);
+    return rectangle;
 }
 
-void WindowManager::convert_window_to_floating(xcb_window_t window, bool explicit_choice)
+std::optional<Geometry> WindowManager::placement_parent_geometry(xcb_window_t window) const
 {
-    auto* client = get_client(window);
-    if (client && explicit_choice)
-        state_.floating_preference(window, true);
-    if (!client || client->kind() != Client::Kind::Tiled || client->monitor >= monitors_.size())
-        return;
-
-    std::optional<Geometry> prior_floating = prior_floating_geometry(*client);
-    size_t monitor_idx = client->monitor;
-    state_.touch(client->id);
-
-    Geometry geometry = prior_floating ? *prior_floating : current_window_geometry(window);
-    if (!prior_floating && (client->presentation.hidden || geometry.x <= OFF_SCREEN_X / 2))
-    {
-        geometry = floating::place_floating(
-            monitors_[monitor_idx].working_area(),
-            geometry.width,
-            geometry.height,
-            std::nullopt
-        );
-    }
-    state_.change_kind(client->id, FloatingState{ geometry });
-}
-
-void WindowManager::convert_window_to_tiled(
-    xcb_window_t window,
-    std::optional<Geometry> prior_floating,
-    bool explicit_choice
-)
-{
-    auto* client = get_client(window);
-    if (client && explicit_choice)
-        state_.floating_preference(window, false);
-    if (!client || client->kind() != Client::Kind::Floating || client->monitor >= monitors_.size())
-        return;
-
-    auto saved_position = saved_tiled_pos(*client);
-    std::optional<size_t> index;
-    if (saved_position && saved_position->monitor == client->monitor && saved_position->workspace == client->workspace)
-        index = saved_position->index;
-    state_.change_kind(client->id, TiledState{ prior_floating }, index);
+    if (auto const* client = get_client(window);
+        client && (client->kind() == Client::Kind::Tiled || client->kind() == Client::Kind::Floating))
+        return presentation_geometry(*client);
+    return read_window_geometry(window);
 }
 
 void WindowManager::toggle_window_float(xcb_window_t window)
@@ -586,17 +539,16 @@ void WindowManager::toggle_window_float(xcb_window_t window)
         return;
 
     if (client->kind() == Client::Kind::Tiled)
-        convert_window_to_floating(window);
+        state_.floating(window, true);
     else
     {
-        Geometry prior_floating = floating_geometry(*client);
         if (client->maximized_horz || client->maximized_vert)
         {
             state_.maximize(window, false, false);
             ewmh_.set_window_state(window, ewmh_.get()->_NET_WM_STATE_MAXIMIZED_HORZ, false);
             ewmh_.set_window_state(window, ewmh_.get()->_NET_WM_STATE_MAXIMIZED_VERT, false);
         }
-        convert_window_to_tiled(window, prior_floating);
+        state_.floating(window, false);
     }
 
     focus_any_window(window);
@@ -1032,7 +984,7 @@ void WindowManager::manage_client(
     else
     {
         // Inactive workspaces may not be laid out before the client becomes floating.
-        candidate.tiled_geometry = current_window_geometry(window);
+        candidate.tiled_geometry = read_window_geometry(window).value_or(Geometry{ 0, 0, 300, 200 });
     }
     candidate.name = initial.properties.title;
     candidate.wm_class = initial.properties.wm_class;
@@ -1074,7 +1026,7 @@ void WindowManager::manage_client(
         apply_restart_client_state(window);
     else
         apply_rule_result_to_window(window, initial.rule_result);
-    effects_.desktops.insert(client.id);
+    state_.effects().desktops.insert(client.id);
     set_iconic_state(window, client.iconic);
     request_allowed_actions(client);
     if (client.urgency.active())
@@ -1083,7 +1035,7 @@ void WindowManager::manage_client(
     invalidate_monitor(client.monitor, client.fullscreen ? window : XCB_NONE);
     request_geometry(client);
     if (!adopting)
-        effects_.maps.push_back(window);
+        state_.effects().maps.push_back(window);
     if (!adopting && !suppress_focus_ && client.monitor == focused_monitor_ && is_focus_candidate(client))
         focus_any_window(window);
 }
@@ -1123,7 +1075,7 @@ void WindowManager::unmanage_window(xcb_window_t window)
 void WindowManager::set_fullscreen(Client const& client, bool enabled)
 {
     state_.fullscreen(client.id, enabled);
-    effects_.repair_focus = !suppress_focus_;
+    state_.effects().repair_focus = !suppress_focus_;
 }
 
 void WindowManager::publish_urgency(Client const& client)
@@ -1176,7 +1128,7 @@ void WindowManager::publish_urgency(Client const& client)
 void WindowManager::set_fullscreen_monitors(Client const& client, FullscreenMonitors const& monitors)
 {
     state_.fullscreen_monitors(client.id, monitors);
-    effects_.fullscreen_properties.insert(client.id);
+    state_.effects().fullscreen_properties.insert(client.id);
 }
 
 Geometry WindowManager::fullscreen_geometry_for_client(Client const& client) const
@@ -1234,7 +1186,7 @@ Geometry WindowManager::fullscreen_geometry_for_client(Client const& client) con
 
 void WindowManager::set_iconic_state(xcb_window_t window, bool iconic)
 {
-    effects_.iconic.insert(window);
+    state_.effects().iconic.insert(window);
     ewmh_.set_window_state(window, ewmh_.get()->_NET_WM_STATE_HIDDEN, iconic);
 }
 
@@ -1531,9 +1483,9 @@ xcb_window_t WindowManager::select_fullscreen_owner_for_monitor(size_t monitor_i
 
 xcb_window_t WindowManager::effective_fullscreen_owner(size_t monitor) const
 {
-    auto pending = effects_.monitors.find(monitor);
-    return pending == effects_.monitors.end() ? monitors_[monitor].fullscreen_owner
-                                              : select_fullscreen_owner_for_monitor(monitor, pending->second);
+    auto pending = state_.effects().monitors.find(monitor);
+    return pending == state_.effects().monitors.end() ? monitors_[monitor].fullscreen_owner
+                                                      : select_fullscreen_owner_for_monitor(monitor, pending->second);
 }
 
 bool WindowManager::is_suppressed_by_fullscreen(Client const& client) const
@@ -1741,13 +1693,13 @@ void WindowManager::update_fullscreen_monitor_state(Client const& client)
     state_.fullscreen_monitors(client.id, monitors);
 }
 
-void WindowManager::write_geometry(Client const& client, Geometry geometry, uint32_t border_width)
+bool WindowManager::write_geometry(Client const& client, Geometry geometry, uint32_t border_width)
 {
     geometry.width = std::max<uint16_t>(1, geometry.width);
     geometry.height = std::max<uint16_t>(1, geometry.height);
     if (state_.presentation(client.id).applied_geometry == geometry
         && state_.presentation(client.id).applied_border == border_width)
-        return;
+        return false;
     state_.presentation(client.id).applied_geometry = geometry;
     state_.presentation(client.id).applied_border = border_width;
     uint32_t color = border_color_for_client(client);
@@ -1766,7 +1718,7 @@ void WindowManager::write_geometry(Client const& client, Geometry geometry, uint
         values
     );
     send_configure_notify(client.id, geometry, static_cast<uint16_t>(border_width));
-    effects_.configure_replies.erase(client.id);
+    return true;
 }
 
 void WindowManager::send_configure_notify(xcb_window_t window, Geometry const& geom, uint16_t border_width)
@@ -1788,24 +1740,11 @@ void WindowManager::send_configure_notify(xcb_window_t window, Geometry const& g
 
 void WindowManager::publish_configure_notify(Client const& client)
 {
-    Geometry geom = presentation_geometry(client);
-
-    // Fall through to X read if cached geometry is uninitialized (e.g. iconic tiled never laid out)
-    if (geom.width > 0 && geom.height > 0)
-    {
-        send_configure_notify(client.id, geom, static_cast<uint16_t>(border_width_for_client(client)));
-        return;
-    }
-
-    auto geom_cookie = xcb_get_geometry(conn_.get(), client.id);
-    auto* geom_reply = xcb_get_geometry_reply(conn_.get(), geom_cookie, nullptr);
-    if (!geom_reply)
-        return;
-
-    Geometry fallback_geom = { geom_reply->x, geom_reply->y, geom_reply->width, geom_reply->height };
-    uint16_t bw = geom_reply->border_width;
-    free(geom_reply);
-    send_configure_notify(client.id, fallback_geom, bw);
+    send_configure_notify(
+        client.id,
+        presentation_geometry(client),
+        static_cast<uint16_t>(border_width_for_client(client))
+    );
 }
 
 Monitor const* WindowManager::monitor_at_point(int16_t x, int16_t y)
@@ -1891,15 +1830,15 @@ void WindowManager::update_window_title(xcb_window_t window)
         return;
     auto previous = match_window_rules(config_.rules, window_match_info(*client), monitors_, config_.workspaces.names);
     state_.title(window, std::move(name));
-    effects_.state_changed |= ipc_.has_subscribers(Event_StateChange);
+    state_.effects().state_changed |= ipc_.has_subscribers(Event_StateChange);
     reevaluate_metadata(window, previous);
 }
 
-void WindowManager::request_workarea_update() { effects_.workareas = true; }
+void WindowManager::request_workarea_update() { state_.effects().workareas = true; }
 
 void WindowManager::refresh_workareas()
 {
-    if (!std::exchange(effects_.workareas, false))
+    if (!std::exchange(state_.effects().workareas, false))
         return;
     std::vector<Strut> struts(monitors_.size());
 
@@ -1932,7 +1871,7 @@ void WindowManager::refresh_workareas()
     }
     for (size_t i = 0; i < monitors_.size(); ++i) state_.workarea(i, struts[i]);
 
-    effects_.workarea_property = true;
+    state_.effects().workarea_property = true;
 }
 
 void WindowManager::flush_and_drain_crossing()
@@ -2005,15 +1944,15 @@ void WindowManager::realize_visibility(size_t monitor_idx, xcb_window_t preferre
 
         if (should_show && client.presentation.hidden)
         {
-            effects_.visibility[id] = true;
+            state_.effects().visibility[id] = true;
         }
         else if (!should_show && !client.presentation.hidden)
         {
-            effects_.visibility[id] = false;
+            state_.effects().visibility[id] = false;
         }
     }
 
-    effects_.stacking = true;
+    state_.effects().stacking = true;
 }
 
 xcb_atom_t WindowManager::intern_atom(char const* name) const

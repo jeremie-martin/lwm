@@ -33,6 +33,14 @@ target_compile_definitions(lwm_logging_tests PRIVATE
 )
 add_dependencies(lwm_logging_tests lwm_log_probe lwm)
 
+add_executable(lwm_runtime_failure_probe
+  runtime_failure_probe.cpp
+  ${CMAKE_SOURCE_DIR}/src/app/main.cpp
+  ${CMAKE_SOURCE_DIR}/src/app/cli.cpp
+)
+target_link_libraries(lwm_runtime_failure_probe PRIVATE liblwm)
+target_link_options(lwm_runtime_failure_probe PRIVATE "-Wl,--export-dynamic-symbol=xcb_poll_for_event")
+
 add_executable(lwm_tests
   test_config_parser.cpp
   test_events_policy.cpp
@@ -79,11 +87,12 @@ add_executable(lwm_tests
 
 target_compile_definitions(lwm_tests PRIVATE
     LWM_BINARY_PATH="$<TARGET_FILE:lwm>"
+    LWM_RUNTIME_FAILURE_PROBE_PATH="$<TARGET_FILE:lwm_runtime_failure_probe>"
     LWM_XORG_CONFIG_PATH="${CMAKE_CURRENT_SOURCE_DIR}/xorg-dummy.conf"
     LWM_NOTIFY_BRIDGE_PATH="${CMAKE_SOURCE_DIR}/scripts/lwm-notify-bridge.sh"
     LWMCTL_BINARY_PATH="$<TARGET_FILE:lwmctl>"
 )
-add_dependencies(lwm_tests lwm lwmctl)
+add_dependencies(lwm_tests lwm lwmctl lwm_runtime_failure_probe)
 
 target_link_libraries(lwm_tests PRIVATE liblwm Catch2::Catch2WithMain PkgConfig::XCB_XTEST nlohmann_json::nlohmann_json)
 target_include_directories(lwm_tests PRIVATE ${CMAKE_SOURCE_DIR}/src)

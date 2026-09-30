@@ -27,19 +27,6 @@ Run a focused Catch2 selection before the full suite, for example:
 ./build/tests/lwm_logging_tests
 ```
 
-The X11 integration harness starts a private Xvfb server and launches the exact
-binaries from its CMake build, independently of the working directory. WM
-readiness requires a live supporting window and a successful ping through that
-process's own socket, so stale root properties cannot satisfy it. Startup/readiness
-failures fail the test and include captured stderr; they do not skip. Direct test
-runs may skip when Xvfb is unavailable; `make test` sets `LWM_TEST_REQUIRE_X11=1`
-to make that a failure. Capability-specific tests can
-still skip when the isolated server lacks that capability. Missing built binaries,
-failed atom creation, and unmet fixture requirements fail rather than skip.
-`LWM_TEST_ALLOW_EXISTING_DISPLAY=1` permits fallback to the current `DISPLAY`
-if the private server cannot start. Use it only with a disposable test display:
-these tests launch a WM and may inject input.
-
 To check undefined behavior and memory safety, use a separate build:
 
 ```sh
@@ -49,50 +36,66 @@ LWM_TEST_REQUIRE_X11=1 ./build/sanitize/tests/lwm_tests
 ./build/sanitize/tests/lwm_logging_tests
 ```
 
-Validate Release separately with `make test BUILD_DIR=build/release TEST_BUILD_TYPE=Release`.
-The default `make test` explicitly selects Debug so invariant checks cannot be
-silently disabled by an earlier Release configuration.
+Validate Release separately with `make test BUILD_DIR=build/release
+TEST_BUILD_TYPE=Release`. The default `make test` explicitly selects Debug so invariant
+checks cannot be silently disabled by an earlier Release configuration.
 
-Use `TestEnvironment::create(config)` for integration fixtures, and the shared
-bounded process/socket helpers in `x11_test_harness.hpp`. Synchronize on the
-observable result under test; a round trip on the test client's X connection
-does not prove that the WM handled an event. Test layout rectangles and resize
-boundaries rather than the shape of an internal data structure. IPC transport
-tests use real Unix sockets, including partial writes and stalled clients. IPC
-JSON is checked with the test-only nlohmann/json parser, not a local parser or
-production serialization helpers.
+## Test fixtures and synchronization
+
+The X11 integration harness starts a private Xvfb server and launches the exact binaries
+from its CMake build, independently of the working directory. WM readiness requires a
+live supporting window and a successful ping through that process's own socket, so stale
+root properties cannot satisfy it. Startup/readiness failures fail the test and include
+captured stderr; they do not skip. Direct test runs may skip when Xvfb is unavailable;
+`make test` sets `LWM_TEST_REQUIRE_X11=1` to make that a failure. Capability-specific
+tests can still skip when the isolated server lacks that capability. Missing built
+binaries, failed atom creation, and unmet fixture requirements fail rather than skip.
+`LWM_TEST_ALLOW_EXISTING_DISPLAY=1` permits fallback to the current `DISPLAY` if the
+private server cannot start. Use it only with a disposable test display: these tests
+launch a WM and may inject input.
+
+Use `TestEnvironment::create(config)` for integration fixtures, and the shared bounded
+process/socket helpers in `x11_test_harness.hpp`. Synchronize on the observable result
+under test; a round trip on the test client's X connection does not prove that the WM
+handled an event. Test layout rectangles and resize boundaries rather than the shape of
+an internal data structure. IPC transport tests use real Unix sockets, including partial
+writes and stalled clients. IPC JSON is checked with the test-only nlohmann/json parser,
+not a local parser or production serialization helpers.
 
 For negative X-event assertions, establish that the WM processed the request before
 checking that state stayed unchanged. `observe_title_after_events()` in
-`tests/wm_observations.hpp` writes a unique title on the same X connection and
-observes it in the WM's IPC snapshot. Use it only on managed fixtures whose title
-does not participate in rules. It establishes handling of earlier events on that
-connection, not completion of unrelated asynchronous work. Prefer the actual
-changed outcome for positive assertions; do not issue actions repeatedly inside
-polling predicates. Restart tests use `wm_instance()` and `wait_for_wm_restart()` to observe a new IPC
-instance before checking restored state. X resource IDs can be reused immediately
-after disconnect and cannot identify a distinct WM lifetime.
+`tests/wm_observations.hpp` writes a unique title on the same X connection and observes
+it in the WM's IPC snapshot. First wait for management to be observable, for example
+through `_LWM_WINDOW_CLASS`; a marker sent immediately after MapWindow can precede event
+selection. Use fixtures whose titles do not participate in rules. It establishes
+handling of earlier events on that connection, not completion of unrelated asynchronous
+work. Prefer the actual changed outcome for positive assertions; do not issue actions
+repeatedly inside polling predicates. Restart tests use `wm_instance()` and
+`wait_for_wm_restart()` to observe a new IPC instance before checking restored state. X
+resource IDs can be reused immediately after disconnect and cannot identify a distinct
+WM lifetime.
 
-Shared property readers validate X replies and property types. Use optional
-values for legitimately absent properties and require values that are part of
-the contract; a missing property must not silently become zero or an empty list.
-Use `LwmProcess::wait_for_exit()` and inspect the wait status to test normal
-shutdown. `stop()` is best-effort fixture cleanup and may force termination.
-`run_lwmctl()` clears inherited socket overrides before selecting the fixture.
+Shared property readers validate X replies and property types. Use optional values for
+legitimately absent properties and require values that are part of the contract; a
+missing property must not silently become zero or an empty list. Use
+`LwmProcess::wait_for_exit()` and inspect the wait status to test normal shutdown.
+`stop()` is best-effort fixture cleanup and may force termination. `run_lwmctl()` clears
+inherited socket overrides before selecting the fixture.
 
-Subscription tests use `Subscriber` in `tests/ipc_subscription.hpp`: it waits
-for the real server acknowledgement and retains coalesced and partial lines.
-Use the actual CLI only when its process or output behavior is the contract.
-Since the CLI hides acknowledgements, establish its readiness by receiving a
-real event; do not assume a fixed sleep means it has subscribed. Test children
-and descriptors must be released even when an assertion fails. `TestFd` in
-`tests/test_resources.hpp` also protects descriptors acquired during fixture
-construction. CTest enforces a 60-second per-case timeout; direct Catch runs
-(including `make test`) rely on bounded fixture operations.
+Subscription tests use `Subscriber` in `tests/ipc_subscription.hpp`: it waits for the
+real server acknowledgement and retains coalesced and partial lines. Use the actual CLI
+only when its process or output behavior is the contract. Since the CLI hides
+acknowledgements, establish its readiness by receiving a real event; do not assume a
+fixed sleep means it has subscribed. Test children and descriptors must be released even
+when an assertion fails. `TestFd` in `tests/test_resources.hpp` also protects
+descriptors acquired during fixture construction. CTest enforces a 60-second per-case
+timeout; direct Catch runs (including `make test`) rely on bounded fixture operations.
 
-Set `LWM_TEST_XSERVER=Xephyr` to run the same integration tests in an owned
-nested Xephyr server; `DISPLAY` must point to its parent X server. This does not
-manage the parent display. The parent may itself be a private Xvfb server.
+## Display and topology validation
+
+Set `LWM_TEST_XSERVER=Xephyr` to run the same integration tests in an owned nested
+Xephyr server; `DISPLAY` must point to its parent X server. This does not manage the
+parent display. The parent may itself be a private Xvfb server.
 
 For real multi-output RandR changes, install the Xorg dummy video driver
 (`xserver-xorg-video-dummy` on Debian/Ubuntu) and `xrandr`, then run:
@@ -101,12 +104,16 @@ For real multi-output RandR changes, install the Xorg dummy video driver
 LWM_TEST_REQUIRE_X11=1 LWM_TEST_XSERVER=Xorg ./build/tests/lwm_tests "[multioutput]"
 ```
 
-This starts an owned, rootless server using `tests/xorg-dummy.conf`, without
-physical input devices or GPUs. The test enables, reorders, removes, and restores
-outputs. It is hidden from the default suite because the dummy driver is optional;
-run it for topology changes. This covers the X protocol path, not hardware/driver
+This starts an owned, rootless server using `tests/xorg-dummy.conf`, without physical
+input devices or GPUs. The test enables, reorders, removes, and restores outputs. It is
+hidden from the default suite because the dummy driver is optional; run it for topology
+changes. Current cases cover output add/reorder/remove/return, workspace preservation,
+floating rebind, and fullscreen migration. They do not exhaust cross-monitor input,
+scratchpad, or dock combinations, and do not validate physical hardware or driver
 behavior. The harness uses the server binary directly on Debian to avoid its
 console-only wrapper.
+
+## Performance and load validation
 
 For transition request budgets and focus-cycle latency on an owned Xvfb server:
 
@@ -115,28 +122,26 @@ python3 tests/performance/transition_counts.py build/release/src/app/lwm --check
 python3 tests/performance/focus_cycle.py build/release/src/app/lwm
 ```
 
-The transition request check needs Linux, Python 3, `cc`, XCB headers, and libX11. It builds
-an LD_PRELOAD tracer in a temporary directory and counts only the WM's requests.
-For 200 title changes, metadata-only updates must perform no geometry writes or
-visibility/stacking reconciliation; sticky and sticky+fullscreen rule changes
-allow at most 200 crossing barriers and 200 QueryTree requests. Sticky-only
-changes must not rewrite unchanged geometry. Two relocation workloads move tiled
-and floating clients between workspaces 200 times, verify final membership, and
-bound geometry writes without fresh geometry reads or repeated reconciliation.
-A 200-operation ratio workload requires layout geometry changes without property
-reads or stacking queries. A 200-client workspace workload also bounds flush calls to catch completion work
-repeated for each configure
-notification. Startup workloads with 10 and 40 docks bound property reads to
-catch repeated workarea scans during adoption and require one shared root-geometry
-read, independent of dock count. Floating and tiled drag workloads send 200
-motions either individually or in a burst, verify the preview reaches the final
-position, and bound geometry writes and reconciliation. These use synthetic X
-events to control batching; integration tests separately exercise real XTEST
-button grabs. Omit `--check` to record counts without enforcing budgets. These are protocol-work budgets, not latency measurements; measure
-uninstrumented Release builds separately on an otherwise idle machine.
+The request probe needs Linux, Python 3, `cc`, XCB headers, and libX11. It builds an
+LD_PRELOAD tracer and counts WM-side requests after completed operations. `--check`
+enforces the budgets in `tests/performance/transition_counts.py`:
 
-Continuous X traffic, slow subscribers, incomplete requests, and SIGHUP are
-exercised together with independent IPC callers:
+| Workload | What the budget protects |
+| --- | --- |
+| Metadata, sticky, and fullscreen rule changes | No geometry work for metadata-only changes; bounded visibility and stacking reconciliation |
+| Tiled and floating relocation | Geometry and membership update without fresh geometry reads or repeated reconciliation |
+| Split ratios | Layout updates without property reads or stacking queries |
+| Workspace changes | Flushes are bounded independently of per-window ConfigureNotify events |
+| Dock adoption | Shared root-geometry read and bounded property reads as dock count grows |
+| Individual and batched drag motions | Final preview geometry with bounded writes and reconciliation |
+
+These probes use synthetic motion events for controlled batching; integration tests
+separately exercise XTEST button grabs. Omit `--check` to record counters. Request
+counts measure protocol work, not latency. Measure uninstrumented Release builds on an
+otherwise idle machine when comparing latency.
+
+Continuous X traffic, slow subscribers, incomplete requests, and SIGHUP are exercised
+together with independent IPC callers:
 
 ```sh
 python3 tests/performance/ipc_load.py build/release/src/app/lwm --x-flood --check
@@ -145,42 +150,42 @@ LWM_TEST_REQUIRE_X11=1 LWM_TEST_PREVIOUS_BINARY=/absolute/path/to/previous/lwm b
 ```
 
 The load probe starts a separate continuous X producer, waits for actual subscription
-acknowledgements, leaves one subscriber unread, and checks that requests and a
-signal reload finish while the producer remains alive. It reports completed-call
-latency, process CPU time and RSS; these are observations, not universal latency
-thresholds. The generated sequence test reports its seed and complete action trace
-on failure, checks protocol state against an independent preference model, and
-checks process identity so exception recovery cannot hide a broken transition.
+acknowledgements, leaves one subscriber unread, and checks that requests and a signal
+reload finish while the producer remains alive. It reports completed-call latency,
+process CPU time and RSS; these are observations, not universal latency thresholds. The
+generated sequence test reports its seed and complete action trace on failure, checks
+one client's protocol state against an independent preference model, and detects
+unexpected process-instance changes. It covers preferences, classification, and restart;
+multi-client geometry, focus, and placement require their own interaction tests.
 Cross-binary handoff explicitly tests both directions through `exec PATH`.
 
-Linux CI runs Debug, Release, sanitizer, and owned multi-output Xorg tests, plus
-Release request budgets and the flood probe. Scheduled/manual runs extend generated
-sequences. This does not replace testing a real desktop, drivers, and applications.
+[Linux CI](.github/workflows/test.yml) runs Debug, Release, sanitizer, and owned
+multi-output Xorg tests, plus Release request budgets and the flood probe.
+Scheduled/manual runs extend generated sequences. These checks do not replace sustained
+desktop use with real drivers and applications.
 
-The focus-cycle benchmark reports completed IPC round-trip latency and distinct
-targets on an owned Xvfb display, with 10, 100, and 500 floating clients. Compare
-Release builds under similar load; this includes IPC, focus publication, and
-server interaction, not just selection. Latency is reported rather than used as a
-machine-dependent test threshold. A full traversal should visit every client. It defaults to `prev`, which permits
-equivalent-work comparisons with versions whose `next` command alternated between
-two windows; use `--direction next` to measure forward traversal.
-`--transients chain` and `--transients cycle` add reverse-registration parent
-relationships before measuring. For example, `--clients 10 40 100 --operations 200
---transients cycle` exercises malformed cyclic hints. Compare ordinary clients
-for unchanged-work latency; cycle results also reflect the new deterministic
-ordering policy, so they do not isolate algorithm cost.
+The focus-cycle benchmark reports completed IPC round-trip latency and distinct targets
+on an owned Xvfb display, with 10, 100, and 500 floating clients. Compare Release builds
+under similar load; this includes IPC, focus publication, and server interaction, not
+just selection. Latency is reported rather than used as a machine-dependent test
+threshold. A full traversal should visit every client. The default direction is `prev`;
+use `--direction next` for forward traversal. Keep direction and workload identical when
+comparing builds. `--transients chain` and `--transients cycle` add reverse-registration
+parent relationships before measuring. For example, `--clients 10 40 100 --operations
+200 --transients cycle` exercises malformed cyclic hints. Compare ordinary clients for
+ordinary focus latency; transient workloads also exercise dependency ordering.
 
-To detect retained X-server clients across repeated restart and failed-exec recovery (also
-requires the libXRes runtime library):
+To detect retained X-server clients across repeated restart and failed-exec recovery
+(also requires the libXRes runtime library):
 
 ```sh
 python3 tests/performance/restart_resources.py build/release/src/app/lwm --check
 ```
 
-This uses the X Resource extension to compare client counts before and after
-20 WM reconstructions. Completion is established through the IPC instance ID;
-resource counts must return to the baseline. A final restart with the observer
-disconnected checks that an otherwise empty X server preserves workspace state.
+This uses the X Resource extension to compare client counts before and after 20 WM
+reconstructions. Completion is established through the IPC instance ID; resource counts
+must return to the baseline. A final restart with the observer disconnected checks that
+an otherwise empty X server preserves workspace state.
 
 For independent IPC callers, run:
 
@@ -188,15 +193,15 @@ For independent IPC callers, run:
 python3 tests/performance/ipc_load.py build/release/src/app/lwm --check
 ```
 
-This uses an owned Xvfb server and 16 concurrent callers, both normally and with
-an incomplete request already connected. All 512 pings must succeed in each
-case. Reported latency is descriptive, not a pass/fail threshold. Omit `--check`
-to collect measurements without enforcing the success-count requirement.
+This uses an owned Xvfb server and 16 concurrent callers, both normally and with an
+incomplete request already connected. All 512 pings must succeed in each case. Reported
+latency is descriptive, not a pass/fail threshold. Omit `--check` to collect
+measurements without enforcing the success-count requirement.
 
-The logging comparison runs real workspace transitions with 40 clients, reports
-IPC percentiles and WM CPU, measures idle worker cost, and fills stderr to test
-backpressure, restart acknowledgement, and actual exec completion.
-Use Release builds and an otherwise quiet machine:
+The logging comparison runs real workspace transitions with 40 clients, reports IPC
+percentiles and WM CPU, measures idle worker cost, and fills stderr to test
+backpressure, restart acknowledgement, and actual exec completion. Use Release builds
+and an otherwise quiet machine:
 
 ```sh
 python3 tests/performance/logging_bench.py --binary build/release/src/app/lwm
@@ -205,19 +210,18 @@ python3 tests/performance/logging_bench.py --binary build/release/src/app/lwm --
 # Add --legacy-baseline only if that binary predates --log-target.
 ```
 
-The default workload sends stderr to `/dev/null`. `--target journal` measures
-the native journal path and writes to the system journal; use a disposable host
-or private mount namespace with a draining journal socket for verbose runs.
-The blocked-output case always uses a private stderr pipe.
+The default workload sends stderr to `/dev/null`. `--target journal` measures the native
+journal path and writes to the system journal; use a disposable host or private mount
+namespace with a draining journal socket for verbose runs. The blocked-output case
+always uses a private stderr pipe.
 
-Results are JSON Lines. `--affinity WM WORKER XSERVER DRIVER` accepts four Linux
-CPU IDs to control placement (use separate physical cores); `--include-off`
-measures the implementation without its worker. Increase `--switches` to reduce
-the effect of CPU accounting's tick resolution. Compare repeated runs, report
-overflow/error status alongside latency, and distinguish producer/library microbenchmarks from whole-WM results. This
-comparison includes the logging policy and call-site changes; it cannot isolate
-library overhead or establish a hard latency guarantee.
-
+Results are JSON Lines. `--affinity WM WORKER XSERVER DRIVER` accepts four Linux CPU IDs
+to control placement (use separate physical cores); `--include-off` measures the
+implementation without its worker. Increase `--switches` to reduce the effect of CPU
+accounting's tick resolution. Compare repeated runs, report overflow/error status
+alongside latency, and distinguish producer/library microbenchmarks from whole-WM
+results. This comparison includes the logging policy and call-site changes; it cannot
+isolate library overhead or establish a hard latency guarantee.
 
 ## Nested preview
 
@@ -229,37 +233,43 @@ For an interactive check, install Xephyr (`xorg-server-xephyr` on Arch Linux,
 ```
 
 The script builds Debug, uses display `:100` (which must be free), and seeds
-`test-config/config.toml` from `config.toml.example` if absent. Edit that test
-config to choose installed applications. WM diagnostics go to the preview
-terminal. It also starts `config/polybar.ini`
-when Polybar is installed. Launch applications with `DISPLAY=:100 <program>`;
-press Enter in the script's terminal to stop the preview.
+`test-config/config.toml` from `config.toml.example` if absent. Edit that test config to
+choose installed applications. WM diagnostics go to the preview terminal. It also starts
+`config/polybar.ini` when Polybar is installed. Launch applications with `DISPLAY=:100
+<program>`; press Enter in the script's terminal to stop the preview.
 
-The sample bar uses PulseAudio and battery names `BAT0`/`ACA0`; adjust its
-modules for your machine. `scripts/launch-polybar.sh` starts a bar on each
-connected output, replacing existing Polybar processes. It is intended for
-your desktop session, not the isolated preview.
+The sample bar uses PulseAudio and battery names `BAT0`/`ACA0`; adjust its modules for
+your machine. `scripts/launch-polybar.sh` starts a bar on each connected output,
+replacing existing Polybar processes. It is intended for your desktop session, not the
+isolated preview.
 
-## Change model
+## Changing behavior
 
-Keep state changes in the funnels described by [ARCHITECTURE.md](ARCHITECTURE.md):
-mutations update domain state and accumulate effects; `complete_transition()`
-owns their ordered completion. Invalidate affected monitors for visibility/layout
-changes, request geometry for rectangle-only changes, and use `focus_any_window()`
-for focus intent. Do not add local reconciliation, property flushes, or crossing
-barriers to feature handlers. Prefer explicit domain state and pure policy
-functions over duplicated guard logic.
+Follow the [state and completion model](ARCHITECTURE.md#lifecycle-and-transitions). Keep
+mutation and its completion obligations together in `State`. Feature handlers should not
+add their own reconciliation, geometry recovery from X presentation, or publication
+barriers. Choose visibility, layout, or geometry effects according to the dependency
+that changed; use `focus_any_window()` for focus intent.
 
-At X event boundaries, use `get_client(window)` because the window may be
-unmanaged or already destroyed. Inside a path that has established managed
-ownership, use `require_client(window)` so an impossible missing client fails
-at the actual invariant boundary.
+At X event boundaries, use `get_client(window)` because the window may be unmanaged or
+already destroyed. Inside a path that has established managed ownership, use
+`require_client(window)` so an impossible missing client fails at the actual invariant
+boundary.
+
+### Test contracts
 
 Test through the real boundary:
 
 - pure decisions belong in a `test_*_policy.cpp` or subsystem unit test;
 - observable WM behavior belongs in an integration test using
-  `tests/x11_test_harness.hpp`;
+  `tests/x11_test_harness.hpp`; cover composed geometry transitions without an
+  explicit placement override that would mask the default-geometry decision.
+  ConfigureRequest coverage counts synthetic replies after observable completion,
+  including requests that do and do not change geometry;
+- fatal exception handling uses `lwm_runtime_failure_probe`, which links the real
+  application entry point and WM and substitutes the first X event-loop poll with
+  a throwing function. Production has no injection hook. The test verifies failure
+  exits and releases ownership; real failed-exec tests separately verify recovery;
 - logging lifecycle cases use `tests/log_probe.cpp` so each case has isolated
   process-global logger state. That probe alone redirects libsystemd's journal
   socket address to a private collector; it uses the real library encoding and
@@ -273,27 +283,26 @@ Test through the real boundary:
   verifies invariant failure aborts even with a blocked sink. Time bounds detect regressions; they
   are not hard real-time guarantees.
 
-Choose tests by the failure they detect, not by test count. Policy tests and
-integration tests may cover the same feature when they protect distinct risks;
-do not duplicate a private helper's implementation when an observable contract
-already owns that behavior. Start negative cases from valid state and violate
-only the intended relationship where possible. Otherwise, a different validation
-check can hide the missing behavior.
+Choose tests by the failure they detect, not by test count. Policy tests and integration
+tests may cover the same feature when they protect distinct risks; do not duplicate a
+private helper's implementation when an observable contract already owns that behavior.
+Start negative cases from valid state and violate only the intended relationship where
+possible. Otherwise, a different validation check can hide the missing behavior.
 
-For restart compatibility, use fixed wire records and independently stated
-expected values, not just an encoder/decoder round trip. Keep actual adoption
-and exec tests: codec tests cannot establish that the WM applies decoded state.
-Require nonempty/cardinality checks before range assertions. Choose policy fixtures
-that distinguish competing outcomes: history order should differ from insertion
-order, and invalid rules must actually be selected. Literal protocol examples
-should check decoded argument values as well as command names.
-For important regressions, check the test against the broken revision or a
-focused, temporary mutation of the relevant behavior. Confirm it fails at the
-intended assertion, then restore production code and run the normal checks.
+For restart compatibility, use fixed wire records and independently stated expected
+values, not just an encoder/decoder round trip. Keep actual adoption and exec tests:
+codec tests cannot establish that the WM applies decoded state. Require
+nonempty/cardinality checks before range assertions. Choose policy fixtures that
+distinguish competing outcomes: history order should differ from insertion order, and
+invalid rules must actually be selected. Literal protocol examples should check decoded
+argument values as well as command names. For important regressions, check the test
+against the broken revision or a focused, temporary mutation of the relevant behavior.
+Confirm it fails at the intended assertion, then restore production code and run the
+normal checks.
 
-If a behavior is difficult to test without mocking an internal WM component,
-move the decision into a pure policy function and keep XCB, filesystem, and IPC
-handling at the boundary.
+If a decision is independently meaningful, a pure policy function can make it simpler to
+test. Keep transport, ordering, and lifecycle tests at real boundaries; do not add
+production hooks or abstractions solely to make a test convenient.
 
 ## Documentation ownership
 
@@ -306,17 +315,16 @@ Update the one surface that owns the changed contract:
 | runtime state or transition ownership | `ARCHITECTURE.md` |
 | ICCCM, EWMH, or `_LWM_*` behavior | `X11.md` |
 | socket command, response, JSON, or event | `IPC.md` |
-| verified unfinished work | `ROADMAP.md` |
 
-Tests are the executable specification. Source comments should explain only
-local invariants or non-obvious rationale; do not duplicate an external
-contract in comments or several documents.
+Tests are the executable specification. Source comments should explain only local
+invariants or non-obvious rationale; do not duplicate an external contract in comments
+or several documents.
 
 ## Style and review
 
-Format C++ with the repository `.clang-format` and follow nearby naming:
-`PascalCase` types, `snake_case` functions and files, and uppercase constants
-and macros. Keep comments literal and local.
+Format C++ with the repository `.clang-format` and follow nearby naming: `PascalCase`
+types, `snake_case` functions and files, and uppercase constants and macros. Keep
+comments literal and local.
 
 Before finishing a change:
 
@@ -326,6 +334,5 @@ Before finishing a change:
 3. Update the owning documentation and remove superseded explanations.
 4. Run `git diff --check` and inspect the final diff for unrelated changes.
 
-Commit subjects are short and imperative. A pull request should state the
-problem, externally observable behavior, tests run, and any manual Xephyr
-reproduction.
+Commit subjects are short and imperative. A pull request should state the problem,
+externally observable behavior, tests run, and any manual Xephyr reproduction.

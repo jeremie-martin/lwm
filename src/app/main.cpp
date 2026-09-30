@@ -13,6 +13,7 @@
 #include <optional>
 #include <stdexcept>
 #include <string>
+#include <string_view>
 #include <unistd.h>
 #include <vector>
 
@@ -100,6 +101,8 @@ int main(int argc, char* argv[])
         return 1;
     }
 
+    int exit_code = 0;
+    std::string_view phase = "Startup";
     try
     {
         std::vector<char*> restart_argv;
@@ -111,43 +114,30 @@ int main(int argc, char* argv[])
 
         std::string config_path = parsed->config_path.value_or(default_config_path());
         bool explicit_config = parsed->config_path.has_value();
-        int recovery_failures = 0;
-        bool runtime_failure = false;
 
         while (true)
         {
+            phase = "Configuration loading";
             lwm::Config config = load_config(config_path, explicit_config);
 
             std::string restart_binary;
-            try
             {
+                phase = "WM initialization";
                 lwm::WindowManager wm(std::move(config), *signals, config_path);
-                recovery_failures = 0;
+                phase = "WM event loop";
                 auto result = wm.run();
                 if (result == lwm::RunResult::Failed)
                 {
-                    runtime_failure = true;
+                    exit_code = 1;
                     break;
                 }
                 if (result != lwm::RunResult::Restart)
                     break;
 
+                phase = "Restart preparation";
                 restart_binary = wm.restart_binary();
                 wm.prepare_restart();
             }
-            catch (std::exception const& e)
-            {
-                ++recovery_failures;
-                if (recovery_failures >= 3)
-                {
-                    throw std::runtime_error(
-                        "WM initialization failed " + std::to_string(recovery_failures) + " times, giving up: " + e.what()
-                    );
-                }
-                LWM_LOG_ERROR("WM initialization failed, retrying ({}/3): {}", recovery_failures, e.what());
-                continue;
-            }
-
             std::string binary = restart_binary.empty() ? parsed->restart_argv.front() : restart_binary;
             LWM_LOG_INFO("Restarting: {}", binary);
             // Exec replaces the worker on success; on failure it remains usable.
@@ -157,21 +147,15 @@ int main(int argc, char* argv[])
 
             LWM_LOG_CRITICAL("exec '{}' failed: {}, recovering", binary, std::strerror(exec_errno));
         }
-
-        if (runtime_failure)
-        {
-            lwm::log::shutdown();
-            return 1;
-        }
     }
     catch (std::exception const& e)
     {
-        LWM_LOG_CRITICAL("Error: {}", e.what());
-        lwm::log::shutdown();
-        return 1;
+        LWM_LOG_CRITICAL("{} failed: {}", phase, e.what());
+        exit_code = 1;
     }
 
-    LWM_LOG_INFO("LWM exiting");
+    if (exit_code == 0)
+        LWM_LOG_INFO("LWM exiting");
     lwm::log::shutdown();
-    return 0;
+    return exit_code;
 }

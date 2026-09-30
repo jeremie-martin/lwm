@@ -34,6 +34,7 @@ void State::changed(xcb_window_t) { effects_.state_changed = true; }
 void State::request_geometry(xcb_window_t id) { effects_.geometry.push_back(id); }
 void State::invalidate(size_t monitor, xcb_window_t preferred)
 {
+    assert(!publishing_);
     if (monitor >= monitors_.size())
         return;
     auto [it, inserted] = effects_.monitors.try_emplace(monitor, preferred);
@@ -216,6 +217,8 @@ void State::change_kind(xcb_window_t id, ClientState state, std::optional<size_t
     bool tiled = std::holds_alternative<TiledState>(state);
     if (was_tiled && !tiled)
         std::get<FloatingState>(state).saved_tiled_pos = detach(client);
+    if (!was_tiled && tiled)
+        client.tiled_geometry = floating_geometry(client);
     client.state = std::move(state);
     if (!was_tiled && tiled)
         attach(client, tile_index);
@@ -290,24 +293,7 @@ void State::classification(xcb_window_t id, bool update_mode)
     if (!normal || !default_normal)
         return;
     if (update_mode && !c.scratchpad)
-    {
-        bool floating = c.preferences.floating.value_or(defaults.kind == WindowClassification::Kind::Floating);
-        if (floating && c.kind() == Client::Kind::Tiled)
-        {
-            auto rectangle = prior_floating_geometry(c).value_or(c.tiled_geometry);
-            change_kind(id, FloatingState{ rectangle });
-            touch(id);
-        }
-        else if (!floating && c.kind() == Client::Kind::Floating)
-        {
-            auto prior = floating_geometry(c);
-            auto saved = saved_tiled_pos(c);
-            std::optional<size_t> index;
-            if (saved && saved->monitor == c.monitor && saved->workspace == c.workspace)
-                index = saved->index;
-            change_kind(id, TiledState{ prior }, index);
-        }
-    }
+        apply_floating(id, c.preferences.floating.value_or(defaults.kind == WindowClassification::Kind::Floating));
     bool taskbar = c.preferences.skip_taskbar.value_or(defaults.skip_taskbar || c.transient_for != XCB_NONE);
     bool pager = c.preferences.skip_pager.value_or(defaults.skip_pager || c.transient_for != XCB_NONE);
     auto layer = c.fullscreen ? LayerHint::Normal
@@ -322,9 +308,32 @@ void State::classification(xcb_window_t id, bool update_mode)
     effects_.states.insert(id);
     changed(id);
 }
-void State::floating_preference(xcb_window_t id, bool enabled)
+void State::apply_floating(xcb_window_t id, bool enabled)
 {
-    edit(id).preferences.floating = enabled;
+    auto& client = edit(id);
+    if (enabled && client.kind() == Client::Kind::Tiled)
+    {
+        auto rectangle = prior_floating_geometry(client).value_or(client.tiled_geometry);
+        change_kind(id, FloatingState{ rectangle });
+        touch(id);
+    }
+    else if (!enabled && client.kind() == Client::Kind::Floating)
+    {
+        auto rectangle = floating_geometry(client);
+        auto saved = saved_tiled_pos(client);
+        std::optional<size_t> index;
+        if (saved && saved->monitor == client.monitor && saved->workspace == client.workspace)
+            index = saved->index;
+        change_kind(id, TiledState{ rectangle }, index);
+    }
+}
+void State::floating(xcb_window_t id, bool enabled)
+{
+    auto& client = edit(id);
+    if (client.kind() != Client::Kind::Tiled && client.kind() != Client::Kind::Floating)
+        return;
+    client.preferences.floating = enabled;
+    apply_floating(id, enabled);
     changed(id);
 }
 void State::layer(xcb_window_t id, LayerHint hint)

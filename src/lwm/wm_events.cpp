@@ -356,8 +356,6 @@ void WindowManager::handle_window_removal(xcb_window_t window)
             + ",\"workspace\":" + std::to_string(client->workspace) + "}";
     }
 
-    // Release scratchpad slot before unmanage destroys the client
-
     unmanage_window(window);
 
     if (!unmap_json.empty())
@@ -793,7 +791,7 @@ void WindowManager::handle_key_press(xcb_key_press_event_t const& e)
 
     if (!handled)
         return;
-    effects_.state_changed |= ipc_.has_subscribers(Event_StateChange);
+    state_.effects().state_changed |= ipc_.has_subscribers(Event_StateChange);
 
     if (ipc_.has_subscribers(Event_KeyAction))
     {
@@ -899,7 +897,7 @@ void WindowManager::handle_restack_message(xcb_client_message_event_t const& e)
     if (auto const* client = get_client(e.window);
         client && (client->kind() == Client::Kind::Tiled || client->kind() == Client::Kind::Floating))
     {
-        effects_.stacking = true;
+        state_.effects().stacking = true;
         conn_.flush();
         return;
     }
@@ -922,7 +920,7 @@ void WindowManager::handle_restack_message(xcb_client_message_event_t const& e)
     // The raw restack of an unmanaged window perturbs X's stacking order
     // outside our funnel; schedule a recompute so apply_stacking re-asserts
     // managed ordering and refreshes _NET_CLIENT_LIST_STACKING.
-    effects_.stacking = true;
+    state_.effects().stacking = true;
     conn_.flush();
 }
 
@@ -1112,7 +1110,7 @@ void WindowManager::handle_desktop_change(xcb_client_message_event_t const& e)
             clear_focus();
     }
 
-    effects_.drain_crossing = true;
+    state_.effects().drain_crossing = true;
 }
 
 void WindowManager::handle_moveresize_window(xcb_client_message_event_t const& e)
@@ -1206,7 +1204,7 @@ void WindowManager::handle_showing_desktop(xcb_client_message_event_t const& e)
             focus_or_fallback(focused_monitor());
         }
     }
-    effects_.drain_crossing = true;
+    state_.effects().drain_crossing = true;
 }
 
 void WindowManager::handle_configure_request(xcb_configure_request_event_t const& e)
@@ -1309,7 +1307,7 @@ void WindowManager::handle_property_notify(xcb_property_notify_event_t const& e)
                 auto previous =
                     match_window_rules(config_.rules, window_match_info(*client), monitors_, config_.workspaces.names);
                 state_.window_class(e.window, std::move(instance), std::move(name));
-                effects_.state_changed |= ipc_.has_subscribers(Event_StateChange);
+                state_.effects().state_changed |= ipc_.has_subscribers(Event_StateChange);
                 reevaluate_metadata(e.window, previous);
             }
         }
@@ -1375,7 +1373,7 @@ void WindowManager::handle_property_notify(xcb_property_notify_event_t const& e)
                     {
                         std::optional<Geometry> parent_geometry;
                         if (transient_anchored)
-                            parent_geometry = current_window_geometry(client->transient_for);
+                            parent_geometry = placement_parent_geometry(client->transient_for);
 
                         geom = floating::place_floating(
                             monitors_[target.monitor].working_area(),
@@ -1523,7 +1521,7 @@ void WindowManager::handle_randr_screen_change()
     state_.fit_floating();
 
     // Update EWMH for new monitor configuration
-    effects_.desktop_metadata = true;
+    state_.effects().desktop_metadata = true;
     request_current_desktop_update();
 
     // Focus a window after reconfiguration
@@ -1532,7 +1530,7 @@ void WindowManager::handle_randr_screen_change()
         focus_or_fallback(monitors_[focused_monitor_]);
     }
 
-    effects_.drain_crossing = true;
+    state_.effects().drain_crossing = true;
 }
 
 } // namespace lwm

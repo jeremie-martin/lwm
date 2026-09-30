@@ -8,7 +8,7 @@ namespace lwm::ipc {
 namespace {
 using enum CommandId;
 constexpr CommandSpec specs[] = {
-    { LogStatus, "log status", Argument::None, "log status", "show logging delivery counters as JSON" },
+    { LogStatus, "log status", Argument::None, "log status", "show logging configuration and backend notifications as JSON" },
     {            Ping,"ping",   Argument::None,"ping",     "check whether the WM is running"                                                             },
     {         Version,           "version",   Argument::None,                       "version",                     "show WM version" },
     {          Reload,     "reload-config",   Argument::None,                 "reload-config",                "reload configuration" },

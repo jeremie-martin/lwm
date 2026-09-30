@@ -72,3 +72,44 @@ TEST_CASE("SIGHUP reload survives WM reconstruction after failed exec", "[integr
         ));
     }
 }
+
+TEST_CASE("Unexpected event-loop exceptions terminate instead of reconstructing", "[integration][lifecycle]")
+{
+    auto& server = X11TestEnvironment::instance();
+    if (!server.available())
+        SKIP("X11 unavailable");
+    X11Connection conn;
+    REQUIRE(conn.ok());
+    auto result = run_command(
+        LWM_RUNTIME_FAILURE_PROBE_PATH,
+        {
+            "--log-target",
+            "stderr",
+            "--log-level",
+            "critical"
+    },
+        { { "DISPLAY", server.display() } },
+        { "XDG_CONFIG_HOME", "LWM_SOCKET" }
+    );
+    REQUIRE(result);
+    INFO(result->stderr_text);
+    REQUIRE(result->exit_code == 1);
+    REQUIRE(result->stderr_text.find("injected event-loop failure") != std::string::npos);
+    // Failure released WM ownership; a fresh process can claim it normally.
+    LwmProcess replacement(server.display());
+    REQUIRE(wait_for_wm_ready(conn, std::chrono::seconds(2)));
+}
+
+TEST_CASE("Startup failure exits without disturbing the running WM", "[integration][lifecycle]")
+{
+    auto env = TestEnvironment::create();
+    REQUIRE(env);
+    auto instance = wm_instance(env->conn);
+    LwmProcess duplicate(X11TestEnvironment::instance().display());
+    auto status = duplicate.wait_for_exit(std::chrono::seconds(2));
+    REQUIRE(status);
+    REQUIRE(WIFEXITED(*status));
+    REQUIRE(WEXITSTATUS(*status) == 1);
+    REQUIRE(duplicate.diagnostics().find("Another window manager") != std::string::npos);
+    REQUIRE(wm_instance(env->conn) == instance);
+}

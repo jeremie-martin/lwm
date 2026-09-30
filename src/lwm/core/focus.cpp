@@ -43,7 +43,7 @@ xcb_window_t fallback(Clients const& clients, Monitor const& monitor, Context co
     for (auto it = workspace.windows.rbegin(); it != workspace.windows.rend(); ++it)
         if (current_tile(*it))
             return *it;
-    // Preserve the existing reverse workspace/membership priority for sticky tiles.
+    // Sticky tiles use reverse workspace order, then reverse membership order.
     for (size_t i = monitor.workspaces.size(); i-- > 0;)
     {
         if (i == context.workspace)

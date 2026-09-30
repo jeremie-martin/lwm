@@ -52,16 +52,8 @@ void WindowManager::apply_rule_result_to_window(xcb_window_t window, WindowRuleR
     auto* client = get_client(window);
     if (!client)
         return;
-    if (rule_result.fullscreen == false)
-        set_fullscreen(*client, false);
-
     if (rule_result.floating.has_value())
-    {
-        if (*rule_result.floating)
-            convert_window_to_floating(window);
-        else
-            convert_window_to_tiled(window);
-    }
+        state_.floating(window, *rule_result.floating);
 
     apply_rule_target_location(window, rule_result);
     apply_rule_floating_placement(window, rule_result);
@@ -76,8 +68,8 @@ void WindowManager::apply_rule_result_to_window(xcb_window_t window, WindowRuleR
         state_.layer(client->id, *rule_result.layer_hint);
     if (rule_result.borderless)
         state_.borderless(client->id, *rule_result.borderless);
-    if (rule_result.fullscreen == true)
-        set_fullscreen(*client, true);
+    if (rule_result.fullscreen)
+        set_fullscreen(*client, *rule_result.fullscreen);
 }
 
 void WindowManager::reapply_rules_to_existing_windows()
@@ -168,8 +160,8 @@ void WindowManager::relocate_to_transient_parent(xcb_window_t window, xcb_window
         return;
     if (client->kind() == Client::Kind::Floating)
     {
-        Geometry geometry = current_window_geometry(window);
-        Geometry parent_geometry = current_window_geometry(client->transient_for);
+        Geometry geometry = floating_geometry(*client);
+        auto parent_geometry = placement_parent_geometry(client->transient_for);
         state_.geometry(
             window,
             floating::place_floating(

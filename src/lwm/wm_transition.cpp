@@ -11,12 +11,15 @@ void WindowManager::invalidate_monitor(size_t monitor, xcb_window_t preferred)
     state_.invalidate(monitor, preferred);
 }
 
-void WindowManager::request_configure_notify(Client const& client) { effects_.configure_replies.insert(client.id); }
+void WindowManager::request_configure_notify(Client const& client)
+{
+    state_.effects().configure_replies.insert(client.id);
+}
 
 void WindowManager::request_geometry(Client const& client)
 {
     if (client.kind() == Client::Kind::Tiled || client.kind() == Client::Kind::Floating)
-        effects_.geometry.push_back(client.id);
+        state_.effects().geometry.push_back(client.id);
 }
 
 Geometry WindowManager::presentation_geometry(Client const& client) const
@@ -98,34 +101,38 @@ void WindowManager::commit_focus(TransitionEffects const& publication)
     ewmh_.set_active_window(active_window_);
 }
 
-void WindowManager::request_urgency_update(Client const& client) { effects_.urgency.insert(client.id); }
-void WindowManager::request_allowed_actions(Client const& client) { effects_.allowed_actions.insert(client.id); }
-void WindowManager::request_client_list_update() { effects_.client_list = true; }
-void WindowManager::request_current_desktop_update() { effects_.current_desktop = true; }
+void WindowManager::request_urgency_update(Client const& client) { state_.effects().urgency.insert(client.id); }
+void WindowManager::request_allowed_actions(Client const& client)
+{
+    state_.effects().allowed_actions.insert(client.id);
+}
+void WindowManager::request_client_list_update() { state_.effects().client_list = true; }
+void WindowManager::request_current_desktop_update() { state_.effects().current_desktop = true; }
 
 void WindowManager::complete_transition()
 {
-    if (effects_ == TransitionEffects{ .state_changed = true } && !ewmh_.has_pending_window_states())
+    if (state_.effects() == TransitionEffects{ .state_changed = true } && !ewmh_.has_pending_window_states())
     {
         ipc_.emit(Event_StateChange, "{\"event\":\"state_change\"}");
-        effects_ = { };
+        state_.effects() = { };
         LWM_ASSERT_INVARIANTS(clients_, monitors_, active_window_);
         return;
     }
     refresh_workareas();
     // Consume pending ownership preferences once. Later phases use resolved owners.
-    auto affected_monitors = std::exchange(effects_.monitors, {});
-    auto layout_monitors = std::exchange(effects_.layouts, { });
-    effects_.drain_crossing |= (!affected_monitors.empty() || !layout_monitors.empty()) && !drag_active();
+    auto affected_monitors = std::exchange(state_.effects().monitors, { });
+    auto layout_monitors = std::exchange(state_.effects().layouts, { });
+    state_.effects().drain_crossing |= (!affected_monitors.empty() || !layout_monitors.empty()) && !drag_active();
     for (auto [monitor, preferred] : affected_monitors)
         if (monitor < monitors_.size())
             realize_visibility(monitor, preferred);
     validate_drag(!affected_monitors.empty() || !layout_monitors.empty());
     if (auto const* active = get_client(active_window_); active && !is_focus_candidate(*active))
         repair_focus_after_visibility_change(focused_monitor_, false);
-    if (active_window_ == XCB_NONE && effects_.repair_focus && !effects_.previous_focus && !showing_desktop_)
+    if (active_window_ == XCB_NONE && state_.effects().repair_focus && !state_.effects().previous_focus
+        && !showing_desktop_)
         focus_or_fallback(focused_monitor(), false);
-    if (affected_monitors.empty() && layout_monitors.empty() && effects_ == TransitionEffects{ }
+    if (affected_monitors.empty() && layout_monitors.empty() && state_.effects() == TransitionEffects{ }
         && !ewmh_.has_pending_window_states())
     {
         LWM_ASSERT_INVARIANTS(clients_, monitors_, active_window_);
@@ -142,12 +149,12 @@ void WindowManager::complete_transition()
                 && affected_monitors.contains(client.monitor))
                 request_geometry(client);
     }
-    if (effects_.previous_focus && get_client(active_window_))
+    if (state_.effects().previous_focus && get_client(active_window_))
         state_.clear_urgency(active_window_);
-    if (effects_.previous_focus)
+    if (state_.effects().previous_focus)
     {
-        effects_.current_desktop = true;
-        effects_.stacking = true;
+        state_.effects().current_desktop = true;
+        state_.effects().stacking = true;
         if (auto const* client = get_client(active_window_))
         {
             if (ipc_.has_subscribers(Event_FocusChange))
@@ -162,9 +169,9 @@ void WindowManager::complete_transition()
     }
     // Panels use client-list changes to refresh urgency. This dependency is
     // resolved before publication, never requested by a publisher.
-    effects_.client_list |= !effects_.urgency.empty();
-    effects_.stacking |= effects_.client_list;
-    for (auto const& [monitor, change] : effects_.workspace_events)
+    state_.effects().client_list |= !state_.effects().urgency.empty();
+    state_.effects().stacking |= state_.effects().client_list;
+    for (auto const& [monitor, change] : state_.effects().workspace_events)
         if (change.first != change.second && ipc_.has_subscribers(Event_WorkspaceSwitch))
         {
             queue_event(
@@ -199,7 +206,8 @@ void WindowManager::complete_transition()
         xcb_grab_server(conn_.get());
     for (auto window : publication.geometry)
         if (auto* client = get_client(window); client && is_visible(*client))
-            write_geometry(*client, presentation_geometry(*client), border_width_for_client(*client));
+            if (write_geometry(*client, presentation_geometry(*client), border_width_for_client(*client)))
+                publication.configure_replies.erase(window);
     if (resizing_tiles)
         xcb_ungrab_server(conn_.get());
     for (auto window : publication.configure_replies)

@@ -339,7 +339,7 @@ TEST_CASE("Real startup reports fatal WM failures once at critical level", "[log
     auto first_critical = result.stderr_text.find("CRITICAL");
     REQUIRE(first_critical != std::string::npos);
     REQUIRE(result.stderr_text.find("CRITICAL", first_critical + 1) == std::string::npos);
-    REQUIRE(result.stderr_text.find("giving up") != std::string::npos);
+    REQUIRE(result.stderr_text.find("WM initialization failed") != std::string::npos);
     fs::remove_all(directory);
 }
 

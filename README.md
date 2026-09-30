@@ -1,13 +1,11 @@
 # LWM
 
-LWM is a small tiling window manager for X11, written in C++23. It provides
-master-stack and monocle layouts, floating windows, per-monitor workspaces,
-focus-follows-mouse, scratchpads, RANDR hotplug handling, and a local IPC
-client named `lwmctl`.
+LWM is a small tiling window manager for X11, written in C++23. It provides master-stack
+and monocle layouts, floating windows, per-monitor workspaces, focus-follows-mouse,
+scratchpads, RANDR hotplug handling, and a local IPC client named `lwmctl`.
 
-LWM is not a compositor, panel, launcher, or desktop session. Run those as
-separate programs, normally from `[autostart]` in the LWM configuration or from
-your X session.
+LWM is not a compositor, panel, launcher, or desktop session. Run those as separate
+programs, normally from `[autostart]` in the LWM configuration or from your X session.
 
 ## Build
 
@@ -20,9 +18,8 @@ Required tools and libraries:
   `xcb-sync`, and `x11`
 - `xcb-xtest` and Xvfb for the full test suite
 
-CMake downloads pinned toml++ and Quill sources on the first configure; test
-builds also download pinned Catch2 and nlohmann/json sources. JSON parsing is
-a test-only dependency used to validate IPC independently of its implementation.
+CMake downloads pinned toml++ and Quill sources on the first configure; test builds also
+download pinned Catch2 and nlohmann/json sources.
 
 Arch Linux:
 
@@ -38,17 +35,20 @@ sudo apt install cmake g++ git pkg-config libsystemd-dev libx11-dev libxcb1-dev 
   libxcb-icccm4-dev libxcb-sync-dev libxcb-xtest0-dev xvfb
 ```
 
-Build the release binaries or build and run all tests in Debug with required
-X11 integration:
+Build the release binaries or build and run all tests in Debug with required X11
+integration:
 
 ```sh
 make
 make test
 ```
 
-The binaries are written to `build/src/app/lwm` and `build/src/app/lwmctl`.
-See [CONTRIBUTING.md](CONTRIBUTING.md#build-and-test) for direct CMake use,
-focused tests, sanitizers, and separate Debug/Release builds.
+The binaries are written to `build/src/app/lwm` and `build/src/app/lwmctl`. See
+[CONTRIBUTING.md](CONTRIBUTING.md#build-and-test) for direct CMake use, focused tests,
+sanitizers, and separate Debug/Release builds.
+
+To try LWM inside an existing desktop, use the [nested Xephyr
+preview](CONTRIBUTING.md#nested-preview).
 
 ## Install and start
 
@@ -56,14 +56,14 @@ focused tests, sanitizers, and separate Debug/Release builds.
 sudo make install
 ```
 
-With the default CMake prefix this installs `lwm`, `lwmctl`, `lwm-notify`, and `lwm-notify-bridge`
-under `/usr/local/bin`.
+With the default CMake prefix this installs `lwm`, `lwmctl`, `lwm-notify`, and
+`lwm-notify-bridge` under `/usr/local/bin`.
 
 `sudo make uninstall` removes the files recorded in `build/install_manifest.txt`,
-including all four programs. Keep the build directory used for installation;
-for another build directory use `make uninstall BUILD_DIR=...`. This honors the
-prefix used at install time. For a staged installation, supply the same `DESTDIR`
-when uninstalling. Missing files are harmless; directories are left in place.
+including all four programs. Keep the build directory used for installation; for another
+build directory use `make uninstall BUILD_DIR=...`. This honors the prefix used at
+install time. For a staged installation, supply the same `DESTDIR` when uninstalling.
+Missing files are harmless; directories are left in place.
 
 Copy the reference configuration and start LWM with an explicit path:
 
@@ -74,36 +74,36 @@ cp config.toml.example "$config_dir/config.toml"
 /usr/local/bin/lwm --config "$config_dir/config.toml"
 ```
 
-Use the same `lwm --config ...` command in `.xinitrc` or a display-manager
-session entry. An explicit path must exist and parse successfully. Without an
-explicit path, LWM reads `$XDG_CONFIG_HOME/lwm/config.toml` only when
-`XDG_CONFIG_HOME` is set; if that implicit file is absent, it uses built-in
-defaults.
+Run LWM as the window manager of an X11 session, using that command in `.xinitrc` or a
+display-manager session entry. It refuses to start alongside another WM. An explicit
+path must exist and parse successfully. Without an explicit path, LWM reads
+`$XDG_CONFIG_HOME/lwm/config.toml` only when `XDG_CONFIG_HOME` is set; if that implicit
+file is absent, it uses built-in defaults.
 
 `lwm --help` is the source of truth for startup and logging options.
 
 ## Configure
 
-[config.toml.example](config.toml.example) is the commented starter and
-configuration reference. It documents commands, autostart, appearance,
-layouts, focus behavior, key and mouse bindings, window rules, workspace
-names, and scratchpads. Adjust the terminal and launcher commands before use.
+[config.toml.example](config.toml.example) is the commented starter and configuration
+reference. It documents commands, autostart, appearance, layouts, focus behavior, key
+and mouse bindings, window rules, workspace names, and scratchpads. Adjust the terminal
+and launcher commands before use.
 
-Each monitor has its own workspaces. Commands target the focused monitor;
-workspace and monitor indices in configuration and IPC are zero-based. Sticky
-windows stay on their owning monitor and appear on all its workspaces. EWMH
-uses a [flat desktop list](X11.md#desktops-and-root-properties) across monitors.
+Each monitor has its own workspaces. Commands target the focused monitor; workspace and
+monitor indices in configuration and IPC are zero-based. Sticky windows stay on their
+owning monitor and appear on all its workspaces. EWMH uses a [flat desktop
+list](X11.md#desktops-and-root-properties) across monitors.
 
-Focus follows the pointer. Master-stack tiles windows; monocle gives each tiled
-window the full content rectangle. Floating windows retain independent geometry.
-A fullscreen window hides other normal windows on its monitor except its own
-transients. Scratchpads provide named windows and a generic pool that can be
-hidden and recalled on the current workspace.
+Focus follows the pointer. Master-stack tiles windows; monocle gives each tiled window
+the full content rectangle. Floating windows retain independent geometry. A fullscreen
+window hides other normal windows on its monitor except its own transients. Scratchpads
+provide named windows and a generic pool that can be hidden and recalled on the current
+workspace.
 
-Reload with `lwmctl reload-config`, a configured `reload_config` binding, or
-`SIGHUP`. A successful reload updates appearance, bindings, workspace names,
-focus and layout parameters, command and scratchpad definitions, and rules
-that currently match managed tiled or floating windows.
+Reload with `lwmctl reload-config`, a configured `reload_config` binding, or `SIGHUP`. A
+successful reload updates appearance, bindings, workspace names, focus and layout
+parameters, command and scratchpad definitions, and rules that currently match managed
+tiled or floating windows.
 
 Reload has these limits:
 
@@ -131,17 +131,21 @@ lwmctl reload-config
 lwmctl restart
 ```
 
-`lwm-notify [notify-send arguments...]` shows a desktop notification when
-`notify-send` is installed. When the caller has a numeric `WINDOWID`, it also
-marks that exact managed source window urgent; LWM does not guess a source from
-notification metadata. The optional `lwm-notify-bridge` forwards desktop
-notifications that carry an explicit `x-window-id` hint; it requires `busctl`
-and `jq`. Run it in your session only if needed. It does not infer a target from
-application names, and reports command errors to stderr.
+`lwm-notify [notify-send arguments...]` shows a desktop notification when `notify-send`
+is installed. When the caller has a numeric `WINDOWID`, it also marks that exact managed
+source window urgent; LWM does not guess a source from notification metadata. The
+optional `lwm-notify-bridge` forwards desktop notifications that carry an explicit
+`x-window-id` hint; it requires `busctl` and `jq`. Run it in your session only if
+needed. It does not infer a target from application names, and reports command errors to
+stderr.
 
-List commands return JSON and subscriptions stream JSON Lines. See
-[IPC.md](IPC.md) for discovery, the raw wire protocol, schemas, and delivery
-semantics.
+List commands return JSON and subscriptions stream JSON Lines. See [IPC.md](IPC.md) for
+discovery, the raw wire protocol, schemas, and delivery semantics.
+
+Restart prepares a state handoff before replacing the process. If the selected binary
+cannot be executed, LWM reconstructs from that handoff. Startup errors and unexpected
+runtime exceptions exit with a nonzero status and a diagnostic; they do not trigger an
+automatic restart loop.
 
 ## Logs
 
@@ -152,34 +156,29 @@ journalctl -b _UID="$(id -u)" SYSLOG_IDENTIFIER=lwm
 lwmctl log status
 ```
 
-Use `--log-level trace|debug|info|warn|error|critical|off` to select verbosity.
-`-V` enables DEBUG; `-d all` and `--debug` enable TRACE. For a terminal or a
-pipe, use `--log-target stderr` and `--log-color auto|always|never`. For example:
+Use `--log-level trace|debug|info|warn|error|critical|off` to select verbosity. `-V`
+enables DEBUG; `-d all` and `--debug` enable TRACE. For a terminal or a pipe, use
+`--log-target stderr` and `--log-color auto|always|never`. For example:
 
 ```sh
 lwm --log-target stderr --log-level debug 2>&1 | tee lwm.log
 ```
 
-The stderr target supports terminals, pipes, and ordinary file redirection.
-Journal storage, retention, and access are managed by the host's journal
-configuration. LWM does not create private rotating files; `--log-file` and
-`--no-log-file` report a migration error. Existing log files are left untouched.
+The stderr target supports terminals, pipes, and ordinary file redirection. Journal
+storage, retention, and access are managed by the host's journal configuration. For a
+file, redirect stderr as shown above; LWM does not manage log-file rotation.
 
-Logging is asynchronous and best effort. A bounded queue drops new records when
-full, keeping ordinary WM operations independent of a slow destination. **Normal
-shutdown drains the worker and can wait for a stalled journal or stderr reader.**
-Exec restart does not drain and may lose queued diagnostics. Use the default
-journal for normal desktop operation; keep readers of
-explicit diagnostic pipes running. No delivery or persistence guarantee is made.
+Logging is asynchronous and best effort. A bounded queue drops new records when full,
+keeping ordinary WM operations independent of a slow destination. **Normal shutdown
+drains the worker and can wait for a stalled journal or stderr reader.** Exec restart
+does not drain and may lose queued diagnostics. Use the default journal for normal
+desktop operation; keep readers of explicit diagnostic pipes running. No delivery or
+persistence guarantee is made.
 
-`lwmctl log status` reports configuration and Quill's backend notifications,
-including overflow summaries and output errors. It does not count every lost
-record; libsystemd silently ignores an absent journal. See
-[IPC.md](IPC.md#logging-status) for the status schema and
-[ARCHITECTURE.md](ARCHITECTURE.md#logging) for the implementation.
-
-To try LWM without replacing your current window manager, use the
-[nested Xephyr preview](CONTRIBUTING.md#nested-preview).
+`lwmctl log status` reports configuration and Quill's backend notifications, including
+overflow summaries and output errors. It does not count every lost record; libsystemd
+silently ignores an absent journal. See [IPC.md](IPC.md#logging-status) for the status
+schema and [ARCHITECTURE.md](ARCHITECTURE.md#logging) for the implementation.
 
 ## Documentation
 
@@ -188,6 +187,5 @@ To try LWM without replacing your current window manager, use the
 - [X11.md](X11.md): ICCCM/EWMH behavior and limits
 - [IPC.md](IPC.md): socket protocol and event schemas
 - [CONTRIBUTING.md](CONTRIBUTING.md): development and verification workflow
-- [ROADMAP.md](ROADMAP.md): verified open work and design questions
 
 LWM is licensed under the [MIT License](LICENSE).

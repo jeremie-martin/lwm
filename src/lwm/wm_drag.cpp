@@ -92,7 +92,7 @@ void WindowManager::begin_window_drag(
     // A tiled resize away from a split becomes a floating resize, after acquisition.
     if (client->kind() == Client::Kind::Tiled && edges != floating::ResizeEdge::None)
     {
-        convert_window_to_floating(window);
+        state_.floating(window, true);
         invalidate_monitor(client->monitor);
     }
     if (client->kind() == Client::Kind::Floating && (client->maximized_horz || client->maximized_vert))
@@ -217,7 +217,7 @@ void WindowManager::end_drag(bool commit)
     xcb_ungrab_pointer(conn_.get(), XCB_CURRENT_TIME);
     if (cursor_default_ != XCB_NONE)
         set_root_cursor(cursor_default_);
-    effects_.drain_crossing = true;
+    state_.effects().drain_crossing = true;
 
     auto const* move = std::get_if<WindowDrag>(&drag->operation);
     if (!move || move->kind != Client::Kind::Tiled)

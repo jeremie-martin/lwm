@@ -32,19 +32,11 @@
 
 namespace lwm {
 
-/// Event mask selected on every managed (tiled/floating) client window.
-/// Does NOT include ButtonPress — that is an exclusive mask in X11 (only one
-/// client per window).  Applications that select it would cause our entire
-/// ChangeWindowAttributes to fail with BadAccess, silently dropping EnterWindow.
-/// Click-to-focus uses passive grabs on the managed window itself; modifier
-/// button bindings still install root passive grabs for root/gap clicks, but
-/// managed-window presses are handled in handle_button_press() because
-/// ReplayPointer skips ancestor passive grabs.
-///
-/// PointerMotion is NOT exclusive — multiple clients can select it on the same
-/// window.  We need it so that the WM receives MotionNotify even when the app
-/// also selects PointerMotion (e.g. terminals).  Without it, focus-follows-mouse
-/// fails to recover after a new window steals focus on a different monitor.
+// ButtonPress is exclusive: selecting it alongside an application's mask can
+// reject the whole ChangeWindowAttributes request. Use passive client grabs for
+// clicks; ReplayPointer skips ancestor grabs, so root grabs alone are insufficient.
+// PointerMotion is shared and lets focus-following recover when an application
+// selected motion events before another window took focus.
 constexpr uint32_t kManagedWindowEventMask =
     XCB_EVENT_MASK_ENTER_WINDOW | XCB_EVENT_MASK_PROPERTY_CHANGE | XCB_EVENT_MASK_POINTER_MOTION;
 
@@ -187,7 +179,6 @@ private:
 
     // One outer operation owns these effects; feature helpers never complete them.
     using TransitionEffects = State::TransitionEffects;
-    TransitionEffects& effects_ = state_.effects();
     void complete_transition();
     void
     dispatch_event(xcb_generic_event_t const& event, size_t& remaining, std::chrono::steady_clock::time_point deadline);
@@ -197,7 +188,7 @@ private:
     void commit_focus(TransitionEffects const& publication);
     void request_geometry(Client const& client);
     Geometry presentation_geometry(Client const& client) const;
-    void write_geometry(Client const& client, Geometry geometry, uint32_t border);
+    [[nodiscard]] bool write_geometry(Client const& client, Geometry geometry, uint32_t border);
     bool monitors_dirty_ = false;
     std::deque<xcb_generic_event_t> deferred_events_;
 
@@ -263,14 +254,9 @@ private:
     void apply_rule_result_to_window(xcb_window_t window, WindowRuleResult const& rule_result);
     void apply_rule_target_location(xcb_window_t window, WindowRuleResult const& rule_result);
     void apply_rule_floating_placement(xcb_window_t window, WindowRuleResult const& rule_result);
-    void convert_window_to_floating(xcb_window_t window, bool explicit_choice = true);
-    void convert_window_to_tiled(
-        xcb_window_t window,
-        std::optional<Geometry> prior_floating = std::nullopt,
-        bool explicit_choice = true
-    );
     void toggle_window_float(xcb_window_t window);
-    Geometry current_window_geometry(xcb_window_t window) const;
+    std::optional<Geometry> read_window_geometry(xcb_window_t window) const;
+    std::optional<Geometry> placement_parent_geometry(xcb_window_t window) const;
 
     void manage_client(
         xcb_window_t window,
@@ -321,9 +307,7 @@ private:
 
     /// Lookup: nullable handle for X event boundaries where the window may not be managed.
     Client const* get_client(xcb_window_t window) const;
-    /// Require: asserts the client exists. Use from internal funnels that already proved
-    /// managed status (iterating clients_, post-manage finalization, operations on
-    /// active_window_, hotplug-plan apply, restart-state apply).
+    /// Internal lookup after managed status is established; throws if the client is absent.
     Client const& require_client(xcb_window_t window) const;
     bool is_managed(xcb_window_t window) const { return clients_.contains(window); }
     bool window_is_iconic(xcb_window_t window) const
@@ -440,8 +424,6 @@ private:
     void request_workarea_update();
     void refresh_workareas();
 
-    // Placement ownership: normal relocation and kind changes maintain tiled
-    // membership, remembered focus, desktop publication and completion effects.
     using RelocationGeometry = State::RelocationGeometry;
     void flush_and_drain_crossing();
 

@@ -2,6 +2,7 @@
 #include "lwm/core/types.hpp"
 #include "wm_observations.hpp"
 #include <catch2/catch_test_macros.hpp>
+#include <catch2/generators/catch_generators.hpp>
 #include <nlohmann/json.hpp>
 #include <xcb/xcb_icccm.h>
 
@@ -33,6 +34,113 @@ void title(X11Connection& conn, xcb_window_t window, std::string const& value)
     );
     xcb_flush(conn.get());
 }
+}
+
+TEST_CASE(
+    "Integration: kind transitions preserve normal geometry across presentation states",
+    "[integration][transition][geometry][rules]"
+)
+{
+    bool rules = GENERATE(false, true);
+    auto presentation = GENERATE("normal", "fullscreen", "hidden", "maximized");
+    CAPTURE(rules, presentation);
+    auto env = TestEnvironment::create(R"(
+[workspaces]
+count = 2
+[[rules]]
+match = { title = 'float' }
+apply = { floating = true, fullscreen = false }
+[[rules]]
+match = { title = 'tile' }
+apply = { floating = false }
+)");
+    if (!env)
+        SKIP("X11 unavailable");
+    auto& conn = env->conn;
+    auto socket = wait_for_ipc_socket_path(conn);
+    REQUIRE(socket);
+    auto instance = wm_instance(conn);
+    auto peer = create_window(conn, 20, 30, 400, 300);
+    map_window(conn, peer);
+    REQUIRE(wait_for_active_window(conn, peer, timeout));
+    auto window = create_window(conn, 60, 70, 320, 240);
+    map_window(conn, window);
+    REQUIRE(wait_for_active_window(conn, window, timeout));
+    auto normal = geometry(conn, window);
+    auto peer_tiled = geometry(conn, peer);
+    REQUIRE(normal);
+    REQUIRE(peer_tiled);
+    auto kind = [&](bool floating)
+    {
+        if (rules)
+            title(conn, window, floating ? "float" : "tile");
+        else
+            set_window_type(
+                conn,
+                window,
+                intern_atom(conn.get(), floating ? "_NET_WM_WINDOW_TYPE_DIALOG" : "_NET_WM_WINDOW_TYPE_NORMAL")
+            );
+        REQUIRE(wait_for_condition(
+            [&]
+            {
+                return get_window_property_string(conn.get(), window, intern_atom(conn.get(), "_LWM_WINDOW_CLASS"))
+                    == (floating ? "floating" : "tiled");
+            },
+            timeout
+        ));
+    };
+    auto state = intern_atom(conn.get(), "_NET_WM_STATE");
+    auto fullscreen = intern_atom(conn.get(), "_NET_WM_STATE_FULLSCREEN");
+    auto horizontal = intern_atom(conn.get(), "_NET_WM_STATE_MAXIMIZED_HORZ");
+    auto vertical = intern_atom(conn.get(), "_NET_WM_STATE_MAXIMIZED_VERT");
+    if (std::string_view(presentation) == "fullscreen")
+    {
+        send_client_message(conn, window, state, 1, fullscreen);
+        REQUIRE(wait_for_condition([&] { return has_state(conn, window, fullscreen); }, timeout));
+    }
+    else if (std::string_view(presentation) == "hidden")
+    {
+        REQUIRE(send_ipc_command(*socket, "workspace switch 1")->starts_with("ok"));
+        REQUIRE(wait_for_condition(
+            [&]
+            {
+                auto rectangle = geometry(conn, window);
+                return rectangle && rectangle->x < -10000;
+            },
+            timeout
+        ));
+    }
+    else if (std::string_view(presentation) == "maximized")
+    {
+        kind(true);
+        send_client_message(conn, window, state, 1, horizontal, vertical);
+        REQUIRE(wait_for_condition([&] { return has_state(conn, window, horizontal); }, timeout));
+        kind(false);
+    }
+    kind(true);
+    // Metadata changes keep fullscreen intent; the rule explicitly clears it.
+    send_client_message(conn, window, state, 0, fullscreen);
+    send_client_message(conn, window, state, 0, horizontal, vertical);
+    REQUIRE(send_ipc_command(*socket, "workspace switch 0")->starts_with("ok"));
+    REQUIRE(wait_for_condition([&] { return geometry(conn, window) == normal; }, timeout));
+    REQUIRE(geometry(conn, peer) != peer_tiled);
+    lwm::Geometry moved{ 55, 66, 311, 217 };
+    uint32_t values[] = { 55, 66, 311, 217 };
+    xcb_configure_window(
+        conn.get(),
+        window,
+        XCB_CONFIG_WINDOW_X | XCB_CONFIG_WINDOW_Y | XCB_CONFIG_WINDOW_WIDTH | XCB_CONFIG_WINDOW_HEIGHT,
+        values
+    );
+    xcb_flush(conn.get());
+    REQUIRE(wait_for_condition([&] { return geometry(conn, window) == moved; }, timeout));
+    kind(false);
+    REQUIRE(wait_for_condition([&] { return geometry(conn, peer) == peer_tiled; }, timeout));
+    kind(true);
+    REQUIRE(wait_for_condition([&] { return geometry(conn, window) == moved; }, timeout));
+    REQUIRE(wm_instance(conn) == instance);
+    destroy_window(conn, window);
+    destroy_window(conn, peer);
 }
 
 TEST_CASE(
@@ -94,6 +202,14 @@ TEST_CASE(
     uint32_t workspace = 1;
     xcb_change_property(conn.get(), XCB_PROP_MODE_REPLACE, window, desktop, XCB_ATOM_CARDINAL, 32, 1, &workspace);
     map_window(conn, window);
+    REQUIRE(wait_for_condition(
+        [&]
+        {
+            return get_window_property_string(conn.get(), window, intern_atom(conn.get(), "_LWM_WINDOW_CLASS"))
+                == "tiled";
+        },
+        timeout
+    ));
     observe_title_after_events(conn, window);
     REQUIRE(require_property_cardinal(conn.get(), window, desktop) == 1);
     REQUIRE(geometry(conn, window));
@@ -244,11 +360,14 @@ TEST_CASE(
 }
 
 TEST_CASE(
-    "Integration: no-op floating configure requests receive a synthetic acknowledgement",
+    "Integration: managed configure requests receive exactly one synthetic acknowledgement",
     "[integration][transition][configure]"
 )
 {
-    auto env = TestEnvironment::create();
+    bool changed = GENERATE(false, true);
+    std::string_view mode = GENERATE("floating", "fullscreen", "hidden", "hidden_tiled");
+    CAPTURE(changed, mode);
+    auto env = TestEnvironment::create("[workspaces]\ncount = 2\n");
     if (!env)
         SKIP("X11 unavailable");
     auto& conn = env->conn;
@@ -258,30 +377,68 @@ TEST_CASE(
     xcb_change_window_attributes(conn.get(), window, XCB_CW_EVENT_MASK, &mask);
     map_window(conn, window);
     REQUIRE(wait_for_active_window(conn, window, timeout));
+    auto socket = wait_for_ipc_socket_path(conn);
+    REQUIRE(socket);
+    if (mode == "fullscreen")
+    {
+        auto fullscreen = intern_atom(conn.get(), "_NET_WM_STATE_FULLSCREEN");
+        send_client_message(conn, window, intern_atom(conn.get(), "_NET_WM_STATE"), 1, fullscreen);
+        REQUIRE(wait_for_condition([&] { return has_state(conn, window, fullscreen); }, timeout));
+    }
     auto rect = geometry(conn, window);
     REQUIRE(rect);
+    bool hidden = mode == "hidden" || mode == "hidden_tiled";
+    if (hidden)
+    {
+        auto reply = send_ipc_command(*socket, "workspace switch 1");
+        REQUIRE(reply);
+        REQUIRE(reply->starts_with("ok"));
+        if (mode == "hidden_tiled")
+            set_window_type(conn, window, intern_atom(conn.get(), "_NET_WM_WINDOW_TYPE_NORMAL"));
+    }
+    observe_title_after_events(conn, window);
+    REQUIRE(geometry(conn, window));
     while (auto* event = xcb_poll_for_event(conn.get())) free(event);
-    uint32_t values[] = { rect->width, rect->height };
+    uint32_t values[] = { static_cast<uint32_t>(rect->width + (changed ? 100 : 0)), rect->height };
     xcb_configure_window(conn.get(), window, XCB_CONFIG_WINDOW_WIDTH | XCB_CONFIG_WINDOW_HEIGHT, values);
-    xcb_flush(conn.get());
-    REQUIRE(wait_for_condition(
-        [&]
+    observe_title_after_events(conn, window);
+    REQUIRE(geometry(conn, window)); // Roundtrip also collects queued X events.
+    auto expected_width = (mode == "fullscreen" || mode == "hidden_tiled") ? rect->width : values[0];
+    size_t acknowledgements = 0;
+    while (auto* event = xcb_poll_for_event(conn.get()))
+    {
+        if (event->response_type == (XCB_CONFIGURE_NOTIFY | 0x80))
         {
-            bool acknowledged = false;
-            while (auto* event = xcb_poll_for_event(conn.get()))
+            auto const configure = *reinterpret_cast<xcb_configure_notify_event_t*>(event);
+            free(event);
+            REQUIRE(configure.window == window);
+            CHECK(configure.width == expected_width);
+            CHECK(configure.x == rect->x);
+            CHECK(configure.y == rect->y);
+            CHECK(configure.height == values[1]);
+            ++acknowledgements;
+        }
+        else
+            free(event);
+    }
+    REQUIRE(acknowledgements == 1);
+    if (mode != "hidden_tiled")
+    {
+        if (hidden)
+        {
+            auto reply = send_ipc_command(*socket, "workspace switch 0");
+            REQUIRE(reply);
+            REQUIRE(reply->starts_with("ok"));
+        }
+        REQUIRE(wait_for_condition(
+            [&]
             {
-                if (event->response_type == (XCB_CONFIGURE_NOTIFY | 0x80))
-                {
-                    auto const& configure = *reinterpret_cast<xcb_configure_notify_event_t*>(event);
-                    acknowledged |= configure.window == window && configure.width == rect->width
-                        && configure.height == rect->height;
-                }
-                free(event);
-            }
-            return acknowledged;
-        },
-        timeout
-    ));
+                auto actual = geometry(conn, window);
+                return actual && actual->width == expected_width && actual->height == rect->height;
+            },
+            timeout
+        ));
+    }
     destroy_window(conn, window);
 }
 
