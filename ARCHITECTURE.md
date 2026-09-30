@@ -31,7 +31,7 @@ belongs in [IPC.md](IPC.md).
 | `src/lwm/wm_events.cpp` | X event dispatch, client messages, property changes, RANDR |
 | `src/lwm/wm_focus.cpp` | focus assignment, fallback, and cycling |
 | `src/lwm/wm_workspace.cpp` | workspace and monitor commands |
-| `src/lwm/wm_placement.cpp` | client relocation, tiled membership, and tiled/floating transitions |
+| `src/lwm/core/state.*` | authoritative mutations, membership, preferences, restoration, and completion effects |
 | `src/lwm/wm_floating.cpp`, `wm_drag.cpp` | floating geometry and pointer-driven move/resize/reorder |
 | `src/lwm/wm_restart.cpp`, `wm_scratchpad.cpp` | exec handoff and scratchpad state |
 
@@ -132,7 +132,9 @@ layouts and are ignored on restore.
 Floating clients keep one normal rectangle. Maximize projects selected axes onto
 the workarea; fullscreen projects onto its target monitor rectangle. Neither
 projection overwrites normal geometry. Tiled layout writes `tiled_geometry` as
-its target, independently of the last rectangle sent to X.
+its target, independently of the last rectangle sent to X. Until the first layout,
+this holds the initial client rectangle, so reclassification on an inactive
+workspace preserves valid geometry.
 
 `write_geometry()` owns WM-driven configure requests, sync notifications, and
 synthetic ConfigureNotify events. Its output cache skips an already-applied
@@ -205,10 +207,23 @@ The important authorities are:
 - `active_window_`: the focused managed window.
 - `Monitor::fullscreen_owner`: the effective fullscreen owner for one monitor.
 
-Application requests and effective policy are intentionally separate where they
-can disagree. For example, `Client::app_prefs` retains requested above/below and
-skip states while rules and modal/fullscreen policy determine the effective
-state published back to X.
+`State` owns the registry, monitors, workspace membership and focus memory,
+active focus, explicit preferences, and scratchpad claims/pool. Readers receive
+const views. Named operations update state and record completion obligations
+together. Registration accepts an unowned candidate; restart accepts a decoded
+record rather than a writable managed client. Topology replacement rebuilds the
+workspace graph inside the same owner.
+
+`Client::preferences` stores optional mode, layer, and taskbar/pager choices.
+Unset fields follow classification defaults; the latest explicit application,
+user, or rule action replaces the same value. Rules are actions, not persistent
+constraints. Modal and fullscreen state project the effective layer without
+destroying the underlying preference. See [X11.md](X11.md) for precedence.
+
+`Client::presentation` contains only backend acknowledgements: off-screen status,
+last written geometry/border, urgency echo suppression, and sync counters. Layout,
+focus eligibility, and drag validity use logical visibility, not this cache.
+The backend has narrow mutable access to this subrecord during publication.
 
 ## Visibility
 
@@ -226,7 +241,7 @@ Normal workspace changes therefore update `hidden`, not `WM_STATE`, and an
 incoming `UnmapNotify` means client withdrawal rather than a workspace change.
 
 Mutations invalidate affected monitors. During completion, `realize_visibility()`
-selects fullscreen ownership and physically hides/shows clients, then
+selects fullscreen ownership and records visibility targets, then
 `arrange_monitor()` computes layout targets. Geometry is written after all
 monitor arrangements. While an operation is pending, eligibility checks use
 its preferred fullscreen owner and current domain state, rather than stale
@@ -281,10 +296,11 @@ clients cannot sit above their owner even while off-screen.
 when necessary, switches the target monitor's workspace when necessary, checks
 fullscreen suppression, and updates active focus, memory, and recency.
 `commit_focus()` publishes the final choice once during completion: it sends
-`WM_TAKE_FOCUS` when advertised, sets X input focus, clears urgency, and updates
+`WM_TAKE_FOCUS` when advertised, sets X input focus and updates
 EWMH state and borders. Explicit same-window focus still reasserts input focus,
 protocol notifications, and server stacking. Intermediate choices within one
-operation do not produce focus events.
+operation do not produce focus events. Urgency is cleared during resolution, before
+publication is frozen.
 
 Docks, desktops, iconic clients, and fullscreen-suppressed clients are excluded
 from fallback and cycling. Explicit activation can deiconify a client before
@@ -319,21 +335,26 @@ An operation is one dispatched X event, IPC command, signal reload, timeout and
 coalesced topology pass, or startup scan. Mutations record `TransitionEffects`;
 only the boundary calls `complete_transition()`. Completion has this order:
 
-1. Refresh pending workareas, resolve visibility/fullscreen ownership, and repair
-   focus eligibility.
-2. Compute layout and presentation geometry; write changed rectangles and
-   required ConfigureNotify replies, then map new clients.
-3. Commit focus and publish client/root properties. `_NET_WM_STATE` updates
-   merge once per affected window with a fresh property read, preserving atoms
-   LWM does not own. Reads are issued together; there is no persistent atom cache.
+1. Refresh input-dependent workareas. Resolve affected fullscreen owners and
+   visibility, validate drag participants, and repair focus.
+2. Compute affected layouts and geometry targets. Resolve publication dependencies
+   (focus changes require current-desktop/stacking publication; urgency requires
+   the panel client-list notification), then freeze the effects record.
+3. Publish visibility/geometry, ConfigureNotify replies, and maps; publish final
+   focus and properties. Geometry IDs are deduplicated before writing.
+   `_NET_WM_STATE` changes merge with one fresh property read per affected client,
+   preserving atoms LWM does not own.
 4. Reconcile stacking, perform at most one crossing-event barrier, and flush X.
-5. Emit settled subscription events and state invalidation, discard the operation's effects, and
-   check Debug invariants.
+5. Emit settled subscription events and check Debug invariants. Publishers cannot
+   mutate managed records or schedule earlier work; Debug checks guard this boundary.
 
-Stacking invalidation belongs to the same effects record and is reset with it.
-WindowManager's deferred publication helpers use `request_*` names; `publish_*`
-helpers perform property writes. `queue_event()` receives JSON only after
-checking for a live subscriber interested in that event type.
+There are separate effect sets for monitor visibility/ownership reconciliation,
+layout changes, and client geometry. Changing a split ratio does not require a
+visibility scan or stacking reconciliation. Pure floating geometry does not
+invalidate unrelated layouts. Membership and visibility changes affect the
+source/destination monitors. `request_*` helpers record output obligations;
+`publish_*` helpers write them. `queue_event()` constructs JSON only for interested
+subscribers.
 
 Dock registration, removal, and strut notifications request a workarea refresh.
 The refresh reads current dock properties and, when a reservation exists, the
@@ -346,7 +367,11 @@ consumes any remaining refresh before arranging monitors. There is no persistent
 dock-property cache, and adoption retains its existing traversal order.
 
 Empty effects require no reconciliation. The outer loop flushes direct protocol
-replies once after draining ready events.
+replies after each bounded event batch. A batch consumes at most 64 X events or
+2 ms between events, counting coalesced motions. IPC, signals, and deadlines are
+serviced between batches. This prevents drain-until-empty starvation; an individual
+handler can still take longer than 2 ms. After a crossing barrier, only events
+already in XCB’s queue are drained, so fresh socket input cannot extend it forever.
 
 This is ordered completion, not rollback or an atomic X-server transaction.
 Helpers may read X hints, refresh workareas needed for placement, and register
@@ -363,38 +388,31 @@ are mapped at completion; adopted clients are not remapped. Docks and desktops
 retain dedicated registration because their layout and focus roles differ;
 popup-only types are mapped without registration.
 
-Mapping, property reevaluation, and config reload apply rule actions through
-`apply_rule_result_to_window()`. Classification and application preferences feed
-the shared desired-state policy on mapping and property changes. Classification
-and rule/scratchpad matching use the same captured properties; initial client
-registration reuses these values. This is consistency within one update, not
-an atomic snapshot of independently changing X properties. Managed
-class/title/type data are refreshed at their property-notification boundaries.
-Title and class updates compare rule results before and after updating metadata.
-Unchanged actions leave placement and user state intact; changed results enter
-the normal classification transition. Pending scratchpad claims are checked even
-when the rule result is unchanged. Type/transient changes still reclassify, and
-config reload explicitly reapplies matching rules.
-Reload uses the current effective state as its baseline, preserving unspecified
-state and the existing behavior when no rule matches. Placement and fullscreen overrides use
-the same transition helpers in all three paths.
+Mapping, changed metadata rule results, and explicit reload apply actions through
+`apply_rule_result_to_window()`. Initial registration captures type/transient,
+class/title and application hints once, applies defaults, then explicit rule
+actions. Runtime type/transient changes refresh defaults without overwriting
+explicit preferences. All matching metadata compares the old and new rule action
+results: unchanged results do nothing; a newly different match applies only its
+specified actions; losing a match does not undo previous actions. Pending
+scratchpad claims are checked independently. Reload reapplies every matching
+action, including unchanged placement. Hotplug and restart do not replay rules.
 
 `unmanage_window()` removes all managed kinds: it writes
 `WM_STATE=WithdrawnState`, removes authoritative membership and pending kill
 state, and requests visibility/focus repair and EWMH list publication.
 
-`wm_placement.cpp` owns ordinary placement and tiled-membership changes.
-`relocate_client()` moves either normal client kind, updates desktop publication,
+`State::relocate()` moves either normal client kind, updates desktop publication,
 and invalidates both affected monitors. Callers choose whether floating geometry
 is preserved or centered when crossing monitors, and choose subsequent focus.
 A tiled reorder within one workspace preserves membership and focus history.
-`change_client_state()` owns tiled/floating conversion: it detaches or attaches
+`State::change_kind()` owns tiled/floating conversion: it detaches or attaches
 membership, remembers the old tile slot when floating, and requests geometry and
 allowed-action publication. Commands, rules, dragging, scratchpads, and restart
 restoration use these operations rather than assembling membership edits.
 
 Manage and unmanage use the same tile attachment/removal mechanics at the
-registry boundary. Hotplug is a bulk exception: it rebuilds the workspace graph
+registry boundary. Hotplug is a bulk owner operation: it rebuilds the workspace graph
 before assigning clients their new monitor/workspace indices. Restart restores
 saved tile order after adopting clients. Neither bulk path replays ordinary moves
 against partially restored membership.
@@ -406,8 +424,8 @@ there is no second compiled configuration to synchronize. `KeybindManager` borro
 its owning WM's stable `Config` object. Resolving a key returns an action by value
 because executing it may reload and replace the configuration that contained it.
 
-Reload validates workspace-count compatibility and prepares scratchpad runtime
-state before replacing `Config`. Surviving scratchpad names retain both claimed
+Reload validates workspace-count compatibility before replacing `Config`.
+The state owner reconciles scratchpad names with the accepted configuration. Surviving scratchpad names retain both claimed
 windows and pending launches, even when their matchers change. Removed names
 release their windows. The WM then regrabs input, updates EWMH workspace metadata,
 and reapplies matching rules through the normal transition helpers. Invalid

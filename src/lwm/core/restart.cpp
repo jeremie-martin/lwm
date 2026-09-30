@@ -71,11 +71,18 @@ std::array<uint32_t, client_words> encode_client(Client const& client)
     data[22] = is_hidden_tiled_pool_scratchpad(client) ? 1 : hidden_floating_pool_scratchpad(client) ? 2 : 0;
     data[23] = client.kind() == Client::Kind::Tiled ? 1 : 2;
     data[24] = client.urgency.sources;
-    data[25] = (client.app_prefs.skip_taskbar ? skip_taskbar : 0) | (client.app_prefs.skip_pager ? skip_pager : 0)
-        | (client.app_prefs.above ? above : 0) | (client.app_prefs.below ? below : 0);
-    data[26] =
-        client.fullscreen_restore_layer_hint ? static_cast<uint32_t>(*client.fullscreen_restore_layer_hint) + 1 : 0;
+    // Preserve the legacy prefix for an older binary adopting these clients.
+    auto const& prefs = client.preferences;
+    data[25] = (prefs.skip_taskbar.value_or(false) ? skip_taskbar : 0)
+        | (prefs.skip_pager.value_or(false) ? skip_pager : 0) | (prefs.layer == LayerHint::Above ? above : 0)
+        | (prefs.layer == LayerHint::Below ? below : 0);
+    data[26] = client.fullscreen && prefs.layer ? static_cast<uint32_t>(*prefs.layer) + 1 : 0;
     data[27] = client.desktop_pinned;
+    data[28] = 1; // Preference suffix version; 0=unset, 1=false, 2=true.
+    data[29] = prefs.floating ? (*prefs.floating ? 2 : 1) : 0;
+    data[30] = prefs.skip_taskbar ? (*prefs.skip_taskbar ? 2 : 1) : 0;
+    data[31] = prefs.skip_pager ? (*prefs.skip_pager ? 2 : 1) : 0;
+    data[32] = prefs.layer ? static_cast<uint32_t>(*prefs.layer) + 1 : 0;
     return data;
 }
 std::optional<ClientRecord> decode_client(std::span<uint32_t const> data)
@@ -102,18 +109,36 @@ std::optional<ClientRecord> decode_client(std::span<uint32_t const> data)
     {
         record.urgency =
             data[24] & (static_cast<uint8_t>(UrgencySource::App) | static_cast<uint8_t>(UrgencySource::WmInitiated));
-        AppPreferences prefs;
-        prefs.skip_taskbar = data[25] & skip_taskbar;
-        prefs.skip_pager = data[25] & skip_pager;
-        prefs.above = data[25] & above;
-        prefs.below = !prefs.above && (data[25] & below);
-        record.app_prefs = prefs;
+        ClientPreferences prefs;
+        if (data[25] & skip_taskbar)
+            prefs.skip_taskbar = true;
+        if (data[25] & skip_pager)
+            prefs.skip_pager = true;
+        if (data[25] & above)
+            prefs.layer = LayerHint::Above;
+        else if (data[25] & below)
+            prefs.layer = LayerHint::Below;
         if (data.size() >= 27 && data[26] > 0 && data[26] <= static_cast<uint32_t>(LayerHint::Below) + 1)
-            record.restore_layer = static_cast<LayerHint>(data[26] - 1);
+            prefs.layer = static_cast<LayerHint>(data[26] - 1);
+        // Older records cannot distinguish an explicit choice from a default.
+        // Retain the saved mode rather than replaying current rules on adoption.
+        if (record.kind)
+            prefs.floating = *record.kind == Client::Kind::Floating;
+        record.preferences = prefs;
     }
     else if (data.size() == 25)
         record.urgency = data[24] ? static_cast<uint8_t>(UrgencySource::WmInitiated) : 0;
     record.desktop_pinned = data.size() >= 28 && data[27] != 0;
+    if (data.size() >= 33 && data[28] == 1 && data[29] <= 2 && data[30] <= 2 && data[31] <= 2 && data[32] <= 3)
+    {
+        auto boolean = [](uint32_t value) -> std::optional<bool>
+        { return value ? std::optional{ value == 2 } : std::nullopt; };
+        record.preferences =
+            ClientPreferences{ boolean(data[29]),
+                               boolean(data[30]),
+                               boolean(data[31]),
+                               data[32] ? std::optional{ static_cast<LayerHint>(data[32] - 1) } : std::nullopt };
+    }
     return record;
 }
 std::optional<GlobalRecord> decode_global(std::span<uint32_t const> data)

@@ -100,7 +100,7 @@ TEST_CASE("Model validation checks active focus at completed transitions", "[cli
 
     SECTION("Unmanaged focus") { clients.clear(); }
     SECTION("Iconic focus") { clients[1].iconic = true; }
-    SECTION("Hidden focus") { clients[1].hidden = true; }
+    SECTION("Hidden focus") { clients[1].presentation.hidden = true; }
     SECTION("Dock focus") { clients[1].state = DockState{}; }
     SECTION("Desktop focus") { clients[1].state = DesktopState{}; }
     auto violation = invariants::validate(clients, monitors, 1);
@@ -121,7 +121,7 @@ TEST_CASE("Model validation checks effective fullscreen ownership", "[client][in
     SECTION("Missing owner") { clients.clear(); }
     SECTION("Owner no longer fullscreen") { clients[1].fullscreen = false; }
     SECTION("Minimized owner") { clients[1].iconic = true; }
-    SECTION("Hidden owner") { clients[1].hidden = true; }
+    SECTION("Hidden owner") { clients[1].presentation.hidden = true; }
     SECTION("Owner on another workspace") { clients[1].workspace = 1; }
     SECTION("Owner on another monitor") { clients[1].monitor = 1; }
     REQUIRE(invariants::validate(clients, monitors));

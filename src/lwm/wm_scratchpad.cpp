@@ -12,21 +12,19 @@ namespace lwm {
 // Initialization and config reload
 // ---------------------------------------------------------------------------
 
-std::optional<Geometry> WindowManager::detach_tiled_to_floating(Client& client)
+std::optional<Geometry> WindowManager::detach_tiled_to_floating(Client const& client)
 {
     std::optional<Geometry> prior_floating = prior_floating_geometry(client);
     Geometry geometry = client.tiled_geometry;
-    change_client_state(client, FloatingState{ geometry });
+    state_.change_kind(client.id, FloatingState{ geometry });
     return prior_floating;
 }
 
 void WindowManager::init_scratchpad_state()
 {
-    named_scratchpads_.clear();
-    for (auto const& sp : config_.scratchpads)
-    {
-        named_scratchpads_.push_back({ sp.name });
-    }
+    std::vector<std::string> names;
+    for (auto const& sp : config_.scratchpads) names.push_back(sp.name);
+    state_.configure_scratchpads(names);
 }
 
 ScratchpadConfig const* WindowManager::find_scratchpad_config(std::string_view name) const
@@ -39,7 +37,7 @@ ScratchpadConfig const* WindowManager::find_scratchpad_config(std::string_view n
     return nullptr;
 }
 
-WindowManager::NamedScratchpadState* WindowManager::find_named_scratchpad(std::string_view name)
+WindowManager::NamedScratchpadState const* WindowManager::find_named_scratchpad(std::string_view name)
 {
     for (auto& sp : named_scratchpads_)
     {
@@ -79,18 +77,17 @@ void WindowManager::toggle_named_scratchpad(std::string_view name)
         }
         LWM_LOG_DEBUG("Scratchpad '{}': launching", name);
         if (launch_program(config->spawn))
-            state->mark_launch_pending();
+            state_.scratchpad_pending(name);
         return;
     }
 
     auto* client = get_client(claimed);
     if (!client)
     {
-        state->mark_empty();
         return;
     }
 
-    if (!client->iconic && !client->hidden && is_visible(*client))
+    if (!client->iconic && is_visible(*client))
     {
         if (active_window_ == claimed)
             hide_scratchpad_window(claimed);
@@ -125,15 +122,13 @@ void WindowManager::stash_to_scratchpad(xcb_window_t window)
     if (client->kind() == Client::Kind::Tiled)
     {
         auto prior_floating = detach_tiled_to_floating(*client);
-        client->scratchpad = HiddenTiledScratchpadPoolMembership { prior_floating };
+        state_.scratchpad(window, HiddenTiledScratchpadPoolMembership{ prior_floating });
     }
     else
     {
-        client->scratchpad = HiddenFloatingScratchpadPoolMembership { floating_geometry(*client) };
+        state_.scratchpad(window, HiddenFloatingScratchpadPoolMembership{ floating_geometry(*client) });
     }
 
-    std::erase(scratchpad_pool_, window);
-    scratchpad_pool_.push_back(window);
 
     iconify_window(window);
 }
@@ -146,7 +141,7 @@ xcb_window_t WindowManager::find_visible_pool_window() const
     {
         auto const& client = require_client(*it);
         if (client.scratchpad && std::holds_alternative<VisibleScratchpadPoolMembership>(*client.scratchpad)
-            && !client.iconic && !client.hidden && is_visible(client))
+            && !client.iconic && is_visible(client))
         {
             return *it;
         }
@@ -218,11 +213,11 @@ void WindowManager::hide_scratchpad_window(xcb_window_t window)
         // Hidden tiled scratchpads are kept as Floating to satisfy the invariant
         // that Tiled clients live in their workspace's tiled list.
         auto prior_floating = detach_tiled_to_floating(*client);
-        client->scratchpad = HiddenTiledScratchpadPoolMembership { prior_floating };
+        state_.scratchpad(window, HiddenTiledScratchpadPoolMembership{ prior_floating });
     }
     else if (client->kind() == Client::Kind::Floating)
     {
-        client->scratchpad = HiddenFloatingScratchpadPoolMembership { floating_geometry(*client) };
+        state_.scratchpad(window, HiddenFloatingScratchpadPoolMembership{ floating_geometry(*client) });
     }
 
     iconify_window(window);
@@ -243,7 +238,7 @@ void WindowManager::show_named_scratchpad_window(xcb_window_t window, Scratchpad
     if (was_tiled)
     {
         detach_tiled_to_floating(*client);
-        client->mru_order = next_mru_order_++;
+        state_.touch(client->id);
     }
 
     Geometry wa = monitors_[target_monitor].working_area();
@@ -251,9 +246,9 @@ void WindowManager::show_named_scratchpad_window(xcb_window_t window, Scratchpad
     uint16_t h = static_cast<uint16_t>(static_cast<double>(wa.height) * config.height);
     int16_t x = static_cast<int16_t>(wa.x + (wa.width - w) / 2);
     int16_t y = static_cast<int16_t>(wa.y + (wa.height - h) / 2);
-    floating_geometry(*client) = { x, y, w, h };
+    state_.geometry(window, { x, y, w, h });
 
-    relocate_client(*client, target_monitor, target_workspace);
+    state_.relocate(client->id, target_monitor, target_workspace);
 
     // A late title/class match may already be visible on the target workspace.
     request_geometry(*client);
@@ -283,19 +278,19 @@ void WindowManager::show_pool_scratchpad_window(xcb_window_t window)
         restore_geometry = hidden_floating->restore_geometry;
     }
 
-    client->scratchpad = VisibleScratchpadPoolMembership {};
+    state_.scratchpad(window, VisibleScratchpadPoolMembership{ });
 
     if (restore_tiled)
     {
-        relocate_client(*client, target_monitor, target_workspace);
-        change_client_state(*client, TiledState{ restore_prior_floating });
+        state_.relocate(client->id, target_monitor, target_workspace);
+        state_.change_kind(client->id, TiledState{ restore_prior_floating });
     }
     else
     {
         if (client->kind() == Client::Kind::Tiled)
         {
-            change_client_state(*client, FloatingState{ restore_geometry.value_or(client->tiled_geometry) });
-            client->mru_order = next_mru_order_++;
+            state_.change_kind(client->id, FloatingState{ restore_geometry.value_or(client->tiled_geometry) });
+            state_.touch(client->id);
         }
         if (restore_geometry.has_value())
         {
@@ -309,9 +304,9 @@ void WindowManager::show_pool_scratchpad_window(xcb_window_t window)
                     target_area
                 );
             }
-            floating_geometry(*client) = restored_geometry;
+            state_.geometry(window, restored_geometry);
         }
-        relocate_client(*client, target_monitor, target_workspace);
+        state_.relocate(client->id, target_monitor, target_workspace);
     }
 
     deiconify_window(window, true);
@@ -322,15 +317,17 @@ void WindowManager::show_pool_scratchpad_window(xcb_window_t window)
 // ---------------------------------------------------------------------------
 
 void WindowManager::finalize_scratchpad_claim(
-    xcb_window_t window, NamedScratchpadState& state, std::string_view name)
+    xcb_window_t window,
+    NamedScratchpadState const& state,
+    std::string_view name
+)
 {
     bool was_pending = state.pending_launch();
-    state.mark_claimed(window);
 
     auto* client = get_client(window);
     if (!client)
         return;
-    client->scratchpad = NamedScratchpadMembership { std::string(name) };
+    state_.scratchpad(window, NamedScratchpadMembership{ std::string(name) });
 
     if (was_pending)
     {
@@ -368,29 +365,6 @@ WindowManager::match_scratchpad_for_window(WindowMatchInfo const& properties, Wi
     }
 
     return std::nullopt;
-}
-
-// ---------------------------------------------------------------------------
-// Cleanup on window removal
-// ---------------------------------------------------------------------------
-
-void WindowManager::release_scratchpad_window(xcb_window_t window)
-{
-    auto const* client = get_client(window);
-    if (!client)
-        return;
-
-    if (auto const* named = scratchpad_named(*client))
-    {
-        auto* state = find_named_scratchpad(named->name);
-        if (state && state->window() == window)
-        {
-            LWM_LOG_DEBUG("Named scratchpad '{}' window {:#x} removed", state->name, window);
-            state->mark_empty();
-        }
-    }
-
-    std::erase(scratchpad_pool_, window);
 }
 
 } // namespace lwm

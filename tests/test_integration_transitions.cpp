@@ -36,6 +36,40 @@ void title(X11Connection& conn, xcb_window_t window, std::string const& value)
 }
 
 TEST_CASE(
+    "Integration: reclassifying an unarranged client preserves its initial geometry",
+    "[integration][transition][geometry][property]"
+)
+{
+    auto env = TestEnvironment::create("[workspaces]\ncount = 2\n");
+    if (!env)
+        SKIP("X11 unavailable");
+    auto& conn = env->conn;
+    auto socket = wait_for_ipc_socket_path(conn);
+    REQUIRE(socket);
+    auto window = create_window(conn, 60, 70, 320, 240);
+    auto desktop = intern_atom(conn.get(), "_NET_WM_DESKTOP");
+    uint32_t workspace = 1;
+    xcb_change_property(conn.get(), XCB_PROP_MODE_REPLACE, window, desktop, XCB_ATOM_CARDINAL, 32, 1, &workspace);
+    map_window(conn, window);
+    observe_title_after_events(conn, window);
+    REQUIRE(require_property_cardinal(conn.get(), window, desktop) == 1);
+    REQUIRE(geometry(conn, window));
+    REQUIRE(geometry(conn, window)->x < -10000);
+
+    SECTION("Window type changes to dialog")
+    {
+        set_window_type(conn, window, intern_atom(conn.get(), "_NET_WM_WINDOW_TYPE_DIALOG"));
+    }
+    SECTION("Window becomes transient") { xcb_icccm_set_wm_transient_for(conn.get(), window, conn.root()); }
+    observe_title_after_events(conn, window);
+    auto reply = send_ipc_command(*socket, "workspace switch 1");
+    REQUIRE(reply);
+    REQUIRE(reply->starts_with("ok"));
+    REQUIRE(wait_for_condition([&] { return geometry(conn, window) == lwm::Geometry{ 60, 70, 320, 240 }; }, timeout));
+    destroy_window(conn, window);
+}
+
+TEST_CASE(
     "Integration: compound rules compose placement kind visibility and focus",
     "[integration][transition][rules][sequence]"
 )
@@ -631,4 +665,287 @@ TEST_CASE(
     Subscriber reconnected(*path, "state_change");
     CHECK(state().at("instance") != snapshot.at("instance"));
     destroy_window(conn, window);
+}
+
+TEST_CASE("Integration: application state requests do not replay rule placement", "[integration][transition][rules]")
+{
+    auto env = TestEnvironment::create(R"(
+[[rules]]
+match = { class = "Positioned" }
+apply = { floating = true, below = true, geometry = { x = 60, y = 70, width = 300, height = 200 } }
+)");
+    if (!env)
+        SKIP("X11 unavailable");
+    auto& conn = env->conn;
+    auto window = create_window(conn, 60, 70, 300, 200);
+    set_window_wm_class(conn, window, "test", "Positioned");
+    map_window(conn, window);
+    REQUIRE(wait_for_active_window(conn, window, timeout));
+    auto state = intern_atom(conn.get(), "_NET_WM_STATE");
+    auto above = intern_atom(conn.get(), "_NET_WM_STATE_ABOVE");
+    auto below = intern_atom(conn.get(), "_NET_WM_STATE_BELOW");
+    auto fullscreen = intern_atom(conn.get(), "_NET_WM_STATE_FULLSCREEN");
+    send_client_message(
+        conn,
+        window,
+        intern_atom(conn.get(), "_NET_MOVERESIZE_WINDOW"),
+        (1u << 8) | (1u << 9),
+        360,
+        270,
+        0,
+        0
+    );
+    REQUIRE(wait_for_condition([&] { return geometry(conn, window) == lwm::Geometry{ 360, 270, 300, 200 }; }, timeout));
+    send_client_message(conn, window, state, 1, above, above, 0, 0);
+    observe_title_after_events(conn, window);
+    CHECK(geometry(conn, window) == lwm::Geometry{ 360, 270, 300, 200 });
+    CHECK(property_has_atom(conn.get(), window, state, above));
+    CHECK_FALSE(property_has_atom(conn.get(), window, state, below));
+    // A duplicate toggle is one operation; invalid actions are ignored.
+    send_client_message(conn, window, state, 2, above, above, 0, 0);
+    observe_title_after_events(conn, window);
+    CHECK_FALSE(property_has_atom(conn.get(), window, state, above));
+    send_client_message(conn, window, state, 99, below, 0, 0, 0);
+    observe_title_after_events(conn, window);
+    CHECK_FALSE(property_has_atom(conn.get(), window, state, below));
+    send_client_message(conn, window, state, 1, below, 0, 0, 0);
+    send_client_message(conn, window, state, 1, fullscreen, 0, 0, 0);
+    observe_title_after_events(conn, window);
+    CHECK(property_has_atom(conn.get(), window, state, fullscreen));
+    send_client_message(conn, window, state, 0, fullscreen, 0, 0, 0);
+    observe_title_after_events(conn, window);
+    CHECK(property_has_atom(conn.get(), window, state, below));
+    CHECK(geometry(conn, window) == lwm::Geometry{ 360, 270, 300, 200 });
+    // Reload explicitly reapplies even unchanged placement actions.
+    auto socket = wait_for_ipc_socket_path(conn);
+    REQUIRE(socket);
+    REQUIRE(send_ipc_command(*socket, "reload-config")->starts_with("ok "));
+    CHECK(geometry(conn, window) == lwm::Geometry{ 60, 70, 300, 200 });
+    destroy_window(conn, window);
+}
+
+TEST_CASE(
+    "Integration: explicit preferences survive defaults modal fullscreen and restart",
+    "[integration][transition][rules][restart]"
+)
+{
+    auto env = TestEnvironment::create();
+    if (!env)
+        SKIP("X11 unavailable");
+    auto& conn = env->conn;
+    auto window = create_window(conn, 60, 70, 300, 200);
+    set_window_type(conn, window, intern_atom(conn.get(), "_NET_WM_WINDOW_TYPE_UTILITY"));
+    map_window(conn, window);
+    REQUIRE(wait_for_active_window(conn, window, timeout));
+    auto state = intern_atom(conn.get(), "_NET_WM_STATE");
+    auto taskbar = intern_atom(conn.get(), "_NET_WM_STATE_SKIP_TASKBAR");
+    auto below = intern_atom(conn.get(), "_NET_WM_STATE_BELOW");
+    auto modal = intern_atom(conn.get(), "_NET_WM_STATE_MODAL");
+    auto above = intern_atom(conn.get(), "_NET_WM_STATE_ABOVE");
+    send_client_message(conn, window, state, 0, taskbar, 0, 0, 0);
+    send_client_message(conn, window, state, 1, below, modal, 0, 0);
+    observe_title_after_events(conn, window);
+    CHECK_FALSE(property_has_atom(conn.get(), window, state, taskbar));
+    CHECK(property_has_atom(conn.get(), window, state, above));
+    auto socket = wait_for_ipc_socket_path(conn);
+    REQUIRE(socket);
+    auto instance = wm_instance(conn);
+    REQUIRE(instance);
+    REQUIRE(send_ipc_command(*socket, "restart")->starts_with("ok "));
+    REQUIRE(wait_for_wm_restart(conn, timeout, *instance));
+    send_client_message(conn, window, state, 0, modal, 0, 0, 0);
+    set_window_type(conn, window, intern_atom(conn.get(), "_NET_WM_WINDOW_TYPE_NORMAL"));
+    observe_title_after_events(conn, window);
+    CHECK_FALSE(property_has_atom(conn.get(), window, state, taskbar));
+    CHECK(property_has_atom(conn.get(), window, state, below));
+    CHECK_FALSE(property_has_atom(conn.get(), window, state, above));
+    destroy_window(conn, window);
+}
+
+TEST_CASE(
+    "Integration: generated state requests converge to the declared preferences",
+    "[integration][transition][sequence]"
+)
+{
+    auto env = TestEnvironment::create();
+    if (!env)
+        SKIP("X11 unavailable");
+    auto& conn = env->conn;
+    auto window = create_window(conn, 60, 70, 300, 200);
+    map_window(conn, window);
+    REQUIRE(wait_for_active_window(conn, window, timeout));
+    auto state = intern_atom(conn.get(), "_NET_WM_STATE");
+    auto taskbar = intern_atom(conn.get(), "_NET_WM_STATE_SKIP_TASKBAR");
+    auto pager = intern_atom(conn.get(), "_NET_WM_STATE_SKIP_PAGER");
+    auto modal = intern_atom(conn.get(), "_NET_WM_STATE_MODAL");
+    auto above = intern_atom(conn.get(), "_NET_WM_STATE_ABOVE");
+    auto below = intern_atom(conn.get(), "_NET_WM_STATE_BELOW");
+    auto fullscreen = intern_atom(conn.get(), "_NET_WM_STATE_FULLSCREEN");
+    uint32_t seed = 0x14537;
+    if (auto* value = std::getenv("LWM_TEST_SEQUENCE_SEED"))
+        seed = static_cast<uint32_t>(std::stoul(value));
+    size_t steps = 160;
+    if (auto* value = std::getenv("LWM_TEST_SEQUENCE_STEPS"))
+        steps = std::stoul(value);
+    CAPTURE(seed);
+    auto random = [&]
+    {
+        seed ^= seed << 13;
+        seed ^= seed >> 17;
+        seed ^= seed << 5;
+        return seed;
+    };
+    bool skip_taskbar = false, skip_pager = false, is_modal = false, is_fullscreen = false;
+    int layer = 0;
+    // Establish explicit false choices before varying classification defaults.
+    send_client_message(conn, window, state, 0, taskbar, pager, 0, 0);
+    send_client_message(conn, window, state, 0, above, below, 0, 0);
+    std::string trace;
+    for (size_t step = 0; step < steps; ++step)
+    {
+        auto before_instance = wm_instance(conn);
+        REQUIRE(before_instance);
+        auto op = random() % 9;
+        bool enable = (random() & 1) != 0;
+        trace += std::to_string(op) + ":" + std::to_string(enable) + " ";
+        INFO("Replay operations: " << trace);
+        CAPTURE(step);
+        if (op < 6)
+        {
+            auto atom = std::array{ taskbar, pager, modal, above, below, fullscreen }[op];
+            send_client_message(conn, window, state, enable ? 1 : 0, atom, atom, 0, 0);
+            if (op == 0)
+                skip_taskbar = enable;
+            if (op == 1)
+                skip_pager = enable;
+            if (op == 2)
+                is_modal = enable;
+            if (op == 3)
+            {
+                if (enable)
+                    layer = 1;
+                else if (layer == 1)
+                    layer = 0;
+            }
+            if (op == 4)
+            {
+                if (enable)
+                    layer = -1;
+                else if (layer == -1)
+                    layer = 0;
+            }
+            if (op == 5)
+                is_fullscreen = enable;
+        }
+        else if (op == 6)
+        {
+            set_window_type(
+                conn,
+                window,
+                intern_atom(conn.get(), enable ? "_NET_WM_WINDOW_TYPE_UTILITY" : "_NET_WM_WINDOW_TYPE_NORMAL")
+            );
+        }
+        else if (op == 7)
+        {
+            auto socket = wait_for_ipc_socket_path(conn);
+            REQUIRE(socket);
+            auto instance = wm_instance(conn);
+            REQUIRE(instance);
+            auto reply = send_ipc_command(*socket, "restart");
+            REQUIRE(reply);
+            REQUIRE(reply->starts_with("ok "));
+            REQUIRE(wait_for_wm_restart(conn, timeout, *instance));
+        }
+        else
+        {
+            send_client_message(conn, window, state, 42, fullscreen, modal, 0, 0);
+        }
+        observe_title_after_events(conn, window);
+        if (op != 7)
+            CHECK(wm_instance(conn) == before_instance);
+        CHECK(property_has_atom(conn.get(), window, state, taskbar) == skip_taskbar);
+        CHECK(property_has_atom(conn.get(), window, state, pager) == skip_pager);
+        CHECK(property_has_atom(conn.get(), window, state, modal) == is_modal);
+        CHECK(property_has_atom(conn.get(), window, state, fullscreen) == is_fullscreen);
+        CHECK(property_has_atom(conn.get(), window, state, above) == (!is_fullscreen && (is_modal || layer == 1)));
+        CHECK(property_has_atom(conn.get(), window, state, below) == (!is_fullscreen && !is_modal && layer == -1));
+    }
+    destroy_window(conn, window);
+}
+
+TEST_CASE("Integration: restart handoff works in both directions across binaries", "[.][integration][crossbinary]")
+{
+    auto previous = std::getenv("LWM_TEST_PREVIOUS_BINARY");
+    REQUIRE(previous);
+    REQUIRE(std::filesystem::is_regular_file(previous));
+    auto env = TestEnvironment::create(R"(
+[[rules]]
+apply = { floating = true, below = true, skip_taskbar = true, geometry = { x = 60, y = 70, width = 300, height = 200 } }
+)");
+    REQUIRE(env);
+    auto& conn = env->conn;
+    auto window = create_window(conn, 60, 70, 300, 200);
+    map_window(conn, window);
+    REQUIRE(wait_for_active_window(conn, window, timeout));
+    auto state = intern_atom(conn.get(), "_NET_WM_STATE");
+    auto fullscreen = intern_atom(conn.get(), "_NET_WM_STATE_FULLSCREEN");
+    auto below = intern_atom(conn.get(), "_NET_WM_STATE_BELOW");
+    auto taskbar = intern_atom(conn.get(), "_NET_WM_STATE_SKIP_TASKBAR");
+    auto current = find_test_executable_path("lwm").string();
+    send_client_message(conn, window, state, 0, taskbar, 0, 0, 0);
+    observe_title_after_events(conn, window);
+    // Two old-binary handoffs can reuse the original WM's resource ID. Old
+    // binaries do not maintain the extension; their later choices must win.
+    for (auto const& binary : std::array<std::string, 3>{ previous, previous, current })
+    {
+        send_client_message(conn, window, state, 1, fullscreen, 0, 0, 0);
+        observe_title_after_events(conn, window);
+        auto instance = wm_instance(conn);
+        REQUIRE(instance);
+        auto socket = wait_for_ipc_socket_path(conn);
+        REQUIRE(socket);
+        auto reply = send_ipc_command(*socket, "exec " + binary);
+        REQUIRE(reply);
+        REQUIRE(reply->starts_with("ok "));
+        REQUIRE(wait_for_wm_restart(conn, timeout, *instance));
+        REQUIRE(wait_for_active_window(conn, window, timeout));
+        REQUIRE(property_has_atom(conn.get(), window, state, fullscreen));
+        if (binary == previous)
+            send_client_message(conn, window, state, 1, taskbar, 0, 0, 0);
+        send_client_message(conn, window, state, 0, fullscreen, 0, 0, 0);
+        observe_title_after_events(conn, window);
+        CHECK(property_has_atom(conn.get(), window, state, below));
+        CHECK(property_has_atom(conn.get(), window, state, taskbar));
+        CHECK(geometry(conn, window) == lwm::Geometry{ 60, 70, 300, 200 });
+    }
+    destroy_window(conn, window);
+}
+
+TEST_CASE(
+    "Integration: repeated fullscreen request selects its existing fullscreen client",
+    "[integration][transition][fullscreen]"
+)
+{
+    auto env = TestEnvironment::create();
+    REQUIRE(env);
+    auto& conn = env->conn;
+    auto first = create_window(conn, 10, 10, 200, 150), second = create_window(conn, 10, 10, 200, 150);
+    map_window(conn, first);
+    REQUIRE(wait_for_active_window(conn, first, timeout));
+    map_window(conn, second);
+    REQUIRE(wait_for_active_window(conn, second, timeout));
+    auto state = intern_atom(conn.get(), "_NET_WM_STATE");
+    auto fullscreen = intern_atom(conn.get(), "_NET_WM_STATE_FULLSCREEN");
+    for (auto owner : { first, second, first })
+    {
+        send_client_message(conn, owner, state, 1, fullscreen, 0, 0, 0);
+        observe_title_after_events(conn, owner);
+        auto active = geometry(conn, owner), hidden = geometry(conn, owner == first ? second : first);
+        REQUIRE(active);
+        REQUIRE(hidden);
+        CHECK(active->x == 0);
+        CHECK(hidden->x < -10000);
+    }
+    destroy_window(conn, first);
+    destroy_window(conn, second);
 }

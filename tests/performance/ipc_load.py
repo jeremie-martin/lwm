@@ -1,8 +1,12 @@
 #!/usr/bin/env python3
 """Measure independent IPC callers against an owned WM and Xvfb (Linux)."""
+
 import argparse
 import concurrent.futures
 import json
+import multiprocessing
+import signal
+import ctypes as c
 import os
 from pathlib import Path
 import select
@@ -12,6 +16,7 @@ import subprocess
 import tempfile
 import time
 from contextlib import ExitStack
+
 
 def stop(process):
     if process.poll() is None:
@@ -27,7 +32,15 @@ def request(path):
     start = time.perf_counter_ns()
     with socket.socket(socket.AF_UNIX) as peer:
         peer.settimeout(3)
-        peer.connect(str(path))
+        deadline = time.monotonic() + 3
+        while True:
+            try:
+                peer.connect(str(path))
+                break
+            except BlockingIOError:
+                if time.monotonic() >= deadline:
+                    return "connect timeout", (time.perf_counter_ns() - start) / 1000
+                time.sleep(0.001)
         try:
             peer.sendall(b"ping\n")
             result = b""
@@ -38,13 +51,65 @@ def request(path):
     return result.decode().strip(), (time.perf_counter_ns() - start) / 1000
 
 
-def measure(binary, stalled, requests):
-    with tempfile.TemporaryDirectory(prefix="lwm-ipc-load-") as temporary, ExitStack() as cleanup:
+def flood(display_name, ready, finished):
+    # A separate X connection and process keep the producer independent of WM
+    # progress. XSync bounds the producer's own queue, not the WM's event queue.
+    from transition_counts import X, WINDOW, pointer
+
+    display = X.XOpenDisplay(display_name.encode())
+    if not display:
+        return
+    root = X.XDefaultRootWindow(display)
+    window = X.XCreateSimpleWindow(display, root, 10, 10, 200, 150, 0, 0, 0)
+    X.XMapWindow(display, window)
+    atom = X.XInternAtom(display, b"_NET_WM_NAME", 0)
+    utf8 = X.XInternAtom(display, b"UTF8_STRING", 0)
+    index = 0
+    try:
+        while not finished.is_set():
+            for _ in range(64):
+                title = f"flood-{index}".encode()
+                value = c.create_string_buffer(title)
+                X.XChangeProperty(display, window, atom, utf8, 8, 0, value, len(title))
+                pointer(display, root, 6, index % 700, index % 500)
+                index += 1
+            X.XSync(display, 0)
+            ready.set()
+    finally:
+        X.XCloseDisplay(display)
+
+
+def process_metrics(pid):
+    fields = Path(f"/proc/{pid}/stat").read_text().split()
+    return (int(fields[13]) + int(fields[14])) / os.sysconf("SC_CLK_TCK"), int(
+        fields[23]
+    ) * os.sysconf("SC_PAGE_SIZE")
+
+
+def measure(binary, stalled, requests, x_flood=False):
+    with (
+        tempfile.TemporaryDirectory(prefix="lwm-ipc-load-") as temporary,
+        ExitStack() as cleanup,
+    ):
         directory = Path(temporary)
         read_fd, write_fd = os.pipe()
         log = cleanup.enter_context((directory / "server.log").open("wb"))
-        server = subprocess.Popen(["Xvfb", "-displayfd", str(write_fd), "-screen", "0", "800x600x24", "-nolisten", "tcp", "-noreset"],
-                                  pass_fds=[write_fd], stdout=log, stderr=log)
+        server = subprocess.Popen(
+            [
+                "Xvfb",
+                "-displayfd",
+                str(write_fd),
+                "-screen",
+                "0",
+                "800x600x24",
+                "-nolisten",
+                "tcp",
+                "-noreset",
+            ],
+            pass_fds=[write_fd],
+            stdout=log,
+            stderr=log,
+        )
         cleanup.callback(stop, server)
         os.close(write_fd)
         try:
@@ -57,8 +122,20 @@ def measure(binary, stalled, requests):
         config.write_text("[workspaces]\ncount = 2\n")
         environment = dict(os.environ, DISPLAY=display, XDG_RUNTIME_DIR=temporary)
         environment.pop("LWM_SOCKET", None)
-        wm = subprocess.Popen([str(binary), "--config", str(config), "--log-target", "stderr", "--log-level", "error"],
-                              env=environment, stdout=log, stderr=log)
+        wm = subprocess.Popen(
+            [
+                str(binary),
+                "--config",
+                str(config),
+                "--log-target",
+                "stderr",
+                "--log-level",
+                "error",
+            ],
+            env=environment,
+            stdout=log,
+            stderr=log,
+        )
         cleanup.callback(stop, wm)
         path = directory / "lwm" / ("ipc-" + display.replace(":", "_") + ".sock")
         deadline = time.monotonic() + 5
@@ -76,27 +153,104 @@ def measure(binary, stalled, requests):
             peer.connect(str(path))
             peer.sendall(b"pi")
             time.sleep(0.02)  # Let the WM accept this incomplete request first.
+        producer = None
+        if x_flood:
+            context = multiprocessing.get_context("spawn")
+            ready, finished = context.Event(), context.Event()
+            producer = context.Process(target=flood, args=(display, ready, finished))
+            # Establish real subscriptions before starting contention. One stays
+            # unread; the other proves SIGHUP is serviced during the same flood.
+            subscriber = cleanup.enter_context(socket.socket(socket.AF_UNIX))
+            subscriber.setsockopt(socket.SOL_SOCKET, socket.SO_RCVBUF, 1024)
+            reload_peer = cleanup.enter_context(socket.socket(socket.AF_UNIX))
+            for peer, command in (
+                (subscriber, b"subscribe state_change\n"),
+                (reload_peer, b"subscribe config_reload\n"),
+            ):
+                peer.settimeout(3)
+                peer.connect(str(path))
+                peer.sendall(command)
+                acknowledgement = b""
+                while not acknowledgement.endswith(b"\n"):
+                    acknowledgement += peer.recv(1024)
+                if acknowledgement != b"ok subscribed\n":
+                    raise RuntimeError("Subscription failed: " + repr(acknowledgement))
+            producer.start()
+
+            def finish():
+                finished.set()
+                producer.join(3)
+                if producer.is_alive():
+                    producer.kill()
+                    producer.join()
+
+            cleanup.callback(finish)
+            if not ready.wait(5):
+                raise RuntimeError("X flood producer failed to start")
+            os.kill(wm.pid, signal.SIGHUP)
+        cpu_before, _ = process_metrics(wm.pid)
+        started = time.monotonic()
         with concurrent.futures.ThreadPoolExecutor(max_workers=16) as workers:
             results = list(workers.map(lambda _: request(path), range(requests)))
+        reload_seen = None
+        if x_flood:
+            try:
+                message = b""
+                while b"\n" not in message:
+                    chunk = reload_peer.recv(4096)
+                    if not chunk:
+                        break
+                    message += chunk
+                event = json.loads(message.split(b"\n", 1)[0])
+                reload_seen = (
+                    event.get("event") == "config_reload"
+                    and event.get("success") is True
+                    and event.get("source") == "sighup"
+                )
+            except (OSError, ValueError):
+                reload_seen = False
+        elapsed = time.monotonic() - started
+        cpu_after, rss = process_metrics(wm.pid)
         successes = [latency for response, latency in results if response == "ok pong"]
         errors = {}
         for response, _ in results:
             if response != "ok pong":
                 errors[response] = errors.get(response, 0) + 1
-        return {"stalled_request": stalled, "requests": requests, "successes": len(successes), "errors": errors,
-                "median_success_us": statistics.median(successes) if successes else None,
-                "p95_success_us": sorted(successes)[int((len(successes) - 1) * .95)] if successes else None}
+        return {
+            "x_flood": x_flood,
+            "reload_seen": reload_seen,
+            "producer_alive_at_completion": producer.is_alive() if producer else None,
+            "wall_seconds": elapsed,
+            "wm_cpu_seconds": cpu_after - cpu_before,
+            "wm_rss_bytes": rss,
+            "stalled_request": stalled,
+            "requests": requests,
+            "successes": len(successes),
+            "errors": errors,
+            "median_success_us": statistics.median(successes) if successes else None,
+            "p95_success_us": sorted(successes)[int((len(successes) - 1) * 0.95)]
+            if successes
+            else None,
+            "max_success_us": max(successes) if successes else None,
+        }
 
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("binary", type=Path)
     parser.add_argument("--check", action="store_true")
+    parser.add_argument("--x-flood", action="store_true")
+    parser.add_argument("--requests", type=int, default=512)
     args = parser.parse_args()
     for stalled in (False, True):
-        result = measure(args.binary.resolve(strict=True), stalled, 512)
+        result = measure(
+            args.binary.resolve(strict=True), stalled, args.requests, args.x_flood
+        )
         print(json.dumps(result), flush=True)
-        if args.check and result["successes"] != result["requests"]:
+        if args.check and (
+            result["successes"] != result["requests"]
+            or (args.x_flood and not result["reload_seen"])
+        ):
             raise AssertionError("Independent callers failed: " + json.dumps(result))
 
 

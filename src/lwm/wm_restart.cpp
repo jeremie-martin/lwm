@@ -15,12 +15,6 @@ namespace {
 
 using xproperty::read_words;
 
-void restore_visible_pool_scratchpad_membership(Client& client)
-{
-    if (!client.scratchpad)
-        client.scratchpad = VisibleScratchpadPoolMembership{};
-}
-
 } // namespace
 
 void WindowManager::initiate_restart(std::string binary)
@@ -32,6 +26,17 @@ void WindowManager::initiate_restart(std::string binary)
 
 void WindowManager::serialize_restart_state()
 {
+    uint32_t preference_version = 1;
+    xcb_change_property(
+        conn_.get(),
+        XCB_PROP_MODE_REPLACE,
+        wm_window_,
+        lwm_restart_preferences_,
+        XCB_ATOM_CARDINAL,
+        32,
+        1,
+        &preference_version
+    );
 
     // Per-window: write _LWM_RESTART_CLIENT on each tiled/floating client
     for (auto const& [window, client] : clients_)
@@ -48,8 +53,24 @@ void WindowManager::serialize_restart_state()
             lwm_restart_client_,
             XCB_ATOM_CARDINAL,
             32,
-            data.size(),
+            restart::legacy_client_words,
             data.data()
+        );
+
+        // Older readers require exactly the legacy property length. Associate
+        // the extension with its writer so an intervening old binary cannot
+        // accidentally forward stale preferences that it never maintained.
+        std::array<uint32_t, 1 + restart::preference_words> preferences{ wm_window_ };
+        std::copy(data.begin() + restart::legacy_client_words, data.end(), preferences.begin() + 1);
+        xcb_change_property(
+            conn_.get(),
+            XCB_PROP_MODE_REPLACE,
+            window,
+            lwm_restart_preferences_,
+            XCB_ATOM_CARDINAL,
+            32,
+            preferences.size(),
+            preferences.data()
         );
 
         // Store scratchpad name as UTF8 string property
@@ -213,14 +234,15 @@ bool WindowManager::restore_global_restart_state()
     auto record = restart::decode_global(words);
     if (!record)
         return false;
-    focused_monitor_ = record->focused_monitor < monitors_.size() ? record->focused_monitor : 0;
-    active_window_ = record->active_window;
-    showing_desktop_ = record->showing_desktop;
+    state_.restore_focus(record->focused_monitor, record->active_window, record->showing_desktop);
     for (size_t i = 0; i < std::min(monitors_.size(), record->workspaces.size()); ++i)
     {
         auto& monitor = monitors_[i];
-        monitor.current_workspace = std::min(record->workspaces[i].first, monitor.workspaces.size() - 1);
-        monitor.previous_workspace = std::min(record->workspaces[i].second, monitor.workspaces.size() - 1);
+        state_.restore_workspaces(
+            i,
+            std::min(record->workspaces[i].first, monitor.workspaces.size() - 1),
+            std::min(record->workspaces[i].second, monitor.workspaces.size() - 1)
+        );
     }
     auto ratios = read_words(conn_.get(), conn_.screen()->root, lwm_restart_ratios_, XCB_ATOM_CARDINAL);
     for (auto& layout : restart::decode_layouts(ratios))
@@ -228,9 +250,12 @@ bool WindowManager::restore_global_restart_state()
         if (layout.monitor >= monitors_.size() || layout.workspace >= monitors_[layout.monitor].workspaces.size())
             continue;
         auto& workspace = monitors_[layout.monitor].workspaces[layout.workspace];
-        if (layout.strategy)
-            workspace.layout_strategy = *layout.strategy;
-        workspace.split_ratios = std::move(layout.ratios);
+        state_.restore_layout(
+            layout.monitor,
+            layout.workspace,
+            layout.strategy.value_or(workspace.layout_strategy),
+            std::move(layout.ratios)
+        );
     }
 
     LWM_LOG_INFO(
@@ -245,33 +270,15 @@ bool WindowManager::restore_global_restart_state()
 void WindowManager::apply_restart_client_state(xcb_window_t window)
 {
     auto words = read_words(conn_.get(), window, lwm_restart_client_, XCB_ATOM_CARDINAL, restart::client_words);
+    auto preferences =
+        read_words(conn_.get(), window, lwm_restart_preferences_, XCB_ATOM_CARDINAL, 1 + restart::preference_words);
+    if (words.size() == restart::legacy_client_words && preferences.size() == 1 + restart::preference_words
+        && restart_source_ != XCB_NONE && preferences[0] == restart_source_)
+        words.insert(words.end(), preferences.begin() + 1, preferences.end());
     auto record = restart::decode_client(words);
-    auto* client = get_client(window);
-    if (!record || !client)
+    if (!record || !get_client(window))
         return;
-
-    client->borderless = record->borderless;
-    auto saved_prior_floating = record->prior_floating;
-    auto saved_floating_geometry = record->floating;
-    auto saved_kind = record->kind;
-    if (record->hidden_pool_kind == 1)
-        client->scratchpad = HiddenTiledScratchpadPoolMembership{ saved_prior_floating };
-    else if (record->hidden_pool_kind == 2)
-        client->scratchpad = HiddenFloatingScratchpadPoolMembership{ saved_floating_geometry };
-    if (record->urgency)
-        client->urgency.sources = *record->urgency;
-    else if (client->urgency.active() && window != active_window_)
-        client->urgency.add(UrgencySource::WmInitiated);
-    if (record->app_prefs)
-        client->app_prefs = *record->app_prefs;
-    if (record->restore_layer)
-        client->fullscreen_restore_layer_hint = record->restore_layer;
-    client->desktop_pinned = record->desktop_pinned;
-
-    if (saved_kind == Client::Kind::Tiled)
-        change_client_state(*client, TiledState{ saved_prior_floating });
-    else if (saved_kind == Client::Kind::Floating)
-        change_client_state(*client, FloatingState{ saved_floating_geometry });
+    state_.restore_client(window, *record);
 
     // Restore scratchpad name
     auto name_cookie = xcb_get_property(conn_.get(), false, window, lwm_restart_scratchpad_name_, utf8_string_, 0, 256);
@@ -282,20 +289,7 @@ void WindowManager::apply_restart_client_state(xcb_window_t window)
             static_cast<char const*>(xcb_get_property_value(name_reply.get())),
             static_cast<size_t>(xcb_get_property_value_length(name_reply.get()))
         );
-        client->scratchpad = NamedScratchpadMembership{ scratchpad_name };
-
-        // Re-claim named scratchpad slot
-        if (!scratchpad_name.empty())
-        {
-            for (auto& sp : named_scratchpads_)
-            {
-                if (sp.name == scratchpad_name && sp.window() == XCB_NONE)
-                {
-                    sp.mark_claimed(window);
-                    break;
-                }
-            }
-        }
+        state_.scratchpad(window, NamedScratchpadMembership{ scratchpad_name });
     }
 }
 
@@ -320,30 +314,8 @@ void WindowManager::restore_window_ordering()
     auto tiled_data = xproperty::words(tiled_reply, XCB_ATOM_WINDOW);
     if (xproperty::complete(tiled_reply, XCB_ATOM_WINDOW, 32))
     {
-        size_t tiled_len = tiled_data.size();
 
-        // Build a priority map: window → position in saved order
-        std::unordered_map<xcb_window_t, size_t> tiled_priority;
-        for (size_t i = 0; i < tiled_len; ++i) tiled_priority[static_cast<xcb_window_t>(tiled_data[i])] = i;
-
-        // Sort each workspace's window vector by saved priority
-        for (auto& monitor : monitors_)
-        {
-            for (auto& workspace : monitor.workspaces)
-            {
-                std::ranges::sort(
-                    workspace.windows,
-                    [&](xcb_window_t a, xcb_window_t b)
-                    {
-                        auto ia = tiled_priority.find(a);
-                        auto ib = tiled_priority.find(b);
-                        size_t pa = (ia != tiled_priority.end()) ? ia->second : SIZE_MAX;
-                        size_t pb = (ib != tiled_priority.end()) ? ib->second : SIZE_MAX;
-                        return pa < pb;
-                    }
-                );
-            }
-        }
+        state_.restore_tile_order(tiled_data);
     }
 
     // Restore floating ordering by assigning mru_order from saved priority
@@ -359,7 +331,7 @@ void WindowManager::restore_window_ordering()
         {
             auto* client = get_client(static_cast<xcb_window_t>(float_data[i]));
             if (client && client->kind() == Client::Kind::Floating)
-                client->mru_order = next_mru_order_++;
+                state_.touch(client->id);
         }
     }
 
@@ -377,21 +349,10 @@ void WindowManager::restore_window_ordering()
     auto pool_data = xproperty::words(pool_reply, XCB_ATOM_WINDOW);
     if (xproperty::complete(pool_reply, XCB_ATOM_WINDOW, 32))
     {
-        size_t pool_len = pool_data.size();
 
-        scratchpad_pool_.clear();
-        for (size_t i = 0; i < pool_len; ++i)
-        {
-            xcb_window_t w = static_cast<xcb_window_t>(pool_data[i]);
-            auto* client = get_client(w);
-            if (client && !scratchpad_named(*client)
-                && (client->kind() == Client::Kind::Tiled || client->kind() == Client::Kind::Floating)
-                && std::ranges::find(scratchpad_pool_, w) == scratchpad_pool_.end())
-            {
-                restore_visible_pool_scratchpad_membership(*client);
-                scratchpad_pool_.push_back(w);
-            }
-        }
+        std::vector<xcb_window_t> ids;
+        for (auto id : pool_data) ids.push_back(static_cast<xcb_window_t>(id));
+        state_.restore_pool(ids);
     }
 }
 
@@ -411,6 +372,7 @@ void WindowManager::clean_restart_properties()
         if (client.kind() == Client::Kind::Tiled || client.kind() == Client::Kind::Floating)
         {
             xcb_delete_property(conn_.get(), window, lwm_restart_client_);
+            xcb_delete_property(conn_.get(), window, lwm_restart_preferences_);
             xcb_delete_property(conn_.get(), window, lwm_restart_scratchpad_name_);
         }
     }
@@ -428,7 +390,7 @@ void WindowManager::prepare_restart()
     // Startup adoption restores geometry at its completion boundary.
     for (auto& [window, client] : clients_)
     {
-        if (!client.hidden)
+        if (!client.presentation.hidden)
             continue;
         if (client.kind() != Client::Kind::Tiled && client.kind() != Client::Kind::Floating)
             continue;

@@ -43,7 +43,7 @@ std::vector<xcb_window_t> WindowManager::tiled_participants(Monitor const& monit
         for (auto window : workspace.windows)
         {
             auto const& client = require_client(window);
-            if (!client.hidden && !client.fullscreen && (current || client.sticky))
+            if (is_visible(client) && !client.fullscreen && (current || client.sticky))
                 windows.push_back(window);
         }
     };
@@ -83,7 +83,7 @@ void WindowManager::begin_window_drag(
 )
 {
     auto* client = get_client(window);
-    if (!client || client->hidden || client->iconic || client->fullscreen || showing_desktop_
+    if (!client || !is_visible(*client) || client->iconic || client->fullscreen || showing_desktop_
         || (client->kind() != Client::Kind::Floating && client->kind() != Client::Kind::Tiled))
         return;
     if (!grab_pointer_for_drag())
@@ -97,8 +97,8 @@ void WindowManager::begin_window_drag(
     }
     if (client->kind() == Client::Kind::Floating && (client->maximized_horz || client->maximized_vert))
     {
-        floating_geometry(*client) = presentation_geometry(*client);
-        set_window_maximized(*client, false, false);
+        state_.geometry(window, presentation_geometry(*client));
+        state_.maximize(client->id, false, false);
     }
     Geometry start = client->kind() == Client::Kind::Floating ? floating_geometry(*client) : client->tiled_geometry;
     drag_ = Drag{
@@ -136,9 +136,9 @@ void WindowManager::validate_drag(bool layout_changed)
     if (auto const* window = std::get_if<WindowDrag>(&drag_->operation))
     {
         auto const* client = get_client(window->window);
-        valid = client && client->kind() == window->kind && !client->hidden && !client->iconic && !client->fullscreen
-            && !client->maximized_horz && !client->maximized_vert && client->monitor == window->monitor
-            && client->workspace == window->workspace && !showing_desktop_;
+        valid = client && client->kind() == window->kind && is_visible(*client) && !client->iconic
+            && !client->fullscreen && !client->maximized_horz && !client->maximized_vert
+            && client->monitor == window->monitor && client->workspace == window->workspace && !showing_desktop_;
     }
     else
     {
@@ -177,13 +177,13 @@ void WindowManager::update_drag(int16_t x, int16_t y)
             auto updated = floating::drag_geometry(window->start_geometry, dx, dy, window->edges);
             if (updated == floating_geometry(*client))
                 return;
-            floating_geometry(*client) = updated;
+            state_.geometry(client->id, updated);
             update_floating_monitor_for_geometry(*client);
             window->monitor = client->monitor;
             window->workspace = client->workspace;
             if (active_window_ == client->id && focused_monitor_ != client->monitor)
             {
-                focused_monitor_ = client->monitor;
+                state_.focus_monitor(client->monitor);
                 request_current_desktop_update();
             }
         }
@@ -205,8 +205,7 @@ void WindowManager::update_drag(int16_t x, int16_t y)
         auto it = ratios.find(split.address);
         if (it != ratios.end() && it->second == ratio)
             return;
-        ratios[split.address] = ratio;
-        invalidate_monitor(resize.monitor);
+        state_.ratio(resize.monitor, split.address, ratio);
     }
 }
 
@@ -258,9 +257,9 @@ void WindowManager::end_drag(bool commit)
         if (window != client->id)
             ++index;
     }
-    if (relocate_client(*client, target, mon.current_workspace, RelocationGeometry::Preserve, index))
+    if (state_.relocate(client->id, target, mon.current_workspace, RelocationGeometry::Preserve, index))
     {
-        workspace_policy::set_workspace_focus(ws, client->id);
+        state_.remember_focus(target, mon.current_workspace, client->id);
         focus_any_window(client->id);
     }
 }

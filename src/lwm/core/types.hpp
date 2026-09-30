@@ -72,6 +72,7 @@ struct Strut
     uint32_t right = 0;
     uint32_t top = 0;
     uint32_t bottom = 0;
+    bool operator==(Strut const&) const = default;
 };
 
 /// Edge monitor indices for _NET_WM_FULLSCREEN_MONITORS geometry.
@@ -116,12 +117,14 @@ using ScratchpadMembership = std::variant<
     HiddenTiledScratchpadPoolMembership,
     HiddenFloatingScratchpadPoolMembership>;
 
-struct AppPreferences
+// Unset fields follow classification defaults. Explicit requests (rules, user,
+// or application) replace the same preference; they are not competing layers.
+struct ClientPreferences
 {
-    bool skip_taskbar = false;
-    bool skip_pager = false;
-    bool above = false;
-    bool below = false;
+    std::optional<bool> floating;
+    std::optional<bool> skip_taskbar;
+    std::optional<bool> skip_pager;
+    std::optional<LayerHint> layer;
 };
 
 enum class UrgencySource : uint8_t
@@ -190,6 +193,16 @@ struct DesktopState
 
 using ClientState = std::variant<TiledState, FloatingState, DockState, DesktopState>;
 
+struct ClientPresentation
+{
+    bool hidden = false;
+    std::optional<Geometry> applied_geometry;
+    uint32_t applied_border = 0;
+    bool ignore_next_wm_hints_urgency_echo = false;
+    uint32_t sync_counter = 0;
+    uint64_t sync_value = 0;
+};
+
 /// Managed-window record owned by WindowManager::clients_. The state variant
 /// holds kind-specific data and is the authority for kind().
 struct Client
@@ -229,7 +242,6 @@ struct Client
     std::string wm_class;
     std::string wm_class_name;
 
-    bool hidden = false;                      ///< True when window is moved off-screen by WM
     bool fullscreen = false;                  ///< _NET_WM_STATE_FULLSCREEN
     LayerHint layer_hint = LayerHint::Normal; ///< _NET_WM_STATE_ABOVE / _BELOW (tri-state)
     bool iconic = false;                      ///< _NET_WM_STATE_HIDDEN (minimized)
@@ -240,9 +252,8 @@ struct Client
     bool modal = false;                             ///< _NET_WM_STATE_MODAL
     bool skip_taskbar = false;                      ///< _NET_WM_STATE_SKIP_TASKBAR
     bool skip_pager = false;                        ///< _NET_WM_STATE_SKIP_PAGER
-    AppPreferences app_prefs;                       ///< App-declared EWMH preferences before WM policy
+    ClientPreferences preferences;
     Urgency urgency;                                ///< _NET_WM_STATE_DEMANDS_ATTENTION provenance
-    bool ignore_next_wm_hints_urgency_echo = false; ///< Skip the PropertyNotify from our own WM_HINTS write
     bool borderless = false;                        ///< WM-managed zero-border window
     WindowType ewmh_type = WindowType::Normal;      ///< Cached EWMH window type
     bool accepts_input = true;                      ///< Cached WM_HINTS input field (ICCCM default: true)
@@ -252,18 +263,14 @@ struct Client
     using SavedTilePos = lwm::SavedTilePos;
 
     ClientState state = TiledState{};
-    std::optional<Geometry> applied_geometry;
-    uint32_t applied_border = 0;
-    Geometry tiled_geometry; ///< Target selected by tiled layout
+    ClientPresentation presentation;
+    Geometry tiled_geometry; ///< Latest layout target; initially the client rectangle
     xcb_window_t transient_for = XCB_NONE;
     bool suppress_next_configure_request =
         false; ///< Preserve WM-chosen startup placement against one client resize/move request
 
-    std::optional<LayerHint> fullscreen_restore_layer_hint; ///< Layer hint before fullscreen
     std::optional<FullscreenMonitors> fullscreen_monitors;  ///< Multi-monitor fullscreen
 
-    uint32_t sync_counter = 0; ///< XSync counter ID (0 if none)
-    uint64_t sync_value = 0;   ///< Last sync-request sequence value sent
 
     uint32_t user_time = 0;                   ///< Last user interaction time
     xcb_window_t user_time_window = XCB_NONE; ///< _NET_WM_USER_TIME_WINDOW

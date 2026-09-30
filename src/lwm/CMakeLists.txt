@@ -6,6 +6,7 @@ add_library(liblwm STATIC
     core/ewmh.cpp
     core/floating.cpp
     core/stacking.cpp
+    core/state.cpp
     core/focus.cpp
     core/ipc_command.cpp
     core/ipc_server.cpp
@@ -18,7 +19,6 @@ add_library(liblwm STATIC
     wm_rules.cpp
     wm_focus.cpp
     wm_floating.cpp
-    wm_placement.cpp
     wm_workspace.cpp
     wm_ewmh.cpp
     wm_ipc.cpp

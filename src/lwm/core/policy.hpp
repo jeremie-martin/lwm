@@ -150,10 +150,7 @@ inline void push_focus_history(Workspace& ws, xcb_window_t window)
 }
 
 /// Remove a window from focus_history.
-inline void remove_from_focus_history(Workspace& ws, xcb_window_t window)
-{
-    std::erase(ws.focus_history, window);
-}
+inline void remove_from_focus_history(Workspace& ws, xcb_window_t window) { std::erase(ws.focus_history, window); }
 
 /// Set focused_window and update focus_history in one step.
 inline void set_workspace_focus(Workspace& ws, xcb_window_t window)
@@ -195,80 +192,6 @@ fixup_workspace_focus(Workspace& ws, xcb_window_t removed_window, std::function<
 }
 
 } // namespace lwm::workspace_policy
-
-namespace lwm::classification_policy {
-
-struct DesiredWindowState
-{
-    bool skip_taskbar = false;
-    bool skip_pager = false;
-    bool sticky = false;
-    bool modal = false;
-    LayerHint layer_hint = LayerHint::Normal;
-    bool borderless = false;
-};
-
-struct DesiredStateInputs
-{
-    bool classification_skip_taskbar = false;
-    bool classification_skip_pager = false;
-    bool classification_above = false;
-
-    bool app_skip_taskbar = false;
-    bool app_skip_pager = false;
-    bool ewmh_sticky = false;
-    bool ewmh_modal = false;
-    bool app_above = false;
-    bool app_below = false;
-
-    std::optional<bool> rule_skip_taskbar;
-    std::optional<bool> rule_skip_pager;
-    std::optional<bool> rule_sticky;
-    std::optional<LayerHint> rule_layer_hint;
-    std::optional<bool> rule_borderless;
-
-    bool has_transient = false;
-    bool is_sticky_desktop = false;
-};
-
-inline DesiredWindowState compute_desired_state(DesiredStateInputs const& in)
-{
-    DesiredWindowState out;
-
-    out.skip_taskbar = in.has_transient || in.classification_skip_taskbar || in.app_skip_taskbar;
-    if (in.rule_skip_taskbar.has_value())
-        out.skip_taskbar = *in.rule_skip_taskbar;
-
-    out.skip_pager = in.has_transient || in.classification_skip_pager || in.app_skip_pager;
-    if (in.rule_skip_pager.has_value())
-        out.skip_pager = *in.rule_skip_pager;
-
-    out.sticky = in.is_sticky_desktop || in.ewmh_sticky;
-    if (in.rule_sticky.has_value())
-        out.sticky = *in.rule_sticky;
-
-    out.modal = in.ewmh_modal;
-
-    LayerHint hint = LayerHint::Normal;
-    if (!out.modal)
-    {
-        if (in.classification_above || in.app_above)
-            hint = LayerHint::Above;
-        else if (in.app_below)
-            hint = LayerHint::Below;
-    }
-    if (in.rule_layer_hint.has_value())
-        hint = *in.rule_layer_hint;
-    if (out.modal && hint == LayerHint::Below)
-        hint = LayerHint::Normal;
-    out.layer_hint = hint;
-
-    out.borderless = in.rule_borderless.value_or(false);
-
-    return out;
-}
-
-} // namespace lwm::classification_policy
 
 namespace lwm::hotplug_policy {
 

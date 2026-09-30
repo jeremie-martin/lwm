@@ -177,7 +177,7 @@ TEST_CASE(
 }
 
 TEST_CASE(
-    "Integration: recalling a reclassified hidden scratchpad removes its old tiled membership",
+    "Integration: classification changes preserve hidden scratchpad membership",
     "[integration][placement][scratchpad]"
 )
 {
@@ -197,7 +197,7 @@ TEST_CASE(
     REQUIRE(set_window_type(conn, w, intern_atom(conn.get(), "_NET_WM_WINDOW_TYPE_NORMAL")));
     observe_title_after_events(conn, w);
     auto classification = intern_atom(conn.get(), "_LWM_WINDOW_CLASS");
-    REQUIRE(get_window_property_string(conn.get(), w, classification) == "tiled");
+    REQUIRE(get_window_property_string(conn.get(), w, classification) == "floating");
     command(*socket, "workspace switch 1");
     command(*socket, "scratchpad cycle");
     REQUIRE(wait_for_active_window(conn, w, timeout));

@@ -78,6 +78,7 @@ WindowManager::WindowManager(Config config, SignalPipe& signals, std::string con
     net_wm_state_focused_ = intern_atom("_NET_WM_STATE_FOCUSED");
     lwm_ipc_socket_ = intern_atom("_LWM_IPC_SOCKET");
     lwm_restart_client_ = intern_atom("_LWM_RESTART_CLIENT");
+    lwm_restart_preferences_ = intern_atom("_LWM_RESTART_PREFERENCES");
     lwm_restart_state_ = intern_atom("_LWM_RESTART_STATE");
     lwm_restart_owner_ = intern_atom("_LWM_RESTART_OWNER");
     // Root ownership is established. Release only a marked predecessor, after
@@ -85,7 +86,13 @@ WindowManager::WindowManager(Config config, SignalPipe& signals, std::string con
     auto predecessor = xproperty::scalar(conn_.get(), conn_.screen()->root, lwm_restart_owner_, XCB_ATOM_WINDOW);
     if (predecessor && *predecessor != XCB_NONE && *predecessor != wm_window_
         && xproperty::scalar(conn_.get(), *predecessor, lwm_restart_owner_, XCB_ATOM_WINDOW) == predecessor)
+    {
+        // Resource IDs can be reused after intervening old-binary restarts.
+        // Only a predecessor that advertises this extension can supply it.
+        if (xproperty::scalar(conn_.get(), *predecessor, lwm_restart_preferences_, XCB_ATOM_CARDINAL) == 1)
+            restart_source_ = *predecessor;
         xcb_kill_client(conn_.get(), *predecessor);
+    }
     xcb_delete_property(conn_.get(), conn_.screen()->root, lwm_restart_owner_);
     lwm_restart_tiled_order_ = intern_atom("_LWM_RESTART_TILED_ORDER");
     lwm_restart_floating_order_ = intern_atom("_LWM_RESTART_FLOATING_ORDER");
@@ -275,18 +282,22 @@ RunResult WindowManager::run()
             );
         }
 
-        for (;;)
+        size_t remaining = 64;
+        auto deadline = std::chrono::steady_clock::now() + std::chrono::milliseconds(2);
+        while (remaining && std::chrono::steady_clock::now() < deadline)
         {
             if (!deferred_events_.empty())
             {
                 auto event = deferred_events_.front();
                 deferred_events_.pop_front();
-                dispatch_event(event);
+                --remaining;
+                dispatch_event(event, remaining, deadline);
             }
             else if (auto* event = xcb_poll_for_event(conn_.get()))
             {
                 std::unique_ptr<xcb_generic_event_t, decltype(&free)> owned(event, free);
-                dispatch_event(*owned);
+                --remaining;
+                dispatch_event(*owned, remaining, deadline);
             }
             else
                 break;
@@ -388,46 +399,18 @@ std::expected<void, std::string> WindowManager::apply_config_reload(Config confi
     if (auto validation = validate_reload(config); !validation)
         return std::unexpected(validation.error());
 
-    // Prepare retained runtime claims before replacing the active configuration.
-    std::vector<NamedScratchpadState> scratchpads;
-    scratchpads.reserve(config.scratchpads.size());
-    for (auto const& sp : config.scratchpads)
-    {
-        NamedScratchpadState state{ sp.name };
-        if (auto* previous = find_named_scratchpad(sp.name))
-            state.state = previous->state;
-        scratchpads.push_back(std::move(state));
-    }
     end_drag(false);
     config_ = std::move(config);
-    named_scratchpads_ = std::move(scratchpads);
+    init_scratchpad_state();
     grab_buttons();
     regrab_all_keys();
-
-    // Unhide windows orphaned by removed scratchpad names
-    for (auto& [window, client] : clients_)
-    {
-        auto const* named = scratchpad_named(client);
-        if (!named)
-            continue;
-        if (!find_named_scratchpad(named->name))
-        {
-            LWM_LOG_INFO("Scratchpad '{}' removed from config, restoring window {:#x}", named->name, window);
-            client.scratchpad.reset();
-            if (client.iconic)
-            {
-                client.iconic = false;
-                set_iconic_state(window, false);
-            }
-        }
-    }
-    update_ewmh_desktops();
+    effects_.desktop_metadata = true;
     reapply_rules_to_existing_windows();
     invalidate_all_monitors();
 
     repair_focus_after_visibility_change(focused_monitor_);
 
-    apply_appearance_reload();
+    effects_.appearance = true;
 
     return {};
 }
@@ -468,25 +451,16 @@ uint32_t WindowManager::border_color_for_client(Client const& client) const
     return conn_.screen()->black_pixel;
 }
 
-bool WindowManager::should_apply_focus_border(Client const& client) const
-{
-    if (client.fullscreen)
-        return false;
-    return border_width_for_client(client) > 0;
-}
-
-void WindowManager::apply_appearance_reload()
+void WindowManager::publish_appearance()
 {
     for (auto const& [window, client] : clients_)
     {
         if (client.kind() != Client::Kind::Tiled && client.kind() != Client::Kind::Floating)
             continue;
 
-        uint32_t border_width = border_width_for_client(client);
         uint32_t border_color = border_color_for_client(client);
 
         xcb_change_window_attributes(conn_.get(), window, XCB_CW_BORDER_PIXEL, &border_color);
-        xcb_configure_window(conn_.get(), window, XCB_CONFIG_WINDOW_BORDER_WIDTH, &border_width);
     }
 }
 
@@ -555,18 +529,20 @@ Geometry WindowManager::current_window_geometry(xcb_window_t window) const
     return geometry;
 }
 
-void WindowManager::convert_window_to_floating(xcb_window_t window)
+void WindowManager::convert_window_to_floating(xcb_window_t window, bool explicit_choice)
 {
     auto* client = get_client(window);
+    if (client && explicit_choice)
+        state_.floating_preference(window, true);
     if (!client || client->kind() != Client::Kind::Tiled || client->monitor >= monitors_.size())
         return;
 
     std::optional<Geometry> prior_floating = prior_floating_geometry(*client);
     size_t monitor_idx = client->monitor;
-    client->mru_order = next_mru_order_++;
+    state_.touch(client->id);
 
     Geometry geometry = prior_floating ? *prior_floating : current_window_geometry(window);
-    if (!prior_floating && (client->hidden || geometry.x <= OFF_SCREEN_X / 2))
+    if (!prior_floating && (client->presentation.hidden || geometry.x <= OFF_SCREEN_X / 2))
     {
         geometry = floating::place_floating(
             monitors_[monitor_idx].working_area(),
@@ -575,12 +551,18 @@ void WindowManager::convert_window_to_floating(xcb_window_t window)
             std::nullopt
         );
     }
-    change_client_state(*client, FloatingState{ geometry });
+    state_.change_kind(client->id, FloatingState{ geometry });
 }
 
-void WindowManager::convert_window_to_tiled(xcb_window_t window, std::optional<Geometry> prior_floating)
+void WindowManager::convert_window_to_tiled(
+    xcb_window_t window,
+    std::optional<Geometry> prior_floating,
+    bool explicit_choice
+)
 {
     auto* client = get_client(window);
+    if (client && explicit_choice)
+        state_.floating_preference(window, false);
     if (!client || client->kind() != Client::Kind::Floating || client->monitor >= monitors_.size())
         return;
 
@@ -588,7 +570,7 @@ void WindowManager::convert_window_to_tiled(xcb_window_t window, std::optional<G
     std::optional<size_t> index;
     if (saved_position && saved_position->monitor == client->monitor && saved_position->workspace == client->workspace)
         index = saved_position->index;
-    change_client_state(*client, TiledState{ prior_floating }, index);
+    state_.change_kind(client->id, TiledState{ prior_floating }, index);
 }
 
 void WindowManager::toggle_window_float(xcb_window_t window)
@@ -610,8 +592,7 @@ void WindowManager::toggle_window_float(xcb_window_t window)
         Geometry prior_floating = floating_geometry(*client);
         if (client->maximized_horz || client->maximized_vert)
         {
-            client->maximized_horz = false;
-            client->maximized_vert = false;
+            state_.maximize(window, false, false);
             ewmh_.set_window_state(window, ewmh_.get()->_NET_WM_STATE_MAXIMIZED_HORZ, false);
             ewmh_.set_window_state(window, ewmh_.get()->_NET_WM_STATE_MAXIMIZED_VERT, false);
         }
@@ -754,11 +735,12 @@ void WindowManager::claim_wm_ownership()
 void WindowManager::detect_monitors()
 {
     end_drag(false);
-    monitors_.clear();
+    std::vector<Monitor> discovered;
 
     if (!conn_.has_randr())
     {
-        create_fallback_monitor();
+        discovered.push_back(create_fallback_monitor());
+        state_.replace_monitors(std::move(discovered));
         return;
     }
 
@@ -771,7 +753,8 @@ void WindowManager::detect_monitors()
             std::chrono::seconds(5),
             "randr: get_screen_resources_current returned no reply, falling back to single monitor"
         );
-        create_fallback_monitor();
+        discovered.push_back(create_fallback_monitor());
+        state_.replace_monitors(std::move(discovered));
         return;
     }
 
@@ -835,7 +818,7 @@ void WindowManager::detect_monitors()
             monitor.width = crtc_reply->width;
             monitor.height = crtc_reply->height;
             init_monitor_workspaces(monitor);
-            monitors_.push_back(monitor);
+            discovered.push_back(monitor);
         }
 
         free(crtc_reply);
@@ -844,16 +827,18 @@ void WindowManager::detect_monitors()
 
     free(res_reply);
 
-    if (monitors_.empty())
+    if (discovered.empty())
     {
-        create_fallback_monitor();
+        discovered.push_back(create_fallback_monitor());
+        state_.replace_monitors(std::move(discovered));
         return;
     }
 
-    std::ranges::sort(monitors_, [](Monitor const& a, Monitor const& b) { return a.x < b.x; });
+    std::ranges::sort(discovered, [](Monitor const& a, Monitor const& b) { return a.x < b.x; });
+    state_.replace_monitors(std::move(discovered));
 }
 
-void WindowManager::create_fallback_monitor()
+Monitor WindowManager::create_fallback_monitor()
 {
     Monitor monitor;
     monitor.name = "default";
@@ -862,7 +847,7 @@ void WindowManager::create_fallback_monitor()
     monitor.width = conn_.screen()->width_in_pixels;
     monitor.height = conn_.screen()->height_in_pixels;
     init_monitor_workspaces(monitor);
-    monitors_.push_back(monitor);
+    return monitor;
 }
 
 void WindowManager::init_monitor_workspaces(Monitor& monitor)
@@ -916,7 +901,9 @@ void WindowManager::scan_existing_windows()
         auto* pointer =
             xcb_query_pointer_reply(conn_.get(), xcb_query_pointer(conn_.get(), conn_.screen()->root), nullptr);
         if (pointer)
-            focused_monitor_ = focus::monitor_index_at_point(monitors_, pointer->root_x, pointer->root_y).value_or(0);
+            state_.focus_monitor(
+                focus::monitor_index_at_point(monitors_, pointer->root_x, pointer->root_y).value_or(0)
+            );
         free(pointer);
         if (!monitors_.empty())
             focus_or_fallback(focused_monitor());
@@ -949,12 +936,13 @@ void WindowManager::parse_initial_ewmh_state(Client& client)
             if (state == ewmh->_NET_WM_STATE_ABOVE)
             {
                 client.layer_hint = LayerHint::Above;
-                client.app_prefs.above = true;
+                client.preferences.layer = LayerHint::Above;
             }
             else if (state == ewmh->_NET_WM_STATE_BELOW)
             {
                 client.layer_hint = LayerHint::Below;
-                client.app_prefs.below = true;
+                if (client.preferences.layer != LayerHint::Above)
+                    client.preferences.layer = LayerHint::Below;
             }
             else if (state == ewmh->_NET_WM_STATE_STICKY)
                 client.sticky = true;
@@ -963,12 +951,12 @@ void WindowManager::parse_initial_ewmh_state(Client& client)
             else if (state == ewmh->_NET_WM_STATE_SKIP_TASKBAR)
             {
                 client.skip_taskbar = true;
-                client.app_prefs.skip_taskbar = true;
+                client.preferences.skip_taskbar = true;
             }
             else if (state == ewmh->_NET_WM_STATE_SKIP_PAGER)
             {
                 client.skip_pager = true;
-                client.app_prefs.skip_pager = true;
+                client.preferences.skip_pager = true;
             }
             else if (state == ewmh->_NET_WM_STATE_FULLSCREEN)
                 client.fullscreen = true;
@@ -981,8 +969,6 @@ void WindowManager::parse_initial_ewmh_state(Client& client)
             else if (state == ewmh->_NET_WM_STATE_DEMANDS_ATTENTION)
                 client.urgency.add(UrgencySource::App);
         }
-        if (client.app_prefs.above && client.app_prefs.below)
-            client.app_prefs.below = false;
         xcb_ewmh_get_atoms_reply_wipe(&initial_state);
     }
 }
@@ -1000,13 +986,23 @@ void WindowManager::refresh_user_time_tracking_into(Client& client)
             ensure_property_change_mask(conn_, *time_window);
     }
 
-    client.user_time = get_user_time(window);
+    client.user_time = xproperty::scalar(
+                           conn_.get(),
+                           client.user_time_window != XCB_NONE ? client.user_time_window : window,
+                           net_wm_user_time_,
+                           XCB_ATOM_CARDINAL
+    )
+                           .value_or(0);
 }
 
 void WindowManager::refresh_user_time_tracking(xcb_window_t window)
 {
     if (auto* client = get_client(window))
-        refresh_user_time_tracking_into(*client);
+    {
+        Client updated = *client;
+        refresh_user_time_tracking_into(updated);
+        state_.user_time(window, updated.user_time, updated.user_time_window);
+    }
 }
 
 void WindowManager::manage_client(
@@ -1032,14 +1028,18 @@ void WindowManager::manage_client(
         candidate.monitor = placement.monitor;
         candidate.workspace = placement.workspace;
         candidate.desktop_pinned = placement.desktop_pinned;
-        candidate.mru_order = next_mru_order_++;
+    }
+    else
+    {
+        // Inactive workspaces may not be laid out before the client becomes floating.
+        candidate.tiled_geometry = current_window_geometry(window);
     }
     candidate.name = initial.properties.title;
     candidate.wm_class = initial.properties.wm_class;
     candidate.wm_class_name = initial.properties.wm_class_name;
     candidate.ewmh_type = initial.properties.ewmh_type;
     candidate.transient_for = initial.transient_for;
-    candidate.order = next_client_order_++;
+    candidate.order = 0;
     candidate.iconic = start_iconic;
     parse_initial_ewmh_state(candidate);
     candidate.sticky |= is_sticky_desktop(window);
@@ -1047,10 +1047,8 @@ void WindowManager::manage_client(
     refresh_user_time_tracking_into(candidate);
     bool fullscreen = candidate.fullscreen;
     candidate.fullscreen = false;
-    clients_.emplace(window, std::move(candidate));
+    state_.insert(std::move(candidate));
     auto& client = require_client(window);
-    if (client.kind() == Client::Kind::Tiled)
-        attach_tile(client);
 
     uint32_t mask = kManagedWindowEventMask;
     xcb_change_window_attributes(conn_.get(), window, XCB_CW_EVENT_MASK, &mask);
@@ -1075,8 +1073,7 @@ void WindowManager::manage_client(
     if (adopting && is_restart_)
         apply_restart_client_state(window);
     else
-        apply_rule_result_to_window(window, initial.rule_result, &initial.classification);
-    set_window_layer_hint(client, client.layer_hint);
+        apply_rule_result_to_window(window, initial.rule_result);
     effects_.desktops.insert(client.id);
     set_iconic_state(window, client.iconic);
     request_allowed_actions(client);
@@ -1100,16 +1097,13 @@ void WindowManager::unmanage_window(xcb_window_t window)
     auto workspace = client->workspace;
     bool dock = client->kind() == Client::Kind::Dock;
     bool active = window == active_window_;
-    if (client->kind() == Client::Kind::Tiled && monitor < monitors_.size()
-        && workspace < monitors_[monitor].workspaces.size())
-        detach_tile(*client);
     if (wm_state_ != XCB_NONE)
     {
         uint32_t data[] = { WM_STATE_WITHDRAWN, 0 };
         xcb_change_property(conn_.get(), XCB_PROP_MODE_REPLACE, window, wm_state_, wm_state_, 32, 2, data);
     }
     pending_kills_.erase(window);
-    clients_.erase(window);
+    state_.erase(window);
     if (dock)
     {
         request_workarea_update();
@@ -1126,150 +1120,18 @@ void WindowManager::unmanage_window(xcb_window_t window)
     }
 }
 
-void WindowManager::clear_fullscreen_state(Client& client)
+void WindowManager::set_fullscreen(Client const& client, bool enabled)
 {
-    if (!client.fullscreen)
-        return;
-    client.fullscreen = false;
-    ewmh_.set_window_state(client.id, ewmh_.get()->_NET_WM_STATE_FULLSCREEN, false);
-    auto layer = client.fullscreen_restore_layer_hint.value_or(LayerHint::Normal);
-    client.fullscreen_restore_layer_hint.reset();
-    if (client.app_prefs.above)
-        layer = LayerHint::Above;
-    else if (client.app_prefs.below)
-        layer = LayerHint::Below;
-    set_window_layer_hint(client, layer);
-}
-
-void WindowManager::set_fullscreen(Client& client, bool enabled)
-{
-    if (!enabled && !client.fullscreen)
-        return;
-
-    if (client.kind() != Client::Kind::Tiled && client.kind() != Client::Kind::Floating)
-    {
-        LWM_LOG_WARN("set_fullscreen({:#x}): rejected invalid client state", client.id);
-        // Echo the effective state so the requesting client receives a
-        // PropertyNotify reflecting reality, rather than silently dropping
-        // the _NET_WM_STATE request.
-        ewmh_.set_window_state(client.id, ewmh_.get()->_NET_WM_STATE_FULLSCREEN, client.fullscreen);
-        conn_.flush();
-        return;
-    }
-
-    if (enabled)
-    {
-        if (!client.fullscreen)
-            client.fullscreen_restore_layer_hint = client.layer_hint;
-
-        client.fullscreen = true;
-
-        if (client.layer_hint != LayerHint::Normal)
-            set_window_layer_hint(client, LayerHint::Normal);
-
-        // Fullscreen supersedes maximized state - clear it to avoid confusing EWMH state
-        if (client.maximized_horz || client.maximized_vert)
-        {
-            client.maximized_horz = false;
-            client.maximized_vert = false;
-            ewmh_.set_window_state(client.id, ewmh_.get()->_NET_WM_STATE_MAXIMIZED_HORZ, false);
-            ewmh_.set_window_state(client.id, ewmh_.get()->_NET_WM_STATE_MAXIMIZED_VERT, false);
-        }
-
-        ewmh_.set_window_state(client.id, ewmh_.get()->_NET_WM_STATE_FULLSCREEN, true);
-    }
-    else
-    {
-        clear_fullscreen_state(client);
-    }
-
-    invalidate_monitor(client.monitor, enabled ? client.id : XCB_NONE);
-    if (client.kind() == Client::Kind::Floating)
-        request_geometry(client);
-
+    state_.fullscreen(client.id, enabled);
     effects_.repair_focus = !suppress_focus_;
 }
 
-void WindowManager::set_window_borderless(Client& client, bool enabled)
-{
-    client.borderless = enabled;
-    invalidate_monitor(client.monitor);
-    request_allowed_actions(client);
-}
-
-void WindowManager::set_window_layer_hint(Client& client, LayerHint hint)
-{
-    if (client.layer_hint != hint)
-        effects_.stacking = true;
-    client.layer_hint = hint;
-    ewmh_.set_window_state(client.id, ewmh_.get()->_NET_WM_STATE_ABOVE, hint == LayerHint::Above);
-    ewmh_.set_window_state(client.id, ewmh_.get()->_NET_WM_STATE_BELOW, hint == LayerHint::Below);
-}
-
-void WindowManager::set_window_sticky(Client& client, bool enabled)
-{
-    if (enabled)
-    {
-        client.desktop_pinned = false;
-        client.sticky = true;
-        ewmh_.set_window_state(client.id, ewmh_.get()->_NET_WM_STATE_STICKY, true);
-        effects_.desktops.insert(client.id);
-    }
-    else
-    {
-        client.sticky = false;
-        ewmh_.set_window_state(client.id, ewmh_.get()->_NET_WM_STATE_STICKY, false);
-        effects_.desktops.insert(client.id);
-    }
-
-    invalidate_monitor(client.monitor);
-}
-
-void WindowManager::set_window_maximized(Client& client, bool horiz, bool vert)
-{
-    if (client.fullscreen)
-        horiz = vert = false;
-    client.maximized_horz = horiz;
-    client.maximized_vert = vert;
-    ewmh_.set_window_state(client.id, ewmh_.get()->_NET_WM_STATE_MAXIMIZED_HORZ, horiz);
-    ewmh_.set_window_state(client.id, ewmh_.get()->_NET_WM_STATE_MAXIMIZED_VERT, vert);
-    if (client.kind() == Client::Kind::Floating)
-        request_geometry(client);
-}
-
-void WindowManager::set_window_modal(Client& client, bool enabled)
-{
-    client.modal = enabled;
-
-    ewmh_.set_window_state(client.id, ewmh_.get()->_NET_WM_STATE_MODAL, enabled);
-    if (enabled)
-    {
-        set_window_layer_hint(client, LayerHint::Above);
-    }
-    else if (client.layer_hint == LayerHint::Above)
-    {
-        set_window_layer_hint(client, LayerHint::Normal);
-    }
-}
-
-void WindowManager::set_client_skip_taskbar(Client& client, bool enabled)
-{
-    client.skip_taskbar = enabled;
-    ewmh_.set_window_state(client.id, ewmh_.get()->_NET_WM_STATE_SKIP_TASKBAR, enabled);
-}
-
-void WindowManager::set_client_skip_pager(Client& client, bool enabled)
-{
-    client.skip_pager = enabled;
-    ewmh_.set_window_state(client.id, ewmh_.get()->_NET_WM_STATE_SKIP_PAGER, enabled);
-}
-
-void WindowManager::publish_urgency(Client& client)
+void WindowManager::publish_urgency(Client const& client)
 {
     bool const enabled = client.urgency.active();
     ewmh_.set_window_state(client.id, ewmh_.get()->_NET_WM_STATE_DEMANDS_ATTENTION, enabled);
     if (!enabled)
-        client.ignore_next_wm_hints_urgency_echo = false;
+        state_.presentation(client.id).ignore_next_wm_hints_urgency_echo = false;
 
     // Our own WM_HINTS write echoes back as PropertyNotify. If WM is the sole
     // source, suppress that echo so it isn't reclassified as app-originated.
@@ -1289,7 +1151,7 @@ void WindowManager::publish_urgency(Client& client)
             else
                 hints.flags &= ~XUrgencyHint;
             if (arm_echo)
-                client.ignore_next_wm_hints_urgency_echo = true;
+                state_.presentation(client.id).ignore_next_wm_hints_urgency_echo = true;
             xcb_icccm_set_wm_hints(conn_.get(), client.id, &hints);
         }
     }
@@ -1298,7 +1160,7 @@ void WindowManager::publish_urgency(Client& client)
         xcb_icccm_wm_hints_t new_hints = {};
         new_hints.flags = XUrgencyHint;
         if (arm_echo)
-            client.ignore_next_wm_hints_urgency_echo = true;
+            state_.presentation(client.id).ignore_next_wm_hints_urgency_echo = true;
         xcb_icccm_set_wm_hints(conn_.get(), client.id, &new_hints);
     }
 
@@ -1308,49 +1170,13 @@ void WindowManager::publish_urgency(Client& client)
         xcb_change_window_attributes(conn_.get(), client.id, XCB_CW_BORDER_PIXEL, &color);
     }
 
-    // Re-publish client list so EWMH panels (e.g. polybar) re-check urgency.
-    request_client_list_update();
-    conn_.flush();
+
 }
 
-void WindowManager::set_client_urgency(Client& client, UrgencySource source, bool enabled)
+void WindowManager::set_fullscreen_monitors(Client const& client, FullscreenMonitors const& monitors)
 {
-    bool const changed = enabled ? client.urgency.add(source) : client.urgency.remove(source);
-    if (!changed)
-        return;
-
-    request_urgency_update(client);
-}
-
-void WindowManager::clear_client_urgency(Client& client)
-{
-    if (!client.urgency.clear())
-        return;
-
-    request_urgency_update(client);
-}
-
-void WindowManager::set_fullscreen_monitors(Client& client, FullscreenMonitors const& monitors)
-{
-    client.fullscreen_monitors = monitors;
-
-    if (net_wm_fullscreen_monitors_ != XCB_NONE)
-    {
-        xcb_ewmh_set_wm_fullscreen_monitors(
-            ewmh_.get(),
-            client.id,
-            monitors.top,
-            monitors.bottom,
-            monitors.left,
-            monitors.right
-        );
-    }
-
-    if (client.fullscreen)
-    {
-        request_geometry(client);
-        conn_.flush();
-    }
+    state_.fullscreen_monitors(client.id, monitors);
+    effects_.fullscreen_properties.insert(client.id);
 }
 
 Geometry WindowManager::fullscreen_geometry_for_client(Client const& client) const
@@ -1428,16 +1254,7 @@ void WindowManager::iconify_window(xcb_window_t window)
     }
 
     bool const was_visible = should_be_visible(*client);
-    client->iconic = true;
-    if (client->kind() == Client::Kind::Tiled)
-    {
-        auto& workspace = monitors_[client->monitor].workspaces[client->workspace];
-        workspace_policy::fixup_workspace_focus(
-            workspace,
-            window,
-            [this](xcb_window_t candidate) { return window_is_iconic(candidate); }
-        );
-    }
+    state_.iconic(window, true);
     set_iconic_state(window, true);
 
     invalidate_monitor(client->monitor);
@@ -1463,7 +1280,7 @@ void WindowManager::deiconify_window(xcb_window_t window, bool focus)
         return;
     }
 
-    client->iconic = false;
+    state_.iconic(window, false);
     set_iconic_state(window, false);
 
     invalidate_monitor(client->monitor, client->fullscreen ? window : XCB_NONE);
@@ -1501,7 +1318,7 @@ void WindowManager::kill_window(xcb_window_t window)
     conn_.flush();
 }
 
-void WindowManager::arrange_monitor(Monitor& monitor)
+void WindowManager::arrange_monitor(Monitor const& monitor)
 {
     size_t monitor_idx = monitor_index(monitor);
 
@@ -1519,11 +1336,8 @@ void WindowManager::arrange_monitor(Monitor& monitor)
     for (auto window : windows)
     {
         auto& client = require_client(window);
-        client.tiled_geometry = slots[slot++];
-        request_geometry(client);
+        state_.tiled_geometry(client.id, slots[slot++]);
     }
-
-    effects_.stacking = true;
 }
 
 void WindowManager::invalidate_all_monitors()
@@ -1577,9 +1391,7 @@ bool WindowManager::adjust_master_ratio(double delta)
     double clamped = std::clamp(current + delta, min_ratio, 1.0 - min_ratio);
     if (clamped == current)
         return false;
-    ws.split_ratios[root_addr] = clamped;
-
-    invalidate_monitor(focused_monitor_);
+    state_.ratio(focused_monitor_, root_addr, clamped);
     return true;
 }
 
@@ -1614,7 +1426,7 @@ void WindowManager::swap_focused_tiled(int offset)
         return;
     }
 
-    std::swap(ws.windows[idx], ws.windows[other]);
+    state_.swap_tiles(focused_monitor_, idx, other);
     invalidate_monitor(focused_monitor_);
 }
 
@@ -1623,31 +1435,14 @@ void WindowManager::reset_split_ratio(SplitAddress address, size_t monitor_idx)
     if (monitor_idx >= monitors_.size())
         return;
     auto& ws = monitors_[monitor_idx].current();
-    if (ws.split_ratios.erase(address) > 0)
-        invalidate_monitor(monitor_idx);
-}
-
-Client* WindowManager::get_client(xcb_window_t window)
-{
-    auto it = clients_.find(window);
-    return it != clients_.end() ? &it->second : nullptr;
+    if (ws.split_ratios.contains(address))
+        state_.erase_ratio(monitor_idx, address);
 }
 
 Client const* WindowManager::get_client(xcb_window_t window) const
 {
     auto it = clients_.find(window);
     return it != clients_.end() ? &it->second : nullptr;
-}
-
-Client& WindowManager::require_client(xcb_window_t window)
-{
-    auto it = clients_.find(window);
-    if (it == clients_.end())
-    {
-        LWM_LOG_CRITICAL("require_client: window {:#x} not in clients registry", window);
-        std::abort();
-    }
-    return it->second;
 }
 
 Client const& WindowManager::require_client(xcb_window_t window) const
@@ -1855,15 +1650,15 @@ void WindowManager::send_wm_ping(xcb_window_t window, uint32_t timestamp)
 
 // Notification only: advance the sequence before configure without waiting on
 // the client counter. See X11.md for the supported sync-request behavior.
-void WindowManager::send_sync_request(Client& client, uint32_t timestamp)
+void WindowManager::send_sync_request(Client const& client, uint32_t timestamp)
 {
     if (wm_protocols_ == XCB_NONE || net_wm_sync_request_ == XCB_NONE)
         return;
 
-    if (client.sync_counter == 0)
+    if (state_.presentation(client.id).sync_counter == 0)
         return;
 
-    uint64_t value = ++client.sync_value;
+    uint64_t value = ++state_.presentation(client.id).sync_value;
 
     // _NET_WM_SYNC_REQUEST is sent via WM_PROTOCOLS (EWMH spec)
     xcb_client_message_event_t ev = {};
@@ -1880,15 +1675,15 @@ void WindowManager::send_sync_request(Client& client, uint32_t timestamp)
     // Non-blocking: we don't wait for the client to update its counter
 }
 
-void WindowManager::update_sync_state(Client& client)
+void WindowManager::update_sync_state(Client const& client)
 {
     if (net_wm_sync_request_counter_ == XCB_NONE || net_wm_sync_request_ == XCB_NONE)
         return;
 
     if (!supports_protocol(client.id, net_wm_sync_request_))
     {
-        client.sync_counter = 0;
-        client.sync_value = 0;
+        state_.presentation(client.id).sync_counter = 0;
+        state_.presentation(client.id).sync_value = 0;
         return;
     }
 
@@ -1899,12 +1694,12 @@ void WindowManager::update_sync_state(Client& client)
 
     if (counter == XCB_NONE)
     {
-        client.sync_counter = 0;
-        client.sync_value = 0;
+        state_.presentation(client.id).sync_counter = 0;
+        state_.presentation(client.id).sync_value = 0;
         return;
     }
 
-    client.sync_counter = counter;
+    state_.presentation(client.id).sync_counter = counter;
 
     auto counter_cookie = xcb_sync_query_counter(conn_.get(), counter);
     auto* counter_reply = xcb_sync_query_counter_reply(conn_.get(), counter_cookie, nullptr);
@@ -1912,16 +1707,16 @@ void WindowManager::update_sync_state(Client& client)
     {
         uint64_t value = (static_cast<uint64_t>(counter_reply->counter_value.hi) << 32)
             | static_cast<uint64_t>(counter_reply->counter_value.lo);
-        client.sync_value = value;
+        state_.presentation(client.id).sync_value = value;
         free(counter_reply);
     }
     else
     {
-        client.sync_value = 0;
+        state_.presentation(client.id).sync_value = 0;
     }
 }
 
-void WindowManager::update_fullscreen_monitor_state(Client& client)
+void WindowManager::update_fullscreen_monitor_state(Client const& client)
 {
     if (net_wm_fullscreen_monitors_ == XCB_NONE)
         return;
@@ -1934,7 +1729,7 @@ void WindowManager::update_fullscreen_monitor_state(Client& client)
             nullptr
         ))
     {
-        client.fullscreen_monitors.reset();
+        state_.fullscreen_monitors(client.id, std::nullopt);
         return;
     }
 
@@ -1943,17 +1738,18 @@ void WindowManager::update_fullscreen_monitor_state(Client& client)
     monitors.bottom = reply.bottom;
     monitors.left = reply.left;
     monitors.right = reply.right;
-    client.fullscreen_monitors = monitors;
+    state_.fullscreen_monitors(client.id, monitors);
 }
 
-void WindowManager::write_geometry(Client& client, Geometry geometry, uint32_t border_width)
+void WindowManager::write_geometry(Client const& client, Geometry geometry, uint32_t border_width)
 {
     geometry.width = std::max<uint16_t>(1, geometry.width);
     geometry.height = std::max<uint16_t>(1, geometry.height);
-    if (client.applied_geometry == geometry && client.applied_border == border_width)
+    if (state_.presentation(client.id).applied_geometry == geometry
+        && state_.presentation(client.id).applied_border == border_width)
         return;
-    client.applied_geometry = geometry;
-    client.applied_border = border_width;
+    state_.presentation(client.id).applied_geometry = geometry;
+    state_.presentation(client.id).applied_border = border_width;
     uint32_t color = border_color_for_client(client);
     xcb_change_window_attributes(conn_.get(), client.id, XCB_CW_BORDER_PIXEL, &color);
     send_sync_request(client, last_event_time_);
@@ -2012,7 +1808,7 @@ void WindowManager::publish_configure_notify(Client const& client)
     send_configure_notify(client.id, fallback_geom, bw);
 }
 
-Monitor* WindowManager::monitor_at_point(int16_t x, int16_t y)
+Monitor const* WindowManager::monitor_at_point(int16_t x, int16_t y)
 {
     for (auto& monitor : monitors_)
     {
@@ -2031,7 +1827,7 @@ void WindowManager::update_focused_monitor_at_point(int16_t x, int16_t y)
         return;
 
     // We crossed monitors - update active monitor and clear focus
-    focused_monitor_ = result.new_monitor;
+    state_.focus_monitor(result.new_monitor);
     request_current_desktop_update();
     if (result.clears_focus())
         clear_focus();
@@ -2094,7 +1890,7 @@ void WindowManager::update_window_title(xcb_window_t window)
     if (name == client->name)
         return;
     auto previous = match_window_rules(config_.rules, window_match_info(*client), monitors_, config_.workspaces.names);
-    client->name = std::move(name);
+    state_.title(window, std::move(name));
     effects_.state_changed |= ipc_.has_subscribers(Event_StateChange);
     reevaluate_metadata(window, previous);
 }
@@ -2105,10 +1901,7 @@ void WindowManager::refresh_workareas()
 {
     if (!std::exchange(effects_.workareas, false))
         return;
-    for (auto& monitor : monitors_)
-    {
-        monitor.strut = {};
-    }
+    std::vector<Strut> struts(monitors_.size());
 
     std::optional<Geometry> root;
     for (auto const& [dock, client] : clients_)
@@ -2128,55 +1921,18 @@ void WindowManager::refresh_workareas()
                 break;
             root = Geometry{ 0, 0, reply->width, reply->height };
         }
-        for (auto& monitor : monitors_)
+        for (size_t i = 0; i < monitors_.size(); ++i)
         {
-            auto strut = monitor_strut(reservation, *root, monitor.geometry());
-            monitor.strut.left = std::max(monitor.strut.left, strut.left);
-            monitor.strut.right = std::max(monitor.strut.right, strut.right);
-            monitor.strut.top = std::max(monitor.strut.top, strut.top);
-            monitor.strut.bottom = std::max(monitor.strut.bottom, strut.bottom);
+            auto strut = monitor_strut(reservation, *root, monitors_[i].geometry());
+            struts[i].left = std::max(struts[i].left, strut.left);
+            struts[i].right = std::max(struts[i].right, strut.right);
+            struts[i].top = std::max(struts[i].top, strut.top);
+            struts[i].bottom = std::max(struts[i].bottom, strut.bottom);
         }
     }
+    for (size_t i = 0; i < monitors_.size(); ++i) state_.workarea(i, struts[i]);
 
-    update_ewmh_workarea();
-    invalidate_all_monitors();
-}
-
-// Keep clients mapped while hidden; UnmapNotify is reserved for withdrawal.
-void WindowManager::hide_window(Client& client)
-{
-    xcb_window_t window = client.id;
-
-    if (client.hidden)
-    {
-        LWM_LOG_TRACE("hide_window({:#x}): already hidden, skipping", window);
-        return;
-    }
-
-    client.hidden = true;
-    client.applied_geometry.reset();
-
-    // Move window off-screen (preserve y coordinate for restore)
-    uint32_t values[] = { static_cast<uint32_t>(OFF_SCREEN_X) };
-    xcb_configure_window(conn_.get(), window, XCB_CONFIG_WINDOW_X, values);
-
-    LWM_LOG_TRACE("hide_window({:#x}): moved to x={}", window, OFF_SCREEN_X);
-}
-
-// Clear the flag only. The caller must restore geometry through layout or
-// apply_floating_geometry before completing the visibility transition.
-void WindowManager::show_window(Client& client)
-{
-    xcb_window_t window = client.id;
-
-    if (!client.hidden)
-    {
-        LWM_LOG_TRACE("show_window({:#x}): not hidden, skipping", window);
-        return;
-    }
-
-    client.hidden = false;
-    LWM_LOG_TRACE("show_window({:#x}): marked as visible", window);
+    effects_.workarea_property = true;
 }
 
 void WindowManager::flush_and_drain_crossing()
@@ -2194,7 +1950,7 @@ void WindowManager::flush_and_drain_crossing()
     // the cursor, overriding the focus we just set via focus_or_fallback().
     // Other events are deferred to the top-level event loop so transition
     // helpers do not re-enter arbitrary handlers while holding Client refs.
-    while (auto* event = xcb_poll_for_event(conn_.get()))
+    while (auto* event = xcb_poll_for_queued_event(conn_.get()))
     {
         uint8_t type = event->response_type & ~0x80;
         if (type == XCB_ENTER_NOTIFY || type == XCB_LEAVE_NOTIFY || type == XCB_MOTION_NOTIFY)
@@ -2235,7 +1991,7 @@ void WindowManager::realize_visibility(size_t monitor_idx, xcb_window_t preferre
         return;
     }
 
-    monitors_[monitor_idx].fullscreen_owner = select_fullscreen_owner_for_monitor(monitor_idx, preferred_owner);
+    state_.resolve_owner(monitor_idx, select_fullscreen_owner_for_monitor(monitor_idx, preferred_owner));
 
     for (auto& [id, client] : clients_)
     {
@@ -2247,37 +2003,17 @@ void WindowManager::realize_visibility(size_t monitor_idx, xcb_window_t preferre
 
         bool const should_show = should_be_visible(client) && !is_suppressed_by_fullscreen(client);
 
-        if (should_show && client.hidden)
+        if (should_show && client.presentation.hidden)
         {
-            show_window(client);
+            effects_.visibility[id] = true;
         }
-        else if (!should_show && !client.hidden)
+        else if (!should_show && !client.presentation.hidden)
         {
-            hide_window(client);
+            effects_.visibility[id] = false;
         }
     }
 
     effects_.stacking = true;
-}
-
-void WindowManager::clear_all_borders()
-{
-    for (auto& monitor : monitors_)
-    {
-        for (auto& workspace : monitor.workspaces)
-        {
-            for (xcb_window_t window : workspace.windows)
-            {
-                xcb_change_window_attributes(conn_.get(), window, XCB_CW_BORDER_PIXEL, &conn_.screen()->black_pixel);
-            }
-        }
-    }
-    for (auto const& [window, client] : clients_)
-    {
-        if (client.kind() == Client::Kind::Floating)
-            xcb_change_window_attributes(conn_.get(), window, XCB_CW_BORDER_PIXEL, &conn_.screen()->black_pixel);
-    }
-    conn_.flush();
 }
 
 xcb_atom_t WindowManager::intern_atom(char const* name) const

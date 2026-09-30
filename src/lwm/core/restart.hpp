@@ -6,7 +6,9 @@
 namespace lwm::restart {
 inline constexpr uint32_t state_version = 3;
 inline constexpr uint32_t ratio_version = 3;
-inline constexpr size_t client_words = 28;
+inline constexpr size_t legacy_client_words = 28;
+inline constexpr size_t preference_words = 5;
+inline constexpr size_t client_words = legacy_client_words + preference_words;
 
 struct ClientRecord
 {
@@ -16,8 +18,7 @@ struct ClientRecord
     uint32_t hidden_pool_kind = 0;
     std::optional<Client::Kind> kind;
     std::optional<uint8_t> urgency;
-    std::optional<AppPreferences> app_prefs;
-    std::optional<LayerHint> restore_layer;
+    std::optional<ClientPreferences> preferences;
     bool desktop_pinned = false;
 };
 struct GlobalRecord

@@ -22,10 +22,10 @@ void WindowManager::apply_rule_target_location(xcb_window_t window, WindowRuleRe
     target_workspace = std::min(target_workspace, monitors_[target_monitor].workspaces.size() - 1);
     if (movable->monitor == target_monitor && movable->workspace == target_workspace)
         return;
-    if (!relocate_client(*movable, target_monitor, target_workspace, RelocationGeometry::CenterOnMonitorChange))
+    if (!state_.relocate(movable->id, target_monitor, target_workspace, RelocationGeometry::CenterOnMonitorChange))
         return;
     if (movable->kind() == Client::Kind::Tiled && window == active_window_)
-        workspace_policy::set_workspace_focus(monitors_[target_monitor].workspaces[target_workspace], window);
+        state_.remember_focus(target_monitor, target_workspace, window);
 }
 
 void WindowManager::apply_rule_floating_placement(xcb_window_t window, WindowRuleResult const& rule_result)
@@ -34,25 +34,20 @@ void WindowManager::apply_rule_floating_placement(xcb_window_t window, WindowRul
     if (!client || client->kind() != Client::Kind::Floating)
         return;
 
-    if (rule_result.geometry.has_value())
-        floating_geometry(*client) = *rule_result.geometry;
+    auto geom = rule_result.geometry.value_or(floating_geometry(*client));
 
     if (rule_result.center)
     {
         Geometry area = monitors_[client->monitor].working_area();
-        auto& geom = floating_geometry(*client);
         geom.x = area.x + static_cast<int16_t>((area.width - geom.width) / 2);
         geom.y = area.y + static_cast<int16_t>((area.height - geom.height) / 2);
     }
 
-    client->suppress_next_configure_request = rule_result.geometry.has_value() || rule_result.center;
+    state_.geometry(window, geom);
+    state_.configure_suppression(window, rule_result.geometry.has_value() || rule_result.center);
 }
 
-void WindowManager::apply_rule_result_to_window(
-    xcb_window_t window,
-    WindowRuleResult const& rule_result,
-    WindowClassification const* classification
-)
+void WindowManager::apply_rule_result_to_window(xcb_window_t window, WindowRuleResult const& rule_result)
 {
     auto* client = get_client(window);
     if (!client)
@@ -71,7 +66,16 @@ void WindowManager::apply_rule_result_to_window(
     apply_rule_target_location(window, rule_result);
     apply_rule_floating_placement(window, rule_result);
 
-    apply_classification_state(window, classification, rule_result, client->transient_for != XCB_NONE);
+    if (rule_result.skip_taskbar)
+        state_.skip_taskbar(client->id, *rule_result.skip_taskbar);
+    if (rule_result.skip_pager)
+        state_.skip_pager(client->id, *rule_result.skip_pager);
+    if (rule_result.sticky)
+        state_.sticky(client->id, *rule_result.sticky);
+    if (rule_result.layer_hint)
+        state_.layer(client->id, *rule_result.layer_hint);
+    if (rule_result.borderless)
+        state_.borderless(client->id, *rule_result.borderless);
     if (rule_result.fullscreen == true)
         set_fullscreen(*client, true);
 }
@@ -148,20 +152,6 @@ ClassificationResult WindowManager::classify_managed_window(xcb_window_t window,
     return { classification, std::move(rule_result), transient, std::move(match_info) };
 }
 
-bool WindowManager::sync_kind(xcb_window_t window, WindowClassification::Kind desired_kind)
-{
-    auto* client = get_client(window);
-    if (!client)
-        return false;
-
-    if (desired_kind == WindowClassification::Kind::Floating && client->kind() == Client::Kind::Tiled)
-        convert_window_to_floating(window);
-    else if (desired_kind == WindowClassification::Kind::Tiled && client->kind() == Client::Kind::Floating)
-        convert_window_to_tiled(window);
-
-    return get_client(window) != nullptr;
-}
-
 void WindowManager::relocate_to_transient_parent(xcb_window_t window, xcb_window_t previous_transient_for)
 {
     auto* client = get_client(window);
@@ -174,103 +164,22 @@ void WindowManager::relocate_to_transient_parent(xcb_window_t window, xcb_window
     if (parent->monitor >= monitors_.size() || parent->workspace >= monitors_[parent->monitor].workspaces.size())
         return;
 
-    if (!relocate_client(*client, parent->monitor, parent->workspace))
+    if (!state_.relocate(client->id, parent->monitor, parent->workspace))
         return;
     if (client->kind() == Client::Kind::Floating)
     {
         Geometry geometry = current_window_geometry(window);
         Geometry parent_geometry = current_window_geometry(client->transient_for);
-        floating_geometry(*client) = floating::place_floating(
-            monitors_[parent->monitor].working_area(),
-            std::max<uint16_t>(1, geometry.width),
-            std::max<uint16_t>(1, geometry.height),
-            parent_geometry
+        state_.geometry(
+            window,
+            floating::place_floating(
+                monitors_[parent->monitor].working_area(),
+                std::max<uint16_t>(1, geometry.width),
+                std::max<uint16_t>(1, geometry.height),
+                parent_geometry
+            )
         );
     }
-}
-
-void WindowManager::apply_classification_state(
-    xcb_window_t window,
-    WindowClassification const* classification,
-    WindowRuleResult const& rule_result,
-    bool has_transient
-)
-{
-    auto* client = get_client(window);
-    if (!client)
-        return;
-
-    // Reload patches current state; mapping and property changes recompute defaults.
-    auto desired = classification_policy::compute_desired_state({
-        .classification_skip_taskbar = classification ? classification->skip_taskbar : client->skip_taskbar,
-        .classification_skip_pager = classification ? classification->skip_pager : client->skip_pager,
-        .classification_above = classification ? classification->above : client->layer_hint == LayerHint::Above,
-        .app_skip_taskbar = classification && client->app_prefs.skip_taskbar,
-        .app_skip_pager = classification && client->app_prefs.skip_pager,
-        .ewmh_sticky = client->sticky,
-        .ewmh_modal = client->modal,
-        .app_above = classification && !client->fullscreen && client->app_prefs.above,
-        .app_below =
-            classification ? !client->fullscreen && client->app_prefs.below : client->layer_hint == LayerHint::Below,
-        .rule_skip_taskbar = rule_result.skip_taskbar,
-        .rule_skip_pager = rule_result.skip_pager,
-        .rule_sticky = rule_result.sticky,
-        .rule_layer_hint = rule_result.layer_hint,
-        .rule_borderless = rule_result.borderless.value_or(classification ? false : client->borderless),
-        .has_transient = classification && has_transient,
-        .is_sticky_desktop = client->sticky,
-    });
-
-    if (client->skip_taskbar != desired.skip_taskbar)
-        set_client_skip_taskbar(*client, desired.skip_taskbar);
-    if (client->skip_pager != desired.skip_pager)
-        set_client_skip_pager(*client, desired.skip_pager);
-    if (client->sticky != desired.sticky)
-        set_window_sticky(*client, desired.sticky);
-    if (client->modal != desired.modal)
-        set_window_modal(*client, desired.modal);
-    if (client->layer_hint != desired.layer_hint)
-        set_window_layer_hint(*client, desired.layer_hint);
-    if (client->borderless != desired.borderless)
-        set_window_borderless(*client, desired.borderless);
-
-    request_allowed_actions(*client);
-}
-
-void WindowManager::sync_managed_window_classification(xcb_window_t window, ClassificationResult const& result)
-{
-    auto& client = require_client(window);
-    auto previous_monitor = client.monitor;
-    auto previous_transient = client.transient_for;
-    client.transient_for = result.transient_for;
-    auto kind = result.classification.kind;
-    if (kind != WindowClassification::Kind::Tiled && kind != WindowClassification::Kind::Floating)
-    {
-        effects_.stacking |= previous_transient != client.transient_for;
-        return;
-    }
-    sync_kind(window, kind);
-    relocate_to_transient_parent(window, previous_transient);
-    apply_rule_result_to_window(window, result.rule_result, &result.classification);
-    invalidate_monitor(previous_monitor);
-    invalidate_monitor(client.monitor);
-}
-
-void WindowManager::reevaluate_managed_window(xcb_window_t window, bool refresh_transient)
-{
-    auto* client = get_client(window);
-    if (!client)
-        return;
-
-    if (client->kind() != Client::Kind::Tiled && client->kind() != Client::Kind::Floating)
-        return;
-
-    auto result = classify_managed_window(window, refresh_transient);
-
-    if (claim_pending_scratchpad(window, result.properties, result.rule_result))
-        return;
-
-    sync_managed_window_classification(window, result);
 }
 
 bool WindowManager::claim_pending_scratchpad(
@@ -302,8 +211,8 @@ void WindowManager::reevaluate_metadata(xcb_window_t window, WindowRuleResult co
     if (claim_pending_scratchpad(window, properties, current))
         return;
     // Metadata alone must not reapply placement or undo a user's state changes.
-    if (current != previous)
-        reevaluate_managed_window(window);
+    if (current.matched && current != previous)
+        apply_rule_result_to_window(window, current);
 }
 
 } // namespace lwm

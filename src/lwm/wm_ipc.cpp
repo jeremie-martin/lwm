@@ -64,8 +64,7 @@ std::string WindowManager::run_ipc_command(ipc::Command const& command)
         auto strategy = parse_layout_strategy(name);
         if (!strategy)
             return error_reply("unknown layout: " + name);
-        focused_monitor().current().layout_strategy = *strategy;
-        invalidate_monitor(focused_monitor_);
+        state_.layout(focused_monitor_, *strategy);
         effects_.drain_crossing = true;
         std::string strategy_name = layout_strategy_str(*strategy);
         if (ipc_.has_subscribers(Event_LayoutChange))
@@ -88,8 +87,7 @@ std::string WindowManager::run_ipc_command(ipc::Command const& command)
             );
         if (focused_monitor_ >= monitors_.size())
             return error_reply("no focused monitor");
-        focused_monitor().current().split_ratios[SplitAddress{ 0 }] = val;
-        invalidate_monitor(focused_monitor_);
+        state_.ratio(focused_monitor_, SplitAddress{ 0 }, val);
         if (ipc_.has_subscribers(Event_LayoutChange))
         {
             queue_event(
@@ -104,8 +102,7 @@ std::string WindowManager::run_ipc_command(ipc::Command const& command)
     {
         if (focused_monitor_ >= monitors_.size())
             return error_reply("no focused monitor");
-        focused_monitor().current().split_ratios.clear();
-        invalidate_monitor(focused_monitor_);
+        state_.reset_ratios(focused_monitor_);
         if (ipc_.has_subscribers(Event_LayoutChange))
         {
             queue_event(Event_LayoutChange, "{\"event\":\"layout_change\",\"action\":\"ratio_reset\"}");
@@ -267,7 +264,7 @@ std::string WindowManager::run_ipc_command(ipc::Command const& command)
         if (!state)
             return error_reply("unknown scratchpad: " + name);
         if (state->pending_launch())
-            state->mark_empty();
+            state_.scratchpad_pending(name, false);
         return ok_reply("");
     }
     if (command.id == ScratchpadList)
@@ -313,7 +310,7 @@ std::string WindowManager::handle_notification_attention(xcb_window_t target)
     if (target == active_window_)
         return ok_reply("skipped-active");
 
-    set_client_urgency(*client, UrgencySource::WmInitiated, true);
+    state_.urgency(client->id, UrgencySource::WmInitiated, true);
     return ok_reply(std::to_string(target));
 }
 

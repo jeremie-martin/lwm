@@ -123,7 +123,8 @@ allow at most 200 crossing barriers and 200 QueryTree requests. Sticky-only
 changes must not rewrite unchanged geometry. Two relocation workloads move tiled
 and floating clients between workspaces 200 times, verify final membership, and
 bound geometry writes without fresh geometry reads or repeated reconciliation.
-A 200-client workspace workload also bounds flush calls to catch completion work
+A 200-operation ratio workload requires layout geometry changes without property
+reads or stacking queries. A 200-client workspace workload also bounds flush calls to catch completion work
 repeated for each configure
 notification. Startup workloads with 10 and 40 docks bound property reads to
 catch repeated workarea scans during adoption and require one shared root-geometry
@@ -133,6 +134,28 @@ position, and bound geometry writes and reconciliation. These use synthetic X
 events to control batching; integration tests separately exercise real XTEST
 button grabs. Omit `--check` to record counts without enforcing budgets. These are protocol-work budgets, not latency measurements; measure
 uninstrumented Release builds separately on an otherwise idle machine.
+
+Continuous X traffic, slow subscribers, incomplete requests, and SIGHUP are
+exercised together with independent IPC callers:
+
+```sh
+python3 tests/performance/ipc_load.py build/release/src/app/lwm --x-flood --check
+LWM_TEST_REQUIRE_X11=1 LWM_TEST_SEQUENCE_SEED=89372 LWM_TEST_SEQUENCE_STEPS=3000 build/tests/lwm_tests '[sequence]'
+LWM_TEST_REQUIRE_X11=1 LWM_TEST_PREVIOUS_BINARY=/absolute/path/to/previous/lwm build/tests/lwm_tests '[crossbinary]'
+```
+
+The load probe starts a separate continuous X producer, waits for actual subscription
+acknowledgements, leaves one subscriber unread, and checks that requests and a
+signal reload finish while the producer remains alive. It reports completed-call
+latency, process CPU time and RSS; these are observations, not universal latency
+thresholds. The generated sequence test reports its seed and complete action trace
+on failure, checks protocol state against an independent preference model, and
+checks process identity so exception recovery cannot hide a broken transition.
+Cross-binary handoff explicitly tests both directions through `exec PATH`.
+
+Linux CI runs Debug, Release, sanitizer, and owned multi-output Xorg tests, plus
+Release request budgets and the flood probe. Scheduled/manual runs extend generated
+sequences. This does not replace testing a real desktop, drivers, and applications.
 
 The focus-cycle benchmark reports completed IPC round-trip latency and distinct
 targets on an owned Xvfb display, with 10, 100, and 500 floating clients. Compare

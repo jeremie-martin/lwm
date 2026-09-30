@@ -87,7 +87,6 @@ void WindowManager::publish_client_list()
     }
     ewmh_.update_client_list(windows);
 
-    effects_.stacking = true;
 }
 
 void WindowManager::publish_current_desktop()
@@ -176,8 +175,8 @@ void WindowManager::switch_to_ewmh_desktop(uint32_t desktop)
         monitor_idx
     );
 
-    focused_monitor_ = monitor_idx;
-    if (!apply_workspace_switch(monitor_idx, workspace_idx))
+    state_.focus_monitor(monitor_idx);
+    if (!state_.switch_workspace(monitor_idx, workspace_idx))
     {
         // Only monitor changed (or no-op), no workspace switch needed.
         request_current_desktop_update();

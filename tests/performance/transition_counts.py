@@ -192,8 +192,12 @@ def measure(binary, library, scenario, operations):
                              for client in json.loads(ipc(path, "window list"))["windows"]), wm, log_path)
         time.sleep(0.05)
         start_position = position(display, target) if dragging else None
+        ratio_position = position(display, windows[1]) if scenario == "tiled_ratio" else None
         before = struct.unpack("=6Q", counts_path.read_bytes())
         for index in range(operations):
+            if scenario == "tiled_ratio":
+                ipc(path, f"ratio set {0.45 if index % 2 == 0 else 0.55}")
+                continue
             if scenario == "workspace":
                 ipc(path, f"workspace switch {index % 2}")
                 continue
@@ -224,6 +228,8 @@ def measure(binary, library, scenario, operations):
                 return False
             wait(settled, wm, log_path)
 
+        if scenario == "tiled_ratio" and position(display, windows[1]) == ratio_position:
+            raise AssertionError("Ratio workload did not change layout")
         if relocating:
             workspaces = json.loads(ipc(path, "workspace list"))["monitors"][0]["workspaces"]
             expected = [client_count - operations % 2, operations % 2] if scenario.startswith("tiled_") else [0, 0]
@@ -259,13 +265,21 @@ def main():
                         str(Path(__file__).with_name("xcb_counts.c")), "-ldl"], check=True)
         scenarios = [(name, 200) for name in ("metadata", "sticky", "sticky_fullscreen", "workspace")]
         scenarios += [(name, 200) for name in ("floating_drag", "floating_drag_burst", "tiled_drag", "tiled_drag_burst")]
-        scenarios += [(name, 200) for name in ("tiled_relocation", "floating_relocation")]
+        scenarios += [(name, 200) for name in ("tiled_relocation", "floating_relocation", "tiled_ratio")]
         scenarios += [("dock_startup", count) for count in (10, 40)]
         for scenario, operations in scenarios:
             result = measure(binary, library, scenario, operations)
             print(json.dumps(result), flush=True)
             if arguments.check:
                 counts = result["counts"]
+                if scenario == "tiled_ratio":
+                    if not operations <= counts["geometry_configure"] <= operations * 10:
+                        raise AssertionError("Inactive or excessive ratio layout: " + json.dumps(result))
+                    if counts["query_tree"] or counts["get_property"] or counts["get_geometry"]:
+                        raise AssertionError("Layout-only change reconciled unrelated state: " + json.dumps(result))
+                    if counts["visibility_barrier"] > operations:
+                        raise AssertionError("Repeated crossing barriers: " + json.dumps(result))
+                    continue
                 if scenario == "dock_startup":
                     if not operations <= counts["get_property"] <= 12 * operations + 100:
                         raise AssertionError("Repeated dock reads or inactive tracer: " + json.dumps(result))

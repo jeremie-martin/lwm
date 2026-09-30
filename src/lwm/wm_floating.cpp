@@ -156,18 +156,12 @@ WindowManager::FloatingPlacement WindowManager::initial_floating_placement(
     return { placement, *monitor_idx, *workspace_idx, desktop_pinned };
 }
 
-bool WindowManager::is_floating_window(xcb_window_t window) const
-{
-    auto const* client = get_client(window);
-    return client && client->kind() == Client::Kind::Floating;
-}
-
-void WindowManager::update_floating_monitor_for_geometry(Client& client)
+void WindowManager::update_floating_monitor_for_geometry(Client const& client)
 {
     update_floating_monitor_for_geometry(client, floating_geometry(client));
 }
 
-void WindowManager::update_floating_monitor_for_geometry(Client& client, Geometry const& geom)
+void WindowManager::update_floating_monitor_for_geometry(Client const& client, Geometry const& geom)
 {
     int32_t center_x = static_cast<int32_t>(geom.x) + static_cast<int32_t>(geom.width) / 2;
     int32_t center_y = static_cast<int32_t>(geom.y) + static_cast<int32_t>(geom.height) / 2;
@@ -175,7 +169,7 @@ void WindowManager::update_floating_monitor_for_geometry(Client& client, Geometr
     if (!new_monitor || *new_monitor == client.monitor)
         return;
 
-    if (!relocate_client(client, *new_monitor, monitors_[*new_monitor].current_workspace))
+    if (!state_.relocate(client.id, *new_monitor, monitors_[*new_monitor].current_workspace))
         return;
 
     if (active_window_ == client.id && is_suppressed_by_fullscreen(client))

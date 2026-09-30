@@ -14,37 +14,26 @@ void WindowManager::focus_any_window(xcb_window_t window, bool record_user_time,
         return;
     if (client->iconic)
         deiconify_window(window, false);
-    focused_monitor_ = client->monitor;
+    state_.focus_monitor(client->monitor);
     if (!client->sticky)
-        apply_workspace_switch(client->monitor, client->workspace);
+        state_.switch_workspace(client->monitor, client->workspace);
     if (is_suppressed_by_fullscreen(*client))
     {
         focus_or_fallback(monitors_[client->monitor], false);
         return;
     }
-    if (!effects_.previous_focus)
-        effects_.previous_focus = active_window_;
-    effects_.focus_time = focus_timestamp;
-    active_window_ = window;
-    if (client->kind() == Client::Kind::Tiled)
-        workspace_policy::set_workspace_focus(monitors_[client->monitor].workspaces[client->workspace], window);
-    client->mru_order = next_mru_order_++;
+    state_.focus(window, focus_timestamp);
     if (record_user_time)
     {
         uint32_t time = focus_timestamp ? focus_timestamp : last_input_time_;
         if (time && (!client->user_time || !ewmh_policy::timestamp_is_before(time, client->user_time)))
-            client->user_time = time;
+            state_.user_time(window, time, client->user_time_window);
     }
 }
 
-void WindowManager::clear_focus()
-{
-    if (!effects_.previous_focus)
-        effects_.previous_focus = active_window_;
-    active_window_ = XCB_NONE;
-}
+void WindowManager::clear_focus() { state_.focus(XCB_NONE); }
 
-void WindowManager::focus_or_fallback(Monitor& monitor, bool record_user_time)
+void WindowManager::focus_or_fallback(Monitor const& monitor, bool record_user_time)
 {
     auto context = focus_context(monitor_index(monitor));
     auto target = focus::fallback(clients_, monitor, context);
@@ -64,9 +53,9 @@ void WindowManager::repair_focus_after_visibility_change(size_t preferred_monito
 
     if (auto* active = get_client(active_window_); active && is_focus_candidate(*active))
     {
-        focused_monitor_ = active->monitor;
+        state_.focus_monitor(active->monitor);
         if (active->kind() == Client::Kind::Tiled && active->workspace < monitors_[active->monitor].workspaces.size())
-            workspace_policy::set_workspace_focus(monitors_[active->monitor].workspaces[active->workspace], active->id);
+            state_.remember_focus(active->monitor, active->workspace, active->id);
         request_current_desktop_update();
         return;
     }
@@ -118,11 +107,12 @@ bool WindowManager::cycle_focus(bool forward)
         return false;
     auto context = focus_context(focused_monitor_);
     if (!focus_cycle_ || focus_cycle_->monitor != context.monitor || focus_cycle_->workspace != context.workspace
-        || focus_cycle_->next_recency != next_mru_order_ || focus_cycle_->next_registration != next_client_order_
-        || focus_cycle_->current != active_window_)
+        || focus_cycle_->next_recency != state_.next_recency()
+        || focus_cycle_->next_registration != state_.next_registration() || focus_cycle_->current != active_window_)
     {
-        focus_cycle_ = FocusCycle{ context.monitor,    context.workspace, next_mru_order_,
-                                   next_client_order_, active_window_,    focus::recent_order(clients_) };
+        focus_cycle_ = FocusCycle{ context.monitor,       context.workspace,
+                                   state_.next_recency(), state_.next_registration(),
+                                   active_window_,        focus::recent_order(clients_) };
     }
     auto target = focus::cycle_target(focus_cycle_->order, clients_, context, active_window_, forward);
     if (target == XCB_NONE)
@@ -133,7 +123,7 @@ bool WindowManager::cycle_focus(bool forward)
     focus_any_window(target);
     // Ordinary activation advances recency and thereby invalidates this traversal.
     // A cycling step acknowledges its own recency update without reordering IDs.
-    focus_cycle_->next_recency = next_mru_order_;
+    focus_cycle_->next_recency = state_.next_recency();
     focus_cycle_->current = active_window_;
     return true;
 }

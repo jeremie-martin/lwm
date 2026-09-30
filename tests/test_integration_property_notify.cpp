@@ -1103,7 +1103,7 @@ TEST_CASE("Integration: _NET_SUPPORTED does not overclaim visible-name atoms", "
     destroy_window(conn, window);
 }
 
-TEST_CASE("Integration: initial and runtime rules share state precedence", "[integration][rules][map]")
+TEST_CASE("Integration: rules apply explicit actions without undo on match removal", "[integration][rules][map]")
 {
     bool floating = false;
     SECTION("tiled") { floating = false; }
@@ -1155,15 +1155,9 @@ apply = { borderless = true, sticky = false, fullscreen = false, above = false, 
             );
     };
     REQUIRE(wait_for_condition(correct_state, kTimeout));
-    set_window_title(conn, window, "unruled");
-    REQUIRE(wait_for_condition(
-        [&]()
-        {
-            auto geometry = get_window_geometry(conn, window);
-            return geometry && geometry->border_width == 4;
-        },
-        kTimeout
-    ));
+    // Losing a match does not undo its previous actions.
+    observe_title_after_events(conn, window);
+    REQUIRE(correct_state());
     set_window_title(conn, window, "ruled");
     REQUIRE(wait_for_condition(correct_state, kTimeout));
     destroy_window(conn, window);
@@ -1215,22 +1209,16 @@ apply = { floating = true, borderless = true }
     map_window(conn, window);
     REQUIRE(wait_for_active_window(conn, window, kTimeout));
     auto kind = intern_atom(conn.get(), "_LWM_WINDOW_CLASS");
-    for (int i = 0; i < 3; ++i)
-    {
-        set_window_wm_class(conn, window, "test", "FloatNow");
-        REQUIRE(wait_for_condition(
-            [&] { return get_window_property_string(conn.get(), window, kind) == "floating"; },
-            kTimeout
-        ));
-        auto geometry = get_window_geometry(conn, window);
-        REQUIRE(geometry);
-        CHECK(geometry->border_width == 0);
-        set_window_wm_class(conn, window, "test", "TileNow");
-        REQUIRE(wait_for_condition(
-            [&] { return get_window_property_string(conn.get(), window, kind) == "tiled"; },
-            kTimeout
-        ));
-    }
+    set_window_wm_class(conn, window, "test", "FloatNow");
+    REQUIRE(
+        wait_for_condition([&] { return get_window_property_string(conn.get(), window, kind) == "floating"; }, kTimeout)
+    );
+    set_window_wm_class(conn, window, "test", "TileNow");
+    observe_title_after_events(conn, window);
+    CHECK(get_window_property_string(conn.get(), window, kind) == "floating");
+    auto geometry = get_window_geometry(conn, window);
+    REQUIRE(geometry);
+    CHECK(geometry->border_width == 0);
     destroy_window(conn, window);
 }
 

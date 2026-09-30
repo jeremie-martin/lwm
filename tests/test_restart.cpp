@@ -6,14 +6,15 @@ using namespace lwm;
 namespace {
 // Fixed wire words, independent of the encoder and enum ordinals. Coordinates
 // are unsigned 16-bit encodings; 65436 represents -100. Reserved slots stay zero.
-constexpr std::array<uint32_t, 28> floating_record{
+constexpr std::array<uint32_t, 33> floating_record{
     0,     1,                    // retired overlay flag, borderless
     65436, 25,    600, 400,      // normal rectangle
     1,     65436, 25,  600, 400, // legacy fullscreen restore rectangle
     0,     0,     0,   0,   0,   // legacy maximize restore rectangle
     0,     0,     0,   0,   0,   // prior floating rectangle
     0,     0,     2,             // reserved, hidden pool kind, floating kind
-    2,     1,     3,   1         // app urgency, skip-taskbar, restore-below, desktop pin
+    2,     9,     3,   1,        // urgency, skip-taskbar + below, restore-below, desktop pin
+    1,     0,     2,   0,   3    // preference version, unset mode, taskbar, unset pager, below
 };
 }
 
@@ -26,8 +27,8 @@ TEST_CASE("Restart client encoder preserves the cross-binary wire contract", "[r
     client.borderless = true;
     client.desktop_pinned = true;
     client.fullscreen = true;
-    client.fullscreen_restore_layer_hint = LayerHint::Below;
-    client.app_prefs.skip_taskbar = true;
+    client.preferences.layer = LayerHint::Below;
+    client.preferences.skip_taskbar = true;
     client.urgency.add(UrgencySource::App);
     CHECK(restart::encode_client(client) == floating_record);
 }
@@ -55,18 +56,13 @@ TEST_CASE("Restart client decoder interprets historical extensions independently
             CHECK(
                 result->urgency == static_cast<uint8_t>(length == 25 ? UrgencySource::WmInitiated : UrgencySource::App)
             );
-        CHECK(result->app_prefs.has_value() == (length >= 26));
-        if (result->app_prefs)
+        CHECK(result->preferences.has_value() == (length >= 26));
+        if (result->preferences)
         {
-            CHECK(result->app_prefs->skip_taskbar);
-            CHECK_FALSE(result->app_prefs->skip_pager);
-            CHECK_FALSE(result->app_prefs->above);
-            CHECK_FALSE(result->app_prefs->below);
+            CHECK(result->preferences->skip_taskbar);
+            CHECK_FALSE(result->preferences->skip_pager);
+            CHECK(result->preferences->layer == LayerHint::Below);
         }
-        if (length >= 27)
-            CHECK(result->restore_layer == LayerHint::Below);
-        else
-            CHECK_FALSE(result->restore_layer);
         CHECK(result->desktop_pinned == (length >= 28));
     }
 }

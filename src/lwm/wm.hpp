@@ -10,6 +10,7 @@
 #include "lwm/core/ipc_server.hpp"
 #include "lwm/core/policy.hpp"
 #include "lwm/core/signals.hpp"
+#include "lwm/core/state.hpp"
 #include "lwm/core/types.hpp"
 #include "lwm/core/window_rules.hpp"
 #include "lwm/keybind/keybind.hpp"
@@ -107,18 +108,12 @@ private:
     KeybindManager keybinds_;
     Layout layout_;
 
-    std::vector<Monitor> monitors_;
-    // Unified Client registry
-    // This is the authoritative source of truth for all managed window state.
-    // All state flags (fullscreen, iconic, sticky, above, below, maximized,
-    // modal) are stored in Client records, not in separate sets.
-    // See types.hpp Client struct for full documentation.
-    std::unordered_map<xcb_window_t, Client> clients_;
-
-    bool showing_desktop_ = false;
+    State state_;
+    State::Clients const& clients_ = state_.clients();
+    std::vector<Monitor> const& monitors_ = state_.monitors();
+    bool const& showing_desktop_ = state_.showing_desktop();
     std::unordered_map<xcb_window_t, std::chrono::steady_clock::time_point> pending_kills_;
-    uint64_t next_client_order_ = 0;
-    uint64_t next_mru_order_ = 0;
+
     struct FocusCycle
     {
         size_t monitor, workspace;
@@ -129,8 +124,8 @@ private:
     std::optional<FocusCycle> focus_cycle_;
     int32_t desktop_origin_x_ = 0;
     int32_t desktop_origin_y_ = 0;
-    xcb_window_t active_window_ = XCB_NONE;
-    size_t focused_monitor_ = 0;
+    xcb_window_t const& active_window_ = state_.active_window();
+    size_t const& focused_monitor_ = state_.focused_monitor();
     xcb_window_t wm_window_ = XCB_NONE;
     xcb_atom_t wm_s0_ = XCB_NONE;
     bool running_ = true;
@@ -155,6 +150,8 @@ private:
     xcb_atom_t net_wm_user_time_window_ = XCB_NONE;
     xcb_atom_t net_wm_state_focused_ = XCB_NONE;
     xcb_atom_t lwm_restart_client_ = XCB_NONE;
+    xcb_atom_t lwm_restart_preferences_ = XCB_NONE;
+    xcb_window_t restart_source_ = XCB_NONE;
     xcb_atom_t lwm_restart_owner_ = XCB_NONE;
     xcb_atom_t lwm_restart_state_ = XCB_NONE;
     xcb_atom_t lwm_restart_tiled_order_ = XCB_NONE;
@@ -189,80 +186,32 @@ private:
     SignalPipe& signals_;
 
     // One outer operation owns these effects; feature helpers never complete them.
-    struct TransitionEffects
-    {
-        std::map<size_t, xcb_window_t> monitors;
-        std::vector<xcb_window_t> geometry;
-        std::set<xcb_window_t> configure_replies;
-        std::vector<xcb_window_t> maps;
-        std::optional<xcb_window_t> previous_focus;
-        uint32_t focus_time = XCB_CURRENT_TIME;
-        bool drain_crossing = false;
-        bool repair_focus = false;
-        bool state_changed = false;
-        bool stacking = false;
-        bool workareas = false;
-        bool client_list = false;
-        bool current_desktop = false;
-        std::set<xcb_window_t> allowed_actions;
-        std::set<xcb_window_t> urgency;
-        std::set<xcb_window_t> desktops;
-        std::set<xcb_window_t> iconic;
-        std::map<size_t, std::pair<size_t, size_t>> workspace_events;
-        std::vector<std::pair<EventType, std::string>> events;
-        bool operator==(TransitionEffects const&) const = default;
-    } effects_;
+    using TransitionEffects = State::TransitionEffects;
+    TransitionEffects& effects_ = state_.effects();
     void complete_transition();
-    void dispatch_event(xcb_generic_event_t const& event);
+    void
+    dispatch_event(xcb_generic_event_t const& event, size_t& remaining, std::chrono::steady_clock::time_point deadline);
     void invalidate_monitor(size_t monitor, xcb_window_t preferred = XCB_NONE);
-    void arrange_monitor(Monitor& monitor);
+    void arrange_monitor(Monitor const& monitor);
     void realize_visibility(size_t monitor, xcb_window_t preferred);
-    void commit_focus();
+    void commit_focus(TransitionEffects const& publication);
     void request_geometry(Client const& client);
     Geometry presentation_geometry(Client const& client) const;
-    void write_geometry(Client& client, Geometry geometry, uint32_t border);
+    void write_geometry(Client const& client, Geometry geometry, uint32_t border);
     bool monitors_dirty_ = false;
     std::deque<xcb_generic_event_t> deferred_events_;
 
     // Scratchpad state
-    struct NamedScratchpadState
-    {
-        struct Empty
-        { };
-        struct LaunchPending
-        { };
-        struct Claimed
-        {
-            xcb_window_t window = XCB_NONE;
-        };
-
-        std::string name;
-        std::variant<Empty, LaunchPending, Claimed> state = Empty{};
-
-        xcb_window_t window() const
-        {
-            if (auto const* claimed = std::get_if<Claimed>(&state))
-                return claimed->window;
-            return XCB_NONE;
-        }
-
-        bool pending_launch() const { return std::holds_alternative<LaunchPending>(state); }
-
-        void mark_empty() { state = Empty{}; }
-
-        void mark_launch_pending() { state = LaunchPending{}; }
-
-        void mark_claimed(xcb_window_t claimed_window) { state = Claimed{ claimed_window }; }
-    };
-    std::vector<NamedScratchpadState> named_scratchpads_;
-    std::vector<xcb_window_t> scratchpad_pool_; ///< Generic pool, MRU-ordered (back = most recent)
+    using NamedScratchpadState = State::NamedScratchpadState;
+    std::vector<NamedScratchpadState> const& named_scratchpads_ = state_.named_scratchpads();
+    std::vector<xcb_window_t> const& scratchpad_pool_ = state_.scratchpad_pool();
 
     void create_wm_window();
     void setup_root();
     void grab_buttons();
     void claim_wm_ownership();
     void detect_monitors();
-    void create_fallback_monitor();
+    Monitor create_fallback_monitor();
     void init_monitor_workspaces(Monitor& monitor);
     void scan_existing_windows();
     void run_autostart();
@@ -305,21 +254,21 @@ private:
     std::expected<void, std::string> apply_config_reload(Config config);
     std::expected<void, std::string> validate_reload(Config const& config) const;
     void regrab_all_keys();
-    void apply_appearance_reload();
+    void publish_appearance();
     void request_allowed_actions(Client const& client);
     void publish_allowed_actions(Client const& client);
     /// Publish the stable LWM classification used by external desktop tools.
     void publish_lwm_window_class(Client const& client);
     void reapply_rules_to_existing_windows();
-    void apply_rule_result_to_window(
-        xcb_window_t window,
-        WindowRuleResult const& rule_result,
-        WindowClassification const* classification = nullptr
-    );
+    void apply_rule_result_to_window(xcb_window_t window, WindowRuleResult const& rule_result);
     void apply_rule_target_location(xcb_window_t window, WindowRuleResult const& rule_result);
     void apply_rule_floating_placement(xcb_window_t window, WindowRuleResult const& rule_result);
-    void convert_window_to_floating(xcb_window_t window);
-    void convert_window_to_tiled(xcb_window_t window, std::optional<Geometry> prior_floating = std::nullopt);
+    void convert_window_to_floating(xcb_window_t window, bool explicit_choice = true);
+    void convert_window_to_tiled(
+        xcb_window_t window,
+        std::optional<Geometry> prior_floating = std::nullopt,
+        bool explicit_choice = true
+    );
     void toggle_window_float(xcb_window_t window);
     Geometry current_window_geometry(xcb_window_t window) const;
 
@@ -336,33 +285,18 @@ private:
     /// is for event-handler refresh after insert.
     void refresh_user_time_tracking_into(Client& client);
     void refresh_user_time_tracking(xcb_window_t window);
-    void reevaluate_managed_window(xcb_window_t window, bool refresh_transient = false);
     void reevaluate_metadata(xcb_window_t window, WindowRuleResult const& previous);
     bool
     claim_pending_scratchpad(xcb_window_t window, WindowMatchInfo const& properties, WindowRuleResult const& rules);
-    void sync_managed_window_classification(xcb_window_t window, ClassificationResult const& result);
-    bool sync_kind(xcb_window_t window, WindowClassification::Kind desired_kind);
     void relocate_to_transient_parent(xcb_window_t window, xcb_window_t previous_transient_for);
-    void apply_classification_state(
-        xcb_window_t window,
-        WindowClassification const* classification,
-        WindowRuleResult const& rule_result,
-        bool has_transient
-    );
 
     void unmanage_window(xcb_window_t window);
     void focus_any_window(xcb_window_t window, bool record_user_time = true, uint32_t focus_timestamp = 0);
     /// Returns true when a target was focused; false when there is no focused
     /// monitor or no cycle candidates.
     bool cycle_focus(bool forward);
-    void set_fullscreen(Client& client, bool enabled);
-    void clear_fullscreen_state(Client& client);
-    void set_window_borderless(Client& client, bool enabled);
-    void set_window_layer_hint(Client& client, LayerHint hint);
-    void set_window_sticky(Client& client, bool enabled);
-    void set_window_maximized(Client& client, bool horiz, bool vert);
-    void set_window_modal(Client& client, bool enabled);
-    void set_fullscreen_monitors(Client& client, FullscreenMonitors const& monitors);
+    void set_fullscreen(Client const& client, bool enabled);
+    void set_fullscreen_monitors(Client const& client, FullscreenMonitors const& monitors);
     Geometry fullscreen_geometry_for_client(Client const& client) const;
     void set_iconic_state(xcb_window_t window, bool iconic);
     void iconify_window(xcb_window_t window);
@@ -372,7 +306,6 @@ private:
 
     void invalidate_all_monitors();
 
-    bool apply_workspace_switch(size_t monitor_idx, size_t target_workspace);
     void switch_workspace(size_t ws);
     void toggle_workspace();
     void move_window_to_workspace(size_t ws);
@@ -387,12 +320,10 @@ private:
     void swap_focused_tiled(int offset);
 
     /// Lookup: nullable handle for X event boundaries where the window may not be managed.
-    Client* get_client(xcb_window_t window);
     Client const* get_client(xcb_window_t window) const;
     /// Require: asserts the client exists. Use from internal funnels that already proved
     /// managed status (iterating clients_, post-manage finalization, operations on
     /// active_window_, hotplug-plan apply, restart-state apply).
-    Client& require_client(xcb_window_t window);
     Client const& require_client(xcb_window_t window) const;
     bool is_managed(xcb_window_t window) const { return clients_.contains(window); }
     bool window_is_iconic(xcb_window_t window) const
@@ -401,14 +332,9 @@ private:
         return c && c->iconic;
     }
 
-    void set_client_skip_taskbar(Client& client, bool enabled);
-    void set_client_skip_pager(Client& client, bool enabled);
-    void set_client_urgency(Client& client, UrgencySource source, bool enabled);
-    void clear_client_urgency(Client& client);
-    void request_urgency_update(Client& client);
-    void publish_urgency(Client& client);
+    void request_urgency_update(Client const& client);
+    void publish_urgency(Client const& client);
 
-    Monitor& focused_monitor() { return monitors_[focused_monitor_]; }
     Monitor const& focused_monitor() const { return monitors_[focused_monitor_]; }
     size_t monitor_index(Monitor const& m) const
     {
@@ -418,11 +344,10 @@ private:
     }
     size_t wrap_monitor_index(int idx) const;
     void warp_to_monitor(Monitor const& monitor);
-    void focus_or_fallback(Monitor& monitor, bool record_user_time = true);
+    void focus_or_fallback(Monitor const& monitor, bool record_user_time = true);
     void repair_focus_after_visibility_change(size_t preferred_monitor, bool record_user_time = false);
     focus::Context focus_context(size_t monitor) const;
-    Monitor* monitor_at_point(int16_t x, int16_t y);
-    bool is_floating_window(xcb_window_t window) const;
+    Monitor const* monitor_at_point(int16_t x, int16_t y);
     std::optional<uint32_t> get_raw_window_desktop(xcb_window_t window) const;
     std::optional<uint32_t> get_window_desktop(xcb_window_t window) const;
     bool is_sticky_desktop(xcb_window_t window) const;
@@ -466,11 +391,10 @@ private:
     void apply_stacking();
     bool is_override_redirect_window(xcb_window_t window) const;
     bool is_workspace_visible(size_t monitor_idx, size_t workspace_idx) const;
-    void update_floating_monitor_for_geometry(Client& client);
-    void update_floating_monitor_for_geometry(Client& client, Geometry const& geometry);
+    void update_floating_monitor_for_geometry(Client const& client);
+    void update_floating_monitor_for_geometry(Client const& client, Geometry const& geometry);
     uint32_t border_width_for_client(Client const& client) const;
     uint32_t border_color_for_client(Client const& client) const;
-    bool should_apply_focus_border(Client const& client) const;
     void send_configure_notify(xcb_window_t window, Geometry const& geom, uint16_t border_width);
     void request_configure_notify(Client const& client);
     void publish_configure_notify(Client const& client);
@@ -503,9 +427,9 @@ private:
     bool is_focus_candidate(Client const& client) const;
     void send_wm_take_focus(Client const& client, uint32_t timestamp);
     void send_wm_ping(xcb_window_t window, uint32_t timestamp);
-    void send_sync_request(Client& client, uint32_t timestamp);
-    void update_sync_state(Client& client);
-    void update_fullscreen_monitor_state(Client& client);
+    void send_sync_request(Client const& client, uint32_t timestamp);
+    void update_sync_state(Client const& client);
+    void update_fullscreen_monitor_state(Client const& client);
     void update_focused_monitor_at_point(int16_t x, int16_t y);
     std::string get_window_name(xcb_window_t window);
     std::pair<std::string, std::string> get_wm_class(xcb_window_t window);
@@ -518,33 +442,8 @@ private:
 
     // Placement ownership: normal relocation and kind changes maintain tiled
     // membership, remembered focus, desktop publication and completion effects.
-    enum class RelocationGeometry
-    {
-        Preserve,
-        CenterOnMonitorChange
-    };
-    bool relocate_client(
-        Client& client,
-        size_t monitor,
-        size_t workspace,
-        RelocationGeometry geometry = RelocationGeometry::Preserve,
-        std::optional<size_t> tile_index = std::nullopt
-    );
-    void change_client_state(Client& client, ClientState state, std::optional<size_t> tile_index = std::nullopt);
-    void attach_tile(Client const& client, std::optional<size_t> index = std::nullopt);
-    std::optional<SavedTilePos> detach_tile(Client const& client);
-    // Raw rebinding is only for placement internals and hotplug's already-rebuilt
-    // workspace graph. Registration initializes placement before adding membership.
-    void assign_window_workspace(Client& client, size_t monitor, size_t workspace);
-
-    // Off-screen visibility management
-    void hide_window(Client& client);
-    void show_window(Client& client);
+    using RelocationGeometry = State::RelocationGeometry;
     void flush_and_drain_crossing();
-
-    // Derived visibility: sync physical visibility to match policy state
-
-    // Funnel: refresh fullscreen ownership, sync visibility, then re-tile.
 
     void setup_ewmh();
     void update_ewmh_desktops();
@@ -554,13 +453,12 @@ private:
     void publish_current_desktop();
     uint32_t get_ewmh_desktop_index(size_t monitor_idx, size_t workspace_idx) const;
     void switch_to_ewmh_desktop(uint32_t desktop);
-    void clear_all_borders();
     xcb_atom_t intern_atom(char const* name) const;
 
     std::string handle_notification_attention(xcb_window_t window);
 
     // Scratchpad operations
-    std::optional<Geometry> detach_tiled_to_floating(Client& client);
+    std::optional<Geometry> detach_tiled_to_floating(Client const& client);
     void toggle_named_scratchpad(std::string_view name);
     void stash_to_scratchpad(xcb_window_t window);
     void cycle_scratchpad_pool();
@@ -569,11 +467,10 @@ private:
     void hide_scratchpad_window(xcb_window_t window);
     void show_named_scratchpad_window(xcb_window_t window, ScratchpadConfig const& config);
     void show_pool_scratchpad_window(xcb_window_t window);
-    void release_scratchpad_window(xcb_window_t window);
-    void finalize_scratchpad_claim(xcb_window_t window, NamedScratchpadState& state, std::string_view name);
+    void finalize_scratchpad_claim(xcb_window_t window, NamedScratchpadState const& state, std::string_view name);
     void init_scratchpad_state();
     ScratchpadConfig const* find_scratchpad_config(std::string_view name) const;
-    NamedScratchpadState* find_named_scratchpad(std::string_view name);
+    NamedScratchpadState const* find_named_scratchpad(std::string_view name);
     xcb_window_t find_visible_pool_window() const;
 
     // Restart serialization atoms for scratchpad

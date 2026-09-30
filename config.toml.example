@@ -234,10 +234,12 @@ keys = ["1", "2", "3", "4", "5", "6", "7", "8", "9", "0"]
 # or direct-mapped popup types. geometry and center affect floating clients.
 # Geometry x/y must be within -32768..32767 and width/height within 1..65535.
 # Explicit false state overrides and borderless apply on initial mapping as well
-# as property reevaluation and config reload. Title/class changes only reapply
-# rules when their effective actions change, preserving user placement otherwise.
-# Reload reapplies matching rules to the current state; removing a rule does not
-# undo its earlier effects, and unspecified state is preserved.
+# as changed metadata matches and config reload. Rules are actions, not persistent
+# constraints: later supported application/user requests can replace them.
+# Title/class/type/transient changes apply a match only when its actions change;
+# losing a match leaves its effects in place. Type/transient defaults cannot
+# overwrite explicit choices. Reload reapplies all matching actions, including
+# unchanged geometry/placement. Removing a rule does not undo earlier actions.
 
 # Example: float and center dialog windows
 # [[rules]]

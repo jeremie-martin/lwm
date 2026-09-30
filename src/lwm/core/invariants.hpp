@@ -39,7 +39,7 @@ inline std::optional<Violation> validate(
                 return Violation{ "Fullscreen owner is unmanaged", monitor.fullscreen_owner };
             auto const& owner = it->second;
             if ((owner.kind() != Client::Kind::Tiled && owner.kind() != Client::Kind::Floating) || !owner.fullscreen
-                || owner.iconic || owner.hidden || owner.monitor != m
+                || owner.iconic || owner.presentation.hidden || owner.monitor != m
                 || (!owner.sticky && owner.workspace != monitor.current_workspace))
                 return Violation{ "Fullscreen owner is ineligible", owner.id };
         }
@@ -91,7 +91,7 @@ inline std::optional<Violation> validate(
         auto const& client = it->second;
         if (client.kind() != Client::Kind::Tiled && client.kind() != Client::Kind::Floating)
             return Violation{ "Active window is a dock or desktop", active_window };
-        if (client.iconic || client.hidden)
+        if (client.iconic || client.presentation.hidden)
             return Violation{ "Active window is iconic or hidden", active_window };
     }
     return std::nullopt;
