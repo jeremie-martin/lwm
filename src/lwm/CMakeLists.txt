@@ -32,6 +32,7 @@ target_include_directories(liblwm PUBLIC
 )
 
 target_link_libraries(liblwm PUBLIC
+    PkgConfig::SYSTEMD
     PkgConfig::XCB
     tomlplusplus::tomlplusplus
     quill::quill

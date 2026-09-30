@@ -7,6 +7,7 @@
 #include <filesystem>
 #include <fstream>
 #include <string>
+#include <thread>
 
 using namespace lwm::test;
 
@@ -18,7 +19,7 @@ TEST_CASE("Integration: failed exec is reported at critical level and recovers",
 
     X11Connection connection;
     REQUIRE(connection.ok());
-    LwmProcess wm(environment.display(), {}, { "--log-level", "critical" });
+    LwmProcess wm(environment.display(), { }, { "--log-level", "critical" });
     REQUIRE(wm.running());
     REQUIRE(wait_for_wm_ready(connection, std::chrono::seconds(2)));
 
@@ -39,17 +40,13 @@ TEST_CASE("Integration: failed exec is reported at critical level and recovers",
     REQUIRE(ping->stdout_text.find("pong") != std::string::npos);
 }
 
-TEST_CASE(
-    "Integration: saturated logging keeps IPC, failed exec, and restart responsive",
-    "[integration][logging][restart]"
-)
+TEST_CASE("Integration: standard logging survives failed exec and real restart", "[integration][logging][restart]")
 {
     auto& environment = X11TestEnvironment::instance();
     if (!environment.available())
         SKIP("Xvfb not available");
     X11Connection connection;
     REQUIRE(connection.ok());
-    // Never drain the private journal socket: startup and workspace trace records fill it.
     LwmProcess wm(environment.display(), { }, { "--log-level", "trace" });
     REQUIRE(wait_for_wm_ready(connection, std::chrono::seconds(2)));
     auto command = [&](std::vector<std::string> args)
@@ -63,7 +60,7 @@ TEST_CASE(
     };
     for (int i = 0; i < 30; ++i) command({ "workspace", "switch", std::to_string(i % 2) });
     auto first = nlohmann::json::parse(command({ "log", "status" }));
-    REQUIRE(first["delivery_drops"].get<uint64_t>() > 0);
+    REQUIRE(first["active"] == true);
     command({ "exec", "/definitely/missing/lwm-binary" });
     REQUIRE(wait_for_condition(
         [&]
@@ -75,7 +72,7 @@ TEST_CASE(
     ));
     auto recovered = nlohmann::json::parse(command({ "log", "status" }));
     REQUIRE(recovered["instance"] == first["instance"]);
-    REQUIRE(recovered["delivery_drops"].get<uint64_t>() >= first["delivery_drops"].get<uint64_t>());
+    REQUIRE(recovered["backend_notifications"] == 0);
     command({ "restart" });
     REQUIRE(wait_for_condition(
         [&]
@@ -90,4 +87,82 @@ TEST_CASE(
     auto start = std::chrono::steady_clock::now();
     wm.stop();
     REQUIRE(std::chrono::steady_clock::now() - start < std::chrono::seconds(1));
+}
+
+TEST_CASE(
+    "Integration: blocked console leaves the event loop and exec restart responsive",
+    "[integration][logging][restart]"
+)
+{
+    auto& environment = X11TestEnvironment::instance();
+    if (!environment.available())
+        SKIP("Xvfb not available");
+    X11Connection connection;
+    REQUIRE(connection.ok());
+    struct Pipe
+    {
+        int fds[2]{ -1, -1 };
+        ~Pipe()
+        {
+            for (int fd : fds)
+                if (fd >= 0)
+                    close(fd);
+        }
+    } pipe;
+    REQUIRE(pipe2(pipe.fds, O_CLOEXEC | O_NONBLOCK) == 0);
+    std::string fill(4096, 'x');
+    while (write(pipe.fds[1], fill.data(), fill.size()) > 0)
+    { }
+    REQUIRE(errno == EAGAIN);
+    REQUIRE(fcntl(pipe.fds[1], F_SETFL, fcntl(pipe.fds[1], F_GETFL) & ~O_NONBLOCK) == 0);
+    LwmProcess wm(environment.display(), { }, { "--log-level", "trace" }, pipe.fds[1]);
+    REQUIRE(wait_for_wm_ready(connection, std::chrono::seconds(2)));
+    auto command = [&](std::vector<std::string> args)
+    {
+        auto started = std::chrono::steady_clock::now();
+        auto result = run_lwmctl(wm, args);
+        REQUIRE(result.has_value());
+        REQUIRE(result->exit_code == 0);
+        REQUIRE(std::chrono::steady_clock::now() - started < std::chrono::seconds(1));
+        return result->stdout_text;
+    };
+    auto before = nlohmann::json::parse(command({ "state" }))["instance"];
+    for (int i = 0; i < 200; ++i) command({ "workspace", "switch", std::to_string(i % 2) });
+    REQUIRE(command({ "ping" }).find("pong") != std::string::npos);
+    auto logging_instance = nlohmann::json::parse(command({ "log", "status" }))["instance"];
+    command({ "exec", "/definitely/missing/lwm-binary" });
+    REQUIRE(wait_for_condition(
+        [&]
+        {
+            auto result = run_lwmctl(wm, { "state" });
+            return result && result->exit_code == 0 && nlohmann::json::parse(result->stdout_text)["instance"] != before;
+        },
+        std::chrono::seconds(2)
+    ));
+    REQUIRE(nlohmann::json::parse(command({ "log", "status" }))["instance"] == logging_instance);
+    before = nlohmann::json::parse(command({ "state" }))["instance"];
+    command({ "restart" });
+    REQUIRE(wait_for_condition(
+        [&]
+        {
+            auto result = run_lwmctl(wm, { "state" });
+            return result && result->exit_code == 0 && nlohmann::json::parse(result->stdout_text)["instance"] != before;
+        },
+        std::chrono::seconds(2)
+    ));
+    REQUIRE(command({ "ping" }).find("pong") != std::string::npos);
+    // Only normal shutdown drains the logger. Resume the reader for that step.
+    std::jthread reader(
+        [&](std::stop_token stop)
+        {
+            char buffer[8192];
+            while (!stop.stop_requested())
+            {
+                while (read(pipe.fds[0], buffer, sizeof(buffer)) > 0)
+                { }
+                std::this_thread::sleep_for(std::chrono::milliseconds(1));
+            }
+        }
+    );
+    wm.stop();
 }

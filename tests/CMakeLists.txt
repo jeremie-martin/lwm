@@ -16,6 +16,7 @@ FetchContent_MakeAvailable(Catch2 nlohmann_json)
 
 add_executable(lwm_log_probe log_probe.cpp)
 target_link_libraries(lwm_log_probe PRIVATE liblwm)
+target_link_options(lwm_log_probe PRIVATE "-Wl,--export-dynamic-symbol=sendmsg")
 target_include_directories(lwm_log_probe PRIVATE ${CMAKE_SOURCE_DIR}/src)
 
 add_executable(lwm_logging_tests

@@ -1,5 +1,4 @@
 #pragma once
-#include "log_collector.hpp"
 
 #include <array>
 #include <catch2/catch_test_macros.hpp>
@@ -877,12 +876,12 @@ public:
     explicit LwmProcess(
         std::string display,
         std::string config_contents = {},
-        std::vector<std::string> startup_args = {}
+        std::vector<std::string> startup_args = {},
+        int stderr_fd = -1
     )
         : display_(std::move(display))
         , config_home_(make_temp_dir())
         , runtime_dir_(make_temp_dir())
-        , log_collector_(runtime_dir_ + "/journal")
     {
         std::filesystem::path executable = find_test_executable_path("lwm");
         if (executable.empty())
@@ -894,14 +893,13 @@ public:
         pid_ = fork();
         if (pid_ == 0)
         {
-            int diagnostics =
-                open((std::filesystem::path(runtime_dir_) / "stderr").c_str(), O_WRONLY | O_CREAT | O_TRUNC, 0600);
+            int diagnostics = stderr_fd >= 0 ? dup(stderr_fd)
+                : open((std::filesystem::path(runtime_dir_) / "stderr").c_str(), O_WRONLY | O_CREAT | O_TRUNC, 0600);
             if (diagnostics >= 0)
             {
                 dup2(diagnostics, STDERR_FILENO);
                 close(diagnostics);
             }
-            setenv("LWM_LOG_SOCKET", log_collector_.path.c_str(), 1);
             unsetenv("LWM_SOCKET");
             if (!display_.empty())
                 setenv("DISPLAY", display_.c_str(), 1);
@@ -913,6 +911,7 @@ public:
             std::vector<std::string> owned_args;
             owned_args.reserve(startup_args.size() + 1);
             owned_args.push_back(executable.string());
+            owned_args.insert(owned_args.end(), { "--log-target", "stderr" });
             owned_args.insert(owned_args.end(), startup_args.begin(), startup_args.end());
             std::vector<char*> argv;
             argv.reserve(owned_args.size() + 1);
@@ -948,7 +947,6 @@ public:
         , display_(std::move(other.display_))
         , config_home_(std::move(other.config_home_))
         , runtime_dir_(std::move(other.runtime_dir_))
-        , log_collector_(std::move(other.log_collector_))
     {
         other.pid_ = -1;
         other.config_home_.clear();
@@ -977,7 +975,6 @@ public:
         display_ = std::move(other.display_);
         config_home_ = std::move(other.config_home_);
         runtime_dir_ = std::move(other.runtime_dir_);
-        log_collector_ = std::move(other.log_collector_);
         other.pid_ = -1;
         other.config_home_.clear();
         other.runtime_dir_.clear();
@@ -993,7 +990,7 @@ public:
     }
     std::string diagnostics() const
     {
-        return log_collector_.diagnostics() + read_text_file(std::filesystem::path(runtime_dir_) / "stderr");
+        return read_text_file(std::filesystem::path(runtime_dir_) / "stderr");
     }
     pid_t pid() const { return pid_; }
     std::filesystem::path config_path() const { return std::filesystem::path(config_home_) / "lwm" / "config.toml"; }
@@ -1025,7 +1022,6 @@ private:
     std::string display_;
     std::string config_home_;
     std::string runtime_dir_;
-    LogCollector log_collector_;
 };
 
 // Only missing optional infrastructure may skip; a broken WM must fail.

@@ -15,7 +15,7 @@ Required tools and libraries:
 
 - CMake 3.20 or newer
 - Git and a C++23 compiler
-- `pkg-config`
+- `pkg-config` and the libsystemd development library
 - X11/XCB modules `xcb`, `xcb-keysyms`, `xcb-randr`, `xcb-ewmh`, `xcb-icccm`,
   `xcb-sync`, and `x11`
 - `xcb-xtest` and Xvfb for the full test suite
@@ -27,13 +27,13 @@ a test-only dependency used to validate IPC independently of its implementation.
 Arch Linux:
 
 ```sh
-sudo pacman -S --needed cmake gcc git pkgconf libx11 libxcb xcb-util-keysyms xcb-util-wm xorg-server-xvfb
+sudo pacman -S --needed cmake gcc git pkgconf libx11 libxcb systemd-libs xcb-util-keysyms xcb-util-wm xorg-server-xvfb
 ```
 
 Debian/Ubuntu:
 
 ```sh
-sudo apt install cmake g++ git pkg-config libx11-dev libxcb1-dev \
+sudo apt install cmake g++ git pkg-config libsystemd-dev libx11-dev libxcb1-dev \
   libxcb-keysyms1-dev libxcb-randr0-dev libxcb-ewmh-dev \
   libxcb-icccm4-dev libxcb-sync-dev libxcb-xtest0-dev xvfb
 ```
@@ -160,18 +160,23 @@ pipe, use `--log-target stderr` and `--log-color auto|always|never`. For example
 lwm --log-target stderr --log-level debug 2>&1 | tee lwm.log
 ```
 
-Direct regular-file redirection is rejected for the stderr target: filesystem
-writes can block even with `O_NONBLOCK`. Journal storage, retention, and access
-are managed by the host's journal configuration. LWM no longer creates private
-rotating files; `--log-file` and `--no-log-file` report a migration error. Existing
-log files are left untouched.
+The stderr target supports terminals, pipes, and ordinary file redirection.
+Journal storage, retention, and access are managed by the host's journal
+configuration. LWM does not create private rotating files; `--log-file` and
+`--no-log-file` report a migration error. Existing log files are left untouched.
 
-Logging is best effort. A full queue or unavailable/slow destination drops
-records rather than waiting for the consumer. `lwmctl log status` distinguishes
-queue overflow from delivery failures; a successful send means the local socket
-accepted the record, not that it was persisted. Missing journal service does not
-prevent startup. See [IPC.md](IPC.md#logging-status) for counters and
-[ARCHITECTURE.md](ARCHITECTURE.md#logging) for delivery and lifecycle details.
+Logging is asynchronous and best effort. A bounded queue drops new records when
+full, keeping ordinary WM operations independent of a slow destination. **Normal
+shutdown drains the worker and can wait for a stalled journal or stderr reader.**
+Exec restart does not drain and may lose queued diagnostics. Use the default
+journal for normal desktop operation; keep readers of
+explicit diagnostic pipes running. No delivery or persistence guarantee is made.
+
+`lwmctl log status` reports configuration and Quill's backend notifications,
+including overflow summaries and output errors. It does not count every lost
+record; libsystemd silently ignores an absent journal. See
+[IPC.md](IPC.md#logging-status) for the status schema and
+[ARCHITECTURE.md](ARCHITECTURE.md#logging) for the implementation.
 
 To try LWM without replacing your current window manager, use the
 [nested Xephyr preview](CONTRIBUTING.md#nested-preview).

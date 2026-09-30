@@ -1,10 +1,10 @@
 #include "cli.hpp"
+#include "log_collector.hpp"
 #include "lwm/core/log.hpp"
 #include "x11_test_harness.hpp"
 #include <catch2/catch_test_macros.hpp>
 #include <fstream>
 #include <nlohmann/json.hpp>
-#include <termios.h>
 
 namespace fs = std::filesystem;
 using namespace lwm::test;
@@ -17,17 +17,12 @@ std::vector<char*> mutable_argv(std::vector<std::string>& values)
     for (auto& value : values) result.push_back(value.data());
     return result;
 }
-CommandResult run_lwm(
-    std::vector<std::string> args,
-    bool clear_display = false,
-    std::vector<std::pair<std::string, std::string>> env = { }
-)
+CommandResult run_lwm(std::vector<std::string> args, bool clear_display = false)
 {
-    if (clear_display)
-        env.emplace_back("DISPLAY", "");
-    if (env.empty())
-        env.emplace_back("LWM_LOG_SOCKET", "/nonexistent/lwm-test-journal");
-    auto result = run_command(LWM_BINARY_PATH, args, env);
+    if (std::find(args.begin(), args.end(), "--log-target") == args.end())
+        args.insert(args.end(), { "--log-target", "stderr" });
+    auto result = run_command(LWM_BINARY_PATH, args, clear_display
+        ? std::vector<std::pair<std::string, std::string>>{{"DISPLAY", ""}} : std::vector<std::pair<std::string, std::string>>{});
     REQUIRE(result.has_value());
     return *result;
 }
@@ -37,7 +32,7 @@ CommandResult probe(std::vector<std::string> args, std::string const& socket = "
         LWM_LOG_PROBE_PATH,
         args,
         {
-            { "LWM_LOG_SOCKET", socket }
+            { "LWM_TEST_JOURNAL", socket }
     }
     );
     REQUIRE(result.has_value());
@@ -58,10 +53,10 @@ struct Collector
 };
 }
 
-TEST_CASE("Journal preserves levels and source metadata and skips disabled arguments", "[logging]")
+TEST_CASE("Standard journal sink preserves levels and source metadata", "[logging]")
 {
     Collector c;
-    auto result = probe({ }, c.log.path);
+    auto result = probe({ "--journal" }, c.log.path);
     auto records = c.log.drain();
     REQUIRE(records.size() == 4);
     REQUIRE(records[0].at("MESSAGE") == "info");
@@ -69,76 +64,69 @@ TEST_CASE("Journal preserves levels and source metadata and skips disabled argum
     REQUIRE(records[1].at("PRIORITY") == "4");
     REQUIRE(records[2].at("PRIORITY") == "3");
     REQUIRE(records[3].at("PRIORITY") == "2");
-    REQUIRE(records[0].at("CODE_FILE").ends_with("log_probe.cpp"));
+    REQUIRE(records[0].at("CODE_FILE") == "log_probe.cpp");
     REQUIRE(std::stoi(records[0].at("CODE_LINE")) > 0);
     REQUIRE(records[0].at("CODE_FUNC") == "main");
     REQUIRE(records[0].at("SYSLOG_IDENTIFIER") == "lwm");
     REQUIRE(result.stdout_text.starts_with("evaluated=0"));
-    REQUIRE(status(result)["delivery_drops"] == 0);
-    REQUIRE(records[0].at("LWM_LOG_INSTANCE") == status(result)["instance"].get<std::string>());
+    REQUIRE(status(result)["backend_notifications"] == 0);
 }
 TEST_CASE("Trace and off gates retain disabled argument semantics", "[logging]")
 {
-    auto trace = probe({ "--stderr", "--trace" });
+    auto trace = probe({ "--trace" });
     REQUIRE(trace.stdout_text.starts_with("evaluated=1"));
     REQUIRE(trace.stderr_text.find("trace") != std::string::npos);
-    auto off = probe({ "--stderr", "--off" });
+    auto off = probe({ "--off" });
     REQUIRE(off.stdout_text.starts_with("evaluated=0"));
     REQUIRE(off.stderr_text.empty());
+    REQUIRE(status(off)["active"] == false);
 }
-TEST_CASE("Stderr color is explicit and terminal control bytes are escaped", "[logging]")
-{
-    auto plain = probe({ "--stderr" });
-    REQUIRE(plain.stderr_text.find("\033[") == std::string::npos);
-    auto colored = probe({ "--stderr", "--color" });
-    REQUIRE(colored.stderr_text.find("\033[") != std::string::npos);
-    auto strings = probe({ "--stderr", "strings" });
-    REQUIRE(strings.stderr_text.find("line one\\x0aPRIORITY=0") != std::string::npos);
-}
-TEST_CASE("Arguments are copied, bounded, and cannot inject journal fields", "[logging]")
+TEST_CASE("Standard sinks copy arguments and escape control bytes", "[logging]")
 {
     Collector c;
-    auto result = probe({ "strings" }, c.log.path);
+    probe({ "--journal", "strings" }, c.log.path);
     auto records = c.log.drain();
     REQUIRE(records.size() == 4);
     REQUIRE(records[0].at("MESSAGE") == "owned-before-mutation");
-    REQUIRE(records[1].at("MESSAGE").find("\nPRIORITY=0\n") != std::string::npos);
-    REQUIRE(records[1].at("MESSAGE").find('\0') != std::string::npos);
-    REQUIRE(records[1].at("PRIORITY") == "6");
-    REQUIRE(records[2].at("MESSAGE").size() == 1024);
-    REQUIRE(records[2].at("MESSAGE").ends_with("...[truncated]"));
-    REQUIRE(records[3].at("MESSAGE").ends_with("...[truncated]"));
-    REQUIRE(status(result)["truncations"] == 2);
+    REQUIRE(records[1].at("MESSAGE") == "view-before-mutation");
+    REQUIRE(records[2].at("PRIORITY") == "6");
+    REQUIRE(records[2].at("MESSAGE").find("\nPRIORITY=0\n") != std::string::npos);
+    REQUIRE(records[2].at("MESSAGE").find("\\x00") != std::string::npos);
+    REQUIRE(records[3].at("MESSAGE") == std::string(8192, 'x'));
+    auto console = probe({ "strings" });
+    REQUIRE(console.stderr_text.find("] PRIORITY=0\n") != std::string::npos);
+    REQUIRE(console.stderr_text.find("view-before-mutation") != std::string::npos);
 }
-TEST_CASE("An absent journal counts each failed delivery", "[logging]")
+TEST_CASE("Console color respects startup options", "[logging]")
 {
-    auto result = probe({ });
-    REQUIRE(status(result)["queue_drops"] == 0);
-    REQUIRE(status(result)["delivery_drops"] == 4);
-    REQUIRE(status(result)["last_delivery_error"] == ENOENT);
+    REQUIRE(probe({ "--plain" }).stderr_text.find("\033[") == std::string::npos);
+    REQUIRE(probe({ "--color" }).stderr_text.find("\033[") != std::string::npos);
 }
-TEST_CASE("A full journal queue does not prevent shutdown and losses balance", "[logging]")
+TEST_CASE("Absent journal is best effort and does not prevent shutdown", "[logging]")
 {
-    Collector c;
-    auto started = std::chrono::steady_clock::now();
-    auto result = probe({ "burst" }, c.log.path);
-    REQUIRE(std::chrono::steady_clock::now() - started < std::chrono::seconds(1));
-    auto state = status(result);
-    auto records = c.log.drain();
-    REQUIRE(state["queue_drops"].get<uint64_t>() > 0);
-    REQUIRE(state["delivery_drops"].get<uint64_t>() > 0);
-    REQUIRE(state["queue_drops"].get<uint64_t>() + state["delivery_drops"].get<uint64_t>() + records.size() == 100000);
+    auto result = probe({ "--journal" });
+    // libsystemd deliberately treats ENOENT as success; do not invent a delivery counter.
+    REQUIRE(status(result)["backend_notifications"] == 0);
 }
-TEST_CASE("Failed exec restores logging with the same instance and counters", "[logging]")
+TEST_CASE("Shutdown drains records and disables subsequent argument evaluation", "[logging]")
 {
-    Collector c;
-    auto result = probe({ "restore" }, c.log.path);
-    auto records = c.log.drain();
-    REQUIRE(records.size() == 2);
-    REQUIRE(records[0].at("MESSAGE") == "before exec");
-    REQUIRE(records[1].at("MESSAGE") == "after failed exec");
-    REQUIRE(records[0].at("LWM_LOG_INSTANCE") == records[1].at("LWM_LOG_INSTANCE"));
-    REQUIRE(status(result)["delivery_drops"] == 0);
+    auto result = probe({ "stopped" });
+    REQUIRE(result.stderr_text.find("before shutdown") != std::string::npos);
+    REQUIRE(result.stderr_text.find("disabled while stopped") == std::string::npos);
+}
+TEST_CASE("Backend formatting errors and oversized records do not prevent subsequent logging", "[logging]")
+{
+    for (auto mode : { "backend-error", "oversized" })
+    {
+        auto result = probe({ mode });
+        REQUIRE(status(result)["backend_notifications"].get<int>() > 0);
+        REQUIRE_FALSE(status(result)["last_backend_notification"].get<std::string>().empty());
+        REQUIRE(result.stderr_text.find("after ") != std::string::npos);
+    }
+}
+TEST_CASE("Recurring warnings include Quill's suppression count", "[logging]")
+{
+    REQUIRE(probe({ "rate-limit" }).stderr_text.find("(19x)") != std::string::npos);
 }
 
 TEST_CASE("CLI preserves one config path and restart argv", "[logging][cli]")
@@ -286,17 +274,8 @@ TEST_CASE("CLI rejects duplicate and conflicting logging options", "[logging][cl
     REQUIRE(parsed->log.color == lwm::log::ColorMode::Never);
 }
 
-TEST_CASE("Real startup binary reports logging initialization errors", "[logging][cli]")
+TEST_CASE("Real startup rejects unknown options", "[logging][cli]")
 {
-    auto result = run_lwm(
-        {
-    },
-        false,
-        { { "LWM_LOG_SOCKET", "relative" } }
-    );
-    REQUIRE(result.exit_code == 1);
-    REQUIRE(result.stderr_text.find("logging initialization failed") != std::string::npos);
-
     auto invalid = run_lwm({ "--not-a-startup-option" });
     REQUIRE(invalid.exit_code == 2);
     REQUIRE(invalid.stderr_text.find("unknown option") != std::string::npos);
@@ -354,18 +333,18 @@ struct ChildProbe
     fs::path directory = make_temp_directory();
     pid_t pid = -1;
     int reader = -1;
-    ChildProbe(std::string const& mode, std::string const& socket, std::string const& stderr_kind)
+    ChildProbe(std::string const& mode, std::string const& destination, std::string const& socket = "")
     {
         int output = open((directory / "stdout").c_str(), O_CREAT | O_WRONLY | O_CLOEXEC, 0600);
         REQUIRE(output >= 0);
-        int error = -1;
-        if (stderr_kind == "full" || stderr_kind == "closed")
+        int error;
+        if (destination == "full" || destination == "closed")
         {
             int pipefd[2];
             REQUIRE(pipe2(pipefd, O_CLOEXEC | O_NONBLOCK) == 0);
             reader = pipefd[0];
             error = pipefd[1];
-            if (stderr_kind == "full")
+            if (destination == "full")
             {
                 std::string fill(4096, 'x');
                 while (write(error, fill.data(), fill.size()) > 0)
@@ -379,23 +358,8 @@ struct ChildProbe
             }
             REQUIRE(fcntl(error, F_SETFL, fcntl(error, F_GETFL) & ~O_NONBLOCK) == 0);
         }
-        else if (stderr_kind == "pty")
-        {
-            reader = posix_openpt(O_RDWR | O_NOCTTY | O_NONBLOCK | O_CLOEXEC);
-            REQUIRE(reader >= 0);
-            REQUIRE(grantpt(reader) == 0);
-            REQUIRE(unlockpt(reader) == 0);
-            error = open(ptsname(reader), O_WRONLY | O_NOCTTY | O_CLOEXEC);
-            REQUIRE(error >= 0);
-            termios settings{ };
-            REQUIRE(tcgetattr(error, &settings) == 0);
-            cfmakeraw(&settings);
-            REQUIRE(tcsetattr(error, TCSANOW, &settings) == 0);
-        }
-        else if (stderr_kind == "file")
-            error = open((directory / "stderr").c_str(), O_CREAT | O_WRONLY | O_CLOEXEC, 0600);
         else
-            error = open("/dev/null", O_WRONLY | O_CLOEXEC);
+            error = open((directory / "stderr").c_str(), O_CREAT | O_WRONLY | O_CLOEXEC, 0600);
         REQUIRE(error >= 0);
         pid = fork();
         REQUIRE(pid >= 0);
@@ -407,11 +371,14 @@ struct ChildProbe
             close(error);
             if (reader >= 0)
                 close(reader);
-            setenv("LWM_LOG_SOCKET", socket.c_str(), 1);
-            if (stderr_kind == "journal")
-                execl(LWM_LOG_PROBE_PATH, LWM_LOG_PROBE_PATH, mode.c_str(), nullptr);
-            else
-                execl(LWM_LOG_PROBE_PATH, LWM_LOG_PROBE_PATH, "--stderr", "--plain", mode.c_str(), nullptr);
+            setenv("LWM_TEST_JOURNAL", socket.c_str(), 1);
+            execl(
+                LWM_LOG_PROBE_PATH,
+                LWM_LOG_PROBE_PATH,
+                destination == "journal" ? "--journal" : "--plain",
+                mode.c_str(),
+                nullptr
+            );
             _exit(127);
         }
         close(output);
@@ -428,140 +395,103 @@ struct ChildProbe
             close(reader);
         fs::remove_all(directory);
     }
-    CommandResult finish()
+    std::string output() { return read_text_file(directory / "stdout"); }
+    CommandResult finish(std::function<void()> drain = [] { })
     {
         int exit_status = 0;
-        bool finished =
-            wait_for_condition([&] { return waitpid(pid, &exit_status, WNOHANG) == pid; }, std::chrono::seconds(1));
-        REQUIRE(finished);
+        REQUIRE(wait_for_condition(
+            [&]
+            {
+                drain();
+                return waitpid(pid, &exit_status, WNOHANG) == pid;
+            },
+            std::chrono::seconds(3)
+        ));
         pid = -1;
         REQUIRE(WIFEXITED(exit_status));
-        return { WEXITSTATUS(exit_status), read_text_file(directory / "stdout"), { } };
+        return { WEXITSTATUS(exit_status), output(), read_text_file(directory / "stderr") };
     }
 };
 }
-TEST_CASE("Full and closed stderr pipes cannot block or kill the logger", "[logging]")
+TEST_CASE("Standard sinks isolate submission from backpressure and drain when the reader resumes", "[logging]")
 {
-    for (std::string kind : { "full", "closed" })
+    for (std::string target : { "full", "journal" })
     {
-        ChildProbe child("levels", "", kind);
+        CAPTURE(target);
+        Collector c;
+        ChildProbe child("burst", target, c.log.path);
+        // All 100,000 calls must finish while the destination remains unread.
+        REQUIRE(wait_for_condition(
+            [&] { return child.output().find("submitted") != std::string::npos; },
+            std::chrono::seconds(1)
+        ));
+        std::this_thread::sleep_for(std::chrono::milliseconds(200));
+        siginfo_t info{ };
+        REQUIRE(waitid(P_PID, child.pid, &info, WEXITED | WNOHANG | WNOWAIT) == 0);
+        REQUIRE(info.si_pid == 0); // Standard shutdown waits for delivery.
+        auto result = child.finish(
+            [&]
+            {
+                if (target == "journal")
+                    c.log.drain();
+                else
+                {
+                    char data[8192];
+                    while (read(child.reader, data, sizeof(data)) > 0)
+                    { }
+                }
+            }
+        );
+        REQUIRE(result.exit_code == 0);
+        REQUIRE(status(result)["backend_notifications"].get<int>() > 0);
+        REQUIRE(status(result)["last_backend_notification"].get<std::string>().find("ropped") != std::string::npos);
+    }
+}
+TEST_CASE("A closed console pipe is reported without terminating the WM", "[logging]")
+{
+    ChildProbe child("levels", "closed");
+    auto result = child.finish();
+    REQUIRE(result.exit_code == 0);
+    REQUIRE(status(result)["backend_notifications"].get<int>() > 0);
+}
+TEST_CASE("Ordinary stderr file redirection works", "[logging]")
+{
+    ChildProbe child("levels", "file");
+    auto result = child.finish();
+    REQUIRE(result.exit_code == 0);
+    REQUIRE(result.stderr_text.find("CRITICAL") != std::string::npos);
+    REQUIRE(status(result)["backend_notifications"] == 0);
+}
+
+TEST_CASE("The standard journal transport does not leak its socket through exec", "[logging]")
+{
+    Collector c;
+    probe({ "--journal", "cloexec" }, c.log.path);
+    REQUIRE(c.log.drain().size() == 4);
+}
+
+TEST_CASE("Exec replaces a blocked worker without waiting for the destination", "[logging]")
+{
+    for (std::string target : { "full", "journal" })
+    {
+        Collector c;
+        ChildProbe child("exec-blocked", target, c.log.path);
         auto result = child.finish();
         REQUIRE(result.exit_code == 0);
-        REQUIRE(status(result)["delivery_drops"] == 4);
-        REQUIRE(status(result)["last_delivery_error"] == (kind == "full" ? EAGAIN : EPIPE));
+        REQUIRE(result.stdout_text.find("exec replaced worker") != std::string::npos);
     }
-}
-TEST_CASE("Stderr rejects regular files with an actionable error", "[logging]")
-{
-    ChildProbe child("levels", "", "file");
-    auto result = child.finish();
-    REQUIRE(result.exit_code == 1);
-    REQUIRE(result.stdout_text.find("pipe through tee") != std::string::npos);
-}
-TEST_CASE("Logger descriptors are close-on-exec", "[logging]")
-{
-    probe({ "cloexec" });
-    probe({ "cloexec", "--stderr" });
-}
-TEST_CASE("Backend formatting failures are counted without recursive output", "[logging]")
-{
-    auto result = probe({ "backend-error", "--stderr" });
-    REQUIRE(status(result)["backend_notifications"] == 1);
-    REQUIRE_FALSE(status(result)["last_backend_notification"].get<std::string>().empty());
-    REQUIRE(result.stderr_text.find("after formatting error") != std::string::npos);
-}
-TEST_CASE("Recurring warnings include Quill's suppression count", "[logging]")
-{
-    auto result = probe({ "rate-limit", "--stderr" });
-    INFO(result.stderr_text);
-    REQUIRE(result.stderr_text.find("(19x)") != std::string::npos);
-}
-TEST_CASE("Journal delivery resumes after receiver recreation", "[logging]")
-{
-    Collector c;
-    ChildProbe child("paced", c.log.path, "journal");
-    REQUIRE(wait_for_condition([&] { return !c.log.drain().empty(); }, std::chrono::milliseconds(200)));
-    auto instance = c.log.text;
-    unlink(c.log.path.c_str());
-    std::this_thread::sleep_for(std::chrono::milliseconds(220));
-    LogCollector replacement(c.log.path);
-    std::vector<std::map<std::string, std::string>> received;
-    REQUIRE(wait_for_condition(
-        [&]
-        {
-            received = replacement.drain();
-            return !received.empty();
-        },
-        std::chrono::milliseconds(200)
-    ));
-    auto result = child.finish();
-    REQUIRE(result.exit_code == 0);
-    REQUIRE(status(result)["delivery_drops"].get<uint64_t>() > 0);
-    REQUIRE(received[0].at("LWM_LOG_INSTANCE") == status(result)["instance"].get<std::string>());
 }
 
-TEST_CASE("Partial terminal writes resume without interleaving records", "[logging]")
+#ifndef NDEBUG
+TEST_CASE("An invariant failure aborts even when diagnostic output is blocked", "[logging]")
 {
-    ChildProbe child("paced-large", "", "pty");
-    // The PTY output capacity is smaller than this burst. Resume reading after
-    // it has filled, so the sink must retain and finish a record before the next.
-    std::this_thread::sleep_for(std::chrono::milliseconds(250));
-    std::string output;
-    auto deadline = std::chrono::steady_clock::now() + std::chrono::milliseconds(500);
-    while (std::chrono::steady_clock::now() < deadline)
-    {
-        char buffer[257];
-        ssize_t count = read(child.reader, buffer, sizeof(buffer));
-        if (count > 0)
-            output.append(buffer, count);
-        else
-            std::this_thread::sleep_for(std::chrono::milliseconds(1));
-    }
-    auto result = child.finish();
-    REQUIRE(result.exit_code == 0);
-    REQUIRE(status(result)["delivery_drops"].get<uint64_t>() > 0);
-    REQUIRE(output.ends_with("END\n"));
-    size_t begin = 0;
-    size_t lines = 0;
-    while (begin < output.size())
-    {
-        auto end = output.find('\n', begin);
-        REQUIRE(end != std::string::npos);
-        auto line = output.substr(begin, end - begin);
-        REQUIRE(line.starts_with("INFO [log_probe.cpp:"));
-        REQUIRE(line.ends_with(" END"));
-        REQUIRE(line.size() < 4096);
-        REQUIRE(line.find("INFO", 1) == std::string::npos);
-        ++lines;
-        begin = end + 1;
-    }
-    REQUIRE(lines >= 2);
-    REQUIRE(lines + status(result)["delivery_drops"].get<uint64_t>() == 30);
-}
-
-TEST_CASE("A failed logger restore stays inactive and exposes its error", "[logging]")
-{
-    Collector c;
-    auto result = probe({ "failed-restore" }, c.log.path);
-    auto records = c.log.drain();
-    REQUIRE(records.size() == 1);
-    REQUIRE(records[0].at("MESSAGE") == "before failed restore");
-    REQUIRE(status(result)["active"] == false);
+    ChildProbe child("invariant", "full");
+    int status = 0;
     REQUIRE(
-        status(result)["initialization_error"].get<std::string>().find("absolute Unix socket path") != std::string::npos
+        wait_for_condition([&] { return waitpid(child.pid, &status, WNOHANG) == child.pid; }, std::chrono::seconds(3))
     );
-    REQUIRE(result.stderr_text.empty());
+    child.pid = -1;
+    REQUIRE(WIFSIGNALED(status));
+    REQUIRE(WTERMSIG(status) == SIGABRT);
 }
-
-TEST_CASE("String views, null pointers, and unterminated arrays have bounded copied representations", "[logging]")
-{
-    Collector c;
-    auto result = probe({ "boundaries" }, c.log.path);
-    auto records = c.log.drain();
-    REQUIRE(records.size() == 3);
-    REQUIRE(records[0].at("MESSAGE") == "raw|(null)|");
-    REQUIRE(records[1].at("MESSAGE").size() == 1024);
-    REQUIRE(records[1].at("MESSAGE").ends_with("...[truncated]"));
-    REQUIRE(records[2].at("MESSAGE") == "view before mutation");
-    REQUIRE(status(result)["truncations"] == 1);
-}
+#endif

@@ -94,8 +94,7 @@ allow at most 200 crossing barriers and 200 QueryTree requests. Sticky-only
 changes must not rewrite unchanged geometry. A 200-client workspace workload
 also bounds flush calls to catch completion work repeated for each configure
 notification. Startup workloads with 10 and 40 docks bound property reads to
-catch repeated workarea scans during adoption. Omit `--check` to compare an older
-binary. These are protocol-work budgets, not latency measurements; measure
+catch repeated workarea scans during adoption. Omit `--check` to record counts without enforcing budgets. These are protocol-work budgets, not latency measurements; measure
 uninstrumented Release builds separately on an otherwise idle machine.
 
 For independent IPC callers, run:
@@ -107,23 +106,30 @@ python3 tests/performance/ipc_load.py build/release/src/app/lwm --check
 This uses an owned Xvfb server and 16 concurrent callers, both normally and with
 an incomplete request already connected. All 512 pings must succeed in each
 case. Reported latency is descriptive, not a pass/fail threshold. Omit `--check`
-when comparing an older binary with the former single-client limit.
+to collect measurements without enforcing the success-count requirement.
 
 The logging comparison runs real workspace transitions with 40 clients, reports
 IPC percentiles and WM CPU, measures idle worker cost, and fills stderr to test
-backpressure. Use Release builds and an otherwise quiet machine:
+backpressure, restart acknowledgement, and actual exec completion.
+Use Release builds and an otherwise quiet machine:
 
 ```sh
 python3 tests/performance/logging_bench.py --binary build/release/src/app/lwm
-# Optional comparison against a saved pre-Quill executable:
+# Optional comparison against another saved executable:
 python3 tests/performance/logging_bench.py --binary build/release/src/app/lwm --baseline /path/to/old/lwm
+# Add --legacy-baseline only if that binary predates --log-target.
 ```
+
+The default workload sends stderr to `/dev/null`. `--target journal` measures
+the native journal path and writes to the system journal; use a disposable host
+or private mount namespace with a draining journal socket for verbose runs.
+The blocked-output case always uses a private stderr pipe.
 
 Results are JSON Lines. `--affinity WM WORKER XSERVER DRIVER` accepts four Linux
 CPU IDs to control placement (use separate physical cores); `--include-off`
 measures the implementation without its worker. Increase `--switches` to reduce
-the effect of CPU accounting's tick resolution. Compare repeated runs, report drops alongside latency,
-and distinguish producer/library microbenchmarks from whole-WM results. This
+the effect of CPU accounting's tick resolution. Compare repeated runs, report
+overflow/error status alongside latency, and distinguish producer/library microbenchmarks from whole-WM results. This
 comparison includes the logging policy and call-site changes; it cannot isolate
 library overhead or establish a hard latency guarantee.
 
@@ -170,12 +176,17 @@ Test through the real boundary:
 - observable WM behavior belongs in an integration test using
   `tests/x11_test_harness.hpp`;
 - logging lifecycle cases use `tests/log_probe.cpp` so each case has isolated
-  process-global logger state. `tests/log_collector.hpp` supplies private native
-  journal endpoints; test WMs never write diagnostics into the host journal.
-  Logging tests cover metadata, copied arguments, truncation, lost records,
-  saturated/absent/recreated receivers, closed pipes, descriptor inheritance,
-  and failed exec. The saturated-destination regressions allow one second for
-  completion; this is a test bound, not a hard real-time scheduling guarantee.
+  process-global logger state. That probe alone redirects libsystemd's journal
+  socket address to a private collector; it uses the real library encoding and
+  kernel I/O. Integration WMs use stderr files. No tests send diagnostics into
+  the host journal. Tests cover copied arguments, metadata, level gates,
+  standard escaping/color, oversized records, overflow, absent journal, closed
+  pipes, descriptor inheritance, and failed exec. Saturated pipe and journal tests prove submission
+  completes without a reader and shutdown resumes once the reader drains.
+  A full-WM test verifies IPC/workspace responsiveness during a stalled console
+  and actual exec completion while output remains blocked. A Debug-only probe
+  verifies invariant failure aborts even with a blocked sink. Time bounds detect regressions; they
+  are not hard real-time guarantees.
 
 If a behavior is difficult to test without mocking an internal WM component,
 move the decision into a pure policy function and keep XCB, filesystem, and IPC

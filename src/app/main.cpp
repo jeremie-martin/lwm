@@ -139,13 +139,11 @@ int main(int argc, char* argv[])
 
             std::string binary = restart_binary.empty() ? parsed->restart_argv.front() : restart_binary;
             LWM_LOG_INFO("Restarting: {}", binary);
-            auto saved_options = lwm::log::prepare_exec();
+            // Exec replaces the worker on success; on failure it remains usable.
+            // Do not wait for a stalled log destination before restarting.
             execvp(binary.c_str(), restart_argv.data());
             int exec_errno = errno;
 
-            // A failed destination restore leaves logging inactive, visible via log status.
-            // Never fall back to a potentially blocking inherited stderr.
-            (void)lwm::log::restore(saved_options);
             LWM_LOG_CRITICAL("exec '{}' failed: {}, recovering", binary, std::strerror(exec_errno));
         }
 

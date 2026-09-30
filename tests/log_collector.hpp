@@ -70,12 +70,12 @@ public:
     std::vector<std::map<std::string, std::string>> drain() const
     {
         std::vector<std::map<std::string, std::string>> records;
-        std::array<char, 4097> buffer{ };
+        std::array<char, 64 * 1024> buffer{ };
         ssize_t n;
-        while ((n = recv(fd, buffer.data(), buffer.size(), MSG_DONTWAIT)) > 0)
+        while ((n = recv(fd, buffer.data(), buffer.size(), MSG_DONTWAIT | MSG_TRUNC)) > 0)
         {
-            if (n > 4096)
-                throw std::runtime_error("oversized journal record");
+            if (static_cast<size_t>(n) > buffer.size())
+                throw std::runtime_error("record exceeds test collector capacity");
             std::string_view remaining(buffer.data(), n);
             std::map<std::string, std::string> fields;
             while (!remaining.empty())

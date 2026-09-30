@@ -108,7 +108,6 @@ inline std::optional<Violation> validate(
             if (auto violation = lwm::invariants::validate(clients, monitors, active_window))            \
             {                                                                                            \
                 LWM_LOG_ERROR("INVARIANT VIOLATION: {} ({:#x})", violation->message, violation->window); \
-                lwm::log::shutdown();                                                                    \
                 std::abort();                                                                            \
             }                                                                                            \
         } while (0)

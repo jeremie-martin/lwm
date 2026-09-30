@@ -36,7 +36,7 @@ def request(path, command, timeout=1):
         return reply[3:].strip()
 
 
-def measure(binary, legacy, level, blocked=False, affinity=None, switches=400):
+def measure(binary, legacy, level, blocked=False, affinity=None, switches=400, target_name="stderr"):
     with tempfile.TemporaryDirectory(prefix="lwm-log-perf-") as temporary, ExitStack() as cleanup:
         directory = Path(temporary)
         server_log = cleanup.enter_context((directory / "server.log").open("wb"))
@@ -55,8 +55,7 @@ def measure(binary, legacy, level, blocked=False, affinity=None, switches=400):
             os.close(read_fd)
         config = directory / "config.toml"
         config.write_text("[workspaces]\ncount=2\n")
-        environment = dict(os.environ, DISPLAY=display, XDG_RUNTIME_DIR=temporary,
-                           LWM_LOG_SOCKET=str(directory / "unused-journal"))
+        environment = dict(os.environ, DISPLAY=display, XDG_RUNTIME_DIR=temporary)
         environment.pop("LWM_SOCKET", None)
         if blocked:
             reader, writer = os.pipe()
@@ -66,7 +65,7 @@ def measure(binary, legacy, level, blocked=False, affinity=None, switches=400):
         else:
             target = cleanup.enter_context(open(os.devnull, "wb"))
         # --no-log-file is intentionally used only for the historical baseline.
-        target_args = ["--no-log-file"] if legacy else ["--log-target", "stderr"]
+        target_args = ["--no-log-file"] if legacy else ["--log-target", "stderr" if blocked else target_name]
         wm = subprocess.Popen([str(binary), "--config", str(config), "--log-level", level,
                                "--log-color", "never", *target_args],
                               env=environment, stdout=server_log, stderr=target)
@@ -103,8 +102,9 @@ def measure(binary, legacy, level, blocked=False, affinity=None, switches=400):
             if time.monotonic() >= deadline:
                 raise TimeoutError("window management")
             time.sleep(.005)
-        row = {"binary": str(binary), "legacy": legacy, "level": level, "blocked": blocked, "affinity": affinity, "sha256": hashlib.sha256(binary.read_bytes()).hexdigest()}
+        row = {"binary": str(binary), "legacy": legacy, "level": level, "blocked": blocked, "target": "stderr" if blocked else target_name, "affinity": affinity, "sha256": hashlib.sha256(binary.read_bytes()).hexdigest()}
         if blocked:
+            before = json.loads(request(path, "state"))["instance"]
             os.set_blocking(writer, False)
             try:
                 while True:
@@ -112,17 +112,52 @@ def measure(binary, legacy, level, blocked=False, affinity=None, switches=400):
             except BlockingIOError:
                 pass
             os.set_blocking(writer, True)
+            # An INFO reload outcome guarantees a write after the pipe is full.
+            try:
+                request(path, "reload-config", .3)
+            except TimeoutError:
+                pass  # A historical synchronous logger can stall here too.
+            time.sleep(.2)
             samples = []
-            for command in ["scratchpad stash", "ping", "restart"]:
+            for command in ["workspace switch 1", "ping", "restart"]:
                 start = time.monotonic()
+                if command == "restart":
+                    restart_started = start
                 try:
                     request(path, command, .3)
                     samples.append({"command": command, "timeout": False, "ms": (time.monotonic() - start) * 1000})
                 except TimeoutError:
                     samples.append({"command": command, "timeout": True})
             row["commands"] = samples
-            # Let an old synchronous logger exit without a forced kill after measuring.
+            row["restart_completed_while_blocked"] = False
+            deadline = time.monotonic() + .3
+            while time.monotonic() < deadline:
+                try:
+                    if json.loads(request(path, "state", max(.001, deadline - time.monotonic())))["instance"] != before:
+                        row["restart_completed_while_blocked"] = True
+                        row["restart_completion_ms"] = (time.monotonic() - restart_started) * 1000
+                        break
+                except (OSError, RuntimeError):
+                    pass
+                time.sleep(.001)
             os.set_blocking(reader, False)
+            resumed = time.monotonic()
+            deadline = resumed + 3
+            while time.monotonic() < deadline:
+                try:
+                    while os.read(reader, 65536):
+                        pass
+                except BlockingIOError:
+                    pass
+                try:
+                    if json.loads(request(path, "state", .02))["instance"] != before:
+                        row["restart_after_reader_resumes_ms"] = (time.monotonic() - resumed) * 1000
+                        break
+                except (OSError, RuntimeError):
+                    pass
+                time.sleep(.001)
+            else:
+                raise TimeoutError("restart did not recover after stderr reader resumed")
             wm.terminate()
             deadline = time.monotonic() + 1
             while wm.poll() is None and time.monotonic() < deadline:
@@ -161,26 +196,31 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--binary", type=Path, required=True)
     parser.add_argument("--baseline", type=Path)
+    parser.add_argument("--target", choices=["stderr", "journal"], default="stderr",
+                        help="ordinary-workload destination; journal writes to the system journal")
+    parser.add_argument("--legacy-baseline", action="store_true", help="baseline predates --log-target")
     parser.add_argument("--repeats", type=int, default=3)
     parser.add_argument("--switches", type=int, default=400)
     parser.add_argument("--affinity", type=int, nargs=4, metavar=("WM", "WORKER", "XSERVER", "DRIVER"),
                         help="pin the four roles to Linux CPU IDs, preferably separate physical cores")
     parser.add_argument("--include-off", action="store_true", help="also measure the new implementation without a worker")
     args = parser.parse_args()
+    if args.legacy_baseline and args.target != "stderr":
+        parser.error("--legacy-baseline supports only the stderr comparison")
     if args.repeats < 1 or args.switches < 1:
         parser.error("--repeats and --switches must be positive")
     if args.affinity:
         os.sched_setaffinity(0, {args.affinity[3]})
     binaries = [(args.binary.resolve(), False)]
     if args.baseline:
-        binaries.append((args.baseline.resolve(), True))
+        binaries.append((args.baseline.resolve(), args.legacy_baseline))
     for repeat in range(args.repeats):
         cases = [(binary, legacy, level) for binary, legacy in binaries for level in ["info", "trace"]]
         if args.include_off:
             cases.append((args.binary.resolve(), False, "off"))
         random.Random(repeat).shuffle(cases)
         for binary, legacy, level in cases:
-            print(json.dumps(dict(measure(binary, legacy, level, affinity=args.affinity, switches=args.switches), repeat=repeat)), flush=True)
+            print(json.dumps(dict(measure(binary, legacy, level, affinity=args.affinity, switches=args.switches, target_name=args.target), repeat=repeat)), flush=True)
     for binary, legacy in binaries:
         print(json.dumps(measure(binary, legacy, "info", blocked=True, affinity=args.affinity)), flush=True)
 

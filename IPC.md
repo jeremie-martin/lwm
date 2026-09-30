@@ -108,25 +108,25 @@ Both named scratchpad commands reject unknown names.
 `lwmctl log status` is read-only and does not emit `state_change`. It returns:
 
 ```json
-{"target":"journal","level":"info","instance":"1336-43855073878725","active":true,"queue_drops":0,"delivery_drops":0,"truncations":0,"backend_notifications":0,"last_delivery_error":0,"initialization_error":"","last_backend_notification":""}
+{"target":"journal","level":"info","instance":"1336-43855073878725","active":true,"backend_notifications":0,"last_backend_notification":""}
 ```
 
-`queue_drops` counts records rejected before enqueue. `delivery_drops` counts
-records rejected by the destination or discarded while a previous stderr record
-is pending (including a remainder discarded at shutdown). A partially written
-record can therefore count as dropped. `truncations` counts shortened arguments
-and shortened output records, not distinct messages. `backend_notifications`
-counts Quill notifications, including queue-overflow summaries and formatting
-errors. `last_backend_notification` retains the latest notification text (at most
-1 KiB) to help diagnose the cause. `last_delivery_error` is the most recent delivery errno (zero before any
-failure); it remains set after recovery. `initialization_error` explains an
-inactive service after a failed restore.
+`active` means a logger is enabled, not that output has been delivered. It is false
+at level `off` and after shutdown. Initialization failures are reported by the
+CLI before the WM starts.
 
-Counters are cumulative within a logging `instance`, survive failed exec, and
-reset on successful exec. Counter reads do not form a barrier against the worker: a queued record may not yet have been delivered or counted.
-Successful delivery means acceptance by the local destination, not durable
-storage. An unavailable journal does not make the service inactive; its failed
-sends increment `delivery_drops`.
+`backend_notifications` counts Quill notifications, including overflow summaries,
+formatting errors, and reported sink errors. `last_backend_notification` retains
+the first 1 KiB of the latest notification. Notifications are asynchronous; a
+stalled worker cannot report further errors until it resumes. They are not an
+exact count of dropped messages. In particular, libsystemd treats an absent
+journal as success, and successful sends do not guarantee persistent storage.
+
+The count and logging `instance` survive failed exec and reset on successful exec.
+The former `queue_drops`, `delivery_drops`, `truncations`, and
+`last_delivery_error` fields were removed with custom delivery accounting.
+`initialization_error` was removed with logging restoration around exec. Clients
+should use the notification fields for diagnostics, not infer delivery guarantees.
 
 ## JSON results
 
