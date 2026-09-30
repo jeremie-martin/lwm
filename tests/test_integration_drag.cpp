@@ -6,41 +6,6 @@
 using namespace lwm::test;
 namespace {
 constexpr auto timeout = std::chrono::seconds(2);
-lwm::Geometry geometry(X11Connection& conn, xcb_window_t window)
-{
-    auto* reply = xcb_get_geometry_reply(conn.get(), xcb_get_geometry(conn.get(), window), nullptr);
-    REQUIRE(reply);
-    lwm::Geometry result{ reply->x, reply->y, reply->width, reply->height };
-    free(reply);
-    return result;
-}
-
-void pointer(
-    X11Connection& conn,
-    uint8_t type,
-    int16_t x,
-    int16_t y,
-    uint8_t button = 1,
-    xcb_window_t child = XCB_NONE,
-    uint16_t state = 0
-)
-{
-    xcb_button_press_event_t event{ };
-    event.response_type = type;
-    event.detail = type == XCB_MOTION_NOTIFY ? 0 : button;
-    event.root = event.event = conn.root();
-    event.child = child;
-    event.root_x = event.event_x = x;
-    event.root_y = event.event_y = y;
-    event.state = state;
-    event.same_screen = 1;
-    uint32_t mask = type == XCB_MOTION_NOTIFY ? XCB_EVENT_MASK_POINTER_MOTION
-        : type == XCB_BUTTON_PRESS            ? XCB_EVENT_MASK_BUTTON_PRESS
-                                              : XCB_EVENT_MASK_BUTTON_RELEASE;
-    xcb_send_event(conn.get(), 0, conn.root(), mask, reinterpret_cast<char*>(&event));
-    xcb_flush(conn.get());
-}
-
 uint8_t grab(X11Connection& conn)
 {
     auto* reply = xcb_grab_pointer_reply(
@@ -87,7 +52,7 @@ TEST_CASE("Integration: EWMH resize preserves the opposite edges in every direct
     REQUIRE(env);
     auto& conn = env->conn;
     auto window = floating_window(conn);
-    auto start = geometry(conn, window);
+    auto start = require_window_geometry(conn, window);
     struct Case
     {
         uint32_t direction;
@@ -121,13 +86,13 @@ TEST_CASE("Integration: EWMH resize preserves the opposite edges in every direct
         observe_title_after_events(conn, window);
         REQUIRE(grab(conn) == XCB_GRAB_STATUS_ALREADY_GRABBED);
         xcb_test_fake_input(conn.get(), XCB_MOTION_NOTIFY, 0, XCB_CURRENT_TIME, conn.root(), 120, 130, 0);
-        lwm::Geometry expected{ static_cast<int16_t>(start.x + test.dx),
-                                static_cast<int16_t>(start.y + test.dy),
-                                static_cast<uint16_t>(start.width + test.dw),
-                                static_cast<uint16_t>(start.height + test.dh) };
+        WindowGeometry expected{ static_cast<int16_t>(start.x + test.dx),
+                                 static_cast<int16_t>(start.y + test.dy),
+                                 static_cast<uint16_t>(start.width + test.dw),
+                                 static_cast<uint16_t>(start.height + test.dh) };
         observe_title_after_events(conn, window);
-        CHECK(geometry(conn, window) == expected);
-        pointer(conn, XCB_BUTTON_RELEASE, 120, 130);
+        CHECK(require_window_geometry(conn, window) == expected);
+        send_pointer_event(conn, XCB_BUTTON_RELEASE, 120, 130);
         observe_title_after_events(conn, window);
         expect_released(conn);
     }
@@ -140,31 +105,31 @@ TEST_CASE("Integration: pointer ownership and release belong to one drag", "[int
     auto& conn = env->conn;
     auto window = floating_window(conn);
     auto other = floating_window(conn);
-    auto start = geometry(conn, window);
+    auto start = require_window_geometry(conn, window);
     auto atom = intern_atom(conn.get(), "_NET_WM_MOVERESIZE");
     REQUIRE(grab(conn) == XCB_GRAB_STATUS_SUCCESS);
     send_client_message(conn, window, atom, 100, 100, 8, 1);
     observe_title_after_events(conn, window);
-    pointer(conn, XCB_MOTION_NOTIFY, 160, 170);
+    send_pointer_event(conn, XCB_MOTION_NOTIFY, 160, 170);
     observe_title_after_events(conn, window);
-    CHECK(geometry(conn, window) == start);
+    CHECK(require_window_geometry(conn, window) == start);
     CHECK(wait_for_active_window(conn, other, timeout));
     xcb_ungrab_pointer(conn.get(), XCB_CURRENT_TIME);
     send_client_message(conn, window, atom, 100, 100, 8, 1);
     observe_title_after_events(conn, window);
     REQUIRE(grab(conn) == XCB_GRAB_STATUS_ALREADY_GRABBED);
     send_client_message(conn, other, atom, 100, 100, 11); // Cannot cancel another window's interaction.
-    pointer(conn, XCB_BUTTON_RELEASE, 110, 110, 3);       // Nor can another button release it.
+    send_pointer_event(conn, XCB_BUTTON_RELEASE, 110, 110, 3); // Nor can another button release it.
     observe_title_after_events(conn, window);
     CHECK(grab(conn) == XCB_GRAB_STATUS_ALREADY_GRABBED);
-    pointer(conn, XCB_BUTTON_RELEASE, 160, 170, 1); // Apply the final position, even without motion.
+    send_pointer_event(conn, XCB_BUTTON_RELEASE, 160, 170, 1); // Apply the final position, even without motion.
     observe_title_after_events(conn, window);
     CHECK(
-        geometry(conn, window)
-        == lwm::Geometry{ static_cast<int16_t>(start.x + 60),
-                          static_cast<int16_t>(start.y + 70),
-                          start.width,
-                          start.height }
+        require_window_geometry(conn, window)
+        == WindowGeometry{ static_cast<int16_t>(start.x + 60),
+                           static_cast<int16_t>(start.y + 70),
+                           start.width,
+                           start.height }
     );
     expect_released(conn);
 }
@@ -213,7 +178,7 @@ TEST_CASE("Integration: tiled drops translate visible slots past iconic members"
         windows,
         [&](auto a, auto b)
         {
-            auto x = geometry(conn, a), y = geometry(conn, b);
+            auto x = require_window_geometry(conn, a), y = require_window_geometry(conn, b);
             return x.x < y.x || (x.x == y.x && x.y < y.y);
         }
     );
@@ -234,19 +199,19 @@ TEST_CASE("Integration: tiled drops translate visible slots past iconic members"
             intern_atom(conn.get(), "_NET_WM_STATE_STICKY")
         );
         observe_title_after_events(conn, windows[0]);
-        REQUIRE(geometry(conn, guest).x > geometry(conn, windows[0]).x);
+        REQUIRE(require_window_geometry(conn, guest).x > require_window_geometry(conn, windows[0]).x);
     }
     SECTION("without sticky guests") { }
-    auto left = geometry(conn, windows[0]);
-    auto right = geometry(conn, windows[2]);
+    auto left = require_window_geometry(conn, windows[0]);
+    auto right = require_window_geometry(conn, windows[2]);
     REQUIRE(left.x < right.x);
-    pointer(conn, XCB_BUTTON_PRESS, left.x + 30, left.y + 30, 1, windows[0], XCB_MOD_MASK_4);
+    send_pointer_event(conn, XCB_BUTTON_PRESS, left.x + 30, left.y + 30, 1, windows[0], XCB_MOD_MASK_4);
     observe_title_after_events(conn, windows[0]);
     REQUIRE(grab(conn) == XCB_GRAB_STATUS_ALREADY_GRABBED);
-    pointer(conn, XCB_BUTTON_RELEASE, right.x + right.width / 2, right.y + right.height / 4);
+    send_pointer_event(conn, XCB_BUTTON_RELEASE, right.x + right.width / 2, right.y + right.height / 4);
     observe_title_after_events(conn, windows[0]);
-    CHECK(geometry(conn, windows[2]).x < geometry(conn, windows[0]).x);
-    CHECK(geometry(conn, hidden).x == lwm::OFF_SCREEN_X);
+    CHECK(require_window_geometry(conn, windows[2]).x < require_window_geometry(conn, windows[0]).x);
+    CHECK(require_window_geometry(conn, hidden).x == lwm::OFF_SCREEN_X);
     expect_released(conn);
 }
 
@@ -258,13 +223,13 @@ TEST_CASE("Integration: cancelling a tiled preview restores layout without reord
     auto window = create_window(conn, 10, 10, 200, 200);
     map_window(conn, window);
     REQUIRE(wait_for_active_window(conn, window, timeout));
-    auto start = geometry(conn, window);
-    pointer(conn, XCB_BUTTON_PRESS, 100, 100, 1, window, XCB_MOD_MASK_4);
+    auto start = require_window_geometry(conn, window);
+    send_pointer_event(conn, XCB_BUTTON_PRESS, 100, 100, 1, window, XCB_MOD_MASK_4);
     observe_title_after_events(conn, window);
-    pointer(conn, XCB_MOTION_NOTIFY, 140, 150);
+    send_pointer_event(conn, XCB_MOTION_NOTIFY, 140, 150);
     observe_title_after_events(conn, window);
-    REQUIRE(geometry(conn, window).x == start.x + 40);
-    REQUIRE(geometry(conn, window).y == start.y + 50);
+    REQUIRE(require_window_geometry(conn, window).x == start.x + 40);
+    REQUIRE(require_window_geometry(conn, window).y == start.y + 50);
     SECTION("explicit cancel")
     {
         send_client_message(conn, window, intern_atom(conn.get(), "_NET_WM_MOVERESIZE"), 140, 150, 11);
@@ -276,7 +241,7 @@ TEST_CASE("Integration: cancelling a tiled preview restores layout without reord
         REQUIRE(send_ipc_command(*path, "reload-config") == "ok reloaded");
     }
     observe_title_after_events(conn, window);
-    CHECK(geometry(conn, window) == start);
+    CHECK(require_window_geometry(conn, window) == start);
     expect_released(conn);
 }
 
@@ -290,21 +255,21 @@ TEST_CASE("Integration: split resize ends when its participants change", "[integ
     REQUIRE(wait_for_active_window(conn, first, timeout));
     map_window(conn, second);
     REQUIRE(wait_for_active_window(conn, second, timeout));
-    auto left = geometry(conn, first), right = geometry(conn, second);
+    auto left = require_window_geometry(conn, first), right = require_window_geometry(conn, second);
     if (left.x > right.x)
         std::swap(left, right);
     auto x = static_cast<int16_t>((left.x + left.width + right.x) / 2);
     auto y = static_cast<int16_t>(left.y + left.height / 2);
-    pointer(conn, XCB_BUTTON_PRESS, x, y);
+    send_pointer_event(conn, XCB_BUTTON_PRESS, x, y);
     observe_title_after_events(conn, first);
     REQUIRE(grab(conn) == XCB_GRAB_STATUS_ALREADY_GRABBED);
     send_client_message(conn, second, intern_atom(conn.get(), "WM_CHANGE_STATE"), 3);
     observe_title_after_events(conn, first);
     expect_released(conn);
-    auto settled = geometry(conn, first);
-    pointer(conn, XCB_MOTION_NOTIFY, x + 100, y);
+    auto settled = require_window_geometry(conn, first);
+    send_pointer_event(conn, XCB_MOTION_NOTIFY, x + 100, y);
     observe_title_after_events(conn, first);
-    CHECK(geometry(conn, first) == settled);
+    CHECK(require_window_geometry(conn, first) == settled);
 }
 
 TEST_CASE("Integration: real button grabs drive floating resize and tiled conversion", "[integration][drag][input]")
@@ -339,7 +304,7 @@ action = "resize_floating"
         REQUIRE(wait_for_active_window(conn, window, timeout));
     }
     REQUIRE(window != XCB_NONE);
-    auto start = geometry(conn, window);
+    auto start = require_window_geometry(conn, window);
     int16_t x = start.x + start.width / 2, y = start.y + start.height / 2;
     xcb_test_fake_input(conn.get(), XCB_MOTION_NOTIFY, 0, XCB_CURRENT_TIME, conn.root(), x, y, 0);
     xcb_test_fake_input(conn.get(), XCB_BUTTON_PRESS, 3, XCB_CURRENT_TIME, conn.root(), 0, 0, 0);
@@ -348,11 +313,11 @@ action = "resize_floating"
     xcb_test_fake_input(conn.get(), XCB_MOTION_NOTIFY, 0, XCB_CURRENT_TIME, conn.root(), x + 30, y + 20, 0);
     observe_title_after_events(conn, window);
     CHECK(
-        geometry(conn, window)
-        == lwm::Geometry{ start.x,
-                          start.y,
-                          static_cast<uint16_t>(start.width + 30),
-                          static_cast<uint16_t>(start.height + 20) }
+        require_window_geometry(conn, window)
+        == WindowGeometry{ start.x,
+                           start.y,
+                           static_cast<uint16_t>(start.width + 30),
+                           static_cast<uint16_t>(start.height + 20) }
     );
     xcb_test_fake_input(conn.get(), XCB_BUTTON_RELEASE, 3, XCB_CURRENT_TIME, conn.root(), 0, 0, 0);
     observe_title_after_events(conn, window);
@@ -366,20 +331,20 @@ TEST_CASE("Integration: floating motion bursts stop at release and use its final
     REQUIRE(env);
     auto& conn = env->conn;
     auto window = floating_window(conn);
-    auto start = geometry(conn, window);
+    auto start = require_window_geometry(conn, window);
     send_client_message(conn, window, intern_atom(conn.get(), "_NET_WM_MOVERESIZE"), 100, 100, 8, 1);
     observe_title_after_events(conn, window);
     REQUIRE(grab(conn) == XCB_GRAB_STATUS_ALREADY_GRABBED);
-    for (int16_t x = 101; x <= 150; ++x) pointer(conn, XCB_MOTION_NOTIFY, x, 100);
-    pointer(conn, XCB_BUTTON_RELEASE, 160, 170);
-    pointer(conn, XCB_MOTION_NOTIFY, 300, 300);
+    for (int16_t x = 101; x <= 150; ++x) send_pointer_event(conn, XCB_MOTION_NOTIFY, x, 100);
+    send_pointer_event(conn, XCB_BUTTON_RELEASE, 160, 170);
+    send_pointer_event(conn, XCB_MOTION_NOTIFY, 300, 300);
     observe_title_after_events(conn, window);
     CHECK(
-        geometry(conn, window)
-        == lwm::Geometry{ static_cast<int16_t>(start.x + 60),
-                          static_cast<int16_t>(start.y + 70),
-                          start.width,
-                          start.height }
+        require_window_geometry(conn, window)
+        == WindowGeometry{ static_cast<int16_t>(start.x + 60),
+                           static_cast<int16_t>(start.y + 70),
+                           start.width,
+                           start.height }
     );
     expect_released(conn);
 }
@@ -402,17 +367,17 @@ TEST_CASE("Integration: retained maximize flags do not cancel a tiled move", "[i
     );
     observe_title_after_events(conn, window);
     REQUIRE(get_window_property_string(conn.get(), window, intern_atom(conn.get(), "_LWM_WINDOW_CLASS")) == "tiled");
-    auto start = geometry(conn, window);
-    pointer(conn, XCB_BUTTON_PRESS, 100, 100, 1, window, XCB_MOD_MASK_4);
+    auto start = require_window_geometry(conn, window);
+    send_pointer_event(conn, XCB_BUTTON_PRESS, 100, 100, 1, window, XCB_MOD_MASK_4);
     observe_title_after_events(conn, window);
-    pointer(conn, XCB_MOTION_NOTIFY, 140, 150);
+    send_pointer_event(conn, XCB_MOTION_NOTIFY, 140, 150);
     observe_title_after_events(conn, window);
     CHECK(grab(conn) == XCB_GRAB_STATUS_ALREADY_GRABBED);
-    CHECK(geometry(conn, window).x == start.x + 40);
-    CHECK(geometry(conn, window).y == start.y + 50);
-    pointer(conn, XCB_BUTTON_RELEASE, 140, 150);
+    CHECK(require_window_geometry(conn, window).x == start.x + 40);
+    CHECK(require_window_geometry(conn, window).y == start.y + 50);
+    send_pointer_event(conn, XCB_BUTTON_RELEASE, 140, 150);
     observe_title_after_events(conn, window);
-    CHECK(geometry(conn, window) == start);
+    CHECK(require_window_geometry(conn, window) == start);
     expect_released(conn);
 }
 
@@ -443,16 +408,16 @@ TEST_CASE("Integration: a desktop window under the pointer does not hide split b
     REQUIRE(wait_for_active_window(conn, first, timeout));
     map_window(conn, second);
     REQUIRE(wait_for_active_window(conn, second, timeout));
-    auto left = geometry(conn, first), right = geometry(conn, second);
+    auto left = require_window_geometry(conn, first), right = require_window_geometry(conn, second);
     if (left.x > right.x)
         std::swap(left, right);
     auto x = static_cast<int16_t>((left.x + left.width + right.x) / 2);
     auto y = static_cast<int16_t>(left.y + left.height / 2);
     // The root grab reports the desktop window as the child under the split border.
-    pointer(conn, XCB_BUTTON_PRESS, x, y, 3, desktop, XCB_MOD_MASK_4);
+    send_pointer_event(conn, XCB_BUTTON_PRESS, x, y, 3, desktop, XCB_MOD_MASK_4);
     observe_title_after_events(conn, first);
     CHECK(grab(conn) == XCB_GRAB_STATUS_ALREADY_GRABBED);
-    pointer(conn, XCB_BUTTON_RELEASE, x, y, 3);
+    send_pointer_event(conn, XCB_BUTTON_RELEASE, x, y, 3);
     observe_title_after_events(conn, first);
     expect_released(conn);
 }

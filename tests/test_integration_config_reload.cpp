@@ -11,8 +11,6 @@
 #include <sys/socket.h>
 #include <sys/un.h>
 #include <unistd.h>
-#include <xcb/xcb_keysyms.h>
-#include <xcb/xtest.h>
 
 using namespace lwm::test;
 
@@ -110,73 +108,16 @@ size_t line_count(std::filesystem::path const& path)
     return count;
 }
 
-void set_window_title(X11Connection& conn, xcb_window_t window, std::string const& title)
+// A shell whose command line names `needle` is found until its commands have finished.
+bool process_running_with_argument(std::string const& needle)
 {
-    xcb_atom_t net_wm_name = intern_atom(conn.get(), "_NET_WM_NAME");
-    xcb_atom_t utf8_string = intern_atom(conn.get(), "UTF8_STRING");
-
-    if (net_wm_name != XCB_NONE && utf8_string != XCB_NONE)
+    std::error_code ec;
+    for (auto const& entry : std::filesystem::directory_iterator("/proc", ec))
     {
-        xcb_change_property(
-            conn.get(),
-            XCB_PROP_MODE_REPLACE,
-            window,
-            net_wm_name,
-            utf8_string,
-            8,
-            static_cast<uint32_t>(title.size()),
-            title.data()
-        );
+        if (read_text_file(entry.path() / "cmdline").find(needle) != std::string::npos)
+            return true;
     }
-
-    xcb_change_property(
-        conn.get(),
-        XCB_PROP_MODE_REPLACE,
-        window,
-        XCB_ATOM_WM_NAME,
-        XCB_ATOM_STRING,
-        8,
-        static_cast<uint32_t>(title.size()),
-        title.data()
-    );
-    xcb_flush(conn.get());
-}
-
-bool wait_for_window_geometry(
-    X11Connection& conn,
-    xcb_window_t window,
-    int16_t x,
-    int16_t y,
-    uint16_t width,
-    uint16_t height
-)
-{
-    return wait_for_condition(
-        [&conn, window, x, y, width, height]()
-        {
-            auto cookie = xcb_get_geometry(conn.get(), window);
-            auto* reply = xcb_get_geometry_reply(conn.get(), cookie, nullptr);
-            if (!reply)
-                return false;
-
-            bool matches = reply->x == x && reply->y == y && reply->width == width && reply->height == height;
-            free(reply);
-            return matches;
-        },
-        kTimeout
-    );
-}
-
-bool is_hidden_offscreen(X11Connection& conn, xcb_window_t window)
-{
-    auto cookie = xcb_get_geometry(conn.get(), window);
-    auto* reply = xcb_get_geometry_reply(conn.get(), cookie, nullptr);
-    if (!reply)
-        return false;
-
-    bool hidden = reply->x < 0;
-    free(reply);
-    return hidden;
+    return false;
 }
 
 std::optional<std::pair<int16_t, int16_t>> window_center(X11Connection& conn, xcb_window_t window)
@@ -263,6 +204,7 @@ TEST_CASE("Integration: reload-config does not rerun autostart", "[integration][
         [&marker_path]() { return std::filesystem::exists(marker_path) && line_count(marker_path) == 1; },
         kTimeout
     ));
+    REQUIRE(wait_for_condition([&] { return !process_running_with_argument(marker_path.string()); }, kTimeout));
 
     REQUIRE(env->wm.write_config(make_config("gamma", "delta", 2, autostart_cmd)));
     auto reload_result = run_lwmctl(env->wm, { "reload-config" }, *socket_path);
@@ -270,7 +212,9 @@ TEST_CASE("Integration: reload-config does not rerun autostart", "[integration][
     REQUIRE(reload_result->exit_code == 0);
     REQUIRE(wait_for_desktop_names(env->conn, { "gamma", "delta" }));
 
-    std::this_thread::sleep_for(std::chrono::milliseconds(300));
+    // Launching returns only after exec, so a rerun during reload would have a shell by now.
+    // Check that no such shell is still running before checking that none appended a line.
+    REQUIRE_FALSE(process_running_with_argument(marker_path.string()));
     REQUIRE(line_count(marker_path) == 1);
 
     std::error_code ec;
@@ -442,21 +386,7 @@ switch_workspace = 1
     REQUIRE(env);
     auto& conn = env->conn;
     auto desktop = intern_atom(conn.get(), "_NET_CURRENT_DESKTOP");
-    auto press = [&](xcb_keysym_t symbol)
-    {
-        auto* symbols = xcb_key_symbols_alloc(conn.get());
-        REQUIRE(symbols);
-        auto* codes = xcb_key_symbols_get_keycode(symbols, symbol);
-        REQUIRE(codes);
-        auto code = codes[0];
-        free(codes);
-        xcb_key_symbols_free(symbols);
-        REQUIRE(code != XCB_NO_SYMBOL);
-        xcb_test_fake_input(conn.get(), XCB_KEY_PRESS, code, XCB_CURRENT_TIME, conn.root(), 0, 0, 0);
-        xcb_test_fake_input(conn.get(), XCB_KEY_RELEASE, code, XCB_CURRENT_TIME, conn.root(), 0, 0, 0);
-        xcb_flush(conn.get());
-    };
-    press(XK_F6);
+    REQUIRE(send_key(conn, XK_F6));
     REQUIRE(wait_for_property_cardinal(conn.get(), conn.root(), desktop, 1, kTimeout));
     REQUIRE(env->wm.write_config(R"(
 [workspaces]
@@ -466,9 +396,9 @@ names = ["after", "two"]
 key = "F6"
 switch_workspace = 0
 )"));
-    press(XK_F5);
+    REQUIRE(send_key(conn, XK_F5));
     REQUIRE(wait_for_desktop_names(conn, { "after", "two" }));
-    press(XK_F6);
+    REQUIRE(send_key(conn, XK_F6));
     REQUIRE(wait_for_property_cardinal(conn.get(), conn.root(), desktop, 0, kTimeout));
 
     // Invalid replacement must leave both the published config and working bindings intact.
@@ -490,7 +420,7 @@ apply = { floating = true }
     auto switched = run_lwmctl(env->wm, { "workspace", "switch", "1" });
     REQUIRE(switched);
     REQUIRE(switched->exit_code == 0);
-    press(XK_F6);
+    REQUIRE(send_key(conn, XK_F6));
     REQUIRE(wait_for_property_cardinal(conn.get(), conn.root(), desktop, 0, kTimeout));
 }
 

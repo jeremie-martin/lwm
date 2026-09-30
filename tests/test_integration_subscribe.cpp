@@ -2,7 +2,6 @@
 #include <X11/Xlib.h>
 #include <cstdio>
 #include <memory>
-#include <xcb/xcb_keysyms.h>
 #include <xcb/xtest.h>
 
 using namespace lwm::test;
@@ -71,68 +70,6 @@ struct CliSubscriber
         );
     }
 };
-
-std::optional<xcb_keycode_t> first_keycode_for_keysym(X11Connection& conn, xcb_keysym_t keysym)
-{
-    xcb_key_symbols_t* key_symbols = xcb_key_symbols_alloc(conn.get());
-    if (!key_symbols)
-        return std::nullopt;
-
-    xcb_keycode_t* keycodes = xcb_key_symbols_get_keycode(key_symbols, keysym);
-    std::optional<xcb_keycode_t> result;
-    if (keycodes && keycodes[0] != XCB_NO_SYMBOL)
-        result = keycodes[0];
-
-    free(keycodes);
-    xcb_key_symbols_free(key_symbols);
-    return result;
-}
-
-bool send_key_chord(X11Connection& conn, xcb_keysym_t modifier, xcb_keysym_t key)
-{
-    auto modifier_code = first_keycode_for_keysym(conn, modifier);
-    auto key_code = first_keycode_for_keysym(conn, key);
-    if (!modifier_code || !key_code)
-        return false;
-
-    xcb_test_fake_input(conn.get(), XCB_KEY_PRESS, *modifier_code, XCB_CURRENT_TIME, conn.root(), 0, 0, 0);
-    xcb_test_fake_input(conn.get(), XCB_KEY_PRESS, *key_code, XCB_CURRENT_TIME, conn.root(), 0, 0, 0);
-    xcb_test_fake_input(conn.get(), XCB_KEY_RELEASE, *key_code, XCB_CURRENT_TIME, conn.root(), 0, 0, 0);
-    xcb_test_fake_input(conn.get(), XCB_KEY_RELEASE, *modifier_code, XCB_CURRENT_TIME, conn.root(), 0, 0, 0);
-    xcb_flush(conn.get());
-    return true;
-}
-
-void set_window_title(X11Connection& conn, xcb_window_t window, std::string const& title)
-{
-    xcb_atom_t net_wm_name = intern_atom(conn.get(), "_NET_WM_NAME");
-    xcb_atom_t utf8_string = intern_atom(conn.get(), "UTF8_STRING");
-    if (net_wm_name != XCB_NONE && utf8_string != XCB_NONE)
-    {
-        xcb_change_property(
-            conn.get(),
-            XCB_PROP_MODE_REPLACE,
-            window,
-            net_wm_name,
-            utf8_string,
-            8,
-            static_cast<uint32_t>(title.size()),
-            title.data()
-        );
-    }
-
-    xcb_change_property(
-        conn.get(),
-        XCB_PROP_MODE_REPLACE,
-        window,
-        XCB_ATOM_WM_NAME,
-        XCB_ATOM_STRING,
-        8,
-        static_cast<uint32_t>(title.size()),
-        title.data()
-    );
-    xcb_flush(conn.get());
-}
 
 } // namespace
 

@@ -1,9 +1,6 @@
-#include "lwm/core/types.hpp"
 #include "wm_observations.hpp"
 #include <X11/keysym.h>
 #include <catch2/catch_test_macros.hpp>
-#include <xcb/xcb_keysyms.h>
-#include <xcb/xtest.h>
 
 using namespace lwm::test;
 namespace {
@@ -30,27 +27,6 @@ nlohmann::json query(std::string const& socket, std::string const& text)
     REQUIRE(reply);
     REQUIRE(reply->starts_with("ok "));
     return nlohmann::json::parse(reply->substr(3));
-}
-void key(X11Connection& conn, xcb_keysym_t symbol)
-{
-    auto* symbols = xcb_key_symbols_alloc(conn.get());
-    REQUIRE(symbols);
-    auto* codes = xcb_key_symbols_get_keycode(symbols, symbol);
-    auto code = codes ? codes[0] : XCB_NO_SYMBOL;
-    free(codes);
-    xcb_key_symbols_free(symbols);
-    REQUIRE(code != XCB_NO_SYMBOL);
-    xcb_test_fake_input(conn.get(), XCB_KEY_PRESS, code, XCB_CURRENT_TIME, conn.root(), 0, 0, 0);
-    xcb_test_fake_input(conn.get(), XCB_KEY_RELEASE, code, XCB_CURRENT_TIME, conn.root(), 0, 0, 0);
-    xcb_flush(conn.get());
-}
-lwm::Geometry geometry(X11Connection& conn, xcb_window_t window)
-{
-    auto* reply = xcb_get_geometry_reply(conn.get(), xcb_get_geometry(conn.get(), window), nullptr);
-    REQUIRE(reply);
-    lwm::Geometry result{ reply->x, reply->y, reply->width, reply->height };
-    free(reply);
-    return result;
 }
 void park_pointer(X11Connection& conn)
 {
@@ -84,7 +60,7 @@ TEST_CASE(
     send_client_message(conn, a, intern_atom(conn.get(), "WM_CHANGE_STATE"), XCB_ICCCM_WM_STATE_ICONIC);
     observe_title_after_events(conn, d);
     auto desktop = intern_atom(conn.get(), "_NET_WM_DESKTOP");
-    SECTION("Key binding") { key(conn, XK_F5); }
+    SECTION("Key binding") { REQUIRE(send_key(conn, XK_F5)); }
     SECTION("EWMH request") { send_client_message(conn, d, desktop, 1); }
     observe_title_after_events(conn, d);
     // a is more recent but iconic; c is last in layout order. History chooses b.
@@ -145,34 +121,34 @@ TEST_CASE(
         REQUIRE(wait_for_active_window(conn, w, timeout));
     }
     auto a = windows[0], b = windows[1], c = windows[2];
-    std::vector<lwm::Geometry> initial;
-    for (auto w : windows) initial.push_back(geometry(conn, w));
+    std::vector<WindowGeometry> initial;
+    for (auto w : windows) initial.push_back(require_window_geometry(conn, w));
     command(*socket, "focus window=" + std::to_string(b));
     auto toggle = [&]
     {
-        key(conn, XK_F6);
+        REQUIRE(send_key(conn, XK_F6));
         observe_title_after_events(conn, b);
     };
     toggle();
-    auto floating = geometry(conn, b);
+    auto floating = require_window_geometry(conn, b);
     toggle();
-    for (size_t i = 0; i < windows.size(); ++i) REQUIRE(geometry(conn, windows[i]) == initial[i]);
+    for (size_t i = 0; i < windows.size(); ++i) REQUIRE(require_window_geometry(conn, windows[i]) == initial[i]);
     toggle();
-    REQUIRE(geometry(conn, b) == floating);
+    REQUIRE(require_window_geometry(conn, b) == floating);
     auto desktop = intern_atom(conn.get(), "_NET_WM_DESKTOP");
     send_client_message(conn, b, desktop, 1);
     observe_title_after_events(conn, b);
     command(*socket, "workspace switch 1");
     REQUIRE(wait_for_active_window(conn, b, timeout));
-    REQUIRE(geometry(conn, b) == floating);
+    REQUIRE(require_window_geometry(conn, b) == floating);
     toggle();
     send_client_message(conn, b, desktop, 0);
     observe_title_after_events(conn, b);
     command(*socket, "workspace switch 0");
     // Relocation appends b after c; its saved slot from another workspace cannot reorder peers.
-    REQUIRE(geometry(conn, c).x == geometry(conn, b).x);
-    REQUIRE(geometry(conn, c).y < geometry(conn, b).y);
-    REQUIRE(geometry(conn, a).x < geometry(conn, b).x);
+    REQUIRE(require_window_geometry(conn, c).x == require_window_geometry(conn, b).x);
+    REQUIRE(require_window_geometry(conn, c).y < require_window_geometry(conn, b).y);
+    REQUIRE(require_window_geometry(conn, a).x < require_window_geometry(conn, b).x);
     for (auto w : windows) destroy_window(conn, w);
 }
 
@@ -192,7 +168,7 @@ TEST_CASE(
     REQUIRE(set_window_type(conn, w, intern_atom(conn.get(), "_NET_WM_WINDOW_TYPE_DIALOG")));
     map_window(conn, w);
     REQUIRE(wait_for_active_window(conn, w, timeout));
-    auto saved = geometry(conn, w);
+    auto saved = require_window_geometry(conn, w);
     command(*socket, "scratchpad stash");
     REQUIRE(set_window_type(conn, w, intern_atom(conn.get(), "_NET_WM_WINDOW_TYPE_NORMAL")));
     observe_title_after_events(conn, w);
@@ -205,7 +181,7 @@ TEST_CASE(
     REQUIRE(workspaces.at(0).at("window_count") == 0);
     REQUIRE(workspaces.at(1).at("window_count") == 0);
     REQUIRE(get_window_property_string(conn.get(), w, classification) == "floating");
-    REQUIRE(geometry(conn, w) == saved);
+    REQUIRE(require_window_geometry(conn, w) == saved);
     REQUIRE(require_property_cardinal(conn.get(), w, intern_atom(conn.get(), "_NET_WM_DESKTOP")) == 1);
     destroy_window(conn, w);
 }

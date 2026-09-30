@@ -4,7 +4,6 @@
 #include <chrono>
 #include <optional>
 #include <sstream>
-#include <thread>
 #include <xcb/xcb_icccm.h>
 
 using namespace lwm::test;
@@ -306,10 +305,8 @@ TEST_CASE(
     xcb_icccm_set_wm_hints(conn.get(), w1, &hints);
     xcb_flush(conn.get());
 
-    // Give the WM time to process the PropertyNotify.
-    std::this_thread::sleep_for(std::chrono::milliseconds(200));
-
-    // Urgency should still be present.
+    // Urgency should still be present once the WM has handled the rewrite.
+    observe_title_after_events(conn, w1);
     REQUIRE(property_has_atom(conn.get(), w1, net_wm_state, net_wm_state_demands_attention));
     REQUIRE(has_wm_hints_urgency(conn.get(), w1));
 
@@ -361,12 +358,12 @@ TEST_CASE(
     ));
 
     send_client_message(conn, w1, net_wm_state, 0, net_wm_state_demands_attention, 0, 0, 0);
-    std::this_thread::sleep_for(std::chrono::milliseconds(200));
+    observe_title_after_events(conn, w1);
     REQUIRE(property_has_atom(conn.get(), w1, net_wm_state, net_wm_state_demands_attention));
     REQUIRE(has_wm_hints_urgency(conn.get(), w1));
 
     send_client_message(conn, w1, net_wm_state, 2, net_wm_state_demands_attention, 0, 0, 0);
-    std::this_thread::sleep_for(std::chrono::milliseconds(200));
+    observe_title_after_events(conn, w1);
     REQUIRE(property_has_atom(conn.get(), w1, net_wm_state, net_wm_state_demands_attention));
     REQUIRE(has_wm_hints_urgency(conn.get(), w1));
 
@@ -468,7 +465,8 @@ TEST_CASE(
     (void)restart_result;
     REQUIRE(wait_for_wm_restart(conn, std::chrono::seconds(5), *previous_wm));
     REQUIRE(wait_for_active_window(conn, w2, kTimeout));
-    std::this_thread::sleep_for(std::chrono::milliseconds(100));
+    // Urgency properties outlive the old WM; first prove the new one has adopted w1.
+    observe_title_after_events(conn, w1);
 
     REQUIRE(wait_for_condition(
         [&]()
@@ -536,6 +534,8 @@ TEST_CASE(
     auto restart_result = run_lwmctl(wm, { "restart" });
     (void)restart_result;
     REQUIRE(wait_for_wm_restart(conn, std::chrono::seconds(5), *previous));
+    // Urgency properties outlive the old WM; first prove the new one has adopted w1.
+    observe_title_after_events(conn, w1);
 
     REQUIRE(wait_for_condition(
         [&]() { return property_has_atom(conn.get(), w1, net_wm_state, net_wm_state_demands_attention); },
@@ -548,6 +548,7 @@ TEST_CASE(
     hints.input = 1;
     xcb_icccm_set_wm_hints(conn.get(), w1, &hints);
     xcb_flush(conn.get());
+    observe_title_after_events(conn, w1);
     REQUIRE(wait_for_condition(
         [&]()
         {

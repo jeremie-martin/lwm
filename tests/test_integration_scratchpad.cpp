@@ -7,7 +7,6 @@
 #include <optional>
 #include <sys/socket.h>
 #include <sys/un.h>
-#include <xcb/xcb_keysyms.h>
 #include <xcb/xtest.h>
 
 using namespace lwm::test;
@@ -15,122 +14,6 @@ using namespace lwm::test;
 namespace {
 
 constexpr auto kTimeout = std::chrono::seconds(2);
-
-struct WindowGeometry
-{
-    int16_t x = 0;
-    int16_t y = 0;
-    uint16_t width = 0;
-    uint16_t height = 0;
-
-    bool operator==(WindowGeometry const&) const = default;
-};
-
-std::optional<WindowGeometry> get_window_geometry(X11Connection& conn, xcb_window_t window)
-{
-    auto cookie = xcb_get_geometry(conn.get(), window);
-    auto* reply = xcb_get_geometry_reply(conn.get(), cookie, nullptr);
-    if (!reply)
-        return std::nullopt;
-
-    WindowGeometry result{
-        .x = reply->x,
-        .y = reply->y,
-        .width = reply->width,
-        .height = reply->height,
-    };
-    free(reply);
-    return result;
-}
-
-bool is_hidden_offscreen(X11Connection& conn, xcb_window_t window)
-{
-    auto geometry = get_window_geometry(conn, window);
-    return geometry.has_value() && geometry->x < 0;
-}
-
-bool wait_for_window_geometry(
-    X11Connection& conn,
-    xcb_window_t window,
-    int16_t x,
-    int16_t y,
-    uint16_t width,
-    uint16_t height
-)
-{
-    return wait_for_condition(
-        [&conn, window, x, y, width, height]()
-        {
-            auto geometry = get_window_geometry(conn, window);
-            return geometry.has_value() && geometry->x == x && geometry->y == y && geometry->width == width
-                && geometry->height == height;
-        },
-        kTimeout
-    );
-}
-
-std::optional<xcb_keycode_t> first_keycode_for_keysym(X11Connection& conn, xcb_keysym_t keysym)
-{
-    xcb_key_symbols_t* key_symbols = xcb_key_symbols_alloc(conn.get());
-    if (!key_symbols)
-        return std::nullopt;
-
-    xcb_keycode_t* keycodes = xcb_key_symbols_get_keycode(key_symbols, keysym);
-    std::optional<xcb_keycode_t> result;
-    if (keycodes && keycodes[0] != XCB_NO_SYMBOL)
-        result = keycodes[0];
-
-    free(keycodes);
-    xcb_key_symbols_free(key_symbols);
-    return result;
-}
-
-bool send_mouse_chord(X11Connection& conn, xcb_keysym_t modifier, uint8_t button, int16_t root_x, int16_t root_y)
-{
-    auto modifier_code = first_keycode_for_keysym(conn, modifier);
-    if (!modifier_code)
-        return false;
-
-    xcb_test_fake_input(conn.get(), XCB_MOTION_NOTIFY, 0, XCB_CURRENT_TIME, conn.root(), root_x, root_y, 0);
-    xcb_test_fake_input(conn.get(), XCB_KEY_PRESS, *modifier_code, XCB_CURRENT_TIME, conn.root(), 0, 0, 0);
-    xcb_test_fake_input(conn.get(), XCB_BUTTON_PRESS, button, XCB_CURRENT_TIME, conn.root(), 0, 0, 0);
-    xcb_test_fake_input(conn.get(), XCB_BUTTON_RELEASE, button, XCB_CURRENT_TIME, conn.root(), 0, 0, 0);
-    xcb_test_fake_input(conn.get(), XCB_KEY_RELEASE, *modifier_code, XCB_CURRENT_TIME, conn.root(), 0, 0, 0);
-    xcb_flush(conn.get());
-    return true;
-}
-
-void set_window_title(X11Connection& conn, xcb_window_t window, std::string const& title)
-{
-    xcb_atom_t net_wm_name = intern_atom(conn.get(), "_NET_WM_NAME");
-    xcb_atom_t utf8_string = intern_atom(conn.get(), "UTF8_STRING");
-
-    if (net_wm_name != XCB_NONE && utf8_string != XCB_NONE)
-    {
-        xcb_change_property(
-            conn.get(),
-            XCB_PROP_MODE_REPLACE,
-            window,
-            net_wm_name,
-            utf8_string,
-            8,
-            static_cast<uint32_t>(title.size()),
-            title.data()
-        );
-    }
-
-    xcb_change_property(
-        conn.get(),
-        XCB_PROP_MODE_REPLACE,
-        window,
-        XCB_ATOM_WM_NAME,
-        XCB_ATOM_STRING,
-        8,
-        static_cast<uint32_t>(title.size()),
-        title.data()
-    );
-    xcb_flush(conn.get());
-}
 
 std::string scratchpad_match_config()
 {
@@ -275,8 +158,7 @@ TEST_CASE(
 
     // Warp to root (away), then to scratchpad center — should trigger EnterNotify and refocus
     xcb_warp_pointer(conn.get(), XCB_NONE, conn.root(), 0, 0, 0, 0, 0, 0);
-    xcb_flush(conn.get());
-    std::this_thread::sleep_for(std::chrono::milliseconds(50));
+    observe_title_after_events(conn, tiled);
 
     int16_t sp_cx = static_cast<int16_t>(sp_geom->x + sp_geom->width / 2);
     int16_t sp_cy = static_cast<int16_t>(sp_geom->y + sp_geom->height / 2);

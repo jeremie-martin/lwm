@@ -6,7 +6,6 @@
 #include <chrono>
 #include <optional>
 #include <xcb/randr.h>
-#include <xcb/xcb_keysyms.h>
 #include <xcb/xtest.h>
 
 using namespace lwm::test;
@@ -14,34 +13,6 @@ using namespace lwm::test;
 namespace {
 
 constexpr auto kTimeout = std::chrono::seconds(2);
-
-struct WindowGeometry
-{
-    int16_t x = 0;
-    int16_t y = 0;
-    uint16_t width = 0;
-    uint16_t height = 0;
-    uint16_t border_width = 0;
-
-    bool operator==(WindowGeometry const&) const = default;
-};
-
-bool wait_for_x_input_focus(X11Connection& conn, xcb_window_t expected, std::chrono::milliseconds timeout)
-{
-    return wait_for_condition(
-        [&conn, expected]()
-        {
-            auto cookie = xcb_get_input_focus(conn.get());
-            auto* reply = xcb_get_input_focus_reply(conn.get(), cookie, nullptr);
-            if (!reply)
-                return false;
-            bool result = reply->focus == expected;
-            free(reply);
-            return result;
-        },
-        timeout
-    );
-}
 
 void set_initial_window_state(X11Connection& conn, xcb_window_t window, std::initializer_list<xcb_atom_t> states)
 {
@@ -61,66 +32,6 @@ void set_initial_window_state(X11Connection& conn, xcb_window_t window, std::ini
         atoms.data()
     );
     xcb_flush(conn.get());
-}
-
-void set_initial_desktop(X11Connection& conn, xcb_window_t window, uint32_t desktop)
-{
-    xcb_atom_t net_wm_desktop = intern_atom(conn.get(), "_NET_WM_DESKTOP");
-    if (net_wm_desktop == XCB_NONE)
-        return;
-
-    xcb_change_property(conn.get(), XCB_PROP_MODE_REPLACE, window, net_wm_desktop, XCB_ATOM_CARDINAL, 32, 1, &desktop);
-    xcb_flush(conn.get());
-}
-
-bool is_stacked_above(X11Connection& conn, xcb_window_t upper, xcb_window_t lower)
-{
-    auto cookie = xcb_query_tree(conn.get(), conn.root());
-    auto* reply = xcb_query_tree_reply(conn.get(), cookie, nullptr);
-    if (!reply)
-        return false;
-
-    int len = xcb_query_tree_children_length(reply);
-    auto* children = xcb_query_tree_children(reply);
-    auto* upper_it = std::find(children, children + len, upper);
-    auto* lower_it = std::find(children, children + len, lower);
-    bool result = upper_it != children + len && lower_it != children + len && upper_it > lower_it;
-    free(reply);
-    return result;
-}
-
-void set_transient_for(X11Connection& conn, xcb_window_t window, xcb_window_t parent)
-{
-    xcb_atom_t wm_transient_for = intern_atom(conn.get(), "WM_TRANSIENT_FOR");
-    if (wm_transient_for == XCB_NONE)
-        return;
-
-    xcb_change_property(conn.get(), XCB_PROP_MODE_REPLACE, window, wm_transient_for, XCB_ATOM_WINDOW, 32, 1, &parent);
-    xcb_flush(conn.get());
-}
-
-std::optional<WindowGeometry> get_window_geometry(X11Connection& conn, xcb_window_t window)
-{
-    auto cookie = xcb_get_geometry(conn.get(), window);
-    auto* reply = xcb_get_geometry_reply(conn.get(), cookie, nullptr);
-    if (!reply)
-        return std::nullopt;
-
-    WindowGeometry result{
-        .x = reply->x,
-        .y = reply->y,
-        .width = reply->width,
-        .height = reply->height,
-        .border_width = reply->border_width,
-    };
-    free(reply);
-    return result;
-}
-
-bool is_hidden_offscreen(X11Connection& conn, xcb_window_t window)
-{
-    auto geometry = get_window_geometry(conn, window);
-    return geometry.has_value() && geometry->x < 0;
 }
 
 void set_wm_hints_urgency(X11Connection& conn, xcb_window_t window)
@@ -182,37 +93,6 @@ struct RandrScreenSizeGuard
             (void)set_randr_screen_size(conn, width, height);
     }
 };
-
-std::optional<xcb_keycode_t> first_keycode_for_keysym(X11Connection& conn, xcb_keysym_t keysym)
-{
-    xcb_key_symbols_t* key_symbols = xcb_key_symbols_alloc(conn.get());
-    if (!key_symbols)
-        return std::nullopt;
-
-    xcb_keycode_t* keycodes = xcb_key_symbols_get_keycode(key_symbols, keysym);
-    std::optional<xcb_keycode_t> result;
-    if (keycodes && keycodes[0] != XCB_NO_SYMBOL)
-        result = keycodes[0];
-
-    free(keycodes);
-    xcb_key_symbols_free(key_symbols);
-    return result;
-}
-
-bool send_mouse_chord(X11Connection& conn, xcb_keysym_t modifier, uint8_t button, int16_t root_x, int16_t root_y)
-{
-    auto modifier_code = first_keycode_for_keysym(conn, modifier);
-    if (!modifier_code)
-        return false;
-
-    xcb_test_fake_input(conn.get(), XCB_MOTION_NOTIFY, 0, XCB_CURRENT_TIME, conn.root(), root_x, root_y, 0);
-    xcb_test_fake_input(conn.get(), XCB_KEY_PRESS, *modifier_code, XCB_CURRENT_TIME, conn.root(), 0, 0, 0);
-    xcb_test_fake_input(conn.get(), XCB_BUTTON_PRESS, button, XCB_CURRENT_TIME, conn.root(), 0, 0, 0);
-    xcb_test_fake_input(conn.get(), XCB_BUTTON_RELEASE, button, XCB_CURRENT_TIME, conn.root(), 0, 0, 0);
-    xcb_test_fake_input(conn.get(), XCB_KEY_RELEASE, *modifier_code, XCB_CURRENT_TIME, conn.root(), 0, 0, 0);
-    xcb_flush(conn.get());
-    return true;
-}
 
 } // namespace
 
@@ -626,11 +506,7 @@ TEST_CASE(
 
     auto has_fullscreen_state = [&] { return has_state(conn, w1, net_wm_state_fullscreen); };
 
-    auto border_width_is_zero = [&]
-    {
-        auto geometry = get_window_geometry(conn, w1);
-        return geometry && geometry->border_width == 0;
-    };
+    auto border_width_is_zero = [&] { return get_window_border_width(conn, w1) == 0; };
 
     REQUIRE(wait_for_condition(has_fullscreen_state, kTimeout));
     REQUIRE(wait_for_condition(border_width_is_zero, kTimeout));

@@ -32,21 +32,6 @@ void send_wm_state_change(
     send_client_message(conn, window, net_wm_state, action, state1, state2);
 }
 
-std::optional<uint32_t> get_wm_state(X11Connection& conn, xcb_window_t window, xcb_atom_t wm_state)
-{
-    auto cookie = xcb_get_property(conn.get(), 0, window, wm_state, wm_state, 0, 2);
-    auto* reply = xcb_get_property_reply(conn.get(), cookie, nullptr);
-    if (!reply || reply->type != wm_state || reply->format != 32 || xcb_get_property_value_length(reply) < 8)
-    {
-        free(reply);
-        return std::nullopt;
-    }
-
-    uint32_t result = static_cast<uint32_t*>(xcb_get_property_value(reply))[0];
-    free(reply);
-    return result;
-}
-
 } // namespace
 
 // ─────────────────────────────────────────────────────────────────────────────

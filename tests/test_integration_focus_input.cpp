@@ -19,24 +19,6 @@ namespace {
 
 constexpr auto kTimeout = std::chrono::seconds(2);
 
-/// Query the actual X server input focus (not the WM's _NET_ACTIVE_WINDOW).
-xcb_window_t get_x_input_focus(X11Connection& conn)
-{
-    auto cookie = xcb_get_input_focus(conn.get());
-    auto* reply = xcb_get_input_focus_reply(conn.get(), cookie, nullptr);
-    if (!reply)
-        return XCB_NONE;
-    xcb_window_t focus = reply->focus;
-    free(reply);
-    return focus;
-}
-
-/// Wait for xcb_get_input_focus() to return the expected window.
-bool wait_for_x_input_focus(X11Connection& conn, xcb_window_t expected, std::chrono::milliseconds timeout)
-{
-    return wait_for_condition([&]() { return get_x_input_focus(conn) == expected; }, timeout);
-}
-
 /// Set WM_HINTS with the input field (ICCCM).
 /// @param accepts_input  false for "Globally Active" windows that handle WM_TAKE_FOCUS themselves.
 void set_wm_hints_input(X11Connection& conn, xcb_window_t window, bool accepts_input)

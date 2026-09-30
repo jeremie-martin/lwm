@@ -14,8 +14,6 @@
 #include <sys/un.h>
 #include <unistd.h>
 #include <vector>
-#include <xcb/xcb_keysyms.h>
-#include <xcb/xtest.h>
 
 using namespace lwm::test;
 
@@ -176,26 +174,6 @@ bool scratchpad_list_has_documented_shape(JsonValue const& value)
         && has_typed_array(value, "pool", JsonValue::value_t::number_unsigned);
 }
 
-struct WindowGeometry
-{
-    int16_t x;
-    int16_t y;
-    uint16_t width;
-    uint16_t height;
-    bool operator==(WindowGeometry const&) const = default;
-};
-
-std::optional<WindowGeometry> get_window_geometry(X11Connection& conn, xcb_window_t window)
-{
-    auto cookie = xcb_get_geometry(conn.get(), window);
-    auto* reply = xcb_get_geometry_reply(conn.get(), cookie, nullptr);
-    if (!reply)
-        return std::nullopt;
-    WindowGeometry g{ reply->x, reply->y, reply->width, reply->height };
-    free(reply);
-    return g;
-}
-
 std::optional<std::array<uint32_t, 4>> get_frame_extents(X11Connection& conn, xcb_window_t window, xcb_atom_t atom)
 {
     auto cookie = xcb_get_property(conn.get(), 0, window, atom, XCB_ATOM_CARDINAL, 0, 4);
@@ -209,17 +187,6 @@ std::optional<std::array<uint32_t, 4>> get_frame_extents(X11Connection& conn, xc
 
     auto* values = static_cast<uint32_t*>(xcb_get_property_value(reply));
     std::array<uint32_t, 4> result{ values[0], values[1], values[2], values[3] };
-    free(reply);
-    return result;
-}
-
-std::optional<uint16_t> get_window_border_width(X11Connection& conn, xcb_window_t window)
-{
-    auto cookie = xcb_get_geometry(conn.get(), window);
-    auto* reply = xcb_get_geometry_reply(conn.get(), cookie, nullptr);
-    if (!reply)
-        return std::nullopt;
-    uint16_t result = reply->border_width;
     free(reply);
     return result;
 }
@@ -283,21 +250,6 @@ bool drain_window_visibility_events(X11Connection& conn, xcb_window_t window)
     return observed;
 }
 
-std::optional<uint32_t> get_wm_state(X11Connection& conn, xcb_window_t window, xcb_atom_t wm_state)
-{
-    auto cookie = xcb_get_property(conn.get(), 0, window, wm_state, wm_state, 0, 2);
-    auto* reply = xcb_get_property_reply(conn.get(), cookie, nullptr);
-    if (!reply || reply->type != wm_state || reply->format != 32 || xcb_get_property_value_length(reply) < 8)
-    {
-        free(reply);
-        return std::nullopt;
-    }
-
-    uint32_t const result = static_cast<uint32_t*>(xcb_get_property_value(reply))[0];
-    free(reply);
-    return result;
-}
-
 std::optional<bool>
 property_contains_atom(X11Connection& conn, xcb_window_t window, xcb_atom_t property, xcb_atom_t expected)
 {
@@ -340,37 +292,6 @@ std::optional<std::vector<xcb_window_t>> get_client_list(X11Connection& conn, xc
     std::sort(result.begin(), result.end());
     free(reply);
     return result;
-}
-
-std::optional<xcb_keycode_t> first_keycode_for_keysym(X11Connection& conn, xcb_keysym_t keysym)
-{
-    xcb_key_symbols_t* key_symbols = xcb_key_symbols_alloc(conn.get());
-    if (!key_symbols)
-        return std::nullopt;
-
-    xcb_keycode_t* keycodes = xcb_key_symbols_get_keycode(key_symbols, keysym);
-    std::optional<xcb_keycode_t> result;
-    if (keycodes && keycodes[0] != XCB_NO_SYMBOL)
-        result = keycodes[0];
-
-    free(keycodes);
-    xcb_key_symbols_free(key_symbols);
-    return result;
-}
-
-bool send_key_chord(X11Connection& conn, xcb_keysym_t modifier, xcb_keysym_t key)
-{
-    auto modifier_code = first_keycode_for_keysym(conn, modifier);
-    auto key_code = first_keycode_for_keysym(conn, key);
-    if (!modifier_code || !key_code)
-        return false;
-
-    xcb_test_fake_input(conn.get(), XCB_KEY_PRESS, *modifier_code, XCB_CURRENT_TIME, conn.root(), 0, 0, 0);
-    xcb_test_fake_input(conn.get(), XCB_KEY_PRESS, *key_code, XCB_CURRENT_TIME, conn.root(), 0, 0, 0);
-    xcb_test_fake_input(conn.get(), XCB_KEY_RELEASE, *key_code, XCB_CURRENT_TIME, conn.root(), 0, 0, 0);
-    xcb_test_fake_input(conn.get(), XCB_KEY_RELEASE, *modifier_code, XCB_CURRENT_TIME, conn.root(), 0, 0, 0);
-    xcb_flush(conn.get());
-    return true;
 }
 
 } // namespace

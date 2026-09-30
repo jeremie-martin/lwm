@@ -4,7 +4,6 @@
 #include <catch2/catch_test_macros.hpp>
 #include <nlohmann/json.hpp>
 #include <xcb/xcb_ewmh.h>
-#include <xcb/xcb_keysyms.h>
 #include <xcb/xtest.h>
 using namespace lwm::test;
 namespace {
@@ -213,20 +212,6 @@ move_to_workspace = 1
     auto outputs = run_command("/usr/bin/xrandr", { "--query" });
     INFO((outputs ? outputs->stdout_text : "xrandr failed"));
     REQUIRE(two_outputs);
-    auto press = [&](xcb_keysym_t symbol)
-    {
-        auto* symbols = xcb_key_symbols_alloc(conn.get());
-        REQUIRE(symbols);
-        auto* codes = xcb_key_symbols_get_keycode(symbols, symbol);
-        REQUIRE(codes);
-        auto code = codes[0];
-        free(codes);
-        xcb_key_symbols_free(symbols);
-        REQUIRE(code != XCB_NO_SYMBOL);
-        xcb_test_fake_input(conn.get(), XCB_KEY_PRESS, code, XCB_CURRENT_TIME, conn.root(), 0, 0, 0);
-        xcb_test_fake_input(conn.get(), XCB_KEY_RELEASE, code, XCB_CURRENT_TIME, conn.root(), 0, 0, 0);
-        xcb_flush(conn.get());
-    };
     auto command = [&](std::string text)
     {
         auto reply = send_ipc_command(*socket, text);
@@ -260,7 +245,7 @@ move_to_workspace = 1
         auto before = rectangle(window);
         auto source = location()["monitor"].get<size_t>();
         auto destination = 1 - source;
-        press(XK_F9);
+        REQUIRE(send_key(conn, XK_F9));
         REQUIRE(wait_for_condition([&] { return location()["monitor"] == destination; }, timeout));
         REQUIRE(wait_for_active_window(conn, window, timeout));
         CHECK(query(*socket, "workspace list")["focused_monitor"] == destination);
@@ -278,7 +263,7 @@ move_to_workspace = 1
         command("focus window=" + std::to_string(window));
         // Both destinations start on workspace 0; moving away clears active focus.
         REQUIRE(workspace == 0);
-        press(XK_F10);
+        REQUIRE(send_key(conn, XK_F10));
         REQUIRE(wait_for_condition([&] { return location()["workspace"] == 1; }, timeout));
         REQUIRE(wait_for_condition([&] { return query(*socket, "window list")["focused"] != window; }, timeout));
         command("workspace switch 1");

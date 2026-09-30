@@ -1,5 +1,4 @@
 #include "ipc_subscription.hpp"
-#include "lwm/core/types.hpp"
 #include "wm_observations.hpp"
 #include <catch2/catch_test_macros.hpp>
 #include <catch2/generators/catch_generators.hpp>
@@ -9,16 +8,6 @@
 using namespace lwm::test;
 namespace {
 constexpr auto timeout = std::chrono::seconds(2);
-
-std::optional<lwm::Geometry> geometry(X11Connection& conn, xcb_window_t window)
-{
-    auto* reply = xcb_get_geometry_reply(conn.get(), xcb_get_geometry(conn.get(), window), nullptr);
-    if (!reply)
-        return { };
-    lwm::Geometry result{ reply->x, reply->y, reply->width, reply->height };
-    free(reply);
-    return result;
-}
 
 void title(X11Connection& conn, xcb_window_t window, std::string const& value)
 {
@@ -66,8 +55,8 @@ apply = { floating = false }
     auto window = create_window(conn, 60, 70, 320, 240);
     map_window(conn, window);
     REQUIRE(wait_for_active_window(conn, window, timeout));
-    auto normal = geometry(conn, window);
-    auto peer_tiled = geometry(conn, peer);
+    auto normal = get_window_geometry(conn, window);
+    auto peer_tiled = get_window_geometry(conn, peer);
     REQUIRE(normal);
     REQUIRE(peer_tiled);
     auto kind = [&](bool floating)
@@ -104,7 +93,7 @@ apply = { floating = false }
         REQUIRE(wait_for_condition(
             [&]
             {
-                auto rectangle = geometry(conn, window);
+                auto rectangle = get_window_geometry(conn, window);
                 return rectangle && rectangle->x < -10000;
             },
             timeout
@@ -122,9 +111,9 @@ apply = { floating = false }
     send_client_message(conn, window, state, 0, fullscreen);
     send_client_message(conn, window, state, 0, horizontal, vertical);
     REQUIRE(send_ipc_command(*socket, "workspace switch 0")->starts_with("ok"));
-    REQUIRE(wait_for_condition([&] { return geometry(conn, window) == normal; }, timeout));
-    REQUIRE(geometry(conn, peer) != peer_tiled);
-    lwm::Geometry moved{ 55, 66, 311, 217 };
+    REQUIRE(wait_for_condition([&] { return get_window_geometry(conn, window) == normal; }, timeout));
+    REQUIRE(get_window_geometry(conn, peer) != peer_tiled);
+    WindowGeometry moved{ 55, 66, 311, 217 };
     uint32_t values[] = { 55, 66, 311, 217 };
     xcb_configure_window(
         conn.get(),
@@ -133,11 +122,11 @@ apply = { floating = false }
         values
     );
     xcb_flush(conn.get());
-    REQUIRE(wait_for_condition([&] { return geometry(conn, window) == moved; }, timeout));
+    REQUIRE(wait_for_condition([&] { return get_window_geometry(conn, window) == moved; }, timeout));
     kind(false);
-    REQUIRE(wait_for_condition([&] { return geometry(conn, peer) == peer_tiled; }, timeout));
+    REQUIRE(wait_for_condition([&] { return get_window_geometry(conn, peer) == peer_tiled; }, timeout));
     kind(true);
-    REQUIRE(wait_for_condition([&] { return geometry(conn, window) == moved; }, timeout));
+    REQUIRE(wait_for_condition([&] { return get_window_geometry(conn, window) == moved; }, timeout));
     REQUIRE(wm_instance(conn) == instance);
     destroy_window(conn, window);
     destroy_window(conn, peer);
@@ -169,7 +158,7 @@ TEST_CASE(
     REQUIRE(wait_for_condition([&] { return has_state(conn, owner, fullscreen); }, timeout));
     auto has_visibility = [&](bool visible)
     {
-        auto rect = geometry(conn, dialog);
+        auto rect = get_window_geometry(conn, dialog);
         return rect && rect->width == 320 && rect->height == 240
             && (visible ? rect->x >= 0 && rect->y >= 0 : rect->x < -10000);
     };
@@ -212,8 +201,8 @@ TEST_CASE(
     ));
     observe_title_after_events(conn, window);
     REQUIRE(require_property_cardinal(conn.get(), window, desktop) == 1);
-    REQUIRE(geometry(conn, window));
-    REQUIRE(geometry(conn, window)->x < -10000);
+    REQUIRE(get_window_geometry(conn, window));
+    REQUIRE(get_window_geometry(conn, window)->x < -10000);
 
     SECTION("Window type changes to dialog")
     {
@@ -224,7 +213,10 @@ TEST_CASE(
     auto reply = send_ipc_command(*socket, "workspace switch 1");
     REQUIRE(reply);
     REQUIRE(reply->starts_with("ok"));
-    REQUIRE(wait_for_condition([&] { return geometry(conn, window) == lwm::Geometry{ 60, 70, 320, 240 }; }, timeout));
+    REQUIRE(wait_for_condition(
+        [&] { return get_window_geometry(conn, window) == WindowGeometry{ 60, 70, 320, 240 }; },
+        timeout
+    ));
     destroy_window(conn, window);
 }
 
@@ -282,8 +274,8 @@ apply = { floating = true, workspace = 0, sticky = true, fullscreen = false, geo
             REQUIRE(wait_for_condition(
                 [&]
                 {
-                    auto rect = geometry(conn, window);
-                    return rect && (hidden ? rect->x < -10000 : *rect == lwm::Geometry{ 60, 70, 310, 210 });
+                    auto rect = get_window_geometry(conn, window);
+                    return rect && (hidden ? rect->x < -10000 : *rect == WindowGeometry{ 60, 70, 310, 210 });
                 },
                 timeout
             ));
@@ -344,18 +336,24 @@ TEST_CASE(
     hints(140, 150, 420, 280);
     // Observe completion of the hints before the following request on the same X connection.
     send_client_message(conn, window, state, 0, fullscreen);
-    REQUIRE(wait_for_condition([&] { return geometry(conn, window) == lwm::Geometry{ 140, 150, 420, 280 }; }, timeout));
+    REQUIRE(wait_for_condition(
+        [&] { return get_window_geometry(conn, window) == WindowGeometry{ 140, 150, 420, 280 }; },
+        timeout
+    ));
     send_client_message(conn, window, state, 1, horizontal);
     REQUIRE(wait_for_condition(
         [&]
         {
-            auto rect = geometry(conn, window);
+            auto rect = get_window_geometry(conn, window);
             return rect && rect->width == conn.screen()->width_in_pixels && rect->y == 150 && rect->height == 280;
         },
         timeout
     ));
     send_client_message(conn, window, state, 0, horizontal);
-    REQUIRE(wait_for_condition([&] { return geometry(conn, window) == lwm::Geometry{ 140, 150, 420, 280 }; }, timeout));
+    REQUIRE(wait_for_condition(
+        [&] { return get_window_geometry(conn, window) == WindowGeometry{ 140, 150, 420, 280 }; },
+        timeout
+    ));
     destroy_window(conn, window);
 }
 
@@ -385,7 +383,7 @@ TEST_CASE(
         send_client_message(conn, window, intern_atom(conn.get(), "_NET_WM_STATE"), 1, fullscreen);
         REQUIRE(wait_for_condition([&] { return has_state(conn, window, fullscreen); }, timeout));
     }
-    auto rect = geometry(conn, window);
+    auto rect = get_window_geometry(conn, window);
     REQUIRE(rect);
     bool hidden = mode == "hidden" || mode == "hidden_tiled";
     if (hidden)
@@ -397,12 +395,12 @@ TEST_CASE(
             set_window_type(conn, window, intern_atom(conn.get(), "_NET_WM_WINDOW_TYPE_NORMAL"));
     }
     observe_title_after_events(conn, window);
-    REQUIRE(geometry(conn, window));
+    REQUIRE(get_window_geometry(conn, window));
     while (auto* event = xcb_poll_for_event(conn.get())) free(event);
     uint32_t values[] = { static_cast<uint32_t>(rect->width + (changed ? 100 : 0)), rect->height };
     xcb_configure_window(conn.get(), window, XCB_CONFIG_WINDOW_WIDTH | XCB_CONFIG_WINDOW_HEIGHT, values);
     observe_title_after_events(conn, window);
-    REQUIRE(geometry(conn, window)); // Roundtrip also collects queued X events.
+    REQUIRE(get_window_geometry(conn, window)); // Roundtrip also collects queued X events.
     auto expected_width = (mode == "fullscreen" || mode == "hidden_tiled") ? rect->width : values[0];
     size_t acknowledgements = 0;
     while (auto* event = xcb_poll_for_event(conn.get()))
@@ -433,7 +431,7 @@ TEST_CASE(
         REQUIRE(wait_for_condition(
             [&]
             {
-                auto actual = geometry(conn, window);
+                auto actual = get_window_geometry(conn, window);
                 return actual && actual->width == expected_width && actual->height == rect->height;
             },
             timeout
@@ -486,8 +484,8 @@ TEST_CASE(
     CHECK(focus.at("event") == "focus_change");
     CHECK(focus.at("window") == first);
     REQUIRE(wait_for_active_window(conn, first, timeout));
-    auto first_geometry = geometry(conn, first);
-    auto second_geometry = geometry(conn, second);
+    auto first_geometry = get_window_geometry(conn, first);
+    auto second_geometry = get_window_geometry(conn, second);
     REQUIRE(first_geometry);
     REQUIRE(second_geometry);
     CHECK(first_geometry->x >= 0);
@@ -512,8 +510,8 @@ TEST_CASE("Integration: tiled resize motion stops at queued button release", "[i
     REQUIRE(wait_for_active_window(conn, first, timeout));
     map_window(conn, second);
     REQUIRE(wait_for_active_window(conn, second, timeout));
-    auto left = geometry(conn, first);
-    auto right = geometry(conn, second);
+    auto left = get_window_geometry(conn, first);
+    auto right = get_window_geometry(conn, second);
     REQUIRE(left);
     REQUIRE(right);
     xcb_window_t left_window = first;
@@ -545,7 +543,7 @@ TEST_CASE("Integration: tiled resize motion stops at queued button release", "[i
     REQUIRE(wait_for_condition(
         [&]
         {
-            auto current = geometry(conn, left_window);
+            auto current = get_window_geometry(conn, left_window);
             return current && current->width > left->width + 30;
         },
         timeout
@@ -553,19 +551,9 @@ TEST_CASE("Integration: tiled resize motion stops at queued button release", "[i
     for (int offset = 41; offset <= 80; ++offset) pointer(XCB_MOTION_NOTIFY, start_x + offset);
     pointer(XCB_BUTTON_RELEASE, start_x + 80);
     pointer(XCB_MOTION_NOTIFY, start_x + 250);
-    // This property event follows the entire pointer sequence on the same connection.
-    title(conn, first, "resize-finished");
-    auto path = wait_for_ipc_socket_path(conn);
-    REQUIRE(path);
-    REQUIRE(wait_for_condition(
-        [&]
-        {
-            auto reply = send_ipc_command(*path, "window list");
-            return reply && reply->find("resize-finished") != std::string::npos;
-        },
-        timeout
-    ));
-    auto current = geometry(conn, left_window);
+    // The unflushed pointer sequence and this marker reach the WM together, in order.
+    observe_title_after_events(conn, first);
+    auto current = get_window_geometry(conn, left_window);
     REQUIRE(current);
     CHECK(std::abs(static_cast<int>(current->width) - left->width - 80) <= 2);
     destroy_window(conn, first);
@@ -618,7 +606,7 @@ TEST_CASE("Integration: state requests leave dock and desktop windows alone", "[
         [&] { return get_window_property_string(conn.get(), window, classification).has_value(); },
         timeout
     ));
-    auto before = geometry(conn, window);
+    auto before = get_window_geometry(conn, window);
     REQUIRE(before);
     auto horizontal = intern_atom(conn.get(), "_NET_WM_STATE_MAXIMIZED_HORZ");
     auto marker = create_window(conn, 10, 10, 100, 100);
@@ -629,7 +617,7 @@ TEST_CASE("Integration: state requests leave dock and desktop windows alone", "[
     observe_title_after_events(conn, marker);
     // Fixtures have no maximized presentation, so none is advertised.
     CHECK_FALSE(has_state(conn, window, horizontal));
-    CHECK(geometry(conn, window) == before);
+    CHECK(get_window_geometry(conn, window) == before);
     destroy_window(conn, marker);
     destroy_window(conn, window);
 }
@@ -677,7 +665,7 @@ TEST_CASE(
     auto snapshot = clients();
     REQUIRE(snapshot.at("windows").size() == 2);
     for (auto const& client : snapshot.at("windows")) CHECK(client.at("iconic") == false);
-    auto rect = geometry(conn, first);
+    auto rect = get_window_geometry(conn, first);
     REQUIRE(rect);
     CHECK(rect->x >= 0);
     destroy_window(conn, first);
@@ -735,7 +723,7 @@ TEST_CASE(
     auto third_dock = dock(80);
     auto second = dialog();
     // A reply on this connection ensures all windows exist before the startup scan.
-    REQUIRE(geometry(conn, second));
+    REQUIRE(get_window_geometry(conn, second));
     LwmProcess wm(server.display(), R"(
 [appearance]
 padding = 0
@@ -749,8 +737,8 @@ apply = { center = true }
     REQUIRE(path);
     REQUIRE(send_ipc_command(*path, "ping"));
     auto screen_height = conn.screen()->height_in_pixels;
-    auto first_rect = geometry(conn, first);
-    auto second_rect = geometry(conn, second);
+    auto first_rect = get_window_geometry(conn, first);
+    auto second_rect = get_window_geometry(conn, second);
     REQUIRE(first_rect);
     REQUIRE(second_rect);
     CHECK(first_rect->y == 40 + (screen_height - 40 - 100) / 2);
@@ -785,7 +773,7 @@ apply = { center = true }
         REQUIRE(wait_for_condition(
             [&]
             {
-                auto rect = geometry(conn, tiled);
+                auto rect = get_window_geometry(conn, tiled);
                 return workarea_top() == top && rect && rect->y == top && rect->height == screen_height - top;
             },
             timeout
@@ -902,10 +890,13 @@ apply = { floating = true, below = true, geometry = { x = 60, y = 70, width = 30
         0,
         0
     );
-    REQUIRE(wait_for_condition([&] { return geometry(conn, window) == lwm::Geometry{ 360, 270, 300, 200 }; }, timeout));
+    REQUIRE(wait_for_condition(
+        [&] { return get_window_geometry(conn, window) == WindowGeometry{ 360, 270, 300, 200 }; },
+        timeout
+    ));
     send_client_message(conn, window, state, 1, above, above, 0, 0);
     observe_title_after_events(conn, window);
-    CHECK(geometry(conn, window) == lwm::Geometry{ 360, 270, 300, 200 });
+    CHECK(get_window_geometry(conn, window) == WindowGeometry{ 360, 270, 300, 200 });
     CHECK(property_has_atom(conn.get(), window, state, above));
     CHECK_FALSE(property_has_atom(conn.get(), window, state, below));
     // A duplicate toggle is one operation; invalid actions are ignored.
@@ -922,12 +913,12 @@ apply = { floating = true, below = true, geometry = { x = 60, y = 70, width = 30
     send_client_message(conn, window, state, 0, fullscreen, 0, 0, 0);
     observe_title_after_events(conn, window);
     CHECK(property_has_atom(conn.get(), window, state, below));
-    CHECK(geometry(conn, window) == lwm::Geometry{ 360, 270, 300, 200 });
+    CHECK(get_window_geometry(conn, window) == WindowGeometry{ 360, 270, 300, 200 });
     // Reload explicitly reapplies even unchanged placement actions.
     auto socket = wait_for_ipc_socket_path(conn);
     REQUIRE(socket);
     REQUIRE(send_ipc_command(*socket, "reload-config")->starts_with("ok "));
-    CHECK(geometry(conn, window) == lwm::Geometry{ 60, 70, 300, 200 });
+    CHECK(get_window_geometry(conn, window) == WindowGeometry{ 60, 70, 300, 200 });
     destroy_window(conn, window);
 }
 
@@ -1099,7 +1090,8 @@ TEST_CASE(
     {
         send_client_message(conn, owner, state, 1, fullscreen, 0, 0, 0);
         observe_title_after_events(conn, owner);
-        auto active = geometry(conn, owner), hidden = geometry(conn, owner == first ? second : first);
+        auto active = get_window_geometry(conn, owner),
+             hidden = get_window_geometry(conn, owner == first ? second : first);
         REQUIRE(active);
         REQUIRE(hidden);
         CHECK(active->x == 0);
@@ -1138,7 +1130,7 @@ apply = { workspace = 1 }
     REQUIRE(get_window_property_string(conn.get(), window, window_class) == "floating");
     send_client_message(conn, conn.root(), intern_atom(conn.get(), "_NET_CURRENT_DESKTOP"), 1);
     observe_title_after_events(conn, window);
-    auto rect = geometry(conn, window);
+    auto rect = get_window_geometry(conn, window);
     REQUIRE(rect);
     CHECK(rect->x >= 0);
     CHECK(rect->x + rect->width <= conn.screen()->width_in_pixels);

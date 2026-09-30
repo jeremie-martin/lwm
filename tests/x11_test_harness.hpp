@@ -29,6 +29,8 @@
 #include <unistd.h>
 #include <xcb/xcb.h>
 #include <xcb/xcb_icccm.h>
+#include <xcb/xcb_keysyms.h>
+#include <xcb/xtest.h>
 
 namespace lwm::test {
 
@@ -665,6 +667,265 @@ inline bool wait_for_active_window(X11Connection& conn, xcb_window_t expected, s
     if (active == XCB_NONE)
         return false;
     return wait_for_property_window(conn.get(), conn.root(), active, expected, timeout);
+}
+
+// Waits for the server's input focus, which decides keyboard delivery, not _NET_ACTIVE_WINDOW.
+inline bool wait_for_x_input_focus(X11Connection& conn, xcb_window_t expected, std::chrono::milliseconds timeout)
+{
+    return wait_for_condition(
+        [&conn, expected]()
+        {
+            auto cookie = xcb_get_input_focus(conn.get());
+            auto* reply = xcb_get_input_focus_reply(conn.get(), cookie, nullptr);
+            if (!reply)
+                return false;
+            bool result = reply->focus == expected;
+            free(reply);
+            return result;
+        },
+        timeout
+    );
+}
+
+// Outer geometry without the border; read the border with get_window_border_width().
+struct WindowGeometry
+{
+    int16_t x = 0;
+    int16_t y = 0;
+    uint16_t width = 0;
+    uint16_t height = 0;
+
+    bool operator==(WindowGeometry const&) const = default;
+};
+
+inline std::optional<WindowGeometry> get_window_geometry(X11Connection& conn, xcb_window_t window)
+{
+    auto cookie = xcb_get_geometry(conn.get(), window);
+    auto* reply = xcb_get_geometry_reply(conn.get(), cookie, nullptr);
+    if (!reply)
+        return std::nullopt;
+
+    WindowGeometry result{
+        .x = reply->x,
+        .y = reply->y,
+        .width = reply->width,
+        .height = reply->height,
+    };
+    free(reply);
+    return result;
+}
+
+inline WindowGeometry require_window_geometry(X11Connection& conn, xcb_window_t window)
+{
+    auto geometry = get_window_geometry(conn, window);
+    REQUIRE(geometry);
+    return *geometry;
+}
+
+inline std::optional<uint16_t> get_window_border_width(X11Connection& conn, xcb_window_t window)
+{
+    auto cookie = xcb_get_geometry(conn.get(), window);
+    auto* reply = xcb_get_geometry_reply(conn.get(), cookie, nullptr);
+    if (!reply)
+        return std::nullopt;
+    uint16_t result = reply->border_width;
+    free(reply);
+    return result;
+}
+
+inline bool is_hidden_offscreen(X11Connection& conn, xcb_window_t window)
+{
+    auto geometry = get_window_geometry(conn, window);
+    return geometry.has_value() && geometry->x < 0;
+}
+
+inline bool wait_for_window_geometry(
+    X11Connection& conn,
+    xcb_window_t window,
+    int16_t x,
+    int16_t y,
+    uint16_t width,
+    uint16_t height,
+    std::chrono::milliseconds timeout = std::chrono::seconds(2)
+)
+{
+    WindowGeometry expected{ .x = x, .y = y, .width = width, .height = height };
+    return wait_for_condition(
+        [&conn, window, expected]() { return get_window_geometry(conn, window) == expected; },
+        timeout
+    );
+}
+
+inline bool is_stacked_above(X11Connection& conn, xcb_window_t upper, xcb_window_t lower)
+{
+    auto cookie = xcb_query_tree(conn.get(), conn.root());
+    auto* reply = xcb_query_tree_reply(conn.get(), cookie, nullptr);
+    if (!reply)
+        return false;
+
+    int len = xcb_query_tree_children_length(reply);
+    auto* children = xcb_query_tree_children(reply);
+    auto* upper_it = std::find(children, children + len, upper);
+    auto* lower_it = std::find(children, children + len, lower);
+    bool result = upper_it != children + len && lower_it != children + len && upper_it > lower_it;
+    free(reply);
+    return result;
+}
+
+inline std::optional<uint32_t> get_wm_state(X11Connection& conn, xcb_window_t window, xcb_atom_t wm_state)
+{
+    auto cookie = xcb_get_property(conn.get(), 0, window, wm_state, wm_state, 0, 2);
+    auto* reply = xcb_get_property_reply(conn.get(), cookie, nullptr);
+    if (!reply || reply->type != wm_state || reply->format != 32 || xcb_get_property_value_length(reply) < 8)
+    {
+        free(reply);
+        return std::nullopt;
+    }
+
+    uint32_t result = static_cast<uint32_t*>(xcb_get_property_value(reply))[0];
+    free(reply);
+    return result;
+}
+
+// Sets both _NET_WM_NAME and WM_NAME, producing two PropertyNotify events.
+inline void set_window_title(X11Connection& conn, xcb_window_t window, std::string const& title)
+{
+    xcb_atom_t net_wm_name = intern_atom(conn.get(), "_NET_WM_NAME");
+    xcb_atom_t utf8_string = intern_atom(conn.get(), "UTF8_STRING");
+
+    if (net_wm_name != XCB_NONE && utf8_string != XCB_NONE)
+    {
+        xcb_change_property(
+            conn.get(),
+            XCB_PROP_MODE_REPLACE,
+            window,
+            net_wm_name,
+            utf8_string,
+            8,
+            static_cast<uint32_t>(title.size()),
+            title.data()
+        );
+    }
+
+    xcb_change_property(
+        conn.get(),
+        XCB_PROP_MODE_REPLACE,
+        window,
+        XCB_ATOM_WM_NAME,
+        XCB_ATOM_STRING,
+        8,
+        static_cast<uint32_t>(title.size()),
+        title.data()
+    );
+    xcb_flush(conn.get());
+}
+
+inline void set_transient_for(X11Connection& conn, xcb_window_t window, xcb_window_t parent)
+{
+    xcb_atom_t wm_transient_for = intern_atom(conn.get(), "WM_TRANSIENT_FOR");
+    if (wm_transient_for == XCB_NONE)
+        return;
+
+    xcb_change_property(conn.get(), XCB_PROP_MODE_REPLACE, window, wm_transient_for, XCB_ATOM_WINDOW, 32, 1, &parent);
+    xcb_flush(conn.get());
+}
+
+inline void set_window_desktop(X11Connection& conn, xcb_window_t window, uint32_t desktop)
+{
+    xcb_atom_t net_wm_desktop = intern_atom(conn.get(), "_NET_WM_DESKTOP");
+    if (net_wm_desktop == XCB_NONE)
+        return;
+
+    xcb_change_property(conn.get(), XCB_PROP_MODE_REPLACE, window, net_wm_desktop, XCB_ATOM_CARDINAL, 32, 1, &desktop);
+    xcb_flush(conn.get());
+}
+
+inline std::optional<xcb_keycode_t> first_keycode_for_keysym(X11Connection& conn, xcb_keysym_t keysym)
+{
+    xcb_key_symbols_t* key_symbols = xcb_key_symbols_alloc(conn.get());
+    if (!key_symbols)
+        return std::nullopt;
+
+    xcb_keycode_t* keycodes = xcb_key_symbols_get_keycode(key_symbols, keysym);
+    std::optional<xcb_keycode_t> result;
+    if (keycodes && keycodes[0] != XCB_NO_SYMBOL)
+        result = keycodes[0];
+
+    free(keycodes);
+    xcb_key_symbols_free(key_symbols);
+    return result;
+}
+
+// XTEST input goes through the server's real grabs, unlike synthetic SendEvent input.
+inline bool send_key(X11Connection& conn, xcb_keysym_t key)
+{
+    auto key_code = first_keycode_for_keysym(conn, key);
+    if (!key_code)
+        return false;
+
+    xcb_test_fake_input(conn.get(), XCB_KEY_PRESS, *key_code, XCB_CURRENT_TIME, conn.root(), 0, 0, 0);
+    xcb_test_fake_input(conn.get(), XCB_KEY_RELEASE, *key_code, XCB_CURRENT_TIME, conn.root(), 0, 0, 0);
+    xcb_flush(conn.get());
+    return true;
+}
+
+inline bool send_key_chord(X11Connection& conn, xcb_keysym_t modifier, xcb_keysym_t key)
+{
+    auto modifier_code = first_keycode_for_keysym(conn, modifier);
+    auto key_code = first_keycode_for_keysym(conn, key);
+    if (!modifier_code || !key_code)
+        return false;
+
+    xcb_test_fake_input(conn.get(), XCB_KEY_PRESS, *modifier_code, XCB_CURRENT_TIME, conn.root(), 0, 0, 0);
+    xcb_test_fake_input(conn.get(), XCB_KEY_PRESS, *key_code, XCB_CURRENT_TIME, conn.root(), 0, 0, 0);
+    xcb_test_fake_input(conn.get(), XCB_KEY_RELEASE, *key_code, XCB_CURRENT_TIME, conn.root(), 0, 0, 0);
+    xcb_test_fake_input(conn.get(), XCB_KEY_RELEASE, *modifier_code, XCB_CURRENT_TIME, conn.root(), 0, 0, 0);
+    xcb_flush(conn.get());
+    return true;
+}
+
+// Moves the pointer to (root_x, root_y), then clicks `button` while holding `modifier`.
+inline bool send_mouse_chord(X11Connection& conn, xcb_keysym_t modifier, uint8_t button, int16_t root_x, int16_t root_y)
+{
+    auto modifier_code = first_keycode_for_keysym(conn, modifier);
+    if (!modifier_code)
+        return false;
+
+    xcb_test_fake_input(conn.get(), XCB_MOTION_NOTIFY, 0, XCB_CURRENT_TIME, conn.root(), root_x, root_y, 0);
+    xcb_test_fake_input(conn.get(), XCB_KEY_PRESS, *modifier_code, XCB_CURRENT_TIME, conn.root(), 0, 0, 0);
+    xcb_test_fake_input(conn.get(), XCB_BUTTON_PRESS, button, XCB_CURRENT_TIME, conn.root(), 0, 0, 0);
+    xcb_test_fake_input(conn.get(), XCB_BUTTON_RELEASE, button, XCB_CURRENT_TIME, conn.root(), 0, 0, 0);
+    xcb_test_fake_input(conn.get(), XCB_KEY_RELEASE, *modifier_code, XCB_CURRENT_TIME, conn.root(), 0, 0, 0);
+    xcb_flush(conn.get());
+    return true;
+}
+
+// Sends a synthetic root pointer event (SendEvent) without touching the real pointer or grabs.
+// `type` is XCB_BUTTON_PRESS, XCB_BUTTON_RELEASE, or XCB_MOTION_NOTIFY; `button` is ignored for motion.
+inline void send_pointer_event(
+    X11Connection& conn,
+    uint8_t type,
+    int16_t x,
+    int16_t y,
+    uint8_t button = 1,
+    xcb_window_t child = XCB_NONE,
+    uint16_t state = 0
+)
+{
+    xcb_button_press_event_t event{ };
+    event.response_type = type;
+    event.detail = type == XCB_MOTION_NOTIFY ? 0 : button;
+    event.root = event.event = conn.root();
+    event.child = child;
+    event.root_x = event.event_x = x;
+    event.root_y = event.event_y = y;
+    event.state = state;
+    event.same_screen = 1;
+    uint32_t mask = type == XCB_MOTION_NOTIFY ? XCB_EVENT_MASK_POINTER_MOTION
+        : type == XCB_BUTTON_PRESS            ? XCB_EVENT_MASK_BUTTON_PRESS
+                                              : XCB_EVENT_MASK_BUTTON_RELEASE;
+    xcb_send_event(conn.get(), 0, conn.root(), mask, reinterpret_cast<char*>(&event));
+    xcb_flush(conn.get());
 }
 
 inline std::string make_temp_dir()

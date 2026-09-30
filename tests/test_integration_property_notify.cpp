@@ -16,56 +16,6 @@ namespace {
 
 constexpr auto kTimeout = std::chrono::seconds(2);
 
-struct WindowGeometry
-{
-    int16_t x = 0;
-    int16_t y = 0;
-    uint16_t width = 0;
-    uint16_t height = 0;
-    uint16_t border_width = 0;
-
-    bool operator==(WindowGeometry const&) const = default;
-};
-
-std::optional<WindowGeometry> get_window_geometry(X11Connection& conn, xcb_window_t window)
-{
-    auto cookie = xcb_get_geometry(conn.get(), window);
-    auto* reply = xcb_get_geometry_reply(conn.get(), cookie, nullptr);
-    if (!reply)
-        return std::nullopt;
-
-    WindowGeometry result{
-        .x = reply->x,
-        .y = reply->y,
-        .width = reply->width,
-        .height = reply->height,
-        .border_width = reply->border_width,
-    };
-    free(reply);
-    return result;
-}
-
-std::optional<uint32_t> get_wm_state(X11Connection& conn, xcb_window_t window, xcb_atom_t wm_state)
-{
-    auto cookie = xcb_get_property(conn.get(), 0, window, wm_state, wm_state, 0, 2);
-    auto* reply = xcb_get_property_reply(conn.get(), cookie, nullptr);
-    if (!reply || reply->type != wm_state || reply->format != 32 || xcb_get_property_value_length(reply) < 8)
-    {
-        free(reply);
-        return std::nullopt;
-    }
-
-    uint32_t result = static_cast<uint32_t*>(xcb_get_property_value(reply))[0];
-    free(reply);
-    return result;
-}
-
-bool is_hidden_offscreen(X11Connection& conn, xcb_window_t window)
-{
-    auto geometry = get_window_geometry(conn, window);
-    return geometry.has_value() && geometry->x < 0;
-}
-
 bool is_active_window(X11Connection& conn, xcb_window_t expected)
 {
     xcb_atom_t active = intern_atom(conn.get(), "_NET_ACTIVE_WINDOW");
@@ -74,22 +24,6 @@ bool is_active_window(X11Connection& conn, xcb_window_t expected)
 
     auto value = get_window_property_window(conn.get(), conn.root(), active);
     return value && *value == expected;
-}
-
-bool is_stacked_above(X11Connection& conn, xcb_window_t upper, xcb_window_t lower)
-{
-    auto cookie = xcb_query_tree(conn.get(), conn.root());
-    auto* reply = xcb_query_tree_reply(conn.get(), cookie, nullptr);
-    if (!reply)
-        return false;
-
-    int len = xcb_query_tree_children_length(reply);
-    auto* children = xcb_query_tree_children(reply);
-    auto* upper_it = std::find(children, children + len, upper);
-    auto* lower_it = std::find(children, children + len, lower);
-    bool result = upper_it != children + len && lower_it != children + len && upper_it > lower_it;
-    free(reply);
-    return result;
 }
 
 bool is_listed_above(X11Connection& conn, xcb_window_t upper, xcb_window_t lower)
@@ -102,16 +36,6 @@ bool is_listed_above(X11Connection& conn, xcb_window_t upper, xcb_window_t lower
     auto upper_it = std::ranges::find(windows, upper);
     auto lower_it = std::ranges::find(windows, lower);
     return upper_it != windows.end() && lower_it != windows.end() && upper_it > lower_it;
-}
-
-void set_transient_for(X11Connection& conn, xcb_window_t window, xcb_window_t parent)
-{
-    xcb_atom_t wm_transient_for = intern_atom(conn.get(), "WM_TRANSIENT_FOR");
-    if (wm_transient_for == XCB_NONE)
-        return;
-
-    xcb_change_property(conn.get(), XCB_PROP_MODE_REPLACE, window, wm_transient_for, XCB_ATOM_WINDOW, 32, 1, &parent);
-    xcb_flush(conn.get());
 }
 
 void clear_transient_for(X11Connection& conn, xcb_window_t window)
@@ -162,16 +86,6 @@ void set_wm_normal_hints(
     xcb_flush(conn.get());
 }
 
-void set_window_desktop(X11Connection& conn, xcb_window_t window, uint32_t desktop)
-{
-    xcb_atom_t net_wm_desktop = intern_atom(conn.get(), "_NET_WM_DESKTOP");
-    if (net_wm_desktop == XCB_NONE)
-        return;
-
-    xcb_change_property(conn.get(), XCB_PROP_MODE_REPLACE, window, net_wm_desktop, XCB_ATOM_CARDINAL, 32, 1, &desktop);
-    xcb_flush(conn.get());
-}
-
 void set_wm_protocols_take_focus(X11Connection& conn, xcb_window_t window)
 {
     xcb_atom_t wm_protocols = intern_atom(conn.get(), "WM_PROTOCOLS");
@@ -191,63 +105,6 @@ void clear_wm_protocols(X11Connection& conn, xcb_window_t window)
 
     xcb_delete_property(conn.get(), window, wm_protocols);
     xcb_flush(conn.get());
-}
-
-void set_window_title(X11Connection& conn, xcb_window_t window, std::string const& title)
-{
-    xcb_atom_t net_wm_name = intern_atom(conn.get(), "_NET_WM_NAME");
-    xcb_atom_t utf8_string = intern_atom(conn.get(), "UTF8_STRING");
-
-    if (net_wm_name != XCB_NONE && utf8_string != XCB_NONE)
-    {
-        xcb_change_property(
-            conn.get(),
-            XCB_PROP_MODE_REPLACE,
-            window,
-            net_wm_name,
-            utf8_string,
-            8,
-            static_cast<uint32_t>(title.size()),
-            title.data()
-        );
-    }
-
-    xcb_change_property(
-        conn.get(),
-        XCB_PROP_MODE_REPLACE,
-        window,
-        XCB_ATOM_WM_NAME,
-        XCB_ATOM_STRING,
-        8,
-        static_cast<uint32_t>(title.size()),
-        title.data()
-    );
-    xcb_flush(conn.get());
-}
-
-bool wait_for_window_geometry(
-    X11Connection& conn,
-    xcb_window_t window,
-    int16_t x,
-    int16_t y,
-    uint16_t width,
-    uint16_t height
-)
-{
-    return wait_for_condition(
-        [&conn, window, x, y, width, height]()
-        {
-            auto cookie = xcb_get_geometry(conn.get(), window);
-            auto* reply = xcb_get_geometry_reply(conn.get(), cookie, nullptr);
-            if (!reply)
-                return false;
-
-            bool matches = reply->x == x && reply->y == y && reply->width == width && reply->height == height;
-            free(reply);
-            return matches;
-        },
-        kTimeout
-    );
 }
 
 std::string title_rule_geometry_config()
@@ -1146,9 +1003,8 @@ apply = { borderless = true, sticky = false, fullscreen = false, above = false, 
     REQUIRE(wait_for_active_window(conn, window, kTimeout));
     auto correct_state = [&]()
     {
-        auto geometry = get_window_geometry(conn, window);
         auto atoms = get_window_property_atoms(conn.get(), window, state);
-        return geometry && geometry->border_width == 0
+        return get_window_border_width(conn, window) == 0
             && std::ranges::none_of(
                    requested,
                    [&](auto atom) { return std::ranges::find(atoms, atom) != atoms.end(); }
@@ -1185,9 +1041,7 @@ apply = { floating = true, borderless = true, below = true, sticky = true, skip_
     REQUIRE_FALSE(property_has_atom(conn.get(), window, state, taskbar));
     for (auto name : { "_NET_WM_STATE_STICKY", "_NET_WM_STATE_BELOW", "_NET_WM_STATE_SKIP_PAGER" })
         REQUIRE(property_has_atom(conn.get(), window, state, intern_atom(conn.get(), name)));
-    auto geometry = get_window_geometry(conn, window);
-    REQUIRE(geometry.has_value());
-    REQUIRE(geometry->border_width == 0);
+    REQUIRE(get_window_border_width(conn, window) == 0);
     destroy_window(conn, window);
 }
 
@@ -1216,9 +1070,7 @@ apply = { floating = true, borderless = true }
     set_window_wm_class(conn, window, "test", "TileNow");
     observe_title_after_events(conn, window);
     CHECK(get_window_property_string(conn.get(), window, kind) == "floating");
-    auto geometry = get_window_geometry(conn, window);
-    REQUIRE(geometry);
-    CHECK(geometry->border_width == 0);
+    CHECK(get_window_border_width(conn, window) == 0);
     destroy_window(conn, window);
 }
 
