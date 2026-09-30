@@ -3,6 +3,32 @@
 #include <nlohmann/json.hpp>
 
 namespace lwm::test {
+// X resource IDs can be reused immediately after disconnect. IPC's instance
+// identifies a WM lifetime even when its supporting-window ID is reused.
+inline std::optional<std::string> wm_instance(X11Connection& conn)
+{
+    auto atom = intern_atom(conn.get(), "_LWM_IPC_SOCKET");
+    auto path = get_window_property_string(conn.get(), conn.root(), atom);
+    if (!path || path->empty())
+        return std::nullopt;
+    auto reply = send_ipc_command(*path, "state");
+    if (!reply || !reply->starts_with("ok "))
+        return std::nullopt;
+    return nlohmann::json::parse(reply->substr(3)).at("instance").get<std::string>();
+}
+
+inline bool wait_for_wm_restart(X11Connection& conn, std::chrono::milliseconds timeout, std::string const& previous)
+{
+    return wait_for_condition(
+        [&]
+        {
+            auto current = wm_instance(conn);
+            return current && *current != previous;
+        },
+        timeout
+    );
+}
+
 // Use only on a managed window whose title does not participate in rules.
 // The WM observes this title after earlier events sent on this X connection.
 // Reading it through IPC proves handling/completion, unlike an X client roundtrip.

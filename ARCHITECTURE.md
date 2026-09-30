@@ -39,6 +39,27 @@ server use the same grammar, while tests use independent wire peers. Socket read
 transport server; its command callback runs on this same thread. X events,
 config reloads, and timeouts use the same state-transition helpers.
 
+## Process resources
+
+`SignalPipe` owns the SIGHUP/SIGCHLD handlers and nonblocking, close-on-exec
+self-pipe for the process lifetime. Main creates it before starting the logging
+worker and destroys it after logging shutdown. WM reconstruction after a failed
+exec reuses this owner; failed constructors cannot leak pipe descriptors or
+replace process handlers. X resources belong to the WM's X connection and are
+released when that connection closes, including on initialization failure.
+Restart is the exception: closing the last X connection in DestroyAll mode resets
+an otherwise empty server and loses saved root properties. The old WM therefore
+retains its connection's resources, marking its internal window and the root with
+`_LWM_RESTART_OWNER`. After claiming root ownership, the replacement validates
+that marker and kills the retained predecessor through X11 before continuing
+initialization. This preserves empty-display restart without accumulating old
+X clients. Normal shutdown and constructor failure keep DestroyAll semantics.
+
+`core/xproperty.hpp` owns raw property replies and validates their type, format,
+and completeness before decoding. Callers retain protocol-specific cardinality
+and fallback decisions. Pipelined restart reads keep their existing request
+ordering; standard XCB ICCCM/EWMH helpers remain in use.
+
 ## Logging
 
 `core/log` configures Quill 13.0.0 with its standard `SystemdSink` (default)
@@ -256,7 +277,9 @@ helpers perform property writes. `queue_event()` receives JSON only after
 checking for a live subscriber interested in that event type.
 
 Dock registration, removal, and strut notifications request a workarea refresh.
-The refresh reads current dock properties and geometry, publishes workareas, and
+The refresh reads current dock properties and, when a reservation exists, the
+root geometry once. It projects root-relative reservations onto each monitor,
+publishes workareas, and
 invalidates layout. Consecutive dock registrations during startup share a refresh;
 adopting a normal client consumes pending workarea changes before placement and
 rules. Hotplug likewise refreshes before relocating floating clients. Completion

@@ -1,4 +1,5 @@
 #include "ewmh.hpp"
+#include "xproperty.hpp"
 #include <algorithm>
 #include <cstring>
 
@@ -398,30 +399,22 @@ WindowType Ewmh::get_window_type_enum(xcb_window_t window) const
     return WindowType::Normal;
 }
 
-Strut Ewmh::get_window_strut(xcb_window_t window) const
+DockStrut Ewmh::get_window_strut(xcb_window_t window) const
 {
-    Strut strut;
-
-    xcb_ewmh_wm_strut_partial_t partial;
-    if (xcb_ewmh_get_wm_strut_partial_reply(&ewmh_, xcb_ewmh_get_wm_strut_partial(&ewmh_, window), &partial, nullptr))
-    {
-        strut.left = partial.left;
-        strut.right = partial.right;
-        strut.top = partial.top;
-        strut.bottom = partial.bottom;
-        return strut;
-    }
-
-    xcb_ewmh_get_extents_reply_t extents;
-    if (xcb_ewmh_get_wm_strut_reply(&ewmh_, xcb_ewmh_get_wm_strut(&ewmh_, window), &extents, nullptr))
-    {
-        strut.left = extents.left;
-        strut.right = extents.right;
-        strut.top = extents.top;
-        strut.bottom = extents.bottom;
-    }
-
-    return strut;
+    auto partial_reply = xproperty::read(conn_.get(), window, ewmh_._NET_WM_STRUT_PARTIAL, XCB_ATOM_CARDINAL, 12);
+    auto partial = xproperty::words(partial_reply, XCB_ATOM_CARDINAL);
+    if (partial.size() == 12)
+        return {
+            { partial[0],  partial[4],  partial[5] },
+            { partial[1],  partial[6],  partial[7] },
+            { partial[2],  partial[8],  partial[9] },
+            { partial[3], partial[10], partial[11] }
+        };
+    auto legacy_reply = xproperty::read(conn_.get(), window, ewmh_._NET_WM_STRUT, XCB_ATOM_CARDINAL, 4);
+    auto legacy = xproperty::words(legacy_reply, XCB_ATOM_CARDINAL);
+    if (legacy.size() == 4)
+        return { { legacy[0] }, { legacy[1] }, { legacy[2] }, { legacy[3] } };
+    return { };
 }
 
 }

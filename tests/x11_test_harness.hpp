@@ -456,13 +456,13 @@ inline std::optional<xcb_window_t> supporting_wm_window(X11Connection& conn)
     return get_window_property_window(conn.get(), conn.root(), atom);
 }
 
-inline bool wait_for_wm_ready(X11Connection& conn, std::chrono::milliseconds timeout, xcb_window_t previous = XCB_NONE)
+inline bool wait_for_wm_ready(X11Connection& conn, std::chrono::milliseconds timeout)
 {
     return wait_for_condition(
         [&]()
         {
             auto current = supporting_wm_window(conn);
-            if (!current || *current == XCB_NONE || *current == previous)
+            if (!current || *current == XCB_NONE)
                 return false;
             auto atom = intern_atom(conn.get(), "_NET_SUPPORTING_WM_CHECK");
             return get_window_property_window(conn.get(), *current, atom) == current;

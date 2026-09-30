@@ -268,3 +268,65 @@ move_to_workspace = 1
         destroy_window(conn, window);
     }
 }
+
+TEST_CASE(
+    "Integration: partial struts reserve root regions independently of dock position",
+    "[integration][multioutput][.multioutput]"
+)
+{
+    auto* server = std::getenv("LWM_TEST_XSERVER");
+    if (!server || std::strcmp(server, "Xorg") != 0)
+        SKIP("Select the owned Xorg dummy server for multi-output coverage");
+    auto env = TestEnvironment::create("[workspaces]\ncount = 1\n");
+    REQUIRE(env);
+    REQUIRE(env->x11_env.owns_display());
+    RestoreOutputs restore;
+    randr({ "--addmode", "DUMMY1", "1280x720" });
+    randr({ "--output", "DUMMY1", "--mode", "1280x720", "--pos", "1280x0" });
+    auto& conn = env->conn;
+    auto socket = wait_for_ipc_socket_path(conn);
+    REQUIRE(socket);
+    REQUIRE(wait_for_condition([&] { return query(*socket, "workspace list")["monitors"].size() == 2; }, timeout));
+    auto workarea = intern_atom(conn.get(), "_NET_WORKAREA");
+    auto partial = intern_atom(conn.get(), "_NET_WM_STRUT_PARTIAL");
+    auto legacy = intern_atom(conn.get(), "_NET_WM_STRUT");
+    auto check = [&](std::vector<uint32_t> expected)
+    {
+        REQUIRE(wait_for_condition(
+            [&]
+            {
+                auto actual = read_property32(conn.get(), conn.root(), workarea, XCB_ATOM_CARDINAL);
+                return actual && *actual == expected;
+            },
+            timeout
+        ));
+    };
+    check({ 0, 0, 1280, 720, 1280, 0, 1280, 720 });
+    auto dock = create_window(conn, 0, 0, 100, 40);
+    set_window_type(conn, dock, intern_atom(conn.get(), "_NET_WM_WINDOW_TYPE_DOCK"));
+    uint32_t old[] = { 0, 0, 25, 0 };
+    xcb_change_property(conn.get(), XCB_PROP_MODE_REPLACE, dock, legacy, XCB_ATOM_CARDINAL, 32, 4, old);
+    uint32_t values[] = { 0, 0, 40, 0, 0, 0, 0, 0, 1280, 2559, 0, 0 };
+    auto publish = [&](uint8_t format, uint32_t count)
+    {
+        xcb_change_property(conn.get(), XCB_PROP_MODE_REPLACE, dock, partial, XCB_ATOM_CARDINAL, format, count, values);
+        xcb_flush(conn.get());
+    };
+    publish(32, 12);
+    map_window(conn, dock);
+    check({ 0, 0, 1280, 720, 1280, 40, 1280, 680 });
+    values[8] = 0;
+    values[9] = 1279;
+    publish(32, 12);
+    check({ 0, 40, 1280, 680, 1280, 0, 1280, 720 });
+    // A complete zero partial strut overrides the nonzero legacy reservation.
+    values[2] = 0;
+    publish(32, 12);
+    check({ 0, 0, 1280, 720, 1280, 0, 1280, 720 });
+    // A malformed partial property falls back to the legacy edge-wide reservation.
+    publish(8, 48);
+    check({ 0, 25, 1280, 695, 1280, 25, 1280, 695 });
+    xcb_destroy_window(conn.get(), dock);
+    xcb_flush(conn.get());
+    check({ 0, 0, 1280, 720, 1280, 0, 1280, 720 });
+}

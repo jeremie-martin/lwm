@@ -1,5 +1,6 @@
 #include "ipc_subscription.hpp"
 #include "lwm/core/types.hpp"
+#include "wm_observations.hpp"
 #include <catch2/catch_test_macros.hpp>
 #include <nlohmann/json.hpp>
 #include <xcb/xcb_icccm.h>
@@ -425,12 +426,12 @@ TEST_CASE(
     auto second = create_window(conn, 10, 10, 200, 200);
     map_window(conn, second);
     REQUIRE(wait_for_active_window(conn, second, timeout));
-    auto previous = supporting_wm_window(conn);
+    auto previous = wm_instance(conn);
     REQUIRE(previous);
     auto restarted = send_ipc_command(*path, "restart");
     REQUIRE(restarted);
     REQUIRE(restarted->starts_with("ok"));
-    REQUIRE(wait_for_wm_ready(conn, timeout, *previous));
+    REQUIRE(wait_for_wm_restart(conn, timeout, *previous));
     REQUIRE(wait_for_active_window(conn, second, timeout));
     auto snapshot = clients();
     REQUIRE(snapshot.at("windows").size() == 2);
@@ -622,10 +623,10 @@ TEST_CASE(
     CHECK(state().at("sequence") == current.at("sequence"));
     // Include already buffered records when checking for a feedback loop.
     CHECK_FALSE(subscriber.reader.read(subscriber.fd, std::chrono::milliseconds(30)));
-    auto previous_wm = supporting_wm_window(conn);
+    auto previous_wm = wm_instance(conn);
     REQUIRE(previous_wm);
     REQUIRE(send_ipc_command(*path, "restart"));
-    REQUIRE(wait_for_wm_ready(conn, timeout, *previous_wm));
+    REQUIRE(wait_for_wm_restart(conn, timeout, *previous_wm));
     REQUIRE(wait_for_condition([&] { return send_ipc_command(*path, "ping") == "ok pong"; }, timeout));
     Subscriber reconnected(*path, "state_change");
     CHECK(state().at("instance") != snapshot.at("instance"));

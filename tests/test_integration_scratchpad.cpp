@@ -1,4 +1,4 @@
-#include "x11_test_harness.hpp"
+#include "wm_observations.hpp"
 #include <X11/Xlib.h>
 #include <catch2/catch_test_macros.hpp>
 #include <cerrno>
@@ -320,10 +320,10 @@ TEST_CASE("Integration: floating scratchpad preserves kind and geometry across r
     REQUIRE(geom_before.has_value());
     REQUIRE(geom_before->x >= 0);
 
-    auto previous = supporting_wm_window(conn);
+    auto previous = wm_instance(conn);
     REQUIRE(previous);
     REQUIRE(send_ipc_command(*socket_path, "restart") == "ok restarting");
-    REQUIRE(wait_for_wm_ready(conn, std::chrono::seconds(5), *previous));
+    REQUIRE(wait_for_wm_restart(conn, std::chrono::seconds(5), *previous));
     REQUIRE(wait_for_active_window(conn, sp, kTimeout));
     REQUIRE(get_window_geometry(conn, sp) == geom_before);
     auto kind = intern_atom(conn.get(), "_LWM_WINDOW_CLASS");
@@ -506,11 +506,11 @@ TEST_CASE("Integration: visible scratchpad pool window keeps cycling after resta
     REQUIRE(wait_for_active_window(conn, pooled, kTimeout));
     REQUIRE(wait_for_condition([&]() { return !is_hidden_offscreen(conn, pooled); }, kTimeout));
 
-    auto previous_wm = supporting_wm_window(conn);
+    auto previous_wm = wm_instance(conn);
     REQUIRE(previous_wm.has_value());
     auto restart_result = send_ipc_command(*socket_path, "restart");
     (void)restart_result;
-    REQUIRE(wait_for_wm_ready(conn, std::chrono::seconds(5), *previous_wm));
+    REQUIRE(wait_for_wm_restart(conn, std::chrono::seconds(5), *previous_wm));
     REQUIRE(wait_for_active_window(conn, pooled, kTimeout));
     REQUIRE(wait_for_condition([&]() { return !is_hidden_offscreen(conn, pooled); }, kTimeout));
 
@@ -555,11 +555,11 @@ TEST_CASE("Integration: hidden scratchpad stays hidden across restart", "[integr
     REQUIRE(wait_for_condition([&]() { return is_hidden_offscreen(conn, sp); }, kTimeout));
     REQUIRE(wait_for_active_window(conn, tiled, kTimeout));
 
-    auto previous_wm = supporting_wm_window(conn);
+    auto previous_wm = wm_instance(conn);
     REQUIRE(previous_wm.has_value());
     auto restart_result = send_ipc_command(*socket_path, "restart");
     (void)restart_result;
-    REQUIRE(wait_for_wm_ready(conn, std::chrono::seconds(5), *previous_wm));
+    REQUIRE(wait_for_wm_restart(conn, std::chrono::seconds(5), *previous_wm));
     REQUIRE(wait_for_condition([&]() { return is_hidden_offscreen(conn, sp); }, kTimeout));
     REQUIRE(wait_for_active_window(conn, tiled, kTimeout));
 

@@ -11,8 +11,6 @@ release promise; completed work belongs in Git history.
 
 ## Protocol and tooling
 
-- Model `_NET_WM_STRUT_PARTIAL` coordinate ranges instead of using edge extents
-  only.
 - Decide and document a policy for tiled-window `_NET_WM_MOVERESIZE` requests;
   tiled geometry is currently layout-owned and these requests are ignored.
 - Upgrade `_NET_WM_SYNC_REQUEST` from notification-only behavior if waiting on

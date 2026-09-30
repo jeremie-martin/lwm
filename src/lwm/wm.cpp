@@ -4,22 +4,20 @@
 #include "lwm/core/ipc.hpp"
 #include "lwm/core/log.hpp"
 #include "lwm/core/policy.hpp"
+#include "lwm/core/xproperty.hpp"
 #include <algorithm>
 #include <cerrno>
 #include <chrono>
 #include <cstddef>
 #include <cstdlib>
 #include <cstring>
-#include <fcntl.h>
 #include <filesystem>
 #include <limits>
 #include <memory>
 #include <optional>
 #include <poll.h>
-#include <signal.h>
 #include <spawn.h>
 #include <string_view>
-#include <sys/wait.h>
 #include <unistd.h>
 #include <utility>
 #include <xcb/xcb_icccm.h>
@@ -45,64 +43,17 @@ void ensure_property_change_mask(Connection& conn, xcb_window_t window)
     xcb_change_window_attributes(conn.get(), window, XCB_CW_EVENT_MASK, &mask);
 }
 
-void close_fd(int& fd)
-{
-    if (fd >= 0)
-    {
-        close(fd);
-        fd = -1;
-    }
 }
 
-void sigchld_handler(int /*sig*/)
-{
-    int saved_errno = errno;
-    while (waitpid(-1, nullptr, WNOHANG) > 0)
-    { }
-    errno = saved_errno;
-}
-
-// Self-pipe for SIGHUP: handler writes a byte, main loop reads it.
-int g_sighup_write_fd = -1;
-
-void sighup_handler(int /*sig*/)
-{
-    int saved_errno = errno;
-    if (g_sighup_write_fd >= 0)
-    {
-        char byte = 1;
-        // write() is async-signal-safe; ignore failure (pipe full = already pending)
-        (void)write(g_sighup_write_fd, &byte, 1);
-    }
-    errno = saved_errno;
-}
-
-void setup_signal_handlers()
-{
-    struct sigaction sa = {};
-    sa.sa_handler = sigchld_handler;
-    sa.sa_flags = SA_RESTART | SA_NOCLDSTOP;
-    sigaction(SIGCHLD, &sa, nullptr);
-
-    sa = {};
-    sa.sa_handler = sighup_handler;
-    sa.sa_flags = SA_RESTART;
-    sigaction(SIGHUP, &sa, nullptr);
-}
-
-}
-
-WindowManager::WindowManager(Config config, std::string config_path)
+WindowManager::WindowManager(Config config, SignalPipe& signals, std::string config_path)
     : config_(std::move(config))
     , conn_()
     , ewmh_(conn_)
     , keybinds_(conn_, config_)
     , layout_(config_.appearance, config_.layout)
     , config_path_(std::move(config_path))
+    , signals_(signals)
 {
-    if (pipe2(signal_pipe_, O_CLOEXEC | O_NONBLOCK) == 0)
-        g_sighup_write_fd = signal_pipe_[1];
-    setup_signal_handlers();
     init_mousebinds();
     create_wm_window();
     setup_root();
@@ -128,6 +79,14 @@ WindowManager::WindowManager(Config config, std::string config_path)
     lwm_ipc_socket_ = intern_atom("_LWM_IPC_SOCKET");
     lwm_restart_client_ = intern_atom("_LWM_RESTART_CLIENT");
     lwm_restart_state_ = intern_atom("_LWM_RESTART_STATE");
+    lwm_restart_owner_ = intern_atom("_LWM_RESTART_OWNER");
+    // Root ownership is established. Release only a marked predecessor, after
+    // opening our connection so an otherwise empty X server cannot reset.
+    auto predecessor = xproperty::scalar(conn_.get(), conn_.screen()->root, lwm_restart_owner_, XCB_ATOM_WINDOW);
+    if (predecessor && *predecessor != XCB_NONE && *predecessor != wm_window_
+        && xproperty::scalar(conn_.get(), *predecessor, lwm_restart_owner_, XCB_ATOM_WINDOW) == predecessor)
+        xcb_kill_client(conn_.get(), *predecessor);
+    xcb_delete_property(conn_.get(), conn_.screen()->root, lwm_restart_owner_);
     lwm_restart_tiled_order_ = intern_atom("_LWM_RESTART_TILED_ORDER");
     lwm_restart_floating_order_ = intern_atom("_LWM_RESTART_FLOATING_ORDER");
     lwm_restart_ratios_ = intern_atom("_LWM_RESTART_RATIOS");
@@ -237,16 +196,7 @@ WindowManager::WindowManager(Config config, std::string config_path)
 
 WindowManager::~WindowManager()
 {
-    if (cursor_default_ != XCB_NONE)
-        xcb_free_cursor(conn_.get(), cursor_default_);
-    if (cursor_resize_h_ != XCB_NONE)
-        xcb_free_cursor(conn_.get(), cursor_resize_h_);
-    if (cursor_resize_v_ != XCB_NONE)
-        xcb_free_cursor(conn_.get(), cursor_resize_v_);
     cleanup_ipc();
-    g_sighup_write_fd = -1;
-    close_fd(signal_pipe_[0]);
-    close_fd(signal_pipe_[1]);
 }
 
 RunResult WindowManager::run()
@@ -300,7 +250,7 @@ RunResult WindowManager::run()
         // Build poll array: X fd, signal pipe, IPC listener and connections
         poll_fds.clear();
         poll_fds.push_back({ .fd = xfd, .events = POLLIN, .revents = 0 });
-        poll_fds.push_back({ .fd = signal_pipe_[0], .events = POLLIN, .revents = 0 });
+        poll_fds.push_back({ .fd = signals_.fd(), .events = POLLIN, .revents = 0 });
         ipc_.append_poll_fds(poll_fds);
 
         int poll_result = poll(poll_fds.data(), static_cast<nfds_t>(poll_fds.size()), timeout_ms);
@@ -309,9 +259,7 @@ RunResult WindowManager::run()
             // SIGHUP: drain pipe and reload config
             if (poll_fds[POLL_SIGNAL].revents & POLLIN)
             {
-                char buf[64];
-                while (read(signal_pipe_[0], buf, sizeof(buf)) > 0)
-                { }
+                signals_.drain();
                 auto result = reload_config();
                 emit_config_reload_result(result, "sighup");
                 complete_transition();
@@ -1133,24 +1081,12 @@ void WindowManager::refresh_user_time_tracking_into(Client& client)
     xcb_window_t window = client.id;
     client.user_time_window = XCB_NONE;
 
-    if (net_wm_user_time_window_ != XCB_NONE)
+    if (auto time_window = xproperty::scalar(conn_.get(), window, net_wm_user_time_window_, XCB_ATOM_WINDOW);
+        time_window && *time_window != XCB_NONE)
     {
-        auto cookie = xcb_get_property(conn_.get(), 0, window, net_wm_user_time_window_, XCB_ATOM_WINDOW, 0, 1);
-        auto* reply = xcb_get_property_reply(conn_.get(), cookie, nullptr);
-        if (reply)
-        {
-            if (xcb_get_property_value_length(reply) >= 4)
-            {
-                xcb_window_t time_window = *static_cast<xcb_window_t*>(xcb_get_property_value(reply));
-                if (time_window != XCB_NONE)
-                {
-                    client.user_time_window = time_window;
-                    if (time_window != window)
-                        ensure_property_change_mask(conn_, time_window);
-                }
-            }
-            free(reply);
-        }
+        client.user_time_window = *time_window;
+        if (*time_window != window)
+            ensure_property_change_mask(conn_, *time_window);
     }
 
     client.user_time = get_user_time(window);
@@ -1889,21 +1825,8 @@ std::optional<xcb_window_t> WindowManager::transient_for_window(xcb_window_t win
     if (wm_transient_for_ == XCB_NONE)
         return std::nullopt;
 
-    auto cookie = xcb_get_property(conn_.get(), 0, window, wm_transient_for_, XCB_ATOM_WINDOW, 0, 1);
-    auto* reply = xcb_get_property_reply(conn_.get(), cookie, nullptr);
-    if (!reply)
-        return std::nullopt;
-
-    std::optional<xcb_window_t> result;
-    if (xcb_get_property_value_length(reply) >= static_cast<int>(sizeof(xcb_window_t)))
-    {
-        auto* value = static_cast<xcb_window_t*>(xcb_get_property_value(reply));
-        if (value && *value != XCB_NONE)
-            result = *value;
-    }
-
-    free(reply);
-    return result;
+    auto value = xproperty::scalar(conn_.get(), window, wm_transient_for_, XCB_ATOM_WINDOW);
+    return value && *value != XCB_NONE ? value : std::nullopt;
 }
 
 bool WindowManager::should_be_visible(Client const& client) const
@@ -2201,19 +2124,10 @@ void WindowManager::update_sync_state(Client& client)
         return;
     }
 
-    auto cookie = xcb_get_property(conn_.get(), 0, client.id, net_wm_sync_request_counter_, XCB_ATOM_CARDINAL, 0, 1);
-    auto* reply = xcb_get_property_reply(conn_.get(), cookie, nullptr);
-    if (!reply)
-        return;
-
-    xcb_sync_counter_t counter = XCB_NONE;
-    if (xcb_get_property_value_length(reply) >= static_cast<int>(sizeof(xcb_sync_counter_t)))
-    {
-        auto* value = static_cast<xcb_sync_counter_t*>(xcb_get_property_value(reply));
-        if (value)
-            counter = *value;
-    }
-    free(reply);
+    auto reply = xproperty::read(conn_.get(), client.id, net_wm_sync_request_counter_, XCB_ATOM_CARDINAL, 2);
+    auto counters = xproperty::words(reply, XCB_ATOM_CARDINAL);
+    // Extended synchronization advertises a second counter; the first remains the basic counter.
+    xcb_sync_counter_t counter = counters.empty() ? XCB_NONE : counters.front();
 
     if (counter == XCB_NONE)
     {
@@ -2359,45 +2273,12 @@ void WindowManager::update_focused_monitor_at_point(int16_t x, int16_t y)
 
 std::string WindowManager::get_window_name(xcb_window_t window)
 {
-    if (utf8_string_ != XCB_NONE)
-    {
-        auto cookie = xcb_get_property(conn_.get(), 0, window, ewmh_.get()->_NET_WM_NAME, utf8_string_, 0, 1024);
-        auto* reply = xcb_get_property_reply(conn_.get(), cookie, nullptr);
-        if (reply)
-        {
-            int len = xcb_get_property_value_length(reply);
-            if (len > 0)
-            {
-                char* name = static_cast<char*>(xcb_get_property_value(reply));
-                if (name)
-                {
-                    std::string windowName(name, len);
-                    free(reply);
-                    return windowName;
-                }
-            }
-            free(reply);
-        }
-    }
-
-    auto cookie = xcb_get_property(conn_.get(), 0, window, XCB_ATOM_WM_NAME, XCB_ATOM_STRING, 0, 1024);
-    auto* reply = xcb_get_property_reply(conn_.get(), cookie, nullptr);
-
-    if (reply)
-    {
-        int len = xcb_get_property_value_length(reply);
-        if (len > 0)
-        {
-            char* name = static_cast<char*>(xcb_get_property_value(reply));
-            if (name)
-            {
-                std::string windowName(name, len);
-                free(reply);
-                return windowName;
-            }
-        }
-        free(reply);
-    }
+    if (auto name = xproperty::text_prefix(conn_.get(), window, ewmh_.get()->_NET_WM_NAME, utf8_string_, 1024);
+        name && !name->empty())
+        return *name;
+    if (auto name = xproperty::text_prefix(conn_.get(), window, XCB_ATOM_WM_NAME, XCB_ATOM_STRING, 1024);
+        name && !name->empty())
+        return *name;
     return "Unnamed";
 }
 
@@ -2433,19 +2314,7 @@ uint32_t WindowManager::get_user_time(xcb_window_t window)
             time_window = client->user_time_window;
     }
 
-    auto cookie = xcb_get_property(conn_.get(), 0, time_window, net_wm_user_time_, XCB_ATOM_CARDINAL, 0, 1);
-    auto* reply = xcb_get_property_reply(conn_.get(), cookie, nullptr);
-    if (reply)
-    {
-        uint32_t time = 0;
-        if (xcb_get_property_value_length(reply) >= 4)
-        {
-            time = *static_cast<uint32_t*>(xcb_get_property_value(reply));
-        }
-        free(reply);
-        return time;
-    }
-    return 0;
+    return xproperty::scalar(conn_.get(), time_window, net_wm_user_time_, XCB_ATOM_CARDINAL).value_or(0);
 }
 
 void WindowManager::update_window_title(xcb_window_t window)
@@ -2473,29 +2342,31 @@ void WindowManager::refresh_workareas()
         monitor.strut = {};
     }
 
+    std::optional<Geometry> root;
     for (auto const& [dock, client] : clients_)
     {
         if (client.kind() != Client::Kind::Dock)
             continue;
-
-        Strut strut = ewmh_.get_window_strut(dock);
-        if (strut.left == 0 && strut.right == 0 && strut.top == 0 && strut.bottom == 0)
+        auto reservation = ewmh_.get_window_strut(dock);
+        if (reservation.empty())
             continue;
-
-        auto geom_cookie = xcb_get_geometry(conn_.get(), dock);
-        auto* geom = xcb_get_geometry_reply(conn_.get(), geom_cookie, nullptr);
-        if (!geom)
-            continue;
-
-        Monitor* target = monitor_at_point(geom->x, geom->y);
-        free(geom);
-
-        if (target)
+        if (!root)
         {
-            target->strut.left = std::max(target->strut.left, strut.left);
-            target->strut.right = std::max(target->strut.right, strut.right);
-            target->strut.top = std::max(target->strut.top, strut.top);
-            target->strut.bottom = std::max(target->strut.bottom, strut.bottom);
+            std::unique_ptr<xcb_get_geometry_reply_t, decltype(&free)> reply(
+                xcb_get_geometry_reply(conn_.get(), xcb_get_geometry(conn_.get(), conn_.screen()->root), nullptr),
+                &free
+            );
+            if (!reply)
+                break;
+            root = Geometry{ 0, 0, reply->width, reply->height };
+        }
+        for (auto& monitor : monitors_)
+        {
+            auto strut = monitor_strut(reservation, *root, monitor.geometry());
+            monitor.strut.left = std::max(monitor.strut.left, strut.left);
+            monitor.strut.right = std::max(monitor.strut.right, strut.right);
+            monitor.strut.top = std::max(monitor.strut.top, strut.top);
+            monitor.strut.bottom = std::max(monitor.strut.bottom, strut.bottom);
         }
     }
 

@@ -10,6 +10,7 @@
 #include <lwm/config/config.hpp>
 #include <lwm/core/log.hpp>
 #include <lwm/wm.hpp>
+#include <optional>
 #include <stdexcept>
 #include <string>
 #include <unistd.h>
@@ -73,6 +74,17 @@ int main(int argc, char* argv[])
         return 0;
     }
 
+    std::optional<lwm::SignalPipe> signals;
+    try
+    {
+        signals.emplace();
+    }
+    catch (std::exception const& error)
+    {
+        std::cerr << "lwm: signal initialization failed: " << error.what() << '\n';
+        return 1;
+    }
+
     try
     {
         auto log_init = lwm::log::initialize(parsed->log);
@@ -88,14 +100,13 @@ int main(int argc, char* argv[])
         return 1;
     }
 
-    std::vector<char*> restart_argv;
-    restart_argv.reserve(parsed->restart_argv.size() + 1);
-    for (std::string& argument : parsed->restart_argv)
-        restart_argv.push_back(argument.data());
-    restart_argv.push_back(nullptr);
-
     try
     {
+        std::vector<char*> restart_argv;
+        restart_argv.reserve(parsed->restart_argv.size() + 1);
+        for (std::string& argument : parsed->restart_argv) restart_argv.push_back(argument.data());
+        restart_argv.push_back(nullptr);
+
         LWM_LOG_INFO("Starting LWM window manager");
 
         std::string config_path = parsed->config_path.value_or(default_config_path());
@@ -110,7 +121,7 @@ int main(int argc, char* argv[])
             std::string restart_binary;
             try
             {
-                lwm::WindowManager wm(std::move(config), config_path);
+                lwm::WindowManager wm(std::move(config), *signals, config_path);
                 recovery_failures = 0;
                 auto result = wm.run();
                 if (result == lwm::RunResult::Failed)

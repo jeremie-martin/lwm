@@ -1,4 +1,5 @@
 #include "ipc.hpp"
+#include "xproperty.hpp"
 #include <cstdlib>
 #include <cstring>
 #include <sys/types.h>
@@ -82,21 +83,19 @@ std::optional<std::string> get_root_text_property(xcb_connection_t* conn, xcb_wi
 
     xcb_atom_t utf8_string = intern_atom(conn, "UTF8_STRING");
     xcb_atom_t type = utf8_string != XCB_NONE ? utf8_string : XCB_ATOM_STRING;
-    auto cookie = xcb_get_property(conn, 0, root, property, type, 0, 4096);
-    auto* reply = xcb_get_property_reply(conn, cookie, nullptr);
+    auto reply = xproperty::read(conn, root, property, type, 4096);
     if (!reply)
         return std::nullopt;
 
     std::optional<std::string> value;
-    int length = xcb_get_property_value_length(reply);
-    if (reply->type == type && reply->format == 8 && reply->bytes_after == 0 && length > 0)
+    int length = xcb_get_property_value_length(reply.get());
+    if (xproperty::complete(reply, type, 8) && length > 0)
     {
-        auto const* bytes = static_cast<char const*>(xcb_get_property_value(reply));
+        auto const* bytes = static_cast<char const*>(xcb_get_property_value(reply.get()));
         if (!std::memchr(bytes, 0, length))
             value = std::string(bytes, bytes + length);
     }
 
-    free(reply);
     return value;
 }
 

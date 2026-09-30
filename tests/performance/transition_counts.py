@@ -103,7 +103,7 @@ def measure(binary, library, scenario, operations):
         config_path = directory / "config.toml"
         config_path.write_text(config)
         counts_path = directory / "counts"
-        counts_path.write_bytes(bytes(40))
+        counts_path.write_bytes(bytes(48))
         log_path = directory / "wm.log"
         log = cleanup.enter_context(log_path.open("wb"))
         environment = dict(os.environ, DISPLAY=display_name, XDG_RUNTIME_DIR=temporary,
@@ -128,9 +128,9 @@ def measure(binary, library, scenario, operations):
         wait(lambda: ipc(path, "ping") == b"pong", wm, log_path)
         if scenario == "dock_startup":
             # The successful ping follows startup completion, including adoption.
-            counts = struct.unpack("=5Q", counts_path.read_bytes())
+            counts = struct.unpack("=6Q", counts_path.read_bytes())
             return dict(scenario=scenario, operations=operations,
-                        counts=dict(zip(("get_property", "geometry_configure", "visibility_barrier", "query_tree", "flush"), counts)))
+                        counts=dict(zip(("get_property", "geometry_configure", "visibility_barrier", "query_tree", "flush", "get_geometry"), counts)))
         window_type, dialog, atom_type = atom("_NET_WM_WINDOW_TYPE"), atom("_NET_WM_WINDOW_TYPE_DIALOG"), atom("ATOM")
         windows = []
         client_count = 200 if scenario == "workspace" else 10
@@ -146,7 +146,7 @@ def measure(binary, library, scenario, operations):
         ipc(path, f"focus window={target}")
         name_atom, utf8 = atom("_NET_WM_NAME"), atom("UTF8_STRING")
         time.sleep(0.05)
-        before = struct.unpack("=5Q", counts_path.read_bytes())
+        before = struct.unpack("=6Q", counts_path.read_bytes())
         for index in range(operations):
             if scenario == "workspace":
                 ipc(path, f"workspace switch {index % 2}")
@@ -168,8 +168,8 @@ def measure(binary, library, scenario, operations):
             wait(settled, wm, log_path)
 
         time.sleep(0.05)
-        after = struct.unpack("=5Q", counts_path.read_bytes())
-        names = ("get_property", "geometry_configure", "visibility_barrier", "query_tree", "flush")
+        after = struct.unpack("=6Q", counts_path.read_bytes())
+        names = ("get_property", "geometry_configure", "visibility_barrier", "query_tree", "flush", "get_geometry")
         return dict(scenario=scenario, operations=operations,
                     counts=dict(zip(names, (end - start for start, end in zip(before, after)))))
 
@@ -194,6 +194,8 @@ def main():
                 if scenario == "dock_startup":
                     if not operations <= counts["get_property"] <= 12 * operations + 100:
                         raise AssertionError("Repeated dock reads or inactive tracer: " + json.dumps(result))
+                    if counts["get_geometry"] != 1:
+                        raise AssertionError("Dock refresh must share one root geometry read: " + json.dumps(result))
                     continue
                 operations_flush_budget = result["operations"] * 20
                 reads = result["operations"] * (1 if scenario == "metadata" else 2)

@@ -3,6 +3,7 @@
 
 #include "lwm/core/log.hpp"
 #include "lwm/core/restart.hpp"
+#include "lwm/core/xproperty.hpp"
 #include "wm.hpp"
 #include <algorithm>
 #include <cstring>
@@ -12,27 +13,7 @@ namespace lwm {
 
 namespace {
 
-// Validate the X envelope before interpreting words. Oversized/truncated
-// properties are rejected rather than mistaken for complete records.
-std::vector<uint32_t> read_words(
-    xcb_connection_t* connection,
-    xcb_window_t window,
-    xcb_atom_t property,
-    xcb_atom_t type,
-    uint32_t limit = 65536
-)
-{
-    auto cookie = xcb_get_property(connection, false, window, property, type, 0, limit);
-    auto* reply = xcb_get_property_reply(connection, cookie, nullptr);
-    std::vector<uint32_t> words;
-    if (reply && reply->type == type && reply->format == 32 && reply->bytes_after == 0)
-    {
-        auto* begin = static_cast<uint32_t const*>(xcb_get_property_value(reply));
-        words.assign(begin, begin + xcb_get_property_value_length(reply) / 4);
-    }
-    free(reply);
-    return words;
-}
+using xproperty::read_words;
 
 void restore_visible_pool_scratchpad_membership(Client& client)
 {
@@ -310,13 +291,12 @@ void WindowManager::apply_restart_client_state(xcb_window_t window)
 
     // Restore scratchpad name
     auto name_cookie = xcb_get_property(conn_.get(), false, window, lwm_restart_scratchpad_name_, utf8_string_, 0, 256);
-    auto* name_reply = xcb_get_property_reply(conn_.get(), name_cookie, nullptr);
-    if (name_reply && name_reply->type == utf8_string_ && name_reply->format == 8 && name_reply->bytes_after == 0
-        && xcb_get_property_value_length(name_reply) > 0)
+    auto name_reply = xproperty::receive(conn_.get(), name_cookie);
+    if (xproperty::complete(name_reply, utf8_string_, 8) && xcb_get_property_value_length(name_reply.get()) > 0)
     {
         std::string scratchpad_name(
-            static_cast<char const*>(xcb_get_property_value(name_reply)),
-            static_cast<size_t>(xcb_get_property_value_length(name_reply))
+            static_cast<char const*>(xcb_get_property_value(name_reply.get())),
+            static_cast<size_t>(xcb_get_property_value_length(name_reply.get()))
         );
         client->scratchpad = NamedScratchpadMembership{ scratchpad_name };
 
@@ -333,7 +313,6 @@ void WindowManager::apply_restart_client_state(xcb_window_t window)
             }
         }
     }
-    free(name_reply);
 }
 
 void WindowManager::restore_window_ordering()
@@ -353,12 +332,11 @@ void WindowManager::restore_window_ordering()
     );
 
     // Restore tiled ordering
-    auto* tiled_reply = xcb_get_property_reply(conn_.get(), tiled_cookie, nullptr);
-    if (tiled_reply && tiled_reply->type == XCB_ATOM_WINDOW && tiled_reply->format == 32
-        && tiled_reply->bytes_after == 0)
+    auto tiled_reply = xproperty::receive(conn_.get(), tiled_cookie);
+    auto tiled_data = xproperty::words(tiled_reply, XCB_ATOM_WINDOW);
+    if (xproperty::complete(tiled_reply, XCB_ATOM_WINDOW, 32))
     {
-        size_t tiled_len = xcb_get_property_value_length(tiled_reply) / 4;
-        auto* tiled_data = static_cast<uint32_t const*>(xcb_get_property_value(tiled_reply));
+        size_t tiled_len = tiled_data.size();
 
         // Build a priority map: window → position in saved order
         std::unordered_map<xcb_window_t, size_t> tiled_priority;
@@ -383,16 +361,14 @@ void WindowManager::restore_window_ordering()
             }
         }
     }
-    free(tiled_reply);
 
     // Restore floating ordering by assigning mru_order from saved priority
-    auto* float_reply = xcb_get_property_reply(conn_.get(), float_cookie, nullptr);
+    auto float_reply = xproperty::receive(conn_.get(), float_cookie);
+    auto float_data = xproperty::words(float_reply, XCB_ATOM_WINDOW);
 
-    if (float_reply && float_reply->type == XCB_ATOM_WINDOW && float_reply->format == 32
-        && float_reply->bytes_after == 0)
+    if (xproperty::complete(float_reply, XCB_ATOM_WINDOW, 32))
     {
-        size_t float_len = xcb_get_property_value_length(float_reply) / 4;
-        auto* float_data = static_cast<uint32_t const*>(xcb_get_property_value(float_reply));
+        size_t float_len = float_data.size();
 
         // Assign mru_order based on saved ordering position
         for (size_t i = 0; i < float_len; ++i)
@@ -402,7 +378,6 @@ void WindowManager::restore_window_ordering()
                 client->mru_order = next_mru_order_++;
         }
     }
-    free(float_reply);
 
     // Restore scratchpad pool ordering
     auto pool_cookie = xcb_get_property(
@@ -414,11 +389,11 @@ void WindowManager::restore_window_ordering()
         0,
         65536
     );
-    auto* pool_reply = xcb_get_property_reply(conn_.get(), pool_cookie, nullptr);
-    if (pool_reply && pool_reply->type == XCB_ATOM_WINDOW && pool_reply->format == 32 && pool_reply->bytes_after == 0)
+    auto pool_reply = xproperty::receive(conn_.get(), pool_cookie);
+    auto pool_data = xproperty::words(pool_reply, XCB_ATOM_WINDOW);
+    if (xproperty::complete(pool_reply, XCB_ATOM_WINDOW, 32))
     {
-        size_t pool_len = xcb_get_property_value_length(pool_reply) / 4;
-        auto* pool_data = static_cast<uint32_t const*>(xcb_get_property_value(pool_reply));
+        size_t pool_len = pool_data.size();
 
         scratchpad_pool_.clear();
         for (size_t i = 0; i < pool_len; ++i)
@@ -434,7 +409,6 @@ void WindowManager::restore_window_ordering()
             }
         }
     }
-    free(pool_reply);
 }
 
 void WindowManager::clean_restart_properties()
@@ -502,16 +476,30 @@ void WindowManager::prepare_restart()
     // Release WM_S0 selection
     xcb_set_selection_owner(conn_.get(), XCB_NONE, wm_s0_, XCB_CURRENT_TIME);
 
-    // Set RetainPermanent so the X server keeps any lingering resources alive
-    // when the connection closes (via CLOEXEC on exec). Standard practice in i3/dwm.
+    // Keep one identifiable predecessor until a replacement connection exists.
+    // DestroyAll here would reset an X server whose only client is the WM.
+    xcb_change_property(
+        conn_.get(),
+        XCB_PROP_MODE_REPLACE,
+        wm_window_,
+        lwm_restart_owner_,
+        XCB_ATOM_WINDOW,
+        32,
+        1,
+        &wm_window_
+    );
+    xcb_change_property(
+        conn_.get(),
+        XCB_PROP_MODE_REPLACE,
+        conn_.screen()->root,
+        lwm_restart_owner_,
+        XCB_ATOM_WINDOW,
+        32,
+        1,
+        &wm_window_
+    );
     xcb_set_close_down_mode(conn_.get(), XCB_CLOSE_DOWN_RETAIN_PERMANENT);
 
-    // Destroy our WM windows (both the internal WM window and the EWMH supporting window)
-    if (wm_window_ != XCB_NONE)
-    {
-        xcb_destroy_window(conn_.get(), wm_window_);
-        wm_window_ = XCB_NONE;
-    }
     ewmh_.destroy_for_restart();
 
     // Clean up IPC

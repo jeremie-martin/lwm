@@ -1,5 +1,7 @@
 add_library(liblwm STATIC
     core/connection.cpp
+    core/signals.cpp
+    core/workarea.cpp
     core/log.cpp
     core/ewmh.cpp
     core/floating.cpp

@@ -61,6 +61,8 @@ add_executable(lwm_tests
   test_ipc_command.cpp
   test_notify_bridge.cpp
   test_harness.cpp
+  test_workarea.cpp
+  test_signal_lifecycle.cpp
   test_layout.cpp
   test_restart.cpp
   test_stacking_policy.cpp

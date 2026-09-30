@@ -31,6 +31,7 @@ void Server::start(std::string path)
     if (path.size() >= sizeof(sockaddr_un::sun_path))
         throw std::runtime_error("IPC socket path is too long: " + path);
     std::filesystem::create_directories(std::filesystem::path(path).parent_path());
+    clients_.reserve(max_clients + max_subscribers);
     int fd = socket(AF_UNIX, SOCK_STREAM | SOCK_CLOEXEC | SOCK_NONBLOCK, 0);
     if (fd < 0)
         throw std::runtime_error("Failed to create IPC socket");
@@ -44,7 +45,6 @@ void Server::start(std::string path)
         close(fd);
         throw std::runtime_error("Failed to bind IPC socket: " + std::string(std::strerror(error)));
     }
-    clients_.reserve(max_clients + max_subscribers);
     listener_ = fd;
     path_ = std::move(path);
     if (listen(listener_, 16) < 0 || chmod(path_.c_str(), 0600) < 0)

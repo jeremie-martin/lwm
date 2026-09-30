@@ -7,6 +7,7 @@
 #include "lwm/core/invariants.hpp"
 #include "lwm/core/ipc_server.hpp"
 #include "lwm/core/policy.hpp"
+#include "lwm/core/signals.hpp"
 #include "lwm/core/types.hpp"
 #include "lwm/core/window_rules.hpp"
 #include "lwm/keybind/keybind.hpp"
@@ -62,7 +63,7 @@ struct ClassificationResult
 class WindowManager
 {
 public:
-    WindowManager(Config config, std::string config_path);
+    WindowManager(Config config, SignalPipe& signals, std::string config_path);
     ~WindowManager();
 
     RunResult run();
@@ -173,6 +174,7 @@ private:
     xcb_atom_t net_wm_user_time_window_ = XCB_NONE;
     xcb_atom_t net_wm_state_focused_ = XCB_NONE;
     xcb_atom_t lwm_restart_client_ = XCB_NONE;
+    xcb_atom_t lwm_restart_owner_ = XCB_NONE;
     xcb_atom_t lwm_restart_state_ = XCB_NONE;
     xcb_atom_t lwm_restart_tiled_order_ = XCB_NONE;
     xcb_atom_t lwm_restart_floating_order_ = XCB_NONE;
@@ -203,8 +205,8 @@ private:
     SplitAddress last_gap_click_address_{};
     size_t last_gap_click_monitor_ = 0;
 
-    // SIGHUP self-pipe: handler writes to [1], main loop polls [0]
-    int signal_pipe_[2] = { -1, -1 };
+    // Process-owned signal handlers and reload pipe survive WM reconstruction.
+    SignalPipe& signals_;
 
     // One outer operation owns these effects; feature helpers never complete them.
     struct TransitionEffects

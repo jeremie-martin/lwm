@@ -6,6 +6,7 @@
 #include <optional>
 #include <thread>
 #include <vector>
+#include <xcb/sync.h>
 #include <xcb/xcb_icccm.h>
 #include <xcb/xtest.h>
 
@@ -726,7 +727,7 @@ TEST_CASE(
     REQUIRE(wait_for_active_window(conn, w2, kTimeout));
     send_client_message(conn, w1, net_active_window, 1, 2500, 0, 0, 0);
     REQUIRE(wait_for_active_window(conn, w1, kTimeout));
-    REQUIRE_FALSE(has_state(conn, w1, net_wm_state_demands_attention));
+    REQUIRE(wait_for_condition([&] { return !has_state(conn, w1, net_wm_state_demands_attention); }, kTimeout));
 
     destroy_window(conn, w2);
     destroy_window(conn, w1);
@@ -1407,4 +1408,191 @@ TEST_CASE(
     CHECK(get_window_geometry(conn, window) == previous);
     REQUIRE(wait_for_active_window(conn, window, kTimeout));
     destroy_window(conn, window);
+}
+
+TEST_CASE(
+    "Integration: malformed transient properties do not make clients floating",
+    "[integration][property][malformed]"
+)
+{
+    auto env = TestEnvironment::create();
+    REQUIRE(env);
+    auto& conn = env->conn;
+    auto parent = create_window(conn, 10, 10, 200, 150);
+    auto child = create_window(conn, 20, 20, 200, 150);
+    map_window(conn, parent);
+    REQUIRE(wait_for_active_window(conn, parent, kTimeout));
+    map_window(conn, child);
+    REQUIRE(wait_for_active_window(conn, child, kTimeout));
+    auto property = intern_atom(conn.get(), "WM_TRANSIENT_FOR");
+    auto actions = intern_atom(conn.get(), "_NET_WM_ALLOWED_ACTIONS");
+    auto move = intern_atom(conn.get(), "_NET_WM_ACTION_MOVE");
+    auto check = [&](xcb_atom_t type, uint8_t format, uint32_t count)
+    {
+        set_transient_for(conn, child, parent);
+        REQUIRE(wait_for_condition([&] { return property_has_atom(conn.get(), child, actions, move); }, kTimeout));
+        uint32_t values[] = { parent, parent };
+        xcb_change_property(conn.get(), XCB_PROP_MODE_REPLACE, child, property, type, format, count, values);
+        observe_title_after_events(conn, child);
+        CHECK_FALSE(property_has_atom(conn.get(), child, actions, move));
+    };
+    check(XCB_ATOM_WINDOW, 8, 4);
+    check(XCB_ATOM_WINDOW, 16, 2);
+    check(XCB_ATOM_CARDINAL, 32, 1);
+    check(XCB_ATOM_WINDOW, 32, 2);
+    check(XCB_ATOM_WINDOW, 32, 0);
+}
+
+TEST_CASE(
+    "Integration: malformed user timestamps cannot reject legitimate activation",
+    "[integration][property][malformed]"
+)
+{
+    auto env = TestEnvironment::create();
+    REQUIRE(env);
+    auto& conn = env->conn;
+    auto target = create_window(conn, 10, 10, 200, 150);
+    auto active = create_window(conn, 20, 20, 200, 150);
+    map_window(conn, target);
+    REQUIRE(wait_for_active_window(conn, target, kTimeout));
+    map_window(conn, active);
+    REQUIRE(wait_for_active_window(conn, active, kTimeout));
+    auto time = intern_atom(conn.get(), "_NET_WM_USER_TIME");
+    auto activate = intern_atom(conn.get(), "_NET_ACTIVE_WINDOW");
+    auto attention = intern_atom(conn.get(), "_NET_WM_STATE_DEMANDS_ATTENTION");
+    uint32_t values[] = { 2000, 2000 };
+    xcb_change_property(conn.get(), XCB_PROP_MODE_REPLACE, active, time, XCB_ATOM_CARDINAL, 32, 1, values);
+    observe_title_after_events(conn, active);
+    send_client_message(conn, target, activate, 1, 1500);
+    REQUIRE(wait_for_condition([&] { return has_state(conn, target, attention); }, kTimeout));
+    REQUIRE(wait_for_active_window(conn, active, kTimeout));
+    auto check = [&](xcb_atom_t type, uint8_t format, uint32_t count)
+    {
+        xcb_change_property(conn.get(), XCB_PROP_MODE_REPLACE, active, time, type, format, count, values);
+        observe_title_after_events(conn, active);
+        send_client_message(conn, target, activate, 1, 1500);
+        REQUIRE(wait_for_active_window(conn, target, kTimeout));
+        send_client_message(conn, active, activate, 2, 0);
+        REQUIRE(wait_for_active_window(conn, active, kTimeout));
+    };
+    check(XCB_ATOM_CARDINAL, 8, 4);
+    check(XCB_ATOM_CARDINAL, 16, 2);
+    check(XCB_ATOM_WINDOW, 32, 1);
+    check(XCB_ATOM_CARDINAL, 32, 2);
+}
+
+TEST_CASE("Integration: titles validate format and retain bounded text fallback", "[integration][property][malformed]")
+{
+    auto env = TestEnvironment::create();
+    REQUIRE(env);
+    auto& conn = env->conn;
+    auto window = create_window(conn, 10, 10, 200, 150);
+    map_window(conn, window);
+    REQUIRE(wait_for_active_window(conn, window, kTimeout));
+    auto socket = wait_for_ipc_socket_path(conn);
+    REQUIRE(socket);
+    auto name = intern_atom(conn.get(), "_NET_WM_NAME");
+    auto utf8 = intern_atom(conn.get(), "UTF8_STRING");
+    std::string fallback = "legacy title";
+    xcb_change_property(
+        conn.get(),
+        XCB_PROP_MODE_REPLACE,
+        window,
+        XCB_ATOM_WM_NAME,
+        XCB_ATOM_STRING,
+        8,
+        fallback.size(),
+        fallback.data()
+    );
+    auto check = [&](std::string const& expected)
+    {
+        xcb_flush(conn.get());
+        REQUIRE(wait_for_condition(
+            [&]
+            {
+                auto reply = send_ipc_command(*socket, "window list");
+                REQUIRE(reply);
+                REQUIRE(reply->starts_with("ok "));
+                auto snapshot = nlohmann::json::parse(reply->substr(3));
+                for (auto const& entry : snapshot.at("windows"))
+                    if (entry.at("id") == window && entry.at("title") == expected)
+                        return true;
+                return false;
+            },
+            kTimeout
+        ));
+    };
+    uint32_t invalid = 0x41414141;
+    xcb_change_property(conn.get(), XCB_PROP_MODE_REPLACE, window, name, utf8, 32, 1, &invalid);
+    check(fallback);
+    std::string long_title(5000, 'b');
+    xcb_change_property(conn.get(), XCB_PROP_MODE_REPLACE, window, name, utf8, 8, long_title.size(), long_title.data());
+    check(long_title.substr(0, 4096));
+    xcb_delete_property(conn.get(), window, name);
+    check(fallback);
+}
+
+TEST_CASE(
+    "Integration: sync notifications accept basic and extended counter properties",
+    "[integration][property][sync]"
+)
+{
+    auto env = TestEnvironment::create();
+    REQUIRE(env);
+    auto& conn = env->conn;
+    auto* initialized = xcb_sync_initialize_reply(conn.get(), xcb_sync_initialize(conn.get(), 3, 1), nullptr);
+    REQUIRE(initialized);
+    free(initialized);
+    auto protocols = intern_atom(conn.get(), "WM_PROTOCOLS");
+    auto request = intern_atom(conn.get(), "_NET_WM_SYNC_REQUEST");
+    auto property = intern_atom(conn.get(), "_NET_WM_SYNC_REQUEST_COUNTER");
+    auto check = [&](uint8_t format, uint32_t count, bool accepted)
+    {
+        auto window = create_window(conn, 10, 10, 200, 150);
+        xcb_sync_counter_t counters[] = { xcb_generate_id(conn.get()), xcb_generate_id(conn.get()), 0 };
+        xcb_sync_create_counter(conn.get(), counters[0], { 0, 100 });
+        xcb_sync_create_counter(conn.get(), counters[1], { 0, 200 });
+        xcb_change_property(conn.get(), XCB_PROP_MODE_REPLACE, window, protocols, XCB_ATOM_ATOM, 32, 1, &request);
+        xcb_change_property(
+            conn.get(),
+            XCB_PROP_MODE_REPLACE,
+            window,
+            property,
+            XCB_ATOM_CARDINAL,
+            format,
+            count,
+            counters
+        );
+        map_window(conn, window);
+        REQUIRE(wait_for_active_window(conn, window, kTimeout));
+        observe_title_after_events(conn, window);
+        // The WM has completed mapping; this reply brings prior messages into our event queue.
+        free(xcb_get_input_focus_reply(conn.get(), xcb_get_input_focus(conn.get()), nullptr));
+        std::optional<uint32_t> first_value;
+        while (auto* event = xcb_poll_for_event(conn.get()))
+        {
+            if ((event->response_type & 0x7f) == XCB_CLIENT_MESSAGE)
+            {
+                auto* message = reinterpret_cast<xcb_client_message_event_t*>(event);
+                if (message->window == window && message->type == protocols && message->data.data32[0] == request
+                    && !first_value)
+                    first_value = message->data.data32[2];
+            }
+            free(event);
+        }
+        if (accepted)
+        {
+            REQUIRE(first_value);
+            CHECK(*first_value == 101); // Uses the basic counter even when the extended one exists.
+        }
+        else
+            CHECK_FALSE(first_value);
+        destroy_window(conn, window);
+        xcb_sync_destroy_counter(conn.get(), counters[0]);
+        xcb_sync_destroy_counter(conn.get(), counters[1]);
+    };
+    check(32, 1, true);
+    check(32, 2, true);
+    check(8, 4, false);
+    check(32, 3, false);
 }

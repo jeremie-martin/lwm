@@ -2,6 +2,7 @@
 
 #include "connection.hpp"
 #include "types.hpp"
+#include "workarea.hpp"
 #include <map>
 #include <string>
 #include <vector>
@@ -79,7 +80,7 @@ public:
     WindowType get_window_type_enum(xcb_window_t window) const;
 
     // Strut support
-    Strut get_window_strut(xcb_window_t window) const;
+    DockStrut get_window_strut(xcb_window_t window) const;
 
     void destroy_for_restart();
 

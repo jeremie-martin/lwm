@@ -69,8 +69,9 @@ observes it in the WM's IPC snapshot. Use it only on managed fixtures whose titl
 does not participate in rules. It establishes handling of earlier events on that
 connection, not completion of unrelated asynchronous work. Prefer the actual
 changed outcome for positive assertions; do not issue actions repeatedly inside
-polling predicates. Restart tests must observe a new WM identity before checking
-restored state.
+polling predicates. Restart tests use `wm_instance()` and `wait_for_wm_restart()` to observe a new IPC
+instance before checking restored state. X resource IDs can be reused immediately
+after disconnect and cannot identify a distinct WM lifetime.
 
 Shared property readers validate X replies and property types. Use optional
 values for legitimately absent properties and require values that are part of
@@ -121,8 +122,21 @@ allow at most 200 crossing barriers and 200 QueryTree requests. Sticky-only
 changes must not rewrite unchanged geometry. A 200-client workspace workload
 also bounds flush calls to catch completion work repeated for each configure
 notification. Startup workloads with 10 and 40 docks bound property reads to
-catch repeated workarea scans during adoption. Omit `--check` to record counts without enforcing budgets. These are protocol-work budgets, not latency measurements; measure
+catch repeated workarea scans during adoption and require one shared root-geometry
+read, independent of dock count. Omit `--check` to record counts without enforcing budgets. These are protocol-work budgets, not latency measurements; measure
 uninstrumented Release builds separately on an otherwise idle machine.
+
+To detect retained X-server clients across repeated restart and failed-exec recovery (also
+requires the libXRes runtime library):
+
+```sh
+python3 tests/performance/restart_resources.py build/release/src/app/lwm --check
+```
+
+This uses the X Resource extension to compare client counts before and after
+20 WM reconstructions. Completion is established through the IPC instance ID;
+resource counts must return to the baseline. A final restart with the observer
+disconnected checks that an otherwise empty X server preserves workspace state.
 
 For independent IPC callers, run:
 

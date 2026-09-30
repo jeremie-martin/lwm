@@ -1,4 +1,4 @@
-#include "x11_test_harness.hpp"
+#include "wm_observations.hpp"
 #include <X11/Xlib.h>
 #include <algorithm>
 #include <array>
@@ -818,21 +818,13 @@ TEST_CASE("Integration: monocle layout survives exec restart", "[integration][la
         kTimeout
     ));
 
-    xcb_atom_t supporting = intern_atom(conn.get(), "_NET_SUPPORTING_WM_CHECK");
-    auto old_supporting = get_window_property_window(conn.get(), conn.root(), supporting);
-    REQUIRE(old_supporting.has_value());
+    auto previous = wm_instance(conn);
+    REQUIRE(previous);
 
     auto restart = run_lwmctl(test_env->wm, { "restart" }, *socket_path);
     REQUIRE(restart.has_value());
     REQUIRE(restart->exit_code == 0);
-    REQUIRE(wait_for_condition(
-        [&]()
-        {
-            auto current = get_window_property_window(conn.get(), conn.root(), supporting);
-            return current && *current != XCB_NONE && *current != *old_supporting;
-        },
-        std::chrono::seconds(5)
-    ));
+    REQUIRE(wait_for_wm_restart(conn, std::chrono::seconds(5), *previous));
 
     REQUIRE(wait_for_condition(
         [&]()
@@ -1045,10 +1037,10 @@ TEST_CASE("Integration: workspace, fullscreen, scratchpad and restart transition
         command("scratchpad cycle");
         REQUIRE(wait_for_active_window(conn, b, kTimeout));
         REQUIRE(wait_for_condition([&] { return visible(a) && visible(b); }, kTimeout));
-        auto previous = supporting_wm_window(conn);
+        auto previous = wm_instance(conn);
         REQUIRE(previous);
         command("restart");
-        REQUIRE(wait_for_wm_ready(conn, kTimeout, *previous));
+        REQUIRE(wait_for_wm_restart(conn, kTimeout, *previous));
         REQUIRE(wait_for_active_window(conn, b, kTimeout));
         REQUIRE(wait_for_condition([&] { return visible(a) && visible(b); }, kTimeout));
     }
