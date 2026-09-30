@@ -124,8 +124,7 @@ void WindowManager::complete_transition()
         if (monitor < monitors_.size())
             realize_visibility(monitor, preferred);
     validate_drag(!affected_monitors.empty());
-    if (auto const* active = get_client(active_window_);
-        active && (!is_focus_eligible(*active) || !is_visible(*active)))
+    if (auto const* active = get_client(active_window_); active && !is_focus_candidate(*active))
         repair_focus_after_visibility_change(focused_monitor_, false);
     if (active_window_ == XCB_NONE && effects_.repair_focus && !effects_.previous_focus && !showing_desktop_)
         focus_or_fallback(focused_monitor(), false);

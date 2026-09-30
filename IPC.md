@@ -64,7 +64,12 @@ containing line breaks or NULs cannot be represented by this line protocol.
 
 ## Commands
 
-Monitor- and workspace-relative commands target the focused monitor.
+Monitor- and workspace-relative commands target the focused monitor. Consecutive
+`focus next` / `focus prev` commands retain their starting order, including sticky
+windows, and skip windows that are no longer eligible. Ordinary activation,
+a change of monitor/workspace or active window, or a new client registration
+starts a fresh recent-use traversal. Cycling returns an error when no window is
+eligible, including while showing the desktop.
 
 | Command | Result |
 | --- | --- |
@@ -85,7 +90,7 @@ Monitor- and workspace-relative commands target the focused monitor.
 | `workspace next` / `workspace prev` | switch with wraparound |
 | `workspace list` | workspace state as JSON |
 | `focus window=<xid>` | focus a window, switching workspace if needed |
-| `focus next` / `focus prev` | move through the MRU focus cycle |
+| `focus next` / `focus prev` | cycle eligible windows in recent-use order |
 | `window list` | tiled and floating client state as JSON |
 | `scratchpad stash` | move the active window to the generic pool |
 | `scratchpad cycle` | cycle the generic pool |

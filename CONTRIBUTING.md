@@ -108,13 +108,14 @@ run it for topology changes. This covers the X protocol path, not hardware/drive
 behavior. The harness uses the server binary directly on Debian to avoid its
 console-only wrapper.
 
-For transition request budgets on an owned Xvfb server:
+For transition request budgets and focus-cycle latency on an owned Xvfb server:
 
 ```sh
 python3 tests/performance/transition_counts.py build/release/src/app/lwm --check
+python3 tests/performance/focus_cycle.py build/release/src/app/lwm
 ```
 
-This optional Linux check needs Python 3, `cc`, XCB headers, and libX11. It builds
+The transition request check needs Linux, Python 3, `cc`, XCB headers, and libX11. It builds
 an LD_PRELOAD tracer in a temporary directory and counts only the WM's requests.
 For 200 title changes, metadata-only updates must perform no geometry writes or
 visibility/stacking reconciliation; sticky and sticky+fullscreen rule changes
@@ -129,6 +130,14 @@ position, and bound geometry writes and reconciliation. These use synthetic X
 events to control batching; integration tests separately exercise real XTEST
 button grabs. Omit `--check` to record counts without enforcing budgets. These are protocol-work budgets, not latency measurements; measure
 uninstrumented Release builds separately on an otherwise idle machine.
+
+The focus-cycle benchmark reports completed IPC round-trip latency and distinct
+targets on an owned Xvfb display, with 10, 100, and 500 floating clients. Compare
+Release builds under similar load; this includes IPC, focus publication, and
+server interaction, not just selection. Latency is reported rather than used as a
+machine-dependent test threshold. A full traversal should visit every client. It defaults to `prev`, which permits
+equivalent-work comparisons with versions whose `next` command alternated between
+two windows; use `--direction next` to measure forward traversal.
 
 To detect retained X-server clients across repeated restart and failed-exec recovery (also
 requires the libXRes runtime library):

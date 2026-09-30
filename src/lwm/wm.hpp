@@ -5,6 +5,7 @@
 #include "lwm/core/events.hpp"
 #include "lwm/core/ewmh.hpp"
 #include "lwm/core/floating.hpp"
+#include "lwm/core/focus.hpp"
 #include "lwm/core/invariants.hpp"
 #include "lwm/core/ipc_server.hpp"
 #include "lwm/core/policy.hpp"
@@ -118,6 +119,14 @@ private:
     std::unordered_map<xcb_window_t, std::chrono::steady_clock::time_point> pending_kills_;
     uint64_t next_client_order_ = 0;
     uint64_t next_mru_order_ = 0;
+    struct FocusCycle
+    {
+        size_t monitor, workspace;
+        uint64_t next_recency, next_registration;
+        xcb_window_t current;
+        std::vector<xcb_window_t> order;
+    };
+    std::optional<FocusCycle> focus_cycle_;
     int32_t desktop_origin_x_ = 0;
     int32_t desktop_origin_y_ = 0;
     xcb_window_t active_window_ = XCB_NONE;
@@ -411,7 +420,7 @@ private:
     void warp_to_monitor(Monitor const& monitor);
     void focus_or_fallback(Monitor& monitor, bool record_user_time = true);
     void repair_focus_after_visibility_change(size_t preferred_monitor, bool record_user_time = false);
-    std::vector<focus_policy::FloatingCandidate> build_floating_candidates() const;
+    focus::Context focus_context(size_t monitor) const;
     Monitor* monitor_at_point(int16_t x, int16_t y);
     bool is_floating_window(xcb_window_t window) const;
     std::optional<uint32_t> get_raw_window_desktop(xcb_window_t window) const;
@@ -449,6 +458,7 @@ private:
     bool should_be_visible(Client const& client) const;
     bool is_visible(Client const& client) const;
     bool is_suppressed_by_fullscreen(Client const& client) const;
+    xcb_window_t effective_fullscreen_owner(size_t monitor) const;
     stacking_policy::Tier compute_stack_tier(Client const& client) const;
     stacking_policy::ClientStackInputs stack_inputs_of(Client const& client) const;
     xcb_window_t select_fullscreen_owner_for_monitor(size_t monitor_idx, xcb_window_t preferred_owner = XCB_NONE) const;
@@ -492,11 +502,7 @@ private:
     MousebindConfig const* resolve_mouse_binding(uint16_t state, uint8_t button) const;
     bool supports_protocol(xcb_window_t window, xcb_atom_t protocol) const;
     bool is_focus_eligible(Client const& client) const;
-    bool is_focus_candidate(xcb_window_t window) const
-    {
-        auto const* c = get_client(window);
-        return c && !c->iconic && is_focus_eligible(*c);
-    }
+    bool is_focus_candidate(Client const& client) const;
     void send_wm_take_focus(Client const& client, uint32_t timestamp);
     void send_wm_ping(xcb_window_t window, uint32_t timestamp);
     void send_sync_request(Client& client, uint32_t timestamp);

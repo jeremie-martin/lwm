@@ -3,8 +3,32 @@
 #include "lwm/core/types.hpp"
 #include <optional>
 #include <span>
+#include <unordered_map>
 
 namespace lwm::focus {
+
+using Clients = std::unordered_map<xcb_window_t, Client>;
+
+// One selection uses one resolved fullscreen owner, including pending transitions.
+struct Context
+{
+    size_t monitor;
+    size_t workspace;
+    xcb_window_t fullscreen_owner;
+    bool showing_desktop;
+};
+
+bool accepts_focus(Client const& client);
+bool eligible(Client const& client, Context const& context);
+xcb_window_t fallback(Clients const& clients, Monitor const& monitor, Context const& context);
+std::vector<xcb_window_t> recent_order(Clients const& clients);
+xcb_window_t cycle_target(
+    std::span<xcb_window_t const> order,
+    Clients const& clients,
+    Context const& context,
+    xcb_window_t current,
+    bool forward
+);
 
 enum class PointerTransition
 {

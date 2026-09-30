@@ -1139,8 +1139,7 @@ void WindowManager::manage_client(
     request_geometry(client);
     if (!adopting)
         effects_.maps.push_back(window);
-    if (!adopting && !client.iconic && !suppress_focus_ && client.monitor == focused_monitor_ && is_visible(client)
-        && is_focus_eligible(client))
+    if (!adopting && !suppress_focus_ && client.monitor == focused_monitor_ && is_focus_candidate(client))
         focus_any_window(window);
 }
 
@@ -1814,6 +1813,13 @@ xcb_window_t WindowManager::select_fullscreen_owner_for_monitor(size_t monitor_i
     return fullscreen_policy::select_owner(monitors_[monitor_idx].fullscreen_owner, candidates);
 }
 
+xcb_window_t WindowManager::effective_fullscreen_owner(size_t monitor) const
+{
+    auto pending = effects_.monitors.find(monitor);
+    return pending == effects_.monitors.end() ? monitors_[monitor].fullscreen_owner
+                                              : select_fullscreen_owner_for_monitor(monitor, pending->second);
+}
+
 bool WindowManager::is_suppressed_by_fullscreen(Client const& client) const
 {
     if (client.kind() != Client::Kind::Tiled && client.kind() != Client::Kind::Floating)
@@ -1823,10 +1829,7 @@ bool WindowManager::is_suppressed_by_fullscreen(Client const& client) const
     if (client.iconic || !should_be_visible(client))
         return false;
 
-    auto pending = effects_.monitors.find(client.monitor);
-    xcb_window_t const owner = pending == effects_.monitors.end()
-        ? monitors_[client.monitor].fullscreen_owner
-        : select_fullscreen_owner_for_monitor(client.monitor, pending->second);
+    auto owner = effective_fullscreen_owner(client.monitor);
     if (owner == XCB_NONE || owner == client.id)
         return false;
     if (client.transient_for == owner)

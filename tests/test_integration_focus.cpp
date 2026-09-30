@@ -1,5 +1,6 @@
 #include "wm_observations.hpp"
 #include <X11/Xlib.h>
+#include <X11/keysym.h>
 #include <algorithm>
 #include <catch2/catch_test_macros.hpp>
 #include <chrono>
@@ -1768,4 +1769,125 @@ TEST_CASE(
     CHECK(has_state(conn, b, unknown));
     destroy_window(conn, a);
     destroy_window(conn, b);
+}
+
+TEST_CASE(
+    "Integration: consecutive focus cycling walks stable MRU and resets after activation",
+    "[integration][focus][cycle]"
+)
+{
+    auto env = TestEnvironment::create();
+    if (!env)
+        SKIP("X11 unavailable");
+    auto& conn = env->conn;
+    xcb_warp_pointer(conn.get(), XCB_NONE, conn.root(), 0, 0, 0, 0, 0, 0);
+    xcb_flush(conn.get());
+    std::vector<xcb_window_t> windows;
+    for (int i = 0; i < 4; ++i)
+    {
+        auto w = create_window(conn, 20, 20, 200, 150);
+        if (i == 1)
+            set_transient_for(conn, w, windows.front());
+        windows.push_back(w);
+        map_window(conn, w);
+        REQUIRE(wait_for_active_window(conn, w, kTimeout));
+    }
+    auto command = [&](std::string argument, xcb_window_t expected)
+    {
+        auto result = run_lwmctl(env->wm, { "focus", argument });
+        REQUIRE(result);
+        REQUIRE(result->exit_code == 0);
+        REQUIRE(result->stdout_text == std::to_string(expected) + "\n");
+        REQUIRE(wait_for_active_window(conn, expected, kTimeout));
+        REQUIRE(wait_for_x_input_focus(conn, expected, kTimeout));
+    };
+    // Establish recency independently of mapping/layout order: 0, 2, 1, 3.
+    for (int i : { 3, 1, 2, 0 }) command("window=" + std::to_string(windows[i]), windows[i]);
+    for (int i : { 2, 1, 3, 0, 2 }) command("next", windows[i]);
+    for (int i : { 0, 3, 1, 2 }) command("prev", windows[i]);
+    // Explicit same-window activation also starts a fresh MRU traversal.
+    command("window=" + std::to_string(windows[2]), windows[2]);
+    command("next", windows[1]);
+    command("next", windows[3]);
+    // Destruction of an inactive member must not leave a stale target.
+    destroy_window(conn, windows[0]);
+    observe_title_after_events(conn, windows[3]);
+    command("next", windows[2]);
+    auto added = create_window(conn, 20, 20, 200, 150);
+    map_window(conn, added);
+    REQUIRE(wait_for_active_window(conn, added, kTimeout));
+    command("next", windows[2]);
+    command("next", windows[3]);
+    for (int i : { 1, 2, 3 }) destroy_window(conn, windows[i]);
+    destroy_window(conn, added);
+}
+
+TEST_CASE(
+    "Integration: keyboard cycling includes sticky tiles and observes changed input hints",
+    "[integration][focus][cycle]"
+)
+{
+    auto env = TestEnvironment::create(R"(
+[workspaces]
+count = 2
+[[binds]]
+key = "F5"
+focus_next = true
+[[binds]]
+key = "F6"
+focus_prev = true
+)");
+    if (!env)
+        SKIP("X11 unavailable");
+    auto& conn = env->conn;
+    xcb_warp_pointer(conn.get(), XCB_NONE, conn.root(), 0, 0, 0, 0, 0, 0);
+    xcb_flush(conn.get());
+    auto sticky = create_window(conn, 20, 20, 200, 150);
+    set_initial_window_state(conn, sticky, { intern_atom(conn.get(), "_NET_WM_STATE_STICKY") });
+    map_window(conn, sticky);
+    REQUIRE(wait_for_active_window(conn, sticky, kTimeout));
+    send_client_message(conn, conn.root(), intern_atom(conn.get(), "_NET_CURRENT_DESKTOP"), 1);
+    REQUIRE(wait_for_property_cardinal(
+        conn.get(),
+        conn.root(),
+        intern_atom(conn.get(), "_NET_CURRENT_DESKTOP"),
+        1,
+        kTimeout
+    ));
+    auto a = create_window(conn, 20, 20, 200, 150);
+    map_window(conn, a);
+    REQUIRE(wait_for_active_window(conn, a, kTimeout));
+    auto b = create_window(conn, 20, 20, 200, 150);
+    map_window(conn, b);
+    REQUIRE(wait_for_active_window(conn, b, kTimeout));
+    auto key = [&](xcb_keysym_t symbol, xcb_window_t expected)
+    {
+        auto code = first_keycode_for_keysym(conn, symbol);
+        REQUIRE(code);
+        xcb_test_fake_input(conn.get(), XCB_KEY_PRESS, *code, XCB_CURRENT_TIME, conn.root(), 0, 0, 0);
+        xcb_test_fake_input(conn.get(), XCB_KEY_RELEASE, *code, XCB_CURRENT_TIME, conn.root(), 0, 0, 0);
+        xcb_flush(conn.get());
+        observe_title_after_events(conn, b);
+        REQUIRE(wait_for_active_window(conn, expected, kTimeout));
+    };
+    key(XK_F5, a);
+    key(XK_F5, sticky);
+    key(XK_F6, a);
+    xcb_icccm_wm_hints_t hints{ };
+    hints.flags = XCB_ICCCM_WM_HINT_INPUT;
+    hints.input = 0;
+    xcb_icccm_set_wm_hints(conn.get(), sticky, &hints);
+    observe_title_after_events(conn, b);
+    key(XK_F5, b);
+    hints.input = 1;
+    xcb_icccm_set_wm_hints(conn.get(), sticky, &hints);
+    observe_title_after_events(conn, b);
+    key(XK_F6, sticky);
+    send_client_message(conn, conn.root(), intern_atom(conn.get(), "_NET_SHOWING_DESKTOP"), 1);
+    observe_title_after_events(conn, b);
+    auto result = run_lwmctl(env->wm, { "focus", "next" });
+    REQUIRE(result);
+    REQUIRE(result->exit_code != 0);
+    REQUIRE(wait_for_x_input_focus(conn, conn.root(), kTimeout));
+    for (auto window : { sticky, a, b }) destroy_window(conn, window);
 }

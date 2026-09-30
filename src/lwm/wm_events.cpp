@@ -1507,7 +1507,7 @@ void WindowManager::handle_property_notify(xcb_property_notify_event_t const& e)
                 client->accepts_input = true; // ICCCM default when WM_HINTS absent
             }
 
-            if (active_window_ == e.window && !is_focus_eligible(*client))
+            if (active_window_ == e.window && !is_focus_candidate(*client))
             {
                 focus_or_fallback(monitors_[client->monitor], false);
             }
@@ -1518,7 +1518,7 @@ void WindowManager::handle_property_notify(xcb_property_notify_event_t const& e)
         if (auto* client = get_client(e.window))
         {
             client->supports_take_focus = supports_protocol(e.window, wm_take_focus_);
-            if (active_window_ == e.window && !is_focus_eligible(*client))
+            if (active_window_ == e.window && !is_focus_candidate(*client))
                 repair_focus_after_visibility_change(client->monitor, false);
         }
     }

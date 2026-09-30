@@ -240,19 +240,6 @@ TEST_CASE("compute_desired_state enforces above/below mutual exclusion", "[clien
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// Focus eligibility with state combinations
-// ─────────────────────────────────────────────────────────────────────────────
-
-TEST_CASE("Focus eligibility checks input hints", "[client][focus][policy]")
-{
-    // Windows need input focus or WM_TAKE_FOCUS
-    REQUIRE(focus_policy::is_focus_eligible(true, false));
-    REQUIRE(focus_policy::is_focus_eligible(false, true));
-    REQUIRE(focus_policy::is_focus_eligible(true, true));
-    REQUIRE_FALSE(focus_policy::is_focus_eligible(false, false));
-}
-
-// ─────────────────────────────────────────────────────────────────────────────
 // Visibility policy comprehensive tests
 // ─────────────────────────────────────────────────────────────────────────────
 

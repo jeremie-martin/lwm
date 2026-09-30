@@ -16,7 +16,8 @@ belongs in [IPC.md](IPC.md).
 | `src/lwm/layout/` | pure master-stack and monocle geometry, split ratios, hit testing |
 | `src/lwm/core/log.*` | Quill configuration, standard sinks, process-boundary lifecycle |
 | `src/lwm/core/types.hpp` | domain state: clients, monitors, workspaces, geometry |
-| `src/lwm/core/policy.hpp` | pure visibility, focus, workspace, fullscreen, and hotplug decisions |
+| `src/lwm/core/focus.*` | shared client eligibility, fallback, cycle ordering, and pointer monitor selection |
+| `src/lwm/core/policy.hpp` | pure visibility, workspace, fullscreen, and hotplug decisions |
 | `src/lwm/core/ewmh.*` | EWMH atoms, classification, and property I/O |
 | `src/lwm/core/restart.*` | bounded restart record encoding/decoding without X or live-state mutation |
 | `src/lwm/core/ipc_server.*` | bounded independent connections, deadlines, ordered subscription output |
@@ -277,8 +278,20 @@ is true or it advertises `WM_TAKE_FOCUS`.
 
 Fallback selection prefers the workspace's remembered focus, its bounded focus
 history, reverse tiled order, sticky tiled clients on the monitor, then visible
-floating clients by recency. Focus cycling instead builds one recency-ranked
-list of eligible tiled and floating clients.
+floating clients by recency. `core/focus` reads the client registry directly for
+both fallback and cycling, using one eligibility predicate and one resolved
+fullscreen owner per selection. Fallback does not allocate candidate lists.
+
+Cycling retains only window IDs in descending recency order; consecutive steps
+keep that order while recording actual focus recency. Each step checks current
+client state, so removed or newly ineligible windows are skipped, and existing
+windows that become eligible can join the traversal. Sticky tiled and floating
+clients participate across workspaces on their monitor. Ordinary activation
+(including same-window activation), a changed monitor/workspace or active window,
+or a new client registration starts a fresh traversal. The WM detects these
+changes from its existing recency/registration counters and current focus context;
+cycling acknowledges its own recency update. Equal recency is ordered by newest
+registration, then window ID.
 
 Visibility-changing transitions finish with `flush_and_drain_crossing()`
 before accepting subsequent pointer-driven focus. This round-trip discards stale
