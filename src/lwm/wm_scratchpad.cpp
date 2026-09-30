@@ -28,21 +28,6 @@ void WindowManager::init_scratchpad_state()
     {
         named_scratchpads_.push_back({ sp.name });
     }
-    rebuild_scratchpad_matchers();
-}
-
-void WindowManager::rebuild_scratchpad_matchers()
-{
-    scratchpad_matchers_.clear();
-    for (auto const& sp : config_.scratchpads)
-    {
-        CompiledScratchpadMatcher matcher;
-        matcher.name = sp.name;
-        matcher.class_regex = WindowRules::compile_pattern(sp.class_pattern);
-        matcher.instance_regex = WindowRules::compile_pattern(sp.instance_pattern);
-        matcher.title_regex = WindowRules::compile_pattern(sp.title_pattern);
-        scratchpad_matchers_.push_back(std::move(matcher));
-    }
 }
 
 ScratchpadConfig const* WindowManager::find_scratchpad_config(std::string_view name) const
@@ -372,19 +357,14 @@ WindowManager::match_scratchpad_for_window(WindowMatchInfo const& properties, Wi
             return rule_result.scratchpad;
     }
 
-    for (auto const& matcher : scratchpad_matchers_)
+    for (auto const& matcher : config_.scratchpads)
     {
         auto* state = find_named_scratchpad(matcher.name);
         if (!state || state->window() != XCB_NONE)
             continue;
 
-        if (matcher.class_regex.has_value() && !std::regex_match(properties.wm_class, *matcher.class_regex))
-            continue;
-        if (matcher.instance_regex.has_value() && !std::regex_match(properties.wm_class_name, *matcher.instance_regex))
-            continue;
-        if (matcher.title_regex.has_value() && !std::regex_match(properties.title, *matcher.title_regex))
-            continue;
-        if (!matcher.class_regex.has_value() && !matcher.instance_regex.has_value() && !matcher.title_regex.has_value())
+        if (matcher.match.empty()
+            || !matcher.match.matches(properties.wm_class, properties.wm_class_name, properties.title))
             continue;
 
         return matcher.name;

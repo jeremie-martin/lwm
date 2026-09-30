@@ -17,20 +17,17 @@ Config make_empty_config()
     return cfg;
 }
 
-CommandConfig make_shell_command(std::string value) { return CommandConfig::shell_command(std::move(value)); }
-
-KeybindConfig make_spawn_bind(std::string mod, std::string key, std::string command)
+std::pair<KeyBinding, Action> make_action_bind(uint16_t modifier, std::string const& key, Action action)
 {
-    KeybindConfig keybind;
-    keybind.mod = std::move(mod);
-    keybind.key = std::move(key);
-    keybind.action = SpawnAction{ make_shell_command(std::move(command)) };
-    return keybind;
+    return {
+        { modifier, static_cast<xcb_keysym_t>(XStringToKeysym(key.c_str())) },
+        std::move(action)
+    };
 }
 
-KeybindConfig make_action_bind(std::string mod, std::string key, Action action)
+std::pair<KeyBinding, Action> make_spawn_bind(uint16_t modifier, std::string const& key, std::string command)
 {
-    return { std::move(mod), std::move(key), std::move(action) };
+    return make_action_bind(modifier, key, SpawnAction{ CommandConfig::shell_command(std::move(command)) });
 }
 
 template <typename T> T const* action_as(Action const& action) { return std::get_if<T>(&action); }
@@ -78,48 +75,13 @@ std::unique_ptr<Connection> make_connection()
 // Modifier parsing tests (no X11 needed)
 // ─────────────────────────────────────────────────────────────────────────────
 
-TEST_CASE("KeybindManager parses modifier names, combinations and malformed input", "[keybind]")
-{
-    for (auto const& [text, expected] : std::vector<std::pair<std::string, uint16_t>>{
-             {                "super",                                                                XCB_MOD_MASK_4 },
-             {                "shift",                                                            XCB_MOD_MASK_SHIFT },
-             {                 "ctrl",                                                          XCB_MOD_MASK_CONTROL },
-             {              "control",                                                          XCB_MOD_MASK_CONTROL },
-             {                  "alt",                                                                XCB_MOD_MASK_1 },
-             {          "super+shift",                                         (XCB_MOD_MASK_4 | XCB_MOD_MASK_SHIFT) },
-             {           "super+ctrl",                                       (XCB_MOD_MASK_4 | XCB_MOD_MASK_CONTROL) },
-             {            "super+alt",                                             (XCB_MOD_MASK_4 | XCB_MOD_MASK_1) },
-             {           "shift+ctrl",                                   (XCB_MOD_MASK_SHIFT | XCB_MOD_MASK_CONTROL) },
-             {             "ctrl+alt",                                       (XCB_MOD_MASK_CONTROL | XCB_MOD_MASK_1) },
-             {     "super+shift+ctrl",                  (XCB_MOD_MASK_4 | XCB_MOD_MASK_SHIFT | XCB_MOD_MASK_CONTROL) },
-             {      "super+shift+alt",                        (XCB_MOD_MASK_4 | XCB_MOD_MASK_SHIFT | XCB_MOD_MASK_1) },
-             {       "super+ctrl+alt",                      (XCB_MOD_MASK_4 | XCB_MOD_MASK_CONTROL | XCB_MOD_MASK_1) },
-             {       "shift+ctrl+alt",                  (XCB_MOD_MASK_SHIFT | XCB_MOD_MASK_CONTROL | XCB_MOD_MASK_1) },
-             { "super+shift+ctrl+alt", (XCB_MOD_MASK_4 | XCB_MOD_MASK_SHIFT | XCB_MOD_MASK_CONTROL | XCB_MOD_MASK_1) },
-             {              "unknown",                                                                             0 },
-             {        "super+unknown",                                                                XCB_MOD_MASK_4 },
-             {                     "",                                                                             0 },
-             {     "shift+super+ctrl",                  (XCB_MOD_MASK_4 | XCB_MOD_MASK_SHIFT | XCB_MOD_MASK_CONTROL) },
-             {     "ctrl+shift+super",                  (XCB_MOD_MASK_4 | XCB_MOD_MASK_SHIFT | XCB_MOD_MASK_CONTROL) },
-             {               "super+",                                                                XCB_MOD_MASK_4 },
-             {         "super+shift+",                                         (XCB_MOD_MASK_4 | XCB_MOD_MASK_SHIFT) },
-             {                    "+",                                                                             0 },
-             {                   "++",                                                                             0 },
-             {                  "+++",                                                                             0 },
-    })
-    {
-        CAPTURE(text);
-        CHECK(KeybindManager::parse_modifier(text) == expected);
-    }
-}
-
 TEST_CASE("KeybindManager preserves shell command payloads for spawn actions", "[keybind]")
 {
     if (!ensure_x11_environment())
         SKIP("X11 environment not available");
 
     Config cfg = make_empty_config();
-    cfg.keybinds.push_back(make_spawn_bind("super", "a", "/usr/bin/firefox"));
+    cfg.keybinds.insert(make_spawn_bind(XCB_MOD_MASK_4, "a", "/usr/bin/firefox"));
     auto conn = make_connection();
     KeybindManager mgr(*conn, cfg);
 
@@ -154,11 +116,11 @@ TEST_CASE("KeybindManager::resolve handles multiple bindings across keys, modifi
         SKIP("X11 environment not available");
 
     Config cfg = make_empty_config();
-    cfg.keybinds.push_back(make_spawn_bind("super", "a", "terminal"));
-    cfg.keybinds.push_back(make_spawn_bind("super", "b", "browser"));
-    cfg.keybinds.push_back(make_action_bind("super+shift", "a", KillAction{ }));
-    cfg.keybinds.push_back(make_action_bind("super", "1", SwitchWorkspaceAction{ 0 }));
-    cfg.keybinds.push_back(make_action_bind("super+shift", "1", MoveToWorkspaceAction{ 0 }));
+    cfg.keybinds.insert(make_spawn_bind(XCB_MOD_MASK_4, "a", "terminal"));
+    cfg.keybinds.insert(make_spawn_bind(XCB_MOD_MASK_4, "b", "browser"));
+    cfg.keybinds.insert(make_action_bind(XCB_MOD_MASK_4 | XCB_MOD_MASK_SHIFT, "a", KillAction{ }));
+    cfg.keybinds.insert(make_action_bind(XCB_MOD_MASK_4, "1", SwitchWorkspaceAction{ 0 }));
+    cfg.keybinds.insert(make_action_bind(XCB_MOD_MASK_4 | XCB_MOD_MASK_SHIFT, "1", MoveToWorkspaceAction{ 0 }));
 
     auto conn = make_connection();
     KeybindManager mgr(*conn, cfg);
@@ -193,10 +155,10 @@ TEST_CASE("KeybindManager handles all standard keybind modifiers", "[keybind]")
         SKIP("X11 environment not available");
 
     Config cfg = make_empty_config();
-    cfg.keybinds.push_back(make_spawn_bind("super", "a", "test-cmd-1"));
-    cfg.keybinds.push_back(make_spawn_bind("super+shift", "a", "test-cmd-2"));
-    cfg.keybinds.push_back(make_spawn_bind("super+ctrl", "a", "test-cmd-3"));
-    cfg.keybinds.push_back(make_spawn_bind("super+alt", "a", "test-cmd-4"));
+    cfg.keybinds.insert(make_spawn_bind(XCB_MOD_MASK_4, "a", "test-cmd-1"));
+    cfg.keybinds.insert(make_spawn_bind(XCB_MOD_MASK_4 | XCB_MOD_MASK_SHIFT, "a", "test-cmd-2"));
+    cfg.keybinds.insert(make_spawn_bind(XCB_MOD_MASK_4 | XCB_MOD_MASK_CONTROL, "a", "test-cmd-3"));
+    cfg.keybinds.insert(make_spawn_bind(XCB_MOD_MASK_4 | XCB_MOD_MASK_1, "a", "test-cmd-4"));
 
     auto conn = make_connection();
     KeybindManager mgr(*conn, cfg);
@@ -220,7 +182,7 @@ TEST_CASE("KeybindManager handles modifier state filtering", "[keybind]")
         SKIP("X11 environment not available");
 
     Config cfg = make_empty_config();
-    cfg.keybinds.push_back(make_spawn_bind("super", "a", "test"));
+    cfg.keybinds.insert(make_spawn_bind(XCB_MOD_MASK_4, "a", "test"));
 
     auto conn = make_connection();
     KeybindManager mgr(*conn, cfg);
@@ -239,37 +201,21 @@ TEST_CASE("KeybindManager handles modifier state filtering", "[keybind]")
     REQUIRE_FALSE(with_ctrl.has_value());
 }
 
-TEST_CASE("KeybindManager handles invalid key names in config", "[keybind]")
-{
-    if (!ensure_x11_environment())
-        SKIP("X11 environment not available");
-
-    Config cfg = make_empty_config();
-    cfg.keybinds.push_back(make_spawn_bind("super", "InvalidKeyThatDoesNotExist", "test"));
-
-    auto conn = make_connection();
-    KeybindManager mgr(*conn, cfg);
-
-    uint16_t super = XCB_MOD_MASK_4;
-    auto result = mgr.resolve(super, 0x1234);
-    REQUIRE_FALSE(result.has_value());
-}
-
 TEST_CASE("KeybindManager resolves configured actions and their payloads", "[keybind]")
 {
     if (!ensure_x11_environment())
         SKIP("X11 environment not available");
 
     Config cfg = make_empty_config();
-    cfg.keybinds.push_back(make_spawn_bind("super", "a", "terminal"));
-    cfg.keybinds.push_back(make_action_bind("super", "q", KillAction{ }));
-    cfg.keybinds.push_back(make_action_bind("super", "1", SwitchWorkspaceAction{ 0 }));
-    cfg.keybinds.push_back(make_action_bind("super+shift", "1", MoveToWorkspaceAction{ 0 }));
-    cfg.keybinds.push_back(make_action_bind("super", "Left", FocusMonitorAction{ -1 }));
-    cfg.keybinds.push_back(make_action_bind("super+shift", "Left", MoveToMonitorAction{ -1 }));
-    cfg.keybinds.push_back(make_action_bind("super", "f", ToggleFullscreenAction{ }));
-    cfg.keybinds.push_back(make_action_bind("super", "j", FocusNextAction{ }));
-    cfg.keybinds.push_back(make_action_bind("super", "k", FocusPrevAction{ }));
+    cfg.keybinds.insert(make_spawn_bind(XCB_MOD_MASK_4, "a", "terminal"));
+    cfg.keybinds.insert(make_action_bind(XCB_MOD_MASK_4, "q", KillAction{ }));
+    cfg.keybinds.insert(make_action_bind(XCB_MOD_MASK_4, "1", SwitchWorkspaceAction{ 0 }));
+    cfg.keybinds.insert(make_action_bind(XCB_MOD_MASK_4 | XCB_MOD_MASK_SHIFT, "1", MoveToWorkspaceAction{ 0 }));
+    cfg.keybinds.insert(make_action_bind(XCB_MOD_MASK_4, "Left", FocusMonitorAction{ -1 }));
+    cfg.keybinds.insert(make_action_bind(XCB_MOD_MASK_4 | XCB_MOD_MASK_SHIFT, "Left", MoveToMonitorAction{ -1 }));
+    cfg.keybinds.insert(make_action_bind(XCB_MOD_MASK_4, "f", ToggleFullscreenAction{ }));
+    cfg.keybinds.insert(make_action_bind(XCB_MOD_MASK_4, "j", FocusNextAction{ }));
+    cfg.keybinds.insert(make_action_bind(XCB_MOD_MASK_4, "k", FocusPrevAction{ }));
 
     auto conn = make_connection();
     KeybindManager mgr(*conn, cfg);

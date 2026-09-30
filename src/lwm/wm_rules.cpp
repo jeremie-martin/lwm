@@ -106,7 +106,7 @@ void WindowManager::reapply_rules_to_existing_windows()
 
         auto match_info = window_match_info(*client);
 
-        auto rule_result = window_rules_.match(match_info, monitors_, config_.workspaces.names);
+        auto rule_result = match_window_rules(config_.rules, match_info, monitors_, config_.workspaces.names);
         if (rule_result.matched)
         {
             apply_rule_result_to_window(window, rule_result);
@@ -139,7 +139,7 @@ ClassificationResult WindowManager::classify_managed_window(xcb_window_t window,
     }
     match_info.is_transient = has_transient;
     auto classification = classify_window_type(match_info.ewmh_type, has_transient);
-    auto rule_result = window_rules_.match(match_info, monitors_, config_.workspaces.names);
+    auto rule_result = match_window_rules(config_.rules, match_info, monitors_, config_.workspaces.names);
 
     if (rule_result.matched && classification.kind != WindowClassification::Kind::Dock
         && classification.kind != WindowClassification::Kind::Desktop
@@ -311,7 +311,7 @@ void WindowManager::reevaluate_metadata(xcb_window_t window, WindowRuleResult co
     if (client.kind() != Client::Kind::Tiled && client.kind() != Client::Kind::Floating)
         return;
     auto properties = window_match_info(client);
-    auto current = window_rules_.match(properties, monitors_, config_.workspaces.names);
+    auto current = match_window_rules(config_.rules, properties, monitors_, config_.workspaces.names);
     if (claim_pending_scratchpad(window, properties, current))
         return;
     // Metadata alone must not reapply placement or undo a user's state changes.

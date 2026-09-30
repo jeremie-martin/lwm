@@ -7,6 +7,7 @@
 #include <expected>
 #include <map>
 #include <optional>
+#include <regex>
 #include <string>
 #include <vector>
 
@@ -20,13 +21,27 @@ struct RuleGeometry
     std::optional<uint16_t> height;
 };
 
+// Configuration owns the compiled patterns used by rules and scratchpads.
+struct WindowMatcher
+{
+    std::optional<std::regex> class_regex;
+    std::optional<std::regex> instance_regex;
+    std::optional<std::regex> title_regex;
+
+    bool empty() const { return !class_regex && !instance_regex && !title_regex; }
+    bool matches(std::string const& wm_class, std::string const& instance, std::string const& title) const
+    {
+        return (!class_regex || std::regex_match(wm_class, *class_regex))
+            && (!instance_regex || std::regex_match(instance, *instance_regex))
+            && (!title_regex || std::regex_match(title, *title_regex));
+    }
+};
+
 struct WindowRuleConfig
 {
     // Matching criteria (all optional, AND logic - all specified must match)
-    std::optional<std::string> class_pattern;    // WM_CLASS class name (regex)
-    std::optional<std::string> instance_pattern; // WM_CLASS instance name (regex)
-    std::optional<std::string> title_pattern;    // Window title (regex)
-    std::optional<std::string> type;             // "normal", "dialog", "utility", etc.
+    WindowMatcher match;
+    std::optional<WindowType> type;
     std::optional<bool> transient;               // Require transient (true) or non-transient (false)
 
     // Actions
@@ -47,18 +62,17 @@ struct WindowRuleConfig
     std::optional<std::string> scratchpad; ///< Assign to named scratchpad
 };
 
-struct KeybindConfig
+enum class MouseAction
 {
-    std::string mod;
-    std::string key;
-    Action action;
+    DragWindow,
+    ResizeFloating,
+    ToggleFloat
 };
-
 struct MousebindConfig
 {
-    std::string mod;
-    int button = 0;
-    std::string action;
+    uint16_t modifier = 0;
+    uint8_t button = 0;
+    MouseAction action = MouseAction::DragWindow;
 };
 
 struct AppearanceConfig
@@ -104,9 +118,7 @@ struct ScratchpadConfig
 {
     std::string name;
     CommandConfig spawn;
-    std::optional<std::string> class_pattern;
-    std::optional<std::string> instance_pattern;
-    std::optional<std::string> title_pattern;
+    WindowMatcher match;
     double width = 0.8;   ///< Fraction of monitor working area
     double height = 0.7;
 };
@@ -119,7 +131,7 @@ struct Config
     std::map<std::string, CommandConfig> commands;
     WorkspacesConfig workspaces;
     AutostartConfig autostart;
-    std::vector<KeybindConfig> keybinds;
+    std::map<KeyBinding, Action> keybinds;
     std::vector<MousebindConfig> mousebinds;
     std::vector<WindowRuleConfig> rules;
     std::vector<ScratchpadConfig> scratchpads;
@@ -128,7 +140,6 @@ struct Config
 using ConfigLoadResult = std::expected<Config, std::string>;
 
 ConfigLoadResult load_config_result(std::string const& path);
-std::optional<Config> load_config(std::string const& path);
 Config default_config();
 
 } // namespace lwm

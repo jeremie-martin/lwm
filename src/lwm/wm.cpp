@@ -54,7 +54,6 @@ WindowManager::WindowManager(Config config, SignalPipe& signals, std::string con
     , config_path_(std::move(config_path))
     , signals_(signals)
 {
-    init_mousebinds();
     create_wm_window();
     setup_root();
     grab_buttons();
@@ -161,7 +160,6 @@ WindowManager::WindowManager(Config config, SignalPipe& signals, std::string con
 
         set_root_cursor(cursor_default_);
     }
-    window_rules_.load_rules(config_.rules);
     init_scratchpad_state();
     detect_monitors();
     LWM_LOG_INFO("Managing {} monitor(s)", monitors_.size());
@@ -371,7 +369,7 @@ std::expected<void, std::string> WindowManager::reload_config()
     if (!loaded)
         return std::unexpected(loaded.error());
 
-    return apply_config_reload(*loaded);
+    return apply_config_reload(std::move(*loaded));
 }
 
 std::expected<void, std::string> WindowManager::validate_reload(Config const& config) const
@@ -389,52 +387,35 @@ std::expected<void, std::string> WindowManager::apply_config_reload(Config confi
     if (auto validation = validate_reload(config); !validation)
         return std::unexpected(validation.error());
 
-    WindowRules reloaded_rules;
-    reloaded_rules.load_rules(config.rules);
-
+    // Prepare retained runtime claims before replacing the active configuration.
+    std::vector<NamedScratchpadState> scratchpads;
+    scratchpads.reserve(config.scratchpads.size());
+    for (auto const& sp : config.scratchpads)
+    {
+        NamedScratchpadState state{ sp.name };
+        if (auto* previous = find_named_scratchpad(sp.name))
+            state.state = previous->state;
+        scratchpads.push_back(std::move(state));
+    }
     config_ = std::move(config);
-    window_rules_ = std::move(reloaded_rules);
-
-    keybinds_.reload(config_);
-    init_mousebinds();
+    named_scratchpads_ = std::move(scratchpads);
     grab_buttons();
     regrab_all_keys();
 
-    // Rebuild scratchpad state: preserve claimed windows, update matchers
+    // Unhide windows orphaned by removed scratchpad names
+    for (auto& [window, client] : clients_)
     {
-        std::vector<NamedScratchpadState> old_states = std::move(named_scratchpads_);
-        named_scratchpads_.clear();
-        for (auto const& sp : config_.scratchpads)
+        auto const* named = scratchpad_named(client);
+        if (!named)
+            continue;
+        if (!find_named_scratchpad(named->name))
         {
-            NamedScratchpadState state{ sp.name };
-            // Preserve existing window claim if scratchpad name survived reload
-            for (auto& old : old_states)
+            LWM_LOG_INFO("Scratchpad '{}' removed from config, restoring window {:#x}", named->name, window);
+            client.scratchpad.reset();
+            if (client.iconic)
             {
-                if (old.name == sp.name)
-                {
-                    state.state = std::move(old.state);
-                    break;
-                }
-            }
-            named_scratchpads_.push_back(std::move(state));
-        }
-        rebuild_scratchpad_matchers();
-
-        // Unhide windows orphaned by removed scratchpad names
-        for (auto& [window, client] : clients_)
-        {
-            auto const* named = scratchpad_named(client);
-            if (!named)
-                continue;
-            if (!find_named_scratchpad(named->name))
-            {
-                LWM_LOG_INFO("Scratchpad '{}' removed from config, restoring window {:#x}", named->name, window);
-                client.scratchpad.reset();
-                if (client.iconic)
-                {
-                    client.iconic = false;
-                    set_iconic_state(window, false);
-                }
+                client.iconic = false;
+                set_iconic_state(window, false);
             }
         }
     }
@@ -735,32 +716,12 @@ void WindowManager::create_wm_window()
     );
 }
 
-void WindowManager::init_mousebinds()
-{
-    mousebinds_.clear();
-    mousebinds_.reserve(config_.mousebinds.size());
-
-    for (auto const& mb : config_.mousebinds)
-    {
-        if (mb.button <= 0 || mb.button > std::numeric_limits<uint8_t>::max())
-            continue;
-        if (mb.action.empty())
-            continue;
-
-        MouseBinding binding;
-        binding.modifier = KeybindManager::parse_modifier(mb.mod);
-        binding.button = static_cast<uint8_t>(mb.button);
-        binding.action = mb.action;
-        mousebinds_.push_back(std::move(binding));
-    }
-}
-
 void WindowManager::grab_buttons()
 {
     xcb_window_t root = conn_.screen()->root;
     xcb_ungrab_button(conn_.get(), XCB_BUTTON_INDEX_ANY, root, XCB_MOD_MASK_ANY);
 
-    for (auto const& binding : mousebinds_)
+    for (auto const& binding : config_.mousebinds)
     {
         uint16_t modifiers[] = { binding.modifier,
                                  static_cast<uint16_t>(binding.modifier | XCB_MOD_MASK_2),
@@ -2325,7 +2286,7 @@ void WindowManager::update_window_title(xcb_window_t window)
     auto name = get_window_name(window);
     if (name == client->name)
         return;
-    auto previous = window_rules_.match(window_match_info(*client), monitors_, config_.workspaces.names);
+    auto previous = match_window_rules(config_.rules, window_match_info(*client), monitors_, config_.workspaces.names);
     client->name = std::move(name);
     effects_.state_changed |= ipc_.has_subscribers(Event_StateChange);
     reevaluate_metadata(window, previous);

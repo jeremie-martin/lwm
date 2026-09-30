@@ -51,7 +51,7 @@ lwm::Config load_config(std::string const& config_path, bool explicit_path)
     auto loaded = lwm::load_config_result(config_path);
     if (!loaded)
         throw std::runtime_error(loaded.error());
-    return *loaded;
+    return std::move(*loaded);
 }
 
 int main(int argc, char* argv[])

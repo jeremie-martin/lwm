@@ -1,223 +1,9 @@
 #include "window_rules.hpp"
-#include "lwm/core/log.hpp"
-#include <algorithm>
-#include <cstring>
 
 namespace lwm {
-
 namespace {
-
-// Escape special regex characters for literal matching
-std::string escape_regex(std::string const& str)
-{
-    static char const* const metacharacters = R"(\.^$|()[]{}*+?)";
-    std::string result;
-    result.reserve(str.size() * 2);
-    for (char c : str)
-    {
-        if (std::strchr(metacharacters, c) != nullptr)
-        {
-            result += '\\';
-        }
-        result += c;
-    }
-    return result;
-}
-
-}
-std::optional<std::regex> WindowRules::compile_pattern(std::optional<std::string> const& pattern)
-{
-    if (!pattern.has_value())
-    {
-        return std::nullopt;
-    }
-
-    // Anchor the pattern so matching is full-string by default.
-    // Users who want substring matching can use explicit ".*foo.*" syntax.
-    std::string anchored = "^(?:" + *pattern + ")$";
-
-    try
-    {
-        return std::regex(anchored, std::regex::ECMAScript | std::regex::optimize);
-    }
-    catch (std::regex_error const& e)
-    {
-        // Fall back to literal string matching by escaping the pattern
-        LWM_LOG_WARN("Invalid regex pattern '{}', using literal match: {}", *pattern, e.what());
-        try
-        {
-            return std::regex("^(?:" + escape_regex(*pattern) + ")$", std::regex::ECMAScript | std::regex::optimize);
-        }
-        catch (...)
-        {
-            return std::nullopt;
-        }
-    }
-}
-
-std::optional<WindowType> WindowRules::parse_window_type(std::optional<std::string> const& type_str)
-{
-    if (!type_str.has_value())
-    {
-        return std::nullopt;
-    }
-
-    std::string type = *type_str;
-    // Convert to lowercase for case-insensitive matching
-    std::ranges::transform(type, type.begin(), [](unsigned char c) { return std::tolower(c); });
-
-    if (type == "desktop")
-        return WindowType::Desktop;
-    if (type == "dock")
-        return WindowType::Dock;
-    if (type == "toolbar")
-        return WindowType::Toolbar;
-    if (type == "menu")
-        return WindowType::Menu;
-    if (type == "utility")
-        return WindowType::Utility;
-    if (type == "splash")
-        return WindowType::Splash;
-    if (type == "dialog")
-        return WindowType::Dialog;
-    if (type == "dropdown_menu" || type == "dropdownmenu")
-        return WindowType::DropdownMenu;
-    if (type == "popup_menu" || type == "popupmenu")
-        return WindowType::PopupMenu;
-    if (type == "tooltip")
-        return WindowType::Tooltip;
-    if (type == "notification")
-        return WindowType::Notification;
-    if (type == "combo")
-        return WindowType::Combo;
-    if (type == "dnd")
-        return WindowType::Dnd;
-    if (type == "normal")
-        return WindowType::Normal;
-
-    return std::nullopt;
-}
-
-void WindowRules::load_rules(std::vector<WindowRuleConfig> const& configs)
-{
-    rules_.clear();
-    rules_.reserve(configs.size());
-
-    for (auto const& cfg : configs)
-    {
-        CompiledWindowRule rule;
-
-        // Detect empty patterns (present but empty string) — fail-closed
-        if (cfg.class_pattern.has_value() && cfg.class_pattern->empty())
-        {
-            LWM_LOG_WARN("Window rule has empty class_pattern, rule will never match");
-            rule.never_matches = true;
-        }
-        if (cfg.instance_pattern.has_value() && cfg.instance_pattern->empty())
-        {
-            LWM_LOG_WARN("Window rule has empty instance_pattern, rule will never match");
-            rule.never_matches = true;
-        }
-        if (cfg.title_pattern.has_value() && cfg.title_pattern->empty())
-        {
-            LWM_LOG_WARN("Window rule has empty title_pattern, rule will never match");
-            rule.never_matches = true;
-        }
-
-        if (!rule.never_matches)
-        {
-            rule.class_regex = compile_pattern(cfg.class_pattern);
-            rule.instance_regex = compile_pattern(cfg.instance_pattern);
-            rule.title_regex = compile_pattern(cfg.title_pattern);
-        }
-
-        rule.type = parse_window_type(cfg.type);
-
-        // Detect unknown type string — fail-closed
-        if (cfg.type.has_value() && !rule.type.has_value())
-        {
-            LWM_LOG_WARN("Window rule has unknown type '{}', rule will never match", *cfg.type);
-            rule.never_matches = true;
-        }
-        rule.transient = cfg.transient;
-
-        rule.floating = cfg.floating;
-        rule.workspace = cfg.workspace;
-        rule.workspace_name = cfg.workspace_name;
-        rule.monitor = cfg.monitor;
-        rule.monitor_name = cfg.monitor_name;
-        rule.fullscreen = cfg.fullscreen;
-        if (cfg.above.has_value() && *cfg.above)
-            rule.layer_hint = LayerHint::Above;
-        else if (cfg.below.has_value() && *cfg.below)
-            rule.layer_hint = LayerHint::Below;
-        else if (cfg.above.has_value() || cfg.below.has_value())
-            rule.layer_hint = LayerHint::Normal;
-        rule.sticky = cfg.sticky;
-        rule.skip_taskbar = cfg.skip_taskbar;
-        rule.skip_pager = cfg.skip_pager;
-        rule.borderless = cfg.borderless;
-        rule.geometry = cfg.geometry;
-        rule.center = cfg.center;
-        rule.scratchpad = cfg.scratchpad;
-
-        rules_.push_back(std::move(rule));
-    }
-}
-
-bool WindowRules::matches_rule(CompiledWindowRule const& rule, WindowMatchInfo const& info) const
-{
-    if (rule.never_matches)
-        return false;
-
-    if (rule.class_regex.has_value())
-    {
-        if (!std::regex_match(info.wm_class, *rule.class_regex))
-        {
-            return false;
-        }
-    }
-
-    if (rule.instance_regex.has_value())
-    {
-        if (!std::regex_match(info.wm_class_name, *rule.instance_regex))
-        {
-            return false;
-        }
-    }
-
-    if (rule.title_regex.has_value())
-    {
-        if (!std::regex_match(info.title, *rule.title_regex))
-        {
-            return false;
-        }
-    }
-
-    if (rule.type.has_value())
-    {
-        if (info.ewmh_type != *rule.type)
-        {
-            return false;
-        }
-    }
-
-    if (rule.transient.has_value())
-    {
-        if (info.is_transient != *rule.transient)
-        {
-            return false;
-        }
-    }
-
-    return true;
-}
-
-std::optional<size_t> WindowRules::resolve_monitor(
-    std::optional<int> index,
-    std::optional<std::string> const& name,
-    std::span<Monitor const> monitors
-)
+std::optional<size_t>
+resolve_monitor(std::optional<int> index, std::optional<std::string> const& name, std::span<Monitor const> monitors)
 {
     if (index.has_value())
     {
@@ -243,7 +29,7 @@ std::optional<size_t> WindowRules::resolve_monitor(
     return std::nullopt;
 }
 
-std::optional<size_t> WindowRules::resolve_workspace(
+std::optional<size_t> resolve_workspace(
     std::optional<int> index,
     std::optional<std::string> const& name,
     std::span<std::string const> workspace_names
@@ -273,18 +59,22 @@ std::optional<size_t> WindowRules::resolve_workspace(
     return std::nullopt;
 }
 
-WindowRuleResult WindowRules::match(
+}
+
+WindowRuleResult match_window_rules(
+    std::span<WindowRuleConfig const> rules,
     WindowMatchInfo const& info,
     std::span<Monitor const> monitors,
     std::span<std::string const> workspace_names
-) const
+)
 {
     WindowRuleResult result;
 
     // First match wins
-    for (auto const& rule : rules_)
+    for (auto const& rule : rules)
     {
-        if (!matches_rule(rule, info))
+        if (!rule.match.matches(info.wm_class, info.wm_class_name, info.title)
+            || (rule.type && *rule.type != info.ewmh_type) || (rule.transient && *rule.transient != info.is_transient))
         {
             continue;
         }
@@ -297,7 +87,12 @@ WindowRuleResult WindowRules::match(
         result.target_workspace = resolve_workspace(rule.workspace, rule.workspace_name, workspace_names);
 
         result.fullscreen = rule.fullscreen;
-        result.layer_hint = rule.layer_hint;
+        if (rule.above.value_or(false))
+            result.layer_hint = LayerHint::Above;
+        else if (rule.below.value_or(false))
+            result.layer_hint = LayerHint::Below;
+        else if (rule.above || rule.below)
+            result.layer_hint = LayerHint::Normal;
         result.sticky = rule.sticky;
         result.skip_taskbar = rule.skip_taskbar;
         result.skip_pager = rule.skip_pager;

@@ -53,7 +53,9 @@ commands = [
 
 # Mouse bindings. Defining any [[mousebinds]] replaces all built-in mouse
 # bindings.
-# mod: modifiers only ("super", "super+shift", "ctrl", ...)
+# mod: modifiers only ("super", "super+shift", "ctrl", ...); empty means none.
+# Modifier order is irrelevant; "ctrl" and "control" are aliases. Empty tokens
+# (e.g. "super+") and repeated modifiers are rejected.
 # button: X11 mouse button number (1 = left, 2 = middle, 3 = right)
 # action: "drag_window", "resize_floating", "toggle_float"
 [[mousebinds]]
@@ -74,6 +76,8 @@ action = "toggle_float"
 # Explicit bindings
 # key: one combo string, e.g. "super+Return", "super+shift+Left", "Print"
 # Exactly one action field is allowed in each [[binds]] entry.
+# Keys use X11 keysym names. Duplicate modifier/keysym pairs are rejected,
+# including aliases and reordered modifiers.
 # Defining any [[binds]] starts from an empty key-binding set; list every
 # non-workspace binding to retain. The workspace groups below are then added.
 [[binds]]
@@ -168,6 +172,7 @@ reload_config = true
 # for a mode/modifier pair replaces that built-in group. If [[binds]] is
 # present, groups add bindings to the explicit set. Multiple groups with the
 # same mode/modifier may coexist, as below for AZERTY and QWERTY symbols.
+# Group identity uses modifiers, not their spelling or order.
 # mode:
 #   "switch" => focus workspace N
 #   "move"   => send focused window to workspace N
@@ -222,7 +227,8 @@ keys = ["1", "2", "3", "4", "5", "6", "7", "8", "9", "0"]
 #   scratchpad = "music"
 # Use either workspace or workspace_name, and either monitor or monitor_name.
 # workspace_name must appear in [workspaces].names. Match regexes must be valid
-# and nonempty; malformed configuration is rejected before any rules apply.
+# and nonempty; they are compiled when loading the configuration. Malformed
+# configuration is rejected before any rules apply.
 #
 # Rules affect only tiled/floating clients; they cannot convert desktop, dock,
 # or direct-mapped popup types. geometry and center affect floating clients.
@@ -230,6 +236,8 @@ keys = ["1", "2", "3", "4", "5", "6", "7", "8", "9", "0"]
 # Explicit false state overrides and borderless apply on initial mapping as well
 # as property reevaluation and config reload. Title/class changes only reapply
 # rules when their effective actions change, preserving user placement otherwise.
+# Reload reapplies matching rules to the current state; removing a rule does not
+# undo its earlier effects, and unspecified state is preserved.
 
 # Example: float and center dialog windows
 # [[rules]]

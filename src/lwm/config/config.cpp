@@ -1,12 +1,11 @@
 #include "config.hpp"
-#include "lwm/keybind/keybind.hpp"
+#include <X11/Xlib.h>
 #include <algorithm>
 #include <array>
 #include <cmath>
 #include <limits>
 #include <regex>
 #include <set>
-#include <sstream>
 #include <string_view>
 #include <toml++/toml.hpp>
 
@@ -210,65 +209,66 @@ parse_optional_number(toml::table const& table, std::string_view key, std::strin
     return std::optional<double>{};
 }
 
-ParseVoid validate_regex_pattern(std::string const& pattern, std::string const& context)
+ParseResult<WindowType> parse_rule_type(std::string type, std::string const& context)
 {
-    if (pattern.empty())
-    {
-        return std::unexpected(context + " must not be empty");
-    }
+    std::ranges::transform(type, type.begin(), [](unsigned char c) { return std::tolower(c); });
+    if (type == "desktop")
+        return WindowType::Desktop;
+    if (type == "dock")
+        return WindowType::Dock;
+    if (type == "toolbar")
+        return WindowType::Toolbar;
+    if (type == "menu")
+        return WindowType::Menu;
+    if (type == "utility")
+        return WindowType::Utility;
+    if (type == "splash")
+        return WindowType::Splash;
+    if (type == "dialog")
+        return WindowType::Dialog;
+    if (type == "dropdown_menu" || type == "dropdownmenu")
+        return WindowType::DropdownMenu;
+    if (type == "popup_menu" || type == "popupmenu")
+        return WindowType::PopupMenu;
+    if (type == "tooltip")
+        return WindowType::Tooltip;
+    if (type == "notification")
+        return WindowType::Notification;
+    if (type == "combo")
+        return WindowType::Combo;
+    if (type == "dnd")
+        return WindowType::Dnd;
+    if (type == "normal")
+        return WindowType::Normal;
 
-    try
-    {
-        std::regex("^(?:" + pattern + ")$", std::regex::ECMAScript);
-    }
-    catch (std::regex_error const& e)
-    {
-        return std::unexpected(context + " has invalid regex: " + std::string(e.what()));
-    }
-
-    return {};
-}
-
-ParseVoid validate_rule_type(std::string const& type, std::string const& context)
-{
-    static constexpr std::array<std::string_view, 15> allowed = {
-        "desktop",      "dock",       "toolbar",   "menu",    "utility",      "splash", "dialog", "dropdown_menu",
-        "dropdownmenu", "popup_menu", "popupmenu", "tooltip", "notification", "combo",  "dnd",
-    };
-
-    std::string lowered = type;
-    std::ranges::transform(
-        lowered,
-        lowered.begin(),
-        [](unsigned char ch) { return static_cast<char>(std::tolower(ch)); }
-    );
-    if (lowered == "normal" || std::ranges::find(allowed, lowered) != allowed.end())
-        return {};
     return std::unexpected(context + " has unknown window type '" + type + "'");
 }
 
-template <typename T> ParseVoid parse_regex_matchers(toml::table const& table, std::string const& context, T& target)
+ParseVoid parse_regex_matchers(toml::table const& table, std::string const& context, WindowMatcher& match)
 {
-    auto parse_pattern = [&](std::string_view key, std::optional<std::string>& field) -> ParseVoid
+    auto parse_pattern = [&](std::string_view key, std::optional<std::regex>& field) -> ParseVoid
     {
         LWM_TRYV(pattern, parse_optional_string(table, key, context));
         if (!pattern)
             return {};
 
-        LWM_TRY(validate_regex_pattern(*pattern, context + "." + std::string(key)));
-        field = std::move(*pattern);
+        if (pattern->empty())
+            return std::unexpected(context + "." + std::string(key) + " must not be empty");
+        try
+        {
+            field.emplace("^(?:" + *pattern + ")$", std::regex::ECMAScript | std::regex::optimize);
+        }
+        catch (std::regex_error const& error)
+        {
+            return std::unexpected(context + "." + std::string(key) + " has invalid regex: " + error.what());
+        }
         return {};
     };
 
-    LWM_TRY(parse_pattern("class", target.class_pattern));
-    LWM_TRY(parse_pattern("instance", target.instance_pattern));
-    LWM_TRY(parse_pattern("title", target.title_pattern));
+    LWM_TRY(parse_pattern("class", match.class_regex));
+    LWM_TRY(parse_pattern("instance", match.instance_regex));
+    LWM_TRY(parse_pattern("title", match.title_regex));
     return {};
-}
-
-template <typename T> bool has_matcher_patterns(T const& target)
-{
-    return target.class_pattern.has_value() || target.instance_pattern.has_value() || target.title_pattern.has_value();
 }
 
 bool has_workspace_name(Config const& config, std::string_view workspace_name)
@@ -284,79 +284,58 @@ bool has_scratchpad_name(Config const& config, std::string_view scratchpad_name)
     );
 }
 
-ParseResult<std::string> validate_modifier_string(std::string const& mod, std::string const& context)
+ParseResult<uint16_t> parse_modifiers(std::string_view text, std::string const& context)
 {
-    if (mod.empty())
-        return std::string{};
-
-    std::stringstream stream(mod);
-    std::string token;
-    std::vector<std::string> tokens;
-    std::set<std::string> seen;
-
-    while (std::getline(stream, token, '+'))
+    uint16_t result = 0;
+    if (text.empty())
+        return result;
+    for (size_t start = 0;;)
     {
-        if (token.empty())
-            return std::unexpected(context + " contains an empty modifier token");
-        if (token == "control")
-            token = "ctrl";
-        if (token != "super" && token != "shift" && token != "ctrl" && token != "alt")
-        {
-            return std::unexpected(context + " has unknown modifier '" + token + "'");
-        }
-        if (!seen.insert(token).second)
-        {
-            return std::unexpected(context + " repeats modifier '" + token + "'");
-        }
-        tokens.push_back(token);
+        auto end = text.find('+', start);
+        auto token = text.substr(start, end == text.npos ? end : end - start);
+        uint16_t mask = 0;
+        if (token == "super")
+            mask = XCB_MOD_MASK_4;
+        else if (token == "shift")
+            mask = XCB_MOD_MASK_SHIFT;
+        else if (token == "ctrl" || token == "control")
+            mask = XCB_MOD_MASK_CONTROL;
+        else if (token == "alt")
+            mask = XCB_MOD_MASK_1;
+        else
+            return std::unexpected(context + " has unknown or empty modifier '" + std::string(token) + "'");
+        if (result & mask)
+            return std::unexpected(context + " repeats modifier '" + std::string(token) + "'");
+        result |= mask;
+        if (end == text.npos)
+            return result;
+        start = end + 1;
     }
-
-    std::ostringstream normalized;
-    for (size_t i = 0; i < tokens.size(); ++i)
-    {
-        if (i != 0)
-            normalized << '+';
-        normalized << tokens[i];
-    }
-    return normalized.str();
 }
 
-ParseResult<std::pair<std::string, std::string>> parse_key_combo(std::string const& combo, std::string const& context)
+ParseResult<xcb_keysym_t> parse_keysym(std::string const& key, std::string const& context)
 {
-    if (combo.empty())
-        return std::unexpected(context + " must not be empty");
-
-    std::stringstream stream(combo);
-    std::string token;
-    std::vector<std::string> parts;
-    while (std::getline(stream, token, '+'))
-    {
-        if (token.empty())
-            return std::unexpected(context + " contains an empty token");
-        parts.push_back(token);
-    }
-
-    if (parts.empty())
-        return std::unexpected(context + " must contain a key");
-
-    std::string key = parts.back();
-    parts.pop_back();
-
-    std::ostringstream mod;
-    for (size_t i = 0; i < parts.size(); ++i)
-    {
-        if (i != 0)
-            mod << '+';
-        mod << parts[i];
-    }
-
-    LWM_TRYV(normalized_mod, validate_modifier_string(mod.str(), context));
-    if (KeybindManager::parse_keysym(key) == XCB_NO_SYMBOL)
-    {
+    auto symbol = XStringToKeysym(key.c_str());
+    if (symbol == NoSymbol)
         return std::unexpected(context + " has unknown key '" + key + "'");
-    }
+    return static_cast<xcb_keysym_t>(symbol);
+}
 
-    return std::make_pair(std::move(normalized_mod), std::move(key));
+ParseResult<KeyBinding> parse_key_combo(std::string const& combo, std::string const& context)
+{
+    auto separator = combo.rfind('+');
+    LWM_TRYV(
+        modifier,
+        parse_modifiers(
+            separator == combo.npos ? std::string_view{ } : std::string_view(combo).substr(0, separator),
+            context
+        )
+    );
+    LWM_TRYV(keysym, parse_keysym(combo.substr(separator == combo.npos ? 0 : separator + 1), context));
+    // A leading '+' is an empty modifier, not an unmodified key.
+    if (separator == 0)
+        return std::unexpected(context + " contains an empty modifier");
+    return KeyBinding{ modifier, keysym };
 }
 
 ParseVoid expect_enabled_flag(toml::node const& node, std::string const& context)
@@ -432,37 +411,12 @@ ParseVoid validate_workspace_index(int64_t workspace, size_t count, std::string 
     return {};
 }
 
-ParseVoid add_binding(
-    std::vector<KeybindConfig>& keybinds,
-    std::set<KeyBinding>& seen,
-    KeybindConfig keybind,
-    std::string const& context
-)
+ParseVoid
+add_binding(std::map<KeyBinding, Action>& bindings, KeyBinding binding, Action action, std::string const& context)
 {
-    KeyBinding binding{ KeybindManager::parse_modifier(keybind.mod), KeybindManager::parse_keysym(keybind.key) };
-    if (!seen.insert(binding).second)
-    {
-        return std::unexpected(context + " duplicates an existing binding for '" + keybind.key + "'");
-    }
-    keybinds.push_back(std::move(keybind));
+    if (!bindings.emplace(binding, std::move(action)).second)
+        return std::unexpected(context + " duplicates an existing binding");
     return {};
-}
-
-template <typename Predicate>
-void erase_matching_bindings(std::vector<KeybindConfig>& keybinds, std::set<KeyBinding>& seen, Predicate&& predicate)
-{
-    auto it = keybinds.begin();
-    while (it != keybinds.end())
-    {
-        if (!predicate(*it))
-        {
-            ++it;
-            continue;
-        }
-
-        seen.erase({ KeybindManager::parse_modifier(it->mod), KeybindManager::parse_keysym(it->key) });
-        it = keybinds.erase(it);
-    }
 }
 
 bool action_is_workspace_group(Action const& action, std::string_view action_name)
@@ -474,192 +428,75 @@ bool action_is_workspace_group(Action const& action, std::string_view action_nam
     return false;
 }
 
-constexpr std::array<std::string_view, 20> BIND_ACTION_KEYS = {
-    "spawn",
-    "kill",
-    "reload_config",
-    "restart",
-    "switch_workspace",
-    "toggle_workspace",
-    "move_to_workspace",
-    "focus_monitor",
-    "move_to_monitor",
-    "toggle_fullscreen",
-    "toggle_float",
-    "focus_next",
-    "focus_prev",
-    "ratio_grow",
-    "ratio_shrink",
-    "swap_next",
-    "swap_prev",
-    "toggle_scratchpad",
-    "scratchpad_stash",
-    "scratchpad_cycle",
+// Parameterless actions share one parser and one name-to-value table.
+std::pair<std::string_view, Action> const flag_actions[] = {
+    {              "kill",             KillAction{ } },
+    {     "reload_config",     ReloadConfigAction{ } },
+    {           "restart",          RestartAction{ } },
+    {  "toggle_workspace",  ToggleWorkspaceAction{ } },
+    { "toggle_fullscreen", ToggleFullscreenAction{ } },
+    {      "toggle_float",      ToggleFloatAction{ } },
+    {        "focus_next",        FocusNextAction{ } },
+    {        "focus_prev",        FocusPrevAction{ } },
+    {        "ratio_grow",        RatioGrowAction{ } },
+    {      "ratio_shrink",      RatioShrinkAction{ } },
+    {         "swap_next",         SwapNextAction{ } },
+    {         "swap_prev",         SwapPrevAction{ } },
+    {  "scratchpad_stash",  ScratchpadStashAction{ } },
+    {  "scratchpad_cycle",  ScratchpadCycleAction{ } },
 };
 
-ParseVoid reject_unknown_bind_keys(toml::table const& table, std::string const& context)
+ParseResult<Action> parse_bind_action(toml::table const& table, std::string const& context, Config const& config)
 {
-    for (auto const& [key, _] : table)
+    std::string_view name;
+    toml::node const* value = nullptr;
+    for (auto const& [key, node] : table)
     {
         if (key == "key")
             continue;
-        if (std::ranges::find(BIND_ACTION_KEYS, key.str()) != BIND_ACTION_KEYS.end())
-            continue;
-        return std::unexpected(context + " has unknown key '" + std::string(key.str()) + "'");
+        if (value)
+            return std::unexpected(context + " must define exactly one action");
+        name = key.str();
+        value = &node;
     }
-    return {};
-}
-
-int count_present_bind_actions(toml::table const& table)
-{
-    int count = 0;
-    for (std::string_view key : BIND_ACTION_KEYS)
-    {
-        if (table.contains(key))
-            ++count;
-    }
-    return count;
-}
-
-ParseVoid parse_workspace_binding_action(
-    toml::node const& node,
-    std::string const& context,
-    std::string_view action_name,
-    Config const& config,
-    KeybindConfig& keybind
-)
-{
-    LWM_TRYV(workspace, expect_integer(node, context + "." + std::string(action_name)));
-    LWM_TRY(validate_workspace_index(workspace, config.workspaces.count, context + "." + std::string(action_name)));
-    if (action_name == "switch_workspace")
-        keybind.action = SwitchWorkspaceAction{ static_cast<size_t>(workspace) };
-    else
-        keybind.action = MoveToWorkspaceAction{ static_cast<size_t>(workspace) };
-    return {};
-}
-
-ParseVoid parse_direction_binding_action(
-    toml::node const& node,
-    std::string const& context,
-    std::string_view action_name,
-    KeybindConfig& keybind
-)
-{
-    LWM_TRYV(direction, expect_integer(node, context + "." + std::string(action_name)));
-    if (direction != -1 && direction != 1)
-        return std::unexpected(context + "." + std::string(action_name) + " must be -1 or 1");
-    if (action_name == "focus_monitor")
-        keybind.action = FocusMonitorAction{ static_cast<int>(direction) };
-    else
-        keybind.action = MoveToMonitorAction{ static_cast<int>(direction) };
-    return {};
-}
-
-ParseVoid parse_enabled_binding_action(
-    toml::node const& node,
-    std::string const& context,
-    std::string_view action_name,
-    KeybindConfig& keybind
-)
-{
-    LWM_TRY(expect_enabled_flag(node, context + "." + std::string(action_name)));
-    if (action_name == "kill")
-        keybind.action = KillAction{};
-    else if (action_name == "reload_config")
-        keybind.action = ReloadConfigAction{};
-    else if (action_name == "restart")
-        keybind.action = RestartAction{};
-    else if (action_name == "toggle_workspace")
-        keybind.action = ToggleWorkspaceAction{};
-    else if (action_name == "toggle_fullscreen")
-        keybind.action = ToggleFullscreenAction{};
-    else if (action_name == "toggle_float")
-        keybind.action = ToggleFloatAction{};
-    else if (action_name == "focus_next")
-        keybind.action = FocusNextAction{};
-    else if (action_name == "focus_prev")
-        keybind.action = FocusPrevAction{};
-    else if (action_name == "ratio_grow")
-        keybind.action = RatioGrowAction{};
-    else if (action_name == "ratio_shrink")
-        keybind.action = RatioShrinkAction{};
-    else if (action_name == "swap_next")
-        keybind.action = SwapNextAction{};
-    else if (action_name == "swap_prev")
-        keybind.action = SwapPrevAction{};
-    else if (action_name == "scratchpad_stash")
-        keybind.action = ScratchpadStashAction{};
-    else if (action_name == "scratchpad_cycle")
-        keybind.action = ScratchpadCycleAction{};
-    return {};
-}
-
-ParseVoid parse_scratchpad_binding_action(
-    toml::node const& node,
-    std::string const& context,
-    Config const& config,
-    KeybindConfig& keybind
-)
-{
-    LWM_TRYV(scratchpad, expect_string(node, context + ".toggle_scratchpad"));
-    if (!has_scratchpad_name(config, scratchpad))
-        return std::unexpected(context + ".toggle_scratchpad points to unknown scratchpad '" + scratchpad + "'");
-    keybind.action = ToggleScratchpadAction{ std::move(scratchpad) };
-    return {};
-}
-
-ParseVoid
-parse_bind_action(toml::table const& table, std::string const& context, Config const& config, KeybindConfig& keybind)
-{
-    if (count_present_bind_actions(table) != 1)
+    if (!value)
         return std::unexpected(context + " must define exactly one action");
-
-    if (auto const* node = table.get("spawn"))
+    auto field = context + "." + std::string(name);
+    for (auto const& [key, action] : flag_actions)
     {
-        LWM_TRYV(command, parse_command_config(*node, context + ".spawn", config.commands, true));
-        keybind.action = SpawnAction{ std::move(command) };
-        return {};
+        if (name != key)
+            continue;
+        LWM_TRY(expect_enabled_flag(*value, field));
+        return action;
     }
-    if (auto const* node = table.get("kill"))
-        return parse_enabled_binding_action(*node, context, "kill", keybind);
-    if (auto const* node = table.get("reload_config"))
-        return parse_enabled_binding_action(*node, context, "reload_config", keybind);
-    if (auto const* node = table.get("restart"))
-        return parse_enabled_binding_action(*node, context, "restart", keybind);
-    if (auto const* node = table.get("switch_workspace"))
-        return parse_workspace_binding_action(*node, context, "switch_workspace", config, keybind);
-    if (auto const* node = table.get("toggle_workspace"))
-        return parse_enabled_binding_action(*node, context, "toggle_workspace", keybind);
-    if (auto const* node = table.get("move_to_workspace"))
-        return parse_workspace_binding_action(*node, context, "move_to_workspace", config, keybind);
-    if (auto const* node = table.get("focus_monitor"))
-        return parse_direction_binding_action(*node, context, "focus_monitor", keybind);
-    if (auto const* node = table.get("move_to_monitor"))
-        return parse_direction_binding_action(*node, context, "move_to_monitor", keybind);
-    if (auto const* node = table.get("toggle_fullscreen"))
-        return parse_enabled_binding_action(*node, context, "toggle_fullscreen", keybind);
-    if (auto const* node = table.get("toggle_float"))
-        return parse_enabled_binding_action(*node, context, "toggle_float", keybind);
-    if (auto const* node = table.get("focus_next"))
-        return parse_enabled_binding_action(*node, context, "focus_next", keybind);
-    if (auto const* node = table.get("focus_prev"))
-        return parse_enabled_binding_action(*node, context, "focus_prev", keybind);
-    if (auto const* node = table.get("ratio_grow"))
-        return parse_enabled_binding_action(*node, context, "ratio_grow", keybind);
-    if (auto const* node = table.get("ratio_shrink"))
-        return parse_enabled_binding_action(*node, context, "ratio_shrink", keybind);
-    if (auto const* node = table.get("swap_next"))
-        return parse_enabled_binding_action(*node, context, "swap_next", keybind);
-    if (auto const* node = table.get("swap_prev"))
-        return parse_enabled_binding_action(*node, context, "swap_prev", keybind);
-    if (auto const* node = table.get("toggle_scratchpad"))
-        return parse_scratchpad_binding_action(*node, context, config, keybind);
-    if (auto const* node = table.get("scratchpad_stash"))
-        return parse_enabled_binding_action(*node, context, "scratchpad_stash", keybind);
-    if (auto const* node = table.get("scratchpad_cycle"))
-        return parse_enabled_binding_action(*node, context, "scratchpad_cycle", keybind);
-
-    return std::unexpected(context + " must define exactly one action");
+    if (name == "spawn")
+    {
+        LWM_TRYV(command, parse_command_config(*value, field, config.commands, true));
+        return SpawnAction{ std::move(command) };
+    }
+    if (name == "switch_workspace" || name == "move_to_workspace")
+    {
+        LWM_TRYV(workspace, expect_integer(*value, field));
+        LWM_TRY(validate_workspace_index(workspace, config.workspaces.count, field));
+        return name == "switch_workspace" ? Action{ SwitchWorkspaceAction{ static_cast<size_t>(workspace) } }
+                                          : Action{ MoveToWorkspaceAction{ static_cast<size_t>(workspace) } };
+    }
+    if (name == "focus_monitor" || name == "move_to_monitor")
+    {
+        LWM_TRYV(direction, expect_integer(*value, field));
+        if (direction != -1 && direction != 1)
+            return std::unexpected(field + " must be -1 or 1");
+        return name == "focus_monitor" ? Action{ FocusMonitorAction{ static_cast<int>(direction) } }
+                                       : Action{ MoveToMonitorAction{ static_cast<int>(direction) } };
+    }
+    if (name == "toggle_scratchpad")
+    {
+        LWM_TRYV(scratchpad, expect_string(*value, field));
+        if (!has_scratchpad_name(config, scratchpad))
+            return std::unexpected(field + " points to unknown scratchpad '" + scratchpad + "'");
+        return ToggleScratchpadAction{ std::move(scratchpad) };
+    }
+    return std::unexpected(context + " has unknown key '" + std::string(name) + "'");
 }
 
 ParseResult<RuleGeometry> parse_geometry(toml::node const& node, std::string const& context)
@@ -703,12 +540,12 @@ ParseResult<RuleGeometry> parse_geometry(toml::node const& node, std::string con
 ParseVoid parse_rule_match_table(toml::table const& table, std::string const& context, WindowRuleConfig& rule)
 {
     LWM_TRY(reject_unknown_keys(table, { "class", "instance", "title", "type", "transient" }, context));
-    LWM_TRY(parse_regex_matchers(table, context, rule));
+    LWM_TRY(parse_regex_matchers(table, context, rule.match));
     LWM_TRYV(type, parse_optional_string(table, "type", context));
     if (type)
     {
-        LWM_TRY(validate_rule_type(*type, context + ".type"));
-        rule.type = std::move(*type);
+        LWM_TRYV(parsed_type, parse_rule_type(*type, context + ".type"));
+        rule.type = parsed_type;
     }
     LWM_TRYV(transient, parse_optional_bool(table, "transient", context));
     if (transient)
@@ -722,8 +559,8 @@ parse_scratchpad_match_table(toml::table const& table, std::string const& contex
 {
     LWM_TRY(reject_unknown_keys(table, { "class", "instance", "title" }, context));
 
-    LWM_TRY(parse_regex_matchers(table, context, scratchpad));
-    if (!has_matcher_patterns(scratchpad))
+    LWM_TRY(parse_regex_matchers(table, context, scratchpad.match));
+    if (scratchpad.match.empty())
     {
         return std::unexpected(context + " must define at least one matcher");
     }
@@ -872,46 +709,39 @@ ParseVoid parse_rule_apply_table(
     return {};
 }
 
-std::vector<KeybindConfig> build_default_keybinds(Config const& config)
+std::map<KeyBinding, Action> build_default_keybinds(Config const& config)
 {
-    std::vector<KeybindConfig> keybinds;
+    std::map<KeyBinding, Action> keybinds;
 
-    auto add_spawn = [&](std::string mod, std::string key, std::string_view command_name)
+    auto add_spawn = [&](uint16_t mod, std::string key, std::string_view command_name)
     {
         auto it = config.commands.find(std::string(command_name));
         if (it == config.commands.end())
             return;
 
-        KeybindConfig keybind;
-        keybind.mod = std::move(mod);
-        keybind.key = std::move(key);
-        keybind.action = SpawnAction{ it->second };
-        keybinds.push_back(std::move(keybind));
+        keybinds[{ mod, static_cast<xcb_keysym_t>(XStringToKeysym(key.c_str())) }] = SpawnAction{ it->second };
     };
 
-    auto add_workspace_binds =
-        [&](std::string const& mod, std::vector<std::string> const& keys, std::string_view action)
+    auto add_workspace_binds = [&](uint16_t mod, std::vector<std::string> const& keys, std::string_view action)
     {
         size_t limit = std::min(config.workspaces.count, keys.size());
         for (size_t i = 0; i < limit; ++i)
         {
-            KeybindConfig keybind;
-            keybind.mod = mod;
-            keybind.key = keys[i];
+            Action binding_action;
             if (action == "switch_workspace")
-                keybind.action = SwitchWorkspaceAction{ i };
+                binding_action = SwitchWorkspaceAction{ i };
             else
-                keybind.action = MoveToWorkspaceAction{ i };
-            keybinds.push_back(std::move(keybind));
+                binding_action = MoveToWorkspaceAction{ i };
+            keybinds[{ mod, static_cast<xcb_keysym_t>(XStringToKeysym(keys[i].c_str())) }] = std::move(binding_action);
         }
     };
 
-    add_spawn("super", "Return", "terminal");
-    add_spawn("super", "d", "launcher");
+    add_spawn(XCB_MOD_MASK_4, "Return", "terminal");
+    add_spawn(XCB_MOD_MASK_4, "d", "launcher");
 
-    keybinds.push_back({ .mod = "super", .key = "q", .action = KillAction{} });
+    keybinds[{ XCB_MOD_MASK_4, static_cast<xcb_keysym_t>(XStringToKeysym("q")) }] = KillAction{ };
     add_workspace_binds(
-        "super",
+        XCB_MOD_MASK_4,
         { "ampersand",
           "eacute",
           "quotedbl",
@@ -924,9 +754,9 @@ std::vector<KeybindConfig> build_default_keybinds(Config const& config)
           "agrave" },
         "switch_workspace"
     );
-    add_workspace_binds("super", { "1", "2", "3", "4", "5", "6", "7", "8", "9", "0" }, "switch_workspace");
+    add_workspace_binds(XCB_MOD_MASK_4, { "1", "2", "3", "4", "5", "6", "7", "8", "9", "0" }, "switch_workspace");
     add_workspace_binds(
-        "super+shift",
+        XCB_MOD_MASK_4 | XCB_MOD_MASK_SHIFT,
         { "ampersand",
           "eacute",
           "quotedbl",
@@ -939,25 +769,30 @@ std::vector<KeybindConfig> build_default_keybinds(Config const& config)
           "agrave" },
         "move_to_workspace"
     );
-    add_workspace_binds("super+shift", { "1", "2", "3", "4", "5", "6", "7", "8", "9", "0" }, "move_to_workspace");
+    add_workspace_binds(
+        XCB_MOD_MASK_4 | XCB_MOD_MASK_SHIFT,
+        { "1", "2", "3", "4", "5", "6", "7", "8", "9", "0" },
+        "move_to_workspace"
+    );
 
-    keybinds.push_back({ .mod = "super", .key = "Left", .action = FocusMonitorAction{ -1 } });
-    keybinds.push_back({ .mod = "super", .key = "Right", .action = FocusMonitorAction{ 1 } });
-    keybinds.push_back({ .mod = "super+shift", .key = "Left", .action = MoveToMonitorAction{ -1 } });
-    keybinds.push_back({ .mod = "super+shift", .key = "Right", .action = MoveToMonitorAction{ 1 } });
-    keybinds.push_back({ .mod = "super", .key = "f", .action = ToggleFullscreenAction{} });
-    keybinds.push_back({ .mod = "super+shift", .key = "f", .action = ToggleFloatAction{} });
-    keybinds.push_back({ .mod = "super", .key = "j", .action = FocusNextAction{} });
-    keybinds.push_back({ .mod = "super", .key = "k", .action = FocusPrevAction{} });
-    keybinds.push_back({ .mod = "super", .key = "h", .action = RatioShrinkAction{} });
-    keybinds.push_back({ .mod = "super", .key = "l", .action = RatioGrowAction{} });
+    keybinds[{ XCB_MOD_MASK_4, static_cast<xcb_keysym_t>(XStringToKeysym("Left")) }] = FocusMonitorAction{ -1 };
+    keybinds[{ XCB_MOD_MASK_4, static_cast<xcb_keysym_t>(XStringToKeysym("Right")) }] = FocusMonitorAction{ 1 };
+    keybinds[{ XCB_MOD_MASK_4 | XCB_MOD_MASK_SHIFT, static_cast<xcb_keysym_t>(XStringToKeysym("Left")) }] =
+        MoveToMonitorAction{ -1 };
+    keybinds[{ XCB_MOD_MASK_4 | XCB_MOD_MASK_SHIFT, static_cast<xcb_keysym_t>(XStringToKeysym("Right")) }] =
+        MoveToMonitorAction{ 1 };
+    keybinds[{ XCB_MOD_MASK_4, static_cast<xcb_keysym_t>(XStringToKeysym("f")) }] = ToggleFullscreenAction{ };
+    keybinds[{ XCB_MOD_MASK_4 | XCB_MOD_MASK_SHIFT, static_cast<xcb_keysym_t>(XStringToKeysym("f")) }] =
+        ToggleFloatAction{ };
+    keybinds[{ XCB_MOD_MASK_4, static_cast<xcb_keysym_t>(XStringToKeysym("j")) }] = FocusNextAction{ };
+    keybinds[{ XCB_MOD_MASK_4, static_cast<xcb_keysym_t>(XStringToKeysym("k")) }] = FocusPrevAction{ };
+    keybinds[{ XCB_MOD_MASK_4, static_cast<xcb_keysym_t>(XStringToKeysym("h")) }] = RatioShrinkAction{ };
+    keybinds[{ XCB_MOD_MASK_4, static_cast<xcb_keysym_t>(XStringToKeysym("l")) }] = RatioGrowAction{ };
 
     return keybinds;
 }
 
-} // namespace
-
-Config default_config()
+Config default_values()
 {
     Config cfg;
     cfg.workspaces.names = default_workspace_names(cfg.workspaces.count);
@@ -965,15 +800,23 @@ Config default_config()
     cfg.commands["terminal"] = CommandConfig::argv_command({ "/usr/local/bin/st" });
     cfg.commands["browser"] = CommandConfig::argv_command({ "/usr/bin/firefox" });
     cfg.commands["launcher"] = CommandConfig::argv_command({ "dmenu_run" });
-    cfg.keybinds = build_default_keybinds(cfg);
 
     cfg.mousebinds = {
-        { "super", 1,     "drag_window" },
-        { "super", 3, "resize_floating" },
-        { "super", 2,    "toggle_float" },
+        { XCB_MOD_MASK_4, 1,     MouseAction::DragWindow },
+        { XCB_MOD_MASK_4, 3, MouseAction::ResizeFloating },
+        { XCB_MOD_MASK_4, 2,    MouseAction::ToggleFloat },
     };
 
     return cfg;
+}
+
+} // namespace
+
+Config default_config()
+{
+    auto config = default_values();
+    config.keybinds = build_default_keybinds(config);
+    return config;
 }
 
 ConfigLoadResult load_config_result(std::string const& path)
@@ -1010,9 +853,8 @@ ConfigLoadResult load_config_result(std::string const& path)
         LWM_TRY(ensure_optional_array(root, "rules", "[[rules]]"));
         LWM_TRY(ensure_optional_array(root, "scratchpads", "[[scratchpads]]"));
 
-        Config cfg = default_config();
+        Config cfg = default_values();
         bool has_bind_overrides = root.contains("binds");
-        bool has_workspace_bind_overrides = root.contains("workspace_binds");
 
         if (auto appearance = root["appearance"].as_table())
         {
@@ -1237,16 +1079,6 @@ ConfigLoadResult load_config_result(std::string const& path)
             }
         }
 
-        if (has_bind_overrides)
-            cfg.keybinds.clear();
-
-        std::set<KeyBinding> seen_bindings;
-        for (auto const& keybind : cfg.keybinds)
-        {
-            seen_bindings.insert({ KeybindManager::parse_modifier(keybind.mod),
-                                   KeybindManager::parse_keysym(keybind.key) });
-        }
-
         if (auto binds = root["binds"].as_array())
         {
             for (size_t i = 0; i < binds->size(); ++i)
@@ -1256,7 +1088,6 @@ ConfigLoadResult load_config_result(std::string const& path)
                     return std::unexpected("[[binds]] entry is missing");
                 LWM_TRYV(table, expect_table(*item, "[[binds]]#" + std::to_string(i)));
                 std::string context = "[[binds]]#" + std::to_string(i);
-                LWM_TRY(reject_unknown_bind_keys(*table, context));
 
                 auto const* key_node = table->get("key");
                 if (!key_node)
@@ -1264,15 +1095,12 @@ ConfigLoadResult load_config_result(std::string const& path)
                 LWM_TRYV(key_combo, expect_string(*key_node, context + ".key"));
                 LWM_TRYV(combo, parse_key_combo(key_combo, context + ".key"));
 
-                KeybindConfig keybind;
-                keybind.mod = std::move(combo.first);
-                keybind.key = std::move(combo.second);
-                LWM_TRY(parse_bind_action(*table, context, cfg, keybind));
-                LWM_TRY(add_binding(cfg.keybinds, seen_bindings, std::move(keybind), context));
+                LWM_TRYV(action, parse_bind_action(*table, context, cfg));
+                LWM_TRY(add_binding(cfg.keybinds, combo, std::move(action), context));
             }
         }
 
-        std::set<std::pair<std::string, std::string>> replaced_workspace_groups;
+        std::set<std::pair<uint16_t, std::string>> replaced_workspace_groups;
         if (auto workspace_binds = root["workspace_binds"].as_array())
         {
             for (size_t i = 0; i < workspace_binds->size(); ++i)
@@ -1295,7 +1123,7 @@ ConfigLoadResult load_config_result(std::string const& path)
                     return std::unexpected(context + ".mode must be 'switch' or 'move'");
 
                 LWM_TRYV(mod_value, expect_string(*mod_node, context + ".mod"));
-                LWM_TRYV(mod, validate_modifier_string(mod_value, context + ".mod"));
+                LWM_TRYV(mod, parse_modifiers(mod_value, context + ".mod"));
                 LWM_TRYV(keys, parse_string_array(*keys_node, context + ".keys"));
                 if (keys.size() != cfg.workspaces.count)
                 {
@@ -1305,43 +1133,29 @@ ConfigLoadResult load_config_result(std::string const& path)
                 }
 
                 std::string action = mode == "switch" ? "switch_workspace" : "move_to_workspace";
-                if (has_workspace_bind_overrides && !has_bind_overrides)
+                if (!has_bind_overrides)
                 {
                     auto const [_, inserted] = replaced_workspace_groups.insert({ mod, action });
                     if (inserted)
                     {
-                        erase_matching_bindings(
+                        std::erase_if(
                             cfg.keybinds,
-                            seen_bindings,
-                            [&](KeybindConfig const& existing)
-                            { return existing.mod == mod && action_is_workspace_group(existing.action, action); }
+                            [&](auto const& existing)
+                            {
+                                return existing.first.modifier == mod
+                                    && action_is_workspace_group(existing.second, action);
+                            }
                         );
                     }
                 }
 
                 for (size_t workspace = 0; workspace < keys.size(); ++workspace)
                 {
-                    if (KeybindManager::parse_keysym(keys[workspace]) == XCB_NO_SYMBOL)
-                    {
-                        return std::unexpected(
-                            context + ".keys[" + std::to_string(workspace) + "] has unknown key '" + keys[workspace]
-                            + "'"
-                        );
-                    }
-
-                    KeybindConfig keybind;
-                    keybind.mod = mod;
-                    keybind.key = keys[workspace];
-                    if (action == "switch_workspace")
-                        keybind.action = SwitchWorkspaceAction{ workspace };
-                    else
-                        keybind.action = MoveToWorkspaceAction{ workspace };
-                    LWM_TRY(add_binding(
-                        cfg.keybinds,
-                        seen_bindings,
-                        std::move(keybind),
-                        context + ".keys[" + std::to_string(workspace) + "]"
-                    ));
+                    auto key_context = context + ".keys[" + std::to_string(workspace) + "]";
+                    LWM_TRYV(keysym, parse_keysym(keys[workspace], key_context));
+                    Action binding_action = action == "switch_workspace" ? Action{ SwitchWorkspaceAction{ workspace } }
+                                                                         : Action{ MoveToWorkspaceAction{ workspace } };
+                    LWM_TRY(add_binding(cfg.keybinds, { mod, keysym }, std::move(binding_action), key_context));
                 }
             }
         }
@@ -1362,15 +1176,15 @@ ConfigLoadResult load_config_result(std::string const& path)
                 if (auto const* mod_node = table->get("mod"))
                 {
                     LWM_TRYV(mod_value, expect_string(*mod_node, context + ".mod"));
-                    LWM_TRYV(mod, validate_modifier_string(mod_value, context + ".mod"));
-                    mousebind.mod = std::move(mod);
+                    LWM_TRYV(mod, parse_modifiers(mod_value, context + ".mod"));
+                    mousebind.modifier = mod;
                 }
                 if (auto const* button_node = table->get("button"))
                 {
                     LWM_TRYV(button, expect_integer(*button_node, context + ".button"));
                     if (button <= 0 || button > 255)
                         return std::unexpected(context + ".button must be in range 1..255");
-                    mousebind.button = static_cast<int>(button);
+                    mousebind.button = static_cast<uint8_t>(button);
                 }
                 else
                 {
@@ -1380,16 +1194,19 @@ ConfigLoadResult load_config_result(std::string const& path)
                 if (auto const* action_node = table->get("action"))
                 {
                     LWM_TRYV(action, expect_string(*action_node, context + ".action"));
-                    mousebind.action = std::move(action);
+                    if (action == "drag_window")
+                        mousebind.action = MouseAction::DragWindow;
+                    else if (action == "resize_floating")
+                        mousebind.action = MouseAction::ResizeFloating;
+                    else if (action == "toggle_float")
+                        mousebind.action = MouseAction::ToggleFloat;
+                    else
+                        return std::unexpected(context + ".action has unknown mouse action '" + action + "'");
                 }
                 else
                 {
                     return std::unexpected(context + ".action is required");
                 }
-
-                if (mousebind.action != "drag_window" && mousebind.action != "resize_floating"
-                    && mousebind.action != "toggle_float")
-                    return std::unexpected(context + ".action has unknown mouse action '" + mousebind.action + "'");
 
                 cfg.mousebinds.push_back(std::move(mousebind));
             }
@@ -1435,14 +1252,6 @@ ConfigLoadResult load_config_result(std::string const& path)
     {
         return std::unexpected("Config error in '" + path + "': " + std::string(e.what()));
     }
-}
-
-std::optional<Config> load_config(std::string const& path)
-{
-    auto result = load_config_result(path);
-    if (!result)
-        return std::nullopt;
-    return *result;
 }
 
 #undef LWM_TRY

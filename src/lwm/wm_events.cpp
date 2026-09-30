@@ -469,10 +469,10 @@ void WindowManager::handle_motion_notify(xcb_motion_notify_event_t const& e)
     update_focused_monitor_at_point(e.root_x, e.root_y);
 }
 
-WindowManager::MouseBinding const* WindowManager::resolve_mouse_binding(uint16_t state, uint8_t button) const
+MousebindConfig const* WindowManager::resolve_mouse_binding(uint16_t state, uint8_t button) const
 {
     uint16_t clean_mod = state & ~(XCB_MOD_MASK_LOCK | XCB_MOD_MASK_2);
-    for (auto const& binding : mousebinds_)
+    for (auto const& binding : config_.mousebinds)
     {
         if (binding.button == button && binding.modifier == clean_mod)
             return &binding;
@@ -507,12 +507,12 @@ void WindowManager::handle_button_press(xcb_button_press_event_t const& e)
     bool is_floating = client && client->kind() == Client::Kind::Floating;
     bool is_tiled = client && client->kind() == Client::Kind::Tiled;
 
-    auto handle_binding = [&](MouseBinding const& binding) -> bool
+    auto handle_binding = [&](MousebindConfig const& binding) -> bool
     {
         if (from_window_grab)
             allow_window_grab(XCB_ALLOW_ASYNC_POINTER);
 
-        if (binding.action == "drag_window")
+        if (binding.action == MouseAction::DragWindow)
         {
             if (is_floating)
             {
@@ -527,7 +527,7 @@ void WindowManager::handle_button_press(xcb_button_press_event_t const& e)
                 return true;
             }
         }
-        else if (binding.action == "resize_floating")
+        else if (binding.action == MouseAction::ResizeFloating)
         {
             if (is_floating)
             {
@@ -564,7 +564,7 @@ void WindowManager::handle_button_press(xcb_button_press_event_t const& e)
                 return true;
             }
         }
-        else if (binding.action == "toggle_float")
+        else if (binding.action == MouseAction::ToggleFloat)
         {
             if (is_tiled || is_floating)
             {
@@ -1388,7 +1388,8 @@ void WindowManager::handle_property_notify(xcb_property_notify_event_t const& e)
             auto [instance, name] = get_wm_class(e.window);
             if (client->wm_class_name != instance || client->wm_class != name)
             {
-                auto previous = window_rules_.match(window_match_info(*client), monitors_, config_.workspaces.names);
+                auto previous =
+                    match_window_rules(config_.rules, window_match_info(*client), monitors_, config_.workspaces.names);
                 client->wm_class_name = std::move(instance);
                 client->wm_class = std::move(name);
                 effects_.state_changed |= ipc_.has_subscribers(Event_StateChange);

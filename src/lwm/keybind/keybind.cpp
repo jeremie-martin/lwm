@@ -1,42 +1,17 @@
 #include "keybind.hpp"
-#include <X11/Xlib.h>
-#include <sstream>
 
 namespace lwm {
 
 KeybindManager::KeybindManager(Connection& conn, Config const& config)
     : conn_(conn)
-{
-    load_bindings(config);
-}
-
-void KeybindManager::reload(Config const& config)
-{
-    load_bindings(config);
-}
-
-void KeybindManager::load_bindings(Config const& config)
-{
-    bindings_.clear();
-
-    for (auto const& kb : config.keybinds)
-    {
-        uint16_t mod = parse_modifier(kb.mod);
-        xcb_keysym_t keysym = parse_keysym(kb.key);
-
-        if (keysym != XCB_NO_SYMBOL)
-        {
-            KeyBinding binding{ mod, keysym };
-            bindings_[binding] = kb.action;
-        }
-    }
-}
+    , config_(config)
+{ }
 
 void KeybindManager::grab_keys(xcb_window_t window)
 {
     xcb_ungrab_key(conn_.get(), XCB_GRAB_ANY, window, XCB_MOD_MASK_ANY);
 
-    for (auto const& [binding, action] : bindings_)
+    for (auto const& [binding, action] : config_.keybinds)
     {
         xcb_keycode_t* keycodes = xcb_key_symbols_get_keycode(conn_.keysyms(), binding.keysym);
         if (keycodes)
@@ -67,43 +42,12 @@ std::optional<Action> KeybindManager::resolve(uint16_t state, xcb_keysym_t keysy
 {
     uint16_t cleanMod = state & ~(XCB_MOD_MASK_LOCK | XCB_MOD_MASK_2);
 
-    auto it = bindings_.find({ cleanMod, keysym });
-    if (it != bindings_.end())
+    auto it = config_.keybinds.find({ cleanMod, keysym });
+    if (it != config_.keybinds.end())
     {
         return it->second;
     }
     return std::nullopt;
-}
-
-uint16_t KeybindManager::parse_modifier(std::string const& mod)
-{
-    uint16_t result = 0;
-    std::istringstream stream(mod);
-    std::string token;
-
-    while (std::getline(stream, token, '+'))
-    {
-        if (token == "super")
-            result |= XCB_MOD_MASK_4;
-        else if (token == "shift")
-            result |= XCB_MOD_MASK_SHIFT;
-        else if (token == "ctrl" || token == "control")
-            result |= XCB_MOD_MASK_CONTROL;
-        else if (token == "alt")
-            result |= XCB_MOD_MASK_1;
-    }
-
-    return result;
-}
-
-xcb_keysym_t KeybindManager::parse_keysym(std::string const& key)
-{
-    KeySym sym = XStringToKeysym(key.c_str());
-    if (sym != NoSymbol)
-    {
-        return static_cast<xcb_keysym_t>(sym);
-    }
-    return XCB_NO_SYMBOL;
 }
 
 } // namespace lwm

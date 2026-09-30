@@ -1,14 +1,18 @@
 #include "x11_test_harness.hpp"
+#include <X11/keysym.h>
 #include <catch2/catch_test_macros.hpp>
 #include <cerrno>
 #include <chrono>
 #include <cstring>
 #include <filesystem>
+#include <nlohmann/json.hpp>
 #include <optional>
 #include <sstream>
 #include <sys/socket.h>
 #include <sys/un.h>
 #include <unistd.h>
+#include <xcb/xcb_keysyms.h>
+#include <xcb/xtest.h>
 
 using namespace lwm::test;
 
@@ -420,4 +424,134 @@ size = { width = 0.8, height = 0.6 }
 
     destroy_window(env->conn, scratchpad_window);
     destroy_window(env->conn, fallback);
+}
+
+TEST_CASE("Integration: a reload binding can replace itself and publish new bindings", "[integration][reload][keybind]")
+{
+    auto env = TestEnvironment::create(R"(
+[workspaces]
+count = 2
+names = ["before", "two"]
+[[binds]]
+key = "F5"
+reload_config = true
+[[binds]]
+key = "F6"
+switch_workspace = 1
+)");
+    REQUIRE(env);
+    auto& conn = env->conn;
+    auto desktop = intern_atom(conn.get(), "_NET_CURRENT_DESKTOP");
+    auto press = [&](xcb_keysym_t symbol)
+    {
+        auto* symbols = xcb_key_symbols_alloc(conn.get());
+        REQUIRE(symbols);
+        auto* codes = xcb_key_symbols_get_keycode(symbols, symbol);
+        REQUIRE(codes);
+        auto code = codes[0];
+        free(codes);
+        xcb_key_symbols_free(symbols);
+        REQUIRE(code != XCB_NO_SYMBOL);
+        xcb_test_fake_input(conn.get(), XCB_KEY_PRESS, code, XCB_CURRENT_TIME, conn.root(), 0, 0, 0);
+        xcb_test_fake_input(conn.get(), XCB_KEY_RELEASE, code, XCB_CURRENT_TIME, conn.root(), 0, 0, 0);
+        xcb_flush(conn.get());
+    };
+    press(XK_F6);
+    REQUIRE(wait_for_property_cardinal(conn.get(), conn.root(), desktop, 1, kTimeout));
+    REQUIRE(env->wm.write_config(R"(
+[workspaces]
+count = 2
+names = ["after", "two"]
+[[binds]]
+key = "F6"
+switch_workspace = 0
+)"));
+    press(XK_F5);
+    REQUIRE(wait_for_desktop_names(conn, { "after", "two" }));
+    press(XK_F6);
+    REQUIRE(wait_for_property_cardinal(conn.get(), conn.root(), desktop, 0, kTimeout));
+
+    // Invalid replacement must leave both the published config and working bindings intact.
+    REQUIRE(env->wm.write_config(R"(
+[workspaces]
+count = 2
+names = ["invalid", "two"]
+[[binds]]
+key = "F6"
+switch_workspace = 1
+[[rules]]
+match = { title = "[invalid" }
+apply = { floating = true }
+)"));
+    auto result = run_lwmctl(env->wm, { "reload-config" });
+    REQUIRE(result);
+    REQUIRE(result->exit_code != 0);
+    REQUIRE(wait_for_desktop_names(conn, { "after", "two" }));
+    auto switched = run_lwmctl(env->wm, { "workspace", "switch", "1" });
+    REQUIRE(switched);
+    REQUIRE(switched->exit_code == 0);
+    press(XK_F6);
+    REQUIRE(wait_for_property_cardinal(conn.get(), conn.root(), desktop, 0, kTimeout));
+}
+
+TEST_CASE(
+    "Integration: reload preserves scratchpad claims and pending launches by name",
+    "[integration][reload][scratchpad]"
+)
+{
+    auto config = [](bool keep_claimed, std::string pattern)
+    {
+        std::string result = R"(
+[workspaces]
+count = 2
+[[scratchpads]]
+name = "pending"
+spawn = { argv = ["/bin/true"] }
+match = { class = "Pending" }
+)";
+        if (keep_claimed)
+            result += "\n[[scratchpads]]\nname = \"claimed\"\nspawn = { argv = [\"/bin/true\"] }\nmatch = { class = \""
+                + pattern + "\" }\n";
+        return result;
+    };
+    auto env = TestEnvironment::create(config(true, "Original"));
+    REQUIRE(env);
+    auto& conn = env->conn;
+    auto socket = wait_for_ipc_socket_path(conn);
+    REQUIRE(socket);
+    auto snapshot = [&]
+    {
+        auto reply = send_ipc_command(*socket, "scratchpad list");
+        REQUIRE(reply);
+        REQUIRE(reply->starts_with("ok "));
+        return nlohmann::json::parse(reply->substr(3));
+    };
+    REQUIRE(send_ipc_command(*socket, "scratchpad toggle pending") == "ok");
+    auto window = create_window(conn, 10, 10, 200, 150);
+    set_window_wm_class(conn, window, "instance", "Original");
+    map_window(conn, window);
+    REQUIRE(wait_for_condition([&] { return snapshot()["named"][1]["window"] == window; }, kTimeout));
+    auto before = snapshot();
+    REQUIRE(before["named"][0]["pending"] == true);
+    REQUIRE(env->wm.write_config(config(true, "[invalid")));
+    auto rejected = run_lwmctl(env->wm, { "reload-config" });
+    REQUIRE(rejected);
+    REQUIRE(rejected->exit_code != 0);
+    CHECK(snapshot() == before);
+
+    REQUIRE(env->wm.write_config(config(true, "Replacement")));
+    REQUIRE(send_ipc_command(*socket, "reload-config") == "ok reloaded");
+    CHECK(snapshot() == before);
+    REQUIRE(send_ipc_command(*socket, "scratchpad toggle claimed") == "ok");
+    REQUIRE(wait_for_active_window(conn, window, kTimeout));
+    REQUIRE(send_ipc_command(*socket, "scratchpad toggle claimed") == "ok");
+    auto hidden = intern_atom(conn.get(), "_NET_WM_STATE_HIDDEN");
+    REQUIRE(wait_for_condition([&] { return has_state(conn, window, hidden); }, kTimeout));
+    REQUIRE(env->wm.write_config(config(false, "")));
+    REQUIRE(send_ipc_command(*socket, "reload-config") == "ok reloaded");
+    auto remaining = snapshot();
+    REQUIRE(remaining["named"].size() == 1);
+    CHECK(remaining["named"][0]["pending"] == true);
+    REQUIRE(wait_for_active_window(conn, window, kTimeout));
+    REQUIRE(wait_for_condition([&] { return !has_state(conn, window, hidden); }, kTimeout));
 }

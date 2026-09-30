@@ -327,10 +327,21 @@ helpers update both client placement and tiled membership before invalidating
 the source and destination monitors. Direct monitor/workspace writes belong only in
 manage, movement, restart, and hotplug paths.
 
-Config loading is strict and atomic. Reload replaces the parsed configuration,
-rebuilds input and scratchpad state, updates EWMH workspace metadata, and
-reapplies currently matching rules. The user-visible reload limits are recorded
-in [README.md](README.md).
+Configuration loading validates and prepares a candidate before changing the WM.
+`Config` owns compiled rule and scratchpad regexes, the resolved keybinding map,
+and typed mouse actions. Runtime matching and input handling use that data directly;
+there is no second compiled configuration to synchronize. `KeybindManager` borrows
+its owning WM's stable `Config` object. Resolving a key returns an action by value
+because executing it may reload and replace the configuration that contained it.
+
+Reload validates workspace-count compatibility and prepares scratchpad runtime
+state before replacing `Config`. Surviving scratchpad names retain both claimed
+windows and pending launches, even when their matchers change. Removed names
+release their windows. The WM then regrabs input, updates EWMH workspace metadata,
+and reapplies matching rules through the normal transition helpers. Invalid
+configuration leaves the active configuration and runtime claims unchanged;
+this does not promise rollback of X-server errors during application.
+The user-visible reload limits are recorded in [README.md](README.md).
 
 Graceful restart serializes global, workspace, client, ordering, ratio, and
 scratchpad state into private X properties, execs the selected binary, restores

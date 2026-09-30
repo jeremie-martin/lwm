@@ -1,5 +1,6 @@
 #include "lwm/config/config.hpp"
 #include "test_resources.hpp"
+#include <X11/keysym.h>
 #include <catch2/catch_test_macros.hpp>
 #include <cstdio>
 #include <filesystem>
@@ -120,8 +121,8 @@ apply = { floating = true, scratchpad = "term", center = true }
     REQUIRE(cfg.autostart.commands.front().argv.front() == "/usr/bin/printf");
     REQUIRE(cfg.scratchpads.size() == 1);
     REQUIRE(cfg.keybinds.size() == 8);
-    REQUIRE(action_as<SpawnAction>(cfg.keybinds[0].action) != nullptr);
-    auto const* scratchpad_action = action_as<ToggleScratchpadAction>(cfg.keybinds[1].action);
+    REQUIRE(action_as<SpawnAction>(cfg.keybinds.at({ XCB_MOD_MASK_4, XK_Return })) != nullptr);
+    auto const* scratchpad_action = action_as<ToggleScratchpadAction>(cfg.keybinds.at({ XCB_MOD_MASK_4, XK_u }));
     REQUIRE(scratchpad_action != nullptr);
     REQUIRE(scratchpad_action->name == "term");
     REQUIRE(cfg.rules.size() == 1);
@@ -145,9 +146,9 @@ swap_prev = true
     bool saw_prev = false;
     for (auto const& kb : loaded->keybinds)
     {
-        if (action_as<SwapNextAction>(kb.action))
+        if (action_as<SwapNextAction>(kb.second))
             saw_next = true;
-        else if (action_as<SwapPrevAction>(kb.action))
+        else if (action_as<SwapPrevAction>(kb.second))
             saw_prev = true;
     }
     REQUIRE(saw_next);
@@ -201,14 +202,14 @@ count = 3
 
     REQUIRE(loaded.has_value());
     REQUIRE_FALSE(loaded->keybinds.empty());
-    auto const* spawn_action = action_as<SpawnAction>(loaded->keybinds.front().action);
+    auto const* spawn_action = action_as<SpawnAction>(loaded->keybinds.at({ XCB_MOD_MASK_4, XK_Return }));
     REQUIRE(spawn_action != nullptr);
     REQUIRE(spawn_action->command.argv.front() == "/usr/bin/ghostty");
 
     size_t switch_bind_count = 0;
     for (auto const& keybind : loaded->keybinds)
     {
-        if (action_as<SwitchWorkspaceAction>(keybind.action))
+        if (action_as<SwitchWorkspaceAction>(keybind.second))
             ++switch_bind_count;
     }
     REQUIRE(switch_bind_count == 6);
@@ -238,16 +239,16 @@ keys = ["F1", "F2", "F3"]
 
     for (auto const& keybind : loaded->keybinds)
     {
-        if (auto const* spawn = action_as<SpawnAction>(keybind.action); spawn && keybind.key == "Return")
+        if (auto const* spawn = action_as<SpawnAction>(keybind.second); spawn && keybind.first.keysym == XK_Return)
         {
             saw_terminal_spawn =
                 spawn->command.kind == CommandConfig::Kind::Argv && spawn->command.argv.front() == "/usr/bin/ghostty";
         }
-        if (action_as<FocusMonitorAction>(keybind.action))
+        if (action_as<FocusMonitorAction>(keybind.second))
             saw_focus_monitor = true;
-        if (action_as<SwitchWorkspaceAction>(keybind.action))
+        if (action_as<SwitchWorkspaceAction>(keybind.second))
             ++switch_bind_count;
-        if (action_as<MoveToWorkspaceAction>(keybind.action))
+        if (action_as<MoveToWorkspaceAction>(keybind.second))
             ++move_bind_count;
     }
 
@@ -417,4 +418,75 @@ TEST_CASE("Config rejects numeric narrowing and excessive workspace allocation",
         CHECK_FALSE(load_from_string(text));
     }
     CHECK(load_from_string("[appearance]\npadding = 65535\nborder_width = 65535"));
+}
+
+TEST_CASE("Binding identity uses modifiers and keysyms rather than spelling", "[config][keybind]")
+{
+    auto loaded = load_from_string(R"(
+[workspaces]
+count = 2
+[[workspace_binds]]
+mode = "move"
+mod = "shift+super"
+keys = ["F1", "F2"]
+)");
+    REQUIRE(loaded);
+    size_t moves = 0;
+    for (auto const& [binding, action] : loaded->keybinds)
+        if (std::holds_alternative<MoveToWorkspaceAction>(action))
+            ++moves;
+    CHECK(moves == 2); // Replaces the default super+shift group, regardless of ordering.
+    auto const& action = loaded->keybinds.at({ XCB_MOD_MASK_4 | XCB_MOD_MASK_SHIFT, XK_F2 });
+    REQUIRE(std::holds_alternative<MoveToWorkspaceAction>(action));
+    CHECK(std::get<MoveToWorkspaceAction>(action).workspace == 1);
+
+    for (std::string combo : { "super+", "super++a", "+a", "super+super+a", "ctrl+control+a", "unknown+a" })
+    {
+        CAPTURE(combo);
+        CHECK_FALSE(load_from_string("[[binds]]\nkey = \"" + combo + "\"\nkill = true\n"));
+    }
+    for (std::string modifiers : { "super+", "+super", "super++shift", "ctrl+control" })
+    {
+        CAPTURE(modifiers);
+        CHECK_FALSE(
+            load_from_string("[[mousebinds]]\nmod = \"" + modifiers + "\"\nbutton = 1\naction = \"drag_window\"\n")
+        );
+    }
+    auto duplicate = load_from_string(R"(
+[[binds]]
+key = "control+shift+a"
+kill = true
+[[binds]]
+key = "shift+ctrl+a"
+restart = true
+)");
+    REQUIRE_FALSE(duplicate);
+    CHECK(duplicate.error().find("duplicates") != std::string::npos);
+}
+
+TEST_CASE("Parsed matchers preserve full matching and reject invalid rules and scratchpads", "[config][rules]")
+{
+    auto loaded = load_from_string(R"(
+[[rules]]
+match = { class = "Firefox|Chromium", instance = "Navigator", title = ".*Video.*", type = "DIALOG" }
+apply = { floating = true }
+)");
+    REQUIRE(loaded);
+    auto const& rule = loaded->rules.front();
+    CHECK(rule.type == lwm::WindowType::Dialog);
+    CHECK(rule.match.matches("Firefox", "Navigator", "Video playing"));
+    CHECK_FALSE(rule.match.matches("MyFirefox", "Navigator", "Video playing"));
+    CHECK_FALSE(rule.match.matches("Firefox", "navigator", "Video playing"));
+    CHECK_FALSE(rule.match.matches("Firefox", "Navigator", "Music playing"));
+    for (std::string field : { "class", "instance", "title" })
+        for (std::string pattern : { "", "[invalid" })
+        {
+            CAPTURE(field, pattern);
+            auto matcher = "match = { " + field + " = \"" + pattern + "\" }\n";
+            CHECK_FALSE(load_from_string("[[rules]]\n" + matcher + "apply = { floating = true }\n"));
+            CHECK_FALSE(
+                load_from_string("[[scratchpads]]\nname = \"term\"\nspawn = { argv = [\"true\"] }\n" + matcher)
+            );
+        }
+    CHECK_FALSE(load_from_string("[[rules]]\nmatch = { type = \"unknown\" }\napply = { floating = true }\n"));
 }

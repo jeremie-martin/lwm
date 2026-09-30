@@ -120,19 +120,11 @@ private:
 
     using DragState = std::variant<NoDrag, FloatingMove, FloatingResize, TiledMove, TiledResize>;
 
-    struct MouseBinding
-    {
-        uint16_t modifier = 0;
-        uint8_t button = 0;
-        std::string action;
-    };
-
     Config config_;
     Connection conn_;
     Ewmh ewmh_;
     KeybindManager keybinds_;
     Layout layout_;
-    WindowRules window_rules_;
 
     std::vector<Monitor> monitors_;
     // Unified Client registry
@@ -192,7 +184,6 @@ private:
     xcb_keysym_t last_toggle_keysym_ = XCB_NO_SYMBOL;
     xcb_timestamp_t last_toggle_release_time_ = 0;
     DragState drag_state_;
-    std::vector<MouseBinding> mousebinds_;
 
     // Cursor resources for tiled resize hover feedback
     xcb_cursor_t cursor_default_ = XCB_NONE;
@@ -277,20 +268,10 @@ private:
     std::vector<NamedScratchpadState> named_scratchpads_;
     std::vector<xcb_window_t> scratchpad_pool_; ///< Generic pool, MRU-ordered (back = most recent)
 
-    struct CompiledScratchpadMatcher
-    {
-        std::string name;
-        std::optional<std::regex> class_regex;
-        std::optional<std::regex> instance_regex;
-        std::optional<std::regex> title_regex;
-    };
-    std::vector<CompiledScratchpadMatcher> scratchpad_matchers_;
-
     void create_wm_window();
     void setup_root();
     void grab_buttons();
     void claim_wm_ownership();
-    void init_mousebinds();
     void detect_monitors();
     void create_fallback_monitor();
     void init_monitor_workspaces(Monitor& monitor);
@@ -524,7 +505,7 @@ private:
         size_t monitor_idx;
     };
     std::optional<SplitBorderHit> try_hit_split_border(int16_t x, int16_t y);
-    MouseBinding const* resolve_mouse_binding(uint16_t state, uint8_t button) const;
+    MousebindConfig const* resolve_mouse_binding(uint16_t state, uint8_t button) const;
     bool supports_protocol(xcb_window_t window, xcb_atom_t protocol) const;
     bool is_focus_eligible(Client const& client) const;
     bool is_focus_candidate(xcb_window_t window) const
@@ -603,7 +584,6 @@ private:
     void release_scratchpad_window(xcb_window_t window);
     void finalize_scratchpad_claim(xcb_window_t window, NamedScratchpadState& state, std::string_view name);
     void init_scratchpad_state();
-    void rebuild_scratchpad_matchers();
     ScratchpadConfig const* find_scratchpad_config(std::string_view name) const;
     NamedScratchpadState* find_named_scratchpad(std::string_view name);
     xcb_window_t find_visible_pool_window() const;
