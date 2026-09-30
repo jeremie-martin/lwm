@@ -1,5 +1,5 @@
+#include "ipc_subscription.hpp"
 #include "lwm/core/types.hpp"
-#include "x11_test_harness.hpp"
 #include <catch2/catch_test_macros.hpp>
 #include <nlohmann/json.hpp>
 #include <xcb/xcb_icccm.h>
@@ -8,51 +8,11 @@ using namespace lwm::test;
 namespace {
 constexpr auto timeout = std::chrono::seconds(2);
 
-struct Subscriber
-{
-    int fd = socket(AF_UNIX, SOCK_STREAM | SOCK_CLOEXEC, 0);
-    Subscriber(std::string const& path, std::string_view filter)
-    {
-        REQUIRE(fd >= 0);
-        sockaddr_un address{};
-        address.sun_family = AF_UNIX;
-        REQUIRE(path.size() < sizeof(address.sun_path));
-        std::memcpy(address.sun_path, path.c_str(), path.size() + 1);
-        REQUIRE(connect(fd, reinterpret_cast<sockaddr*>(&address), sizeof(address)) == 0);
-        std::string request = "subscribe " + std::string(filter) + "\n";
-        REQUIRE(send(fd, request.data(), request.size(), MSG_NOSIGNAL) == request.size());
-        REQUIRE(line() == "ok subscribed");
-    }
-    ~Subscriber()
-    {
-        if (fd >= 0)
-            close(fd);
-    }
-    std::string line()
-    {
-        std::string result;
-        auto deadline = std::chrono::steady_clock::now() + timeout;
-        while (std::chrono::steady_clock::now() < deadline)
-        {
-            pollfd descriptor{ fd, POLLIN, 0 };
-            if (poll(&descriptor, 1, 20) <= 0)
-                continue;
-            char byte;
-            if (recv(fd, &byte, 1, 0) != 1)
-                break;
-            if (byte == '\n')
-                return result;
-            result += byte;
-        }
-        return {};
-    }
-};
-
 std::optional<lwm::Geometry> geometry(X11Connection& conn, xcb_window_t window)
 {
     auto* reply = xcb_get_geometry_reply(conn.get(), xcb_get_geometry(conn.get(), window), nullptr);
     if (!reply)
-        return {};
+        return { };
     lwm::Geometry result{ reply->x, reply->y, reply->width, reply->height };
     free(reply);
     return result;
@@ -173,7 +133,7 @@ TEST_CASE(
     set_window_type(conn, window, intern_atom(conn.get(), "_NET_WM_WINDOW_TYPE_DIALOG"));
     auto hints = [&](int x, int y, int width, int height)
     {
-        xcb_size_hints_t value{};
+        xcb_size_hints_t value{ };
         value.flags = XCB_ICCCM_SIZE_HINT_US_POSITION | XCB_ICCCM_SIZE_HINT_US_SIZE;
         value.x = x;
         value.y = y;
@@ -316,8 +276,7 @@ TEST_CASE(
     auto reply = send_ipc_command(*path, "window list");
     REQUIRE(reply);
     CHECK(nlohmann::json::parse(reply->substr(3)).at("focused") == first);
-    pollfd descriptor{ subscriber.fd, POLLIN, 0 };
-    CHECK(poll(&descriptor, 1, 30) == 0);
+    CHECK_FALSE(subscriber.reader.read(subscriber.fd, std::chrono::milliseconds(30)));
     destroy_window(conn, second);
     destroy_window(conn, first);
 }
@@ -348,7 +307,7 @@ TEST_CASE("Integration: tiled resize motion stops at queued button release", "[i
     int16_t y = left->y + left->height / 2;
     auto pointer = [&](uint8_t type, int16_t x)
     {
-        xcb_button_press_event_t event{};
+        xcb_button_press_event_t event{ };
         event.response_type = type;
         event.detail = type == XCB_MOTION_NOTIFY ? 0 : 1;
         event.root = conn.root();
@@ -461,7 +420,7 @@ TEST_CASE(
     auto path = wait_for_ipc_socket_path(conn);
     REQUIRE(path);
     auto first = create_window(conn, 10, 10, 200, 200);
-    xcb_icccm_wm_hints_t hints{};
+    xcb_icccm_wm_hints_t hints{ };
     hints.flags = XCB_ICCCM_WM_HINT_STATE;
     hints.initial_state = XCB_ICCCM_WM_STATE_ICONIC;
     xcb_icccm_set_wm_hints(conn.get(), first, &hints);
@@ -677,8 +636,8 @@ TEST_CASE(
     REQUIRE(logging->starts_with("ok "));
     CHECK(nlohmann::json::parse(logging->substr(3)).at("active") == true);
     CHECK(state().at("sequence") == current.at("sequence"));
-    pollfd descriptor{ subscriber.fd, POLLIN, 0 };
-    CHECK(poll(&descriptor, 1, 30) == 0); // Read-only state/log queries must not create an event feedback loop.
+    // Include already buffered records when checking for a feedback loop.
+    CHECK_FALSE(subscriber.reader.read(subscriber.fd, std::chrono::milliseconds(30)));
     auto previous_wm = supporting_wm_window(conn);
     REQUIRE(previous_wm);
     REQUIRE(send_ipc_command(*path, "restart"));

@@ -539,7 +539,7 @@ uint32_t WindowManager::border_color_for_client(Client const& client) const
 
 bool WindowManager::should_apply_focus_border(Client const& client) const
 {
-    if (!focus_policy::should_apply_focus_border(client.fullscreen))
+    if (client.fullscreen)
         return false;
     return border_width_for_client(client) > 0;
 }

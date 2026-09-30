@@ -3,7 +3,21 @@
 #include <catch2/catch_test_macros.hpp>
 using namespace lwm;
 
-TEST_CASE("Restart client codec preserves state and accepts older record lengths", "[restart][codec]")
+namespace {
+// Fixed wire words, independent of the encoder and enum ordinals. Coordinates
+// are unsigned 16-bit encodings; 65436 represents -100. Reserved slots stay zero.
+constexpr std::array<uint32_t, 28> floating_record{
+    0,     1,                    // retired overlay flag, borderless
+    65436, 25,    600, 400,      // normal rectangle
+    1,     65436, 25,  600, 400, // legacy fullscreen restore rectangle
+    0,     0,     0,   0,   0,   // legacy maximize restore rectangle
+    0,     0,     0,   0,   0,   // prior floating rectangle
+    0,     0,     2,             // reserved, hidden pool kind, floating kind
+    2,     1,     3,   1         // app urgency, skip-taskbar, restore-below, desktop pin
+};
+}
+
+TEST_CASE("Restart client encoder preserves the cross-binary wire contract", "[restart][codec]")
 {
     Client client;
     set_floating_state(client, { -100, 25, 600, 400 });
@@ -13,21 +27,73 @@ TEST_CASE("Restart client codec preserves state and accepts older record lengths
     client.fullscreen_restore_layer_hint = LayerHint::Below;
     client.app_prefs.skip_taskbar = true;
     client.urgency.add(UrgencySource::App);
-    auto words = restart::encode_client(client);
-    auto result = restart::decode_client(words);
-    REQUIRE(result);
-    CHECK(result->floating == floating_geometry(client));
-    CHECK(words[6] == 1); // old readers receive a fullscreen restore rectangle
-    CHECK(result->restore_layer == LayerHint::Below);
-    CHECK(result->desktop_pinned);
-    REQUIRE(result->app_prefs);
-    CHECK(result->app_prefs->skip_taskbar);
-    CHECK(result->urgency == client.urgency.sources);
-    for (size_t length = 0; length < 24; ++length) CHECK_FALSE(restart::decode_client(std::span(words).first(length)));
-    for (size_t length = 24; length <= words.size(); ++length)
-        CHECK(restart::decode_client(std::span(words).first(length)));
-    words[4] = 65536;
-    CHECK_FALSE(restart::decode_client(words));
+    CHECK(restart::encode_client(client) == floating_record);
+}
+
+TEST_CASE("Restart client decoder interprets historical extensions independently", "[restart][codec]")
+{
+    // The oldest record has 24 words. Later writers appended urgency (initially
+    // boolean), then app preferences, restore layer, and finally desktop pinning.
+    for (size_t length = 24; length <= 28; ++length)
+    {
+        CAPTURE(length);
+        std::vector<uint32_t> words(floating_record.begin(), floating_record.begin() + length);
+        if (length == 25)
+            words[24] = 1; // old boolean urgency belongs to the WM, not the app
+        auto result = restart::decode_client(words);
+        REQUIRE(result);
+        CHECK(result->borderless);
+        CHECK(result->floating == Geometry{ -100, 25, 600, 400 });
+        CHECK_FALSE(result->prior_floating);
+        CHECK(result->hidden_pool_kind == 0);
+        CHECK(result->kind == Client::Kind::Floating);
+        if (length == 24)
+            CHECK_FALSE(result->urgency);
+        else
+            CHECK(
+                result->urgency == static_cast<uint8_t>(length == 25 ? UrgencySource::WmInitiated : UrgencySource::App)
+            );
+        CHECK(result->app_prefs.has_value() == (length >= 26));
+        if (result->app_prefs)
+        {
+            CHECK(result->app_prefs->skip_taskbar);
+            CHECK_FALSE(result->app_prefs->skip_pager);
+            CHECK_FALSE(result->app_prefs->above);
+            CHECK_FALSE(result->app_prefs->below);
+        }
+        if (length >= 27)
+            CHECK(result->restore_layer == LayerHint::Below);
+        else
+            CHECK_FALSE(result->restore_layer);
+        CHECK(result->desktop_pinned == (length >= 28));
+    }
+}
+
+TEST_CASE("Restart client decoder rejects malformed records", "[restart][codec]")
+{
+    REQUIRE(restart::decode_client(floating_record));
+    for (size_t length = 0; length < 24; ++length)
+        CHECK_FALSE(restart::decode_client(std::span(floating_record).first(length)));
+    for (size_t offset : { 2u, 7u, 12u, 17u })
+    {
+        auto words = floating_record;
+        if (offset != 2)
+            words[offset - 1] = 1;
+        REQUIRE(restart::decode_client(words));
+        for (size_t field = offset; field < offset + 4; ++field)
+        {
+            CAPTURE(offset, field);
+            auto invalid = words;
+            invalid[field] = 65536;
+            CHECK_FALSE(restart::decode_client(invalid));
+        }
+    }
+    for (size_t field : { 22u, 23u })
+    {
+        auto invalid = floating_record;
+        invalid[field] = 3;
+        CHECK_FALSE(restart::decode_client(invalid));
+    }
 }
 TEST_CASE("Restart global decoder rejects incomplete monitor records before mutation", "[restart][codec]")
 {
@@ -91,7 +157,7 @@ TEST_CASE("Restart ratio decoder accepts historical packed and depth-path addres
 
 TEST_CASE("Restart decoder folds legacy restore rectangles into normal geometry", "[restart][codec]")
 {
-    std::array<uint32_t, restart::client_words> words{};
+    std::array<uint32_t, restart::client_words> words{ };
     words[23] = 2;
     auto rectangle = [&](size_t offset, uint32_t x)
     {

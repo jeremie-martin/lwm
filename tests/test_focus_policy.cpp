@@ -1,5 +1,4 @@
 #include "lwm/core/focus.hpp"
-#include "lwm/core/policy.hpp"
 #include <catch2/catch_test_macros.hpp>
 
 using namespace lwm;
@@ -127,10 +126,4 @@ TEST_CASE("Pointer movement handles monitor transitions, boundaries, and edge ca
         REQUIRE(right_edge.transition == focus::PointerTransition::MonitorChangedClearFocus);
         REQUIRE(right_edge.new_monitor == 1);
     }
-}
-
-TEST_CASE("Focus border policy skips fullscreen windows", "[focus][policy]")
-{
-    REQUIRE(focus_policy::should_apply_focus_border(false));
-    REQUIRE_FALSE(focus_policy::should_apply_focus_border(true));
 }

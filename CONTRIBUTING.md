@@ -62,6 +62,13 @@ tests use real Unix sockets, including partial writes and stalled clients. IPC
 JSON is checked with the test-only nlohmann/json parser, not a local parser or
 production serialization helpers.
 
+Subscription tests use `Subscriber` in `tests/ipc_subscription.hpp`: it waits
+for the real server acknowledgement and retains coalesced and partial lines.
+Use the actual CLI only when its process or output behavior is the contract.
+Since the CLI hides acknowledgements, establish its readiness by receiving a
+real event; do not assume a fixed sleep means it has subscribed. Test children
+and descriptors must be released even when an assertion fails.
+
 Set `LWM_TEST_XSERVER=Xephyr` to run the same integration tests in an owned
 nested Xephyr server; `DISPLAY` must point to its parent X server. This does not
 manage the parent display. The parent may itself be a private Xvfb server.
@@ -187,6 +194,20 @@ Test through the real boundary:
   and actual exec completion while output remains blocked. A Debug-only probe
   verifies invariant failure aborts even with a blocked sink. Time bounds detect regressions; they
   are not hard real-time guarantees.
+
+Choose tests by the failure they detect, not by test count. Policy tests and
+integration tests may cover the same feature when they protect distinct risks;
+do not duplicate a private helper's implementation when an observable contract
+already owns that behavior. Start negative cases from valid state and violate
+only the intended relationship where possible. Otherwise, a different validation
+check can hide the missing behavior.
+
+For restart compatibility, use fixed wire records and independently stated
+expected values, not just an encoder/decoder round trip. Keep actual adoption
+and exec tests: codec tests cannot establish that the WM applies decoded state.
+For important regressions, check the test against the broken revision or a
+focused, temporary mutation of the relevant behavior. Confirm it fails at the
+intended assertion, then restore production code and run the normal checks.
 
 If a behavior is difficult to test without mocking an internal WM component,
 move the decision into a pure policy function and keep XCB, filesystem, and IPC

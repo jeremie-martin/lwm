@@ -108,8 +108,8 @@ TEST_CASE("Model validation checks active focus at completed transitions", "[cli
 
 TEST_CASE("Model validation checks effective fullscreen ownership", "[client][invariants]")
 {
-    std::vector<Monitor> monitors(1);
-    monitors[0].workspaces.resize(2);
+    std::vector<Monitor> monitors(2);
+    for (auto& monitor : monitors) monitor.workspaces.resize(2);
     monitors[0].fullscreen_owner = 1;
     std::unordered_map<xcb_window_t, Client> clients;
     clients[1].id = 1;

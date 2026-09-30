@@ -1,80 +1,70 @@
-#include "x11_test_harness.hpp"
+#include "ipc_subscription.hpp"
 #include <X11/Xlib.h>
-#include <algorithm>
-#include <array>
-#include <catch2/catch_test_macros.hpp>
-#include <chrono>
-#include <cstdlib>
-#include <nlohmann/json.hpp>
-#include <optional>
-#include <poll.h>
-#include <string>
-#include <string_view>
-#include <sys/wait.h>
-#include <thread>
-#include <unistd.h>
+#include <cstdio>
+#include <memory>
 #include <xcb/xcb_keysyms.h>
 #include <xcb/xtest.h>
 
 using namespace lwm::test;
 
 namespace {
-
 constexpr auto kTimeout = std::chrono::seconds(2);
 
-std::optional<std::string> read_line_with_timeout(int fd, std::chrono::milliseconds timeout)
+// Only the consumer-close contract needs a CLI process. Protocol/content tests
+// use Subscriber's acknowledged socket; CLI framing has its own independent peer.
+struct CliSubscriber
 {
-    auto deadline = std::chrono::steady_clock::now() + timeout;
-    std::string output;
-    std::array<char, 512> buffer{};
+    TestFd output;
+    LineReader reader;
+    std::unique_ptr<FILE, int (*)(FILE*)> errors{ tmpfile(), fclose };
+    pid_t pid = -1;
 
-    while (std::chrono::steady_clock::now() < deadline)
+    explicit CliSubscriber(LwmProcess const& wm)
     {
-        auto remaining =
-            std::chrono::duration_cast<std::chrono::milliseconds>(deadline - std::chrono::steady_clock::now());
-        pollfd pfd{ .fd = fd, .events = POLLIN | POLLHUP, .revents = 0 };
-        int rc = poll(&pfd, 1, static_cast<int>(std::max<int64_t>(1, remaining.count())));
-        if (rc <= 0)
-            continue;
-        if ((pfd.revents & POLLHUP) && !(pfd.revents & POLLIN))
-            break;
-
-        ssize_t n = read(fd, buffer.data(), buffer.size());
-        if (n <= 0)
-            break;
-
-        output.append(buffer.data(), static_cast<size_t>(n));
-        size_t newline = output.find('\n');
-        if (newline != std::string::npos)
+        REQUIRE(errors);
+        REQUIRE(fcntl(fileno(errors.get()), F_SETFD, FD_CLOEXEC) == 0);
+        int pipe[2];
+        REQUIRE(pipe2(pipe, O_CLOEXEC) == 0);
+        output.fd = pipe[0];
+        TestFd writer{ pipe[1] };
+        auto executable = lwmctl_executable_path();
+        pid = fork();
+        REQUIRE(pid >= 0);
+        if (pid == 0)
         {
-            output.resize(newline + 1);
-            return output;
+            if (dup2(writer.fd, STDOUT_FILENO) < 0 || dup2(fileno(errors.get()), STDERR_FILENO) < 0)
+                _exit(126);
+            output.reset();
+            writer.reset();
+            setenv("DISPLAY", wm.display().c_str(), 1);
+            setenv("XDG_RUNTIME_DIR", wm.runtime_dir().c_str(), 1);
+            execl(executable.c_str(), executable.c_str(), "subscribe", "window_map", nullptr);
+            _exit(127);
         }
     }
-
-    return std::nullopt;
-}
-
-std::string read_all_from_fd(int fd)
-{
-    std::string output;
-    std::array<char, 512> buffer{};
-    ssize_t n = 0;
-    while ((n = read(fd, buffer.data(), buffer.size())) > 0) output.append(buffer.data(), static_cast<size_t>(n));
-    return output;
-}
-
-bool wait_for_process_exit(pid_t pid, std::chrono::milliseconds timeout, int& status)
-{
-    return wait_for_condition(
-        [&]()
+    ~CliSubscriber()
+    {
+        if (pid > 0)
         {
-            pid_t result = waitpid(pid, &status, WNOHANG);
-            return result == pid;
-        },
-        timeout
-    );
-}
+            kill(pid, SIGKILL);
+            while (waitpid(pid, nullptr, 0) < 0 && errno == EINTR)
+            { }
+        }
+    }
+    bool wait(int& status)
+    {
+        return wait_for_condition(
+            [&]
+            {
+                if (waitpid(pid, &status, WNOHANG) != pid)
+                    return false;
+                pid = -1;
+                return true;
+            },
+            kTimeout
+        );
+    }
+};
 
 std::optional<xcb_keycode_t> first_keycode_for_keysym(X11Connection& conn, xcb_keysym_t keysym)
 {
@@ -138,256 +128,83 @@ void set_window_title(X11Connection& conn, xcb_window_t window, std::string cons
     xcb_flush(conn.get());
 }
 
-struct FocusChangeEvent
-{
-    std::string event;
-    xcb_window_t window = XCB_NONE;
-    std::string class_name;
-    std::string title;
-};
-
-std::optional<FocusChangeEvent> parse_focus_change_event(std::string_view line)
-{
-    if (line.empty() || line.back() != '\n')
-        return std::nullopt;
-    auto value = nlohmann::json::parse(line, nullptr, false);
-    if (!value.is_object() || !value.contains("event") || !value["event"].is_string() || !value.contains("window")
-        || !value["window"].is_number_unsigned() || value["window"].get<uint64_t>() > UINT32_MAX
-        || !value.contains("class") || !value["class"].is_string() || !value.contains("title")
-        || !value["title"].is_string())
-        return std::nullopt;
-    return FocusChangeEvent{ value["event"], value["window"], value["class"], value["title"] };
-}
-
 } // namespace
 
 TEST_CASE("Integration: lwmctl subscribe exits when stdout consumer closes", "[integration][subscribe]")
 {
-    auto test_env = TestEnvironment::create();
-    if (!test_env)
-        SKIP("Test environment not available");
+    auto env = TestEnvironment::create();
+    if (!env)
+        SKIP("X11 unavailable");
+    auto& conn = env->conn;
+    CliSubscriber child(env->wm);
 
-    auto& conn = test_env->conn;
-    auto& wm = test_env->wm;
-
-    int stdout_pipe[2] = { -1, -1 };
-    int stderr_pipe[2] = { -1, -1 };
-    REQUIRE(pipe(stdout_pipe) == 0);
-    REQUIRE(pipe(stderr_pipe) == 0);
-
-    pid_t pid = fork();
-    REQUIRE(pid >= 0);
-
-    if (pid == 0)
+    // The CLI intentionally hides the acknowledgement. Generate real events
+    // until one is delivered, rather than guessing when it has subscribed.
+    std::vector<xcb_window_t> windows;
+    auto deadline = std::chrono::steady_clock::now() + kTimeout;
+    std::optional<std::string> first;
+    while (!first && std::chrono::steady_clock::now() < deadline)
     {
-        dup2(stdout_pipe[1], STDOUT_FILENO);
-        dup2(stderr_pipe[1], STDERR_FILENO);
-        close(stdout_pipe[0]);
-        close(stdout_pipe[1]);
-        close(stderr_pipe[0]);
-        close(stderr_pipe[1]);
-
-        setenv("DISPLAY", wm.display().c_str(), 1);
-        setenv("XDG_RUNTIME_DIR", wm.runtime_dir().c_str(), 1);
-
-        std::filesystem::path executable = lwmctl_executable_path();
-        execl(executable.c_str(), executable.c_str(), "subscribe", "window_map", nullptr);
-        _exit(127);
+        windows.push_back(create_window(conn, 10, 10, 200, 150));
+        map_window(conn, windows.back());
+        first = child.reader.read(child.output.fd, std::chrono::milliseconds(50));
     }
+    REQUIRE(first);
+    auto event = nlohmann::json::parse(*first);
+    REQUIRE(event.at("event") == "window_map");
+    REQUIRE(std::find(windows.begin(), windows.end(), event.at("window").get<xcb_window_t>()) != windows.end());
 
-    close(stdout_pipe[1]);
-    stdout_pipe[1] = -1;
-    close(stderr_pipe[1]);
-    stderr_pipe[1] = -1;
-
-    auto cleanup_child = [&]()
-    {
-        if (stdout_pipe[0] >= 0)
-            close(stdout_pipe[0]);
-        if (stderr_pipe[0] >= 0)
-            close(stderr_pipe[0]);
-
-        if (pid > 0)
-        {
-            int status = 0;
-            if (!wait_for_process_exit(pid, std::chrono::milliseconds(200), status))
-            {
-                kill(pid, SIGKILL);
-                waitpid(pid, &status, 0);
-            }
-            pid = -1;
-        }
-    };
-
-    std::this_thread::sleep_for(std::chrono::milliseconds(100));
-
-    xcb_window_t w1 = create_window(conn, 10, 10, 200, 150);
-    map_window(conn, w1);
-
-    auto first_event = read_line_with_timeout(stdout_pipe[0], kTimeout);
-    REQUIRE(first_event.has_value());
-    REQUIRE(first_event->find("\"event\":\"window_map\"") != std::string::npos);
-
-    close(stdout_pipe[0]);
-    stdout_pipe[0] = -1;
-
-    xcb_window_t w2 = create_window(conn, 40, 40, 200, 150);
-    map_window(conn, w2);
-
+    child.output.reset();
+    auto next = create_window(conn, 40, 40, 200, 150);
+    map_window(conn, next);
     int status = 0;
-    bool exited = wait_for_process_exit(pid, kTimeout, status);
-    if (!exited)
-    {
-        cleanup_child();
-        FAIL("lwmctl subscribe did not exit after stdout closed");
-    }
-
-    std::string stderr_text = read_all_from_fd(stderr_pipe[0]);
-    close(stderr_pipe[0]);
-    stderr_pipe[0] = -1;
-    pid = -1;
+    REQUIRE(child.wait(status));
     REQUIRE(WIFEXITED(status));
     CHECK(WEXITSTATUS(status) == 0);
-    CHECK(stderr_text.empty());
-
-    destroy_window(conn, w2);
-    destroy_window(conn, w1);
+    rewind(child.errors.get());
+    CHECK(fgetc(child.errors.get()) == EOF);
+    destroy_window(conn, next);
+    for (auto window : windows) destroy_window(conn, window);
 }
 
-TEST_CASE("Integration: subscribe decodes escaped focus change fields", "[integration][subscribe][json]")
+TEST_CASE("Integration: subscription JSON preserves escaped focus fields", "[integration][subscribe][json]")
 {
-    auto test_env = TestEnvironment::create();
-    if (!test_env)
-        SKIP("Test environment not available");
-
-    auto& conn = test_env->conn;
-    auto& wm = test_env->wm;
-
-    int stdout_pipe[2] = { -1, -1 };
-    REQUIRE(pipe(stdout_pipe) == 0);
-
-    pid_t pid = fork();
-    REQUIRE(pid >= 0);
-
-    if (pid == 0)
-    {
-        dup2(stdout_pipe[1], STDOUT_FILENO);
-        close(stdout_pipe[0]);
-        close(stdout_pipe[1]);
-        setenv("DISPLAY", wm.display().c_str(), 1);
-        setenv("XDG_RUNTIME_DIR", wm.runtime_dir().c_str(), 1);
-
-        std::filesystem::path executable = lwmctl_executable_path();
-        execl(executable.c_str(), executable.c_str(), "subscribe", "focus_change", nullptr);
-        _exit(127);
-    }
-
-    close(stdout_pipe[1]);
-    stdout_pipe[1] = -1;
-    std::this_thread::sleep_for(std::chrono::milliseconds(100));
-
-    xcb_window_t window = create_window(conn, 10, 10, 200, 150);
-    set_window_wm_class(conn, window, "escaped-instance", "escaped-class");
+    auto env = TestEnvironment::create();
+    if (!env)
+        SKIP("X11 unavailable");
+    auto path = wait_for_ipc_socket_path(env->conn);
+    REQUIRE(path);
+    Subscriber subscriber(*path, "focus_change");
+    auto window = create_window(env->conn, 10, 10, 200, 150);
+    set_window_wm_class(env->conn, window, "escaped-instance", "escaped-class");
     std::string title = "quote \" and slash \\ line\n tab\t";
-    set_window_title(conn, window, title);
-    map_window(conn, window);
-
-    auto event_line = read_line_with_timeout(stdout_pipe[0], kTimeout);
-    REQUIRE(event_line.has_value());
-    auto event = parse_focus_change_event(*event_line);
-    REQUIRE(event.has_value());
-    CHECK(event->event == "focus_change");
-    CHECK(event->window == window);
-    CHECK(event->class_name == "escaped-class");
-    CHECK(event->title == title);
-
-    close(stdout_pipe[0]);
-    stdout_pipe[0] = -1;
-    int status = 0;
-    if (!wait_for_process_exit(pid, std::chrono::milliseconds(200), status))
-    {
-        kill(pid, SIGKILL);
-        waitpid(pid, &status, 0);
-    }
-    pid = -1;
-
-    destroy_window(conn, window);
+    set_window_title(env->conn, window, title);
+    map_window(env->conn, window);
+    auto event = subscriber.event();
+    CHECK(event.at("event") == "focus_change");
+    CHECK(event.at("window") == window);
+    CHECK(event.at("class") == "escaped-class");
+    CHECK(event.at("title") == title);
+    destroy_window(env->conn, window);
 }
 
-TEST_CASE("Integration: lwmctl subscribe preserves monitor direction in key_action events", "[integration][subscribe]")
+TEST_CASE("Integration: subscription preserves monitor direction in key_action events", "[integration][subscribe]")
 {
-    auto test_env = TestEnvironment::create();
-    if (!test_env)
-        SKIP("Test environment not available");
-
-    auto& conn = test_env->conn;
-    auto& wm = test_env->wm;
-
+    auto env = TestEnvironment::create();
+    if (!env)
+        SKIP("X11 unavailable");
+    auto& conn = env->conn;
     if (!extension_available(conn, &xcb_test_id))
         SKIP("XTEST extension not available");
-
-    int stdout_pipe[2] = { -1, -1 };
-    int stderr_pipe[2] = { -1, -1 };
-    REQUIRE(pipe(stdout_pipe) == 0);
-    REQUIRE(pipe(stderr_pipe) == 0);
-
-    pid_t pid = fork();
-    REQUIRE(pid >= 0);
-
-    if (pid == 0)
-    {
-        dup2(stdout_pipe[1], STDOUT_FILENO);
-        dup2(stderr_pipe[1], STDERR_FILENO);
-        close(stdout_pipe[0]);
-        close(stdout_pipe[1]);
-        close(stderr_pipe[0]);
-        close(stderr_pipe[1]);
-
-        setenv("DISPLAY", wm.display().c_str(), 1);
-        setenv("XDG_RUNTIME_DIR", wm.runtime_dir().c_str(), 1);
-
-        std::filesystem::path executable = lwmctl_executable_path();
-        execl(executable.c_str(), executable.c_str(), "subscribe", "key_action", nullptr);
-        _exit(127);
-    }
-
-    close(stdout_pipe[1]);
-    stdout_pipe[1] = -1;
-    close(stderr_pipe[1]);
-    stderr_pipe[1] = -1;
-
-    auto cleanup_child = [&]()
-    {
-        if (stdout_pipe[0] >= 0)
-            close(stdout_pipe[0]);
-        if (stderr_pipe[0] >= 0)
-            close(stderr_pipe[0]);
-
-        if (pid > 0)
-        {
-            int status = 0;
-            if (!wait_for_process_exit(pid, std::chrono::milliseconds(200), status))
-            {
-                kill(pid, SIGKILL);
-                waitpid(pid, &status, 0);
-            }
-            pid = -1;
-        }
-    };
-
-    std::this_thread::sleep_for(std::chrono::milliseconds(100));
-
+    auto path = wait_for_ipc_socket_path(conn);
+    REQUIRE(path);
+    Subscriber subscriber(*path, "key_action");
     REQUIRE(send_key_chord(conn, XStringToKeysym("Super_L"), XStringToKeysym("Left")));
-    auto left_event = read_line_with_timeout(stdout_pipe[0], kTimeout);
-    REQUIRE(left_event.has_value());
-    CHECK(left_event->find("\"event\":\"key_action\"") != std::string::npos);
-    CHECK(left_event->find("\"action\":\"focus_monitor_left\"") != std::string::npos);
-
     REQUIRE(send_key_chord(conn, XStringToKeysym("Super_L"), XStringToKeysym("Right")));
-    auto right_event = read_line_with_timeout(stdout_pipe[0], kTimeout);
-    REQUIRE(right_event.has_value());
-    CHECK(right_event->find("\"event\":\"key_action\"") != std::string::npos);
-    CHECK(right_event->find("\"action\":\"focus_monitor_right\"") != std::string::npos);
-
-    cleanup_child();
+    for (auto action : { "focus_monitor_left", "focus_monitor_right" })
+    {
+        auto event = subscriber.event();
+        CHECK(event.at("event") == "key_action");
+        CHECK(event.at("action") == action);
+    }
 }
