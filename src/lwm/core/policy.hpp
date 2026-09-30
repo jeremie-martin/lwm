@@ -76,6 +76,15 @@ inline bool is_window_visible(
     return client_workspace == monitors[client_monitor].current_workspace;
 }
 
+// Docks and desktop windows are not workspace members; their monitor and
+// workspace fields carry no placement, so they are always visible.
+inline bool is_client_visible(Client const& client, bool showing_desktop, std::span<Monitor const> monitors)
+{
+    if (client.kind() == Client::Kind::Dock || client.kind() == Client::Kind::Desktop)
+        return true;
+    return is_window_visible(showing_desktop, client.iconic, client.sticky, client.monitor, client.workspace, monitors);
+}
+
 // The caller supplies ownership resolved for the client's visible monitor scope.
 inline bool is_fullscreen_suppressed(Client const& client, xcb_window_t owner)
 {

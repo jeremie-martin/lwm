@@ -1482,14 +1482,7 @@ std::optional<xcb_window_t> WindowManager::transient_for_window(xcb_window_t win
 
 bool WindowManager::should_be_visible(Client const& client) const
 {
-    return visibility_policy::is_window_visible(
-        showing_desktop_,
-        client.iconic,
-        client.sticky,
-        client.monitor,
-        client.workspace,
-        monitors_
-    );
+    return visibility_policy::is_client_visible(client, showing_desktop_, monitors_);
 }
 
 bool WindowManager::is_visible(Client const& client) const

@@ -72,6 +72,20 @@ TEST_CASE("Floating translation keeps windows on the target monitor", "[floating
     }
 }
 
+TEST_CASE("Recovered floating geometry keeps overlapping rectangles and centers outside ones", "[floating]")
+{
+    Geometry area{ 100, 50, 800, 600 };
+    // Partial overlap preserves the user's placement, even when it extends past the area.
+    REQUIRE(floating::recover_to_area(area, { 850, 600, 200, 100 }) == Geometry{ 850, 600, 200, 100 });
+    // Off-screen and other-monitor rectangles, including edge-adjacent ones, are re-placed.
+    for (Geometry outside : {
+             Geometry{ -20000, 100, 200, 100 },
+             Geometry{    900, 100, 200, 100 },
+             Geometry{    300, 650, 200, 100 }
+    })
+        REQUIRE(floating::recover_to_area(area, outside) == Geometry{ 400, 300, 200, 100 });
+}
+
 // ─────────────────────────────────────────────────────────────────────────────
 // Position-hint monitor guard tests
 // ─────────────────────────────────────────────────────────────────────────────

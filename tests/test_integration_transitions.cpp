@@ -1149,3 +1149,40 @@ TEST_CASE(
     destroy_window(conn, first);
     destroy_window(conn, second);
 }
+
+TEST_CASE(
+    "Integration: floating an unarranged tile with off-monitor geometry places it on its monitor",
+    "[integration][transition][geometry]"
+)
+{
+    auto env = TestEnvironment::create(R"(
+[workspaces]
+count = 2
+[[rules]]
+match = { class = "Parked" }
+apply = { workspace = 1 }
+)");
+    REQUIRE(env);
+    auto& conn = env->conn;
+    // A client may request a position saved from a monitor that no longer exists.
+    auto window = create_window(conn, -5000, 10, 300, 200);
+    set_window_wm_class(conn, window, "parked", "Parked");
+    map_window(conn, window);
+    auto window_class = intern_atom(conn.get(), "_LWM_WINDOW_CLASS");
+    REQUIRE(wait_for_condition(
+        [&] { return get_window_property_string(conn.get(), window, window_class) == "tiled"; },
+        timeout
+    ));
+    // Its workspace is not arranged, so the requested rectangle is its only tiled geometry.
+    set_window_type(conn, window, intern_atom(conn.get(), "_NET_WM_WINDOW_TYPE_UTILITY"));
+    observe_title_after_events(conn, window);
+    REQUIRE(get_window_property_string(conn.get(), window, window_class) == "floating");
+    send_client_message(conn, conn.root(), intern_atom(conn.get(), "_NET_CURRENT_DESKTOP"), 1);
+    observe_title_after_events(conn, window);
+    auto rect = geometry(conn, window);
+    REQUIRE(rect);
+    CHECK(rect->x >= 0);
+    CHECK(rect->x + rect->width <= conn.screen()->width_in_pixels);
+    CHECK(rect->y >= 0);
+    destroy_window(conn, window);
+}

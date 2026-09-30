@@ -46,6 +46,9 @@ PositionHintResolution resolve_position_hint(
 bool hint_targets_monitor(Geometry monitor, int16_t x, int16_t y, uint16_t width, uint16_t height);
 
 Geometry clamp_to_area(Geometry area, Geometry geometry);
+// Keep geometry that overlaps area; center geometry lying entirely outside it,
+// such as an off-screen or other-monitor rectangle that was never laid out here.
+Geometry recover_to_area(Geometry area, Geometry geometry);
 Geometry translate_to_area(Geometry geometry, Geometry source_area, Geometry target_area);
 
 } // namespace lwm::floating

@@ -153,6 +153,16 @@ Geometry clamp_to_area(Geometry area, Geometry geometry)
     return clamp_geometry(area, geometry, geometry.x, geometry.y);
 }
 
+Geometry recover_to_area(Geometry area, Geometry geometry)
+{
+    auto overlaps = [](int32_t start, int32_t extent, int32_t area_start, int32_t area_extent)
+    { return start < area_start + area_extent && area_start < start + extent; };
+    if (overlaps(geometry.x, geometry.width, area.x, area.width)
+        && overlaps(geometry.y, geometry.height, area.y, area.height))
+        return geometry;
+    return place_floating(area, geometry.width, geometry.height, std::nullopt);
+}
+
 Geometry translate_to_area(Geometry geometry, Geometry source_area, Geometry target_area)
 {
     int32_t x = static_cast<int32_t>(target_area.x) + geometry.x - source_area.x;

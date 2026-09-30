@@ -314,6 +314,12 @@ inline Geometry const& floating_geometry(Client const& client)
     return std::get<FloatingState>(client.state).geometry;
 }
 
+// Tiled clients retain maximize flags as a preference; only floating presentation honors them.
+inline bool presents_maximized(Client const& client)
+{
+    return client.kind() == Client::Kind::Floating && (client.maximized_horz || client.maximized_vert);
+}
+
 inline std::optional<Geometry>& prior_floating_geometry(Client& client)
 {
     return std::get<TiledState>(client.state).prior_floating;

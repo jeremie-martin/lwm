@@ -95,7 +95,7 @@ void WindowManager::begin_window_drag(
         state_.floating(window, true);
         invalidate_monitor(client->monitor);
     }
-    if (client->kind() == Client::Kind::Floating && (client->maximized_horz || client->maximized_vert))
+    if (presents_maximized(*client))
     {
         state_.geometry(window, presentation_geometry(*client));
         state_.maximize(client->id, false, false);
@@ -137,8 +137,8 @@ void WindowManager::validate_drag(bool layout_changed)
     {
         auto const* client = get_client(window->window);
         valid = client && client->kind() == window->kind && is_visible(*client) && !client->iconic
-            && !client->fullscreen && !client->maximized_horz && !client->maximized_vert
-            && client->monitor == window->monitor && client->workspace == window->workspace && !showing_desktop_;
+            && !client->fullscreen && !presents_maximized(*client) && client->monitor == window->monitor
+            && client->workspace == window->workspace && !showing_desktop_;
     }
     else
     {

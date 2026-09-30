@@ -187,6 +187,26 @@ TEST_CASE("Visibility handles show desktop, workspace, and invalid monitor", "[v
     REQUIRE_FALSE(visibility_policy::is_window_visible(false, false, true, 5, 0, monitors));
 }
 
+TEST_CASE("Docks and desktops are visible independently of workspace fields", "[visibility][policy]")
+{
+    auto monitors = make_monitors();
+    monitors[0].current_workspace = 2;
+    Client normal;
+    Client dock;
+    dock.state = DockState{ };
+    Client desktop;
+    desktop.state = DesktopState{ };
+    REQUIRE_FALSE(visibility_policy::is_client_visible(normal, false, monitors));
+    for (bool showing_desktop : { false, true })
+    {
+        REQUIRE(visibility_policy::is_client_visible(dock, showing_desktop, monitors));
+        REQUIRE(visibility_policy::is_client_visible(desktop, showing_desktop, monitors));
+    }
+    normal.workspace = 2;
+    REQUIRE(visibility_policy::is_client_visible(normal, false, monitors));
+    REQUIRE_FALSE(visibility_policy::is_client_visible(normal, true, monitors));
+}
+
 // ─────────────────────────────────────────────────────────────────────────────
 // Maximize geometry contract
 // ─────────────────────────────────────────────────────────────────────────────

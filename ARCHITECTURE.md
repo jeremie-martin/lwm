@@ -61,6 +61,9 @@ alternatives; `Client::kind()` derives its classification from that state:
   stacking tier.
 - `Desktop`: outside normal focus/layout and uses the Below stacking tier.
 
+Docks and desktops are not workspace members: their monitor and workspace fields
+carry no placement, and visibility policy treats them as always visible.
+
 Popup-only window types are mapped directly and never enter `clients_`.
 
 The important authorities are:
@@ -203,8 +206,10 @@ workarea; fullscreen projects onto its target monitor rectangle. Neither project
 overwrites normal geometry. Tiled layout writes `tiled_geometry` as its target,
 independently of the last rectangle sent to X. Until the first layout, this holds the
 initial client rectangle, so reclassification on an inactive workspace preserves valid
-geometry. A floating-to-tiled transition seeds this rectangle from the normal floating
-rectangle until layout runs. Ordinary mode changes restore prior floating geometry when
+geometry; that rectangle can still lie off its monitor (an off-monitor initial request
+or a tile moved before it was arranged), so `State::change_kind` recovers tiled-to-floating
+rectangles onto the monitor as described in [X11.md](X11.md). A floating-to-tiled transition seeds this rectangle from the normal floating rectangle
+until layout runs. Ordinary mode changes restore prior floating geometry when
 present, otherwise the tiled target; commands, rules and metadata classification share
 that decision in `State`. They never recover normal geometry from fullscreen, maximized
 or off-screen X presentation. Managed transient placement uses the parent's intended
@@ -325,7 +330,8 @@ start/latest pointer coordinates. Its operation is either a window move/resize o
 tiled split resize. Failed acquisition leaves domain state unchanged; tiled-to-floating
 conversion and exiting maximize happen only after acquisition. Window drags retain their
 expected kind and placement. Completion cancels them when the client disappears, becomes
-hidden/fullscreen/maximized, changes kind, or is moved elsewhere by another operation.
+hidden/fullscreen, presents maximized (floating only; tiled clients retain maximize
+flags without presenting them), changes kind, or is moved elsewhere by another operation.
 Split drags retain the participants, workarea, workspace, and strategy defining their
 split; layout invalidation checks that this context still exists. Config reload,
 topology reconciliation, and restart cancel the interaction before replacing its

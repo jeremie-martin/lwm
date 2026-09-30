@@ -27,14 +27,7 @@ Entry entry(Client const& client, std::span<Monitor const> monitors, bool showin
         return { &client, true, Tier::Below };
     if (client.kind() == Client::Kind::Dock)
         return { &client, true, Tier::Above };
-    bool visible = visibility_policy::is_window_visible(
-        showing_desktop,
-        client.iconic,
-        client.sticky,
-        client.monitor,
-        client.workspace,
-        monitors
-    );
+    bool visible = visibility_policy::is_client_visible(client, showing_desktop, monitors);
     bool suppressed =
         visible && visibility_policy::is_fullscreen_suppressed(client, monitors[client.monitor].fullscreen_owner);
     Tier tier = suppressed                                      ? Tier::Below

@@ -227,7 +227,12 @@ void State::change_kind(xcb_window_t id, ClientState state, std::optional<size_t
     bool was_tiled = client.kind() == Client::Kind::Tiled;
     bool tiled = std::holds_alternative<TiledState>(state);
     if (was_tiled && !tiled)
-        std::get<FloatingState>(state).saved_tiled_pos = detach(client);
+    {
+        auto& floating = std::get<FloatingState>(state);
+        floating.saved_tiled_pos = detach(client);
+        // Tiled rectangles on unarranged workspaces may be stale requested or hotplug geometry.
+        floating.geometry = floating::recover_to_area(monitors_[client.monitor].working_area(), floating.geometry);
+    }
     if (!was_tiled && tiled)
         client.tiled_geometry = floating_geometry(client);
     if (was_tiled != tiled)

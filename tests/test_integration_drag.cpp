@@ -383,3 +383,76 @@ TEST_CASE("Integration: floating motion bursts stop at release and use its final
     );
     expect_released(conn);
 }
+
+TEST_CASE("Integration: retained maximize flags do not cancel a tiled move", "[integration][drag]")
+{
+    auto env = TestEnvironment::create();
+    REQUIRE(env);
+    auto& conn = env->conn;
+    auto window = create_window(conn, 10, 10, 200, 200);
+    map_window(conn, window);
+    REQUIRE(wait_for_active_window(conn, window, timeout));
+    send_client_message(
+        conn,
+        window,
+        intern_atom(conn.get(), "_NET_WM_STATE"),
+        1,
+        intern_atom(conn.get(), "_NET_WM_STATE_MAXIMIZED_HORZ"),
+        intern_atom(conn.get(), "_NET_WM_STATE_MAXIMIZED_VERT")
+    );
+    observe_title_after_events(conn, window);
+    REQUIRE(get_window_property_string(conn.get(), window, intern_atom(conn.get(), "_LWM_WINDOW_CLASS")) == "tiled");
+    auto start = geometry(conn, window);
+    pointer(conn, XCB_BUTTON_PRESS, 100, 100, 1, window, XCB_MOD_MASK_4);
+    observe_title_after_events(conn, window);
+    pointer(conn, XCB_MOTION_NOTIFY, 140, 150);
+    observe_title_after_events(conn, window);
+    CHECK(grab(conn) == XCB_GRAB_STATUS_ALREADY_GRABBED);
+    CHECK(geometry(conn, window).x == start.x + 40);
+    CHECK(geometry(conn, window).y == start.y + 50);
+    pointer(conn, XCB_BUTTON_RELEASE, 140, 150);
+    observe_title_after_events(conn, window);
+    CHECK(geometry(conn, window) == start);
+    expect_released(conn);
+}
+
+TEST_CASE("Integration: a desktop window under the pointer does not hide split borders", "[integration][drag]")
+{
+    auto env = TestEnvironment::create("[workspaces]\ncount = 2\n[appearance]\npadding = 10\nborder_width = 1\n");
+    REQUIRE(env);
+    auto& conn = env->conn;
+    auto desktop = create_window(conn, 0, 0, 4000, 4000);
+    set_window_type(conn, desktop, intern_atom(conn.get(), "_NET_WM_WINDOW_TYPE_DESKTOP"));
+    map_window(conn, desktop);
+    REQUIRE(wait_for_condition(
+        [&]
+        {
+            return get_window_property_string(conn.get(), desktop, intern_atom(conn.get(), "_LWM_WINDOW_CLASS"))
+                == "desktop";
+        },
+        timeout
+    ));
+    // Desktop windows carry no workspace, so every workspace must treat them alike.
+    SECTION("first workspace") { }
+    SECTION("second workspace")
+    {
+        send_client_message(conn, conn.root(), intern_atom(conn.get(), "_NET_CURRENT_DESKTOP"), 1);
+    }
+    auto first = create_window(conn, 10, 10, 200, 200), second = create_window(conn, 10, 10, 200, 200);
+    map_window(conn, first);
+    REQUIRE(wait_for_active_window(conn, first, timeout));
+    map_window(conn, second);
+    REQUIRE(wait_for_active_window(conn, second, timeout));
+    auto left = geometry(conn, first), right = geometry(conn, second);
+    if (left.x > right.x)
+        std::swap(left, right);
+    auto x = static_cast<int16_t>((left.x + left.width + right.x) / 2);
+    auto y = static_cast<int16_t>(left.y + left.height / 2);
+    // The root grab reports the desktop window as the child under the split border.
+    pointer(conn, XCB_BUTTON_PRESS, x, y, 3, desktop, XCB_MOD_MASK_4);
+    observe_title_after_events(conn, first);
+    CHECK(grab(conn) == XCB_GRAB_STATUS_ALREADY_GRABBED);
+    pointer(conn, XCB_BUTTON_RELEASE, x, y, 3);
+    observe_title_after_events(conn, first);
+    expect_released(conn);
+}
