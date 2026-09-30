@@ -1,6 +1,7 @@
 #include "wm_observations.hpp"
 #include <algorithm>
 #include <catch2/catch_test_macros.hpp>
+#include <catch2/generators/catch_generators.hpp>
 #include <chrono>
 #include <optional>
 #include <sstream>
@@ -289,6 +290,16 @@ TEST_CASE(
     map_window(conn, w2);
     REQUIRE(wait_for_active_window(conn, w2, kTimeout));
 
+    bool app_urgent = GENERATE(false, true);
+    bool delete_hints = GENERATE(false, true);
+    CAPTURE(app_urgent, delete_hints);
+    if (app_urgent)
+    {
+        set_wm_hints_urgency(conn.get(), w1, true);
+        observe_title_after_events(conn, w1);
+        REQUIRE(property_has_atom(conn.get(), w1, net_wm_state, net_wm_state_demands_attention));
+    }
+
     // Mark w1 urgent via WM IPC (WM-initiated urgency).
     std::string window_arg = "window=" + std::to_string(w1);
     run_lwmctl(wm, { "notify-attention", window_arg });
@@ -297,13 +308,15 @@ TEST_CASE(
         kTimeout
     ));
 
-    // App rewrites WM_HINTS (e.g. changing window group) WITHOUT urgency.
-    // This should NOT clear the WM-initiated urgency.
-    xcb_icccm_wm_hints_t hints = {};
-    hints.flags = XCB_ICCCM_WM_HINT_INPUT;
-    hints.input = 1;
-    xcb_icccm_set_wm_hints(conn.get(), w1, &hints);
-    xcb_flush(conn.get());
+    // Withdrawing the app request must preserve outstanding WM urgency,
+    // whether the hint is cleared or the entire property is deleted.
+    if (delete_hints)
+    {
+        xcb_delete_property(conn.get(), w1, XCB_ATOM_WM_HINTS);
+        xcb_flush(conn.get());
+    }
+    else
+        set_wm_hints_urgency(conn.get(), w1, false);
 
     // Urgency should still be present once the WM has handled the rewrite.
     observe_title_after_events(conn, w1);
@@ -318,6 +331,8 @@ TEST_CASE(
         [&]() { return !property_has_atom(conn.get(), w1, net_wm_state, net_wm_state_demands_attention); },
         kTimeout
     ));
+
+    REQUIRE(wait_for_condition([&]() { return !has_wm_hints_urgency(conn.get(), w1); }, kTimeout));
 
     destroy_window(conn, w2);
     destroy_window(conn, w1);
@@ -410,7 +425,15 @@ TEST_CASE("Integration: app-only urgency clears on app WM_HINTS rewrite", "[inte
         kTimeout
     ));
 
-    set_wm_hints_urgency(conn.get(), w1, false);
+    bool delete_hints = GENERATE(false, true);
+    CAPTURE(delete_hints);
+    if (delete_hints)
+    {
+        xcb_delete_property(conn.get(), w1, XCB_ATOM_WM_HINTS);
+        xcb_flush(conn.get());
+    }
+    else
+        set_wm_hints_urgency(conn.get(), w1, false);
     REQUIRE(wait_for_condition(
         [&]()
         {
@@ -567,4 +590,25 @@ TEST_CASE(
 
     destroy_window(conn, w2);
     destroy_window(conn, w1);
+}
+
+TEST_CASE("Integration: active window rejects app urgency hints", "[integration][notify_attention][wm_hints]")
+{
+    auto test_env = TestEnvironment::create();
+    if (!test_env)
+        SKIP("Test environment not available");
+    auto& conn = test_env->conn;
+    auto net_wm_state = intern_atom(conn.get(), "_NET_WM_STATE");
+    auto attention = intern_atom(conn.get(), "_NET_WM_STATE_DEMANDS_ATTENTION");
+    auto window = create_window(conn, 10, 10, 200, 150);
+    map_window(conn, window);
+    REQUIRE(wait_for_active_window(conn, window, kTimeout));
+
+    set_wm_hints_urgency(conn.get(), window, true);
+    observe_title_after_events(conn, window);
+    REQUIRE_FALSE(has_wm_hints_urgency(conn.get(), window));
+    REQUIRE_FALSE(property_has_atom(conn.get(), window, net_wm_state, attention));
+    REQUIRE(wait_for_active_window(conn, window, kTimeout));
+
+    destroy_window(conn, window);
 }

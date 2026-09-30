@@ -121,10 +121,12 @@ Publication compares the projection with `Output`, the record of what LWM last w
 for each window, and with `RootOutput` for the root window. Only differences are sent.
 An external change is handled by forgetting the affected field: a conflicting
 ConfigureNotify forgets geometry so the next publication rewrites it (a mismatch is
-usually LWM's own superseded configure, so it does not force one), and an application
-clearing `WM_HINTS` urgency that LWM still asserts forgets and reasserts the published
-urgency. Root lists are written on the first publication even when empty, replacing
-lists left by a previous window manager. Inputs to the projection that are not
+usually LWM's own superseded configure, so it does not force one). Observed `WM_HINTS`
+urgency that differs from the cache forgets the published urgency and forces completion,
+independently of urgency provenance or focus. Missing hints count as a cleared hint;
+publication reconciles it with the remaining urgency sources. Root lists are written on
+the first publication even when empty, replacing lists left by a previous window manager.
+Inputs to the projection that are not
 in `State` (a drag preview, reloaded appearance, a forgotten field) mark the
 presentation dirty. `_NET_WM_STATE` updates read the property once, replace only the
 atoms LWM owns, and preserve the rest. An explicit focus request reasserts X input

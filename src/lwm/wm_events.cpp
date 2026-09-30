@@ -784,15 +784,19 @@ void WindowManager::handle_wm_hints(Client const& client)
     xcb_window_t id = client.id;
     bool active = id == state_.active_window();
     auto& output = outputs_[id];
-    xcb_icccm_wm_hints_t hints;
+    xcb_icccm_wm_hints_t hints{ };
     if (!xcb_icccm_get_wm_hints_reply(conn_.get(), xcb_icccm_get_wm_hints(conn_.get(), id), &hints, nullptr))
-    {
-        state_.focus_hints(id, true, client.supports_take_focus); // ICCCM default when WM_HINTS is absent
-        return;
-    }
+        hints = { }; // Missing hints mean input is accepted and no app urgency is requested.
     state_.focus_hints(id, !(hints.flags & XCB_ICCCM_WM_HINT_INPUT) || hints.input, client.supports_take_focus);
-    auto const& urgency = state_.require(id).urgency;
-    if (hints.flags & XUrgencyHint)
+    bool hinted_urgent = (hints.flags & XUrgencyHint) != 0;
+    // WM_HINTS is shared with the application. A changed hint invalidates our
+    // publication cache regardless of which urgency sources remain in State.
+    if (output.urgent != hinted_urgent)
+    {
+        output.urgent.reset();
+        presentation_dirty_ = true;
+    }
+    if (hinted_urgent)
     {
         if (std::exchange(output.ignore_urgency_echo, false))
             return;
@@ -800,19 +804,11 @@ void WindowManager::handle_wm_hints(Client const& client)
             state_.urgency(id, UrgencySource::App, true);
         return;
     }
-    if (!urgency.active())
-        output.ignore_urgency_echo = false;
-    if (active)
-        return;
-    // Clearing the hint withdraws the application's request. LWM-initiated
-    // urgency survives, so the published hint is forgotten and re-asserted.
-    if (urgency.has(UrgencySource::App))
+    output.ignore_urgency_echo = false;
+    // Clearing or deleting the hint withdraws only the application's request.
+    // Publication reasserts any remaining WM-initiated urgency.
+    if (!active)
         state_.urgency(id, UrgencySource::App, false);
-    else if (urgency.has(UrgencySource::WmInitiated))
-    {
-        output.urgent.reset();
-        presentation_dirty_ = true;
-    }
 }
 
 void WindowManager::focus_monitor_at_point(int16_t x, int16_t y)
