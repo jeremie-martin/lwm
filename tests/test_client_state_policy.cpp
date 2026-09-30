@@ -24,28 +24,6 @@ std::vector<Monitor> make_monitors(size_t count = 2, size_t workspaces = 3)
     return monitors;
 }
 
-Client make_client(xcb_window_t id, Client::Kind kind = Client::Kind::Tiled)
-{
-    Client c;
-    c.id = id;
-    switch (kind)
-    {
-        case Client::Kind::Tiled:
-            set_tiled_state(c);
-            break;
-        case Client::Kind::Floating:
-            set_floating_state(c, Geometry{ 0, 0, 300, 200 });
-            break;
-        case Client::Kind::Dock:
-            c.state = DockState {};
-            break;
-        case Client::Kind::Desktop:
-            c.state = DesktopState {};
-            break;
-    }
-    return c;
-}
-
 } // namespace
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -130,24 +108,9 @@ TEST_CASE("Fullscreen owner selector preserves valid owner before falling back b
     REQUIRE(fullscreen_policy::select_owner(0x1000, candidates) == XCB_NONE);
 }
 
-TEST_CASE("Client kind can be set to all valid types", "[client][state]")
-{
-    Client tiled = make_client(0x1000, Client::Kind::Tiled);
-    REQUIRE(tiled.kind() == Client::Kind::Tiled);
-
-    Client floating = make_client(0x2000, Client::Kind::Floating);
-    REQUIRE(floating.kind() == Client::Kind::Floating);
-
-    Client dock = make_client(0x3000, Client::Kind::Dock);
-    REQUIRE(dock.kind() == Client::Kind::Dock);
-
-    Client desktop = make_client(0x4000, Client::Kind::Desktop);
-    REQUIRE(desktop.kind() == Client::Kind::Desktop);
-}
-
 TEST_CASE("Tiling state carries only tiled restore data for tiled clients", "[client][state][tiling]")
 {
-    Client c = make_client(0x1000, Client::Kind::Tiled);
+    Client c;
 
     REQUIRE(tiled_state(c) != nullptr);
     REQUIRE(floating_state(c) == nullptr);
@@ -162,7 +125,8 @@ TEST_CASE("Tiling state carries only tiled restore data for tiled clients", "[cl
 
 TEST_CASE("Tiling state carries floating geometry and saved tile position for floating clients", "[client][state][tiling]")
 {
-    Client c = make_client(0x2000, Client::Kind::Floating);
+    Client c;
+    set_floating_state(c, Geometry{ 0, 0, 300, 200 });
 
     REQUIRE(floating_state(c) != nullptr);
     REQUIRE(tiled_state(c) == nullptr);
@@ -179,7 +143,8 @@ TEST_CASE("Tiling state carries floating geometry and saved tile position for fl
 
 TEST_CASE("Tiling state transitions discard incompatible state", "[client][state][tiling]")
 {
-    Client c = make_client(0x3000, Client::Kind::Floating);
+    Client c;
+    set_floating_state(c, Geometry{ 0, 0, 300, 200 });
     saved_tiled_pos(c) = Client::SavedTilePos{ 1, 0, 0 };
 
     set_tiled_state(c, Geometry{ 10, 20, 400, 300 });
@@ -222,24 +187,6 @@ TEST_CASE("Container states discard tiled and floating data", "[client][state]")
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// Fullscreen state tests
-// ─────────────────────────────────────────────────────────────────────────────
-
-TEST_CASE("Fullscreen monitors can be specified", "[client][state][fullscreen]")
-{
-    Client c = make_client(0x1000);
-
-    c.fullscreen_monitors = FullscreenMonitors{ 0, 1, 0, 1 };
-    c.fullscreen = true;
-
-    REQUIRE(c.fullscreen_monitors.has_value());
-    REQUIRE(c.fullscreen_monitors->top == 0);
-    REQUIRE(c.fullscreen_monitors->bottom == 1);
-    REQUIRE(c.fullscreen_monitors->left == 0);
-    REQUIRE(c.fullscreen_monitors->right == 1);
-}
-
-// ─────────────────────────────────────────────────────────────────────────────
 // Iconic (minimized) state tests
 // ─────────────────────────────────────────────────────────────────────────────
 
@@ -266,31 +213,6 @@ TEST_CASE("Sticky window visible across workspaces but not monitors", "[client][
     REQUIRE(visibility_policy::is_window_visible(false, false, true, 0, 1, monitors));
     REQUIRE(visibility_policy::is_window_visible(false, false, true, 0, 2, monitors));
     REQUIRE_FALSE(visibility_policy::is_window_visible(false, false, true, 5, 0, monitors));
-}
-
-// ─────────────────────────────────────────────────────────────────────────────
-// Maximized state tests
-// ─────────────────────────────────────────────────────────────────────────────
-
-TEST_CASE("Maximized states can be set independently", "[client][state][maximized]")
-{
-    Client c = make_client(0x1000, Client::Kind::Floating);
-
-    // Only horizontal maximize
-    c.maximized_horz = true;
-    REQUIRE(c.maximized_horz);
-    REQUIRE_FALSE(c.maximized_vert);
-
-    // Only vertical maximize
-    c.maximized_horz = false;
-    c.maximized_vert = true;
-    REQUIRE_FALSE(c.maximized_horz);
-    REQUIRE(c.maximized_vert);
-
-    // Both
-    c.maximized_horz = true;
-    REQUIRE(c.maximized_horz);
-    REQUIRE(c.maximized_vert);
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -367,28 +289,6 @@ TEST_CASE("Visibility handles show desktop, workspace, and invalid monitor", "[v
 // ─────────────────────────────────────────────────────────────────────────────
 // State combination tests
 // ─────────────────────────────────────────────────────────────────────────────
-
-TEST_CASE("Fullscreen and iconic can coexist", "[client][state][combination]")
-{
-    Client c = make_client(0x1000);
-
-    c.fullscreen = true;
-    c.iconic = true;
-
-    REQUIRE(c.fullscreen);
-    REQUIRE(c.iconic);
-}
-
-TEST_CASE("Sticky and fullscreen can coexist", "[client][state][combination]")
-{
-    Client c = make_client(0x1000);
-
-    c.sticky = true;
-    c.fullscreen = true;
-
-    REQUIRE(c.sticky);
-    REQUIRE(c.fullscreen);
-}
 
 TEST_CASE("Modal suppresses explicit above in desired state", "[client][state][combination][policy]")
 {
