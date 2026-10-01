@@ -161,8 +161,8 @@ journalctl -b _UID="$(id -u)" SYSLOG_IDENTIFIER=lwm
 lwmctl log status
 ```
 
-Use `--log-level trace|debug|info|warn|error|critical|off` to select verbosity. `-V`
-enables DEBUG; `-d all` and `--debug` enable TRACE. For a terminal or a pipe, use
+Use `--log-level trace|debug|info|warn|error|critical|off` to select verbosity.
+For a terminal or a pipe, use
 `--log-target stderr` and `--log-color auto|always|never`. For example:
 
 ```sh

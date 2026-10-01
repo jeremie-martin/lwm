@@ -25,10 +25,6 @@ std::expected<quill::LogLevel, std::string> parse_level(std::string_view value)
     for (auto level : { TraceL3, Debug, Info, Warning, Error, Critical, None })
         if (value == level_name(level))
             return level;
-    if (value == "warning")
-        return Warning;
-    if (value == "err")
-        return Error;
     return std::unexpected("invalid log level '" + std::string(value) + "'");
 }
 std::string level_name(quill::LogLevel level)

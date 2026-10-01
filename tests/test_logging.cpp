@@ -145,94 +145,65 @@ TEST_CASE("Recurring warnings include Quill's suppression count", "[logging]")
     REQUIRE(probe({ "rate-limit" }).stderr_text.find("(19x)") != std::string::npos);
 }
 
-TEST_CASE("CLI preserves one config path and restart argv", "[logging][cli]")
+TEST_CASE("CLI preserves explicit configuration and restart arguments", "[logging][cli]")
 {
-    std::vector<std::string> values{ "lwm", "-V", "--config", "config.toml", "--log-color=never" };
-    auto argv = mutable_argv(values);
-    auto parsed = lwm::cli::parse(static_cast<int>(argv.size()), argv.data());
-    REQUIRE(parsed.has_value());
-    REQUIRE(parsed->log.level == quill::LogLevel::Debug);
-    REQUIRE(parsed->log.color == lwm::log::ColorMode::Never);
-    REQUIRE(parsed->config_path == "config.toml");
-    REQUIRE(parsed->restart_argv == values);
-
-    values = { "lwm", "--config", "a.toml", "b.toml" };
-    argv = mutable_argv(values);
-    parsed = lwm::cli::parse(static_cast<int>(argv.size()), argv.data());
-    REQUIRE(!parsed.has_value());
-    REQUIRE(parsed.error().find("duplicate config") != std::string::npos);
-
-    values = { "lwm", "--config=" };
-    argv = mutable_argv(values);
-    parsed = lwm::cli::parse(static_cast<int>(argv.size()), argv.data());
-    REQUIRE(!parsed.has_value());
-    REQUIRE(parsed.error().find("empty value for --config") != std::string::npos);
-
-    values = { "lwm", "--log-file=" };
-    argv = mutable_argv(values);
-    parsed = lwm::cli::parse(static_cast<int>(argv.size()), argv.data());
-    REQUIRE(!parsed.has_value());
-    REQUIRE(parsed.error().find("private log files were removed") != std::string::npos);
-
-    values = { "lwm", "-c", "short.toml" };
-    argv = mutable_argv(values);
-    parsed = lwm::cli::parse(static_cast<int>(argv.size()), argv.data());
-    REQUIRE(parsed.has_value());
-    REQUIRE(parsed->config_path == "short.toml");
-    REQUIRE(parsed->restart_argv == values);
-
-    values = { "lwm", "-cattached.toml", "-dall" };
-    argv = mutable_argv(values);
-    parsed = lwm::cli::parse(static_cast<int>(argv.size()), argv.data());
-    REQUIRE(parsed.has_value());
-    REQUIRE(parsed->config_path == "attached.toml");
-    REQUIRE(parsed->log.level == quill::LogLevel::TraceL3);
-    REQUIRE(parsed->restart_argv == values);
-
-    values = { "lwm", "-dnope" };
-    argv = mutable_argv(values);
-    parsed = lwm::cli::parse(static_cast<int>(argv.size()), argv.data());
-    REQUIRE(!parsed.has_value());
-    REQUIRE(parsed.error().find("invalid -d value") != std::string::npos);
-
-    values = { "lwm", "-c" };
-    argv = mutable_argv(values);
-    parsed = lwm::cli::parse(static_cast<int>(argv.size()), argv.data());
-    REQUIRE(!parsed.has_value());
-    REQUIRE(parsed.error().find("missing value") != std::string::npos);
-
-    values = { "lwm", "-v" };
-    argv = mutable_argv(values);
-    parsed = lwm::cli::parse(static_cast<int>(argv.size()), argv.data());
-    REQUIRE(parsed.has_value());
-    REQUIRE(parsed->version);
-
-    for (std::string const& literal : { "--debug", "--help", "--log-target", "stderr", "--log-level", "--config" })
-    {
-        values = { "lwm", "--", literal };
-        argv = mutable_argv(values);
-        parsed = lwm::cli::parse(static_cast<int>(argv.size()), argv.data());
-        REQUIRE(parsed.has_value());
-        REQUIRE(parsed->config_path == literal);
-        REQUIRE(parsed->log.level == quill::LogLevel::Info);
-        REQUIRE(!parsed->help);
-    }
-
-    values = { "lwm", "--", "first", "second" };
-    argv = mutable_argv(values);
-    parsed = lwm::cli::parse(static_cast<int>(argv.size()), argv.data());
-    REQUIRE(!parsed.has_value());
-    REQUIRE(parsed.error().find("duplicate config") != std::string::npos);
-
-    for (auto empty_path : std::vector<std::vector<std::string>>{
-             { "lwm", "" },
-             { "lwm", "--", "" }
+    for (auto values : std::vector<std::vector<std::string>>{
+             { "lwm", "--log-level", "debug", "--config", "config with spaces.toml", "--log-color=never" },
+             { "lwm", "--log-level=debug", "--config=config with spaces.toml", "--log-color", "never" }
     })
     {
-        argv = mutable_argv(empty_path);
-        parsed = lwm::cli::parse(static_cast<int>(argv.size()), argv.data());
-        REQUIRE(!parsed.has_value());
-        REQUIRE(parsed.error().find("empty config path") != std::string::npos);
+        auto argv = mutable_argv(values);
+        auto parsed = lwm::cli::parse(static_cast<int>(argv.size()), argv.data());
+        REQUIRE(parsed);
+        CHECK(parsed->log.level == quill::LogLevel::Debug);
+        CHECK(parsed->log.color == lwm::log::ColorMode::Never);
+        CHECK(parsed->config_path == "config with spaces.toml");
+        CHECK(parsed->restart_argv == values);
+    }
+    // An explicit option value is literal, including option-like paths and '='.
+    for (std::string const& path : { "--help", "--log-level", "a=b.toml", "-config.toml" })
+        for (bool attached : { false, true })
+        {
+            std::vector<std::string> values = attached
+                ? std::vector<std::string>{ "lwm", "--config=" + path }
+                : std::vector<std::string>{ "lwm", "--config", path };
+            auto argv = mutable_argv(values);
+            auto parsed = lwm::cli::parse(static_cast<int>(argv.size()), argv.data());
+            REQUIRE(parsed);
+            CHECK(parsed->config_path == path);
+            CHECK_FALSE(parsed->help);
+            CHECK(parsed->restart_argv == values);
+        }
+}
+
+TEST_CASE("CLI has one validation path for every value option", "[logging][cli]")
+{
+    for (std::string const& option : { "--config", "--log-level", "--log-target", "--log-color" })
+    {
+        CAPTURE(option);
+        for (auto values : std::vector<std::vector<std::string>>{
+                 { "lwm", option }, { "lwm", option, "" }, { "lwm", option + "=" }
+        })
+        {
+            auto argv = mutable_argv(values);
+            auto parsed = lwm::cli::parse(static_cast<int>(argv.size()), argv.data());
+            REQUIRE_FALSE(parsed);
+            CHECK(parsed.error() == (values.back() == option ? "missing value for " : "empty value for ") + option);
+        }
+    }
+}
+
+TEST_CASE("Unsupported startup arguments use ordinary rejection", "[logging][cli]")
+{
+    for (std::string const& argument : {
+             "config.toml", "", "--", "-c", "-cconfig.toml", "-V", "--verbose", "--debug",
+             "-d", "-dall", "--log-file", "--log-file=a.log", "--no-log-file", "--unknown"
+    })
+    {
+        CAPTURE(argument);
+        auto result = run_lwm({ argument }, true);
+        CHECK(result.exit_code == 2);
+        CHECK(result.stderr_text.find("unknown argument: " + argument + "\n") != std::string::npos);
     }
 }
 
@@ -250,10 +221,10 @@ TEST_CASE("Real startup binary handles standalone version and help", "[logging][
     auto help = run_lwm({ "--help" });
     REQUIRE(help.exit_code == 0);
     REQUIRE(help.stdout_text.empty());
-    REQUIRE(help.stderr_text.find("-c, --config") != std::string::npos);
+    REQUIRE(help.stderr_text.find("--config PATH") != std::string::npos);
 }
 
-TEST_CASE("CLI rejects duplicate and conflicting logging options", "[logging][cli]")
+TEST_CASE("CLI rejects duplicate options and invalid values", "[logging][cli]")
 {
     struct Case
     {
@@ -261,16 +232,15 @@ TEST_CASE("CLI rejects duplicate and conflicting logging options", "[logging][cl
         std::string expected_error;
     };
     for (auto const& test : std::vector<Case>{
+             { { "lwm", "--config", "a.toml", "--config=b.toml" }, "duplicate option: --config" },
+             { { "lwm", "--log-level=warning" }, "invalid log level" },
+             { { "lwm", "--log-level=err" }, "invalid log level" },
              {        { "lwm", "--log-level", "info", "--log-level=warn" },  "duplicate option: --log-level" },
              { { "lwm", "--log-target", "journal", "--log-target=stderr" }, "duplicate option: --log-target" },
              {                                   { "lwm", "--log-target" },                  "missing value" },
              {                              { "lwm", "--log-target=file" },             "invalid log target" },
-             {                                  { "lwm", "--log-target=" },             "invalid log target" },
+             {                                  { "lwm", "--log-target=" },             "empty value for --log-target" },
              {     { "lwm", "--log-color", "never", "--log-color=always" },  "duplicate option: --log-color" },
-             {                         { "lwm", "--verbose", "--verbose" },    "duplicate option: --verbose" },
-             {                             { "lwm", "--debug", "--debug" },      "duplicate option: --debug" },
-             {           { "lwm", "--log-file", "a.log", "--no-log-file" }, "private log files were removed" },
-             {              { "lwm", "--no-log-file", "--log-file=a.log" }, "private log files were removed" },
     })
     {
         auto values = test.arguments;
@@ -290,18 +260,11 @@ TEST_CASE("CLI rejects duplicate and conflicting logging options", "[logging][cl
     REQUIRE(parsed->log.color == lwm::log::ColorMode::Never);
 }
 
-TEST_CASE("Real startup rejects unknown options", "[logging][cli]")
-{
-    auto invalid = run_lwm({ "--not-a-startup-option" });
-    REQUIRE(invalid.exit_code == 2);
-    REQUIRE(invalid.stderr_text.find("unknown option") != std::string::npos);
-}
-
 TEST_CASE("Real startup rejects an empty explicit config path", "[logging][cli]")
 {
-    auto result = run_lwm({ "" });
+    auto result = run_lwm({ "--config", "" });
     REQUIRE(result.exit_code == 2);
-    REQUIRE(result.stderr_text.find("empty config path") != std::string::npos);
+    REQUIRE(result.stderr_text.find("empty value for --config") != std::string::npos);
     REQUIRE(result.stderr_text.find("using defaults") == std::string::npos);
 }
 

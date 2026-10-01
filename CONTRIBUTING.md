@@ -207,7 +207,6 @@ and an otherwise quiet machine:
 python3 tests/performance/logging_bench.py --binary build/release/src/app/lwm
 # Optional comparison against another saved executable:
 python3 tests/performance/logging_bench.py --binary build/release/src/app/lwm --baseline /path/to/old/lwm
-# Add --legacy-baseline only if that binary predates --log-target.
 ```
 
 The default workload sends stderr to `/dev/null`. `--target journal` measures the native
