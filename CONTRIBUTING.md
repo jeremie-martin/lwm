@@ -166,10 +166,9 @@ IDs after each. Both generated tests honor `LWM_TEST_SEQUENCE_SEED` and
 defaults to seed 12345 and 4,000 operations, and reports the seed, step, and
 operation/draw trace on invariant failure.
 
-[Linux CI](.github/workflows/test.yml) runs Debug, Release, sanitizer, and owned
-multi-output Xorg tests, plus Release request budgets and the flood probe.
-Scheduled/manual runs extend generated sequences. These checks do not replace sustained
-desktop use with real drivers and applications.
+Tests and performance probes are run locally; this repository has no GitHub Actions
+pipeline. These checks do not replace sustained desktop use with real drivers and
+applications.
 
 The focus-cycle benchmark reports completed IPC round-trip latency and distinct targets
 on an owned Xvfb display, with 10, 100, and 500 floating clients. Compare Release builds
