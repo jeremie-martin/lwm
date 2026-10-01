@@ -197,10 +197,6 @@ bool WindowManager::read_initial_state(Client& client, bool honor_initial_state)
         }
         xcb_ewmh_get_atoms_reply_wipe(&states);
     }
-    // Fullscreen supersedes maximize.
-    if (client.fullscreen)
-        client.maximized_horz = client.maximized_vert = false;
-
     bool hinted_urgent = false;
     xcb_icccm_wm_hints_t hints;
     if (xcb_icccm_get_wm_hints_reply(conn_.get(), xcb_icccm_get_wm_hints(conn_.get(), client.id), &hints, nullptr))

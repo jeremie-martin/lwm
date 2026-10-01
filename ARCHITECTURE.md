@@ -71,8 +71,8 @@ The important authorities are:
   tiled again on the same workspace.
 - `Workspace::windows`: tiled membership and layout order; `focused_window` and
   `focus_history`: remembered tiled focus, never an iconic client.
-- `Client::mru_order`: focus recency. `Client::fullscreen_claim`: recency of entering
-  fullscreen or restoring a minimized fullscreen client.
+- `Client::mru_order`: focus recency. `Client::fullscreen_claim`: fullscreen claim
+  recency, zero exactly when fullscreen is disabled.
 - `active_window`: the focused managed window.
 - The named scratchpad slots and the pool: the only scratchpad membership records.
 
@@ -226,7 +226,13 @@ eligibility, and drag validity use derived visibility, never the output record.
 ## Fullscreen and stacking
 
 At most one client in view owns fullscreen on a monitor: the one with the most recent
-claim. Entering fullscreen and restoring a minimized fullscreen client claim ownership.
+claim. `State::fullscreen()` assigns the setting idempotently: entering fullscreen
+establishes a claim, leaving it clears the claim, and repeating the setting changes
+nothing. Rules use this assignment. `State::request_fullscreen()` enables fullscreen
+and renews its claim even when already enabled; explicit fullscreen requests use it.
+Admission of an initially fullscreen client and restoration from minimized use the same
+claim operation. It also clears maximize and requests focus repair. Restart restores
+the saved claim order instead of generating interactions from saved settings.
 Other visible clients on that monitor are suppressed and hidden, except managed
 transients of the owner. Fullscreen state may remain set on iconified or off-workspace
 clients; ownership is effective only when they return to view. Showing the desktop
@@ -490,6 +496,8 @@ completed operation that:
   resolves to a tiled client with that placement;
 - every client has a valid monitor and workspace, and no window is both a client and a
   fixture;
+- a client has a nonzero fullscreen claim exactly when fullscreen is enabled, and
+  fullscreen excludes maximize;
 - remembered focus is a member tile that is not iconic;
 - every named scratchpad claim and pool entry refers to a managed client, and no client
   has two scratchpad records;

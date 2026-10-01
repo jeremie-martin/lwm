@@ -134,7 +134,7 @@ TEST_CASE("The most recent fullscreen claim in view owns its monitor", "[state][
     state.transient(4, 2);
     CHECK(state.visible(state.require(4)));
     // Re-entering fullscreen or restoring a minimized fullscreen client reclaims.
-    state.fullscreen(1, true);
+    state.request_fullscreen(1);
     CHECK(state.fullscreen_owner(0) == 1);
     state.iconic(2, true);
     state.iconic(2, false);
@@ -154,6 +154,71 @@ TEST_CASE("The most recent fullscreen claim in view owns its monitor", "[state][
     CHECK_FALSE(state.require(3).maximized_horz);
     state.maximize(3, true, false);
     CHECK_FALSE(state.require(3).maximized_horz);
+}
+
+TEST_CASE("Fullscreen assignments preserve history while requests renew it", "[state][fullscreen]")
+{
+    auto state = test::state();
+    add(state, 1);
+    add(state, 2);
+    state.fullscreen(1, true);
+    state.fullscreen(2, true);
+    SECTION("Visible") { }
+    SECTION("Off workspace") { state.switch_workspace(0, 1); }
+    SECTION("Minimized") { state.iconic(1, true); }
+    SECTION("Showing desktop") { state.show_desktop(true); }
+    auto claims = state.snapshot().fullscreen_claims;
+    auto revision = state.revision();
+    state.take_focus_repair();
+    state.fullscreen(2, true);
+    state.fullscreen(1, true);
+    CHECK(state.snapshot().fullscreen_claims == claims);
+    CHECK(state.revision() == revision);
+    CHECK_FALSE(state.take_focus_repair());
+
+    state.request_fullscreen(1);
+    CHECK(state.snapshot().fullscreen_claims == std::vector<xcb_window_t>{ 2, 1 });
+    CHECK(state.revision() > revision);
+    CHECK(state.take_focus_repair());
+    // A request changes priority, not placement, minimization or show-desktop.
+    state.show_desktop(false);
+    state.switch_workspace(0, 0);
+    if (state.require(1).iconic)
+        CHECK(state.fullscreen_owner(0) == 2);
+    state.iconic(1, false);
+    CHECK(state.fullscreen_owner(0) == 1);
+
+    state.fullscreen(1, false);
+    CHECK(state.fullscreen_owner(0) == 2);
+    revision = state.revision();
+    state.take_focus_repair();
+    state.fullscreen(1, false);
+    CHECK(state.revision() == revision);
+    CHECK_FALSE(state.take_focus_repair());
+    state.fullscreen(1, true);
+    CHECK(state.fullscreen_owner(0) == 1);
+}
+
+TEST_CASE("Fullscreen admission establishes priority and excludes maximize", "[state][fullscreen]")
+{
+    auto state = test::state();
+    add(state, 1);
+    state.request_fullscreen(1);
+    Client client;
+    client.id = 2;
+    client.fullscreen = true;
+    client.maximized_horz = client.maximized_vert = true;
+    state.insert(client);
+    CHECK(state.fullscreen_owner(0) == 2);
+    CHECK_FALSE(state.require(2).maximized_horz);
+    CHECK_FALSE(state.require(2).maximized_vert);
+    // Applying an initial rule does not add a second claim for admission.
+    auto revision = state.revision();
+    state.fullscreen(2, true);
+    CHECK(state.revision() == revision);
+    state.fullscreen(2, false);
+    CHECK(state.require(2).fullscreen_claim == 0);
+    CHECK(state.fullscreen_owner(0) == 1);
 }
 
 TEST_CASE("Scratchpad names and the pool are the only membership records", "[state][scratchpad]")

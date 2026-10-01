@@ -62,6 +62,10 @@ inline std::optional<Violation> validate(State const& state)
             return Violation{ "Client has invalid monitor or workspace placement", id };
         if (client.kind() == Client::Kind::Tiled && !tiled_windows.contains(id))
             return Violation{ "Tiled client is absent from workspace membership", id };
+        if (client.fullscreen != (client.fullscreen_claim != 0))
+            return Violation{ "Fullscreen state disagrees with its claim", id };
+        if (client.fullscreen && (client.maximized_horz || client.maximized_vert))
+            return Violation{ "Fullscreen client retains maximize state", id };
     }
     for (auto const& [id, fixture] : state.fixtures())
         if (id == XCB_NONE || fixture.id != id)

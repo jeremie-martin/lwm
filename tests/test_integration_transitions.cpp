@@ -1139,6 +1139,105 @@ apply = { workspace = 1 }
 }
 
 TEST_CASE(
+    "Integration: fullscreen rule assignments preserve claims across reload metadata and restart",
+    "[integration][transition][fullscreen][rules][reload][restart]"
+)
+{
+    auto replay = GENERATE("reload", "metadata", "restart then reload");
+    bool hidden = GENERATE(false, true);
+    CAPTURE(replay, hidden);
+    auto env = TestEnvironment::create(R"(
+[workspaces]
+count = 2
+[[rules]]
+match = { class = "FullscreenChanged" }
+apply = { fullscreen = true, skip_pager = true }
+[[rules]]
+match = { class = "Fullscreen.*" }
+apply = { fullscreen = true }
+[[rules]]
+match = { class = "NotFullscreen" }
+apply = { fullscreen = false }
+)");
+    REQUIRE(env);
+    auto& conn = env->conn;
+    auto socket = wait_for_ipc_socket_path(conn);
+    REQUIRE(socket);
+    auto state = intern_atom(conn.get(), "_NET_WM_STATE");
+    auto fullscreen = intern_atom(conn.get(), "_NET_WM_STATE_FULLSCREEN");
+    auto minimized = intern_atom(conn.get(), "_NET_WM_STATE_HIDDEN");
+    auto first = create_window(conn, 10, 10, 320, 240);
+    auto second = create_window(conn, 20, 20, 320, 240);
+    for (auto window : { first, second })
+    {
+        set_window_wm_class(conn, window, "test", "FullscreenOriginal");
+        map_window(conn, window);
+        REQUIRE(wait_for_active_window(conn, window, timeout));
+        REQUIRE(has_state(conn, window, fullscreen));
+    }
+    auto expect_owner = [&](xcb_window_t owner, xcb_window_t suppressed)
+    {
+        auto rectangle = get_window_geometry(conn, owner);
+        REQUIRE(rectangle);
+        CHECK(rectangle->x == 0);
+        CHECK(rectangle->width == conn.screen()->width_in_pixels);
+        CHECK(is_hidden_offscreen(conn, suppressed));
+        CHECK(has_state(conn, owner, fullscreen));
+        CHECK(get_window_property_window(conn.get(), conn.root(), intern_atom(conn.get(), "_NET_ACTIVE_WINDOW")) == owner);
+    };
+    // Registration order disagrees with claim order. Both clients already have
+    // fullscreen enabled; this explicit request gives the older one priority.
+    send_client_message(conn, first, state, 1, fullscreen, fullscreen);
+    observe_title_after_events(conn, first);
+    expect_owner(first, second);
+    if (hidden)
+        ipc_ok(*socket, "workspace switch 1");
+
+    if (std::string_view(replay) == "metadata")
+    {
+        // Changing an unrelated rule field replays the entire rule bundle.
+        set_window_wm_class(conn, second, "test", "FullscreenChanged");
+        observe_title_after_events(conn, first);
+        CHECK(has_state(conn, second, intern_atom(conn.get(), "_NET_WM_STATE_SKIP_PAGER")));
+    }
+    else
+    {
+        if (std::string_view(replay) == "restart then reload")
+        {
+            auto instance = wm_instance(conn);
+            REQUIRE(instance);
+            ipc_ok(*socket, "restart");
+            REQUIRE(wait_for_wm_restart(conn, timeout, *instance));
+        }
+        ipc_ok(*socket, "reload-config");
+    }
+    if (hidden)
+        ipc_ok(*socket, "workspace switch 0");
+    expect_owner(first, second);
+    CHECK(has_state(conn, second, fullscreen));
+
+    // A real setting transition still creates a new claim when re-enabled.
+    set_window_wm_class(conn, second, "test", "NotFullscreen");
+    observe_title_after_events(conn, first);
+    CHECK_FALSE(has_state(conn, second, fullscreen));
+    expect_owner(first, second);
+    set_window_wm_class(conn, second, "test", "FullscreenOriginal");
+    observe_title_after_events(conn, first);
+    expect_owner(second, first);
+
+    // Restoring a minimized fullscreen client is an interaction, too.
+    send_client_message(conn, first, state, 1, minimized);
+    observe_title_after_events(conn, first);
+    REQUIRE(has_state(conn, first, minimized));
+    send_client_message(conn, first, state, 0, minimized);
+    observe_title_after_events(conn, first);
+    expect_owner(first, second);
+    CHECK_FALSE(has_state(conn, first, minimized));
+    destroy_window(conn, first);
+    destroy_window(conn, second);
+}
+
+TEST_CASE(
     "Integration: restart preserves fullscreen claims across workspace visibility",
     "[integration][restart][fullscreen]"
 )

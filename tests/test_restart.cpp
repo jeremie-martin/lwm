@@ -166,7 +166,7 @@ TEST_CASE("Restart restores claim history independently of focus and adoption or
         CHECK(target.fullscreen_owner(0) == 2);
         target.iconic(3, false);
         CHECK(target.fullscreen_owner(0) == 3);
-        target.fullscreen(2, true);
+        target.request_fullscreen(2);
         CHECK(target.fullscreen_owner(0) == 2);
     }
     SECTION("missing clients are skipped and new arrivals retain newer claims")

@@ -230,7 +230,7 @@ struct Client
 
     uint64_t order = 0;            ///< Registration order (_NET_CLIENT_LIST)
     uint64_t mru_order = 0;        ///< Focus recency (higher = newer)
-    uint64_t fullscreen_claim = 0; ///< Recency of entering or re-entering fullscreen
+    uint64_t fullscreen_claim = 0; ///< Latest fullscreen claim; zero exactly when fullscreen is disabled
 
     /// Actions of the rule matched at the last manage, metadata change, or
     /// reload. Metadata changes apply a rule only when this result changes.

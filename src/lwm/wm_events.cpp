@@ -497,7 +497,7 @@ void WindowManager::handle_wm_state_change(xcb_client_message_event_t const& e)
     if (requested(ewmh->_NET_WM_STATE_MAXIMIZED_HORZ) || requested(ewmh->_NET_WM_STATE_MAXIMIZED_VERT))
         state_.maximize(id, horizontal, vertical);
     if (fullscreen && requested(ewmh->_NET_WM_STATE_FULLSCREEN))
-        state_.fullscreen(id, true);
+        state_.request_fullscreen(id);
 }
 
 // Application requests (source 1) against another active client need a

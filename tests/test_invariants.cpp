@@ -61,7 +61,7 @@ TEST_CASE("Generated State operation sequences preserve model invariants", "[inv
         size_t monitor = pick(monitors.size());
         size_t workspace = pick(monitors[monitor].workspaces.size());
         xcb_window_t window = windows.empty() ? XCB_NONE : windows[pick(windows.size())];
-        switch (pick(windows.empty() ? 1 : 18))
+        switch (pick(windows.empty() ? 1 : 19))
         {
             case 0:
                 add(state, next, { .monitor = monitor, .workspace = workspace, .floating = pick(2) == 0 });
@@ -146,6 +146,10 @@ TEST_CASE("Generated State operation sequences preserve model invariants", "[inv
             case 17:
                 state.remember_focus(window);
                 trace.push_back("remember");
+                break;
+            case 18:
+                state.request_fullscreen(window);
+                trace.push_back("request fullscreen");
                 break;
         }
         // Completion repairs focus that no longer holds.

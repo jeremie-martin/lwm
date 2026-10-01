@@ -61,12 +61,13 @@ void State::insert(Client client)
     client.order = next_order_++;
     if (client.kind() == Client::Kind::Floating)
         client.mru_order = next_recency_++;
-    if (client.fullscreen)
-        client.fullscreen_claim = ++next_fullscreen_claim_;
+    client.fullscreen_claim = 0;
     auto [it, inserted] = clients_.emplace(client.id, std::move(client));
     assert(inserted);
     if (it->second.kind() == Client::Kind::Tiled)
         attach(it->second);
+    if (it->second.fullscreen)
+        request_fullscreen(it->first);
 }
 
 void State::insert_fixture(xcb_window_t id, Fixture::Role role)
@@ -371,7 +372,7 @@ void State::iconic(xcb_window_t id, bool enabled)
         );
     // Restoring a fullscreen client makes it the preferred owner again.
     if (!enabled && c.fullscreen)
-        c.fullscreen_claim = ++next_fullscreen_claim_;
+        request_fullscreen(id);
 }
 
 void State::sticky(xcb_window_t id, bool enabled)
@@ -386,18 +387,25 @@ void State::sticky(xcb_window_t id, bool enabled)
 
 void State::fullscreen(xcb_window_t id, bool enabled)
 {
-    if (!enabled && !require(id).fullscreen)
+    if (require(id).fullscreen == enabled)
         return;
-    auto& c = edit(id);
-    if (c.fullscreen != enabled)
-        LWM_LOG_DEBUG("Fullscreen changed: window={:#x} enabled={}", id, enabled);
     if (enabled)
-    {
-        // Fullscreen supersedes maximize; an explicit request claims ownership.
-        c.maximized_horz = c.maximized_vert = false;
-        c.fullscreen_claim = ++next_fullscreen_claim_;
-    }
-    c.fullscreen = enabled;
+        return request_fullscreen(id);
+    auto& c = edit(id);
+    LWM_LOG_DEBUG("Fullscreen changed: window={:#x} enabled={}", id, false);
+    c.fullscreen = false;
+    c.fullscreen_claim = 0;
+    repair_focus_ = true;
+}
+
+void State::request_fullscreen(xcb_window_t id)
+{
+    auto& c = edit(id);
+    if (!c.fullscreen)
+        LWM_LOG_DEBUG("Fullscreen changed: window={:#x} enabled={}", id, true);
+    c.fullscreen = true;
+    c.maximized_horz = c.maximized_vert = false;
+    c.fullscreen_claim = ++next_fullscreen_claim_;
     repair_focus_ = true;
 }
 

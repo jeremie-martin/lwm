@@ -112,7 +112,10 @@ public:
     // Client state
     void iconic(xcb_window_t id, bool enabled);
     void sticky(xcb_window_t id, bool enabled);
+    // Assignment is idempotent. Entering fullscreen establishes a claim.
     void fullscreen(xcb_window_t id, bool enabled);
+    // An interaction enables fullscreen and renews priority, even if already enabled.
+    void request_fullscreen(xcb_window_t id);
     void maximize(xcb_window_t id, bool horizontal, bool vertical);
     void modal(xcb_window_t id, bool enabled);
     void borderless(xcb_window_t id, bool enabled);
