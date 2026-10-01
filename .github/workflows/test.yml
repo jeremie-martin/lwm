@@ -52,6 +52,6 @@ jobs:
           LWM_TEST_REQUIRE_X11: '1'
           LWM_TEST_SEQUENCE_STEPS: '3000'
         run: |
-          for seed in 1 89372 4294967295; do
+          for seed in 0 1 89372 4294967295; do
             LWM_TEST_SEQUENCE_SEED="$seed" build/tests/lwm_tests '[sequence]'
           done

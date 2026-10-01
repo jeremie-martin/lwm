@@ -2,6 +2,7 @@
 #include "lwm/core/invariants.hpp"
 #include "state_fixture.hpp"
 #include <catch2/catch_test_macros.hpp>
+#include <cstdlib>
 #include <random>
 
 using namespace lwm;
@@ -48,15 +49,30 @@ TEST_CASE("Model validation rejects focus that completion must repair", "[invari
 // consistent. Focus is resolved through the same completion operation as the WM.
 TEST_CASE("Generated State operation sequences preserve model invariants", "[invariants][sequence]")
 {
-    std::mt19937 random(12345);
-    auto pick = [&](size_t bound) { return bound ? std::uniform_int_distribution<size_t>(0, bound - 1)(random) : 0; };
+    uint32_t seed = 12345;
+    size_t steps = 4000;
+    if (auto* value = std::getenv("LWM_TEST_SEQUENCE_SEED"))
+        seed = static_cast<uint32_t>(std::stoul(value));
+    if (auto* value = std::getenv("LWM_TEST_SEQUENCE_STEPS"))
+        steps = std::stoul(value);
+    REQUIRE(steps > 0);
+    CAPTURE(seed, steps);
+    std::mt19937 random(seed);
+    std::string choices;
+    auto pick = [&](size_t bound)
+    {
+        auto value = bound ? std::uniform_int_distribution<size_t>(0, bound - 1)(random) : 0;
+        choices += std::to_string(value) + "/" + std::to_string(bound) + " ";
+        return value;
+    };
     auto state = test::state(2);
     state.configure_scratchpads(std::vector<std::string>{ "a", "b" });
     std::vector<xcb_window_t> windows;
     xcb_window_t next = 1;
     std::vector<std::string> trace;
-    for (int step = 0; step < 4000; ++step)
+    for (size_t step = 0; step < steps; ++step)
     {
+        choices.clear();
         auto const& monitors = state.monitors();
         size_t monitor = pick(monitors.size());
         size_t workspace = pick(monitors[monitor].workspaces.size());
@@ -123,7 +139,9 @@ TEST_CASE("Generated State operation sequences preserve model invariants", "[inv
             {
                 std::vector<Monitor> outputs;
                 for (size_t i = 0, count = 1 + pick(3); i < count; ++i)
-                    outputs.push_back(test::monitor("M" + std::to_string(pick(3)), static_cast<int16_t>(i * 1000)));
+                    outputs.push_back(test::monitor(
+                        "M" + std::to_string(pick(3)), static_cast<int16_t>(i * 1000), 1 + pick(4)
+                    ));
                 std::ranges::sort(outputs, { }, &Monitor::name);
                 auto [first, last] = std::ranges::unique(outputs, { }, &Monitor::name);
                 outputs.erase(first, last);
@@ -152,12 +170,19 @@ TEST_CASE("Generated State operation sequences preserve model invariants", "[inv
                 trace.push_back("request fullscreen");
                 break;
         }
+        trace.back() += " draws(value/bound): " + choices;
         state.complete_focus();
+        CAPTURE(step);
+        // The registry must retain exactly the independently tracked live IDs.
+        // Internal consistency alone would accept accidentally losing a client.
+        REQUIRE(state.clients().size() == windows.size());
+        for (auto id : windows) REQUIRE(state.find(id));
         if (auto violation = invariants::validate(state))
         {
-            std::string recent;
-            for (size_t i = trace.size() > 12 ? trace.size() - 12 : 0; i < trace.size(); ++i) recent += trace[i] + " ";
-            FAIL("step " << step << ": " << violation->message << " (" << violation->window << ") after " << recent);
+            std::string replay;
+            for (size_t i = 0; i < trace.size(); ++i)
+                replay += std::to_string(i) + ": " + trace[i] + "\n";
+            FAIL(violation->message << " (" << violation->window << ")\n" << replay);
         }
     }
 }

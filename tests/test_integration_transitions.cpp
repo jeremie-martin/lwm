@@ -3,6 +3,7 @@
 #include <catch2/catch_test_macros.hpp>
 #include <catch2/generators/catch_generators.hpp>
 #include <nlohmann/json.hpp>
+#include <random>
 #include <xcb/xcb_icccm.h>
 
 using namespace lwm::test;
@@ -1138,14 +1139,10 @@ TEST_CASE(
     size_t steps = 160;
     if (auto* value = std::getenv("LWM_TEST_SEQUENCE_STEPS"))
         steps = std::stoul(value);
-    CAPTURE(seed);
-    auto random = [&]
-    {
-        seed ^= seed << 13;
-        seed ^= seed >> 17;
-        seed ^= seed << 5;
-        return seed;
-    };
+    REQUIRE(steps > 0);
+    CAPTURE(seed, steps);
+    // Unlike xorshift, the standard generator also explores with seed zero.
+    std::mt19937 random(seed);
     bool skip_taskbar = false, skip_pager = false, is_modal = false, is_fullscreen = false;
     int layer = 0;
     // Establish explicit false choices before varying classification defaults.

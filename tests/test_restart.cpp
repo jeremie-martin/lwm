@@ -282,6 +282,7 @@ TEST_CASE("Restart rebinding matches live output reconciliation", "[restart][sta
     REQUIRE(snapshot);
 
     std::vector<Monitor> discovered;
+    bool fewer_workspaces = false;
     SECTION("Reordered outputs")
     {
         discovered = { test::monitor("M2"), test::monitor("M0", 1000), test::monitor("M1", 2000) };
@@ -296,12 +297,28 @@ TEST_CASE("Restart rebinding matches live output reconciliation", "[restart][sta
                        test::monitor("M1", 2000),
                        test::monitor("M2", 3000) };
     }
-    SECTION("Fewer workspaces") { discovered = { test::monitor("M1", 0, 1), test::monitor("M0", 1000, 1) }; }
+    SECTION("Fewer workspaces")
+    {
+        discovered = { test::monitor("M1", 0, 1), test::monitor("M0", 1000, 1) };
+        fewer_workspaces = true;
+    }
     SECTION("Additional workspaces") { discovered = { test::monitor("M1", 0, 4), test::monitor("M0", 1000, 4) }; }
     for (auto& monitor : discovered) monitor.strut.top = 40;
     // Different new-workspace defaults ensure removed outputs cannot replace them.
     discovered[0].workspaces[0].layout_strategy = LayoutStrategy::Monocle;
     source.replace_monitors(discovered);
+    if (fewer_workspaces)
+    {
+        // Both restoration and live reconciliation use preserve_workspaces.
+        // Anchor their agreement to the contract: retain the survivor's order,
+        // fold higher workspaces in order, then append displaced output members.
+        CHECK(source.monitors()[0].current().windows == std::vector<xcb_window_t>{ 4, 5 });
+        CHECK(source.monitors()[1].current().windows == std::vector<xcb_window_t>{ 1, 3 });
+        CHECK(source.require(4).monitor == 0);
+        CHECK(source.require(5).monitor == 0);
+        CHECK(source.require(1).monitor == 1);
+        for (auto const& [id, client] : source.clients()) CHECK(client.workspace == 0);
+    }
 
     State restored;
     restored.replace_monitors(discovered);

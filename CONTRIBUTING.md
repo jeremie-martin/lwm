@@ -159,8 +159,12 @@ generated sequence test reports its seed and complete action trace on failure, c
 one client's protocol state against an independent preference model, and detects
 unexpected process-instance changes. It covers preferences, classification, and restart;
 multi-client geometry, focus, and placement require their own interaction tests. A
-separate unit-level sequence test drives thousands of `State` operations and checks the
-model invariants after each.
+separate unit-level sequence test drives thousands of `State` operations, varies output
+and workspace counts, and checks model invariants and independently tracked live client
+IDs after each. Both generated tests honor `LWM_TEST_SEQUENCE_SEED` and
+`LWM_TEST_SEQUENCE_STEPS`, including seed zero, and reject zero steps. The unit test
+defaults to seed 12345 and 4,000 operations, and reports the seed, step, and
+operation/draw trace on invariant failure.
 
 [Linux CI](.github/workflows/test.yml) runs Debug, Release, sanitizer, and owned
 multi-output Xorg tests, plus Release request budgets and the flood probe.
@@ -313,7 +317,9 @@ invalid rules must actually be selected. Literal protocol examples should check 
 argument values as well as command names. For important regressions, check the test
 against the broken revision or a focused, temporary mutation of the relevant behavior.
 Confirm it fails at the intended assertion, then restore production code and run the
-normal checks.
+normal checks. When two paths share a policy helper (such as live topology reconciliation
+and restart rebinding), agreement between them is not an independent oracle. Anchor the
+comparison with explicit expected outcomes for the shared contract.
 
 If a decision is independently meaningful, a pure policy function can make it simpler to
 test. Keep transport, ordering, and lifecycle tests at real boundaries; do not add
