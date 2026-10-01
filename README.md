@@ -38,8 +38,15 @@ make
 ```
 
 They appear at `build/src/app/lwm` and `build/src/app/lwmctl`. See
-[CONTRIBUTING.md](CONTRIBUTING.md#build-and-test) for tests, compiler selection,
-and separate build configurations.
+[TESTING.md](TESTING.md#build-and-test) for validation builds.
+
+With `make`, select a non-default compiler at first configuration with
+`CMAKE_OPTIONS="-DCMAKE_CXX_COMPILER=/path/to/g++"` or
+`CMAKE_OPTIONS="-DCMAKE_TOOLCHAIN_FILE=/path/to/toolchain.cmake"`.
+`CMAKE` selects the CMake executable; `BUILD_DIR` selects the build directory.
+Dependency revisions are pinned in [CMakeLists.txt](CMakeLists.txt);
+`-DFETCHCONTENT_SOURCE_DIR_<NAME>=/path/to/checkout` in `CMAKE_OPTIONS` can reuse
+a local checkout.
 
 ## Install and start
 
@@ -58,7 +65,7 @@ or an X11 display-manager session:
 ```
 
 LWM refuses to start alongside another window manager. To try it inside an
-existing desktop, use the [nested preview](CONTRIBUTING.md#nested-preview).
+existing desktop, use the [nested preview](TESTING.md#nested-preview).
 
 An explicit configuration path must exist and parse successfully. Without
 `--config`, LWM reads `$XDG_CONFIG_HOME/lwm/config.toml` only when `XDG_CONFIG_HOME`
@@ -135,7 +142,7 @@ application name. The wrapper is best effort and suppresses errors; it displays
 notifications only when `notify-send` is installed. The bridge reports command errors
 on stderr.
 
-For development, start with [CONTRIBUTING.md](CONTRIBUTING.md). The model and its
-ownership boundaries are described in [ARCHITECTURE.md](ARCHITECTURE.md).
+The model and its ownership boundaries are described in
+[ARCHITECTURE.md](ARCHITECTURE.md).
 
 LWM is licensed under the [MIT License](LICENSE).

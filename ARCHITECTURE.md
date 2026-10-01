@@ -6,7 +6,7 @@ The event loop is single-threaded. Only log delivery runs on a worker.
 
 Configuration syntax belongs in [config.toml.example](config.toml.example).
 [X11.md](X11.md) and [IPC.md](IPC.md) own externally observable protocol behavior;
-[CONTRIBUTING.md](CONTRIBUTING.md) owns build and validation workflows.
+[TESTING.md](TESTING.md) covers validation and the integration harness.
 
 ## Code map
 

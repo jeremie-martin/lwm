@@ -1,4 +1,4 @@
-# Development
+# Testing
 
 Build prerequisites and installation are in [README.md](README.md#build).
 [ARCHITECTURE.md](ARCHITECTURE.md) explains the model and transition ownership;
@@ -22,13 +22,10 @@ cmake --build build/debug --parallel
 LWM_TEST_REQUIRE_X11=1 ctest --test-dir build/debug --output-on-failure --no-tests=error
 ```
 
-Select a non-default compiler at first configuration with
-`-DCMAKE_CXX_COMPILER=/path/to/g++` or `-DCMAKE_TOOLCHAIN_FILE=/path/to/toolchain.cmake`.
-With `make`, pass these through `CMAKE_OPTIONS`; `CMAKE` selects the CMake executable.
 Ensure the matching `ctest` is on `PATH`. For multi-configuration generators, use
 `--config Debug` when building and `-C Debug` with CTest.
 
-Run a focused selection before the full suite:
+Focused runs:
 
 ```sh
 LWM_TEST_REQUIRE_X11=1 build/debug/tests/lwm_tests '[integration][focus]'
@@ -44,39 +41,9 @@ cmake --build build/sanitize --parallel
 LWM_TEST_REQUIRE_X11=1 ctest --test-dir build/sanitize --output-on-failure --no-tests=error
 ```
 
-Dependencies are pinned in [CMakeLists.txt](CMakeLists.txt). Update a revision and
-its version comment together. `FETCHCONTENT_SOURCE_DIR_<NAME>` can reuse a local
-checkout. C++26 and sanitizer requirements are target-scoped; reflect-cpp exports
-its reflection flag to consumers. Other dependencies retain their build settings.
-There is no GitHub Actions pipeline; run validation locally.
+There is no GitHub Actions pipeline; validation runs locally.
 
-## Writing tests
-
-Choose tests by the credible failure they detect. Test public behavior or an
-independent contract; avoid mirrored implementations, test-only production hooks,
-and repeated assertions at layers that add no distinct risk. A regression test
-should fail on the broken implementation for the intended reason. Use a temporary
-mutation when useful, restore it, and rerun the relevant checks.
-
-Use these boundaries and fixtures:
-
-| Contract | Fixture or approach |
-| --- | --- |
-| State and pure policy | `tests/state_fixture.hpp`; construct reachable states through `State` operations |
-| X11 behavior | `TestEnvironment::create(config)` in `tests/x11_test_harness.hpp` |
-| IPC transport | Real Unix sockets, partial writes, stalled peers, and acknowledgement ordering |
-| Subscription content | `Subscriber` in `tests/ipc_subscription.hpp`; it waits for acknowledgement and retains partial lines |
-| JSON | The independent nlohmann/json test parser |
-| Restart handoff | `PausedRestart` in `tests/restart_handoff.hpp` to stop before the successor starts |
-| Logging lifecycle | `tests/log_probe.cpp`, with a private journal collector and isolated logger lifetime |
-| Fatal exceptions | `tests/runtime_failure_probe.cpp`, which interposes the first X event poll without a production hook |
-
-Assert observable results: geometry and resize boundaries, actual X input focus and
-`WM_TAKE_FOCUS`, synthetic ConfigureNotify counts, process exit status, and complete
-protocol values. Agreement between two callers of one policy is not an independent
-oracle. Use explicit expected outcomes and fixtures that distinguish plausible
-alternatives. Check cardinality before range assertions; start negative cases from
-valid states and violate only the intended relationship.
+## Integration harness
 
 The harness starts a private Xvfb and the binaries from the selected CMake build.
 Readiness requires a live supporting window and a successful ping to its socket.
@@ -94,9 +61,12 @@ marker on the same connection and observes it through IPC. First establish windo
 management, and use titles that cannot trigger rules. This orders earlier events
 on that connection only. Do not repeat actions inside polling predicates.
 
+`Subscriber` in `tests/ipc_subscription.hpp` waits for the subscription
+acknowledgement and retains partial lines.
+
 Use `wm_instance()` and `wait_for_wm_restart()` to distinguish WM lifetimes; X IDs
-can be reused. `PausedRestart` allows topology or window changes during handoff.
-Corrupt a current-format snapshot for malformed-adoption tests, with an intact
+can be reused. `PausedRestart` in `tests/restart_handoff.hpp` allows topology or
+window changes during handoff. Corrupt a current-format snapshot for malformed-adoption tests, with an intact
 control; an obsolete version does not test current decoding. Codec round trips
 and malformed-input tests complement actual adoption/exec tests. Tag composed
 restart tests with `[restart]` wherever they live.
@@ -185,28 +155,3 @@ Start applications with `DISPLAY=:100 <program>`.
 When available, Polybar uses [config/polybar.ini](config/polybar.ini). Adjust its
 PulseAudio and battery settings (`BAT0`/`ACA0`). `scripts/launch-polybar.sh` is for
 your desktop session: it replaces existing bars and starts one per output.
-
-## Changes and documentation
-
-Use the repository `.clang-format` and nearby naming: `PascalCase` types,
-`snake_case` functions/files, and uppercase constants/macros. Comments should
-explain local contracts or non-obvious reasons, not narrate code or recount history.
-
-Keep each explanation with its owner:
-
-| Subject | Document |
-| --- | --- |
-| Installation, startup, diagnostics | [README.md](README.md) |
-| Configuration syntax, defaults, reload | [config.toml.example](config.toml.example) |
-| Ownership, invariants, internal data flow | [ARCHITECTURE.md](ARCHITECTURE.md) |
-| X11 application contract | [X11.md](X11.md) |
-| IPC wire contract and consumer recovery | [IPC.md](IPC.md) |
-| Build, tests, development workflow | This guide |
-
-Before finishing, run focused tests and the full suite (`make test`), update the
-owning documentation, and inspect `git diff --check` and the final diff. Exercise
-Xephyr for geometry, input, focus, visibility, or stacking changes, and the dummy
-Xorg cases for topology changes. For documentation/comment-only changes, verify
-links, commands, examples, and described behavior; executable changes need the
-corresponding tests. Commit subjects are short and imperative. PR descriptions
-state the problem, resulting behavior, validation, and material limitations.

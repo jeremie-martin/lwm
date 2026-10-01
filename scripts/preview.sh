@@ -1,5 +1,5 @@
 #!/bin/bash
-# Interactive preview on :100; see CONTRIBUTING.md#nested-preview.
+# Interactive preview on :100; see TESTING.md#nested-preview.
 set -e
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
