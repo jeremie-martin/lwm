@@ -8,9 +8,8 @@
 
 namespace lwm {
 
-// Every WM operation a user can trigger. Key bindings and IPC parse into this
-// one type and share one executor; names are the configuration keys and the
-// `key_action` event values.
+// Operations shared by bindings and IPC, with one executor. Each input surface
+// exposes its own subset; action_name() supplies key_action event names.
 namespace action {
 struct Kill
 {
@@ -160,7 +159,7 @@ using Action = std::variant<
     action::ScratchpadCancelLaunch,
     action::NotifyAttention>;
 
-/// Canonical name: the configuration key, extended with a direction for monitor actions.
+/// Event name; bindable actions use their config key, plus direction for monitor actions.
 std::string_view action_name(Action const& action);
 
 } // namespace lwm

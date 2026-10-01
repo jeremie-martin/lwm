@@ -15,8 +15,7 @@ Geometry working_area_to_content_rect(Geometry const& area, uint32_t padding, ui
              static_cast<uint16_t>(std::max<int32_t>(1, area.height - 2 * inset)) };
 }
 
-// Master-stack is a sequence of cuts, not an arbitrary tree. Visiting cuts
-// directly avoids node allocations, recursion and depth-limited path encoding.
+// Split indices follow successive cuts: master/stack, then each stack slot.
 template <class Slot, class Split>
 void visit_layout(
     size_t count,

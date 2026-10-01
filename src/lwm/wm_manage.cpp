@@ -29,9 +29,7 @@ char const* classification_name(WindowClassification::Kind kind)
 
 } // namespace
 
-// ---------------------------------------------------------------------------
 // Adoption and classification
-// ---------------------------------------------------------------------------
 
 void WindowManager::scan_existing_windows(bool handoff)
 {
@@ -193,9 +191,7 @@ void WindowManager::manage_fixture(xcb_window_t window, Fixture::Role role, bool
         workareas_dirty_ = true;
 }
 
-// ---------------------------------------------------------------------------
 // Client registration
-// ---------------------------------------------------------------------------
 
 bool WindowManager::read_initial_state(Client& client, bool honor_initial_state)
 {
@@ -415,9 +411,7 @@ void WindowManager::place_new_client(xcb_window_t window)
         apply_rule(window, *rule);
 }
 
-// ---------------------------------------------------------------------------
 // Rules
-// ---------------------------------------------------------------------------
 
 // Rules apply only the actions they specify.
 void WindowManager::apply_rule(xcb_window_t window, RuleActions const& rule)

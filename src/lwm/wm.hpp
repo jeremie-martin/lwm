@@ -76,14 +76,13 @@ private:
         xcb_atom_t lwm_restart_owner;
     };
 
-    // What LWM last wrote for one managed window. Completion compares the
-    // projection of current state with this record and writes only the
-    // differences; an external change is handled by forgetting a field.
+    // Last published values; forget an externally changed field to reconcile it.
+    // Domain decisions must use State, not this output cache.
     struct Output
     {
         bool mapped = false;
         bool hidden = false;
-        std::optional<Geometry> geometry; ///< Last on-screen configure, including border
+        std::optional<Geometry> geometry; ///< Last on-screen rectangle; border width is tracked separately
         uint32_t border_width = 0;
         std::optional<uint32_t> border_color;
         std::optional<uint32_t> wm_state;
@@ -334,7 +333,7 @@ private:
         std::optional<double> delta = {}
     );
 
-    // wm_focus.cpp
+    // wm_events.cpp: pointer-driven monitor selection
     void focus_monitor_at_point(int16_t x, int16_t y);
 
     // wm_drag.cpp

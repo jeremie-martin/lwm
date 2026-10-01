@@ -1,5 +1,4 @@
-// Named scratchpads float at a configured size; pooled windows keep their mode.
-// Hidden means iconic. Recall rehosts on the focused monitor's current workspace.
+// Explicit scratchpad hiding uses iconic state; ordinary visibility remains derived.
 
 #include "lwm/core/log.hpp"
 #include "wm.hpp"

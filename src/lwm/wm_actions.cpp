@@ -222,9 +222,7 @@ void WindowManager::layout_changed(
     queue_event(event::LayoutChange{ action_name(action), std::move(value), delta });
 }
 
-// ---------------------------------------------------------------------------
 // Window state
-// ---------------------------------------------------------------------------
 
 void WindowManager::toggle_float(xcb_window_t window)
 {

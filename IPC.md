@@ -1,7 +1,8 @@
 # IPC
 
-LWM exposes a local Unix-domain socket. `lwmctl` is the supported interactive client;
-this document defines the raw protocol for integrations.
+This is the Unix-socket contract for integrations with LWM. For interactive use,
+`lwmctl --help` and command-specific help list commands without connecting.
+[README.md](README.md) covers installation and startup.
 
 ## Discovery and transport
 
@@ -32,7 +33,7 @@ at most 64 KiB written per connection per dispatch. A timed-out exchange is
 disconnected.
 
 `lwmctl --timeout MS` bounds connection, request transmission, response, and
-subscription acknowledgement waits (default 2000 ms). A full listener backlog is retried
+subscription acknowledgement waits (1–600000 ms, default 2000 ms). A full listener backlog is retried
 within the original connection deadline. Idle subscriptions do not time out; once an
 event starts arriving, its complete line must arrive within the timeout. Explicit socket
 selection takes precedence even if the path is unavailable. Discovery properties must be
@@ -56,23 +57,24 @@ events are rejected without printing partial contents. Ordinary command output f
 return nonzero; a closed stdout pipe ends a subscription normally.
 
 `lwmctl --help` and command-specific help (for example `lwmctl workspace --help`) print
-to stdout without connecting. Usage and runtime errors print to stderr and return status
-1; successful commands return 0. Use `--` before arguments that resemble options, and
+to stdout without connecting; an unknown help group returns status 1. Other usage and
+runtime errors print to stderr and return 1; successful commands return 0. Use `--`
+before arguments that resemble options, and
 shell-quote names or paths containing spaces. Arguments containing line breaks or NULs
 cannot be represented by this line protocol.
 
 ## Commands
 
-Queries answer from the current state. Every other command is the same action a key
-binding can perform (see [config.toml.example](config.toml.example)), executed by the
-same code; only `spawn` has no IPC spelling, because IPC callers can start processes
-themselves. Window commands act on the active window and return `error no active window`
-without one. Monitor- and workspace-relative commands target the focused monitor.
-Consecutive `focus next` / `focus prev` commands retain their starting order, including sticky windows, and
-skip windows that are no longer eligible. Ordinary activation, a change of
-monitor/workspace or active window, or a new client registration starts a fresh
-recent-use traversal. Cycling returns an error when no window is eligible, including
-while showing the desktop.
+Queries read current state. Mutating commands execute the same `Action`s as key
+bindings; `spawn` is available only to bindings because IPC callers can launch
+processes themselves. Commands concerning the active window return
+`error no active window` when none is selected. Relative monitor/workspace commands
+target the focused monitor; indices are zero-based.
+
+Consecutive `focus next` / `focus prev` commands retain their starting recent-use
+order, including sticky windows, and skip ineligible clients. Activation, a changed
+monitor/workspace or active window, or a new registration starts a fresh traversal.
+Cycling fails when no window is eligible, including while showing the desktop.
 
 | Command | Result |
 | --- | --- |
@@ -110,8 +112,10 @@ while showing the desktop.
 
 Ratio values must be finite numbers with no trailing characters. `ratio set` rejects
 values outside `[min_ratio, 1 - min_ratio]` from the active configuration; `ratio
-adjust` clamps to that range and replies `ratio unchanged` at a bound. A definite exec failure is logged and leaves the scratchpad retryable.
-Successful exec does not guarantee a matching window: `scratchpad cancel-launch NAME`
+adjust` clamps to that range and replies `ratio unchanged` at a bound.
+
+For named scratchpads, a definite exec failure is logged and leaves the slot
+retryable. Successful exec does not guarantee a matching window: `scratchpad cancel-launch NAME`
 clears a pending launch so the user can retry. It is a no-op for an empty or already
 claimed slot and rejects unknown names. It does not terminate a process; a late matching
 window can still be claimed. Both named scratchpad commands reject unknown names.
@@ -130,10 +134,9 @@ the WM starts.
 
 `backend_notifications` counts Quill notifications, including overflow summaries,
 formatting errors, and reported sink errors. `last_backend_notification` retains the
-first 1 KiB of the latest notification. Notifications are asynchronous; a stalled worker
-cannot report further errors until it resumes. They are not an exact count of dropped
-messages. In particular, libsystemd treats an absent journal as success, and successful
-sends do not guarantee persistent storage.
+first 1 KiB of the latest notification. Notifications are asynchronous and are not an exact count of dropped messages:
+overflow is summarized, a stalled worker cannot report until it resumes, and libsystemd
+accepts an absent journal silently. Successful sends do not confirm durable storage.
 
 The count and logging `instance` survive failed exec and reset on successful exec. This
 logger lifetime differs from the WM `instance` used by state snapshots and
@@ -198,7 +201,7 @@ only in `window list`.
 
 A named entry uses `window: 0` when it has not claimed a window. The pool array is
 ordered by recall rotation, with its current target last; see
-[Scratchpads](ARCHITECTURE.md#scratchpads) for cycle behavior.
+[Scratchpads](ARCHITECTURE.md#pointer-interactions-and-scratchpads) for cycle behavior.
 
 All window values are X11 window IDs. Monitor and workspace indices are zero-based
 runtime indices; none of these identifiers are persistent.

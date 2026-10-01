@@ -22,7 +22,6 @@ struct Options
 /// Parse LWM startup arguments without consulting the filesystem or X11.
 std::expected<Options, std::string> parse(int argc, char* const argv[]);
 
-/// Return the complete startup help text.
 std::string usage(std::string_view program = "lwm");
 
 } // namespace lwm::cli

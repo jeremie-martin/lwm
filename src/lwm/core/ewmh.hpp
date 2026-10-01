@@ -38,7 +38,6 @@ public:
     // First recognized _NET_WM_WINDOW_TYPE, or Normal.
     WindowType get_window_type_enum(xcb_window_t window) const;
 
-    // Strut support
     DockStrut get_window_strut(xcb_window_t window) const;
 
     void destroy_for_restart();

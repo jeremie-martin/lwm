@@ -51,9 +51,7 @@ Workspace& State::edit_workspace(size_t monitor, size_t workspace)
     return monitors_.at(monitor).workspaces.at(workspace);
 }
 
-// ---------------------------------------------------------------------------
 // Registry
-// ---------------------------------------------------------------------------
 
 uint64_t State::register_window(xcb_window_t id, std::span<xcb_window_t const> registration_order)
 {
@@ -128,9 +126,7 @@ std::optional<TileSlot> State::detach(Client const& client)
     return slot;
 }
 
-// ---------------------------------------------------------------------------
 // Derived views
-// ---------------------------------------------------------------------------
 
 bool State::shows(size_t monitor, size_t workspace) const
 {
@@ -238,9 +234,7 @@ bool State::focusable(Client const& client, FullscreenVisibility const& fullscre
     return accepts_focus(client) && !showing_desktop_ && visible(client, fullscreen);
 }
 
-// ---------------------------------------------------------------------------
 // Focus
-// ---------------------------------------------------------------------------
 
 void State::focus(xcb_window_t id, uint32_t time, bool record_user_time)
 {
@@ -349,9 +343,7 @@ void State::show_desktop(bool enabled)
         focus_fallback(focused_monitor_);
 }
 
-// ---------------------------------------------------------------------------
 // Placement and mode
-// ---------------------------------------------------------------------------
 
 bool State::relocate(
     xcb_window_t id,
@@ -477,9 +469,7 @@ void State::swap_tiles(size_t monitor, size_t a, size_t b)
     std::swap(windows.at(a), windows.at(b));
 }
 
-// ---------------------------------------------------------------------------
 // Client state
-// ---------------------------------------------------------------------------
 
 void State::iconic(xcb_window_t id, bool enabled)
 {
@@ -587,9 +577,7 @@ void State::fullscreen_monitors(xcb_window_t id, std::optional<FullscreenMonitor
 
 void State::pin_desktop(xcb_window_t id, bool pinned) { assign(id, &Client::desktop_pinned, pinned); }
 
-// ---------------------------------------------------------------------------
 // Metadata
-// ---------------------------------------------------------------------------
 
 void State::title(xcb_window_t id, std::string value) { assign(id, &Client::name, std::move(value)); }
 
@@ -639,9 +627,7 @@ void State::user_time(xcb_window_t id, uint32_t time, xcb_window_t window)
 
 void State::rule(xcb_window_t id, std::optional<RuleActions> actions) { assign(id, &Client::rule, std::move(actions)); }
 
-// ---------------------------------------------------------------------------
 // Workspaces and monitors
-// ---------------------------------------------------------------------------
 
 bool State::switch_workspace(size_t monitor, size_t workspace)
 {
@@ -744,9 +730,7 @@ void State::replace_monitors(std::vector<Monitor> monitors)
     }
 }
 
-// ---------------------------------------------------------------------------
 // Scratchpads
-// ---------------------------------------------------------------------------
 
 State::NamedScratchpad const* State::named_scratchpad(std::string_view name) const
 {
@@ -773,7 +757,7 @@ void State::release_scratchpad(xcb_window_t id)
 }
 
 // Surviving names keep claims and pending launches; removed names release
-// their windows, which become ordinary visible clients again.
+// their windows and deiconify them; workspace/fullscreen visibility still applies.
 void State::configure_scratchpads(std::span<std::string const> names)
 {
     mutated();
@@ -829,9 +813,7 @@ void State::scratchpad_pending(std::string_view name, bool pending)
         it->state = NamedScratchpad::Empty{ };
 }
 
-// ---------------------------------------------------------------------------
 // Exec handoff
-// ---------------------------------------------------------------------------
 
 restart::Snapshot State::snapshot() const
 {

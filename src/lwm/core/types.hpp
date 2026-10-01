@@ -14,7 +14,6 @@
 
 namespace lwm {
 
-/// EWMH window type classification
 enum class WindowType
 {
     Desktop,
@@ -85,8 +84,7 @@ struct FullscreenMonitors
     bool operator==(FullscreenMonitors const&) const = default;
 };
 
-/// EWMH layer preference (`_NET_WM_STATE_ABOVE` / `_BELOW`).
-/// Tri-state by construction — making "both above and below" unrepresentable.
+/// Mutually exclusive _NET_WM_STATE_ABOVE / _BELOW preference.
 enum class LayerHint
 {
     Normal,
@@ -282,7 +280,6 @@ struct SplitAddress
 
 using SplitRatioMap = std::map<SplitAddress, double>;
 
-/// Layout strategy for a workspace's tiling algorithm.
 enum class LayoutStrategy
 {
     MasterStack,

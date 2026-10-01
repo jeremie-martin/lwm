@@ -56,9 +56,7 @@ WindowManager::WindowManager(Config config, SignalPipe& signals, std::string con
 
 WindowManager::~WindowManager() { cleanup_ipc(); }
 
-// ---------------------------------------------------------------------------
 // X setup
-// ---------------------------------------------------------------------------
 
 void WindowManager::intern_atoms()
 {
@@ -242,9 +240,7 @@ void WindowManager::cleanup_ipc()
     }
 }
 
-// ---------------------------------------------------------------------------
 // Monitors and workareas
-// ---------------------------------------------------------------------------
 
 std::vector<Monitor> WindowManager::discover_monitors()
 {
@@ -361,9 +357,7 @@ std::vector<Strut> WindowManager::dock_struts(std::span<Monitor const> monitors)
     return struts;
 }
 
-// ---------------------------------------------------------------------------
 // Event loop
-// ---------------------------------------------------------------------------
 
 RunResult WindowManager::run()
 {
@@ -513,9 +507,7 @@ void WindowManager::handle_timeouts()
     );
 }
 
-// ---------------------------------------------------------------------------
 // Configuration
-// ---------------------------------------------------------------------------
 
 // A candidate is validated before anything changes; an invalid file leaves
 // the active configuration and runtime claims untouched.
@@ -551,9 +543,7 @@ void WindowManager::report_reload(std::expected<void, std::string> const& result
     queue_event(event::ConfigReload{ result.has_value(), source, result ? std::string() : result.error() });
 }
 
-// ---------------------------------------------------------------------------
 // Processes and window lifetime
-// ---------------------------------------------------------------------------
 
 bool WindowManager::launch_program(CommandConfig const& command, std::string_view source)
 {
@@ -614,9 +604,7 @@ void WindowManager::kill_window(xcb_window_t window)
     pending_kills_[window] = std::chrono::steady_clock::now() + KILL_TIMEOUT;
 }
 
-// ---------------------------------------------------------------------------
 // X reads and protocol messages
-// ---------------------------------------------------------------------------
 
 std::optional<Geometry> WindowManager::read_window_geometry(xcb_window_t window) const
 {

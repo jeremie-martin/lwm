@@ -32,10 +32,10 @@ struct WindowMatcher
 
 struct WindowRuleConfig
 {
-    // Matching criteria (all optional, AND logic - all specified must match)
+    // All specified criteria must match.
     WindowMatcher match;
     std::optional<WindowType> type;
-    std::optional<bool> transient; // Require transient (true) or non-transient (false)
+    std::optional<bool> transient;
     RuleActions actions;
 };
 

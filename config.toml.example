@@ -3,13 +3,19 @@
 # Numeric values must be finite and within the documented bounds; they never wrap.
 # Booleans use true/false; integer settings use integers, not 1.0 or true.
 # Ratios and size fractions accept either integer or floating-point numbers.
-# Omitted settings use built-in defaults, except for the binding replacement
-# rules documented below. Without --config, the implicit path is
-# $XDG_CONFIG_HOME/lwm/config.toml, used only when
-# XDG_CONFIG_HOME is set; otherwise LWM uses built-in defaults.
+# Omitted settings use built-in defaults; the active entries below are a starter
+# configuration, not an exhaustive dump of defaults. README.md explains file selection.
+#
+# Reload with `lwmctl reload-config`, a reload_config binding, or SIGHUP. Invalid
+# input leaves the active configuration unchanged. Reload updates appearance,
+# bindings, names, focus/layout parameters, commands, scratchpads, and matched rules.
+# It does not run autostart, change workspace count, or replace the layout strategy
+# of existing workspaces (use `lwmctl layout set`). Removing a rule does not undo
+# effects already applied. Surviving scratchpad names keep claims/pending launches;
+# removing a name releases and deiconifies its window.
 
 [appearance]
-# Pixel padding and border width must be in 0..65535.
+# Pixel padding and border width: 0..65535; colors: unsigned 32-bit values.
 padding = 10
 border_width = 2
 border_color = 0xFF0000
@@ -57,9 +63,9 @@ commands = [
 # Mouse bindings. Defining any [[mousebinds]] replaces all built-in mouse
 # bindings.
 # mod: modifiers only ("super", "super+shift", "ctrl", ...); empty means none.
-# Modifier order is irrelevant; "ctrl" and "control" are aliases. Empty tokens
+# Modifiers: shift, ctrl/control, alt, super. Order is irrelevant. Empty tokens
 # (e.g. "super+") and repeated modifiers are rejected.
-# button: X11 mouse button number (1 = left, 2 = middle, 3 = right)
+# button: 1..255 (X11: 1 = left, 2 = middle, 3 = right)
 # action: "drag_window", "resize_floating", "toggle_float"
 [[mousebinds]]
 mod = "super"
@@ -227,10 +233,9 @@ keys = ["1", "2", "3", "4", "5", "6", "7", "8", "9", "0"]
 # type: normal, desktop, dock, toolbar, menu, utility, splash, dialog,
 #       dropdown_menu, popup_menu, tooltip, notification, combo, or dnd
 #
-# apply keys:
+# apply must contain at least one action. Keys:
 #   floating, fullscreen, above, below, sticky, skip_taskbar, skip_pager
-#   borderless = true
-#   center = true
+#   borderless, center      => true/false
 #   geometry = { x = 100, y = 100, width = 800, height = 600 }
 #   workspace = 1           # zero-based; use workspace_name when possible
 #   monitor = 0
@@ -238,7 +243,9 @@ keys = ["1", "2", "3", "4", "5", "6", "7", "8", "9", "0"]
 #   monitor_name = "HDMI-1"  # optional if you prefer names
 #   scratchpad = "music"
 # Use either workspace or workspace_name, and either monitor or monitor_name.
-# workspace_name must appear in [workspaces].names. Match regexes must be valid
+# workspace_name must appear in [workspaces].names. above and below cannot both
+# be true; explicitly setting both false selects the normal layer. Missing geometry
+# fields default to x=0, y=0, width=800, height=600. Match regexes must be valid
 # and nonempty; they are compiled when loading the configuration. Malformed
 # configuration is rejected before any rules apply.
 #
@@ -268,7 +275,7 @@ keys = ["1", "2", "3", "4", "5", "6", "7", "8", "9", "0"]
 # Named scratchpads
 # Each entry requires a unique name, a spawn command, and at least one
 # class/instance/title regex. Size values are fractions from 0.1 through 1.0
-# of the focused monitor's working area.
+# of the focused monitor's working area (defaults: width=0.8, height=0.7).
 # A failed exec leaves the scratchpad retryable. If a launched program never
 # creates a matching window, use `lwmctl scratchpad cancel-launch NAME` before
 # retrying. Cancellation does not terminate the program.

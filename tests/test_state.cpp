@@ -384,7 +384,7 @@ TEST_CASE("Scratchpad names and the pool are the only membership records", "[sta
     CHECK(state.scratchpad_claim(1)->name == "a");
     state.pool_scratchpad(1);
     CHECK_FALSE(state.pooled(1));
-    // Surviving names keep claims; removed names release visible windows.
+    // Surviving names keep claims; removed names release and deiconify windows.
     state.claim_scratchpad("b", 2);
     state.iconic(2, true);
     state.configure_scratchpads(std::vector<std::string>{ "a" });

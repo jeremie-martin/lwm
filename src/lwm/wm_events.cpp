@@ -145,9 +145,7 @@ void WindowManager::handle_event(xcb_generic_event_t const& event)
     }
 }
 
-// ---------------------------------------------------------------------------
 // Window lifetime
-// ---------------------------------------------------------------------------
 
 void WindowManager::handle_map_request(xcb_map_request_event_t const& e)
 {
@@ -187,9 +185,7 @@ void WindowManager::handle_window_removal(xcb_window_t window)
     state_.erase(window);
 }
 
-// ---------------------------------------------------------------------------
 // Pointer and keyboard
-// ---------------------------------------------------------------------------
 
 void WindowManager::handle_enter_notify(xcb_enter_notify_event_t const& e)
 {
@@ -389,9 +385,7 @@ void WindowManager::handle_key_release(xcb_key_release_event_t const& e)
         last_toggle_release_time_ = e.time;
 }
 
-// ---------------------------------------------------------------------------
 // Client messages
-// ---------------------------------------------------------------------------
 
 void WindowManager::handle_client_message(xcb_client_message_event_t const& e)
 {
@@ -615,9 +609,7 @@ void WindowManager::handle_showing_desktop(xcb_client_message_event_t const& e)
     drain_requested_ = true;
 }
 
-// ---------------------------------------------------------------------------
 // Configure requests and properties
-// ---------------------------------------------------------------------------
 
 void WindowManager::handle_configure_request(xcb_configure_request_event_t const& e)
 {

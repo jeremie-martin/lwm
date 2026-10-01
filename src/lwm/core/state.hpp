@@ -15,10 +15,8 @@
 
 namespace lwm {
 
-// The single owner of LWM's domain model. Readers receive const views; every
-// mutation is a named operation that keeps membership, focus memory and
-// scratchpad claims consistent. Visibility, fullscreen ownership and effective
-// classification are derived on demand rather than stored.
+// Owns domain state. Const views and named mutations preserve membership and
+// claims; visibility, fullscreen ownership, and classification are derived.
 class State
 {
 public:
@@ -122,7 +120,7 @@ public:
     size_t focused_monitor() const { return focused_monitor_; }
     bool showing_desktop() const { return showing_desktop_; }
     // Activation restores a minimized client and selects its workspace. Unknown or
-    // non-input clients are refused; NONE explicitly clears focus.
+    // clients without input or WM_TAKE_FOCUS are refused; NONE clears focus.
     void focus(xcb_window_t id, uint32_t time = 0, bool record_user_time = true);
     void focus_fallback(size_t monitor, bool record_user_time = true);
     bool cycle_focus(bool forward);

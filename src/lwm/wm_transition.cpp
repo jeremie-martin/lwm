@@ -8,11 +8,8 @@
 
 namespace lwm {
 
-// Every operation ends here. Inputs read from X are refreshed, remaining
-// domain consequences are resolved, and then the frozen model is projected
-// onto X: each output is compared with what LWM last wrote and only the
-// difference is sent. Nothing records which parts of the output a mutation
-// affected, so no mutation can forget one.
+// Resolve domain consequences before freezing State; publication only reads it.
+// Compare complete projections with prior output, so mutations need no change lists.
 void WindowManager::complete_transition()
 {
     bool obligations = workareas_dirty_ || !configure_replies_.empty() || !events_.empty() || restack_requested_
@@ -79,9 +76,7 @@ void WindowManager::complete_transition()
     LWM_ASSERT_INVARIANTS(state_);
 }
 
-// ---------------------------------------------------------------------------
 // Layout
-// ---------------------------------------------------------------------------
 
 // The drag preview is the only geometry input outside the domain model.
 std::optional<Geometry> WindowManager::drag_preview(Client const& client) const
@@ -118,9 +113,7 @@ uint32_t WindowManager::border_color(Client const& client) const
     return conn_.screen()->black_pixel;
 }
 
-// ---------------------------------------------------------------------------
 // Client publication
-// ---------------------------------------------------------------------------
 
 // Hides, shows, configures and maps clients. Returns whether anything moved
 // under the pointer, whether tiled or floating.
@@ -388,9 +381,7 @@ void WindowManager::commit_focus(uint32_t time)
         xcb_set_input_focus(conn_.get(), XCB_INPUT_FOCUS_POINTER_ROOT, conn_.screen()->root, XCB_CURRENT_TIME);
 }
 
-// ---------------------------------------------------------------------------
 // Root publication
-// ---------------------------------------------------------------------------
 
 uint32_t WindowManager::desktop_index(size_t monitor, size_t workspace) const
 {
@@ -551,9 +542,7 @@ void WindowManager::flush_and_drain_crossing()
     }
 }
 
-// ---------------------------------------------------------------------------
 // Subscription events
-// ---------------------------------------------------------------------------
 
 void WindowManager::queue_event(Event event) { events_.push_back(std::move(event)); }
 
