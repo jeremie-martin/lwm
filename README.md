@@ -57,7 +57,8 @@ sudo make install
 ```
 
 With the default CMake prefix this installs `lwm`, `lwmctl`, `lwm-notify`, and
-`lwm-notify-bridge` under `/usr/local/bin`.
+`lwm-notify-bridge` under `/usr/local/bin`. Override `CMAKE_INSTALL_PREFIX` and
+`CMAKE_INSTALL_BINDIR` to choose another installation location.
 
 `sudo make uninstall` removes the files recorded in `build/install_manifest.txt`,
 including all four programs. Keep the build directory used for installation; for another

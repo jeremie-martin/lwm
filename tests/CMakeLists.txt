@@ -1,49 +1,46 @@
-include(FetchContent)
 pkg_check_modules(XCB_XTEST REQUIRED IMPORTED_TARGET xcb-xtest)
 
 FetchContent_Declare(
     Catch2
     GIT_REPOSITORY https://github.com/catchorg/Catch2.git
-    GIT_TAG v3.5.0
+    GIT_TAG 53d0d913a422d356b23dd927547febdf69ee9081 # Catch2 3.5.0
 )
 FetchContent_Declare(
     nlohmann_json
     GIT_REPOSITORY https://github.com/nlohmann/json.git
-    GIT_TAG v3.11.3
-    GIT_SHALLOW TRUE
+    GIT_TAG 9cca280a4d0ccf0c08f47a99aa71d1b0e52f8d03 # nlohmann/json 3.11.3
 )
 FetchContent_MakeAvailable(Catch2 nlohmann_json)
 
 add_executable(lwm_log_probe log_probe.cpp)
 target_link_libraries(lwm_log_probe PRIVATE liblwm)
-target_link_options(lwm_log_probe PRIVATE "-Wl,--export-dynamic-symbol=sendmsg")
-target_include_directories(lwm_log_probe PRIVATE ${CMAKE_SOURCE_DIR}/src)
+target_link_options(lwm_log_probe PRIVATE "LINKER:--export-dynamic-symbol=sendmsg")
 
 add_executable(lwm_logging_tests
   test_logging.cpp
-  ${CMAKE_SOURCE_DIR}/src/app/cli.cpp
+  ${PROJECT_SOURCE_DIR}/src/app/cli.cpp
 )
-target_link_libraries(lwm_logging_tests PRIVATE liblwm Catch2::Catch2WithMain PkgConfig::XCB_XTEST nlohmann_json::nlohmann_json)
-target_include_directories(lwm_logging_tests PRIVATE ${CMAKE_SOURCE_DIR}/src ${CMAKE_SOURCE_DIR}/src/app)
+target_include_directories(lwm_logging_tests PRIVATE ${PROJECT_SOURCE_DIR}/src/app)
 target_compile_definitions(lwm_logging_tests PRIVATE
   LWM_XORG_CONFIG_PATH="${CMAKE_CURRENT_SOURCE_DIR}/xorg-dummy.conf"
   LWMCTL_BINARY_PATH="$<TARGET_FILE:lwmctl>"
   LWM_LOG_PROBE_PATH="$<TARGET_FILE:lwm_log_probe>"
   LWM_BINARY_PATH="$<TARGET_FILE:lwm>"
 )
-add_dependencies(lwm_logging_tests lwm_log_probe lwm)
+add_dependencies(lwm_logging_tests lwm_log_probe lwm lwmctl)
 
 add_executable(lwm_runtime_failure_probe
   runtime_failure_probe.cpp
-  ${CMAKE_SOURCE_DIR}/src/app/main.cpp
-  ${CMAKE_SOURCE_DIR}/src/app/cli.cpp
+  ${PROJECT_SOURCE_DIR}/src/app/main.cpp
+  ${PROJECT_SOURCE_DIR}/src/app/cli.cpp
 )
 target_link_libraries(lwm_runtime_failure_probe PRIVATE liblwm)
-target_link_options(lwm_runtime_failure_probe PRIVATE "-Wl,--export-dynamic-symbol=xcb_poll_for_event")
+target_link_options(lwm_runtime_failure_probe PRIVATE "LINKER:--export-dynamic-symbol=xcb_poll_for_event")
 
 # A real exec replacement that stops before starting the successor, allowing
 # tests to change the display during the handoff without timing races.
 add_executable(lwm_restart_gate restart_gate.cpp)
+target_link_libraries(lwm_restart_gate PRIVATE lwm_build_options)
 target_compile_definitions(lwm_restart_gate PRIVATE LWM_BINARY_PATH="$<TARGET_FILE:lwm>")
 add_dependencies(lwm_restart_gate lwm)
 
@@ -94,19 +91,18 @@ target_compile_definitions(lwm_tests PRIVATE
     LWM_RESTART_GATE_PATH="$<TARGET_FILE:lwm_restart_gate>"
     LWM_RUNTIME_FAILURE_PROBE_PATH="$<TARGET_FILE:lwm_runtime_failure_probe>"
     LWM_XORG_CONFIG_PATH="${CMAKE_CURRENT_SOURCE_DIR}/xorg-dummy.conf"
-    LWM_NOTIFY_BRIDGE_PATH="${CMAKE_SOURCE_DIR}/scripts/lwm-notify-bridge.sh"
+    LWM_NOTIFY_BRIDGE_PATH="${PROJECT_SOURCE_DIR}/scripts/lwm-notify-bridge.sh"
     LWMCTL_BINARY_PATH="$<TARGET_FILE:lwmctl>"
 )
 add_dependencies(lwm_tests lwm lwmctl lwm_runtime_failure_probe lwm_restart_gate)
 
-target_link_libraries(lwm_tests PRIVATE liblwm Catch2::Catch2WithMain PkgConfig::XCB_XTEST nlohmann_json::nlohmann_json)
-target_include_directories(lwm_tests PRIVATE ${CMAKE_SOURCE_DIR}/src)
-
 include(Catch)
-catch_discover_tests(lwm_logging_tests PROPERTIES SKIP_RETURN_CODE 4 TIMEOUT 60)
-catch_discover_tests(lwm_tests PROPERTIES SKIP_RETURN_CODE 4 TIMEOUT 60)
+foreach(target IN ITEMS lwm_tests lwm_logging_tests)
+    target_link_libraries(${target} PRIVATE liblwm Catch2::Catch2WithMain PkgConfig::XCB_XTEST nlohmann_json::nlohmann_json)
+    catch_discover_tests(${target} DISCOVERY_MODE PRE_TEST PROPERTIES SKIP_RETURN_CODE 4 TIMEOUT 60)
+endforeach()
 
 add_test(NAME uninstall_manifest
     COMMAND "${CMAKE_COMMAND}" "-DTEST_DIR=${CMAKE_CURRENT_BINARY_DIR}"
-            "-DUNINSTALL_SCRIPT=${CMAKE_SOURCE_DIR}/cmake/uninstall.cmake"
+            "-DUNINSTALL_SCRIPT=${PROJECT_SOURCE_DIR}/cmake/uninstall.cmake"
             -P "${CMAKE_CURRENT_SOURCE_DIR}/test_uninstall.cmake")

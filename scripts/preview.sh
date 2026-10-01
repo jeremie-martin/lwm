@@ -8,10 +8,8 @@ CONFIG_DIR="$PROJECT_DIR/config"
 
 # Build the project
 echo "Building LWM..."
-mkdir -p "$BUILD_DIR"
-cd "$BUILD_DIR"
-cmake .. -DCMAKE_BUILD_TYPE=Debug
-make -j$(nproc)
+cmake -S "$PROJECT_DIR" -B "$BUILD_DIR" -DCMAKE_BUILD_TYPE=Debug
+cmake --build "$BUILD_DIR" --parallel "$(nproc)"
 
 # Start Xephyr
 echo "Starting Xephyr..."

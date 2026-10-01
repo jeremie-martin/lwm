@@ -1,60 +1,38 @@
-# LWM - Lightweight Window Manager
-# Root Makefile wrapping CMake
-
+# Convenience commands; CMake owns the build and CTest owns the test inventory.
 BUILD_DIR ?= build
+BUILD_TYPE ?= Release
 TEST_BUILD_TYPE ?= Debug
-CMAKE := cmake
-NPROC := $(shell nproc)
+CMAKE ?= cmake
+NPROC ?= $(shell nproc)
 
-.PHONY: all build release debug install uninstall test clean distclean help
+.PHONY: all build release debug test install uninstall clean distclean help
+all release: build
 
-# Default target
-all: build
-
-# Release build (default)
 build:
-	@mkdir -p $(BUILD_DIR)
-	@$(CMAKE) -S . -B $(BUILD_DIR) -DCMAKE_BUILD_TYPE=Release
-	@$(MAKE) -C $(BUILD_DIR) -j$(NPROC)
+	@$(CMAKE) -S . -B "$(BUILD_DIR)" -DCMAKE_BUILD_TYPE=$(BUILD_TYPE) $(CMAKE_OPTIONS)
+	@$(CMAKE) --build "$(BUILD_DIR)" --config $(BUILD_TYPE) --parallel $(NPROC)
 
-# Debug build
-debug:
-	@mkdir -p $(BUILD_DIR)
-	@$(CMAKE) -S . -B $(BUILD_DIR) -DCMAKE_BUILD_TYPE=Debug
-	@$(MAKE) -C $(BUILD_DIR) -j$(NPROC)
+debug: BUILD_TYPE = Debug
+debug: build
 
-# Build with tests
-test:
-	@mkdir -p $(BUILD_DIR)
-	@$(CMAKE) -S . -B $(BUILD_DIR) -DBUILD_TESTS=ON -DCMAKE_BUILD_TYPE=$(TEST_BUILD_TYPE)
-	@$(MAKE) -C $(BUILD_DIR) -j$(NPROC)
-	@LWM_TEST_REQUIRE_X11=1 $(BUILD_DIR)/tests/lwm_tests
-	@$(BUILD_DIR)/tests/lwm_logging_tests
-	@ctest --test-dir "$(BUILD_DIR)" -R '^uninstall_manifest$$' --output-on-failure
+test: BUILD_TYPE = $(TEST_BUILD_TYPE)
+test: override CMAKE_OPTIONS += -DBUILD_TESTING=ON
+test: build
+	@LWM_TEST_REQUIRE_X11=1 ctest --test-dir "$(BUILD_DIR)" -C $(BUILD_TYPE) --output-on-failure --no-tests=error
 
-# Install to system (requires sudo)
 install: build
-	@$(CMAKE) --install $(BUILD_DIR)
+	@$(CMAKE) --install "$(BUILD_DIR)" --config $(BUILD_TYPE)
 
-# Uninstall from system (requires sudo)
 uninstall:
 	@$(CMAKE) --build "$(BUILD_DIR)" --target uninstall
 
-# Clean build artifacts
-clean:
-	@rm -rf $(BUILD_DIR)
-
-# Alias for clean
-distclean: clean
+clean distclean:
+	@rm -rf "$(BUILD_DIR)"
 
 help:
-	@echo "LWM Build System"
-	@echo ""
-	@echo "Targets:"
-	@echo "  make           Build release binary"
-	@echo "  make debug     Build debug binary"
-	@echo "  make test      Build and run tests"
-	@echo "  make install   Install to /usr/local/bin (use with sudo)"
-	@echo "  make uninstall Remove files recorded by this build (use sudo if needed)"
-	@echo "  make clean     Remove build directory"
-	@echo "  make help      Show this help"
+	@echo "make [build|release]  Release build"
+	@echo "make debug            Debug build with invariant checks"
+	@echo "make test             Debug build and all CTest checks"
+	@echo "make install          Install under CMAKE_INSTALL_PREFIX"
+	@echo "make uninstall        Remove files recorded by this build"
+	@echo "make clean            Remove BUILD_DIR"

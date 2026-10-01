@@ -31,15 +31,14 @@ add_library(liblwm STATIC
 )
 
 target_include_directories(liblwm PUBLIC
-    ${CMAKE_CURRENT_SOURCE_DIR}
     ${CMAKE_CURRENT_SOURCE_DIR}/..
 )
 
 target_link_libraries(liblwm PUBLIC
-    PkgConfig::SYSTEMD
+    lwm_build_options
     PkgConfig::XCB
     quill::quill
-    PRIVATE reflectcpp::reflectcpp
+    PRIVATE PkgConfig::SYSTEMD reflectcpp::reflectcpp
 )
 
 # Keep every logging call available in every build; the owned logger applies runtime gates.

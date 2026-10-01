@@ -14,7 +14,7 @@ make test            # Debug build, required X11 integration, logging, install-m
 For a direct CMake workflow:
 
 ```sh
-cmake -S . -B build -DBUILD_TESTS=ON -DCMAKE_BUILD_TYPE=Debug
+cmake -S . -B build -DBUILD_TESTING=ON -DCMAKE_BUILD_TYPE=Debug
 cmake --build build -j
 LWM_TEST_REQUIRE_X11=1 ctest --test-dir build --output-on-failure
 ```
@@ -30,7 +30,7 @@ Run a focused Catch2 selection before the full suite, for example:
 To check undefined behavior and memory safety, use a separate build:
 
 ```sh
-cmake -S . -B build/sanitize -DBUILD_TESTS=ON -DCMAKE_BUILD_TYPE=Debug -DLWM_SANITIZERS=ON
+cmake -S . -B build/sanitize -DBUILD_TESTING=ON -DCMAKE_BUILD_TYPE=Debug -DLWM_SANITIZERS=ON
 cmake --build build/sanitize -j
 LWM_TEST_REQUIRE_X11=1 ./build/sanitize/tests/lwm_tests
 ./build/sanitize/tests/lwm_logging_tests
@@ -39,6 +39,19 @@ LWM_TEST_REQUIRE_X11=1 ./build/sanitize/tests/lwm_tests
 Validate Release separately with `make test BUILD_DIR=build/release
 TEST_BUILD_TYPE=Release`. The default `make test` explicitly selects Debug so invariant
 checks cannot be silently disabled by an earlier Release configuration.
+
+CMake owns target requirements and dependencies; CTest owns the test inventory and
+timeouts. The Makefile is a convenience wrapper over those commands and works with
+Make or Ninja build directories. Tests are opt-in with standard `BUILD_TESTING`
+(replacing the former `BUILD_TESTS` option). For a multi-configuration generator, pass
+`--config Debug` to the build command and `-C Debug` to CTest.
+
+Dependency revisions are pinned in `FetchContent_Declare`; update the revision and
+version comment together. CMake's `FETCHCONTENT_SOURCE_DIR_<NAME>` override can reuse
+a local checkout without downloading it. C++23 and sanitizer flags are target usage
+requirements for LWM and its test programs; third-party targets keep their own build
+settings. Optimization flags come from the selected toolchain/configuration and can
+be overridden with the usual CMake cache variables.
 
 ## Test fixtures and synchronization
 
@@ -91,8 +104,8 @@ only when its process or output behavior is the contract. Since the CLI hides
 acknowledgements, establish its readiness by receiving a real event; do not assume a
 fixed sleep means it has subscribed. Test children and descriptors must be released even
 when an assertion fails. `TestFd` in `tests/test_resources.hpp` also protects
-descriptors acquired during fixture construction. CTest enforces a 60-second per-case
-timeout; direct Catch runs (including `make test`) rely on bounded fixture operations.
+descriptors acquired during fixture construction. CTest (including `make test`) enforces
+a 60-second per-case timeout; direct Catch runs rely on bounded fixture operations.
 
 ## Display and topology validation
 
