@@ -497,6 +497,15 @@ windows without a saved claim come afterward, in their adoption claim order; sub
 requests outrank all restored claims. Autostart is skipped when a predecessor
 handed over, even if its snapshot was unusable.
 
+The snapshot structs are the serialization schema: reflect-cpp uses native C++26
+reflection and its bundled yyjson backend to encode and decode them directly. Every
+field is required (optional values use explicit nulls), client modes carry explicit
+variant tags, and integers are checked
+before narrowing. LWM validates relationships between decoded records before adoption.
+The CARDINAL property contains a format word, a byte length, and zero-padded JSON bytes;
+the length and padding must match exactly. Output-name bytes are preserved even when
+they are not UTF-8. Schema changes require a format-version bump.
+
 The snapshot is private to one format version. A different format word, a truncated or
 out-of-range record, or trailing data rejects the whole snapshot; windows are then
 adopted as on a fresh start, which keeps their EWMH desktops. There is no cross-version

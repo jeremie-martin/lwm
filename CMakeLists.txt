@@ -1,5 +1,9 @@
-cmake_minimum_required(VERSION 3.23)
+cmake_minimum_required(VERSION 3.30)
 project(lwm VERSION 0.1.0 LANGUAGES CXX)
+
+if(CMAKE_CXX_COMPILER_ID STREQUAL "GNU" AND CMAKE_CXX_COMPILER_VERSION VERSION_LESS 16.2)
+    message(FATAL_ERROR "LWM requires GCC 16.2 or newer for C++26 reflection.")
+endif()
 
 set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
 if(NOT CMAKE_CONFIGURATION_TYPES AND NOT CMAKE_BUILD_TYPE)
@@ -13,7 +17,7 @@ include(GNUInstallDirs)
 
 # Usage requirements for LWM targets, without changing third-party builds.
 add_library(lwm_build_options INTERFACE)
-target_compile_features(lwm_build_options INTERFACE cxx_std_23)
+target_compile_features(lwm_build_options INTERFACE cxx_std_26)
 if(LWM_SANITIZERS)
     target_compile_options(lwm_build_options INTERFACE
         -fsanitize=address,undefined -fno-sanitize-recover=all -fno-omit-frame-pointer)
@@ -42,16 +46,22 @@ FetchContent_Declare(
 )
 set(QUILL_DISABLE_NON_PREFIXED_MACROS ON)
 
-# reflect-cpp 0.25.0 decodes the configuration schema using the same TOML parser.
+# reflect-cpp: pinned C++26 reflection support, TOML and bundled yyjson.
 FetchContent_Declare(
     reflectcpp
     GIT_REPOSITORY https://github.com/getml/reflect-cpp.git
-    GIT_TAG 1327ef1d0b403f1424776da4c47bf0c7a6b0feaa
+    GIT_TAG 320f780d1d485f5d245ad1a9f20e6714c7e43afc
 )
-set(REFLECTCPP_JSON OFF)
+set(REFLECTCPP_USE_CPP26_REFLECTION ON)
+set(REFLECTCPP_USE_STD_EXPECTED ON)
+set(REFLECTCPP_JSON ON)
 set(REFLECTCPP_TOML ON)
 set(REFLECTCPP_USE_VCPKG OFF)
 FetchContent_MakeAvailable(tomlplusplus quill reflectcpp)
+target_compile_features(reflectcpp PUBLIC cxx_std_26)
+target_compile_options(reflectcpp PUBLIC
+    "$<$<CXX_COMPILER_ID:GNU>:-freflection>"
+    "$<$<CXX_COMPILER_ID:Clang>:-freflection-latest>")
 
 add_subdirectory(src/lwm)
 add_subdirectory(src/app)

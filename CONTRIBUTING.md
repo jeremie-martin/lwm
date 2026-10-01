@@ -48,10 +48,11 @@ Make or Ninja build directories. Tests are opt-in with standard `BUILD_TESTING`
 
 Dependency revisions are pinned in `FetchContent_Declare`; update the revision and
 version comment together. CMake's `FETCHCONTENT_SOURCE_DIR_<NAME>` override can reuse
-a local checkout without downloading it. C++23 and sanitizer flags are target usage
-requirements for LWM and its test programs; third-party targets keep their own build
-settings. Optimization flags come from the selected toolchain/configuration and can
-be overridden with the usual CMake cache variables.
+a local checkout without downloading it. C++26 and sanitizer flags are target usage
+requirements for LWM and its test programs. reflect-cpp uses native reflection and
+`std::expected`; its reflection flag propagates to consumers. Other third-party
+targets keep their own build settings. Optimization flags come from the selected
+toolchain/configuration and can be overridden with the usual CMake cache variables.
 
 ## Test fixtures and synchronization
 
@@ -75,7 +76,7 @@ an internal data structure. IPC transport tests use real Unix sockets, including
 writes and stalled clients. The subscription-order test fills the accepted socket through
 the production poll interface until even a one-byte send returns `EAGAIN`, then checks
 the real acknowledgement and events together after draining those disposable bytes.
-IPC JSON is checked with the test-only nlohmann/json parser, not a local parser or
+IPC and restart JSON are checked with the test-only nlohmann/json parser, not a local parser or
 production serialization helpers.
 
 For negative X-event assertions, establish that the WM processed the request before

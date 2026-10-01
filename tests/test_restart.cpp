@@ -2,12 +2,33 @@
 #include "lwm/core/state.hpp"
 #include "state_fixture.hpp"
 #include <catch2/catch_test_macros.hpp>
+#include <cstring>
+#include <nlohmann/json.hpp>
 
 using namespace lwm;
 using test::add;
 using test::add_floating;
 
 namespace {
+
+// The private handoff envelope is format, byte length, then zero-padded JSON.
+std::vector<uint32_t> pack_json(std::string const& text)
+{
+    std::vector<uint32_t> words(2 + (text.size() + 3) / 4);
+    words[0] = 11;
+    words[1] = static_cast<uint32_t>(text.size());
+    std::memcpy(words.data() + 2, text.data(), text.size());
+    return words;
+}
+
+nlohmann::json unpack_json(std::vector<uint32_t> const& words)
+{
+    REQUIRE(words.size() >= 2);
+    REQUIRE(words[0] == 11);
+    REQUIRE(words[1] <= (words.size() - 2) * 4);
+    auto data = reinterpret_cast<char const*>(words.data() + 2);
+    return nlohmann::json::parse(data, data + words[1]);
+}
 
 restart::Snapshot sample()
 {
@@ -23,17 +44,24 @@ restart::Snapshot sample()
          { { SplitAddress{ 0 }, 0.25 }, { SplitAddress{ 40 }, 0.75 } },
          { 0x100, 0x300 },
          0x300 },
-         { } }                                       },
-        { "M1", { 1000, 0, 1000, 800 }, 0, 0, { { } } }
+         {} }                                       },
+        { "M1", { 1000, 0, 1000, 800 }, 0, 0, { {} } }
     };
-    snapshot.clients = { { 0x100, 0, 0, TiledMode{ Geometry{ -5, -6, 70, 80 } }, { true, false, std::nullopt, LayerHint::Below }, 3, true, false },
-                         { 0x200, 1, 0, FloatingMode{ { -32768, 32767, 65535, 1 } }, { }, 0, false, true } };
+    snapshot.clients = {
+        { 0x100,
+         0, 0,
+         TiledMode{ Geometry{ -5, -6, 70, 80 } },
+         { true, false, std::nullopt, LayerHint::Below },
+         3,  true,
+         false                                                                            },
+        { 0x200, 1, 0, FloatingMode{ { -32768, 32767, 65535, 1 } },     {}, 0, false, true }
+    };
     snapshot.clients[1].mru_order = (uint64_t{ 1 } << 40) + 7;
     std::get<FloatingMode>(snapshot.clients[1].mode).tile_slot = TileSlot{ 7, "output with spaces", 1 };
     snapshot.named_scratchpads = {
         { "tëxt with spaces",        0x200 },
-        {                 "",        0x100 },
-        {          "pending", std::nullopt }
+        {                  "",        0x100 },
+        {           "pending", std::nullopt }
     };
     snapshot.clients[1].fullscreen_monitors = FullscreenMonitors{ 0, 1, 0, 1 };
     snapshot.pool = { 0x300 };
@@ -50,13 +78,13 @@ TEST_CASE("Restart snapshots round-trip every field", "[restart][codec]")
     auto words = restart::encode(snapshot);
     REQUIRE(words.front() == restart::format);
     CHECK(restart::decode(words) == snapshot);
-    CHECK(restart::decode(restart::encode({ })) == restart::Snapshot{ });
+    CHECK(restart::decode(restart::encode({})) == restart::Snapshot{});
 }
 
 TEST_CASE("Restart decoding rejects other formats and malformed records", "[restart][codec]")
 {
     auto words = restart::encode(sample());
-    CHECK_FALSE(restart::decode({ }));
+    CHECK_FALSE(restart::decode({}));
     auto other = words;
     for (auto format : { restart::format - 1, restart::format + 1 })
     {
@@ -129,12 +157,15 @@ TEST_CASE("Restored tile slots are admitted only while the original workspace ex
     add(target, 3);
     Client client;
     client.id = 2;
-    client.mode = FloatingMode{ std::get<FloatingMode>(record.mode).geometry, std::get<FloatingMode>(record.mode).tile_slot };
+    client.mode =
+        FloatingMode{ std::get<FloatingMode>(record.mode).geometry, std::get<FloatingMode>(record.mode).tile_slot };
     target.insert(client);
     target.floating(2, false);
     bool valid = target.monitors()[0].name == "M0" && std::get<FloatingMode>(record.mode).tile_slot->workspace == 0;
-    CHECK(target.monitors()[0].current().windows
-          == (valid ? std::vector<xcb_window_t>{ 1, 2, 3 } : std::vector<xcb_window_t>{ 1, 3, 2 }));
+    CHECK(
+        target.monitors()[0].current().windows
+        == (valid ? std::vector<xcb_window_t>{ 1, 2, 3 } : std::vector<xcb_window_t>{ 1, 3, 2 })
+    );
 }
 
 TEST_CASE("State snapshots restore workspaces, order, recency and scratchpads", "[restart][state]")
@@ -164,7 +195,12 @@ TEST_CASE("State snapshots restore workspaces, order, recency and scratchpads", 
     target.restore_workspaces(*snapshot);
     for (xcb_window_t id : { 3, 2, 1 }) add(target, id);
     auto const& saved = *snapshot->find(4);
-    add(target, 4, { .monitor = saved.monitor, .workspace = saved.workspace, .floating = true, .geometry = std::get<FloatingMode>(saved.mode).geometry });
+    add(target,
+        4,
+        { .monitor = saved.monitor,
+          .workspace = saved.workspace,
+          .floating = true,
+          .geometry = std::get<FloatingMode>(saved.mode).geometry });
     target.restore_membership(*snapshot);
 
     auto const& workspace = target.monitors()[0].workspaces[0];
@@ -176,34 +212,28 @@ TEST_CASE("State snapshots restore workspaces, order, recency and scratchpads", 
     CHECK(target.monitors()[1].previous_workspace == 0);
     CHECK(target.scratchpad_claim(2)->name == "term");
     CHECK(target.scratchpad_pool() == std::vector<xcb_window_t>{ 3 });
-    for (auto const& [id, client] : source.clients())
-        CHECK(target.require(id).mru_order == client.mru_order);
+    for (auto const& [id, client] : source.clients()) CHECK(target.require(id).mru_order == client.mru_order);
     CHECK(saved.preferences.skip_pager == true);
 }
 
 TEST_CASE("Restart claim order is explicit in the wire format", "[restart][codec]")
 {
-    std::vector<uint32_t> words{
-        10, 0, 0,   0,  1, // format, focus, active, desktop, monitor count
-        1, 77,             // one-byte output name "M"
-        0, 0,  100, 80,    // output geometry
-        0, 0,  1,          // current, previous, workspace count
-        0, 0,  0,   0,     // master-stack, no focus, ratios, tiles
-        1,                 // client count
-        7, 0, 0,           // id, never focused (64 bit)
-        0, 0, 0,           // monitor, workspace, tiled
-        0,                 // absent remembered floating geometry
-        0, 0,  0,   0,     // unset preferences
-        0, 0,  0,          // urgency, borderless, pinned
-        0,                 // absent fullscreen monitor hint
-        1, 7,              // registration order
-        0, 0,              // named slots, pool
-        1, 7               // oldest-to-newest fullscreen claims
-    };
-    auto decoded = restart::decode(words);
+    // Independent literal input: no production encoder constructs this fixture.
+    auto document = nlohmann::json::parse(R"({
+        "focused_monitor": 0, "active": 0, "showing_desktop": false,
+        "monitors": [{"name": "M", "geometry": {"x": 0, "y": 0, "width": 100, "height": 80},
+            "current": 0, "previous": 0, "workspaces": [{"strategy": "MasterStack", "ratios": [],
+            "tiles": [], "preferred_tile": 0}]}],
+        "clients": [{"window": 7, "monitor": 0, "workspace": 0,
+            "mode": {"TiledMode": {"floating": null}},
+            "preferences": {"floating": null, "skip_taskbar": null, "skip_pager": null, "layer": null},
+            "urgency": 0, "borderless": false, "desktop_pinned": false, "fullscreen_monitors": null, "mru_order": 0}],
+        "registration_order": [7], "named_scratchpads": [], "pool": [], "fullscreen_claims": [7]
+    })");
+    auto decoded = restart::decode(pack_json(document.dump()));
     REQUIRE(decoded);
     CHECK(decoded->fullscreen_claims == std::vector<xcb_window_t>{ 7 });
-    CHECK(restart::encode(*decoded) == words);
+    CHECK(unpack_json(restart::encode(*decoded)) == document);
 }
 
 TEST_CASE("Restart restores claim history independently of focus and adoption order", "[restart][state]")
@@ -385,7 +415,7 @@ TEST_CASE("Unchanged restart topology preserves intentional floating geometry an
             .floating = true,
             .geometry = { -100, -100, 1500, 1000 }
     });
-    source.fullscreen_monitors(1, FullscreenMonitors{ });
+    source.fullscreen_monitors(1, FullscreenMonitors{});
     auto snapshot = source.snapshot();
     auto before = snapshot.clients;
     snapshot.rebind(test::state().monitors());
@@ -475,4 +505,96 @@ TEST_CASE("Admission preserves shared registration ranks independently of scan o
     add(target, 7);
     CHECK(target.require(7).order == 6);
     CHECK(target.snapshot().registration_order == std::vector<xcb_window_t>{ 2, 3, 4, 5, 6, 7 });
+}
+
+TEST_CASE("Restart decoder rejects malformed typed values before narrowing or defaulting", "[restart][codec]")
+{
+    auto original = unpack_json(restart::encode(sample()));
+    REQUIRE(restart::decode(pack_json(original.dump())) == sample());
+    for (auto const& [path, value] : std::vector<std::pair<std::string, nlohmann::json>>{
+             {                 "/clients/0/window",                                uint64_t{ 1 } << 32 },
+             {                "/clients/0/monitor",                                                 -1 },
+             {              "/clients/0/mru_order",                                                 -1 },
+             {                "/clients/0/urgency",                                                256 },
+             {                "/clients/0/urgency",                                                  4 },
+             {             "/clients/0/borderless",                                                  1 },
+             {            "/monitors/0/geometry/x",                                              32768 },
+             {            "/monitors/0/geometry/y",                                             -32769 },
+             {        "/monitors/0/geometry/width",                                              65536 },
+             {       "/monitors/0/geometry/height",                                                 -1 },
+             {        "/monitors/0/geometry/width",                                                1.0 },
+             { "/monitors/0/workspaces/0/strategy",                                          "Unknown" },
+             {      "/clients/0/preferences/layer",                                          "Unknown" },
+             {                   "/clients/0/mode",                           nlohmann::json::object() },
+             {                   "/clients/0/mode", { { "UnknownMode", { { "floating", nullptr } } } } },
+             {                         "/monitors",                                        4294967295u },
+    })
+    {
+        CAPTURE(path, value);
+        auto damaged = original;
+        damaged[nlohmann::json::json_pointer(path)] = value;
+        CHECK_FALSE(restart::decode(pack_json(damaged.dump())));
+    }
+    SECTION("Every incomplete JSON payload is rejected with an accurate envelope")
+    {
+        auto payload = original.dump();
+        for (size_t size = 0; size < payload.size(); ++size)
+        {
+            CAPTURE(size);
+            CHECK_FALSE(restart::decode(pack_json(payload.substr(0, size))));
+        }
+    }
+    SECTION("Missing optional fields are damage, not defaults")
+    {
+        original["clients"][0]["preferences"].erase("floating");
+        CHECK_FALSE(restart::decode(pack_json(original.dump())));
+    }
+    SECTION("Unknown nested fields are rejected")
+    {
+        original["clients"][0]["preferences"]["unknown"] = true;
+        CHECK_FALSE(restart::decode(pack_json(original.dump())));
+    }
+    SECTION("Variant tag must match its payload")
+    {
+        original["clients"][0]["mode"] = {
+            { "FloatingMode", { { "floating", nullptr } } }
+        };
+        CHECK_FALSE(restart::decode(pack_json(original.dump())));
+    }
+    SECTION("A valid mode cannot hide an extra tag")
+    {
+        original["clients"][0]["mode"]["UnknownMode"] = nullptr;
+        CHECK_FALSE(restart::decode(pack_json(original.dump())));
+    }
+    SECTION("Two valid mode tags cannot choose one by their order")
+    {
+        original["clients"][0]["mode"]["FloatingMode"] = original["clients"][1]["mode"]["FloatingMode"];
+        CHECK_FALSE(restart::decode(pack_json(original.dump())));
+    }
+    SECTION("Duplicate fields cannot overwrite decoded values")
+    {
+        auto text = original.dump();
+        text.insert(1, "\"focused_monitor\":0,");
+        CHECK_FALSE(restart::decode(pack_json(text)));
+    }
+    SECTION("Length and padding cannot hide trailing data")
+    {
+        auto text = original.dump();
+        while (text.size() % 4 == 0) text += ' ';
+        auto words = pack_json(text);
+        reinterpret_cast<char*>(words.data() + 2)[text.size()] = 'x';
+        CHECK_FALSE(restart::decode(words));
+        words = pack_json(text);
+        words[1] = UINT32_MAX;
+        CHECK_FALSE(restart::decode(words));
+        CHECK_FALSE(restart::decode(pack_json(text + "{}")));
+    }
+}
+
+TEST_CASE("Restart preserves full-width recency and opaque output names", "[restart][codec]")
+{
+    auto source = sample();
+    source.clients[0].mru_order = UINT64_MAX - 1;
+    source.monitors[0].name = std::string("output\0", 7) + char(0xff);
+    CHECK(restart::decode(restart::encode(source)) == source);
 }

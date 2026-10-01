@@ -1,144 +1,118 @@
 #include "restart.hpp"
 #include "policy.hpp"
-#include <bit>
 #include <cstring>
+#include <memory>
+#include <rfl/AddTagsToVariants.hpp>
+#include <rfl/NoExtraFields.hpp>
+#include <rfl/NoOptionals.hpp>
+#include <rfl/json/write.hpp>
 #include <unordered_set>
+#include <utility>
 
 namespace lwm::restart {
 namespace {
 
-class Writer
+// Tighten the library reader at the handoff boundary: no ambiguous objects
+// or variant tags, and no integer narrowing (including signed X11 coordinates).
+struct Reader : rfl::json::Reader
 {
-public:
-    void word(uint32_t value) { words_.push_back(value); }
-    void flag(bool value) { word(value ? 1 : 0); }
-    void count(size_t value) { word(static_cast<uint32_t>(value)); }
-    void geometry(Geometry g)
+    rfl::Result<InputObjectType> to_object(InputVarType value) const noexcept
     {
-        word(static_cast<uint16_t>(g.x));
-        word(static_cast<uint16_t>(g.y));
-        word(g.width);
-        word(g.height);
-    }
-    void optional_geometry(std::optional<Geometry> const& g)
-    {
-        flag(g.has_value());
-        if (g)
-            geometry(*g);
-    }
-    // 0 = unset, 1 = false, 2 = true.
-    void optional_bool(std::optional<bool> value) { word(value ? (*value ? 2 : 1) : 0); }
-    void optional_layer(std::optional<LayerHint> value) { word(value ? static_cast<uint32_t>(*value) + 1 : 0); }
-    void ratio(double value)
-    {
-        auto bits = std::bit_cast<uint64_t>(value);
-        word(static_cast<uint32_t>(bits));
-        word(static_cast<uint32_t>(bits >> 32));
-    }
-    void text(std::string const& value)
-    {
-        count(value.size());
-        for (size_t i = 0; i < value.size(); i += 4)
+        auto object = rfl::json::Reader::to_object(value);
+        if (!object)
+            return object;
+        std::unordered_set<std::string_view> names;
+        size_t index, count;
+        yyjson_val *key, *field;
+        yyjson_obj_foreach(value.val_, index, count, key, field)
         {
-            uint32_t packed = 0;
-            std::memcpy(&packed, value.data() + i, std::min<size_t>(4, value.size() - i));
-            word(packed);
+            if (!names.emplace(yyjson_get_str(key), yyjson_get_len(key)).second)
+                return rfl::error("duplicate restart field");
         }
+        return object;
     }
-    std::vector<uint32_t> take() { return std::move(words_); }
 
-private:
-    std::vector<uint32_t> words_;
+    using rfl::json::Reader::read_object;
+    template <typename Processors, typename... Fields>
+    std::optional<rfl::Error> read_object(
+        rfl::parsing::FieldVariantReader<Reader, rfl::json::Writer, Processors, Fields...> const& reader,
+        InputObjectType object
+    ) const noexcept
+    {
+        if (yyjson_obj_size(object.val_) != 1)
+            return rfl::Error("restart mode must have exactly one tag");
+        return rfl::json::Reader::read_object(reader, object);
+    }
+
+    template <typename T> rfl::Result<T> to_basic_type(InputVarType value) const noexcept
+    {
+        if constexpr (std::is_integral_v<T> && !std::is_same_v<T, bool>)
+        {
+            if (yyjson_is_uint(value.val_) && std::in_range<T>(yyjson_get_uint(value.val_)))
+                return static_cast<T>(yyjson_get_uint(value.val_));
+            if (yyjson_is_sint(value.val_) && std::in_range<T>(yyjson_get_sint(value.val_)))
+                return static_cast<T>(yyjson_get_sint(value.val_));
+            return rfl::error("restart integer is out of range or has the wrong type");
+        }
+        else
+            return rfl::json::Reader::to_basic_type<T>(value);
+    }
 };
 
-// Every read is bounds-checked; a failed read poisons the reader so decoding
-// stops without partially trusting later fields.
-class Reader
+using Wire = rfl::Processors<rfl::NoExtraFields, rfl::NoOptionals, rfl::AddTagsToVariants>;
+
+// Structural validity belongs to the decoder. Relationships between records
+// belong here, and must hold before any part of the snapshot is adopted.
+bool valid(Snapshot const& snapshot)
 {
-public:
-    explicit Reader(std::span<uint32_t const> words)
-        : words_(words)
-    { }
-
-    bool ok() const { return ok_; }
-    bool done() const { return ok_ && words_.empty(); }
-
-    uint32_t word()
+    std::unordered_set<std::string> outputs;
+    for (auto const& monitor : snapshot.monitors)
     {
-        if (words_.empty())
-        {
-            ok_ = false;
-            return 0;
-        }
-        uint32_t value = words_.front();
-        words_ = words_.subspan(1);
-        return value;
+        if (monitor.name.empty() || !outputs.insert(monitor.name).second || monitor.workspaces.empty()
+            || monitor.current >= monitor.workspaces.size() || monitor.previous >= monitor.workspaces.size())
+            return false;
+        for (auto const& workspace : monitor.workspaces)
+            for (auto const& [address, ratio] : workspace.ratios)
+                if (!(ratio > 0 && ratio < 1))
+                    return false;
     }
-    uint32_t bounded(uint32_t max)
+    if (!snapshot.monitors.empty() && snapshot.focused_monitor >= snapshot.monitors.size())
+        return false;
+    std::unordered_set<uint64_t> recencies;
+    std::unordered_set<xcb_window_t> registered;
+    for (auto window : snapshot.registration_order)
+        if (window == XCB_NONE || !registered.insert(window).second)
+            return false;
+    for (auto const& client : snapshot.clients)
     {
-        uint32_t value = word();
-        if (value > max)
-            ok_ = false;
-        return value;
+        if (client.mru_order == UINT64_MAX || (client.mru_order && !recencies.insert(client.mru_order).second)
+            || client.monitor >= snapshot.monitors.size()
+            || client.workspace >= snapshot.monitors[client.monitor].workspaces.size()
+            || client.urgency
+                > (static_cast<uint8_t>(UrgencySource::WmInitiated) | static_cast<uint8_t>(UrgencySource::App))
+            || !registered.erase(client.window))
+            return false;
+        if (auto const* floating = std::get_if<FloatingMode>(&client.mode);
+            floating && floating->tile_slot && floating->tile_slot->output.empty())
+            return false;
     }
-    bool flag() { return bounded(1) != 0; }
-    // A count cannot exceed the remaining words, which bounds every allocation.
-    size_t count(size_t words_per_item = 1)
+    std::unordered_set<std::string> names;
+    std::unordered_set<xcb_window_t> claimed;
+    for (auto const& named : snapshot.named_scratchpads)
     {
-        uint32_t value = word();
-        if (words_per_item && value > words_.size() / words_per_item)
-            ok_ = false;
-        return ok_ ? value : 0;
+        if (!names.insert(named.name).second)
+            return false;
+        if (named.window
+            && (*named.window == XCB_NONE || !claimed.insert(*named.window).second || !snapshot.find(*named.window)))
+            return false;
     }
-    Geometry geometry()
-    {
-        uint32_t x = bounded(0xFFFF), y = bounded(0xFFFF), width = bounded(0xFFFF), height = bounded(0xFFFF);
-        return { static_cast<int16_t>(static_cast<uint16_t>(x)),
-                 static_cast<int16_t>(static_cast<uint16_t>(y)),
-                 static_cast<uint16_t>(width),
-                 static_cast<uint16_t>(height) };
-    }
-    std::optional<Geometry> optional_geometry()
-    {
-        return flag() ? std::optional{ geometry() } : std::nullopt;
-    }
-    std::optional<bool> optional_bool()
-    {
-        auto value = bounded(2);
-        return value ? std::optional{ value == 2 } : std::nullopt;
-    }
-    std::optional<LayerHint> optional_layer()
-    {
-        auto value = bounded(static_cast<uint32_t>(LayerHint::Below) + 1);
-        return value ? std::optional{ static_cast<LayerHint>(value - 1) } : std::nullopt;
-    }
-    double ratio()
-    {
-        uint64_t low = word();
-        uint64_t high = word();
-        return std::bit_cast<double>(low | (high << 32));
-    }
-    std::string text()
-    {
-        size_t size = word();
-        if (size > words_.size() * 4)
-        {
-            ok_ = false;
-            return { };
-        }
-        std::string value(size, '\0');
-        for (size_t i = 0; i < size; i += 4)
-        {
-            uint32_t packed = word();
-            std::memcpy(value.data() + i, &packed, std::min<size_t>(4, size - i));
-        }
-        return value;
-    }
-
-private:
-    std::span<uint32_t const> words_;
-    bool ok_ = true;
-};
+    std::unordered_set<xcb_window_t> candidates;
+    for (auto const& client : snapshot.clients) candidates.insert(client.window);
+    for (auto window : snapshot.fullscreen_claims)
+        if (!candidates.erase(window))
+            return false;
+    return true;
+}
 
 } // namespace
 
@@ -152,11 +126,7 @@ ClientRecord const* Snapshot::find(xcb_window_t window) const
 
 MonitorRecord capture_monitor(Monitor const& monitor)
 {
-    MonitorRecord record{ monitor.name,
-                          monitor.geometry(),
-                          monitor.current_workspace,
-                          monitor.previous_workspace,
-                          { } };
+    MonitorRecord record{ monitor.name, monitor.geometry(), monitor.current_workspace, monitor.previous_workspace, {} };
     for (auto const& workspace : monitor.workspaces)
         record.workspaces.push_back(
             { workspace.layout_strategy, workspace.split_ratios, workspace.windows, workspace.preferred_tile }
@@ -208,218 +178,37 @@ void Snapshot::rebind(std::span<Monitor const> discovered)
 
 std::vector<uint32_t> encode(Snapshot const& snapshot)
 {
-    Writer out;
-    out.word(format);
-    out.count(snapshot.focused_monitor);
-    out.word(snapshot.active);
-    out.flag(snapshot.showing_desktop);
-    out.count(snapshot.monitors.size());
-    for (auto const& monitor : snapshot.monitors)
-    {
-        out.text(monitor.name);
-        out.geometry(monitor.geometry);
-        out.count(monitor.current);
-        out.count(monitor.previous);
-        out.count(monitor.workspaces.size());
-        for (auto const& workspace : monitor.workspaces)
-        {
-            out.word(static_cast<uint32_t>(workspace.strategy));
-            out.word(workspace.preferred_tile);
-            out.count(workspace.ratios.size());
-            for (auto const& [address, ratio] : workspace.ratios)
-            {
-                out.word(address.index);
-                out.ratio(ratio);
-            }
-            out.count(workspace.tiles.size());
-            for (auto window : workspace.tiles) out.word(window);
-        }
-    }
-    out.count(snapshot.clients.size());
-    for (auto const& client : snapshot.clients)
-    {
-        out.word(client.window);
-        out.word(static_cast<uint32_t>(client.mru_order));
-        out.word(static_cast<uint32_t>(client.mru_order >> 32));
-        out.count(client.monitor);
-        out.count(client.workspace);
-        auto const* floating = std::get_if<FloatingMode>(&client.mode);
-        out.flag(floating != nullptr);
-        if (floating)
-        {
-            out.geometry(floating->geometry);
-            out.flag(floating->tile_slot.has_value());
-            if (auto const& slot = floating->tile_slot)
-            {
-                out.count(slot->index);
-                out.text(slot->output);
-                out.count(slot->workspace);
-            }
-        }
-        else
-            out.optional_geometry(std::get<TiledMode>(client.mode).floating);
-        out.optional_bool(client.preferences.floating);
-        out.optional_bool(client.preferences.skip_taskbar);
-        out.optional_bool(client.preferences.skip_pager);
-        out.optional_layer(client.preferences.layer);
-        out.word(client.urgency);
-        out.flag(client.borderless);
-        out.flag(client.desktop_pinned);
-        out.flag(client.fullscreen_monitors.has_value());
-        if (auto const& m = client.fullscreen_monitors)
-        {
-            out.word(m->top);
-            out.word(m->bottom);
-            out.word(m->left);
-            out.word(m->right);
-        }
-    }
-    out.count(snapshot.registration_order.size());
-    for (auto window : snapshot.registration_order) out.word(window);
-    out.count(snapshot.named_scratchpads.size());
-    for (auto const& named : snapshot.named_scratchpads)
-    {
-        out.text(named.name);
-        out.flag(named.window.has_value());
-        if (named.window)
-            out.word(*named.window);
-    }
-    out.count(snapshot.pool.size());
-    for (auto window : snapshot.pool) out.word(window);
-    out.count(snapshot.fullscreen_claims.size());
-    for (auto window : snapshot.fullscreen_claims) out.word(window);
-    return out.take();
+    // X11 output names are byte strings. Preserve them even if they are not UTF-8.
+    auto payload = rfl::json::write<Wire>(snapshot, YYJSON_WRITE_ALLOW_INVALID_UNICODE);
+    if (payload.size() > UINT32_MAX)
+        throw std::length_error("Restart snapshot is too large");
+    std::vector<uint32_t> words(2 + (payload.size() + 3) / 4);
+    words[0] = format;
+    words[1] = static_cast<uint32_t>(payload.size());
+    std::memcpy(words.data() + 2, payload.data(), payload.size());
+    return words;
 }
 
 std::optional<Snapshot> decode(std::span<uint32_t const> words)
 {
-    Reader in(words);
-    if (in.word() != format || !in.ok())
+    if (words.size() < 2 || words[0] != format || words.size() != 2 + (size_t{ words[1] } + 3) / 4)
         return std::nullopt;
-    Snapshot snapshot;
-    snapshot.focused_monitor = in.word();
-    snapshot.active = in.word();
-    snapshot.showing_desktop = in.flag();
-    snapshot.monitors.resize(in.count(8));
-    std::unordered_set<std::string> outputs;
-    for (auto& monitor : snapshot.monitors)
-    {
-        monitor.name = in.text();
-        if (monitor.name.empty() || !outputs.insert(monitor.name).second)
-            return std::nullopt;
-        monitor.geometry = in.geometry();
-        monitor.current = in.word();
-        monitor.previous = in.word();
-        monitor.workspaces.resize(in.count(4));
-        if (monitor.workspaces.empty() || monitor.current >= monitor.workspaces.size()
-            || monitor.previous >= monitor.workspaces.size())
-            return std::nullopt;
-        for (auto& workspace : monitor.workspaces)
-        {
-            workspace.strategy = static_cast<LayoutStrategy>(in.bounded(static_cast<uint32_t>(LayoutStrategy::Monocle)));
-            workspace.preferred_tile = in.word();
-            size_t ratios = in.count(3);
-            for (size_t i = 0; i < ratios; ++i)
-            {
-                SplitAddress address{ in.word() };
-                double ratio = in.ratio();
-                if (!(ratio > 0 && ratio < 1))
-                    return std::nullopt;
-                workspace.ratios[address] = ratio;
-            }
-            workspace.tiles.resize(in.count());
-            for (auto& window : workspace.tiles) window = in.word();
-        }
-    }
-    if (!snapshot.monitors.empty() && snapshot.focused_monitor >= snapshot.monitors.size())
+    auto bytes = std::string_view(reinterpret_cast<char const*>(words.data() + 2), (words.size() - 2) * 4);
+    if (bytes.substr(words[1]).find_first_not_of('\0') != bytes.npos)
         return std::nullopt;
-    snapshot.clients.resize(in.count(15));
-    std::unordered_set<uint64_t> recencies;
-    for (auto& client : snapshot.clients)
-    {
-        client.window = in.word();
-        client.mru_order = in.word();
-        client.mru_order |= static_cast<uint64_t>(in.word()) << 32;
-        if (client.mru_order == UINT64_MAX || (client.mru_order && !recencies.insert(client.mru_order).second))
-            return std::nullopt;
-        client.monitor = in.word();
-        client.workspace = in.word();
-        if (client.monitor >= snapshot.monitors.size()
-            || client.workspace >= snapshot.monitors[client.monitor].workspaces.size())
-            return std::nullopt;
-        if (in.flag())
-        {
-            FloatingMode mode{ in.geometry() };
-            if (in.flag())
-            {
-                TileSlot slot{ in.word(), in.text(), in.word() };
-                if (slot.output.empty())
-                    return std::nullopt;
-                mode.tile_slot = std::move(slot);
-            }
-            client.mode = std::move(mode);
-        }
-        else
-            client.mode = TiledMode{ in.optional_geometry() };
-        client.preferences.floating = in.optional_bool();
-        client.preferences.skip_taskbar = in.optional_bool();
-        client.preferences.skip_pager = in.optional_bool();
-        client.preferences.layer = in.optional_layer();
-        client.urgency = static_cast<uint8_t>(
-            in.bounded(static_cast<uint32_t>(UrgencySource::WmInitiated) | static_cast<uint32_t>(UrgencySource::App))
-        );
-        client.borderless = in.flag();
-        client.desktop_pinned = in.flag();
-        if (in.flag())
-            client.fullscreen_monitors = FullscreenMonitors{ in.word(), in.word(), in.word(), in.word() };
-    }
-    snapshot.registration_order.resize(in.count());
-    std::unordered_set<xcb_window_t> registered;
-    for (auto& window : snapshot.registration_order)
-    {
-        window = in.word();
-        if (window == XCB_NONE || !registered.insert(window).second)
-            return std::nullopt;
-    }
-    // Every client has one registration. Remaining IDs belong to fixtures,
-    // whose role and protocol properties are read again during adoption.
-    for (auto const& client : snapshot.clients)
-        if (!registered.erase(client.window))
-            return std::nullopt;
-    snapshot.named_scratchpads.resize(in.count(2));
-    std::unordered_set<std::string> names;
-    std::unordered_set<xcb_window_t> claimed;
-    for (auto& named : snapshot.named_scratchpads)
-    {
-        named.name = in.text();
-        if (!names.insert(named.name).second)
-            return std::nullopt;
-        if (in.flag())
-        {
-            auto window = in.word();
-            if (window == XCB_NONE || !claimed.insert(window).second || !snapshot.find(window))
-                return std::nullopt;
-            named.window = window;
-        }
-    }
-    snapshot.pool.resize(in.count());
-    for (auto& window : snapshot.pool) window = in.word();
-    snapshot.fullscreen_claims.resize(in.count());
-    // Claims name distinct saved clients. Missing live clients are handled at
-    // adoption, not by trusting dangling or duplicate IDs in the wire record.
-    std::unordered_set<xcb_window_t> candidates;
-    for (auto const& client : snapshot.clients)
-        if (client.window != XCB_NONE)
-            candidates.insert(client.window);
-    for (auto& window : snapshot.fullscreen_claims)
-    {
-        window = in.word();
-        if (!candidates.erase(window))
-            return std::nullopt;
-    }
-    if (!in.done())
+    std::unique_ptr<yyjson_doc, decltype(&yyjson_doc_free)> document(
+        yyjson_read(bytes.data(), words[1], YYJSON_READ_ALLOW_INVALID_UNICODE),
+        &yyjson_doc_free
+    );
+    if (!document)
         return std::nullopt;
-    return snapshot;
+    auto snapshot = rfl::parsing::Parser<Reader, rfl::json::Writer, Snapshot, Wire>::read(
+        Reader{},
+        Reader::InputVarType(yyjson_doc_get_root(document.get()))
+    );
+    if (!snapshot || !valid(*snapshot))
+        return std::nullopt;
+    return std::move(*snapshot);
 }
 
 } // namespace lwm::restart

@@ -11,7 +11,7 @@
 // as on a fresh start.
 namespace lwm::restart {
 
-inline constexpr uint32_t format = 10;
+inline constexpr uint32_t format = 11; // Bump when the snapshot schema changes.
 
 struct ClientRecord
 {

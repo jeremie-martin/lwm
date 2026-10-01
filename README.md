@@ -1,6 +1,6 @@
 # LWM
 
-LWM is a small tiling window manager for X11, written in C++23. It provides master-stack
+LWM is a small tiling window manager for X11, written in C++26. It provides master-stack
 and monocle layouts, floating windows, per-monitor workspaces, focus-follows-mouse,
 scratchpads, RANDR hotplug handling, and a local IPC client named `lwmctl`.
 
@@ -11,8 +11,8 @@ programs, normally from `[autostart]` in the LWM configuration or from your X se
 
 Required tools and libraries:
 
-- CMake 3.23 or newer
-- Git and a C++23 compiler
+- CMake 3.30 or newer
+- Git and GCC 16.2 or newer (C++26 reflection); ordinary Clang releases are not sufficient
 - `pkg-config` and the libsystemd development library
 - X11/XCB modules `xcb`, `xcb-keysyms`, `xcb-randr`, `xcb-ewmh`, `xcb-icccm`,
   `xcb-sync`, and `x11`
@@ -20,6 +20,9 @@ Required tools and libraries:
 
 CMake downloads pinned toml++, reflect-cpp, and Quill sources on the first configure;
 test builds also download pinned Catch2 and nlohmann/json sources.
+reflect-cpp uses native C++26 reflection (`-freflection` on GCC). An experimental
+Clang build implementing P2996 can use `-freflection-latest`, but GCC is the tested
+toolchain. Distribution packages must meet these compiler and CMake versions.
 
 Arch Linux:
 
