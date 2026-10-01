@@ -291,7 +291,8 @@ desktop deliberately leaves focus cleared.
 Fallback selection prefers the workspace's remembered focus, its bounded focus history,
 reverse tiled order, sticky tiled clients on the monitor, then visible floating clients
 by recency. `core/focus` reads `State` directly and derives fullscreen visibility once per
-selection, so candidate eligibility checks are constant-time and allocate no candidate
+selection and passes it to `State::focusable()`, so selection and active-focus repair
+share one eligibility policy. Candidate checks are constant-time and allocate no candidate
 lists.
 
 Cycling retains only window IDs in descending recency order; consecutive steps keep that
@@ -424,6 +425,12 @@ and per-client placement, mode, geometry, preferences, urgency and fullscreen-mo
 hints. Named scratchpad records contain either a claimed window or a pending launch;
 empty slots need no record. Floating clients also retain their tile-return slots,
 including original output names.
+One oldest-to-newest registration list covers both clients and fixtures, independently
+of tile order, focus recency and server stacking. Admission assigns surviving windows
+their saved rank and reserves all saved ranks before admitting newcomers, even though
+fixtures are scanned first. Missing windows leave harmless gaps; new windows follow
+all survivors in adoption order. Later ordinary registrations follow the same sequence.
+No post-admission order repair is needed.
 The snapshot also records oldest-to-newest fullscreen claims, including hidden and
 iconic clients. Claim order is authoritative even when no owner is currently visible;
 it is independent of focus recency and X stacking/adoption order.
@@ -539,6 +546,7 @@ completed operation that:
   resolves to a tiled client with that placement;
 - every client has a valid monitor and workspace, and no window is both a client and a
   fixture;
+- registration ranks are unique across clients and fixtures and below the next rank;
 - a client has a nonzero fullscreen claim exactly when fullscreen is enabled, and
   fullscreen excludes maximize;
 - remembered focus is a member tile that is not iconic;

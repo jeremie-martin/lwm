@@ -36,6 +36,7 @@ restart::Snapshot sample()
     };
     snapshot.clients[1].fullscreen_monitors = FullscreenMonitors{ 0, 1, 0, 1 };
     snapshot.pool = { 0x300 };
+    snapshot.registration_order = { 0x200, 0x300, 0x100 };
     snapshot.fullscreen_claims = { 0x200, 0x100 };
     return snapshot;
 }
@@ -177,7 +178,7 @@ TEST_CASE("State snapshots restore workspaces, order, recency and scratchpads", 
 TEST_CASE("Restart claim order is explicit in the wire format", "[restart][codec]")
 {
     std::vector<uint32_t> words{
-        7, 0,  0,   0,  1, // format, focus, active, desktop, monitor count
+        8, 0,  0,   0,  1, // format, focus, active, desktop, monitor count
         1, 77,             // one-byte output name "M"
         0, 0,  100, 80,    // output geometry
         0, 0,  1,          // current, previous, workspace count
@@ -190,6 +191,7 @@ TEST_CASE("Restart claim order is explicit in the wire format", "[restart][codec
         0, 0,  0,          // urgency, borderless, pinned
         0,                 // absent tile return slot
         0,                 // absent fullscreen monitor hint
+        1, 7,              // registration order
         0, 0,              // named slots, pool
         1, 7               // oldest-to-newest fullscreen claims
     };
@@ -408,4 +410,49 @@ TEST_CASE("Restart rejects ambiguous output identities and scratchpad ownership"
     SECTION("Claim without a client") { snapshot.named_scratchpads[1].window = 999; }
     SECTION("Claim with no window") { snapshot.named_scratchpads[1].window = XCB_NONE; }
     CHECK_FALSE(restart::decode(restart::encode(snapshot)));
+}
+
+TEST_CASE("Restart rejects ambiguous or missing registration identities", "[restart][codec][registration]")
+{
+    auto snapshot = sample();
+    SECTION("Duplicate registration") { snapshot.registration_order.push_back(0x100); }
+    SECTION("Zero registration") { snapshot.registration_order.push_back(XCB_NONE); }
+    SECTION("Missing client") { std::erase(snapshot.registration_order, 0x100); }
+    SECTION("Duplicate client") { snapshot.clients.push_back(snapshot.clients.front()); }
+    CHECK_FALSE(restart::decode(restart::encode(snapshot)));
+}
+
+TEST_CASE("Admission preserves shared registration ranks independently of scan order", "[restart][state][registration]")
+{
+    auto source = test::state();
+    add(source, 1);
+    source.insert_fixture(2, Fixture::Role::Dock);
+    add(source, 3);
+    source.insert_fixture(4, Fixture::Role::Desktop);
+    source.focus(1);
+    source.swap_tiles(0, 0, 1);
+    auto snapshot = restart::decode(restart::encode(source.snapshot()));
+    REQUIRE(snapshot);
+    REQUIRE(snapshot->registration_order == std::vector<xcb_window_t>{ 1, 2, 3, 4 });
+
+    auto target = test::state();
+    auto const& order = snapshot->registration_order;
+    // A new fixture arrives first; client 1 disappeared during handoff.
+    target.insert_fixture(5, Fixture::Role::Dock, order);
+    target.insert_fixture(4, Fixture::Role::Desktop, order);
+    target.insert_fixture(2, Fixture::Role::Dock, order);
+    Client newcomer;
+    newcomer.id = 6;
+    target.insert(newcomer, order);
+    Client survivor;
+    survivor.id = 3;
+    target.insert(survivor, order);
+    CHECK(target.require(3).order == 2);
+    CHECK(target.find_fixture(2)->order == 1);
+    CHECK(target.find_fixture(4)->order == 3);
+    CHECK(target.find_fixture(5)->order == 4);
+    CHECK(target.require(6).order == 5);
+    add(target, 7);
+    CHECK(target.require(7).order == 6);
+    CHECK(target.snapshot().registration_order == std::vector<xcb_window_t>{ 2, 3, 4, 5, 6, 7 });
 }

@@ -54,12 +54,22 @@ Workspace& State::edit_workspace(size_t monitor, size_t workspace)
 // Registry
 // ---------------------------------------------------------------------------
 
-void State::insert(Client client)
+uint64_t State::register_window(xcb_window_t id, std::span<xcb_window_t const> registration_order)
+{
+    assert(id != XCB_NONE && !find(id) && !find_fixture(id));
+    // Fixtures may be admitted before clients. Reserve every saved rank so a
+    // newcomer cannot take the rank of a survivor that has not been admitted yet.
+    next_order_ = std::max<uint64_t>(next_order_, registration_order.size());
+    auto saved = std::ranges::find(registration_order, id);
+    return saved == registration_order.end() ? next_order_++ : static_cast<uint64_t>(saved - registration_order.begin());
+}
+
+void State::insert(Client client, std::span<xcb_window_t const> registration_order)
 {
     assert(client.monitor < monitors_.size() && client.workspace < monitors_[client.monitor].workspaces.size());
     mutated();
     forget_missing_tile_slot(client);
-    client.order = next_order_++;
+    client.order = register_window(client.id, registration_order);
     if (client.kind() == Client::Kind::Floating)
         client.mru_order = next_recency_++;
     client.fullscreen_claim = 0;
@@ -71,10 +81,10 @@ void State::insert(Client client)
         request_fullscreen(it->first);
 }
 
-void State::insert_fixture(xcb_window_t id, Fixture::Role role)
+void State::insert_fixture(xcb_window_t id, Fixture::Role role, std::span<xcb_window_t const> registration_order)
 {
     mutated();
-    fixtures_.emplace(id, Fixture{ id, role, next_order_++ });
+    fixtures_.emplace(id, Fixture{ id, role, register_window(id, registration_order) });
 }
 
 void State::erase(xcb_window_t id)
@@ -226,7 +236,12 @@ bool State::visible(Client const& client, FullscreenVisibility const& fullscreen
 
 bool State::focusable(Client const& client) const
 {
-    return accepts_focus(client) && !showing_desktop_ && visible(client);
+    return focusable(client, fullscreen_visibility());
+}
+
+bool State::focusable(Client const& client, FullscreenVisibility const& fullscreen) const
+{
+    return accepts_focus(client) && !showing_desktop_ && visible(client, fullscreen);
 }
 
 // ---------------------------------------------------------------------------
@@ -761,6 +776,11 @@ void State::scratchpad_pending(std::string_view name, bool pending)
 restart::Snapshot State::snapshot() const
 {
     restart::Snapshot snapshot;
+    std::vector<std::pair<uint64_t, xcb_window_t>> registration;
+    for (auto const& [id, client] : clients_) registration.emplace_back(client.order, id);
+    for (auto const& [id, fixture] : fixtures_) registration.emplace_back(fixture.order, id);
+    std::ranges::sort(registration);
+    for (auto const& [order, id] : registration) snapshot.registration_order.push_back(id);
     snapshot.focused_monitor = focused_monitor_;
     snapshot.active = active_window_;
     snapshot.showing_desktop = showing_desktop_;

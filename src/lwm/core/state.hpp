@@ -75,8 +75,10 @@ public:
     Client const& require(xcb_window_t id) const;
     Fixture const* find_fixture(xcb_window_t id) const;
     // The candidate's placement must be valid; tiled clients join their workspace.
-    void insert(Client client);
-    void insert_fixture(xcb_window_t id, Fixture::Role role);
+    // During adoption, both registries use the same saved registration order.
+    // Survivors receive their saved rank; newcomers follow all saved ranks.
+    void insert(Client client, std::span<xcb_window_t const> registration_order = { });
+    void insert_fixture(xcb_window_t id, Fixture::Role role, std::span<xcb_window_t const> registration_order = { });
     void erase(xcb_window_t id);
 
     // Derived views
@@ -93,6 +95,7 @@ public:
     bool suppressed(Client const& client) const;
     static bool accepts_focus(Client const& client) { return client.accepts_input || client.supports_take_focus; }
     bool focusable(Client const& client) const;
+    bool focusable(Client const& client, FullscreenVisibility const& fullscreen) const;
     uint64_t revision() const { return revision_; }
     // Counters let focus cycling detect registrations and recency changes.
     uint64_t next_order() const { return next_order_; }
@@ -203,6 +206,7 @@ private:
     uint64_t revision_ = 0;
     bool frozen_ = false;
 
+    uint64_t register_window(xcb_window_t id, std::span<xcb_window_t const> registration_order);
     Client& edit(xcb_window_t id);
     void touch(xcb_window_t id);
     std::vector<xcb_window_t> fullscreen_claim_order() const;

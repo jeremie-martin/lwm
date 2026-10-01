@@ -65,7 +65,10 @@ TEST_CASE("Automatic focus excludes clients that cannot hold focus", "[focus][po
         REQUIRE(focus::fallback(state, 0) == 2);
         state.focus_hints(2, false, false);
     }
+    auto fullscreen = state.fullscreen_visibility();
+    CHECK(state.focusable(state.require(1), fullscreen) == (state.require(1).monitor == 1));
     REQUIRE(focus::fallback(state, 0) == XCB_NONE);
+    REQUIRE(focus::cycle_target(focus::recent_order(state), state, 0, XCB_NONE, true) == XCB_NONE);
 }
 
 TEST_CASE("Fullscreen transients and either input protocol keep focus eligibility", "[focus][policy]")

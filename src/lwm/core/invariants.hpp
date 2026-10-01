@@ -52,8 +52,11 @@ inline std::optional<Violation> validate(State const& state)
         }
     }
 
+    std::unordered_set<uint64_t> registrations;
     for (auto const& [id, client] : clients)
     {
+        if (client.order >= state.next_order() || !registrations.insert(client.order).second)
+            return Violation{ "Client registration order is invalid or duplicated", id };
         if (id == XCB_NONE || client.id != id)
             return Violation{ "Client id disagrees with registry key", id };
         if (state.find_fixture(id))
@@ -68,8 +71,12 @@ inline std::optional<Violation> validate(State const& state)
             return Violation{ "Fullscreen client retains maximize state", id };
     }
     for (auto const& [id, fixture] : state.fixtures())
+    {
         if (id == XCB_NONE || fixture.id != id)
             return Violation{ "Fixture id disagrees with registry key", id };
+        if (fixture.order >= state.next_order() || !registrations.insert(fixture.order).second)
+            return Violation{ "Fixture registration order is invalid or duplicated", id };
+    }
 
     std::unordered_set<xcb_window_t> scratchpads;
     for (auto const& slot : state.named_scratchpads())

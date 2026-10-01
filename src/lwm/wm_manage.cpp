@@ -167,7 +167,9 @@ void WindowManager::manage_fixture(xcb_window_t window, Fixture::Role role, bool
         uint32_t below = XCB_STACK_MODE_BELOW;
         xcb_configure_window(conn_.get(), window, XCB_CONFIG_WINDOW_STACK_MODE, &below);
     }
-    state_.insert_fixture(window, role);
+    state_.insert_fixture(
+        window, role, adopting && handoff_ ? std::span(handoff_->registration_order) : std::span<xcb_window_t const>{ }
+    );
     outputs_[window].mapped = adopting;
     if (role == Fixture::Role::Dock)
         workareas_dirty_ = true;
@@ -347,7 +349,10 @@ void WindowManager::manage_client(xcb_window_t window, ClassificationResult cons
         candidate.desktop_pinned = saved->desktop_pinned;
         candidate.fullscreen_monitors = saved->fullscreen_monitors;
     }
-    state_.insert(std::move(candidate));
+    state_.insert(
+        std::move(candidate),
+        adopting && handoff_ ? std::span(handoff_->registration_order) : std::span<xcb_window_t const>{ }
+    );
 
     uint32_t mask = kManagedWindowEventMask;
     xcb_change_window_attributes(conn_.get(), window, XCB_CW_EVENT_MASK, &mask);

@@ -20,8 +20,7 @@ struct Eligibility
 
     bool operator()(Client const& client) const
     {
-        return client.monitor == monitor && State::accepts_focus(client) && !state.showing_desktop()
-            && state.visible(client, fullscreen);
+        return client.monitor == monitor && state.focusable(client, fullscreen);
     }
 };
 

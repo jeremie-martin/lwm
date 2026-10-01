@@ -11,7 +11,7 @@
 // as on a fresh start.
 namespace lwm::restart {
 
-inline constexpr uint32_t format = 7;
+inline constexpr uint32_t format = 8;
 
 struct ClientRecord
 {
@@ -67,6 +67,7 @@ struct Snapshot
     bool showing_desktop = false;
     std::vector<MonitorRecord> monitors;
     std::vector<ClientRecord> clients; ///< Oldest to newest focus recency
+    std::vector<xcb_window_t> registration_order; ///< Clients and fixtures, oldest registration first
     std::vector<NamedScratchpadRecord> named_scratchpads;
     std::vector<xcb_window_t> pool;
     std::vector<xcb_window_t> fullscreen_claims; ///< Oldest to newest, including hidden and iconic clients

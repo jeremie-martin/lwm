@@ -268,6 +268,8 @@ std::vector<uint32_t> encode(Snapshot const& snapshot)
             out.word(m->right);
         }
     }
+    out.count(snapshot.registration_order.size());
+    for (auto window : snapshot.registration_order) out.word(window);
     out.count(snapshot.named_scratchpads.size());
     for (auto const& named : snapshot.named_scratchpads)
     {
@@ -359,6 +361,19 @@ std::optional<Snapshot> decode(std::span<uint32_t const> words)
         if (in.flag())
             client.fullscreen_monitors = FullscreenMonitors{ in.word(), in.word(), in.word(), in.word() };
     }
+    snapshot.registration_order.resize(in.count());
+    std::unordered_set<xcb_window_t> registered;
+    for (auto& window : snapshot.registration_order)
+    {
+        window = in.word();
+        if (window == XCB_NONE || !registered.insert(window).second)
+            return std::nullopt;
+    }
+    // Every client has one registration. Remaining IDs belong to fixtures,
+    // whose role and protocol properties are read again during adoption.
+    for (auto const& client : snapshot.clients)
+        if (!registered.erase(client.window))
+            return std::nullopt;
     snapshot.named_scratchpads.resize(in.count(2));
     std::unordered_set<std::string> names;
     std::unordered_set<xcb_window_t> claimed;

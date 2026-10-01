@@ -1,4 +1,4 @@
-#include "wm_observations.hpp"
+#include "restart_handoff.hpp"
 #include <X11/keysym.h>
 #include <catch2/catch_test_macros.hpp>
 #include <catch2/generators/catch_generators.hpp>
@@ -210,4 +210,84 @@ TEST_CASE("Integration: restart preserves a floating tile's return position", "[
     for (size_t i = 0; i < windows.size(); ++i)
         CHECK(require_window_geometry(conn, windows[i]) == before[i]);
     for (auto window : windows) destroy_window(conn, window);
+}
+
+TEST_CASE(
+    "Integration: restart preserves registration independently of stacking and tile order",
+    "[integration][restart][registration]"
+)
+{
+    auto restart_kind = GENERATE("restart", "failed-exec", "handoff");
+    CAPTURE(restart_kind);
+    auto env = TestEnvironment::create();
+    REQUIRE(env);
+    auto& conn = env->conn;
+    park_pointer(conn);
+    auto socket = wait_for_ipc_socket_path(conn);
+    REQUIRE(socket);
+    auto list_atom = intern_atom(conn.get(), "_NET_CLIENT_LIST");
+    auto stack_atom = intern_atom(conn.get(), "_NET_CLIENT_LIST_STACKING");
+    auto list = [&](xcb_atom_t atom)
+    {
+        return get_window_property_windows(conn.get(), conn.root(), atom);
+    };
+    std::vector<xcb_window_t> expected;
+    auto create = [&](char const* type)
+    {
+        auto window = create_window(conn, 20, 20, 200, 150);
+        if (type)
+            set_window_type(conn, window, intern_atom(conn.get(), type));
+        map_window(conn, window);
+        expected.push_back(window);
+        REQUIRE(wait_for_condition([&] { return list(list_atom) == expected; }, timeout));
+        return window;
+    };
+    auto first = create(nullptr);
+    auto dock = create("_NET_WM_WINDOW_TYPE_DOCK");
+    auto second = create(nullptr);
+    create("_NET_WM_WINDOW_TYPE_DESKTOP");
+    auto third = create(nullptr);
+    create("_NET_WM_WINDOW_TYPE_DIALOG");
+    ipc_ok(*socket, "focus window=" + std::to_string(first));
+    auto stacking = list(stack_atom);
+    REQUIRE(stacking != expected);
+    std::vector<WindowGeometry> tiles;
+    for (auto window : { first, second, third }) tiles.push_back(require_window_geometry(conn, window));
+
+    for (int iteration = 0; iteration < 2; ++iteration)
+    {
+        CAPTURE(iteration);
+        auto previous = wm_instance(conn);
+        REQUIRE(previous);
+        if (iteration == 0 && std::string_view(restart_kind) == "handoff")
+        {
+            PausedRestart restart(env->wm, *socket);
+            destroy_window(conn, dock);
+            std::erase(expected, dock);
+            // A new fixture is admitted before saved clients. Both new windows
+            // must follow every survivor despite that admission order.
+            for (auto type : { "_NET_WM_WINDOW_TYPE_DOCK", "_NET_WM_WINDOW_TYPE_DIALOG" })
+            {
+                auto window = create_window(conn, 30, 30, 180, 120);
+                set_window_type(conn, window, intern_atom(conn.get(), type));
+                map_window(conn, window);
+                expected.push_back(window);
+                REQUIRE(get_window_geometry(conn, window));
+            }
+            restart.resume();
+        }
+        else
+            ipc_ok(*socket, std::string_view(restart_kind) == "failed-exec" ? "exec /definitely/missing/lwm" : "restart");
+        REQUIRE(wait_for_wm_restart(conn, timeout, *previous));
+        socket = wait_for_ipc_socket_path(conn);
+        REQUIRE(socket);
+        CHECK(list(list_atom) == expected);
+        if (std::string_view(restart_kind) != "handoff")
+            CHECK(list(stack_atom) == stacking);
+        size_t index = 0;
+        for (auto window : { first, second, third }) CHECK(require_window_geometry(conn, window) == tiles[index++]);
+    }
+    // Subsequent ordinary admission must follow the restored sequence too.
+    create(nullptr);
+    for (auto window : expected) destroy_window(conn, window);
 }
