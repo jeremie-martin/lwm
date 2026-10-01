@@ -239,7 +239,7 @@ bool WindowManager::publish_properties(Client const& client, Output& output, Sta
     uint32_t desktop = client.sticky ? 0xFFFFFFFF : desktop_index(client.monitor, client.workspace);
     if (output.desktop != desktop)
     {
-        ewmh_.set_window_desktop(id, desktop);
+        xcb_ewmh_set_wm_desktop(ewmh_.get(), id, desktop);
         output.desktop = desktop;
     }
     uint32_t wm_state = client.iconic ? WM_STATE_ICONIC : WM_STATE_NORMAL;
@@ -262,7 +262,7 @@ bool WindowManager::publish_properties(Client const& client, Output& output, Sta
             actions.push_back(e->_NET_WM_ACTION_MOVE);
             actions.push_back(e->_NET_WM_ACTION_RESIZE);
         }
-        ewmh_.set_allowed_actions(id, actions);
+        xcb_ewmh_set_wm_allowed_actions(ewmh_.get(), id, actions.size(), actions.data());
         publish_window_class(id, kind);
         output.window_class = kind;
     }
@@ -451,14 +451,14 @@ void WindowManager::publish_root(std::vector<State::Projected> const& clients, b
     // Panels use client-list changes to refresh urgency.
     if (client_list != root_.client_list || urgency_changed)
     {
-        ewmh_.update_client_list(client_list);
+        xcb_ewmh_set_client_list(ewmh_.get(), 0, client_list.size(), client_list.data());
         root_.client_list = std::move(client_list);
     }
     if (auto layout = desktop_layout(); root_.desktops != layout)
     {
-        ewmh_.set_number_of_desktops(layout.count);
+        xcb_ewmh_set_number_of_desktops(ewmh_.get(), 0, layout.count);
         ewmh_.set_desktop_names(layout.names);
-        ewmh_.set_desktop_geometry(layout.width, layout.height);
+        xcb_ewmh_set_desktop_geometry(ewmh_.get(), 0, layout.width, layout.height);
         ewmh_.set_desktop_viewport(layout.viewports);
         ewmh_.set_workarea(layout.workareas);
         root_.desktops = std::move(layout);
@@ -466,17 +466,17 @@ void WindowManager::publish_root(std::vector<State::Projected> const& clients, b
     auto const& focused = state_.monitors()[state_.focused_monitor()];
     if (auto desktop = desktop_index(state_.focused_monitor(), focused.current_workspace); root_.current_desktop != desktop)
     {
-        ewmh_.set_current_desktop(desktop);
+        xcb_ewmh_set_current_desktop(ewmh_.get(), 0, desktop);
         root_.current_desktop = desktop;
     }
     if (root_.active != state_.active_window())
     {
-        ewmh_.set_active_window(state_.active_window());
+        xcb_ewmh_set_active_window(ewmh_.get(), 0, state_.active_window());
         root_.active = state_.active_window();
     }
     if (root_.showing_desktop != state_.showing_desktop())
     {
-        ewmh_.set_showing_desktop(state_.showing_desktop());
+        xcb_ewmh_set_showing_desktop(ewmh_.get(), 0, state_.showing_desktop());
         root_.showing_desktop = state_.showing_desktop();
     }
 }
@@ -509,7 +509,7 @@ void WindowManager::reconcile_stacking(State::FullscreenVisibility const& fullsc
     }
     if (order != root_.stacking)
     {
-        ewmh_.update_client_list_stacking(order);
+        xcb_ewmh_set_client_list_stacking(ewmh_.get(), 0, order.size(), order.data());
         root_.stacking = std::move(order);
     }
 }

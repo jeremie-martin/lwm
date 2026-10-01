@@ -185,6 +185,27 @@ TEST_CASE("Integration: bindings and IPC report the same action events", "[integ
         CHECK(event.at("event") == "layout_change");
         CHECK(event.at("action") == "adjust_ratio");
         CHECK(event.at("delta") == 0.05);
+        CHECK_FALSE(event.contains("value"));
+    }
+    // Values keep their JSON type; absent values stay absent. Numeric events
+    // must describe the accepted value, including precision beyond six decimals.
+    for (auto const& [command, expected] : std::vector<std::pair<std::string, nlohmann::json>>{
+             {     "layout set monocle",   { { "action", "set_layout" }, { "value", "monocle" } } },
+             { "ratio set 0.6123456789", { { "action", "set_ratio" }, { "value", 0.6123456789 } } },
+             {            "ratio reset",                         { { "action", "reset_ratios" } } }
+    })
+    {
+        auto result = send_ipc_command(*path, command);
+        REQUIRE(result);
+        REQUIRE(result->starts_with("ok"));
+        auto event = subscriber.event();
+        REQUIRE(event.at("event") == "layout_change");
+        REQUIRE(event.contains("instance"));
+        REQUIRE(event.contains("sequence"));
+        event.erase("event");
+        event.erase("instance");
+        event.erase("sequence");
+        CHECK(event == expected);
     }
     destroy_window(conn, second);
     destroy_window(conn, first);

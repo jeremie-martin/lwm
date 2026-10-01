@@ -142,7 +142,7 @@ Result WindowManager::execute(Action const& action, std::string_view source)
                 std::string name = layout_strategy_str(layout.strategy);
                 state_.layout(monitor, layout.strategy);
                 drain_requested_ = true;
-                layout_changed(action, json_string(name));
+                layout_changed(action, name);
                 return "layout set to " + name;
             },
             [&](SetRatio const& ratio) -> Result
@@ -153,7 +153,7 @@ Result WindowManager::execute(Action const& action, std::string_view source)
                         "ratio out of range [" + std::to_string(min) + ", " + std::to_string(1.0 - min) + "]"
                     );
                 state_.ratio(monitor, SplitAddress{ 0 }, ratio.value);
-                layout_changed(action, std::to_string(ratio.value));
+                layout_changed(action, ratio.value);
                 return "ratio set";
             },
             [&](AdjustRatio const& adjust) -> Result
@@ -213,7 +213,11 @@ Result WindowManager::execute(Action const& action, std::string_view source)
     );
 }
 
-void WindowManager::layout_changed(Action const& action, std::optional<std::string> value, std::optional<double> delta)
+void WindowManager::layout_changed(
+    Action const& action,
+    std::optional<event::LayoutValue> value,
+    std::optional<double> delta
+)
 {
     queue_event(event::LayoutChange{ action_name(action), std::move(value), delta });
 }

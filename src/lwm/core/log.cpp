@@ -150,13 +150,13 @@ std::string status_json()
     std::lock_guard lock(notification_mutex);
     return fmtquill::format(
         "{{\"target\":\"{}\",\"level\":\"{}\",\"instance\":\"{}\",\"active\":{},"
-        "\"backend_notifications\":{},\"last_backend_notification\":\"{}\"}}",
+        "\"backend_notifications\":{},\"last_backend_notification\":{}}}",
         options.target == Target::Journal ? "journal" : "stderr",
         level_name(options.level),
         instance,
         logger != nullptr,
         notifications,
-        json_escape(last_notification)
+        json_string(last_notification)
     );
 }
 } // namespace lwm::log

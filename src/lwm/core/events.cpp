@@ -1,6 +1,7 @@
-#include "lwm/core/overloaded.hpp"
 #include "events.hpp"
-#include <cstdio>
+#include "lwm/core/overloaded.hpp"
+#include <rfl/json/write.hpp>
+#include <rfl/make_named_tuple.hpp>
 
 namespace lwm {
 
@@ -30,56 +31,16 @@ uint32_t parse_event_filter(std::string_view filter)
     return mask;
 }
 
-std::string json_escape(std::string_view input)
-{
-    std::string out;
-    out.reserve(input.size() + 8);
-    for (char ch : input)
-    {
-        switch (ch)
-        {
-            case '"':
-                out += "\\\"";
-                break;
-            case '\\':
-                out += "\\\\";
-                break;
-            case '\b':
-                out += "\\b";
-                break;
-            case '\f':
-                out += "\\f";
-                break;
-            case '\n':
-                out += "\\n";
-                break;
-            case '\r':
-                out += "\\r";
-                break;
-            case '\t':
-                out += "\\t";
-                break;
-            default:
-                if (static_cast<unsigned char>(ch) < 0x20)
-                {
-                    char buf[8];
-                    std::snprintf(buf, sizeof(buf), "\\u%04x", static_cast<unsigned char>(ch));
-                    out += buf;
-                }
-                else
-                    out += ch;
-                break;
-        }
-    }
-    return out;
-}
+// X metadata can contain opaque bytes; preserve them as the existing IPC does.
+std::string json_string(std::string_view input) { return rfl::json::write(input, YYJSON_WRITE_ALLOW_INVALID_UNICODE); }
 
 namespace {
-std::string placement_json(std::optional<Placement> const& placement)
+template <typename... Fields> std::string json(std::string_view event, Fields&&... fields)
 {
-    if (!placement)
-        return { };
-    return ",\"monitor\":" + std::to_string(placement->monitor) + ",\"workspace\":" + std::to_string(placement->workspace);
+    return rfl::json::write(
+        rfl::make_named_tuple(rfl::make_field<"event">(event), std::forward<Fields>(fields)...),
+        YYJSON_WRITE_ALLOW_INVALID_UNICODE
+    );
 }
 }
 
@@ -117,46 +78,66 @@ int event_priority(Event const& event)
 
 std::string event_json(Event const& event)
 {
+    using rfl::make_field;
     return std::visit(
         Overloaded{
             [](event::WorkspaceSwitch const& e)
             {
-                return "{\"event\":\"workspace_switch\",\"monitor\":" + std::to_string(e.monitor)
-                    + ",\"from\":" + std::to_string(e.from) + ",\"to\":" + std::to_string(e.to) + "}";
+                return json(
+                    "workspace_switch",
+                    make_field<"monitor">(e.monitor),
+                    make_field<"from">(e.from),
+                    make_field<"to">(e.to)
+                );
             },
             [](event::FocusChange const& e)
             {
-                return "{\"event\":\"focus_change\",\"window\":" + std::to_string(e.window)
-                    + ",\"class\":" + json_string(e.wm_class) + ",\"title\":" + json_string(e.title) + "}";
+                return json(
+                    "focus_change",
+                    make_field<"window">(e.window),
+                    make_field<"class">(e.wm_class),
+                    make_field<"title">(e.title)
+                );
             },
             [](event::WindowMap const& e)
             {
-                return "{\"event\":\"window_map\",\"window\":" + std::to_string(e.window)
-                    + ",\"class\":" + json_string(e.wm_class) + ",\"kind\":" + json_string(e.kind)
-                    + placement_json(e.placement) + "}";
+                return json(
+                    "window_map",
+                    make_field<"window">(e.window),
+                    make_field<"class">(e.wm_class),
+                    make_field<"kind">(e.kind),
+                    make_field<"monitor">(e.placement.transform([](auto p) { return p.monitor; })),
+                    make_field<"workspace">(e.placement.transform([](auto p) { return p.workspace; }))
+                );
             },
             [](event::WindowUnmap const& e)
             {
-                return "{\"event\":\"window_unmap\",\"window\":" + std::to_string(e.window) + ",\"kind\":"
-                    + json_string(e.kind) + placement_json(e.placement) + "}";
+                return json(
+                    "window_unmap",
+                    make_field<"window">(e.window),
+                    make_field<"kind">(e.kind),
+                    make_field<"monitor">(e.placement.transform([](auto p) { return p.monitor; })),
+                    make_field<"workspace">(e.placement.transform([](auto p) { return p.workspace; }))
+                );
             },
             [](event::LayoutChange const& e)
             {
-                std::string json = "{\"event\":\"layout_change\",\"action\":" + json_string(e.action);
-                if (e.value)
-                    json += ",\"value\":" + *e.value;
-                if (e.delta)
-                    json += ",\"delta\":" + std::to_string(*e.delta);
-                return json + "}";
+                return json(
+                    "layout_change",
+                    make_field<"action">(e.action),
+                    make_field<"value">(e.value),
+                    make_field<"delta">(e.delta)
+                );
             },
-            [](event::KeyAction const& e) { return "{\"event\":\"key_action\",\"action\":" + json_string(e.action) + "}"; },
+            [](event::KeyAction const& e) { return json("key_action", make_field<"action">(e.action)); },
             [](event::ConfigReload const& e)
             {
-                std::string json = "{\"event\":\"config_reload\",\"success\":" + std::string(json_bool(e.success))
-                    + ",\"source\":" + json_string(e.source);
-                if (!e.success)
-                    json += ",\"error\":" + json_string(e.error);
-                return json + "}";
+                return json(
+                    "config_reload",
+                    make_field<"success">(e.success),
+                    make_field<"source">(e.source),
+                    make_field<"error">(e.success ? std::nullopt : std::optional{ e.error })
+                );
             },
         },
         event

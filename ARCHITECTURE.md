@@ -134,8 +134,9 @@ changed.
 
 Workspace switches and focus changes for subscribers are derived the same way: the
 current workspace per output name and an explicit focus request are compared with the
-last completion. Other events are typed facts recorded where they happen and serialized
-in one place. A new subscription records the exposed state as its baseline, and
+last completion. Other events are typed facts recorded where they happen. Their wire fields are
+assembled at one boundary and encoded by reflect-cpp; action handlers never pre-render
+JSON values. A new subscription records the exposed state as its baseline, and
 `state_change` is emitted when the exposed state snapshot differs from the
 last one sent.
 

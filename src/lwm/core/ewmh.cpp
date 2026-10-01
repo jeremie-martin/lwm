@@ -4,21 +4,30 @@
 #include <cstring>
 
 namespace lwm {
-
 namespace {
-
-bool is_known_window_type(xcb_ewmh_connection_t const* ewmh, xcb_atom_t type)
+struct WindowTypeEntry
 {
-    return type == ewmh->_NET_WM_WINDOW_TYPE_DESKTOP || type == ewmh->_NET_WM_WINDOW_TYPE_DOCK
-        || type == ewmh->_NET_WM_WINDOW_TYPE_TOOLBAR || type == ewmh->_NET_WM_WINDOW_TYPE_MENU
-        || type == ewmh->_NET_WM_WINDOW_TYPE_UTILITY || type == ewmh->_NET_WM_WINDOW_TYPE_SPLASH
-        || type == ewmh->_NET_WM_WINDOW_TYPE_DIALOG || type == ewmh->_NET_WM_WINDOW_TYPE_DROPDOWN_MENU
-        || type == ewmh->_NET_WM_WINDOW_TYPE_POPUP_MENU || type == ewmh->_NET_WM_WINDOW_TYPE_TOOLTIP
-        || type == ewmh->_NET_WM_WINDOW_TYPE_NOTIFICATION || type == ewmh->_NET_WM_WINDOW_TYPE_COMBO
-        || type == ewmh->_NET_WM_WINDOW_TYPE_DND || type == ewmh->_NET_WM_WINDOW_TYPE_NORMAL;
-}
+    xcb_atom_t xcb_ewmh_connection_t::*atom;
+    WindowType type;
+};
+constexpr WindowTypeEntry window_types[] = {
+    {       &xcb_ewmh_connection_t::_NET_WM_WINDOW_TYPE_DESKTOP,      WindowType::Desktop },
+    {          &xcb_ewmh_connection_t::_NET_WM_WINDOW_TYPE_DOCK,         WindowType::Dock },
+    {       &xcb_ewmh_connection_t::_NET_WM_WINDOW_TYPE_TOOLBAR,      WindowType::Toolbar },
+    {          &xcb_ewmh_connection_t::_NET_WM_WINDOW_TYPE_MENU,         WindowType::Menu },
+    {       &xcb_ewmh_connection_t::_NET_WM_WINDOW_TYPE_UTILITY,      WindowType::Utility },
+    {        &xcb_ewmh_connection_t::_NET_WM_WINDOW_TYPE_SPLASH,       WindowType::Splash },
+    {        &xcb_ewmh_connection_t::_NET_WM_WINDOW_TYPE_DIALOG,       WindowType::Dialog },
+    { &xcb_ewmh_connection_t::_NET_WM_WINDOW_TYPE_DROPDOWN_MENU, WindowType::DropdownMenu },
+    {    &xcb_ewmh_connection_t::_NET_WM_WINDOW_TYPE_POPUP_MENU,    WindowType::PopupMenu },
+    {       &xcb_ewmh_connection_t::_NET_WM_WINDOW_TYPE_TOOLTIP,      WindowType::Tooltip },
+    {  &xcb_ewmh_connection_t::_NET_WM_WINDOW_TYPE_NOTIFICATION, WindowType::Notification },
+    {         &xcb_ewmh_connection_t::_NET_WM_WINDOW_TYPE_COMBO,        WindowType::Combo },
+    {           &xcb_ewmh_connection_t::_NET_WM_WINDOW_TYPE_DND,          WindowType::Dnd },
+    {        &xcb_ewmh_connection_t::_NET_WM_WINDOW_TYPE_NORMAL,       WindowType::Normal },
+};
 
-}
+} // namespace
 
 Ewmh::Ewmh(Connection& conn)
     : conn_(conn)
@@ -109,20 +118,6 @@ void Ewmh::init_atoms(std::vector<xcb_atom_t> const& extra_supported)
         ewmh_._NET_CLOSE_WINDOW,
         ewmh_._NET_WM_FULLSCREEN_MONITORS,
         ewmh_._NET_WM_WINDOW_TYPE,
-        ewmh_._NET_WM_WINDOW_TYPE_DESKTOP,
-        ewmh_._NET_WM_WINDOW_TYPE_DOCK,
-        ewmh_._NET_WM_WINDOW_TYPE_TOOLBAR,
-        ewmh_._NET_WM_WINDOW_TYPE_MENU,
-        ewmh_._NET_WM_WINDOW_TYPE_UTILITY,
-        ewmh_._NET_WM_WINDOW_TYPE_SPLASH,
-        ewmh_._NET_WM_WINDOW_TYPE_DIALOG,
-        ewmh_._NET_WM_WINDOW_TYPE_DROPDOWN_MENU,
-        ewmh_._NET_WM_WINDOW_TYPE_POPUP_MENU,
-        ewmh_._NET_WM_WINDOW_TYPE_TOOLTIP,
-        ewmh_._NET_WM_WINDOW_TYPE_NOTIFICATION,
-        ewmh_._NET_WM_WINDOW_TYPE_COMBO,
-        ewmh_._NET_WM_WINDOW_TYPE_DND,
-        ewmh_._NET_WM_WINDOW_TYPE_NORMAL,
         ewmh_._NET_WM_STRUT,
         ewmh_._NET_WM_STRUT_PARTIAL,
         ewmh_._NET_FRAME_EXTENTS,
@@ -147,6 +142,7 @@ void Ewmh::init_atoms(std::vector<xcb_atom_t> const& extra_supported)
         ewmh_._NET_WM_USER_TIME,
     };
 
+    for (auto const& type : window_types) supported.push_back(ewmh_.*type.atom);
     supported.insert(supported.end(), extra_supported.begin(), extra_supported.end());
     xcb_ewmh_set_supported(&ewmh_, 0, supported.size(), supported.data());
 }
@@ -155,8 +151,6 @@ void Ewmh::set_wm_name(std::string const& name)
 {
     xcb_ewmh_set_wm_name(&ewmh_, supporting_window_, name.length(), name.c_str());
 }
-
-void Ewmh::set_number_of_desktops(uint32_t count) { xcb_ewmh_set_number_of_desktops(&ewmh_, 0, count); }
 
 void Ewmh::set_desktop_names(std::vector<std::string> const& names)
 {
@@ -184,48 +178,12 @@ void Ewmh::set_workarea(std::vector<Geometry> const& workareas)
     }
 }
 
-void Ewmh::set_desktop_geometry(uint32_t width, uint32_t height)
-{
-    xcb_ewmh_set_desktop_geometry(&ewmh_, 0, width, height);
-}
-
-void Ewmh::set_showing_desktop(bool showing) { xcb_ewmh_set_showing_desktop(&ewmh_, 0, showing ? 1 : 0); }
-
-void Ewmh::set_current_desktop(uint32_t desktop) { xcb_ewmh_set_current_desktop(&ewmh_, 0, desktop); }
-
-void Ewmh::set_active_window(xcb_window_t window) { xcb_ewmh_set_active_window(&ewmh_, 0, window); }
-
 void Ewmh::set_desktop_viewport(std::vector<std::pair<uint32_t, uint32_t>> const& viewports)
 {
     std::vector<xcb_ewmh_coordinates_t> coordinates;
     for (auto [x, y] : viewports) coordinates.push_back({ x, y });
     if (!coordinates.empty())
         xcb_ewmh_set_desktop_viewport(&ewmh_, 0, coordinates.size(), coordinates.data());
-}
-
-void Ewmh::set_window_desktop(xcb_window_t window, uint32_t desktop)
-{
-    xcb_ewmh_set_wm_desktop(&ewmh_, window, desktop);
-}
-
-void Ewmh::set_frame_extents(xcb_window_t window, uint32_t left, uint32_t right, uint32_t top, uint32_t bottom)
-{
-    xcb_ewmh_set_frame_extents(&ewmh_, window, left, right, top, bottom);
-}
-
-void Ewmh::set_allowed_actions(xcb_window_t window, std::vector<xcb_atom_t> const& actions)
-{
-    xcb_ewmh_set_wm_allowed_actions(&ewmh_, window, actions.size(), const_cast<xcb_atom_t*>(actions.data()));
-}
-
-void Ewmh::update_client_list(std::vector<xcb_window_t> const& windows)
-{
-    xcb_ewmh_set_client_list(&ewmh_, 0, windows.size(), const_cast<xcb_window_t*>(windows.data()));
-}
-
-void Ewmh::update_client_list_stacking(std::vector<xcb_window_t> const& windows)
-{
-    xcb_ewmh_set_client_list_stacking(&ewmh_, 0, windows.size(), const_cast<xcb_window_t*>(windows.data()));
 }
 
 void Ewmh::update_window_states(
@@ -258,51 +216,23 @@ void Ewmh::update_window_states(
     }
 }
 
-xcb_atom_t Ewmh::get_window_type(xcb_window_t window) const
+WindowType Ewmh::get_window_type_enum(xcb_window_t window) const
 {
     xcb_ewmh_get_atoms_reply_t types;
     if (!xcb_ewmh_get_wm_window_type_reply(&ewmh_, xcb_ewmh_get_wm_window_type(&ewmh_, window), &types, nullptr))
-        return ewmh_._NET_WM_WINDOW_TYPE_NORMAL;
-
-    xcb_atom_t type = ewmh_._NET_WM_WINDOW_TYPE_NORMAL;
+        return WindowType::Normal;
+    WindowType result = WindowType::Normal;
     for (uint32_t i = 0; i < types.atoms_len; ++i)
-    {
-        if (is_known_window_type(&ewmh_, types.atoms[i]))
+        if (auto entry =
+                std::ranges::find(window_types, types.atoms[i], [&](auto const& entry) { return ewmh_.*entry.atom; });
+            entry != std::end(window_types))
         {
-            type = types.atoms[i];
+            result = entry->type;
             break;
         }
-    }
     xcb_ewmh_get_atoms_reply_wipe(&types);
-    return type;
-}
 
-WindowType Ewmh::get_window_type_enum(xcb_window_t window) const
-{
-    xcb_atom_t type = get_window_type(window);
-
-    struct Entry { xcb_atom_t atom; WindowType wtype; };
-    Entry const table[] = {
-        { ewmh_._NET_WM_WINDOW_TYPE_DESKTOP,      WindowType::Desktop },
-        { ewmh_._NET_WM_WINDOW_TYPE_DOCK,          WindowType::Dock },
-        { ewmh_._NET_WM_WINDOW_TYPE_TOOLBAR,       WindowType::Toolbar },
-        { ewmh_._NET_WM_WINDOW_TYPE_MENU,          WindowType::Menu },
-        { ewmh_._NET_WM_WINDOW_TYPE_UTILITY,       WindowType::Utility },
-        { ewmh_._NET_WM_WINDOW_TYPE_SPLASH,        WindowType::Splash },
-        { ewmh_._NET_WM_WINDOW_TYPE_DIALOG,        WindowType::Dialog },
-        { ewmh_._NET_WM_WINDOW_TYPE_DROPDOWN_MENU, WindowType::DropdownMenu },
-        { ewmh_._NET_WM_WINDOW_TYPE_POPUP_MENU,    WindowType::PopupMenu },
-        { ewmh_._NET_WM_WINDOW_TYPE_TOOLTIP,       WindowType::Tooltip },
-        { ewmh_._NET_WM_WINDOW_TYPE_NOTIFICATION,  WindowType::Notification },
-        { ewmh_._NET_WM_WINDOW_TYPE_COMBO,         WindowType::Combo },
-        { ewmh_._NET_WM_WINDOW_TYPE_DND,           WindowType::Dnd },
-    };
-
-    for (auto const& e : table)
-        if (type == e.atom)
-            return e.wtype;
-
-    return WindowType::Normal;
+    return result;
 }
 
 DockStrut Ewmh::get_window_strut(xcb_window_t window) const

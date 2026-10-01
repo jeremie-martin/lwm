@@ -41,10 +41,8 @@ inline constexpr NamedEvent event_specs[] = {
 /// Returns Event_All if filter is empty; unknown names are ignored.
 uint32_t parse_event_filter(std::string_view filter);
 
-/// Escape a string for JSON output (handles quotes, backslashes, control chars).
-std::string json_escape(std::string_view input);
-/// A quoted, escaped JSON string.
-inline std::string json_string(std::string_view input) { return "\"" + json_escape(input) + "\""; }
+/// A quoted JSON string, including opaque X metadata bytes.
+std::string json_string(std::string_view input);
 inline char const* json_bool(bool value) { return value ? "true" : "false"; }
 
 struct Placement
@@ -77,10 +75,11 @@ struct WindowUnmap
     std::string_view kind;
     std::optional<Placement> placement; ///< Absent for fixtures
 };
+using LayoutValue = std::variant<std::string, double>;
 struct LayoutChange
 {
     std::string_view action;
-    std::optional<std::string> value; ///< Pre-rendered JSON value, when the action has one
+    std::optional<LayoutValue> value;
     std::optional<double> delta;
 };
 struct KeyAction

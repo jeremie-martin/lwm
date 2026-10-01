@@ -103,3 +103,42 @@ TEST_CASE(
 
     destroy_window(conn, window);
 }
+
+TEST_CASE("Integration: the first recognized window type wins", "[integration][ewmh][classification]")
+{
+    auto env = TestEnvironment::create();
+    if (!env)
+        SKIP("X11 unavailable");
+    auto& conn = env->conn;
+    auto property = intern_atom(conn.get(), "_NET_WM_WINDOW_TYPE");
+    auto published = intern_atom(conn.get(), "_LWM_WINDOW_CLASS");
+    auto normal = intern_atom(conn.get(), "_NET_WM_WINDOW_TYPE_NORMAL");
+    auto dialog = intern_atom(conn.get(), "_NET_WM_WINDOW_TYPE_DIALOG");
+    auto unknown = intern_atom(conn.get(), "_LWM_TEST_UNKNOWN_TYPE");
+    REQUIRE(property != XCB_NONE);
+    REQUIRE(published != XCB_NONE);
+    REQUIRE(normal != XCB_NONE);
+    REQUIRE(dialog != XCB_NONE);
+    REQUIRE(unknown != XCB_NONE);
+    for (auto const& [types, expected] : std::vector<std::pair<std::vector<xcb_atom_t>, std::string>>{
+             { { unknown, normal, dialog },    "tiled" },
+             { { unknown, dialog, normal }, "floating" },
+             {                 { unknown },    "tiled" }
+    })
+    {
+        auto window = create_window(conn, 10, 10, 200, 150);
+        xcb_change_property(
+            conn.get(),
+            XCB_PROP_MODE_REPLACE,
+            window,
+            property,
+            XCB_ATOM_ATOM,
+            32,
+            types.size(),
+            types.data()
+        );
+        map_window(conn, window);
+        REQUIRE(wait_for_window_class(conn, published, window, expected));
+        destroy_window(conn, window);
+    }
+}

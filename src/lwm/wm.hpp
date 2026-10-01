@@ -328,7 +328,11 @@ private:
     size_t wrap_monitor(int index) const;
     void warp_to_monitor(Monitor const& monitor);
     void swap_active_tile(int offset);
-    void layout_changed(Action const& action, std::optional<std::string> value = { }, std::optional<double> delta = { });
+    void layout_changed(
+        Action const& action,
+        std::optional<event::LayoutValue> value = {},
+        std::optional<double> delta = {}
+    );
 
     // wm_focus.cpp
     void focus_monitor_at_point(int16_t x, int16_t y);

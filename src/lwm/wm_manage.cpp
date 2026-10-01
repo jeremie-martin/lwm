@@ -380,7 +380,7 @@ void WindowManager::manage_client(xcb_window_t window, ClassificationResult cons
         XCB_BUTTON_INDEX_ANY,
         XCB_MOD_MASK_ANY
     );
-    ewmh_.set_frame_extents(window, 0, 0, 0, 0);
+    xcb_ewmh_set_frame_extents(ewmh_.get(), window, 0, 0, 0, 0);
     read_sync_counter(window);
     auto& output = outputs_[window];
     output.mapped = adopting;

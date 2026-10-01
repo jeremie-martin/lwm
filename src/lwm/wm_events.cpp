@@ -420,7 +420,7 @@ void WindowManager::handle_client_message(xcb_client_message_event_t const& e)
     else if (e.type == ewmh->_NET_WM_DESKTOP)
         handle_desktop_change(e);
     else if (e.type == ewmh->_NET_REQUEST_FRAME_EXTENTS)
-        ewmh_.set_frame_extents(e.window, 0, 0, 0, 0);
+        xcb_ewmh_set_frame_extents(ewmh_.get(), e.window, 0, 0, 0, 0);
     else if (e.type == ewmh->_NET_MOVERESIZE_WINDOW)
         handle_moveresize_window(e);
     else if (e.type == ewmh->_NET_WM_MOVERESIZE)
