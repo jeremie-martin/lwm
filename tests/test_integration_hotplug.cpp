@@ -403,3 +403,70 @@ TEST_CASE(
     xcb_ungrab_pointer(conn.get(), XCB_CURRENT_TIME);
     xcb_flush(conn.get());
 }
+
+TEST_CASE(
+    "Integration: tile return slots survive output reorder and expire on removal",
+    "[integration][tile-slot][multioutput][.multioutput]"
+)
+{
+    auto* server = std::getenv("LWM_TEST_XSERVER");
+    if (!server || std::strcmp(server, "Xorg") != 0)
+        SKIP("Select the owned Xorg dummy server for multi-output coverage");
+    auto env = TestEnvironment::create("[workspaces]\ncount = 2\n");
+    REQUIRE(env);
+    RestoreOutputs restore;
+    auto& conn = env->conn;
+    auto socket = wait_for_ipc_socket_path(conn);
+    REQUIRE(socket);
+    randr({ "--addmode", "DUMMY1", "1280x720" });
+    randr({ "--output", "DUMMY1", "--mode", "1280x720", "--right-of", "DUMMY0" });
+    REQUIRE(wait_for_condition([&] { return query(*socket, "workspace list")["monitors"].size() == 2; }, timeout));
+    // Explicit desktop requests make placement independent of pointer position.
+    std::vector<xcb_window_t> windows;
+    for (int i = 0; i < 3; ++i)
+    {
+        auto window = create_window(conn, 20, 20, 200, 150);
+        set_window_desktop(conn, window, 0);
+        map_window(conn, window);
+        REQUIRE(wait_for_condition(
+            [&] { return get_window_property_string(conn.get(), window, intern_atom(conn.get(), "_LWM_WINDOW_CLASS")) == "tiled"; },
+            timeout
+        ));
+        observe_title_after_events(conn, window);
+        windows.push_back(window);
+    }
+    auto a = windows[0], b = windows[1], c = windows[2];
+    ipc_ok(*socket, "focus window=" + std::to_string(b));
+    ipc_ok(*socket, "window float");
+    bool removed = false;
+    SECTION("Reordered outputs retain the workspace slot")
+    {
+        randr({ "--output", "DUMMY1", "--pos", "0x0", "--output", "DUMMY0", "--pos", "1280x0" });
+        REQUIRE(wait_for_condition(
+            [&] { return query(*socket, "workspace list")["monitors"][0]["name"] == "DUMMY1"; }, timeout
+        ));
+    }
+    SECTION("Removed outputs cannot lend their slot to the survivor")
+    {
+        removed = true;
+        randr({ "--output", "DUMMY0", "--off" });
+        REQUIRE(wait_for_condition([&] { return query(*socket, "workspace list")["monitors"].size() == 1; }, timeout));
+    }
+    // Also carry the resulting slot decision through a real exec handoff.
+    auto previous = wm_instance(conn);
+    REQUIRE(previous);
+    ipc_ok(*socket, "restart");
+    REQUIRE(wait_for_wm_restart(conn, timeout, *previous));
+    socket = wait_for_ipc_socket_path(conn);
+    REQUIRE(socket);
+    ipc_ok(*socket, "focus window=" + std::to_string(b));
+    ipc_ok(*socket, "window float");
+    auto ga = require_window_geometry(conn, a);
+    auto gb = require_window_geometry(conn, b);
+    auto gc = require_window_geometry(conn, c);
+    CHECK(ga.x < gb.x);
+    CHECK(gb.x == gc.x);
+    CHECK((gb.y > gc.y) == removed);
+    CHECK(gb.y != gc.y);
+    for (auto window : windows) destroy_window(conn, window);
+}

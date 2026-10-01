@@ -193,6 +193,13 @@ std::vector<uint32_t> encode(Snapshot const& snapshot)
         out.word(client.urgency);
         out.flag(client.borderless);
         out.flag(client.desktop_pinned);
+        out.flag(client.tile_slot.has_value());
+        if (client.tile_slot)
+        {
+            out.count(client.tile_slot->index);
+            out.text(client.tile_slot->output);
+            out.count(client.tile_slot->workspace);
+        }
     }
     out.count(snapshot.named_scratchpads.size());
     for (auto const& named : snapshot.named_scratchpads)
@@ -239,7 +246,7 @@ std::optional<Snapshot> decode(std::span<uint32_t const> words)
             for (auto& window : workspace.tiles) window = in.word();
         }
     }
-    snapshot.clients.resize(in.count(20));
+    snapshot.clients.resize(in.count(21));
     for (auto& client : snapshot.clients)
     {
         client.window = in.word();
@@ -257,6 +264,16 @@ std::optional<Snapshot> decode(std::span<uint32_t const> words)
         );
         client.borderless = in.flag();
         client.desktop_pinned = in.flag();
+        if (in.flag())
+        {
+            TileSlot slot;
+            slot.index = in.word();
+            slot.output = in.text();
+            slot.workspace = in.word();
+            if (client.kind != Client::Kind::Floating || slot.output.empty())
+                return std::nullopt;
+            client.tile_slot = std::move(slot);
+        }
     }
     snapshot.named_scratchpads.resize(in.count(2));
     for (auto& named : snapshot.named_scratchpads)

@@ -22,6 +22,7 @@ restart::Snapshot sample()
                           { 0, 0, { { } } } };
     snapshot.clients = { { 0x100, 0, 0, Client::Kind::Tiled, { 1, 2, 3, 4 }, Geometry{ -5, -6, 70, 80 }, { true, false, std::nullopt, LayerHint::Below }, 3, true, false },
                          { 0x200, 1, 0, Client::Kind::Floating, { -32768, 32767, 65535, 1 }, std::nullopt, { }, 0, false, true } };
+    snapshot.clients[1].tile_slot = TileSlot{ 7, "output with spaces", 1 };
     snapshot.named_scratchpads = { { "tëxt with spaces", 0x200 }, { "", 0x100 } };
     snapshot.pool = { 0x300 };
     snapshot.fullscreen_claims = { 0x200, 0x100 };
@@ -44,8 +45,11 @@ TEST_CASE("Restart decoding rejects other formats and malformed records", "[rest
     auto words = restart::encode(sample());
     CHECK_FALSE(restart::decode({ }));
     auto other = words;
-    other[0] = restart::format + 1;
-    CHECK_FALSE(restart::decode(other));
+    for (auto format : { restart::format - 1, restart::format + 1 })
+    {
+        other[0] = format;
+        CHECK_FALSE(restart::decode(other));
+    }
     // Every truncation and any trailing word is rejected rather than partially applied.
     for (size_t size = 0; size < words.size(); ++size)
     {
@@ -73,6 +77,47 @@ TEST_CASE("Restart decoding rejects other formats and malformed records", "[rest
     auto snapshot = sample();
     snapshot.monitors[0].workspaces[0].ratios[SplitAddress{ 1 }] = 1.5;
     CHECK_FALSE(restart::decode(restart::encode(snapshot)));
+}
+
+TEST_CASE("Restart rejects tile slots on tiled clients or without output identity", "[restart][codec][tile-slot]")
+{
+    auto snapshot = sample();
+    SECTION("Tiled client") { snapshot.clients[0].tile_slot = TileSlot{ 1, "M0", 0 }; }
+    SECTION("Empty output") { snapshot.clients[1].tile_slot->output.clear(); }
+    CHECK_FALSE(restart::decode(restart::encode(snapshot)));
+}
+
+TEST_CASE("Restored tile slots are admitted only while the original workspace exists", "[restart][state][tile-slot]")
+{
+    auto source = test::state();
+    for (xcb_window_t id : { 1, 2, 3 }) add(source, id);
+    source.floating(2, true);
+    auto snapshot = restart::decode(restart::encode(source.snapshot()));
+    REQUIRE(snapshot);
+    REQUIRE(snapshot->find(2));
+    auto const& saved = *snapshot->find(2);
+    REQUIRE(saved.tile_slot == TileSlot{ 1, "M0", 0 });
+    auto target = test::state();
+    SECTION("Original workspace exists") { }
+    SECTION("Original output disappeared") { target.replace_monitors({ test::monitor("replacement") }); }
+    SECTION("Saved workspace no longer exists")
+    {
+        for (auto& record : snapshot->clients)
+            if (record.window == 2)
+                record.tile_slot->workspace = 99;
+    }
+    // Client records are in recency order, so find the floating client by ID.
+    auto record = *snapshot->find(2);
+    add(target, 1);
+    add(target, 3);
+    Client client;
+    client.id = 2;
+    client.mode = FloatingMode{ record.geometry, record.tile_slot };
+    target.insert(client);
+    target.floating(2, false);
+    bool valid = target.monitors()[0].name == "M0" && record.tile_slot->workspace == 0;
+    CHECK(target.monitors()[0].current().windows
+          == (valid ? std::vector<xcb_window_t>{ 1, 2, 3 } : std::vector<xcb_window_t>{ 1, 3, 2 }));
 }
 
 TEST_CASE("State snapshots restore workspaces, order, recency and scratchpads", "[restart][state]")
@@ -121,13 +166,14 @@ TEST_CASE("State snapshots restore workspaces, order, recency and scratchpads", 
 TEST_CASE("Restart claim order is explicit in the wire format", "[restart][codec]")
 {
     std::vector<uint32_t> words{
-        5, 0, 0,   0,  0, // format, focus, active, desktop, monitor count
+        6, 0, 0,   0,  0, // format, focus, active, desktop, monitor count
         1,                // client count
         7, 0, 0,   0,     // id, monitor, workspace, tiled
         0, 0, 100, 80,    // normal geometry
         0, 0, 0,   0,  0, // absent remembered floating geometry
         0, 0, 0,   0,     // unset preferences
         0, 0, 0,          // urgency, borderless, pinned
+        0,                // absent tile return slot
         0, 0,             // named slots, pool
         1, 7              // oldest-to-newest fullscreen claims
     };

@@ -58,6 +58,7 @@ void State::insert(Client client)
 {
     assert(client.monitor < monitors_.size() && client.workspace < monitors_[client.monitor].workspaces.size());
     mutated();
+    forget_missing_tile_slot(client);
     client.order = next_order_++;
     if (client.kind() == Client::Kind::Floating)
         client.mru_order = next_recency_++;
@@ -108,7 +109,7 @@ std::optional<TileSlot> State::detach(Client const& client)
     auto it = ws.find_window(client.id);
     if (it == ws.windows.end())
         return std::nullopt;
-    TileSlot slot{ static_cast<size_t>(it - ws.windows.begin()), client.monitor, client.workspace };
+    TileSlot slot{ static_cast<size_t>(it - ws.windows.begin()), monitors_[client.monitor].name, client.workspace };
     ws.windows.erase(it);
     workspace_policy::remove_from_focus_history(ws, client.id);
     workspace_policy::fixup_workspace_focus(
@@ -175,16 +176,52 @@ std::vector<xcb_window_t> State::fullscreen_claim_order() const
 
 xcb_window_t State::fullscreen_owner(size_t monitor) const { return fullscreen_owners().at(monitor); }
 
-bool State::suppressed(Client const& client, xcb_window_t owner)
+State::FullscreenVisibility State::fullscreen_visibility() const
 {
-    return owner != XCB_NONE && owner != client.id && owner != client.transient_for;
+    FullscreenVisibility result{ fullscreen_owners(), { } };
+    if (std::ranges::all_of(result.owners, [](auto owner) { return owner == XCB_NONE; }))
+        return result;
+
+    // Reverse the managed parent links once. Walking outward from each owner
+    // visits every descendant at most once per owner, even with cyclic hints.
+    std::unordered_map<xcb_window_t, std::vector<xcb_window_t>> children;
+    for (auto const& [id, client] : clients_)
+        if (client.transient_for != XCB_NONE)
+            children[client.transient_for].push_back(id);
+    std::unordered_set<xcb_window_t> visited;
+    std::vector<xcb_window_t> pending;
+    for (size_t monitor = 0; monitor < result.owners.size(); ++monitor)
+    {
+        auto owner = result.owners[monitor];
+        if (owner == XCB_NONE)
+            continue;
+        visited.clear();
+        visited.insert(owner);
+        pending.push_back(owner);
+        while (!pending.empty())
+        {
+            auto window = pending.back();
+            pending.pop_back();
+            // Intermediate windows may live elsewhere or be hidden. Only the
+            // descendant's own monitor determines which owner exempts it.
+            if (require(window).monitor == monitor)
+                result.exempt.insert(window);
+            if (auto it = children.find(window); it != children.end())
+                for (auto child : it->second)
+                    if (visited.insert(child).second)
+                        pending.push_back(child);
+        }
+    }
+    return result;
 }
 
-bool State::visible(Client const& client) const { return visible(client, fullscreen_owner(client.monitor)); }
+bool State::suppressed(Client const& client) const { return fullscreen_visibility().suppressed(client); }
 
-bool State::visible(Client const& client, xcb_window_t owner) const
+bool State::visible(Client const& client) const { return visible(client, fullscreen_visibility()); }
+
+bool State::visible(Client const& client, FullscreenVisibility const& fullscreen) const
 {
-    return in_view(client) && !suppressed(client, owner);
+    return in_view(client) && !fullscreen.suppressed(client);
 }
 
 bool State::focusable(Client const& client) const
@@ -295,6 +332,19 @@ bool State::relocate(
     return true;
 }
 
+// Slots refer to the original workspace, even while the client lives elsewhere.
+// Once that workspace disappears, a returning output must not resurrect the slot.
+void State::forget_missing_tile_slot(Client& client) const
+{
+    auto* mode = floating_mode(client);
+    if (!mode || !mode->tile_slot)
+        return;
+    auto const& slot = *mode->tile_slot;
+    auto output = std::ranges::find(monitors_, slot.output, &Monitor::name);
+    if (output == monitors_.end() || slot.workspace >= output->workspaces.size())
+        mode->tile_slot.reset();
+}
+
 void State::set_mode(xcb_window_t id, bool floating)
 {
     auto& client = edit(id);
@@ -316,7 +366,8 @@ void State::set_mode(xcb_window_t id, bool floating)
     }
     auto const& mode = std::get<FloatingMode>(client.mode);
     std::optional<size_t> index;
-    if (mode.tile_slot && mode.tile_slot->monitor == client.monitor && mode.tile_slot->workspace == client.workspace)
+    if (mode.tile_slot && mode.tile_slot->output == monitors_[client.monitor].name
+        && mode.tile_slot->workspace == client.workspace)
         index = mode.tile_slot->index;
     // Until layout runs, the floating rectangle is also the tile's best known geometry.
     client.mode = TiledMode{ mode.geometry, mode.geometry };
@@ -615,6 +666,7 @@ void State::replace_monitors(std::vector<Monitor> monitors)
         c.workspace = std::min(c.workspace, monitors_[c.monitor].workspaces.size() - 1);
         // Monitor indices in the hint may name different outputs now.
         c.fullscreen_monitors.reset();
+        forget_missing_tile_slot(c);
         if (auto* mode = floating_mode(c))
         {
             auto area = monitors_[c.monitor].working_area();
@@ -736,7 +788,8 @@ restart::Snapshot State::snapshot() const
                                      c->preferences,
                                      c->urgency.sources,
                                      c->borderless,
-                                     c->desktop_pinned });
+                                     c->desktop_pinned,
+                                     tiled ? std::nullopt : floating_mode(*c)->tile_slot });
     }
     for (auto const& slot : named_scratchpads_)
         if (slot.window() != XCB_NONE)

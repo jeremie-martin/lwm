@@ -289,9 +289,9 @@ private:
 
     // wm_transition.cpp: operation completion and publication
     void complete_transition();
-    void arrange_tiles(std::span<xcb_window_t const> owners);
+    void arrange_tiles(State::FullscreenVisibility const& fullscreen);
     std::vector<xcb_window_t> tiled_participants(Monitor const& monitor) const;
-    std::vector<xcb_window_t> tiled_participants(Monitor const& monitor, xcb_window_t owner) const;
+    std::vector<xcb_window_t> tiled_participants(Monitor const& monitor, State::FullscreenVisibility const& fullscreen) const;
     Geometry presentation_geometry(Client const& client) const;
     Geometry fullscreen_geometry(Client const& client) const;
     uint32_t border_width(Client const& client) const;
@@ -306,7 +306,7 @@ private:
     void publish_fixtures();
     void publish_root(std::vector<Projected> const& clients, bool urgency_changed);
     DesktopLayout desktop_layout() const;
-    void reconcile_stacking(std::span<xcb_window_t const> owners, bool reassert);
+    void reconcile_stacking(State::FullscreenVisibility const& fullscreen, bool reassert);
     void withdraw_removed();
     void commit_focus(uint32_t time);
     void flush_and_drain_crossing();

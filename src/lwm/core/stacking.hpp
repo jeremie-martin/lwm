@@ -6,8 +6,8 @@
 namespace lwm::stacking {
 
 // One bottom-to-top order for every client and fixture, derived from state and
-// the monitors' fullscreen owners.
-std::vector<xcb_window_t> compute_order(State const& state, std::span<xcb_window_t const> owners);
+// a shared fullscreen visibility projection.
+std::vector<xcb_window_t> compute_order(State const& state, State::FullscreenVisibility const& fullscreen);
 
 struct StackMove
 {

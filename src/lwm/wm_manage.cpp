@@ -327,7 +327,7 @@ void WindowManager::manage_client(xcb_window_t window, ClassificationResult cons
         candidate.monitor = saved->monitor;
         candidate.workspace = saved->workspace;
         if (saved->kind == Client::Kind::Floating)
-            candidate.mode = FloatingMode{ saved->geometry };
+            candidate.mode = FloatingMode{ saved->geometry, saved->tile_slot };
         else
             candidate.mode = TiledMode{ saved->floating, saved->geometry };
         candidate.preferences = saved->preferences;

@@ -11,17 +11,17 @@ bool newer(Client const& a, Client const& b)
     return std::tie(a.mru_order, a.order, a.id) > std::tie(b.mru_order, b.order, b.id);
 }
 
-// One fullscreen owner per selection keeps candidate checks linear.
+// Resolve fullscreen ancestry once per selection, shared by all candidates.
 struct Eligibility
 {
     State const& state;
     size_t monitor;
-    xcb_window_t owner;
+    State::FullscreenVisibility fullscreen;
 
     bool operator()(Client const& client) const
     {
         return client.monitor == monitor && State::accepts_focus(client) && !state.showing_desktop()
-            && state.visible(client, owner);
+            && state.visible(client, fullscreen);
     }
 };
 
@@ -32,7 +32,7 @@ xcb_window_t fallback(State const& state, size_t monitor)
     auto const& monitors = state.monitors();
     if (monitor >= monitors.size())
         return XCB_NONE;
-    Eligibility eligible{ state, monitor, state.fullscreen_owner(monitor) };
+    Eligibility eligible{ state, monitor, state.fullscreen_visibility() };
     auto const& current = monitors[monitor].current();
     auto current_tile = [&](xcb_window_t window)
     {
@@ -81,7 +81,7 @@ cycle_target(std::span<xcb_window_t const> order, State const& state, size_t mon
 {
     if (order.empty() || monitor >= state.monitors().size())
         return XCB_NONE;
-    Eligibility eligible{ state, monitor, state.fullscreen_owner(monitor) };
+    Eligibility eligible{ state, monitor, state.fullscreen_visibility() };
     auto it = std::ranges::find(order, current);
     size_t index = it == order.end() ? (forward ? order.size() - 1 : 0) : static_cast<size_t>(it - order.begin());
     for (size_t visited = 0; visited < order.size(); ++visited)

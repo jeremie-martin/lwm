@@ -168,8 +168,10 @@ struct RuleActions
 struct TileSlot
 {
     size_t index = 0;
-    size_t monitor = 0;
+    std::string output; ///< Stable across monitor enumeration and exec restart
     size_t workspace = 0;
+
+    bool operator==(TileSlot const&) const = default;
 };
 
 struct TiledMode

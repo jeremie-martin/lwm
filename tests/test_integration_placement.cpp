@@ -1,6 +1,7 @@
 #include "wm_observations.hpp"
 #include <X11/keysym.h>
 #include <catch2/catch_test_macros.hpp>
+#include <catch2/generators/catch_generators.hpp>
 
 using namespace lwm::test;
 namespace {
@@ -171,4 +172,42 @@ TEST_CASE(
     REQUIRE(require_window_geometry(conn, w) == saved);
     REQUIRE(require_property_cardinal(conn.get(), w, intern_atom(conn.get(), "_NET_WM_DESKTOP")) == 1);
     destroy_window(conn, w);
+}
+
+TEST_CASE("Integration: restart preserves a floating tile's return position", "[integration][placement][restart][tile-slot]")
+{
+    bool restart = GENERATE(false, true);
+    CAPTURE(restart);
+    auto env = TestEnvironment::create(config);
+    REQUIRE(env);
+    auto& conn = env->conn;
+    park_pointer(conn);
+    auto socket = wait_for_ipc_socket_path(conn);
+    REQUIRE(socket);
+    std::vector<xcb_window_t> windows;
+    for (int i = 0; i < 3; ++i)
+    {
+        auto window = create_window(conn, 20, 20, 200, 150);
+        map_window(conn, window);
+        REQUIRE(wait_for_active_window(conn, window, timeout));
+        windows.push_back(window);
+    }
+    ipc_ok(*socket, "focus window=" + std::to_string(windows[1]));
+    std::vector<WindowGeometry> before;
+    for (auto window : windows) before.push_back(require_window_geometry(conn, window));
+    ipc_ok(*socket, "window float");
+    if (restart)
+    {
+        auto previous = wm_instance(conn);
+        REQUIRE(previous);
+        ipc_ok(*socket, "restart");
+        REQUIRE(wait_for_wm_restart(conn, timeout, *previous));
+        socket = wait_for_ipc_socket_path(conn);
+        REQUIRE(socket);
+    }
+    ipc_ok(*socket, "focus window=" + std::to_string(windows[1]));
+    ipc_ok(*socket, "window float");
+    for (size_t i = 0; i < windows.size(); ++i)
+        CHECK(require_window_geometry(conn, windows[i]) == before[i]);
+    for (auto window : windows) destroy_window(conn, window);
 }

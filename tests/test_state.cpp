@@ -79,6 +79,48 @@ TEST_CASE("Mode changes keep tile slots and one normal floating rectangle", "[st
     }
 }
 
+TEST_CASE("Tile return slots follow output identity and expire with their workspace", "[state][tile-slot][hotplug]")
+{
+    auto state = test::state(2);
+    for (xcb_window_t id : { 1, 2, 3 }) add(state, id);
+    state.floating(2, true);
+    REQUIRE(floating_mode(state.require(2))->tile_slot == TileSlot{ 1, "M0", 0 });
+    SECTION("Reordering outputs preserves the original slot")
+    {
+        state.replace_monitors({ test::monitor("M1"), test::monitor("M0", 1000) });
+        REQUIRE(state.require(2).monitor == 1);
+        state.floating(2, false);
+        CHECK(state.monitors()[1].current().windows == std::vector<xcb_window_t>{ 1, 2, 3 });
+    }
+    SECTION("Removal never lends the slot to the replacement output")
+    {
+        state.replace_monitors({ test::monitor("M1") });
+        CHECK_FALSE(floating_mode(state.require(2))->tile_slot);
+        state.floating(2, false);
+        CHECK(state.monitors()[0].current().windows == std::vector<xcb_window_t>{ 1, 3, 2 });
+    }
+    SECTION("A slot expires even while its client lives on another output")
+    {
+        state.relocate(2, 1, 0);
+        state.replace_monitors({ test::monitor("M1") });
+        CHECK_FALSE(floating_mode(state.require(2))->tile_slot);
+        state.replace_monitors({ test::monitor("M1"), test::monitor("M0", 1000) });
+        add(state, 4, { .monitor = 1 });
+        add(state, 5, { .monitor = 1 });
+        state.relocate(2, 1, 0);
+        state.floating(2, false);
+        CHECK(state.monitors()[1].current().windows == std::vector<xcb_window_t>{ 4, 5, 2 });
+    }
+    SECTION("Visiting another workspace does not erase the original identity")
+    {
+        state.relocate(2, 1, 1);
+        state.replace_monitors({ test::monitor("M1"), test::monitor("M0", 1000) });
+        state.relocate(2, 1, 0);
+        state.floating(2, false);
+        CHECK(state.monitors()[1].current().windows == std::vector<xcb_window_t>{ 1, 2, 3 });
+    }
+}
+
 TEST_CASE("Type and transient updates change only default modes", "[state][mode]")
 {
     auto state = test::state();
@@ -154,6 +196,110 @@ TEST_CASE("The most recent fullscreen claim in view owns its monitor", "[state][
     CHECK_FALSE(state.require(3).maximized_horz);
     state.maximize(3, true, false);
     CHECK_FALSE(state.require(3).maximized_horz);
+}
+
+TEST_CASE(
+    "Fullscreen exemptions follow managed ancestry without changing view eligibility",
+    "[state][fullscreen][ancestry]"
+)
+{
+    auto state = test::state(2);
+    add(state, 1);
+    add_floating(state, 2);
+    add_floating(state, 3);
+    add_floating(state, 4);
+    state.transient(2, 1);
+    state.transient(3, 2);
+    state.fullscreen(1, true);
+    CHECK(state.visible(state.require(3)));
+    CHECK(state.focusable(state.require(3)));
+    CHECK_FALSE(state.visible(state.require(4)));
+
+    SECTION("Minimized descendants stay hidden")
+    {
+        state.iconic(3, true);
+        CHECK_FALSE(state.visible(state.require(3)));
+        state.iconic(3, false);
+        CHECK(state.visible(state.require(3)));
+    }
+    SECTION("Off-workspace descendants need their own sticky preference")
+    {
+        state.relocate(3, 0, 1);
+        CHECK_FALSE(state.visible(state.require(3)));
+        state.sticky(3, true);
+        CHECK(state.visible(state.require(3)));
+    }
+    SECTION("Intermediate visibility does not rewrite ancestry")
+    {
+        state.iconic(2, true);
+        CHECK(state.visible(state.require(3)));
+        state.relocate(2, 1, 1);
+        CHECK(state.visible(state.require(3)));
+    }
+    SECTION("Each monitor applies its own owner")
+    {
+        state.relocate(4, 1, 0);
+        state.fullscreen(4, true);
+        state.relocate(3, 1, 0);
+        CHECK_FALSE(state.visible(state.require(3)));
+        state.transient(2, 4);
+        CHECK(state.visible(state.require(3)));
+    }
+    SECTION("Removing an intermediate parent breaks the exemption")
+    {
+        state.erase(2);
+        CHECK_FALSE(state.visible(state.require(3)));
+    }
+    SECTION("Reparenting an intermediate node updates descendants immediately")
+    {
+        state.transient(2, 4);
+        CHECK_FALSE(state.visible(state.require(3)));
+        state.transient(4, 1);
+        CHECK(state.visible(state.require(3)));
+    }
+}
+
+TEST_CASE("Fullscreen ancestry terminates on missing parents and cycles", "[state][fullscreen][ancestry]")
+{
+    auto state = test::state();
+    for (xcb_window_t id : { 1, 2, 3, 4 }) add_floating(state, id);
+    state.fullscreen(1, true);
+    state.transient(4, 3);
+    state.transient(3, 2);
+    SECTION("Missing parent") { state.transient(2, 99); }
+    SECTION("Self-link") { state.transient(2, 2); }
+    SECTION("Cycle unrelated to the owner") { state.transient(2, 3); }
+    CHECK(state.suppressed(state.require(4)));
+    state.fullscreen(1, false);
+    CHECK_FALSE(state.suppressed(state.require(4)));
+    state.fullscreen(1, true);
+    // Even a cycle containing the owner grants an exemption when the walk
+    // reaches it. Hints remain intact; stacking resolves ordering separately.
+    state.transient(2, 1);
+    state.transient(1, 4);
+    CHECK_FALSE(state.suppressed(state.require(4)));
+    CHECK(state.require(1).transient_for == 4);
+}
+
+TEST_CASE(
+    "Fullscreen ancestry handles long chains and disconnected cycles iteratively",
+    "[state][fullscreen][ancestry]"
+)
+{
+    auto state = test::state();
+    constexpr xcb_window_t count = 2048;
+    for (xcb_window_t id = 1; id <= count; ++id) add_floating(state, id);
+    for (xcb_window_t id = 2; id <= count; ++id) state.transient(id, id - 1);
+    state.fullscreen(1, true);
+    auto revision = state.revision();
+    auto fullscreen = state.fullscreen_visibility();
+    for (auto const& [id, client] : state.clients()) CHECK(state.visible(client, fullscreen));
+    CHECK(state.revision() == revision);
+
+    // A long cycle with no route to the owner grants no exemption.
+    state.transient(2, count);
+    fullscreen = state.fullscreen_visibility();
+    for (auto const& [id, client] : state.clients()) CHECK(state.visible(client, fullscreen) == (id == 1));
 }
 
 TEST_CASE("Fullscreen assignments preserve history while requests renew it", "[state][fullscreen]")

@@ -26,9 +26,10 @@ void WindowManager::complete_transition()
         refresh_workareas();
     validate_drag();
     repair_focus();
-    // Arrangement and urgency clearing leave fullscreen ownership unchanged.
-    auto owners = state_.fullscreen_owners();
-    arrange_tiles(owners);
+    // Arrangement and urgency clearing leave fullscreen ancestry and ownership unchanged.
+    auto fullscreen = state_.fullscreen_visibility();
+    auto const& owners = fullscreen.owners;
+    arrange_tiles(fullscreen);
     auto focus_request = state_.take_focus_request();
     if (focus_request && state_.find(state_.active_window()))
         state_.clear_urgency(state_.active_window());
@@ -47,7 +48,7 @@ void WindowManager::complete_transition()
     // One pass resolves each client's output record and visibility, in registration order.
     std::vector<Projected> clients;
     for (auto const* client : state_.clients_by_order())
-        clients.push_back({ client, &outputs_[client->id], state_.visible(*client, owners[client->monitor]) });
+        clients.push_back({ client, &outputs_[client->id], state_.visible(*client, fullscreen) });
     bool moved = publish_clients(clients);
     if (focus_request)
     {
@@ -62,7 +63,7 @@ void WindowManager::complete_transition()
     ewmh_.update_window_states(states, owned_state_atoms());
     publish_fixtures();
     publish_root(clients, urgency_changed);
-    reconcile_stacking(owners, focus_request.has_value());
+    reconcile_stacking(fullscreen, focus_request.has_value());
     withdraw_removed();
     if (drain_requested_ || (moved && !drag_active()))
         flush_and_drain_crossing();
@@ -86,10 +87,11 @@ void WindowManager::complete_transition()
 // members of other workspaces. Fullscreen windows take fullscreen geometry.
 std::vector<xcb_window_t> WindowManager::tiled_participants(Monitor const& monitor) const
 {
-    return tiled_participants(monitor, state_.fullscreen_owner(static_cast<size_t>(&monitor - state_.monitors().data())));
+    return tiled_participants(monitor, state_.fullscreen_visibility());
 }
 
-std::vector<xcb_window_t> WindowManager::tiled_participants(Monitor const& monitor, xcb_window_t owner) const
+std::vector<xcb_window_t>
+WindowManager::tiled_participants(Monitor const& monitor, State::FullscreenVisibility const& fullscreen) const
 {
     std::vector<xcb_window_t> windows;
     auto collect = [&](Workspace const& workspace, bool current)
@@ -97,7 +99,7 @@ std::vector<xcb_window_t> WindowManager::tiled_participants(Monitor const& monit
         for (auto window : workspace.windows)
         {
             auto const& client = state_.require(window);
-            if ((current || client.sticky) && !client.fullscreen && state_.visible(client, owner))
+            if ((current || client.sticky) && !client.fullscreen && state_.visible(client, fullscreen))
                 windows.push_back(window);
         }
     };
@@ -108,12 +110,12 @@ std::vector<xcb_window_t> WindowManager::tiled_participants(Monitor const& monit
     return windows;
 }
 
-void WindowManager::arrange_tiles(std::span<xcb_window_t const> owners)
+void WindowManager::arrange_tiles(State::FullscreenVisibility const& fullscreen)
 {
     for (size_t m = 0; m < state_.monitors().size(); ++m)
     {
         auto const& monitor = state_.monitors()[m];
-        auto windows = tiled_participants(monitor, owners[m]);
+        auto windows = tiled_participants(monitor, fullscreen);
         auto const& workspace = monitor.current();
         auto slots =
             layout_.arrange(windows.size(), monitor.working_area(), workspace.layout_strategy, workspace.split_ratios);
@@ -553,9 +555,9 @@ void WindowManager::publish_root(std::vector<Projected> const& clients, bool urg
 // A changed desired order, a forwarded restack, or an explicit focus request
 // reads the tree and repairs the server order, including external restacks.
 // Other operations leave an unchanged order alone.
-void WindowManager::reconcile_stacking(std::span<xcb_window_t const> owners, bool reassert)
+void WindowManager::reconcile_stacking(State::FullscreenVisibility const& fullscreen, bool reassert)
 {
-    auto order = stacking::compute_order(state_, owners);
+    auto order = stacking::compute_order(state_, fullscreen);
     if (order == root_.stacking && !restack_requested_ && !reassert)
         return;
     if (order.size() > 1)

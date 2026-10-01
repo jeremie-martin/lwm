@@ -7,6 +7,7 @@
 #include <string>
 #include <string_view>
 #include <unordered_map>
+#include <unordered_set>
 #include <utility>
 #include <variant>
 #include <vector>
@@ -22,6 +23,19 @@ class State
 public:
     using Clients = std::unordered_map<xcb_window_t, Client>;
     using Fixtures = std::unordered_map<xcb_window_t, Fixture>;
+
+    // Derived for one read pass, never retained between operations.
+    // Ancestry is independent of iconic/workspace eligibility.
+    struct FullscreenVisibility
+    {
+        std::vector<xcb_window_t> owners;
+        std::unordered_set<xcb_window_t> exempt;
+
+        bool suppressed(Client const& client) const
+        {
+            return owners[client.monitor] != XCB_NONE && !exempt.contains(client.id);
+        }
+    };
 
     struct NamedScratchpad
     {
@@ -71,11 +85,12 @@ public:
     bool in_view(Client const& client) const;
     xcb_window_t fullscreen_owner(size_t monitor) const;
     std::vector<xcb_window_t> fullscreen_owners() const;
+    FullscreenVisibility fullscreen_visibility() const;
     bool visible(Client const& client) const;
-    // Hot loops resolve the client's monitor owner once.
-    bool visible(Client const& client, xcb_window_t owner) const;
-    // Another window owns fullscreen here and this client is not its transient.
-    static bool suppressed(Client const& client, xcb_window_t owner);
+    // Hot loops share fullscreen owners and descendant membership.
+    bool visible(Client const& client, FullscreenVisibility const& fullscreen) const;
+    // Another window owns fullscreen here and this client is not its descendant.
+    bool suppressed(Client const& client) const;
     static bool accepts_focus(Client const& client) { return client.accepts_input || client.supports_take_focus; }
     bool focusable(Client const& client) const;
     uint64_t revision() const { return revision_; }
@@ -207,6 +222,7 @@ private:
     void attach(Client const& client, std::optional<size_t> index = std::nullopt);
     std::optional<TileSlot> detach(Client const& client);
     void release_scratchpad(xcb_window_t id);
+    void forget_missing_tile_slot(Client& client) const;
 };
 
 } // namespace lwm

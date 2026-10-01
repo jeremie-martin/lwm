@@ -87,8 +87,8 @@ Derived values are functions, not stored fields:
 - The fullscreen owner of a monitor is the fullscreen client in view with the most
   recent claim. There is no stored owner and no pending owner.
 - A client is visible when it is in view and not suppressed by another monitor owner
-  (its own transients are exempt). It can hold focus when it is visible, accepts input
-  or `WM_TAKE_FOCUS`, and the desktop is not shown.
+  (its managed transient descendants are exempt). It can hold focus when it is visible,
+  accepts input or `WM_TAKE_FOCUS`, and the desktop is not shown.
 
 `State` exposes const views only. Every mutation is a named operation that keeps
 membership, focus memory and scratchpad claims consistent, and increments a revision
@@ -177,7 +177,12 @@ tiled reorder within one workspace keeps membership and focus history.
 remembered floating rectangle, otherwise the layout target; a rectangle lying entirely
 outside the monitor's workarea is centered on it, because an unarranged tile can still
 hold an off-monitor initial or hotplug rectangle. Float-to-tile conversion remembers the
-floating rectangle and restores the tile slot on the same workspace. Type and transient
+floating rectangle and restores the tile slot on the same workspace. A slot identifies
+its original output by name and its workspace by index, so monitor reordering cannot
+retarget it. Visiting another workspace while floating keeps that identity; tiling
+elsewhere uses normal insertion. Topology replacement and client admission discard a
+slot if its original output or workspace no longer exists. Reconnecting an output
+does not revive a discarded slot. Type and transient
 updates apply the default mode unless the user chose one or a scratchpad owns the
 window.
 
@@ -234,10 +239,18 @@ Admission of an initially fullscreen client and restoration from minimized use t
 claim operation. It also clears maximize and requests focus repair. Restart restores
 the saved claim order instead of generating interactions from saved settings.
 Other visible clients on that monitor are suppressed and hidden, except managed
-transients of the owner. Fullscreen state may remain set on iconified or off-workspace
-clients; ownership is effective only when they return to view. Showing the desktop
-removes fullscreen ownership. `_NET_WM_FULLSCREEN_MONITORS` changes geometry only and
+transient descendants of the owner (see [X11.md](X11.md#state-and-visibility)).
+Fullscreen state may remain set on iconified or off-workspace clients; ownership is
+effective only when they return to view. Showing the desktop removes fullscreen
+ownership. `_NET_WM_FULLSCREEN_MONITORS` changes geometry only and
 does not create cross-monitor ownership.
+
+`State::fullscreen_visibility()` derives owners and descendant exemptions for a
+read pass. It reverses parent links once and walks outward from each owner with a
+visited set, without recursion. Work is O(n) per owner, including cyclic hints;
+with no owner it skips ancestry construction. Completion shares this temporary
+projection between layout, client visibility, and stacking. It is discarded after
+the pass and needs no persistent invalidation machinery.
 
 `stacking::compute_order()` computes one bottom-to-top order for clients and fixtures.
 Its hidden prefix includes iconic, off-workspace, and fullscreen-suppressed clients.
@@ -277,8 +290,9 @@ desktop deliberately leaves focus cleared.
 
 Fallback selection prefers the workspace's remembered focus, its bounded focus history,
 reverse tiled order, sticky tiled clients on the monitor, then visible floating clients
-by recency. `core/focus` reads `State` directly and resolves one fullscreen owner per
-selection, so selection is linear and allocates no candidate lists.
+by recency. `core/focus` reads `State` directly and derives fullscreen visibility once per
+selection, so candidate eligibility checks are constant-time and allocate no candidate
+lists.
 
 Cycling retains only window IDs in descending recency order; consecutive steps keep that
 order while recording actual focus recency. Each step checks current eligibility, so
@@ -396,6 +410,7 @@ decisions.
 Graceful restart encodes `State::snapshot()` into the root property `_LWM_RESTART`:
 focus, showing-desktop, per-workspace layout, ratios, tile order and remembered focus,
 and per-client placement, mode, geometry, preferences, urgency and scratchpad claims.
+Floating clients also retain their tile-return slots, including original output names.
 The snapshot also records oldest-to-newest fullscreen claims, including hidden and
 iconic clients. Claim order is authoritative even when no owner is currently visible;
 it is independent of focus recency and X stacking/adoption order.

@@ -348,11 +348,11 @@ void WindowManager::swap_active_tile(int offset)
     size_t monitor = state_.focused_monitor();
     auto const& workspace = state_.monitors()[monitor].current();
     std::vector<size_t> eligible;
-    auto owner = state_.fullscreen_owner(monitor);
+    auto fullscreen = state_.fullscreen_visibility();
     for (size_t i = 0; i < workspace.windows.size(); ++i)
     {
         auto const& client = state_.require(workspace.windows[i]);
-        if (!client.fullscreen && state_.visible(client, owner))
+        if (!client.fullscreen && state_.visible(client, fullscreen))
             eligible.push_back(i);
     }
     auto it = std::ranges::find_if(eligible, [&](auto i) { return workspace.windows[i] == workspace.focused_window; });

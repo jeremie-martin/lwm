@@ -529,7 +529,7 @@ void WindowManager::handle_active_window_request(xcb_client_message_event_t cons
     }
     // Activation never surfaces a window suppressed by the owner of the placement it is shown on.
     bool shown = client->sticky || state_.shows(client->monitor, client->workspace);
-    if (shown && State::suppressed(*client, state_.fullscreen_owner(client->monitor)))
+    if (shown && state_.suppressed(*client))
         return deny("fullscreen-suppressed");
     if (client->iconic)
         deiconify_window(window, false);

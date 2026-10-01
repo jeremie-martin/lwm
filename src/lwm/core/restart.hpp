@@ -11,7 +11,7 @@
 // as on a fresh start.
 namespace lwm::restart {
 
-inline constexpr uint32_t format = 5;
+inline constexpr uint32_t format = 6;
 
 struct ClientRecord
 {
@@ -25,6 +25,7 @@ struct ClientRecord
     uint8_t urgency = 0;
     bool borderless = false;
     bool desktop_pinned = false;
+    std::optional<TileSlot> tile_slot; ///< Floating client's return position on its original output
 
     bool operator==(ClientRecord const&) const = default;
 };

@@ -176,6 +176,162 @@ TEST_CASE(
 }
 
 TEST_CASE(
+    "Integration: fullscreen descendants share visibility activation and stacking rules",
+    "[integration][transition][fullscreen][ancestry]"
+)
+{
+    auto env = TestEnvironment::create();
+    if (!env)
+        SKIP("X11 unavailable");
+    auto& conn = env->conn;
+    // Keep pointer focus from affecting explicit activation assertions.
+    xcb_warp_pointer(conn.get(), XCB_NONE, conn.root(), 0, 0, 0, 0, 0, 0);
+    xcb_flush(conn.get());
+    auto socket = wait_for_ipc_socket_path(conn);
+    REQUIRE(socket);
+    auto owner = create_window(conn, 20, 30, 400, 300);
+    map_window(conn, owner);
+    REQUIRE(wait_for_active_window(conn, owner, timeout));
+    auto unrelated = create_window(conn, 60, 70, 320, 240);
+    set_window_type(conn, unrelated, intern_atom(conn.get(), "_NET_WM_WINDOW_TYPE_DIALOG"));
+    map_window(conn, unrelated);
+    REQUIRE(wait_for_active_window(conn, unrelated, timeout));
+    ipc_ok(*socket, "focus window=" + std::to_string(owner));
+    ipc_ok(*socket, "window fullscreen");
+    auto dialog = create_window(conn, 60, 70, 320, 240);
+    set_transient_for(conn, dialog, owner);
+    map_window(conn, dialog);
+    REQUIRE(wait_for_active_window(conn, dialog, timeout));
+    auto child = create_window(conn, 80, 90, 200, 150);
+    set_transient_for(conn, child, dialog);
+    map_window(conn, child);
+    REQUIRE(wait_for_active_window(conn, child, timeout));
+    REQUIRE(wait_for_x_input_focus(conn, child, timeout));
+    REQUIRE_FALSE(is_hidden_offscreen(conn, child));
+    REQUIRE(is_hidden_offscreen(conn, unrelated));
+    REQUIRE(is_stacked_above(conn, child, dialog));
+    REQUIRE(is_stacked_above(conn, dialog, owner));
+
+    auto activate = intern_atom(conn.get(), "_NET_ACTIVE_WINDOW");
+    ipc_ok(*socket, "focus window=" + std::to_string(owner));
+    send_client_message(conn, child, activate, 2);
+    REQUIRE(wait_for_active_window(conn, child, timeout));
+    REQUIRE(wait_for_x_input_focus(conn, child, timeout));
+    send_client_message(conn, unrelated, activate, 2);
+    observe_title_after_events(conn, child);
+    REQUIRE(wait_for_active_window(conn, child, timeout));
+    REQUIRE(is_hidden_offscreen(conn, unrelated));
+
+    // Ancestry exempts suppression; it does not prevent minimization. An
+    // explicit activation must also recognize the ancestry before restoring.
+    send_client_message(conn, child, intern_atom(conn.get(), "WM_CHANGE_STATE"), XCB_ICCCM_WM_STATE_ICONIC);
+    observe_title_after_events(conn, child);
+    REQUIRE(is_hidden_offscreen(conn, child));
+    send_client_message(conn, child, activate, 2);
+    REQUIRE(wait_for_active_window(conn, child, timeout));
+    REQUIRE_FALSE(is_hidden_offscreen(conn, child));
+
+    // Changing an intermediate link updates the whole chain without changing
+    // the child's hint, and focus repairs when that child becomes suppressed.
+    xcb_delete_property(conn.get(), dialog, XCB_ATOM_WM_TRANSIENT_FOR);
+    observe_title_after_events(conn, dialog);
+    REQUIRE(is_hidden_offscreen(conn, dialog));
+    REQUIRE(is_hidden_offscreen(conn, child));
+    REQUIRE(wait_for_active_window(conn, owner, timeout));
+    set_transient_for(conn, dialog, owner);
+    observe_title_after_events(conn, dialog);
+    REQUIRE_FALSE(is_hidden_offscreen(conn, child));
+    REQUIRE(is_stacked_above(conn, child, dialog));
+    REQUIRE(is_stacked_above(conn, dialog, owner));
+
+    destroy_window(conn, dialog);
+    observe_title_after_events(conn, child);
+    REQUIRE(is_hidden_offscreen(conn, child));
+    destroy_window(conn, child);
+    destroy_window(conn, unrelated);
+    destroy_window(conn, owner);
+}
+
+TEST_CASE(
+    "Integration: nested dialog families follow fullscreen claims across rule reloads",
+    "[integration][transition][fullscreen][ancestry][rules][reload]"
+)
+{
+    auto env = TestEnvironment::create(R"(
+[[rules]]
+match = { class = "FullscreenRoot" }
+apply = { fullscreen = true }
+)");
+    if (!env)
+        SKIP("X11 unavailable");
+    auto& conn = env->conn;
+    xcb_warp_pointer(conn.get(), XCB_NONE, conn.root(), 0, 0, 0, 0, 0, 0);
+    xcb_flush(conn.get());
+    auto socket = wait_for_ipc_socket_path(conn);
+    REQUIRE(socket);
+    struct Family
+    {
+        xcb_window_t root, dialog, child;
+    };
+    auto create_family = [&]
+    {
+        Family family{ create_window(conn, 20, 30, 400, 300),
+                       create_window(conn, 60, 70, 320, 240),
+                       create_window(conn, 80, 90, 200, 150) };
+        set_window_wm_class(conn, family.root, "test", "FullscreenRoot");
+        set_transient_for(conn, family.dialog, family.root);
+        set_transient_for(conn, family.child, family.dialog);
+        for (auto window : { family.root, family.dialog, family.child })
+        {
+            map_window(conn, window);
+            REQUIRE(wait_for_active_window(conn, window, timeout));
+        }
+        return family;
+    };
+    auto first = create_family();
+    auto second = create_family();
+    ipc_ok(*socket, "ping");
+    auto expect_families = [&](Family const& shown, Family const& hidden)
+    {
+        for (auto window : { shown.root, shown.dialog, shown.child })
+            CHECK(require_window_geometry(conn, window).x >= 0);
+        for (auto window : { hidden.root, hidden.dialog, hidden.child })
+            CHECK(require_window_geometry(conn, window).x < -10000);
+        CHECK(is_stacked_above(conn, shown.child, shown.dialog));
+        CHECK(is_stacked_above(conn, shown.dialog, shown.root));
+    };
+    auto state = intern_atom(conn.get(), "_NET_WM_STATE");
+    auto fullscreen = intern_atom(conn.get(), "_NET_WM_STATE_FULLSCREEN");
+    expect_families(second, first);
+
+    // Explicit requests renew ownership; rule assignments must not. Choose the
+    // older root so replay in registration order would expose a regression.
+    send_client_message(conn, first.root, state, 1, fullscreen);
+    observe_title_after_events(conn, first.child);
+    expect_families(first, second);
+    ipc_ok(*socket, "reload-config");
+    expect_families(first, second);
+    REQUIRE(has_state(conn, first.root, fullscreen));
+    REQUIRE(has_state(conn, second.root, fullscreen));
+
+    send_client_message(conn, second.root, state, 1, fullscreen);
+    observe_title_after_events(conn, second.child);
+    expect_families(second, first);
+    send_client_message(conn, second.child, intern_atom(conn.get(), "_NET_ACTIVE_WINDOW"), 2);
+    REQUIRE(wait_for_active_window(conn, second.child, timeout));
+    REQUIRE(wait_for_x_input_focus(conn, second.child, timeout));
+    // Leaving fullscreen restores the other owner's entire family and repairs
+    // focus away from its newly suppressed competitor's descendant.
+    send_client_message(conn, second.root, state, 0, fullscreen);
+    observe_title_after_events(conn, first.child);
+    expect_families(first, second);
+    REQUIRE(wait_for_active_window(conn, first.root, timeout));
+    REQUIRE(wait_for_x_input_focus(conn, first.root, timeout));
+    for (auto family : { first, second })
+        for (auto window : { family.child, family.dialog, family.root }) destroy_window(conn, window);
+}
+
+TEST_CASE(
     "Integration: reclassifying an unarranged client preserves its initial geometry",
     "[integration][transition][geometry][property]"
 )
