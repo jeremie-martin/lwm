@@ -30,12 +30,12 @@ TEST_CASE("Registration attaches tiles and removal releases every membership", "
     add(state, 3);
     auto const& workspace = state.monitors()[0].workspaces[0];
     CHECK(workspace.windows == std::vector<xcb_window_t>{ 1, 3 });
-    state.focus(3);
+    test::focus(state, 3);
     state.claim_scratchpad("term", 3);
     state.pool_scratchpad(2);
     state.erase(3);
     CHECK(workspace.windows == std::vector<xcb_window_t>{ 1 });
-    CHECK(workspace.focused_window == 1);
+    CHECK(workspace.preferred_tile == XCB_NONE);
     CHECK(state.active_window() == XCB_NONE);
     CHECK(state.named_scratchpad("term")->window() == XCB_NONE);
     state.erase(2);
@@ -314,18 +314,20 @@ TEST_CASE("Fullscreen assignments preserve history while requests renew it", "[s
     SECTION("Minimized") { state.iconic(1, true); }
     SECTION("Showing desktop") { state.show_desktop(true); }
     auto claims = state.snapshot().fullscreen_claims;
+    state.complete_focus();
     auto revision = state.revision();
-    state.take_focus_repair();
     state.fullscreen(2, true);
     state.fullscreen(1, true);
     CHECK(state.snapshot().fullscreen_claims == claims);
     CHECK(state.revision() == revision);
-    CHECK_FALSE(state.take_focus_repair());
+    CHECK_FALSE(state.complete_focus());
 
     state.request_fullscreen(1);
     CHECK(state.snapshot().fullscreen_claims == std::vector<xcb_window_t>{ 2, 1 });
     CHECK(state.revision() > revision);
-    CHECK(state.take_focus_repair());
+    state.complete_focus();
+    CHECK(state.active_window() == (state.focusable(state.require(1)) ? 1
+                                  : state.focusable(state.require(2)) ? 2 : XCB_NONE));
     // A request changes priority, not placement, minimization or show-desktop.
     state.show_desktop(false);
     state.switch_workspace(0, 0);
@@ -336,11 +338,11 @@ TEST_CASE("Fullscreen assignments preserve history while requests renew it", "[s
 
     state.fullscreen(1, false);
     CHECK(state.fullscreen_owner(0) == 2);
+    state.complete_focus();
     revision = state.revision();
-    state.take_focus_repair();
     state.fullscreen(1, false);
     CHECK(state.revision() == revision);
-    CHECK_FALSE(state.take_focus_repair());
+    CHECK_FALSE(state.complete_focus());
     state.fullscreen(1, true);
     CHECK(state.fullscreen_owner(0) == 1);
 }

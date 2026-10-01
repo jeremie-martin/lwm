@@ -1,12 +1,11 @@
 #pragma once
 
-// Pure desktop numbering, workspace focus memory, and output rebinding rules.
+// Pure desktop numbering, workspace switching, and output rebinding rules.
 
 #include "lwm/core/floating.hpp"
 #include "lwm/core/types.hpp"
 #include <algorithm>
 #include <cassert>
-#include <functional>
 #include <optional>
 #include <span>
 #include <tuple>
@@ -70,61 +69,6 @@ inline std::optional<WorkspaceSwitchResult> validate_workspace_switch(Monitor co
     return WorkspaceSwitchResult{ monitor.current_workspace, target_ws };
 }
 
-constexpr size_t kFocusHistoryMax = 16;
-
-/// Push a window to the top (back) of focus_history, removing duplicates.
-inline void push_focus_history(Workspace& ws, xcb_window_t window)
-{
-    if (window == XCB_NONE)
-        return;
-    std::erase(ws.focus_history, window);
-    ws.focus_history.push_back(window);
-    if (ws.focus_history.size() > kFocusHistoryMax)
-        ws.focus_history.erase(ws.focus_history.begin());
-}
-
-/// Remove a window from focus_history.
-inline void remove_from_focus_history(Workspace& ws, xcb_window_t window) { std::erase(ws.focus_history, window); }
-
-/// Set focused_window and update focus_history in one step.
-inline void set_workspace_focus(Workspace& ws, xcb_window_t window)
-{
-    ws.focused_window = window;
-    push_focus_history(ws, window);
-}
-
-/// Fix up workspace.focused_window after a window has been removed from the window list.
-/// Consults focus_history first (MRU), then falls back to last non-iconic window.
-inline void
-fixup_workspace_focus(Workspace& ws, xcb_window_t removed_window, std::function<bool(xcb_window_t)> const& is_iconic)
-{
-    if (ws.focused_window != removed_window)
-        return;
-    ws.focused_window = XCB_NONE;
-
-    // Try focus_history (MRU order, back = most recent)
-    for (auto rit = ws.focus_history.rbegin(); rit != ws.focus_history.rend(); ++rit)
-    {
-        if (*rit != removed_window && ws.find_window(*rit) != ws.windows.end() && !is_iconic(*rit))
-        {
-            xcb_window_t target = *rit; // Extract before set_workspace_focus invalidates iterators
-            set_workspace_focus(ws, target);
-            return;
-        }
-    }
-
-    // Fallback: reverse-iterate window list
-    for (auto rit = ws.windows.rbegin(); rit != ws.windows.rend(); ++rit)
-    {
-        if (!is_iconic(*rit))
-        {
-            xcb_window_t target = *rit; // Extract before set_workspace_focus invalidates iterators
-            set_workspace_focus(ws, target);
-            break;
-        }
-    }
-}
-
 } // namespace lwm::workspace_policy
 
 namespace lwm::hotplug_policy {
@@ -139,11 +83,8 @@ inline Geometry fit_floating(Geometry rectangle, Geometry area, bool displaced)
 inline void merge_membership(Workspace& target, Workspace& source)
 {
     target.windows.insert(target.windows.end(), source.windows.begin(), source.windows.end());
-    if (target.focused_window == XCB_NONE && !source.windows.empty())
-    {
-        target.focused_window = source.focused_window;
-        target.focus_history = std::move(source.focus_history);
-    }
+    if (target.preferred_tile == XCB_NONE)
+        target.preferred_tile = source.preferred_tile;
 }
 
 // Transfer complete workspace state for surviving outputs. Discovery supplies

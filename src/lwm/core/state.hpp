@@ -97,7 +97,7 @@ public:
     bool focusable(Client const& client) const;
     bool focusable(Client const& client, FullscreenVisibility const& fullscreen) const;
     uint64_t revision() const { return revision_; }
-    // Counters let focus cycling detect registrations and recency changes.
+    // Monotonic bounds for registration and completed focus ranks.
     uint64_t next_order() const { return next_order_; }
     uint64_t next_recency() const { return next_recency_; }
 
@@ -107,12 +107,15 @@ public:
     bool showing_desktop() const { return showing_desktop_; }
     void focus(xcb_window_t id, uint32_t time = 0);
     void focus_monitor(size_t monitor);
-    void remember_focus(xcb_window_t id);
+    void prefer_tile(xcb_window_t id);
     void show_desktop(bool enabled);
-    void request_focus_repair() { repair_focus_ = true; }
-    // Completion consumes explicit focus requests (including same-window focus) and repair intent.
-    std::optional<uint32_t> take_focus_request() { return std::exchange(focus_request_, std::nullopt); }
-    bool take_focus_repair() { return std::exchange(repair_focus_, false); }
+    void request_focus_repair()
+    {
+        mutated();
+        repair_focus_ = true;
+    }
+    // Resolve eligibility and record only the final focus, once per transition.
+    std::optional<uint32_t> complete_focus();
 
     // Placement and mode
     bool relocate(
@@ -182,7 +185,7 @@ public:
     // Before adoption: resolve the handoff onto current outputs and restore the
     // workspace graph. The rebound records then place clients and rank membership.
     void restore_workspaces(restart::Snapshot& snapshot);
-    // After adoption placed each saved client: order, focus memory, recency and claims.
+    // After adoption placed each saved client: order, tile preference, recency and claims.
     void restore_membership(restart::Snapshot const& snapshot);
 
     // Publication reads a frozen model; Debug builds reject mutation meanwhile.
@@ -201,14 +204,13 @@ private:
     std::optional<uint32_t> focus_request_;
     bool repair_focus_ = false;
     uint64_t next_order_ = 0;
-    uint64_t next_recency_ = 0;
+    uint64_t next_recency_ = 1;
     uint64_t next_fullscreen_claim_ = 0;
     uint64_t revision_ = 0;
     bool frozen_ = false;
 
     uint64_t register_window(xcb_window_t id, std::span<xcb_window_t const> registration_order);
     Client& edit(xcb_window_t id);
-    void touch(xcb_window_t id);
     std::vector<xcb_window_t> fullscreen_claim_order() const;
     Workspace& edit_workspace(size_t monitor, size_t workspace);
     void mutated();

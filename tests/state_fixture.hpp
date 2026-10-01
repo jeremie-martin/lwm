@@ -29,6 +29,12 @@ inline State state(size_t monitors = 1, size_t workspaces = 3)
     return state;
 }
 
+inline void focus(State& state, xcb_window_t id)
+{
+    state.focus(id);
+    state.complete_focus();
+}
+
 struct ClientSpec
 {
     size_t monitor = 0;

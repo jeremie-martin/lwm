@@ -1,3 +1,4 @@
+#include "lwm/core/focus.hpp"
 #include "lwm/core/overloaded.hpp"
 #include "lwm/core/log.hpp"
 #include "lwm/core/policy.hpp"
@@ -291,7 +292,7 @@ void WindowManager::move_active_to_workspace(size_t workspace)
     size_t monitor = state_.require(window).monitor;
     if (workspace == state_.monitors()[monitor].current_workspace || !state_.relocate(window, monitor, workspace))
         return;
-    state_.remember_focus(window);
+    state_.prefer_tile(window);
     focus_fallback(monitor);
 }
 
@@ -337,7 +338,6 @@ void WindowManager::move_active_to_monitor(int direction)
     size_t workspace = state_.monitors()[target].current_workspace;
     if (!state_.relocate(window, target, workspace, State::RelocationGeometry::Center))
         return;
-    state_.remember_focus(window);
     state_.focus_monitor(target);
     focus_window(window);
     warp_to_monitor(state_.monitors()[target]);
@@ -355,7 +355,8 @@ void WindowManager::swap_active_tile(int offset)
         if (!client.fullscreen && state_.visible(client, fullscreen))
             eligible.push_back(i);
     }
-    auto it = std::ranges::find_if(eligible, [&](auto i) { return workspace.windows[i] == workspace.focused_window; });
+    auto tile = focus::tile(state_, monitor, fullscreen);
+    auto it = std::ranges::find_if(eligible, [&](auto i) { return workspace.windows[i] == tile; });
     size_t count = eligible.size();
     if (it == eligible.end() || count < 2)
         return;

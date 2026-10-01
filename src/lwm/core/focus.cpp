@@ -16,7 +16,7 @@ struct Eligibility
 {
     State const& state;
     size_t monitor;
-    State::FullscreenVisibility fullscreen;
+    State::FullscreenVisibility const& fullscreen;
 
     bool operator()(Client const& client) const
     {
@@ -26,26 +26,34 @@ struct Eligibility
 
 }
 
+xcb_window_t tile(State const& state, size_t monitor, State::FullscreenVisibility const& fullscreen)
+{
+    auto const& monitors = state.monitors();
+    if (monitor >= monitors.size())
+        return XCB_NONE;
+    Eligibility eligible{ state, monitor, fullscreen };
+    auto const& current = monitors[monitor].current();
+    if (current.preferred_tile != XCB_NONE && eligible(state.require(current.preferred_tile)))
+        return current.preferred_tile;
+    Client const* best = nullptr;
+    for (auto it = current.windows.rbegin(); it != current.windows.rend(); ++it)
+    {
+        auto const& client = state.require(*it);
+        if (eligible(client) && (!best || client.mru_order > best->mru_order))
+            best = &client;
+    }
+    return best ? best->id : XCB_NONE;
+}
+
 xcb_window_t fallback(State const& state, size_t monitor)
 {
     auto const& monitors = state.monitors();
     if (monitor >= monitors.size())
         return XCB_NONE;
-    Eligibility eligible{ state, monitor, state.fullscreen_visibility() };
-    auto const& current = monitors[monitor].current();
-    auto current_tile = [&](xcb_window_t window)
-    {
-        auto const* client = state.find(window);
-        return client && client->kind() == Client::Kind::Tiled && eligible(*client);
-    };
-    if (current_tile(current.focused_window))
-        return current.focused_window;
-    for (auto it = current.focus_history.rbegin(); it != current.focus_history.rend(); ++it)
-        if (current_tile(*it))
-            return *it;
-    for (auto it = current.windows.rbegin(); it != current.windows.rend(); ++it)
-        if (current_tile(*it))
-            return *it;
+    auto fullscreen = state.fullscreen_visibility();
+    Eligibility eligible{ state, monitor, fullscreen };
+    if (auto window = tile(state, monitor, eligible.fullscreen); window != XCB_NONE)
+        return window;
     // Sticky tiles use reverse workspace order, then reverse membership order.
     auto const& workspaces = monitors[monitor].workspaces;
     for (size_t i = workspaces.size(); i-- > 0;)
@@ -53,7 +61,7 @@ xcb_window_t fallback(State const& state, size_t monitor)
         if (i == monitors[monitor].current_workspace)
             continue;
         for (auto it = workspaces[i].windows.rbegin(); it != workspaces[i].windows.rend(); ++it)
-            if (current_tile(*it))
+            if (eligible(state.require(*it)))
                 return *it;
     }
     Client const* best = nullptr;
@@ -80,7 +88,8 @@ cycle_target(std::span<xcb_window_t const> order, State const& state, size_t mon
 {
     if (order.empty() || monitor >= state.monitors().size())
         return XCB_NONE;
-    Eligibility eligible{ state, monitor, state.fullscreen_visibility() };
+    auto fullscreen = state.fullscreen_visibility();
+    Eligibility eligible{ state, monitor, fullscreen };
     auto it = std::ranges::find(order, current);
     size_t index = it == order.end() ? (forward ? order.size() - 1 : 0) : static_cast<size_t>(it - order.begin());
     for (size_t visited = 0; visited < order.size(); ++visited)

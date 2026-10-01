@@ -21,8 +21,7 @@ TEST_CASE("Output reconciliation preserves complete surviving workspace state", 
     old[0].previous_workspace = 1;
     auto& ws = old[0].workspaces[2];
     ws.windows = { 10, 20 };
-    ws.focused_window = 10;
-    ws.focus_history = { 20, 10 };
+    ws.preferred_tile = 10;
     ws.layout_strategy = LayoutStrategy::Monocle;
     ws.split_ratios[SplitAddress{ 1 }] = 0.3;
     std::vector<Monitor> next{ monitor("B"), monitor("A", -1000), monitor("C", 1000) };
@@ -30,8 +29,7 @@ TEST_CASE("Output reconciliation preserves complete surviving workspace state", 
     REQUIRE(destinations == std::vector<size_t>{ 1, 0 });
     auto const& restored = next[1].workspaces[2];
     CHECK(restored.windows == std::vector<xcb_window_t>{ 10, 20 });
-    CHECK(restored.focused_window == 10);
-    CHECK(restored.focus_history == std::vector<xcb_window_t>{ 20, 10 });
+    CHECK(restored.preferred_tile == 10);
     CHECK(restored.layout_strategy == LayoutStrategy::Monocle);
     CHECK(restored.split_ratios.at(SplitAddress{ 1 }) == 0.3);
     CHECK(next[1].current_workspace == 2);
@@ -43,23 +41,20 @@ TEST_CASE("Removed outputs merge tiled membership without replacing surviving po
 {
     std::vector<Monitor> old{ monitor("gone"), monitor("kept") };
     old[0].workspaces[1].windows = { 10, 20 };
-    old[0].workspaces[1].focused_window = 20;
-    old[0].workspaces[1].focus_history = { 10, 20 };
+    old[0].workspaces[1].preferred_tile = 20;
     old[0].workspaces[1].split_ratios[SplitAddress{ 0 }] = 0.8;
     old[1].workspaces[1].split_ratios[SplitAddress{ 0 }] = 0.4;
     SECTION("surviving focus takes precedence")
     {
         old[1].workspaces[1].windows = { 30 };
-        old[1].workspaces[1].focused_window = 30;
-        old[1].workspaces[1].focus_history = { 30 };
+        old[1].workspaces[1].preferred_tile = 30;
     }
     SECTION("empty destination inherits incoming focus") { }
-    auto expected = old[1].workspaces[1].focused_window == 30 ? 30u : 20u;
+    auto expected = old[1].workspaces[1].preferred_tile == 30 ? 30u : 20u;
     std::vector<Monitor> next{ monitor("kept") };
     REQUIRE(hotplug_policy::preserve_workspaces(old, next) == std::vector<size_t>{ 0, 0 });
     auto const& ws = next[0].workspaces[1];
-    CHECK(ws.focused_window == expected);
-    CHECK(ws.focus_history.back() == expected);
+    CHECK(ws.preferred_tile == expected);
     CHECK(ws.windows[ws.windows.size() - 2] == 10);
     CHECK(ws.windows.back() == 20);
     CHECK(ws.split_ratios.at(SplitAddress{ 0 }) == 0.4);

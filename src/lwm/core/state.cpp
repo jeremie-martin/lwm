@@ -1,6 +1,7 @@
 #include "state.hpp"
 #include "classification.hpp"
 #include "floating.hpp"
+#include "focus.hpp"
 #include "log.hpp"
 #include "policy.hpp"
 #include <algorithm>
@@ -70,8 +71,7 @@ void State::insert(Client client, std::span<xcb_window_t const> registration_ord
     mutated();
     forget_missing_tile_slot(client);
     client.order = register_window(client.id, registration_order);
-    if (client.kind() == Client::Kind::Floating)
-        client.mru_order = next_recency_++;
+    client.mru_order = 0;
     client.fullscreen_claim = 0;
     auto [it, inserted] = clients_.emplace(client.id, std::move(client));
     assert(inserted);
@@ -121,16 +121,8 @@ std::optional<TileSlot> State::detach(Client const& client)
         return std::nullopt;
     TileSlot slot{ static_cast<size_t>(it - ws.windows.begin()), monitors_[client.monitor].name, client.workspace };
     ws.windows.erase(it);
-    workspace_policy::remove_from_focus_history(ws, client.id);
-    workspace_policy::fixup_workspace_focus(
-        ws,
-        client.id,
-        [this](xcb_window_t id)
-        {
-            auto const* c = find(id);
-            return c && c->iconic;
-        }
-    );
+    if (ws.preferred_tile == client.id)
+        ws.preferred_tile = XCB_NONE;
     return slot;
 }
 
@@ -256,11 +248,7 @@ void State::focus(xcb_window_t id, uint32_t time)
         LWM_LOG_DEBUG("Focus changed: window={:#x} -> {:#x}", active_window_, id);
     active_window_ = id;
     if (auto const* c = find(id))
-    {
         focus_monitor(c->monitor);
-        remember_focus(id);
-        touch(id);
-    }
 }
 
 void State::focus_monitor(size_t monitor)
@@ -272,15 +260,32 @@ void State::focus_monitor(size_t monitor)
     }
 }
 
-// Remembered focus names a tile that could take focus again, never an iconic one.
-void State::remember_focus(xcb_window_t id)
+// Relocation may prefer a destination tile without pretending it received focus.
+void State::prefer_tile(xcb_window_t id)
 {
     auto const& client = require(id);
     if (client.kind() == Client::Kind::Tiled && !client.iconic)
-        workspace_policy::set_workspace_focus(edit_workspace(client.monitor, client.workspace), id);
+        edit_workspace(client.monitor, client.workspace).preferred_tile = id;
 }
 
-void State::touch(xcb_window_t id) { edit(id).mru_order = next_recency_++; }
+std::optional<uint32_t> State::complete_focus()
+{
+    bool requested = std::exchange(repair_focus_, false);
+    auto const* active = find(active_window_);
+    if (active ? !focusable(*active)
+               : active_window_ != XCB_NONE || (requested && !focus_request_ && !showing_desktop_))
+        focus(focus::fallback(*this, focused_monitor_));
+    auto request = std::exchange(focus_request_, std::nullopt);
+    if (request && find(active_window_))
+    {
+        auto& client = edit(active_window_);
+        client.mru_order = next_recency_++;
+        if (client.kind() == Client::Kind::Tiled)
+            edit_workspace(client.monitor, client.workspace).preferred_tile = XCB_NONE;
+        clear_urgency(client.id);
+    }
+    return request;
+}
 
 void State::show_desktop(bool enabled)
 {
@@ -314,7 +319,7 @@ bool State::relocate(
         auto& windows = monitors_[monitor].workspaces[workspace].windows;
         auto from = std::ranges::find(windows, client.id);
         auto target = windows.begin() + static_cast<std::ptrdiff_t>(std::min(*tile_index, windows.size() - 1));
-        // Reordering keeps membership and remembered focus.
+        // Reordering keeps membership and destination preference.
         if (from < target)
             std::rotate(from, from + 1, target + 1);
         else if (target < from)
@@ -375,7 +380,6 @@ void State::set_mode(xcb_window_t id, bool floating)
         );
         auto slot = detach(client);
         client.mode = FloatingMode{ rectangle, slot };
-        touch(id);
         return;
     }
     auto const& mode = std::get<FloatingMode>(client.mode);
@@ -429,12 +433,9 @@ void State::iconic(xcb_window_t id, bool enabled)
         return;
     auto& c = edit(id);
     c.iconic = enabled;
-    if (enabled && c.kind() == Client::Kind::Tiled)
-        workspace_policy::fixup_workspace_focus(
-            monitors_[c.monitor].workspaces[c.workspace],
-            id,
-            [this](auto w) { return require(w).iconic; }
-        );
+    auto& workspace = monitors_[c.monitor].workspaces[c.workspace];
+    if (enabled && workspace.preferred_tile == id)
+        workspace.preferred_tile = XCB_NONE;
     // Restoring a fullscreen client makes it the preferred owner again.
     if (!enabled && c.fullscreen)
         request_fullscreen(id);
@@ -785,10 +786,7 @@ restart::Snapshot State::snapshot() const
     snapshot.active = active_window_;
     snapshot.showing_desktop = showing_desktop_;
     for (auto const& monitor : monitors_) snapshot.monitors.push_back(restart::capture_monitor(monitor));
-    std::vector<Client const*> recency;
-    for (auto const& [id, client] : clients_) recency.push_back(&client);
-    std::ranges::sort(recency, {}, [](Client const* c) { return std::tie(c->mru_order, c->order); });
-    for (auto const* c : recency)
+    for (auto const* c : clients_by_order())
     {
         auto const* tiled = tiled_mode(*c);
         snapshot.clients.push_back(
@@ -803,7 +801,8 @@ restart::Snapshot State::snapshot() const
               c->borderless,
               c->desktop_pinned,
               tiled ? std::nullopt : floating_mode(*c)->tile_slot,
-              c->fullscreen_monitors }
+              c->fullscreen_monitors,
+              c->mru_order }
         );
     }
     for (auto const& slot : named_scratchpads_)
@@ -863,13 +862,16 @@ void State::restore_membership(restart::Snapshot const& snapshot)
             auto rank = [&](xcb_window_t id)
             { return static_cast<size_t>(std::ranges::find(saved.tiles, id) - saved.tiles.begin()); };
             std::ranges::stable_sort(workspace.windows, {}, rank);
-            if (auto const* focused = find(saved.focused);
-                focused && workspace.find_window(saved.focused) != workspace.windows.end() && !focused->iconic)
-                workspace_policy::set_workspace_focus(workspace, saved.focused);
+            if (auto const* preferred = find(saved.preferred_tile);
+                preferred && workspace.find_window(saved.preferred_tile) != workspace.windows.end() && !preferred->iconic)
+                workspace.preferred_tile = saved.preferred_tile;
         }
     for (auto const& record : snapshot.clients)
-        if (find(record.window))
-            touch(record.window);
+        if (auto it = clients_.find(record.window); it != clients_.end())
+        {
+            it->second.mru_order = record.mru_order;
+            next_recency_ = std::max(next_recency_, record.mru_order + 1);
+        }
     for (auto const& named : snapshot.named_scratchpads)
         if (named_scratchpad(named.name))
         {

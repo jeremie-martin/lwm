@@ -42,19 +42,23 @@ inline std::optional<Violation> validate(State const& state)
                 if (client->monitor != m || client->workspace != w)
                     return Violation{ "Tiled membership disagrees with client placement", window };
             }
-            if (auto window = workspace.focused_window; window != XCB_NONE)
+            if (auto window = workspace.preferred_tile; window != XCB_NONE)
             {
                 if (workspace.find_window(window) == workspace.windows.end())
-                    return Violation{ "Workspace focus is absent from tiled membership", window };
+                    return Violation{ "Workspace tile preference is absent from tiled membership", window };
                 if (clients.at(window).iconic)
-                    return Violation{ "Workspace focus is iconic", window };
+                    return Violation{ "Workspace tile preference is iconic", window };
             }
         }
     }
 
     std::unordered_set<uint64_t> registrations;
+    std::unordered_set<uint64_t> recencies;
     for (auto const& [id, client] : clients)
     {
+        if (client.mru_order >= state.next_recency()
+            || (client.mru_order && !recencies.insert(client.mru_order).second))
+            return Violation{ "Client focus recency is invalid or duplicated", id };
         if (client.order >= state.next_order() || !registrations.insert(client.order).second)
             return Violation{ "Client registration order is invalid or duplicated", id };
         if (id == XCB_NONE || client.id != id)

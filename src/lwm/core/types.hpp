@@ -229,7 +229,7 @@ struct Client
     xcb_window_t user_time_window = XCB_NONE;
 
     uint64_t order = 0;            ///< Registration order (_NET_CLIENT_LIST)
-    uint64_t mru_order = 0;        ///< Focus recency (higher = newer)
+    uint64_t mru_order = 0;        ///< Completed focus recency; zero means never focused
     uint64_t fullscreen_claim = 0; ///< Latest fullscreen claim; zero exactly when fullscreen is disabled
 
     /// Actions of the rule matched at the last manage, metadata change, or
@@ -314,8 +314,7 @@ inline std::optional<LayoutStrategy> parse_layout_strategy(std::string_view name
 struct Workspace
 {
     std::vector<xcb_window_t> windows;
-    xcb_window_t focused_window = XCB_NONE;
-    std::vector<xcb_window_t> focus_history; ///< MRU stack; back = most recent
+    xcb_window_t preferred_tile = XCB_NONE; ///< Destination preference; actual tiled focus clears it
 
     LayoutStrategy layout_strategy = LayoutStrategy::MasterStack;
     SplitRatioMap split_ratios; ///< Per-workspace split ratios, keyed by split index

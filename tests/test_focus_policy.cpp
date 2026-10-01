@@ -7,7 +7,7 @@ using test::add;
 using test::add_floating;
 
 TEST_CASE(
-    "Focus fallback uses remembered tiles, history, membership, sticky tiles, then floating recency",
+    "Focus fallback uses tile recency, membership, sticky tiles, then floating recency",
     "[focus][policy]"
 )
 {
@@ -19,7 +19,7 @@ TEST_CASE(
     add_floating(state, 7);
     state.sticky(4, true);
     state.sticky(5, true);
-    for (xcb_window_t id : { 2, 1, 3 }) state.focus(id);
+    for (xcb_window_t id : { 2, 1, 3 }) test::focus(state, id);
     REQUIRE(focus::fallback(state, 0) == 3);
     state.iconic(3, true);
     REQUIRE(focus::fallback(state, 0) == 1);
@@ -33,7 +33,7 @@ TEST_CASE(
     state.sticky(4, false);
     // Then the most recent visible floating client.
     REQUIRE(focus::fallback(state, 0) == 7);
-    state.focus(6);
+    test::focus(state, 6);
     REQUIRE(focus::fallback(state, 0) == 6);
     state.iconic(6, true);
     state.iconic(7, true);
@@ -93,7 +93,7 @@ TEST_CASE("MRU traversal keeps its order but reads eligibility and lifetime live
     add_floating(state, 2);
     add(state, 3);
     add(state, 4);
-    for (xcb_window_t id : { 1, 2, 3, 4 }) state.focus(id);
+    for (xcb_window_t id : { 1, 2, 3, 4 }) test::focus(state, id);
     auto order = focus::recent_order(state);
     REQUIRE(order == std::vector<xcb_window_t>{ 4, 3, 2, 1 });
     xcb_window_t current = 4;
@@ -101,7 +101,7 @@ TEST_CASE("MRU traversal keeps its order but reads eligibility and lifetime live
     {
         current = focus::cycle_target(order, state, 0, current, true);
         REQUIRE(current == expected);
-        state.focus(current);
+        test::focus(state, current);
     }
     REQUIRE(focus::cycle_target(order, state, 0, 4, false) == 1);
     state.erase(3);
@@ -125,4 +125,72 @@ TEST_CASE("Monitor index at point uses half-open monitor bounds", "[focus][monit
     CHECK_FALSE(focus::monitor_index_at_point(monitors, 2000, 10));
     CHECK_FALSE(focus::monitor_index_at_point(monitors, 10, 800));
     CHECK_FALSE(focus::monitor_index_at_point({ }, 0, 0));
+}
+
+TEST_CASE("Only completed focus contributes to recency", "[focus][state]")
+{
+    auto state = test::state();
+    add(state, 1);
+    add_floating(state, 2);
+    add(state, 3);
+    state.floating(3, true);
+    for (auto const& [id, client] : state.clients()) CHECK(client.mru_order == 0);
+    state.focus(1, 10);
+    state.focus(2, 20);
+    CHECK(state.require(1).mru_order == 0);
+    CHECK(state.complete_focus() == 20);
+    CHECK(state.require(1).mru_order == 0);
+    CHECK(state.require(2).mru_order == 1);
+    CHECK_FALSE(state.complete_focus());
+    CHECK(state.require(2).mru_order == 1);
+
+    state.focus(3);
+    state.iconic(3, true);
+    state.complete_focus();
+    CHECK(state.active_window() == 1);
+    CHECK(state.require(1).mru_order == 2);
+    CHECK(state.require(3).mru_order == 0);
+    state.request_focus_repair();
+    state.focus(XCB_NONE);
+    state.complete_focus();
+    CHECK(state.active_window() == XCB_NONE);
+}
+
+TEST_CASE("Tile destination preference does not manufacture focus history", "[focus][state]")
+{
+    auto state = test::state();
+    for (xcb_window_t id : { 1, 2, 3 }) add(state, id);
+    test::focus(state, 1);
+    state.prefer_tile(2);
+    CHECK(focus::fallback(state, 0) == 2);
+    CHECK(state.require(2).mru_order == 0);
+    SECTION("An actual tiled focus supersedes the preference") { test::focus(state, 3); }
+    SECTION("Removing a preference does not select a replacement") { state.erase(2); }
+    SECTION("Minimizing a preference does not select a replacement") { state.iconic(2, true); }
+    CHECK(state.monitors()[0].current().preferred_tile == XCB_NONE);
+    CHECK(focus::fallback(state, 0) == state.active_window());
+}
+
+TEST_CASE("Focus history survives restart without a capacity or synthetic entries", "[focus][restart][state]")
+{
+    auto source = test::state();
+    for (xcb_window_t id = 1; id <= 20; ++id) add(source, id);
+    // Registration order deliberately disagrees with the oldest actual focus.
+    test::focus(source, 2);
+    test::focus(source, 1);
+    for (xcb_window_t id = 3; id <= 20; ++id) test::focus(source, id);
+    auto snapshot = restart::decode(restart::encode(source.snapshot()));
+    REQUIRE(snapshot);
+    auto restored = test::state();
+    restored.restore_workspaces(*snapshot);
+    for (xcb_window_t id = 20; id > 0; --id) add(restored, id);
+    restored.restore_membership(*snapshot);
+    CHECK(focus::recent_order(restored) == focus::recent_order(source));
+    for (auto* state : { &source, &restored })
+    {
+        for (xcb_window_t id = 3; id <= 20; ++id) state->iconic(id, true);
+        CHECK(focus::fallback(*state, 0) == 1);
+        state->iconic(1, true);
+        CHECK(focus::fallback(*state, 0) == 2);
+    }
 }

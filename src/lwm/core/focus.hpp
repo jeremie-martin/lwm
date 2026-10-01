@@ -6,8 +6,11 @@
 
 namespace lwm::focus {
 
-// Automatic focus on one monitor: remembered tiled focus, bounded focus
-// history, reverse tiled order, sticky tiles, then floating clients by recency.
+// Eligible current tile: explicit destination preference, then completed focus
+// recency, with reverse membership order for tiles that have never had focus.
+xcb_window_t tile(State const& state, size_t monitor, State::FullscreenVisibility const& fullscreen);
+
+// Automatic focus: current tile, sticky tiles, then floating clients by recency.
 xcb_window_t fallback(State const& state, size_t monitor);
 
 // All clients by descending recency. Eligibility is checked per step, so the

@@ -17,7 +17,7 @@ struct Scene
     std::vector<xcb_window_t> order(xcb_window_t active = XCB_NONE)
     {
         if (active != XCB_NONE)
-            state.focus(active);
+            test::focus(state, active);
         return stacking::compute_order(state, state.fullscreen_visibility());
     }
 };
@@ -32,7 +32,7 @@ TEST_CASE("Global stacking ranks kinds, focus, layers, fixtures and fullscreen v
     scene.add(4, true, 1);
     REQUIRE(scene.order(1) == std::vector<xcb_window_t>{ 2, 1, 3, 4 });
     REQUIRE(scene.order(3) == std::vector<xcb_window_t>{ 1, 2, 4, 3 });
-    scene.state.focus(XCB_NONE);
+    test::focus(scene.state, XCB_NONE);
     scene.state.layer(3, LayerHint::Below);
     scene.state.layer(2, LayerHint::Above);
     REQUIRE(scene.order() == std::vector<xcb_window_t>{ 3, 1, 4, 2 });

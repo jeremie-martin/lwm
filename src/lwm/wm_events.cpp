@@ -559,7 +559,7 @@ void WindowManager::handle_desktop_change(xcb_client_message_event_t const& e)
     state_.pin_desktop(e.window, true);
     bool target_visible = state_.shows(monitor, workspace);
     if (!target_visible || was_active)
-        state_.remember_focus(e.window);
+        state_.prefer_tile(e.window);
     if (was_active)
     {
         // Keep focus on the source monitor when the destination workspace is

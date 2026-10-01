@@ -22,6 +22,7 @@ void WindowManager::focus_window(xcb_window_t window, bool record_user_time, uin
         focus_fallback(client->monitor, false);
         return;
     }
+    focus_cycle_.reset();
     state_.focus(window, timestamp);
     uint32_t time = timestamp ? timestamp : last_input_time_;
     if (record_user_time && time
@@ -38,16 +39,10 @@ void WindowManager::focus_fallback(size_t monitor, bool record_user_time)
         clear_focus();
 }
 
-void WindowManager::clear_focus() { state_.focus(XCB_NONE); }
-
-// Completion keeps focus on a window that can hold it. Showing the desktop
-// deliberately leaves focus cleared.
-void WindowManager::repair_focus()
+void WindowManager::clear_focus()
 {
-    bool requested = state_.take_focus_repair();
-    auto const* active = state_.find(state_.active_window());
-    if (active ? !state_.focusable(*active) : requested && !state_.showing_desktop())
-        focus_fallback(state_.focused_monitor(), false);
+    focus_cycle_.reset();
+    state_.focus(XCB_NONE);
 }
 
 // Consecutive steps keep one recency order; eligibility is read per step.
@@ -58,10 +53,10 @@ bool WindowManager::cycle_focus(bool forward)
     size_t monitor = state_.focused_monitor();
     size_t workspace = state_.monitors()[monitor].current_workspace;
     if (!focus_cycle_ || focus_cycle_->monitor != monitor || focus_cycle_->workspace != workspace
-        || focus_cycle_->next_recency != state_.next_recency() || focus_cycle_->next_order != state_.next_order()
+        || focus_cycle_->next_order != state_.next_order()
         || focus_cycle_->current != state_.active_window())
         focus_cycle_ = FocusTraversal{
-            monitor, workspace, state_.next_recency(), state_.next_order(), state_.active_window(), focus::recent_order(state_)
+            monitor, workspace, state_.next_order(), state_.active_window(), focus::recent_order(state_)
         };
     auto target = focus::cycle_target(focus_cycle_->order, state_, monitor, state_.active_window(), forward);
     if (target == XCB_NONE)
@@ -69,9 +64,9 @@ bool WindowManager::cycle_focus(bool forward)
         focus_cycle_.reset();
         return false;
     }
+    auto traversal = std::move(*focus_cycle_);
     focus_window(target);
-    // A cycling step acknowledges its own recency update without reordering.
-    focus_cycle_->next_recency = state_.next_recency();
+    focus_cycle_ = std::move(traversal);
     focus_cycle_->current = state_.active_window();
     return true;
 }

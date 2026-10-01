@@ -156,7 +156,7 @@ private:
     struct FocusTraversal
     {
         size_t monitor, workspace;
-        uint64_t next_recency, next_order;
+        uint64_t next_order;
         xcb_window_t current;
         std::vector<xcb_window_t> order;
     };
@@ -359,7 +359,6 @@ private:
     void focus_window(xcb_window_t window, bool record_user_time = true, uint32_t timestamp = 0);
     void focus_fallback(size_t monitor, bool record_user_time = true);
     void clear_focus();
-    void repair_focus();
     bool cycle_focus(bool forward);
     void focus_monitor_at_point(int16_t x, int16_t y);
 

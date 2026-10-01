@@ -45,7 +45,7 @@ TEST_CASE("Model validation rejects focus that completion must repair", "[invari
 }
 
 // Every sequence of State operations keeps membership, placement and claims
-// consistent. Only focus needs the completion step's repair, emulated here.
+// consistent. Focus is resolved through the same completion operation as the WM.
 TEST_CASE("Generated State operation sequences preserve model invariants", "[invariants][sequence]")
 {
     std::mt19937 random(12345);
@@ -144,7 +144,7 @@ TEST_CASE("Generated State operation sequences preserve model invariants", "[inv
                 trace.push_back("transient");
                 break;
             case 17:
-                state.remember_focus(window);
+                state.prefer_tile(window);
                 trace.push_back("remember");
                 break;
             case 18:
@@ -152,11 +152,7 @@ TEST_CASE("Generated State operation sequences preserve model invariants", "[inv
                 trace.push_back("request fullscreen");
                 break;
         }
-        // Completion repairs focus that no longer holds.
-        if (auto const* active = state.find(state.active_window()); active && !state.focusable(*active))
-            state.focus(focus::fallback(state, state.focused_monitor()));
-        else if (state.active_window() != XCB_NONE && !active)
-            state.focus(XCB_NONE);
+        state.complete_focus();
         if (auto violation = invariants::validate(state))
         {
             std::string recent;

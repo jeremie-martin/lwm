@@ -69,7 +69,7 @@ TEST_CASE("Empty workspace has no focused window", "[workspace]")
 {
     Workspace ws;
     REQUIRE(ws.windows.empty());
-    REQUIRE(ws.focused_window == XCB_NONE);
+    REQUIRE(ws.preferred_tile == XCB_NONE);
 }
 
 

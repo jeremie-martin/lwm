@@ -28,6 +28,7 @@ restart::Snapshot sample()
     };
     snapshot.clients = { { 0x100, 0, 0, Client::Kind::Tiled, { 1, 2, 3, 4 }, Geometry{ -5, -6, 70, 80 }, { true, false, std::nullopt, LayerHint::Below }, 3, true, false },
                          { 0x200, 1, 0, Client::Kind::Floating, { -32768, 32767, 65535, 1 }, std::nullopt, { }, 0, false, true } };
+    snapshot.clients[1].mru_order = (uint64_t{ 1 } << 40) + 7;
     snapshot.clients[1].tile_slot = TileSlot{ 7, "output with spaces", 1 };
     snapshot.named_scratchpads = {
         { "tëxt with spaces",        0x200 },
@@ -85,6 +86,11 @@ TEST_CASE("Restart decoding rejects other formats and malformed records", "[rest
         invalid.fullscreen_claims = claims;
         CHECK_FALSE(restart::decode(restart::encode(invalid)));
     }
+    auto invalid_recency = sample();
+    invalid_recency.clients[0].mru_order = invalid_recency.clients[1].mru_order;
+    CHECK_FALSE(restart::decode(restart::encode(invalid_recency)));
+    invalid_recency.clients[0].mru_order = UINT64_MAX;
+    CHECK_FALSE(restart::decode(restart::encode(invalid_recency)));
     // Out-of-range enumerations and ratios are rejected.
     auto snapshot = sample();
     snapshot.monitors[0].workspaces[0].ratios[SplitAddress{ 1 }] = 1.5;
@@ -139,13 +145,13 @@ TEST_CASE("State snapshots restore workspaces, order, recency and scratchpads", 
     add(source, 1);
     add(source, 2);
     add(source, 3);
-    add_floating(source, 4, 1);
+    add_floating(source, 4, 1, 2);
     source.swap_tiles(0, 0, 2);
     source.layout(0, LayoutStrategy::Monocle);
     source.ratio(0, SplitAddress{ 0 }, 0.3);
     source.switch_workspace(1, 2);
-    source.focus(1);
-    source.focus(4);
+    test::focus(source, 1);
+    test::focus(source, 4);
     source.claim_scratchpad("term", 2);
     source.pool_scratchpad(3);
     source.skip_pager(4, true);
@@ -166,25 +172,27 @@ TEST_CASE("State snapshots restore workspaces, order, recency and scratchpads", 
     CHECK(workspace.windows == source.monitors()[0].workspaces[0].windows);
     CHECK(workspace.layout_strategy == LayoutStrategy::Monocle);
     CHECK(workspace.split_ratios.at(SplitAddress{ 0 }) == 0.3);
-    CHECK(workspace.focused_window == 1);
+    CHECK(workspace.preferred_tile == XCB_NONE);
     CHECK(target.monitors()[1].current_workspace == 2);
     CHECK(target.monitors()[1].previous_workspace == 0);
     CHECK(target.scratchpad_claim(2)->name == "term");
     CHECK(target.scratchpad_pool() == std::vector<xcb_window_t>{ 3 });
-    CHECK(target.require(4).mru_order > target.require(1).mru_order);
+    for (auto const& [id, client] : source.clients())
+        CHECK(target.require(id).mru_order == client.mru_order);
     CHECK(saved.preferences.skip_pager == true);
 }
 
 TEST_CASE("Restart claim order is explicit in the wire format", "[restart][codec]")
 {
     std::vector<uint32_t> words{
-        8, 0,  0,   0,  1, // format, focus, active, desktop, monitor count
+        9, 0,  0,   0,  1, // format, focus, active, desktop, monitor count
         1, 77,             // one-byte output name "M"
         0, 0,  100, 80,    // output geometry
         0, 0,  1,          // current, previous, workspace count
         0, 0,  0,   0,     // master-stack, no focus, ratios, tiles
         1,                 // client count
-        7, 0,  0,   0,     // id, monitor, workspace, tiled
+        7, 0, 0,           // id, never focused (64 bit)
+        0, 0, 0,           // monitor, workspace, tiled
         0, 0,  100, 80,    // normal geometry
         0, 0,  0,   0,  0, // absent remembered floating geometry
         0, 0,  0,   0,     // unset preferences
@@ -207,7 +215,7 @@ TEST_CASE("Restart restores claim history independently of focus and adoption or
     for (xcb_window_t id : { 1, 2, 3 }) add(source, id);
     for (xcb_window_t id : { 2, 3, 1 }) source.fullscreen(id, true);
     source.iconic(3, true);
-    source.focus(2); // Focus recency is deliberately not fullscreen claim order.
+    test::focus(source, 2); // Focus recency is deliberately not fullscreen claim order.
     source.switch_workspace(0, 1);
     auto snapshot = source.snapshot();
     CHECK(snapshot.fullscreen_claims == std::vector<xcb_window_t>{ 2, 3, 1 });
@@ -268,10 +276,10 @@ TEST_CASE("Restart rebinding matches live output reconciliation", "[restart][sta
             .floating = true,
             .geometry = { 2200, 80, 250, 150 }
     });
-    source.focus(2);
+    test::focus(source, 2);
     source.floating(2, true);
-    source.focus(3);
-    source.focus(4);
+    test::focus(source, 3);
+    test::focus(source, 4);
     source.fullscreen_monitors(6, FullscreenMonitors{ 0, 2, 0, 2 });
     auto snapshot = restart::decode(restart::encode(source.snapshot()));
     REQUIRE(snapshot);
@@ -327,7 +335,7 @@ TEST_CASE("Restart rebinding matches live output reconciliation", "[restart][sta
         for (size_t w = 0; w < actual.workspaces.size(); ++w)
         {
             CHECK(actual.workspaces[w].windows == expected.workspaces[w].windows);
-            CHECK(actual.workspaces[w].focused_window == expected.workspaces[w].focused_window);
+            CHECK(actual.workspaces[w].preferred_tile == expected.workspaces[w].preferred_tile);
             CHECK(actual.workspaces[w].layout_strategy == expected.workspaces[w].layout_strategy);
             CHECK(actual.workspaces[w].split_ratios == expected.workspaces[w].split_ratios);
         }
@@ -429,7 +437,7 @@ TEST_CASE("Admission preserves shared registration ranks independently of scan o
     source.insert_fixture(2, Fixture::Role::Dock);
     add(source, 3);
     source.insert_fixture(4, Fixture::Role::Desktop);
-    source.focus(1);
+    test::focus(source, 1);
     source.swap_tiles(0, 0, 1);
     auto snapshot = restart::decode(restart::encode(source.snapshot()));
     REQUIRE(snapshot);

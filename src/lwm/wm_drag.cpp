@@ -202,10 +202,7 @@ void WindowManager::end_drag(bool commit)
             ++index;
     }
     if (state_.relocate(client->id, target, monitor.current_workspace, State::RelocationGeometry::Preserve, index))
-    {
-        state_.remember_focus(client->id);
         focus_window(client->id);
-    }
 }
 
 

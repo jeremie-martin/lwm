@@ -45,6 +45,14 @@ TEST_CASE(
     }
     auto a = windows[0], b = windows[1], c = windows[2], d = windows[3];
     for (auto w : { b, a, d }) ipc_ok(*socket, "focus window=" + std::to_string(w));
+    // The same subsequent operations must choose the same focus after exec.
+    if (GENERATE(false, true))
+    {
+        auto previous = wm_instance(conn);
+        REQUIRE(previous);
+        ipc_ok(*socket, "restart");
+        REQUIRE(wait_for_wm_restart(conn, timeout, *previous));
+    }
     send_client_message(conn, a, intern_atom(conn.get(), "WM_CHANGE_STATE"), XCB_ICCCM_WM_STATE_ICONIC);
     observe_title_after_events(conn, d);
     auto desktop = intern_atom(conn.get(), "_NET_WM_DESKTOP");

@@ -25,14 +25,11 @@ void WindowManager::complete_transition()
     if (std::exchange(workareas_dirty_, false))
         refresh_workareas();
     validate_drag();
-    repair_focus();
+    auto focus_request = state_.complete_focus();
     // Arrangement and urgency clearing leave fullscreen ancestry and ownership unchanged.
     auto fullscreen = state_.fullscreen_visibility();
     auto const& owners = fullscreen.owners;
     arrange_tiles(fullscreen);
-    auto focus_request = state_.take_focus_request();
-    if (focus_request && state_.find(state_.active_window()))
-        state_.clear_urgency(state_.active_window());
     published_revision_ = state_.revision();
 
     // Publication reads a frozen model.

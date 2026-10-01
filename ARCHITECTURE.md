@@ -69,9 +69,9 @@ The important authorities are:
 - `TiledMode`: the layout target and the floating rectangle to restore when floated
   again. `FloatingMode`: the one normal rectangle and the tile slot to restore when
   tiled again on the same workspace.
-- `Workspace::windows`: tiled membership and layout order; `focused_window` and
-  `focus_history`: remembered tiled focus, never an iconic client.
-- `Client::mru_order`: focus recency. `Client::fullscreen_claim`: fullscreen claim
+- `Workspace::windows`: tiled membership and layout order. `preferred_tile` records
+  explicit destination intent after relocation; actual tiled focus clears it.
+- `Client::mru_order`: completed focus recency, zero for never-focused clients. `Client::fullscreen_claim`: fullscreen claim
   recency, zero exactly when fullscreen is disabled.
 - `active_window`: the focused managed window.
 - The named scratchpad slots and the pool: the only scratchpad membership records.
@@ -279,7 +279,8 @@ sibling move, so external restacks are repaired too. The same order is published
 
 `focus_window()` records focus intent. It deiconifies when necessary, switches the
 target monitor's workspace, falls back when the target is suppressed by fullscreen, and
-updates active focus, memory and recency. Completion publishes the final choice once:
+updates the active focus intent. `State::complete_focus()` resolves eligibility and
+records only the final choice in recency, then publication sends focus once:
 it sends `WM_TAKE_FOCUS` when advertised and sets X input focus. Intermediate choices
 within one operation do not produce focus events. A managed client accepts focus when
 `WM_HINTS.input` is true or it advertises `WM_TAKE_FOCUS`.
@@ -288,9 +289,11 @@ Completion repairs focus when the active window can no longer hold it, and falls
 when a fullscreen or input-hint change asked for it and nothing is focused. Showing the
 desktop deliberately leaves focus cleared.
 
-Fallback selection prefers the workspace's remembered focus, its bounded focus history,
-reverse tiled order, sticky tiled clients on the monitor, then visible floating clients
-by recency. `core/focus` reads `State` directly and derives fullscreen visibility once per
+Fallback selection prefers the workspace's explicit destination tile, then its most
+recently focused eligible tile (reverse membership order for never-focused tiles),
+sticky tiles on the monitor, then floating clients by recency. Removing or minimizing
+a tile does not select or remember a replacement. Registration and mode changes do not
+count as focus. `core/focus` reads `State` directly and derives fullscreen visibility once per
 selection and passes it to `State::focusable()`, so selection and active-focus repair
 share one eligibility policy. Candidate checks are constant-time and allocate no candidate
 lists.
@@ -300,7 +303,7 @@ order while recording actual focus recency. Each step checks current eligibility
 removed or newly ineligible windows are skipped, and windows that become eligible can
 join the traversal. Ordinary activation (including same-window activation), a changed
 monitor/workspace or active window, or a new registration starts a fresh traversal,
-detected from `State`'s recency and registration counters. Equal recency is ordered by
+detected by activation and the registration counter. Equal recency is ordered by
 newest registration, then window ID.
 
 Visibility-changing transitions finish with `flush_and_drain_crossing()` before
@@ -420,9 +423,11 @@ decisions.
 ## Restart
 
 Graceful restart encodes `State::snapshot()` into the root property `_LWM_RESTART`:
-focus, showing-desktop, per-workspace layout, ratios, tile order and remembered focus,
+focus, showing-desktop, per-workspace layout, ratios, tile order and destination preference,
 and per-client placement, mode, geometry, preferences, urgency and fullscreen-monitor
-hints. Named scratchpad records contain either a claimed window or a pending launch;
+hints. Each client retains its actual focus rank, including zero for never-focused
+clients; adoption does not reconstruct focus by replaying the client list.
+Named scratchpad records contain either a claimed window or a pending launch;
 empty slots need no record. Floating clients also retain their tile-return slots,
 including original output names.
 One oldest-to-newest registration list covers both clients and fixtures, independently
@@ -441,7 +446,7 @@ fixtures and reads all dock reservations before restoring client placement.
 `State::restore_workspaces()` first rebinds the handoff onto discovered outputs through
 the same workspace-transfer policy as live hotplug: surviving names retain their
 workspaces; removed outputs append their tiles to output 0 after surviving members,
-without replacing its layouts or focus memory. Client placement and the focused monitor
+without replacing its layouts or destination preference. Client placement and the focused monitor
 use that same mapping. A smaller configured workspace count folds removed workspaces
 into the last one; additional workspaces retain configuration defaults.
 
@@ -450,7 +455,7 @@ clears fullscreen-monitor index hints. An unchanged topology preserves intention
 floating geometry and hints. Rebinding happens once, before client adoption, so windows
 without a record join the restored current workspace. Adoption places each saved client
 directly from its record instead of replaying rules, and `State::restore_membership()`
-then applies tile order, remembered focus, recency and scratchpad claims. After restoring
+then applies tile order, destination preference, saved recency and scratchpad claims. After restoring
 saved focus and claims, pending launches can claim matching adopted clients, including
 windows that arrived during the handoff. Later map and metadata events fulfill the same
 pending request. Removed scratchpad names and disappeared claimed windows are skipped.
@@ -549,7 +554,8 @@ completed operation that:
 - registration ranks are unique across clients and fixtures and below the next rank;
 - a client has a nonzero fullscreen claim exactly when fullscreen is enabled, and
   fullscreen excludes maximize;
-- remembered focus is a member tile that is not iconic;
+- a destination preference is a member tile that is not iconic;
+- nonzero focus ranks are unique and precede the next recency rank;
 - every named scratchpad claim and pool entry refers to a managed client, and no client
   has two scratchpad records;
 - the active window is managed and can hold focus.

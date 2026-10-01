@@ -11,7 +11,7 @@
 // as on a fresh start.
 namespace lwm::restart {
 
-inline constexpr uint32_t format = 8;
+inline constexpr uint32_t format = 9;
 
 struct ClientRecord
 {
@@ -28,6 +28,8 @@ struct ClientRecord
     std::optional<TileSlot> tile_slot; ///< Floating client's return position on its original output
     std::optional<FullscreenMonitors> fullscreen_monitors;
 
+    uint64_t mru_order = 0; ///< Zero means never focused
+
     bool operator==(ClientRecord const&) const = default;
 };
 
@@ -36,7 +38,7 @@ struct WorkspaceRecord
     LayoutStrategy strategy = LayoutStrategy::MasterStack;
     SplitRatioMap ratios;
     std::vector<xcb_window_t> tiles;
-    xcb_window_t focused = XCB_NONE;
+    xcb_window_t preferred_tile = XCB_NONE;
 
     bool operator==(WorkspaceRecord const&) const = default;
 };
@@ -66,7 +68,7 @@ struct Snapshot
     xcb_window_t active = XCB_NONE;
     bool showing_desktop = false;
     std::vector<MonitorRecord> monitors;
-    std::vector<ClientRecord> clients; ///< Oldest to newest focus recency
+    std::vector<ClientRecord> clients; ///< Registration order
     std::vector<xcb_window_t> registration_order; ///< Clients and fixtures, oldest registration first
     std::vector<NamedScratchpadRecord> named_scratchpads;
     std::vector<xcb_window_t> pool;

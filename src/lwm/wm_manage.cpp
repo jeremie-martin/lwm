@@ -433,7 +433,7 @@ void WindowManager::apply_rule(xcb_window_t window, RuleActions const& rule)
         if ((target != client.monitor || workspace != client.workspace)
             && state_.relocate(window, target, workspace, State::RelocationGeometry::Center)
             && window == state_.active_window())
-            state_.remember_focus(window);
+            state_.prefer_tile(window);
     }
 
     if (auto const* floating = floating_mode(state_.require(window)))

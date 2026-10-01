@@ -160,7 +160,7 @@ MonitorRecord capture_monitor(Monitor const& monitor)
                           { } };
     for (auto const& workspace : monitor.workspaces)
         record.workspaces.push_back(
-            { workspace.layout_strategy, workspace.split_ratios, workspace.windows, workspace.focused_window }
+            { workspace.layout_strategy, workspace.split_ratios, workspace.windows, workspace.preferred_tile }
         );
     return record;
 }
@@ -181,7 +181,7 @@ void Snapshot::rebind(std::span<Monitor const> discovered)
         monitor.previous_workspace = saved.previous;
         for (auto const& workspace : saved.workspaces)
             monitor.workspaces.push_back(
-                { workspace.tiles, workspace.focused, { }, workspace.strategy, workspace.ratios }
+                { workspace.tiles, workspace.preferred_tile, workspace.strategy, workspace.ratios }
             );
         previous.push_back(std::move(monitor));
     }
@@ -225,7 +225,7 @@ std::vector<uint32_t> encode(Snapshot const& snapshot)
         for (auto const& workspace : monitor.workspaces)
         {
             out.word(static_cast<uint32_t>(workspace.strategy));
-            out.word(workspace.focused);
+            out.word(workspace.preferred_tile);
             out.count(workspace.ratios.size());
             for (auto const& [address, ratio] : workspace.ratios)
             {
@@ -240,6 +240,8 @@ std::vector<uint32_t> encode(Snapshot const& snapshot)
     for (auto const& client : snapshot.clients)
     {
         out.word(client.window);
+        out.word(static_cast<uint32_t>(client.mru_order));
+        out.word(static_cast<uint32_t>(client.mru_order >> 32));
         out.count(client.monitor);
         out.count(client.workspace);
         out.flag(client.kind == Client::Kind::Floating);
@@ -311,7 +313,7 @@ std::optional<Snapshot> decode(std::span<uint32_t const> words)
         for (auto& workspace : monitor.workspaces)
         {
             workspace.strategy = static_cast<LayoutStrategy>(in.bounded(static_cast<uint32_t>(LayoutStrategy::Monocle)));
-            workspace.focused = in.word();
+            workspace.preferred_tile = in.word();
             size_t ratios = in.count(3);
             for (size_t i = 0; i < ratios; ++i)
             {
@@ -327,10 +329,15 @@ std::optional<Snapshot> decode(std::span<uint32_t const> words)
     }
     if (!snapshot.monitors.empty() && snapshot.focused_monitor >= snapshot.monitors.size())
         return std::nullopt;
-    snapshot.clients.resize(in.count(22));
+    snapshot.clients.resize(in.count(24));
+    std::unordered_set<uint64_t> recencies;
     for (auto& client : snapshot.clients)
     {
         client.window = in.word();
+        client.mru_order = in.word();
+        client.mru_order |= static_cast<uint64_t>(in.word()) << 32;
+        if (client.mru_order == UINT64_MAX || (client.mru_order && !recencies.insert(client.mru_order).second))
+            return std::nullopt;
         client.monitor = in.word();
         client.workspace = in.word();
         if (client.monitor >= snapshot.monitors.size()
