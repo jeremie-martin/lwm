@@ -1453,3 +1453,71 @@ TEST_CASE(
     destroy_window(conn, first);
     destroy_window(conn, second);
 }
+
+TEST_CASE(
+    "Integration: geometry rules do not veto subsequent application requests",
+    "[integration][transition][geometry][rules][geometry-authority]"
+)
+{
+    auto trigger = GENERATE("admission", "reload", "metadata", "restart");
+    bool center = GENERATE(false, true);
+    CAPTURE(trigger, center);
+    std::string config = R"(
+[[rules]]
+match = { class = "GeometryRule" }
+apply = { floating = true, geometry = { x = 100, y = 100, width = 240, height = 160 }, center = )";
+    config += center ? "true }\n" : "false }\n";
+    auto env = TestEnvironment::create(config);
+    REQUIRE(env);
+    auto& conn = env->conn;
+    auto socket = wait_for_ipc_socket_path(conn);
+    REQUIRE(socket);
+    auto window = create_window(conn, 20, 20, 180, 120);
+    set_window_wm_class(
+        conn,
+        window,
+        "geometry",
+        std::string_view(trigger) == "metadata" ? "BeforeRule" : "GeometryRule"
+    );
+    map_window(conn, window);
+    REQUIRE(wait_for_active_window(conn, window, timeout));
+    if (std::string_view(trigger) == "metadata")
+        set_window_wm_class(conn, window, "geometry", "GeometryRule");
+    else if (std::string_view(trigger) == "reload")
+        ipc_ok(*socket, "reload-config");
+    else if (std::string_view(trigger) == "restart")
+    {
+        auto instance = wm_instance(conn);
+        REQUIRE(instance);
+        ipc_ok(*socket, "restart");
+        REQUIRE(wait_for_wm_restart(conn, timeout, *instance));
+    }
+    REQUIRE(wait_for_window_geometry(conn, window, center ? 520 : 100, center ? 280 : 100, 240, 160));
+
+    // The very first request after each rule application must take effect.
+    uint32_t values[] = { 400, 300, 320, 200 };
+    xcb_configure_window(
+        conn.get(),
+        window,
+        XCB_CONFIG_WINDOW_X | XCB_CONFIG_WINDOW_Y | XCB_CONFIG_WINDOW_WIDTH | XCB_CONFIG_WINDOW_HEIGHT,
+        values
+    );
+    xcb_flush(conn.get());
+    REQUIRE(wait_for_window_geometry(conn, window, 400, 300, 320, 200));
+
+    // Metadata that leaves the matched actions unchanged cannot replay placement.
+    observe_title_after_events(conn, window);
+    REQUIRE(wait_for_window_geometry(conn, window, 400, 300, 320, 200));
+    send_client_message(
+        conn,
+        window,
+        intern_atom(conn.get(), "_NET_MOVERESIZE_WINDOW"),
+        (1 << 8) | (1 << 9) | (1 << 10) | (1 << 11),
+        200,
+        150,
+        280,
+        180
+    );
+    REQUIRE(wait_for_window_geometry(conn, window, 200, 150, 280, 180));
+    destroy_window(conn, window);
+}

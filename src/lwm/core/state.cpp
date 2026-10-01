@@ -351,7 +351,6 @@ void State::set_mode(xcb_window_t id, bool floating)
     if (floating == (client.kind() == Client::Kind::Floating))
         return;
     LWM_LOG_DEBUG("Client kind changed: window={:#x} floating={}", id, floating);
-    client.suppress_next_configure_request = false;
     if (auto* tiled = tiled_mode(client))
     {
         // An unarranged tile can still hold an off-monitor initial or hotplug rectangle.
@@ -515,11 +514,6 @@ void State::fullscreen_monitors(xcb_window_t id, std::optional<FullscreenMonitor
 }
 
 void State::pin_desktop(xcb_window_t id, bool pinned) { assign(id, &Client::desktop_pinned, pinned); }
-
-void State::configure_suppression(xcb_window_t id, bool enabled)
-{
-    assign(id, &Client::suppress_next_configure_request, enabled);
-}
 
 // ---------------------------------------------------------------------------
 // Metadata
@@ -737,6 +731,15 @@ void State::pool_scratchpad(xcb_window_t id)
         return;
     mutated();
     scratchpad_pool_.push_back(id);
+}
+
+// The back is the recall target. Advancing preserves every member in rotation.
+void State::advance_scratchpad_pool()
+{
+    if (scratchpad_pool_.size() < 2)
+        return;
+    mutated();
+    std::rotate(scratchpad_pool_.begin(), scratchpad_pool_.end() - 1, scratchpad_pool_.end());
 }
 
 void State::scratchpad_pending(std::string_view name, bool pending)

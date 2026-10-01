@@ -80,7 +80,7 @@ std::expected<void, std::string> WindowManager::toggle_scratchpad(std::string_vi
         return { };
     }
     auto const& client = state_.require(window);
-    if (!state_.visible(client))
+    if (client.monitor != state_.focused_monitor() || !state_.visible(client))
         show_named_scratchpad(window, config);
     else if (window == state_.active_window())
         hide_scratchpad(window);
@@ -99,23 +99,26 @@ void WindowManager::stash_window(xcb_window_t window)
     hide_scratchpad(window);
 }
 
-// The pool is ordered by stash time; cycling hides the visible entry and
-// shows the most recent hidden one.
+// Pool order owns selection, independently of workspace visibility or minimization.
+// Recall/focus the target first; cycling an active target advances the rotation.
 void WindowManager::cycle_scratchpad_pool()
 {
     auto const& pool = state_.scratchpad_pool();
-    auto shown = std::ranges::find_if(pool.rbegin(), pool.rend(), [&](auto id) { return state_.visible(state_.require(id)); });
-    xcb_window_t visible = shown == pool.rend() ? XCB_NONE : *shown;
-    if (visible != XCB_NONE && visible != state_.active_window())
-    {
-        focus_window(visible);
+    if (pool.empty())
         return;
+    auto window = pool.back();
+    auto const& client = state_.require(window);
+    if (client.monitor != state_.focused_monitor() || !state_.visible(client))
+        show_pooled_scratchpad(window);
+    else if (window != state_.active_window())
+        focus_window(window);
+    else
+    {
+        hide_scratchpad(window);
+        state_.advance_scratchpad_pool();
+        if (pool.size() > 1)
+            show_pooled_scratchpad(pool.back());
     }
-    if (visible != XCB_NONE)
-        hide_scratchpad(visible);
-    auto hidden = std::ranges::find_if(pool.rbegin(), pool.rend(), [&](auto id) { return id != visible && state_.require(id).iconic; });
-    if (hidden != pool.rend())
-        show_pooled_scratchpad(*hidden);
 }
 
 void WindowManager::hide_scratchpad(xcb_window_t window)

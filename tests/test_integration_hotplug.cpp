@@ -629,3 +629,63 @@ TEST_CASE(
     }
     for (auto window : { a, b, c, d, floating, newcomer, dock }) destroy_window(conn, window);
 }
+
+TEST_CASE(
+    "Integration: named and pooled recall bring a visible window to the focused output",
+    "[integration][scratchpad][multioutput][.multioutput]"
+)
+{
+    auto* server = std::getenv("LWM_TEST_XSERVER");
+    if (!server || std::strcmp(server, "Xorg") != 0)
+        SKIP("Select the owned Xorg dummy server for multi-output coverage");
+    auto kind = GENERATE("named", "tiled pool", "floating pool");
+    bool named = std::string_view(kind) == "named";
+    CAPTURE(kind);
+    auto env = TestEnvironment::create(R"(
+[workspaces]
+count = 2
+[[scratchpads]]
+name = "recall"
+spawn = { argv = ["/bin/true"] }
+match = { class = "RecallNamed" }
+)");
+    REQUIRE(env);
+    REQUIRE(env->x11_env.owns_display());
+    RestoreOutputs restore;
+    randr({ "--addmode", "DUMMY1", "1280x720" });
+    randr({ "--output", "DUMMY1", "--mode", "1280x720", "--pos", "1280x0" });
+    auto& conn = env->conn;
+    auto socket = wait_for_ipc_socket_path(conn);
+    REQUIRE(socket);
+    REQUIRE(wait_for_condition([&] { return query(*socket, "workspace list")["monitors"].size() == 2; }, timeout));
+    auto desktop = intern_atom(conn.get(), "_NET_CURRENT_DESKTOP");
+    send_client_message(conn, conn.root(), desktop, 0);
+    REQUIRE(wait_for_property_cardinal(conn.get(), conn.root(), desktop, 0, timeout));
+    auto window = create_window(conn, 10, 10, 240, 160);
+    if (named)
+        set_window_wm_class(conn, window, "recall", "RecallNamed");
+    map_window(conn, window);
+    if (named)
+        REQUIRE(wait_for_condition([&] { return is_hidden_offscreen(conn, window); }, timeout));
+    else
+    {
+        REQUIRE(wait_for_active_window(conn, window, timeout));
+        if (std::string_view(kind) == "floating pool")
+            ipc_ok(*socket, "window float");
+        ipc_ok(*socket, "scratchpad stash");
+    }
+    std::string recall = named ? "scratchpad toggle recall" : "scratchpad cycle";
+    ipc_ok(*socket, recall);
+    REQUIRE(wait_for_active_window(conn, window, timeout));
+    ipc_ok(*socket, "monitor focus right");
+    ipc_ok(*socket, "workspace switch 1");
+    REQUIRE_FALSE(is_hidden_offscreen(conn, window));
+    ipc_ok(*socket, recall);
+    INFO(ipc_ok(*socket, "state"));
+    REQUIRE(wait_for_active_window(conn, window, timeout));
+    REQUIRE(wait_for_property_cardinal(conn.get(), window, intern_atom(conn.get(), "_NET_WM_DESKTOP"), 3, timeout));
+    auto geometry = get_window_geometry(conn, window);
+    REQUIRE(geometry);
+    REQUIRE(geometry->x >= 1280);
+    destroy_window(conn, window);
+}

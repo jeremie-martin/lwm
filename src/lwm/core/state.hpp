@@ -141,7 +141,6 @@ public:
     void clear_urgency(xcb_window_t id);
     void fullscreen_monitors(xcb_window_t id, std::optional<FullscreenMonitors> value);
     void pin_desktop(xcb_window_t id, bool pinned);
-    void configure_suppression(xcb_window_t id, bool enabled);
 
     // Metadata
     void title(xcb_window_t id, std::string value);
@@ -172,6 +171,7 @@ public:
     void configure_scratchpads(std::span<std::string const> names);
     void claim_scratchpad(std::string_view name, xcb_window_t id);
     void pool_scratchpad(xcb_window_t id);
+    void advance_scratchpad_pool();
     void scratchpad_pending(std::string_view name, bool pending);
 
     // Exec handoff

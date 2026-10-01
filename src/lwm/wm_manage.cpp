@@ -442,7 +442,6 @@ void WindowManager::apply_rule(xcb_window_t window, RuleActions const& rule)
                 std::nullopt
             );
         state_.geometry(window, geometry);
-        state_.configure_suppression(window, rule.geometry || rule.center);
     }
 
     if (rule.skip_taskbar)

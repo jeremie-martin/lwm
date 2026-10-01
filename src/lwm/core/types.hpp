@@ -227,8 +227,6 @@ struct Client
     bool supports_take_focus = false; ///< WM_PROTOCOLS contains WM_TAKE_FOCUS
     uint32_t user_time = 0;
     xcb_window_t user_time_window = XCB_NONE;
-    /// Preserve WM-chosen startup placement against one client move/resize request.
-    bool suppress_next_configure_request = false;
 
     uint64_t order = 0;            ///< Registration order (_NET_CLIENT_LIST)
     uint64_t mru_order = 0;        ///< Focus recency (higher = newer)

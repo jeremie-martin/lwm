@@ -342,11 +342,20 @@ All endings release the pointer and drain crossing events.
 ## Scratchpads
 
 Named and pooled scratchpads remain ordinary managed clients. `State`'s named slots
-(empty, launch pending, or claimed) and the pool are the only membership records. A
-hidden scratchpad is simply iconic. Showing one relocates it to the focused monitor's
-current workspace and deiconifies it: named scratchpads float at their configured size,
-while pooled windows keep their mode (a pooled tile rejoins the tiled order, a floating
-window keeps its offset within the workarea).
+(empty, launch pending, or claimed) and the pool are the only membership records. An
+explicitly hidden scratchpad is iconic; workspace and fullscreen visibility remain
+derived. Showing one relocates it to the focused monitor's current workspace and
+deiconifies it: named scratchpads float at their configured size, while pooled windows
+keep their mode (a pooled tile rejoins the tiled order, a floating window keeps its
+offset within the workarea).
+
+The pool order also owns recall selection: the last entry is the target. Stashing
+appends a new target. Like named toggles, cycling recalls a target that is invisible or
+on another monitor, and focuses a visible inactive target here. Cycling an active
+target here hides it, moves it to the front, and recalls the next target. A one-window
+pool simply toggles. Selection does not depend on why a window is invisible, and every
+member participates in rotation. Removing a member preserves the
+remaining order; restart preserves the order and therefore the next recall target.
 
 A named scratchpad enters launch-pending state only after successful process creation
 and exec. Process exit is not used as a window-creation signal: a launcher may delegate

@@ -196,7 +196,9 @@ only in `window list`.
 }
 ```
 
-A named entry uses `window: 0` when it has not claimed a window.
+A named entry uses `window: 0` when it has not claimed a window. The pool array is
+ordered by recall rotation, with its current target last; see
+[Scratchpads](ARCHITECTURE.md#scratchpads) for cycle behavior.
 
 All window values are X11 window IDs. Monitor and workspace indices are zero-based
 runtime indices; none of these identifiers are persistent.

@@ -646,11 +646,6 @@ void WindowManager::handle_configure_request(xcb_configure_request_event_t const
             XCB_CONFIG_WINDOW_X | XCB_CONFIG_WINDOW_Y | XCB_CONFIG_WINDOW_WIDTH | XCB_CONFIG_WINDOW_HEIGHT;
         if (!(e.value_mask & geometry_mask))
             return;
-        if (client->suppress_next_configure_request)
-        {
-            state_.configure_suppression(e.window, false);
-            return;
-        }
         auto geometry = floating_mode(*client)->geometry;
         if (e.value_mask & XCB_CONFIG_WINDOW_X)
             geometry.x = e.x;

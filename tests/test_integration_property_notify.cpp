@@ -882,6 +882,9 @@ TEST_CASE(
     REQUIRE(wait_for_active_window(conn, window, kTimeout));
 
     set_window_title(conn, window, "micro");
+    REQUIRE(wait_for_window_geometry(conn, window, 440, 240, 400, 240));
+
+    // A later application request supersedes the rule, even on its first attempt.
     uint32_t values[] = { 60, 60, 220, 160 };
     xcb_configure_window(
         conn.get(),
@@ -891,7 +894,7 @@ TEST_CASE(
     );
     xcb_flush(conn.get());
 
-    REQUIRE(wait_for_window_geometry(conn, window, 440, 240, 400, 240));
+    REQUIRE(wait_for_window_geometry(conn, window, 60, 60, 220, 160));
 
     destroy_window(conn, window);
 }

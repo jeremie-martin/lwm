@@ -190,7 +190,7 @@ uint32_t WindowManager::border_color(Client const& client) const
 // ---------------------------------------------------------------------------
 
 // Hides, shows, configures and maps clients. Returns whether anything moved
-// under the pointer: visibility changed or a tile was rearranged.
+// under the pointer, whether tiled or floating.
 bool WindowManager::publish_clients(std::vector<Projected> const& clients)
 {
     bool moved = false;
@@ -212,10 +212,9 @@ bool WindowManager::publish_clients(std::vector<Projected> const& clients)
     {
         if (!visible)
             continue;
-        bool showing = output->hidden;
         if (!write_geometry(*client, *output, presentation_geometry(*client), border_width(*client)))
             continue;
-        moved |= showing || client->kind() == Client::Kind::Tiled;
+        moved = true;
         // The synthetic ConfigureNotify sent with the write acknowledges any request.
         configure_replies_.erase(client->id);
     }

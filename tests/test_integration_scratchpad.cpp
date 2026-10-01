@@ -655,3 +655,101 @@ size = { width = 0.8, height = 0.6 }
     destroy_window(conn, window);
     destroy_window(conn, claimed);
 }
+
+TEST_CASE(
+    "Integration: pool rotation reaches every member and survives restart and removal",
+    "[integration][scratchpad][restart][pool-rotation]"
+)
+{
+    auto env = TestEnvironment::create(scratchpad_match_config());
+    REQUIRE(env);
+    auto& conn = env->conn;
+    auto socket = wait_for_ipc_socket_path(conn);
+    REQUIRE(socket);
+    std::vector<xcb_window_t> windows;
+    for (int i = 0; i < 3; ++i)
+    {
+        auto window = create_window(conn, 10, 10, 240, 160);
+        windows.push_back(window);
+        map_window(conn, window);
+        REQUIRE(wait_for_active_window(conn, window, kTimeout));
+        if (i == 1)
+            ipc_ok(*socket, "window float");
+        ipc_ok(*socket, "scratchpad stash");
+    }
+    auto cycle_to = [&](size_t index)
+    {
+        ipc_ok(*socket, "scratchpad cycle");
+        REQUIRE(wait_for_active_window(conn, windows[index], kTimeout));
+        for (size_t i = 0; i < windows.size(); ++i) REQUIRE(is_hidden_offscreen(conn, windows[i]) == (i != index));
+    };
+    cycle_to(2);
+    cycle_to(1);
+
+    auto instance = wm_instance(conn);
+    REQUIRE(instance);
+    ipc_ok(*socket, "restart");
+    REQUIRE(wait_for_wm_restart(conn, kTimeout, *instance));
+    for (auto index : { 0, 2, 1, 0, 2 }) cycle_to(index);
+
+    // Removing the selected entry leaves the next surviving member recallable.
+    destroy_window(conn, windows[2]);
+    REQUIRE(wait_for_condition([&] { return ipc_json(*socket, "scratchpad list").at("pool").size() == 2; }, kTimeout));
+    windows.pop_back();
+    for (auto index : { 1, 0, 1 }) cycle_to(index);
+    for (auto window : windows) destroy_window(conn, window);
+}
+
+TEST_CASE(
+    "Integration: pool selection survives workspace hiding minimization and focus changes",
+    "[integration][scratchpad][pool-rotation]"
+)
+{
+    bool floating = GENERATE(false, true);
+    auto hidden_by = GENERATE("workspace", "minimize");
+    CAPTURE(floating, hidden_by);
+    auto env = TestEnvironment::create("[workspaces]\ncount = 2\nnames = [\"1\", \"2\"]\n");
+    REQUIRE(env);
+    auto& conn = env->conn;
+    auto socket = wait_for_ipc_socket_path(conn);
+    REQUIRE(socket);
+    ipc_ok(*socket, "scratchpad cycle"); // Empty pool is a no-op.
+    auto window = create_window(conn, 10, 10, 240, 160);
+    map_window(conn, window);
+    REQUIRE(wait_for_active_window(conn, window, kTimeout));
+    if (floating)
+        ipc_ok(*socket, "window float");
+    ipc_ok(*socket, "scratchpad stash");
+    ipc_ok(*socket, "scratchpad cycle");
+    REQUIRE(wait_for_active_window(conn, window, kTimeout));
+
+    if (std::string_view(hidden_by) == "workspace")
+        ipc_ok(*socket, "workspace switch 1");
+    else
+        send_client_message(conn, window, intern_atom(conn.get(), "WM_CHANGE_STATE"), 3);
+    REQUIRE(wait_for_condition([&] { return is_hidden_offscreen(conn, window); }, kTimeout));
+    ipc_ok(*socket, "scratchpad cycle");
+    REQUIRE(wait_for_active_window(conn, window, kTimeout));
+    REQUIRE_FALSE(is_hidden_offscreen(conn, window));
+    auto desktop = intern_atom(conn.get(), "_NET_WM_DESKTOP");
+    REQUIRE(wait_for_property_cardinal(
+        conn.get(),
+        window,
+        desktop,
+        std::string_view(hidden_by) == "workspace" ? 1 : 0,
+        kTimeout
+    ));
+
+    // Losing focus does not advance or hide the current selection.
+    auto other = create_window(conn, 10, 10, 200, 100);
+    map_window(conn, other);
+    REQUIRE(wait_for_active_window(conn, other, kTimeout));
+    ipc_ok(*socket, "scratchpad cycle");
+    REQUIRE(wait_for_active_window(conn, window, kTimeout));
+    ipc_ok(*socket, "scratchpad cycle");
+    REQUIRE(wait_for_condition([&] { return is_hidden_offscreen(conn, window); }, kTimeout));
+    ipc_ok(*socket, "scratchpad cycle");
+    REQUIRE(wait_for_active_window(conn, window, kTimeout));
+    destroy_window(conn, window);
+    destroy_window(conn, other);
+}
