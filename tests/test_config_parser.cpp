@@ -166,7 +166,8 @@ retired_overlay = true
 )");
 
     REQUIRE_FALSE(loaded.has_value());
-    REQUIRE(loaded.error().find("unknown key 'retired_overlay'") != std::string::npos);
+    CHECK(loaded.error().find("appearance") != std::string::npos);
+    CHECK(loaded.error().find("retired_overlay") != std::string::npos);
 }
 
 TEST_CASE("Config parser rejects wrong top-level section types", "[config]")
@@ -178,7 +179,8 @@ kill = true
 )");
 
     REQUIRE_FALSE(loaded.has_value());
-    REQUIRE(loaded.error().find("[[binds]] must be an array") != std::string::npos);
+    CHECK(loaded.error().find("binds") != std::string::npos);
+    CHECK(loaded.error().find("array") != std::string::npos);
 }
 
 TEST_CASE("Config parser regenerates default bindings from overridden commands and workspace count", "[config]")
@@ -475,8 +477,7 @@ apply = { floating = true }
             CAPTURE(field, pattern);
             auto matcher = "match = { " + field + " = \"" + pattern + "\" }\n";
             CHECK_FALSE(load_from_string("[[rules]]\n" + matcher + "apply = { floating = true }\n"));
-            CHECK_FALSE(
-                load_from_string("[[scratchpads]]\nname = \"term\"\nspawn = { argv = [\"true\"] }\n" + matcher)
+            CHECK_FALSE(load_from_string("[[scratchpads]]\nname = \"term\"\nspawn = { argv = [\"true\"] }\n" + matcher)
             );
         }
     CHECK_FALSE(load_from_string("[[rules]]\nmatch = { type = \"unknown\" }\napply = { floating = true }\n"));
@@ -560,4 +561,106 @@ apply = { above = false }
     // An explicit false clears a layer preference rather than leaving it unspecified.
     CHECK(loaded->rules[1].actions.layer == LayerHint::Normal);
     CHECK(loaded->layout.strategy == LayoutStrategy::MasterStack);
+}
+
+TEST_CASE("Configuration decoding preserves absence, explicit false, and empty bindings", "[config]")
+{
+    auto defaults = load_from_string("");
+    REQUIRE(defaults);
+    CHECK_FALSE(defaults->keybinds.empty());
+    CHECK_FALSE(defaults->mousebinds.empty());
+    CHECK(defaults->workspaces.names.size() == 10);
+
+    auto empty = load_from_string("binds = []\nmousebinds = []");
+    REQUIRE(empty);
+    CHECK(empty->keybinds.empty());
+    CHECK(empty->mousebinds.empty());
+
+    auto rules = load_from_string(R"(
+[[rules]]
+match = { transient = false }
+apply = { floating = false, fullscreen = false, sticky = false, skip_taskbar = false, skip_pager = false, borderless = false }
+[[rules]]
+apply = { center = true }
+)");
+    REQUIRE(rules);
+    REQUIRE(rules->rules.size() == 2);
+    auto const& explicit_false = rules->rules[0];
+    CHECK(explicit_false.transient == false);
+    CHECK(explicit_false.actions.floating == false);
+    CHECK(explicit_false.actions.fullscreen == false);
+    CHECK(explicit_false.actions.sticky == false);
+    CHECK(explicit_false.actions.skip_taskbar == false);
+    CHECK(explicit_false.actions.skip_pager == false);
+    CHECK(explicit_false.actions.borderless == false);
+    CHECK_FALSE(rules->rules[1].transient.has_value());
+    CHECK_FALSE(rules->rules[1].actions.floating.has_value());
+}
+
+TEST_CASE("Configuration rejects malformed nested values at their owning field", "[config]")
+{
+    for (auto const& [text, field] : std::initializer_list<std::pair<std::string, std::string>>{
+             {                              "[focus]\nwarp_cursor_on_monitor_change = 0", "warp_cursor_on_monitor_change" },
+             {                                             "[appearance]\npadding = 1.5",                       "padding" },
+             {                                         "[appearance]\nborder_color = -1",                  "border_color" },
+             {                                 "[appearance]\nborder_color = 4294967296",                  "border_color" },
+             {                    "[[mousebinds]]\nbutton = 256\naction = 'drag_window'",                        "button" },
+             {                                  "[[mousebinds]]\naction = 'drag_window'",                        "button" },
+             {                                                  "[[binds]]\nkill = true",                           "key" },
+             {                                         "[[binds]]\nkey = 'F1'\nkill = 1",                          "kill" },
+             {                                     "[[binds]]\nkey = 'F1'\nkill = false",                          "kill" },
+             {                           "[[binds]]\nkey = 'F1'\nswitch_workspace = 1.0",              "switch_workspace" },
+             {         "[[binds]]\nkey = 'F1'\nspawn = { argv = ['true'], typo = true }",                          "typo" },
+             {                           "[commands]\nterminal = { argv = ['true', 1] }",                          "argv" },
+             {                                               "[commands]\nterminal = {}",                      "terminal" },
+             {              "[commands]\nterminal = { argv = ['true'], shell = 'true' }",                      "terminal" },
+             {                              "[commands]\nterminal = { ref = 'browser' }",                           "ref" },
+             {                                    "[commands]\nterminal = { argv = [] }",                          "argv" },
+             {                                  "[commands]\nterminal = { argv = [''] }",                          "argv" },
+             {                      "[[binds]]\nkey = 'F1'\nkill = true\nrestart = true",            "exactly one action" },
+             { "[[scratchpads]]\nname = 'term'\nspawn = { argv = ['true'] }\nmatch = {}",                       "matcher" },
+             {                                         "[unknown_section]\nvalue = true",               "unknown_section" },
+             {                    "[[rules]]\napply.geometry = { width = 10, typo = 1 }",                          "typo" },
+             { "[[rules]]\nmatch = { transient = 'false' }\napply = { floating = true }",                     "transient" },
+             {                                      "[[rules]]\nmatch = { class = 'X' }",                         "apply" },
+    })
+    {
+        CAPTURE(text);
+        auto loaded = load_from_string(text);
+        REQUIRE_FALSE(loaded);
+        CHECK(loaded.error().find(field) != std::string::npos);
+    }
+}
+
+TEST_CASE("Numeric action and scratchpad values accept integers without coercing other types", "[config]")
+{
+    auto loaded = load_from_string(R"(
+[appearance]
+border_color = 4294967295
+[[scratchpads]]
+name = 'term'
+spawn = { argv = ['true'] }
+match = { class = 'Term' }
+size = { width = 1, height = 1 }
+[[binds]]
+key = 'F1'
+adjust_ratio = 0
+)");
+    REQUIRE(loaded);
+    CHECK(loaded->appearance.border_color == UINT32_MAX);
+    REQUIRE(loaded->scratchpads.size() == 1);
+    CHECK(loaded->scratchpads[0].width == 1.0);
+    CHECK(loaded->scratchpads[0].height == 1.0);
+    CHECK(loaded->keybinds.at({ 0, XK_F1 }) == Action{ action::AdjustRatio{ 0.0 } });
+    for (std::string value : { "nan", "inf", "-inf", "true", "'0.5'" })
+    {
+        CAPTURE(value);
+        CHECK_FALSE(load_from_string("[[binds]]\nkey = 'F1'\nadjust_ratio = " + value));
+        CHECK_FALSE(load_from_string("[[binds]]\nkey = 'F1'\nset_ratio = " + value));
+        CHECK_FALSE(load_from_string(
+            "[[scratchpads]]\nname = 'term'\nspawn = { argv = ['true'] }\n"
+            "match = { class = 'Term' }\nsize = { width = "
+            + value + " }"
+        ));
+    }
 }

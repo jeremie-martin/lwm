@@ -1,5 +1,8 @@
 # LWM configuration reference and starter file.
-# Unknown sections and keys are errors. Numeric values must be finite.
+# Unknown sections and keys, missing required fields, and wrong types are errors.
+# Numeric values must be finite and within the documented bounds; they never wrap.
+# Booleans use true/false; integer settings use integers, not 1.0 or true.
+# Ratios and size fractions accept either integer or floating-point numbers.
 # Omitted settings use built-in defaults, except for the binding replacement
 # rules documented below. Without --config, the implicit path is
 # $XDG_CONFIG_HOME/lwm/config.toml, used only when

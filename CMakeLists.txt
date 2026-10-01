@@ -1,4 +1,4 @@
-cmake_minimum_required(VERSION 3.20)
+cmake_minimum_required(VERSION 3.23)
 project(lwm VERSION 0.1.0 LANGUAGES CXX)
 
 set(CMAKE_CXX_STANDARD 23)
@@ -43,6 +43,17 @@ FetchContent_Declare(
 )
 set(QUILL_DISABLE_NON_PREFIXED_MACROS ON CACHE BOOL "Use only project-prefixed logging macros" FORCE)
 FetchContent_MakeAvailable(tomlplusplus quill)
+
+# reflect-cpp 0.25.0 decodes the configuration schema using the same TOML parser.
+FetchContent_Declare(
+    reflectcpp
+    GIT_REPOSITORY https://github.com/getml/reflect-cpp.git
+    GIT_TAG 1327ef1d0b403f1424776da4c47bf0c7a6b0feaa
+)
+set(REFLECTCPP_JSON OFF CACHE BOOL "" FORCE)
+set(REFLECTCPP_TOML ON CACHE BOOL "" FORCE)
+set(REFLECTCPP_USE_VCPKG OFF CACHE BOOL "" FORCE)
+FetchContent_MakeAvailable(reflectcpp)
 
 add_subdirectory(src)
 

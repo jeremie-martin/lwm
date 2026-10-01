@@ -400,8 +400,10 @@ claimed.
 ## Configuration and reload
 
 Configuration loading validates a candidate and converts it to typed values before
-changing the WM: layout strategies, rule actions (with workspace names resolved to
-indices), bindings as `Action`s, and compiled regexes. Monitor names in rules resolve
+changing the WM. A private reflect-cpp input schema owns structural validation over
+toml++; LWM resolves domain constraints and references into ordinary runtime values:
+layout strategies, rule actions (with workspace names resolved to indices), bindings as
+`Action`s, and compiled regexes. Monitor names in rules resolve
 against current outputs when applied. Runtime matching and input handling use this data
 directly. Key bindings are grabbed on the root window only; root grabs take precedence
 over any client grab. Resolving a key copies its action, because executing it may reload

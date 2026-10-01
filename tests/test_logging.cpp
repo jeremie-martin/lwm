@@ -277,7 +277,8 @@ TEST_CASE("Explicit malformed config is fatal at a high log threshold", "[loggin
     auto result = run_lwm({ "--config", config_path.string(), "--log-target", "stderr", "--log-level", "error" }, true);
     REQUIRE(result.exit_code == 1);
     REQUIRE(result.stderr_text.find("CRITICAL") != std::string::npos);
-    REQUIRE(result.stderr_text.find("Config parse error") != std::string::npos);
+    REQUIRE(result.stderr_text.find("Config error") != std::string::npos);
+    REQUIRE(result.stderr_text.find(config_path.string()) != std::string::npos);
     REQUIRE(result.stderr_text.find("using defaults") == std::string::npos);
     fs::remove_all(directory);
 }

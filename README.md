@@ -11,15 +11,15 @@ programs, normally from `[autostart]` in the LWM configuration or from your X se
 
 Required tools and libraries:
 
-- CMake 3.20 or newer
+- CMake 3.23 or newer
 - Git and a C++23 compiler
 - `pkg-config` and the libsystemd development library
 - X11/XCB modules `xcb`, `xcb-keysyms`, `xcb-randr`, `xcb-ewmh`, `xcb-icccm`,
   `xcb-sync`, and `x11`
 - `xcb-xtest` and Xvfb for the full test suite
 
-CMake downloads pinned toml++ and Quill sources on the first configure; test builds also
-download pinned Catch2 and nlohmann/json sources.
+CMake downloads pinned toml++, reflect-cpp, and Quill sources on the first configure;
+test builds also download pinned Catch2 and nlohmann/json sources.
 
 Arch Linux:
 
