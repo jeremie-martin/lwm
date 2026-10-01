@@ -72,7 +72,7 @@ Result WindowManager::execute(Action const& action, std::string_view source)
             },
             [&](FocusCycle const& cycle) -> Result
             {
-                if (!cycle_focus(cycle.forward))
+                if (!state_.cycle_focus(cycle.forward))
                     return std::unexpected("no focus candidates");
                 return std::to_string(state_.active_window());
             },
@@ -83,7 +83,7 @@ Result WindowManager::execute(Action const& action, std::string_view source)
                     return std::unexpected("unknown window");
                 if (!State::accepts_focus(*client))
                     return std::unexpected("window not focusable");
-                focus_window(focus.window);
+                state_.focus(focus.window);
                 if (state_.active_window() != focus.window)
                     return std::unexpected("focus request refused");
                 return std::to_string(focus.window);
@@ -104,13 +104,13 @@ Result WindowManager::execute(Action const& action, std::string_view source)
             {
                 if (target.workspace >= focused.workspaces.size())
                     return std::unexpected("workspace out of range");
-                switch_workspace(target.workspace);
+                state_.switch_workspace(monitor, target.workspace);
                 return std::to_string(target.workspace);
             },
             [&](ToggleWorkspace const&) -> Result
             {
                 if (focused.previous_workspace != focused.current_workspace)
-                    switch_workspace(focused.previous_workspace);
+                    state_.switch_workspace(monitor, focused.previous_workspace);
                 return std::to_string(state_.monitors()[monitor].current_workspace);
             },
             [&](CycleWorkspace const& cycle) -> Result
@@ -119,7 +119,7 @@ Result WindowManager::execute(Action const& action, std::string_view source)
                 auto target = static_cast<size_t>(
                     ((static_cast<int>(focused.current_workspace) + cycle.step) % count + count) % count
                 );
-                switch_workspace(target);
+                state_.switch_workspace(monitor, target);
                 return std::to_string(target);
             },
             [&](MoveToWorkspace const& target) -> Result
@@ -128,7 +128,7 @@ Result WindowManager::execute(Action const& action, std::string_view source)
                     return std::unexpected("workspace out of range");
                 if (!has_active)
                     return no_active;
-                move_active_to_workspace(target.workspace);
+                state_.relocate(active, state_.require(active).monitor, target.workspace);
                 return "";
             },
             [&](SwapTile const& swap) -> Result
@@ -232,43 +232,7 @@ void WindowManager::toggle_float(xcb_window_t window)
     if (floating)
         state_.maximize(window, false, false);
     state_.floating(window, !floating);
-    focus_window(window);
-}
-
-void WindowManager::iconify_window(xcb_window_t window)
-{
-    auto const* client = state_.find(window);
-    if (!client || client->iconic)
-        return;
-    bool was_in_view = state_.in_view(*client);
-    state_.iconic(window, true);
-    if (window != state_.active_window())
-        return;
-    if (client->monitor == state_.focused_monitor() && was_in_view)
-        focus_fallback(client->monitor);
-    else
-        clear_focus();
-}
-
-void WindowManager::deiconify_window(xcb_window_t window, bool focus)
-{
-    auto const* client = state_.find(window);
-    if (!client)
-        return;
-    state_.iconic(window, false);
-    if ((focus || client->fullscreen) && client->monitor == state_.focused_monitor() && state_.in_view(*client))
-        focus_window(window);
-}
-
-// ---------------------------------------------------------------------------
-// Workspaces and monitors
-// ---------------------------------------------------------------------------
-
-void WindowManager::switch_workspace(size_t workspace)
-{
-    size_t monitor = state_.focused_monitor();
-    if (state_.switch_workspace(monitor, workspace))
-        focus_fallback(monitor);
+    state_.focus(window);
 }
 
 // _NET_CURRENT_DESKTOP names a monitor and one of its workspaces.
@@ -283,17 +247,7 @@ void WindowManager::switch_to_desktop(uint32_t desktop)
         return;
     state_.focus_monitor(monitor);
     state_.switch_workspace(monitor, workspace);
-    focus_fallback(monitor);
-}
-
-void WindowManager::move_active_to_workspace(size_t workspace)
-{
-    xcb_window_t window = state_.active_window();
-    size_t monitor = state_.require(window).monitor;
-    if (workspace == state_.monitors()[monitor].current_workspace || !state_.relocate(window, monitor, workspace))
-        return;
-    state_.prefer_tile(window);
-    focus_fallback(monitor);
+    state_.focus_fallback(monitor);
 }
 
 size_t WindowManager::wrap_monitor(int index) const
@@ -325,7 +279,7 @@ void WindowManager::focus_adjacent_monitor(int direction)
         return;
     size_t target = wrap_monitor(static_cast<int>(state_.focused_monitor()) + direction);
     state_.focus_monitor(target);
-    focus_fallback(target);
+    state_.focus_fallback(target);
     warp_to_monitor(state_.monitors()[target]);
 }
 
@@ -338,8 +292,7 @@ void WindowManager::move_active_to_monitor(int direction)
     size_t workspace = state_.monitors()[target].current_workspace;
     if (!state_.relocate(window, target, workspace, State::RelocationGeometry::Center))
         return;
-    state_.focus_monitor(target);
-    focus_window(window);
+    state_.focus(window);
     warp_to_monitor(state_.monitors()[target]);
 }
 
@@ -366,7 +319,7 @@ void WindowManager::swap_active_tile(int offset)
     // Every monocle slot shares one rectangle, so swapping would change nothing
     // visible: focus the adjacent tile instead.
     if (workspace.layout_strategy == LayoutStrategy::Monocle)
-        focus_window(workspace.windows[eligible[other]]);
+        state_.focus(workspace.windows[eligible[other]]);
     else
         state_.swap_tiles(monitor, eligible[index], eligible[other]);
 }

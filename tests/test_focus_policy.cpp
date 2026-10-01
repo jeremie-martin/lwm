@@ -140,7 +140,9 @@ TEST_CASE("Only completed focus contributes to recency", "[focus][state]")
     CHECK(state.require(1).mru_order == 0);
     CHECK(state.complete_focus() == 20);
     CHECK(state.require(1).mru_order == 0);
+    CHECK(state.require(1).user_time == 0);
     CHECK(state.require(2).mru_order == 1);
+    CHECK(state.require(2).user_time == 20);
     CHECK_FALSE(state.complete_focus());
     CHECK(state.require(2).mru_order == 1);
 
@@ -156,17 +158,86 @@ TEST_CASE("Only completed focus contributes to recency", "[focus][state]")
     CHECK(state.active_window() == XCB_NONE);
 }
 
+TEST_CASE("Activation owns restoration and placement and refuses ineligible clients", "[focus][state]")
+{
+    auto state = test::state(2);
+    add(state, 1);
+    add(state, 2, { .monitor = 1, .workspace = 2 });
+    test::focus(state, 1);
+    state.iconic(2, true);
+    state.focus(2, 42);
+    CHECK_FALSE(state.require(2).iconic);
+    CHECK(state.focused_monitor() == 1);
+    CHECK(state.monitors()[1].current_workspace == 2);
+    CHECK(state.active_window() == 2);
+    CHECK(state.complete_focus() == 42);
+
+    SECTION("Unknown ID") { state.focus(99); }
+    SECTION("No input protocol")
+    {
+        state.focus_hints(1, false, false);
+        state.focus(1);
+    }
+    SECTION("Desktop is shown")
+    {
+        state.show_desktop(true);
+        state.focus(1);
+        CHECK(state.active_window() == XCB_NONE);
+        state.show_desktop(false);
+    }
+    CHECK(state.active_window() == 2);
+    CHECK(state.focused_monitor() == 1);
+}
+
+TEST_CASE("Domain operations choose focus without caller cleanup", "[focus][state]")
+{
+    auto state = test::state(2);
+    add(state, 1);
+    add(state, 2);
+    add(state, 3, { .workspace = 1 });
+    test::focus(state, 2);
+    SECTION("Minimize")
+    {
+        state.iconic(2, true);
+        CHECK(state.active_window() == 1);
+    }
+    SECTION("Switch workspace")
+    {
+        state.switch_workspace(0, 1);
+        CHECK(state.active_window() == 3);
+    }
+    SECTION("Move to hidden workspace keeps the source monitor focused")
+    {
+        state.relocate(2, 1, 1);
+        CHECK(state.active_window() == 1);
+        CHECK(state.focused_monitor() == 0);
+        state.focus_monitor(1);
+        state.switch_workspace(1, 1);
+        CHECK(state.active_window() == 2);
+    }
+    SECTION("Move to a shown workspace follows the active client")
+    {
+        state.relocate(2, 1, 0);
+        CHECK(state.active_window() == 2);
+        CHECK(state.focused_monitor() == 1);
+    }
+}
+
 TEST_CASE("Tile destination preference does not manufacture focus history", "[focus][state]")
 {
     auto state = test::state();
-    for (xcb_window_t id : { 1, 2, 3 }) add(state, id);
+    add(state, 1, { .workspace = 1 });
+    add(state, 2);
+    add(state, 3, { .workspace = 1 });
     test::focus(state, 1);
-    state.prefer_tile(2);
+    state.switch_workspace(0, 0);
+    state.relocate(2, 0, 1);
+    state.switch_workspace(0, 1);
     CHECK(focus::fallback(state, 0) == 2);
     CHECK(state.require(2).mru_order == 0);
     SECTION("An actual tiled focus supersedes the preference") { test::focus(state, 3); }
-    SECTION("Removing a preference does not select a replacement") { state.erase(2); }
-    SECTION("Minimizing a preference does not select a replacement") { state.iconic(2, true); }
+    SECTION("Removing the preferred client clears its preference") { state.erase(2); }
+    SECTION("Minimizing the preferred client clears its preference") { state.iconic(2, true); }
     CHECK(state.monitors()[0].current().preferred_tile == XCB_NONE);
     CHECK(focus::fallback(state, 0) == state.active_window());
 }

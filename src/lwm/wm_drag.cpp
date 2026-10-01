@@ -55,7 +55,7 @@ void WindowManager::begin_window_drag(xcb_window_t window, int16_t x, int16_t y,
     auto const* client = state_.find(window);
     if (!client || !state_.visible(*client) || client->fullscreen || state_.showing_desktop() || !grab_pointer_for_drag())
         return;
-    focus_window(window);
+    state_.focus(window);
     // A tiled resize away from a split becomes a floating resize.
     if (client->kind() == Client::Kind::Tiled && edges != floating::ResizeEdge::None)
         state_.floating(window, true);
@@ -202,7 +202,7 @@ void WindowManager::end_drag(bool commit)
             ++index;
     }
     if (state_.relocate(client->id, target, monitor.current_workspace, State::RelocationGeometry::Preserve, index))
-        focus_window(client->id);
+        state_.focus(client->id);
 }
 
 

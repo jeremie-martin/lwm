@@ -20,7 +20,6 @@ add_library(liblwm STATIC
     config/config.cpp
     layout/layout.cpp
     wm_actions.cpp
-    wm_focus.cpp
     wm_manage.cpp
     wm_ipc.cpp
     wm_transition.cpp

@@ -26,7 +26,7 @@ behavior belongs in [X11.md](X11.md); the local wire contract belongs in
 | `src/lwm/wm_manage.cpp` | classification, registration, rules, restart adoption |
 | `src/lwm/wm_events.cpp` | X event and client-message handlers |
 | `src/lwm/wm_actions.cpp` | the executor for `Action`s and window, workspace and monitor operations |
-| `src/lwm/wm_focus.cpp`, `wm_drag.cpp`, `wm_scratchpad.cpp` | focus assignment, pointer interactions, scratchpads |
+| `src/lwm/wm_drag.cpp`, `wm_scratchpad.cpp` | pointer interactions, scratchpad commands |
 | `src/lwm/wm_transition.cpp` | operation completion: projection of state onto X and subscribers |
 | `src/lwm/wm_ipc.cpp`, `wm_restart.cpp` | IPC queries and JSON, exec handoff |
 
@@ -166,12 +166,15 @@ match leaves previous actions in place. Reload reapplies every matching rule. Pe
 scratchpad claims are checked independently of rule changes. Precedence and replay
 semantics are specified in [X11.md](X11.md#classification).
 
-`unmanage_window()` removes a client or fixture and repairs focus. Completion then
+`State::erase()` removes a client or fixture and chooses replacement focus. Completion then
 writes `WM_STATE=WithdrawnState` and removes the focused state.
 
 `State::relocate()` moves a client and chooses what happens to a floating rectangle
 when the monitor changes: preserve it, center it, or translate it within the workarea. A
 tiled reorder within one workspace keeps membership and focus history.
+Relocation records destination tile preference for an active client or a hidden
+destination. Focus follows an active client onto a shown destination; otherwise the
+source monitor chooses a replacement. Callers do not repeat these decisions.
 `State::floating()` records explicit mode intent. Tile-to-float conversion restores the
 remembered floating rectangle, otherwise its current derived tile rectangle. A remembered
 rectangle lying entirely outside the monitor's workarea is centered on it. Float-to-tile
@@ -298,10 +301,12 @@ sibling move, so external restacks are repaired too. The same order is published
 
 ## Focus
 
-`focus_window()` records focus intent. It deiconifies when necessary, switches the
+`State::focus()` records focus intent. It deiconifies when necessary, switches the
 target monitor's workspace, falls back when the target is suppressed by fullscreen, and
-updates the active focus intent. `State::complete_focus()` resolves eligibility and
-records only the final choice in recency, then publication sends focus once:
+refuses unknown or non-input clients. Minimization, removal, workspace switching and
+show-desktop also choose focus within `State`; handlers do not supply repair sequences.
+`State::complete_focus()` resolves eligibility and records recency and user time only
+for the final choice, then publication sends focus once:
 it sends `WM_TAKE_FOCUS` when advertised and sets X input focus. Intermediate choices
 within one operation do not produce focus events. A managed client accepts focus when
 `WM_HINTS.input` is true or it advertises `WM_TAKE_FOCUS`.
@@ -313,7 +318,8 @@ desktop deliberately leaves focus cleared.
 Fallback selection prefers the workspace's explicit destination tile, then its most
 recently focused eligible tile (reverse membership order for never-focused tiles),
 sticky tiles on the monitor, then floating clients by recency. Removing or minimizing
-a tile does not select or remember a replacement. Registration and mode changes do not
+the active client selects replacement focus without creating a destination tile preference.
+Registration and mode changes do not
 count as focus. `core/focus` reads `State` directly and derives fullscreen visibility once per
 selection and passes it to `State::focusable()`, so selection and active-focus repair
 share one eligibility policy. Candidate checks are constant-time and allocate no candidate
@@ -323,8 +329,9 @@ Cycling retains only window IDs in descending recency order; consecutive steps k
 order while recording actual focus recency. Each step checks current eligibility, so
 removed or newly ineligible windows are skipped, and windows that become eligible can
 join the traversal. Ordinary activation (including same-window activation), a changed
-monitor/workspace or active window, or a new registration starts a fresh traversal,
-detected by activation and the registration counter. Equal recency is ordered by
+monitor/workspace or active window, or a new registration starts a fresh traversal.
+`State` discards the traversal at those operations; there is no second copy of its
+monitor, workspace, active window or registration counter to synchronize. Equal recency is ordered by
 newest registration, then window ID.
 
 Visibility-changing transitions finish with `flush_and_drain_crossing()` before

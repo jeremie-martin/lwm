@@ -31,9 +31,6 @@ TEST_CASE("Model validation rejects focus that completion must repair", "[invari
     add(state, 1);
     state.focus(1);
     REQUIRE_FALSE(invariants::validate(state));
-    SECTION("Unmanaged") { state.focus(99); }
-    SECTION("Iconic") { state.iconic(1, true); }
-    SECTION("Hidden workspace") { state.switch_workspace(0, 1); }
     SECTION("No input protocol") { state.focus_hints(1, false, false); }
     SECTION("Suppressed by fullscreen")
     {
@@ -162,8 +159,8 @@ TEST_CASE("Generated State operation sequences preserve model invariants", "[inv
                 trace.push_back("transient");
                 break;
             case 17:
-                state.prefer_tile(window);
-                trace.push_back("remember");
+                state.cycle_focus(pick(2) == 0);
+                trace.push_back("cycle focus");
                 break;
             case 18:
                 state.request_fullscreen(window);

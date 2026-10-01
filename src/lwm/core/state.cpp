@@ -57,6 +57,7 @@ Workspace& State::edit_workspace(size_t monitor, size_t workspace)
 
 uint64_t State::register_window(xcb_window_t id, std::span<xcb_window_t const> registration_order)
 {
+    focus_cycle_.clear();
     assert(id != XCB_NONE && !find(id) && !find_fixture(id));
     // Fixtures may be admitted before clients. Reserve every saved rank so a
     // newcomer cannot take the rank of a survivor that has not been admitted yet.
@@ -101,9 +102,10 @@ void State::erase(xcb_window_t id)
     if (client->kind() == Client::Kind::Tiled)
         detach(*client);
     release_scratchpad(id);
-    if (active_window_ == id)
-        active_window_ = XCB_NONE;
+    bool active = active_window_ == id;
     clients_.erase(id);
+    if (active)
+        focus_fallback(focused_monitor_);
 }
 
 void State::attach(Client const& client, std::optional<size_t> index)
@@ -240,10 +242,61 @@ bool State::focusable(Client const& client, FullscreenVisibility const& fullscre
 // Focus
 // ---------------------------------------------------------------------------
 
-void State::focus(xcb_window_t id, uint32_t time)
+void State::focus(xcb_window_t id, uint32_t time, bool record_user_time)
+{
+    if (id != XCB_NONE)
+    {
+        auto const* client = find(id);
+        if (showing_desktop_ || !client || !accepts_focus(*client))
+            return;
+        iconic(id, false);
+        focus_monitor(client->monitor);
+        if (!client->sticky)
+            switch_workspace(client->monitor, client->workspace);
+        if (!visible(*client))
+            return focus_fallback(client->monitor, false);
+    }
+    select_focus(id, time, record_user_time);
+}
+
+void State::focus_fallback(size_t monitor, bool record_user_time)
+{
+    select_focus(focus::fallback(*this, monitor), 0, record_user_time);
+}
+
+void State::restore(xcb_window_t id, bool activate)
+{
+    auto const* client = find(id);
+    if (!client)
+        return;
+    iconic(id, false);
+    if ((activate || client->fullscreen) && client->monitor == focused_monitor_ && in_view(*client))
+        focus(id);
+}
+
+// Traversal retains one MRU order. Operations that change its context discard it;
+// eligibility is still evaluated on every step.
+bool State::cycle_focus(bool forward)
+{
+    if (focus_cycle_.empty())
+        focus_cycle_ = focus::recent_order(*this);
+    auto target = focus::cycle_target(focus_cycle_, *this, focused_monitor_, active_window_, forward);
+    if (target == XCB_NONE)
+    {
+        focus_cycle_.clear();
+        return false;
+    }
+    auto order = std::move(focus_cycle_);
+    focus(target);
+    focus_cycle_ = std::move(order);
+    return true;
+}
+
+void State::select_focus(xcb_window_t id, uint32_t time, bool record_user_time)
 {
     mutated();
-    focus_request_ = time;
+    focus_cycle_.clear();
+    focus_request_ = FocusRequest{ time, record_user_time };
     if (active_window_ != id)
         LWM_LOG_DEBUG("Focus changed: window={:#x} -> {:#x}", active_window_, id);
     active_window_ = id;
@@ -257,34 +310,31 @@ void State::focus_monitor(size_t monitor)
     {
         mutated();
         focused_monitor_ = monitor;
+        focus_cycle_.clear();
     }
 }
 
-// Relocation may prefer a destination tile without pretending it received focus.
-void State::prefer_tile(xcb_window_t id)
-{
-    auto const& client = require(id);
-    if (client.kind() == Client::Kind::Tiled && !client.iconic)
-        edit_workspace(client.monitor, client.workspace).preferred_tile = id;
-}
-
-std::optional<uint32_t> State::complete_focus()
+std::optional<uint32_t> State::complete_focus(uint32_t input_time)
 {
     bool requested = std::exchange(repair_focus_, false);
     auto const* active = find(active_window_);
     if (active ? !focusable(*active)
                : active_window_ != XCB_NONE || (requested && !focus_request_ && !showing_desktop_))
-        focus(focus::fallback(*this, focused_monitor_));
+        focus_fallback(focused_monitor_, false);
     auto request = std::exchange(focus_request_, std::nullopt);
     if (request && find(active_window_))
     {
         auto& client = edit(active_window_);
         client.mru_order = next_recency_++;
+        uint32_t time = request->time ? request->time : input_time;
+        if (request->record_user_time && time
+            && (!client.user_time || !ewmh_policy::timestamp_is_before(time, client.user_time)))
+            client.user_time = time;
         if (client.kind() == Client::Kind::Tiled)
             edit_workspace(client.monitor, client.workspace).preferred_tile = XCB_NONE;
         clear_urgency(client.id);
     }
-    return request;
+    return request ? std::optional{ request->time } : std::nullopt;
 }
 
 void State::show_desktop(bool enabled)
@@ -293,6 +343,10 @@ void State::show_desktop(bool enabled)
         return;
     mutated();
     showing_desktop_ = enabled;
+    if (enabled)
+        select_focus(XCB_NONE);
+    else
+        focus_fallback(focused_monitor_);
 }
 
 // ---------------------------------------------------------------------------
@@ -349,6 +403,16 @@ bool State::relocate(
     client.workspace = workspace;
     if (tiled)
         attach(client, tile_index);
+    bool active = active_window_ == id;
+    if (tiled && !client.iconic && (active || !shows(monitor, workspace)))
+        edit_workspace(monitor, workspace).preferred_tile = id;
+    if (active)
+    {
+        if (in_view(client))
+            focus_monitor(monitor);
+        else
+            focus_fallback(focused_monitor_);
+    }
     return true;
 }
 
@@ -429,6 +493,8 @@ void State::iconic(xcb_window_t id, bool enabled)
     // Restoring a fullscreen client makes it the preferred owner again.
     if (!enabled && c.fullscreen)
         request_fullscreen(id);
+    if (enabled && active_window_ == id)
+        focus_fallback(focused_monitor_);
 }
 
 void State::sticky(xcb_window_t id, bool enabled)
@@ -588,6 +654,8 @@ bool State::switch_workspace(size_t monitor, size_t workspace)
     LWM_LOG_DEBUG("Workspace changed: monitor={} workspace={} -> {}", monitor, m.current_workspace, workspace);
     m.previous_workspace = m.current_workspace;
     m.current_workspace = workspace;
+    if (monitor == focused_monitor_)
+        focus_fallback(monitor);
     return true;
 }
 
@@ -628,6 +696,7 @@ void State::replace_monitors(std::vector<Monitor> monitors)
 {
     assert(!monitors.empty());
     mutated();
+    focus_cycle_.clear();
     bool topology_changed = monitors_.size() != monitors.size()
         || !std::ranges::equal(monitors_,
                                monitors,

@@ -153,7 +153,7 @@ void WindowManager::handle_map_request(xcb_map_request_event_t const& e)
 {
     if (state_.find(e.window))
     {
-        deiconify_window(e.window, true);
+        state_.restore(e.window, true);
         return;
     }
     if (state_.find_fixture(e.window) || is_override_redirect(e.window))
@@ -177,10 +177,14 @@ void WindowManager::handle_window_removal(xcb_window_t window)
     if (auto const* client = state_.find(window))
         queue_event(event::WindowUnmap{ window, client_kind_str(client->kind()), Placement{ client->monitor, client->workspace } });
     else if (auto const* fixture = state_.find_fixture(window))
+    {
         queue_event(event::WindowUnmap{ window, fixture_role_str(fixture->role), std::nullopt });
+        workareas_dirty_ |= fixture->role == Fixture::Role::Dock;
+    }
     else
         return;
-    unmanage_window(window);
+    pending_kills_.erase(window);
+    state_.erase(window);
 }
 
 // ---------------------------------------------------------------------------
@@ -199,7 +203,7 @@ void WindowManager::handle_enter_notify(xcb_enter_notify_event_t const& e)
         if (auto const* client = state_.find(e.event))
         {
             if (state_.visible(*client) && e.event != state_.active_window())
-                focus_window(e.event);
+                state_.focus(e.event);
             return;
         }
     }
@@ -221,7 +225,7 @@ void WindowManager::handle_motion_notify(xcb_motion_notify_event_t const& e)
     if (auto const* client = state_.find(under))
     {
         if (state_.visible(*client) && under != state_.active_window())
-            focus_window(under);
+            state_.focus(under);
         return;
     }
     if (auto hit = hit_split_border(e.root_x, e.root_y))
@@ -307,7 +311,7 @@ void WindowManager::handle_button_press(xcb_button_press_event_t const& e)
 
     // Ordinary clicks focus the client and still reach it.
     if (client && target != state_.active_window())
-        focus_window(target);
+        state_.focus(target);
     if (from_window_grab)
         allow(XCB_ALLOW_REPLAY_POINTER);
     if (client || from_window_grab)
@@ -405,8 +409,8 @@ void WindowManager::handle_client_message(xcb_client_message_event_t const& e)
             e.window,
             FullscreenMonitors{ e.data.data32[0], e.data.data32[1], e.data.data32[2], e.data.data32[3] }
         );
-    else if (e.type == atoms_.wm_change_state && e.data.data32[0] == WM_STATE_ICONIC)
-        iconify_window(e.window);
+    else if (e.type == atoms_.wm_change_state && e.data.data32[0] == WM_STATE_ICONIC && client)
+        state_.iconic(e.window, true);
     else if (e.type == ewmh->_NET_WM_STATE)
         handle_wm_state_change(e);
     else if (e.type == ewmh->_NET_CURRENT_DESKTOP)
@@ -490,9 +494,9 @@ void WindowManager::handle_wm_state_change(xcb_client_message_event_t const& e)
     if (requested(ewmh->_NET_WM_STATE_HIDDEN))
     {
         if (enable(client->iconic))
-            iconify_window(id);
+            state_.iconic(id, true);
         else
-            deiconify_window(id, false);
+            state_.restore(id, false);
     }
     if (requested(ewmh->_NET_WM_STATE_MAXIMIZED_HORZ) || requested(ewmh->_NET_WM_STATE_MAXIMIZED_VERT))
         state_.maximize(id, horizontal, vertical);
@@ -531,9 +535,7 @@ void WindowManager::handle_active_window_request(xcb_client_message_event_t cons
     bool shown = client->sticky || state_.shows(client->monitor, client->workspace);
     if (shown && state_.suppressed(*client))
         return deny("fullscreen-suppressed");
-    if (client->iconic)
-        deiconify_window(window, false);
-    focus_window(window, true, source == 1 ? timestamp : 0);
+    state_.focus(window, source == 1 ? timestamp : 0);
 }
 
 void WindowManager::handle_desktop_change(xcb_client_message_event_t const& e)
@@ -553,22 +555,9 @@ void WindowManager::handle_desktop_change(xcb_client_message_event_t const& e)
         return;
     auto [monitor, workspace] = *placement;
     state_.sticky(e.window, false);
-    bool was_active = state_.active_window() == e.window;
     if (!state_.relocate(e.window, monitor, workspace, State::RelocationGeometry::Center))
         return;
     state_.pin_desktop(e.window, true);
-    bool target_visible = state_.shows(monitor, workspace);
-    if (!target_visible || was_active)
-        state_.prefer_tile(e.window);
-    if (was_active)
-    {
-        // Keep focus on the source monitor when the destination workspace is
-        // not visible, instead of jumping to a screen the user is not using.
-        if (target_visible)
-            state_.focus_monitor(monitor);
-        else
-            focus_fallback(state_.focused_monitor());
-    }
     drain_requested_ = true;
 }
 
@@ -623,10 +612,6 @@ void WindowManager::handle_showing_desktop(xcb_client_message_event_t const& e)
     if (show == state_.showing_desktop())
         return;
     state_.show_desktop(show);
-    if (show)
-        clear_focus();
-    else
-        focus_fallback(state_.focused_monitor());
     drain_requested_ = true;
 }
 
@@ -813,7 +798,7 @@ void WindowManager::focus_monitor_at_point(int16_t x, int16_t y)
         return;
     LWM_LOG_TRACE("Pointer changed monitor: {} -> {}", state_.focused_monitor(), *monitor);
     state_.focus_monitor(*monitor);
-    clear_focus();
+    state_.focus(XCB_NONE);
 }
 
 } // namespace lwm

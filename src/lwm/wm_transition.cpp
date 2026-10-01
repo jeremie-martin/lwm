@@ -24,7 +24,7 @@ void WindowManager::complete_transition()
     if (std::exchange(workareas_dirty_, false))
         refresh_workareas();
     validate_drag();
-    auto focus_request = state_.complete_focus();
+    auto focus_request = state_.complete_focus(last_input_time_);
     auto fullscreen = state_.fullscreen_visibility();
     auto const& owners = fullscreen.owners;
     published_revision_ = state_.revision();

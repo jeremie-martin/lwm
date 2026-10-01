@@ -121,19 +121,26 @@ public:
     xcb_window_t active_window() const { return active_window_; }
     size_t focused_monitor() const { return focused_monitor_; }
     bool showing_desktop() const { return showing_desktop_; }
-    void focus(xcb_window_t id, uint32_t time = 0);
+    // Activation restores a minimized client and selects its workspace. Unknown or
+    // non-input clients are refused; NONE explicitly clears focus.
+    void focus(xcb_window_t id, uint32_t time = 0, bool record_user_time = true);
+    void focus_fallback(size_t monitor, bool record_user_time = true);
+    bool cycle_focus(bool forward);
+    void restore(xcb_window_t id, bool activate);
     void focus_monitor(size_t monitor);
-    void prefer_tile(xcb_window_t id);
     void show_desktop(bool enabled);
     void request_focus_repair()
     {
         mutated();
         repair_focus_ = true;
     }
-    // Resolve eligibility and record only the final focus, once per transition.
-    std::optional<uint32_t> complete_focus();
+    // Resolve eligibility, recency and user time only for the final focus, once
+    // per transition. input_time is the latest observed input timestamp.
+    std::optional<uint32_t> complete_focus(uint32_t input_time = 0);
 
     // Placement and mode
+    // Moving the active client follows a shown destination or chooses replacement
+    // focus on the source monitor. Hidden destinations remember tile preference.
     bool relocate(
         xcb_window_t id,
         size_t monitor,
@@ -221,7 +228,13 @@ private:
     xcb_window_t active_window_ = XCB_NONE;
     size_t focused_monitor_ = 0;
     bool showing_desktop_ = false;
-    std::optional<uint32_t> focus_request_;
+    struct FocusRequest
+    {
+        uint32_t time;
+        bool record_user_time;
+    };
+    std::optional<FocusRequest> focus_request_;
+    std::vector<xcb_window_t> focus_cycle_;
     bool repair_focus_ = false;
     uint64_t next_order_ = 0;
     uint64_t next_recency_ = 1;
@@ -234,6 +247,7 @@ private:
     std::vector<xcb_window_t> fullscreen_claim_order() const;
     Workspace& edit_workspace(size_t monitor, size_t workspace);
     void mutated();
+    void select_focus(xcb_window_t id, uint32_t time = 0, bool record_user_time = true);
     void set_mode(xcb_window_t id, bool floating);
     void apply_default_mode(xcb_window_t id);
     // Records a field change; an unchanged value is not a mutation.

@@ -153,14 +153,6 @@ private:
         uint8_t button; // Zero accepts any release (unspecified EWMH button).
     };
 
-    struct FocusTraversal
-    {
-        size_t monitor, workspace;
-        uint64_t next_order;
-        xcb_window_t current;
-        std::vector<xcb_window_t> order;
-    };
-
     using StateUpdates = std::vector<std::pair<xcb_window_t, std::vector<xcb_atom_t>>>;
 
     struct SplitBorderHit
@@ -197,7 +189,6 @@ private:
 
     std::deque<xcb_generic_event_t> deferred_events_;
     std::unordered_map<xcb_window_t, std::chrono::steady_clock::time_point> pending_kills_;
-    std::optional<FocusTraversal> focus_cycle_;
     std::optional<Drag> drag_;
     bool running_ = true;
     bool restarting_ = false;
@@ -271,7 +262,6 @@ private:
     };
     SizeHints read_size_hints(xcb_window_t window, bool anchored) const;
     void place_new_client(xcb_window_t window);
-    void unmanage_window(xcb_window_t window);
     void apply_rule(xcb_window_t window, RuleActions const& rule);
     void reevaluate_metadata(xcb_window_t window);
     void reapply_rules();
@@ -332,11 +322,7 @@ private:
     // wm_actions.cpp: the one executor for key bindings and IPC
     std::expected<std::string, std::string> execute(Action const& action, std::string_view source);
     void toggle_float(xcb_window_t window);
-    void iconify_window(xcb_window_t window);
-    void deiconify_window(xcb_window_t window, bool focus);
-    void switch_workspace(size_t workspace);
     void switch_to_desktop(uint32_t desktop);
-    void move_active_to_workspace(size_t workspace);
     void focus_adjacent_monitor(int direction);
     void move_active_to_monitor(int direction);
     size_t wrap_monitor(int index) const;
@@ -345,10 +331,6 @@ private:
     void layout_changed(Action const& action, std::optional<std::string> value = { }, std::optional<double> delta = { });
 
     // wm_focus.cpp
-    void focus_window(xcb_window_t window, bool record_user_time = true, uint32_t timestamp = 0);
-    void focus_fallback(size_t monitor, bool record_user_time = true);
-    void clear_focus();
-    bool cycle_focus(bool forward);
     void focus_monitor_at_point(int16_t x, int16_t y);
 
     // wm_drag.cpp

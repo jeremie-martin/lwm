@@ -89,9 +89,9 @@ void WindowManager::scan_existing_windows(bool handoff)
     if (handoff_)
     {
         if (auto const* active = state_.find(handoff_->active); active && state_.focusable(*active))
-            focus_window(active->id, false);
+            state_.focus(active->id, 0, false);
         else
-            focus_fallback(state_.focused_monitor(), false);
+            state_.focus_fallback(state_.focused_monitor(), false);
         // A requested application may have mapped while the WM was absent.
         // Saved claims take precedence; pending launches can claim the remaining
         // adopted clients exactly as they would a later map or metadata update.
@@ -110,7 +110,7 @@ void WindowManager::scan_existing_windows(bool handoff)
             );
         free(pointer);
     }
-    focus_fallback(state_.focused_monitor(), false);
+    state_.focus_fallback(state_.focused_monitor(), false);
     if (!handoff)
         for (auto const& command : config_.autostart.commands) launch_program(command, "autostart");
 }
@@ -398,7 +398,7 @@ void WindowManager::manage_client(xcb_window_t window, ClassificationResult cons
 
     auto const& client = state_.require(window);
     if (!adopting && client.monitor == state_.focused_monitor() && state_.focusable(client))
-        focus_window(window);
+        state_.focus(window);
 }
 
 // Both live admission and startup use the same placement, after registration.
@@ -413,30 +413,6 @@ void WindowManager::place_new_client(xcb_window_t window)
     }
     if (auto const& rule = state_.require(window).rule)
         apply_rule(window, *rule);
-}
-
-void WindowManager::unmanage_window(xcb_window_t window)
-{
-    if (auto const* fixture = state_.find_fixture(window))
-    {
-        if (fixture->role == Fixture::Role::Dock)
-            workareas_dirty_ = true;
-        state_.erase(window);
-        return;
-    }
-    auto const* client = state_.find(window);
-    if (!client)
-        return;
-    size_t monitor = client->monitor;
-    bool active = window == state_.active_window();
-    pending_kills_.erase(window);
-    state_.erase(window);
-    if (!active)
-        return;
-    if (monitor == state_.focused_monitor())
-        focus_fallback(monitor);
-    else
-        clear_focus();
 }
 
 // ---------------------------------------------------------------------------
@@ -456,10 +432,7 @@ void WindowManager::apply_rule(xcb_window_t window, RuleActions const& rule)
     {
         size_t target = monitor.value_or(client.monitor);
         size_t workspace = std::min(rule.workspace.value_or(client.workspace), state_.monitors()[target].workspaces.size() - 1);
-        if ((target != client.monitor || workspace != client.workspace)
-            && state_.relocate(window, target, workspace, State::RelocationGeometry::Center)
-            && window == state_.active_window())
-            state_.prefer_tile(window);
+        state_.relocate(window, target, workspace, State::RelocationGeometry::Center);
     }
 
     if (auto const* floating = floating_mode(state_.require(window)))
@@ -561,8 +534,6 @@ void WindowManager::follow_floating_geometry(xcb_window_t window)
     if (!monitor || *monitor == client.monitor)
         return;
     state_.relocate(window, *monitor, state_.monitors()[*monitor].current_workspace);
-    if (window == state_.active_window() && !state_.focusable(state_.require(window)))
-        focus_fallback(*monitor, false);
 }
 
 } // namespace lwm

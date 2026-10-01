@@ -1,6 +1,7 @@
 #include "lwm/core/log.hpp"
 #ifndef NDEBUG
 #    include "lwm/core/invariants.hpp"
+#    include "state_fixture.hpp"
 #    include <sys/prctl.h>
 #endif
 #include <array>
@@ -146,8 +147,11 @@ int main(int argc, char** argv)
     {
         prctl(PR_SET_DUMPABLE, 0);
         std::this_thread::sleep_for(std::chrono::milliseconds(200));
-        lwm::State state;
-        state.focus(1); // An unmanaged active window violates the model.
+        auto state = lwm::test::state();
+        lwm::test::add(state, 1);
+        state.focus(1);
+        // Deliberately validate before completion repairs newly ineligible focus.
+        state.focus_hints(1, false, false);
         LWM_ASSERT_INVARIANTS(state);
         return 14;
     }

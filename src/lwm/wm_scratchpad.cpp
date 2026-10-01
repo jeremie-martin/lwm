@@ -85,7 +85,7 @@ std::expected<void, std::string> WindowManager::toggle_scratchpad(std::string_vi
     else if (window == state_.active_window())
         hide_scratchpad(window);
     else
-        focus_window(window);
+        state_.focus(window);
     return { };
 }
 
@@ -111,7 +111,7 @@ void WindowManager::cycle_scratchpad_pool()
     if (client.monitor != state_.focused_monitor() || !state_.visible(client))
         show_pooled_scratchpad(window);
     else if (window != state_.active_window())
-        focus_window(window);
+        state_.focus(window);
     else
     {
         hide_scratchpad(window);
@@ -124,7 +124,7 @@ void WindowManager::cycle_scratchpad_pool()
 void WindowManager::hide_scratchpad(xcb_window_t window)
 {
     LWM_LOG_DEBUG("Hiding scratchpad window {:#x}", window);
-    iconify_window(window);
+    state_.iconic(window, true);
 }
 
 void WindowManager::show_named_scratchpad(xcb_window_t window, ScratchpadConfig const& config)
@@ -138,7 +138,7 @@ void WindowManager::show_named_scratchpad(xcb_window_t window, ScratchpadConfig 
     auto height = geometry_extent(static_cast<int64_t>(area.height * config.height));
     state_.geometry(window, floating::place_floating(area, width, height, std::nullopt));
     state_.relocate(window, monitor, workspace);
-    deiconify_window(window, true);
+    state_.restore(window, true);
 }
 
 void WindowManager::show_pooled_scratchpad(xcb_window_t window)
@@ -146,7 +146,7 @@ void WindowManager::show_pooled_scratchpad(xcb_window_t window)
     LWM_LOG_DEBUG("Showing pool scratchpad window {:#x}", window);
     size_t monitor = state_.focused_monitor();
     state_.relocate(window, monitor, state_.monitors()[monitor].current_workspace, State::RelocationGeometry::Translate);
-    deiconify_window(window, true);
+    state_.restore(window, true);
 }
 
 } // namespace lwm
