@@ -897,7 +897,7 @@ apply = { center = true }
     auto second_rect = get_window_geometry(conn, second);
     REQUIRE(first_rect);
     REQUIRE(second_rect);
-    CHECK(first_rect->y == 40 + (screen_height - 40 - 100) / 2);
+    CHECK(first_rect->y == 80 + (screen_height - 80 - 100) / 2);
     CHECK(second_rect->y == 80 + (screen_height - 80 - 100) / 2);
     auto workarea_top = [&]() -> uint32_t
     {

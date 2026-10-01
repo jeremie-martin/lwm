@@ -1,7 +1,8 @@
-#include "wm_observations.hpp"
+#include "restart_handoff.hpp"
 #include <X11/keysym.h>
 #include <array>
 #include <catch2/catch_test_macros.hpp>
+#include <catch2/generators/catch_generators.hpp>
 #include <nlohmann/json.hpp>
 #include <xcb/xcb_ewmh.h>
 #include <xcb/xtest.h>
@@ -469,4 +470,162 @@ TEST_CASE(
     CHECK((gb.y > gc.y) == removed);
     CHECK(gb.y != gc.y);
     for (auto window : windows) destroy_window(conn, window);
+}
+
+TEST_CASE(
+    "Integration: output changes during restart preserve identity and subsequent placement",
+    "[integration][restart][multioutput][.multioutput]"
+)
+{
+    auto* server = std::getenv("LWM_TEST_XSERVER");
+    if (!server || std::strcmp(server, "Xorg") != 0)
+        SKIP("Select the owned Xorg dummy server for multi-output coverage");
+    bool removed = GENERATE(false, true);
+    CAPTURE(removed);
+    auto env = TestEnvironment::create("[workspaces]\ncount = 2\n");
+    REQUIRE(env);
+    RestoreOutputs restore;
+    auto& conn = env->conn;
+    auto socket = wait_for_ipc_socket_path(conn);
+    REQUIRE(socket);
+    randr({ "--addmode", "DUMMY1", "1280x720" });
+    randr({ "--output", "DUMMY1", "--mode", "1280x720", "--right-of", "DUMMY0" });
+    REQUIRE(wait_for_condition([&] { return query(*socket, "workspace list")["monitors"].size() == 2; }, timeout));
+    auto tile = [&](uint32_t desktop)
+    {
+        auto window = create_window(conn, 20, 20, 200, 150);
+        set_window_desktop(conn, window, desktop);
+        map_window(conn, window);
+        REQUIRE(wait_for_condition(
+            [&]
+            {
+                return get_window_property_string(conn.get(), window, intern_atom(conn.get(), "_LWM_WINDOW_CLASS"))
+                    == "tiled";
+            },
+            timeout
+        ));
+        return window;
+    };
+    auto a = tile(1), b = tile(1), c = tile(3), d = tile(3);
+    ipc_ok(*socket, "focus window=" + std::to_string(c));
+    ipc_ok(*socket, "ratio set 0.7");
+    auto floating = create_window(conn, 40, 40, 250, 180);
+    set_window_type(conn, floating, intern_atom(conn.get(), "_NET_WM_WINDOW_TYPE_DIALOG"));
+    set_window_desktop(conn, floating, 1);
+    map_window(conn, floating);
+    REQUIRE(wait_for_condition(
+        [&]
+        {
+            return get_window_property_string(conn.get(), floating, intern_atom(conn.get(), "_LWM_WINDOW_CLASS"))
+                == "floating";
+        },
+        timeout
+    ));
+    auto hint = intern_atom(conn.get(), "_NET_WM_FULLSCREEN_MONITORS");
+    send_client_message(conn, floating, hint, 0, 1, 0, 1);
+    observe_title_after_events(conn, floating);
+    REQUIRE(read_property32(conn.get(), floating, hint, XCB_ATOM_CARDINAL) == std::vector<uint32_t>{ 0, 1, 0, 1 });
+    ipc_ok(*socket, "focus window=" + std::to_string(b));
+    ipc_ok(*socket, "window swap prev"); // Saved order is b, a, unlike adoption order.
+    ipc_ok(*socket, "ratio set 0.3");
+    ipc_ok(*socket, "layout set monocle");
+    auto previous = wm_instance(conn);
+    REQUIRE(previous);
+    PausedRestart restart(env->wm, *socket);
+    if (removed)
+        randr({ "--output", "DUMMY0", "--off", "--output", "DUMMY1", "--pos", "0x0" });
+    else
+        randr({ "--output", "DUMMY1", "--pos", "0x0", "--output", "DUMMY0", "--pos", "1280x0" });
+    // The successor must know even this newly arrived dock before fitting the
+    // saved floating client into the replacement workarea.
+    auto dock = create_window(conn, 0, 0, 200, 80);
+    set_window_type(conn, dock, intern_atom(conn.get(), "_NET_WM_WINDOW_TYPE_DOCK"));
+    uint32_t strut[] = { 0, 0, 80, 0 };
+    xcb_change_property(
+        conn.get(),
+        XCB_PROP_MODE_REPLACE,
+        dock,
+        intern_atom(conn.get(), "_NET_WM_STRUT"),
+        XCB_ATOM_CARDINAL,
+        32,
+        4,
+        strut
+    );
+    map_window(conn, dock);
+    auto newcomer = create_window(conn, 20, 20, 200, 150);
+    map_window(conn, newcomer);
+    REQUIRE(get_window_geometry(conn, newcomer));
+    restart.resume();
+    REQUIRE(wait_for_wm_restart(conn, std::chrono::seconds(5), *previous));
+    socket = wait_for_ipc_socket_path(conn);
+    REQUIRE(socket);
+    auto workspaces = query(*socket, "workspace list");
+    size_t target = removed ? 0 : 1;
+    REQUIRE(workspaces["monitors"].size() == (removed ? 1 : 2));
+    CHECK(workspaces["focused_monitor"] == target);
+    CHECK(workspaces["monitors"][0]["name"] == "DUMMY1");
+    CHECK(workspaces["monitors"][0]["current_workspace"] == 1);
+    CHECK(workspaces["monitors"][0]["workspaces"][1]["layout"] == "master-stack");
+    if (!removed)
+    {
+        CHECK(workspaces["monitors"][1]["name"] == "DUMMY0");
+        CHECK(workspaces["monitors"][1]["current_workspace"] == 1);
+        CHECK(workspaces["monitors"][1]["workspaces"][1]["layout"] == "monocle");
+    }
+    auto monitor_for = [&](xcb_window_t id)
+    {
+        auto windows = query(*socket, "window list");
+        for (auto const& window : windows["windows"])
+            if (window["id"] == id)
+            {
+                CHECK(window["workspace"] == 1);
+                return window["monitor"].get<size_t>();
+            }
+        FAIL("Missing window " << id);
+        return size_t(-1);
+    };
+    for (auto window : { a, b, floating, newcomer }) CHECK(monitor_for(window) == target);
+    CHECK(monitor_for(c) == 0);
+    CHECK(monitor_for(d) == 0);
+    REQUIRE(wait_for_active_window(conn, b, timeout));
+    CHECK(read_property32(conn.get(), floating, hint, XCB_ATOM_CARDINAL).value_or(std::vector<uint32_t>{ }).empty());
+    auto rectangle = require_window_geometry(conn, floating);
+    if (removed)
+    {
+        CHECK(rectangle.x == (1280 - rectangle.width) / 2);
+        CHECK(rectangle.y == 80 + (720 - 80 - rectangle.height) / 2);
+    }
+    else
+        CHECK(rectangle.x >= 1280);
+
+    // Subsequent commands must target the restored output and use its saved
+    // ratios/order, with displaced tiles appended after surviving members.
+    ipc_ok(*socket, "layout set master-stack");
+    auto master = require_window_geometry(conn, removed ? c : b);
+    CHECK((master.width > 700) == removed); // Survivor's 0.7 versus source's 0.3.
+    auto ga = require_window_geometry(conn, a), gb = require_window_geometry(conn, b);
+    auto gn = require_window_geometry(conn, newcomer);
+    if (removed)
+    {
+        auto gd = require_window_geometry(conn, d);
+        CHECK(master.x < gd.x);
+        CHECK(gd.y < gb.y);
+        CHECK(gb.y < ga.y);
+    }
+    else
+        CHECK(gb.x < ga.x);
+    CHECK(ga.y < gn.y);
+    ipc_ok(*socket, "workspace switch 0");
+    REQUIRE(wait_for_condition([&] { return is_hidden_offscreen(conn, b); }, timeout));
+    ipc_ok(*socket, "workspace toggle");
+    REQUIRE(wait_for_active_window(conn, b, timeout));
+    if (removed)
+    {
+        randr({ "--output", "DUMMY0", "--mode", "1280x720", "--right-of", "DUMMY1" });
+        REQUIRE(wait_for_condition([&] { return query(*socket, "workspace list")["monitors"].size() == 2; }, timeout));
+        CHECK(monitor_for(a) == 0);
+        CHECK(monitor_for(floating) == 0);
+        CHECK(query(*socket, "workspace list")["monitors"][1]["current_workspace"] == 0);
+    }
+    for (auto window : { a, b, c, d, floating, newcomer, dock }) destroy_window(conn, window);
 }

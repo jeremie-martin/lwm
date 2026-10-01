@@ -2,6 +2,7 @@
 
 // Pure desktop numbering, workspace focus memory, and output rebinding rules.
 
+#include "lwm/core/floating.hpp"
 #include "lwm/core/types.hpp"
 #include <algorithm>
 #include <cassert>
@@ -128,9 +129,27 @@ fixup_workspace_focus(Workspace& ws, xcb_window_t removed_window, std::function<
 
 namespace lwm::hotplug_policy {
 
+// One geometry policy for clients affected by live or restart-time topology changes.
+inline Geometry fit_floating(Geometry rectangle, Geometry area, bool displaced)
+{
+    return displaced ? floating::place_floating(area, rectangle.width, rectangle.height, std::nullopt)
+                     : floating::clamp_to_area(area, rectangle);
+}
+
+inline void merge_membership(Workspace& target, Workspace& source)
+{
+    target.windows.insert(target.windows.end(), source.windows.begin(), source.windows.end());
+    if (target.focused_window == XCB_NONE && !source.windows.empty())
+    {
+        target.focused_window = source.focused_window;
+        target.focus_history = std::move(source.focus_history);
+    }
+}
+
 // Transfer complete workspace state for surviving outputs. Discovery supplies
 // fresh geometry; old geometry remains available to relocate floating clients.
-// Every monitor has the same nonzero configured workspace count.
+// Discovered monitors have a nonzero configured workspace count. A smaller
+// count folds removed workspaces into the last one; additional workspaces keep defaults.
 inline std::vector<size_t> preserve_workspaces(std::span<Monitor> previous, std::span<Monitor> discovered)
 {
     assert(!discovered.empty());
@@ -144,11 +163,15 @@ inline std::vector<size_t> preserve_workspaces(std::span<Monitor> previous, std:
             destinations[old] = next;
             auto& source = previous[old];
             auto& target = discovered[next];
-            assert(source.workspaces.size() == target.workspaces.size());
-            target.workspaces = std::move(source.workspaces);
+            size_t last = target.workspaces.size() - 1;
+            for (size_t w = 0; w < source.workspaces.size(); ++w)
+                if (w <= last)
+                    target.workspaces[w] = std::move(source.workspaces[w]);
+                else
+                    merge_membership(target.workspaces[last], source.workspaces[w]);
             source.workspaces.clear();
-            target.current_workspace = source.current_workspace;
-            target.previous_workspace = source.previous_workspace;
+            target.current_workspace = std::min(source.current_workspace, last);
+            target.previous_workspace = std::min(source.previous_workspace, last);
             break;
         }
     }
@@ -159,13 +182,8 @@ inline std::vector<size_t> preserve_workspaces(std::span<Monitor> previous, std:
         for (size_t w = 0; w < source.workspaces.size(); ++w)
         {
             auto& from = source.workspaces[w];
-            auto& to = discovered[0].workspaces[w];
-            to.windows.insert(to.windows.end(), from.windows.begin(), from.windows.end());
-            if (to.focused_window == XCB_NONE && !from.windows.empty())
-            {
-                to.focused_window = from.focused_window;
-                to.focus_history = std::move(from.focus_history);
-            }
+            auto& to = discovered[0].workspaces[std::min(w, discovered[0].workspaces.size() - 1)];
+            merge_membership(to, from);
         }
     }
     return destinations;

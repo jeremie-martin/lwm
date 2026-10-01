@@ -297,8 +297,10 @@ possible. Otherwise, a different validation check can hide the missing behavior.
 The restart snapshot is private to one format version: test that every field
 round-trips, that other formats and every truncation are rejected, and keep actual
 adoption and exec tests, because codec tests cannot establish that the WM applies
-decoded state. Require
-nonempty/cardinality checks before range assertions. Choose policy fixtures that
+decoded state. `PausedRestart` uses a test-only exec replacement that stops before
+starting the successor. Use it to create windows or change RandR outputs during the
+handoff; `waitpid` establishes the boundary and the test explicitly resumes startup.
+Require nonempty/cardinality checks before range assertions. Choose policy fixtures that
 distinguish competing outcomes: history order should differ from insertion order, and
 invalid rules must actually be selected. Literal protocol examples should check decoded
 argument values as well as command names. For important regressions, check the test

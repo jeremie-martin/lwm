@@ -11,7 +11,7 @@
 // as on a fresh start.
 namespace lwm::restart {
 
-inline constexpr uint32_t format = 6;
+inline constexpr uint32_t format = 7;
 
 struct ClientRecord
 {
@@ -26,6 +26,7 @@ struct ClientRecord
     bool borderless = false;
     bool desktop_pinned = false;
     std::optional<TileSlot> tile_slot; ///< Floating client's return position on its original output
+    std::optional<FullscreenMonitors> fullscreen_monitors;
 
     bool operator==(ClientRecord const&) const = default;
 };
@@ -42,6 +43,8 @@ struct WorkspaceRecord
 
 struct MonitorRecord
 {
+    std::string name;
+    Geometry geometry;
     size_t current = 0;
     size_t previous = 0;
     std::vector<WorkspaceRecord> workspaces;
@@ -52,7 +55,7 @@ struct MonitorRecord
 struct NamedScratchpadRecord
 {
     std::string name;
-    xcb_window_t window = XCB_NONE;
+    std::optional<xcb_window_t> window; ///< Absent means a launch is pending; present means claimed
 
     bool operator==(NamedScratchpadRecord const&) const = default;
 };
@@ -69,8 +72,13 @@ struct Snapshot
     std::vector<xcb_window_t> fullscreen_claims; ///< Oldest to newest, including hidden and iconic clients
 
     ClientRecord const* find(xcb_window_t window) const;
+    // Resolve the saved graph onto discovered outputs before any client adoption.
+    // Uses the same workspace transfer and floating fit policy as live hotplug.
+    void rebind(std::span<Monitor const> discovered);
     bool operator==(Snapshot const&) const = default;
 };
+
+MonitorRecord capture_monitor(Monitor const& monitor);
 
 std::vector<uint32_t> encode(Snapshot const& snapshot);
 // Rejects any other format and any record that is incomplete or out of range.

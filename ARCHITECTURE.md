@@ -351,8 +351,10 @@ window keeps its offset within the workarea).
 A named scratchpad enters launch-pending state only after successful process creation
 and exec. Process exit is not used as a window-creation signal: a launcher may delegate
 to another process. Pending launches suppress duplicate toggles until a matching window
-arrives or the user explicitly cancels the pending launch through IPC. Cancellation
-neither kills the program nor prevents a late matching window from being claimed.
+arrives or the user explicitly cancels the pending launch through IPC. Pending requests
+survive exec restart and failed-exec recovery while their configured names survive.
+Cancellation neither kills the program nor prevents a late matching window from being
+claimed.
 
 ## Configuration and reload
 
@@ -409,17 +411,34 @@ decisions.
 
 Graceful restart encodes `State::snapshot()` into the root property `_LWM_RESTART`:
 focus, showing-desktop, per-workspace layout, ratios, tile order and remembered focus,
-and per-client placement, mode, geometry, preferences, urgency and scratchpad claims.
-Floating clients also retain their tile-return slots, including original output names.
+and per-client placement, mode, geometry, preferences, urgency and fullscreen-monitor
+hints. Named scratchpad records contain either a claimed window or a pending launch;
+empty slots need no record. Floating clients also retain their tile-return slots,
+including original output names.
 The snapshot also records oldest-to-newest fullscreen claims, including hidden and
 iconic clients. Claim order is authoritative even when no owner is currently visible;
 it is independent of focus recency and X stacking/adoption order.
-The next process decodes it before scanning and restores the workspace graph first, so
-windows without a record join the restored current workspace. Adoption places each
-saved client directly from its record instead of replaying rules, and
-`State::restore_membership()` then applies tile order, remembered focus, recency and
-scratchpad claims. Fullscreen counters are rebuilt from the saved claim order, skipping
-clients that disappeared or no longer request fullscreen. Newly adopted fullscreen
+
+Each saved monitor records its output name and geometry. Indices in the handoff refer
+to that saved graph, never directly to the successor's enumeration. Startup registers
+fixtures and reads all dock reservations before restoring client placement.
+`State::restore_workspaces()` first rebinds the handoff onto discovered outputs through
+the same workspace-transfer policy as live hotplug: surviving names retain their
+workspaces; removed outputs append their tiles to output 0 after surviving members,
+without replacing its layouts or focus memory. Client placement and the focused monitor
+use that same mapping. A smaller configured workspace count folds removed workspaces
+into the last one; additional workspaces retain configuration defaults.
+
+A changed output topology fits floating rectangles using the live-hotplug policy and
+clears fullscreen-monitor index hints. An unchanged topology preserves intentional
+floating geometry and hints. Rebinding happens once, before client adoption, so windows
+without a record join the restored current workspace. Adoption places each saved client
+directly from its record instead of replaying rules, and `State::restore_membership()`
+then applies tile order, remembered focus, recency and scratchpad claims. After restoring
+saved focus and claims, pending launches can claim matching adopted clients, including
+windows that arrived during the handoff. Later map and metadata events fulfill the same
+pending request. Removed scratchpad names and disappeared claimed windows are skipped.
+Fullscreen counters are rebuilt from the saved claim order, skipping clients that disappeared or no longer request fullscreen. Newly adopted fullscreen
 windows without a saved claim come afterward, in their adoption claim order; subsequent
 requests outrank all restored claims. Autostart is skipped when a predecessor
 handed over, even if its snapshot was unusable.

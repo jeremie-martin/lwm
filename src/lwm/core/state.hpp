@@ -176,8 +176,9 @@ public:
 
     // Exec handoff
     restart::Snapshot snapshot() const;
-    // Before adoption: the workspace graph that adopted windows are placed into.
-    void restore_workspaces(restart::Snapshot const& snapshot);
+    // Before adoption: resolve the handoff onto current outputs and restore the
+    // workspace graph. The rebound records then place clients and rank membership.
+    void restore_workspaces(restart::Snapshot& snapshot);
     // After adoption placed each saved client: order, focus memory, recency and claims.
     void restore_membership(restart::Snapshot const& snapshot);
 

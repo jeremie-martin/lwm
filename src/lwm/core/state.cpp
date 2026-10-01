@@ -670,9 +670,7 @@ void State::replace_monitors(std::vector<Monitor> monitors)
         if (auto* mode = floating_mode(c))
         {
             auto area = monitors_[c.monitor].working_area();
-            mode->geometry = displaced
-                ? floating::place_floating(area, mode->geometry.width, mode->geometry.height, std::nullopt)
-                : floating::clamp_to_area(area, mode->geometry);
+            mode->geometry = hotplug_policy::fit_floating(mode->geometry, area, displaced);
         }
     }
 }
@@ -763,55 +761,52 @@ restart::Snapshot State::snapshot() const
     snapshot.focused_monitor = focused_monitor_;
     snapshot.active = active_window_;
     snapshot.showing_desktop = showing_desktop_;
-    for (auto const& monitor : monitors_)
-    {
-        auto& record = snapshot.monitors.emplace_back();
-        record.current = monitor.current_workspace;
-        record.previous = monitor.previous_workspace;
-        for (auto const& workspace : monitor.workspaces)
-            record.workspaces.push_back(
-                { workspace.layout_strategy, workspace.split_ratios, workspace.windows, workspace.focused_window }
-            );
-    }
+    for (auto const& monitor : monitors_) snapshot.monitors.push_back(restart::capture_monitor(monitor));
     std::vector<Client const*> recency;
     for (auto const& [id, client] : clients_) recency.push_back(&client);
     std::ranges::sort(recency, {}, [](Client const* c) { return std::tie(c->mru_order, c->order); });
     for (auto const* c : recency)
     {
         auto const* tiled = tiled_mode(*c);
-        snapshot.clients.push_back({ c->id,
-                                     c->monitor,
-                                     c->workspace,
-                                     c->kind(),
-                                     tiled ? tiled->layout : floating_mode(*c)->geometry,
-                                     tiled ? tiled->floating : std::nullopt,
-                                     c->preferences,
-                                     c->urgency.sources,
-                                     c->borderless,
-                                     c->desktop_pinned,
-                                     tiled ? std::nullopt : floating_mode(*c)->tile_slot });
+        snapshot.clients.push_back(
+            { c->id,
+              c->monitor,
+              c->workspace,
+              c->kind(),
+              tiled ? tiled->layout : floating_mode(*c)->geometry,
+              tiled ? tiled->floating : std::nullopt,
+              c->preferences,
+              c->urgency.sources,
+              c->borderless,
+              c->desktop_pinned,
+              tiled ? std::nullopt : floating_mode(*c)->tile_slot,
+              c->fullscreen_monitors }
+        );
     }
     for (auto const& slot : named_scratchpads_)
-        if (slot.window() != XCB_NONE)
-            snapshot.named_scratchpads.push_back({ slot.name, slot.window() });
+        if (slot.window() != XCB_NONE || slot.pending_launch())
+            snapshot.named_scratchpads.push_back(
+                { slot.name, slot.pending_launch() ? std::nullopt : std::optional{ slot.window() } }
+            );
     snapshot.pool = scratchpad_pool_;
     snapshot.fullscreen_claims = fullscreen_claim_order();
     return snapshot;
 }
 
-void State::restore_workspaces(restart::Snapshot const& snapshot)
+void State::restore_workspaces(restart::Snapshot& snapshot)
 {
+    assert(clients_.empty());
+    snapshot.rebind(monitors_);
     mutated();
-    focused_monitor_ = snapshot.focused_monitor < monitors_.size() ? snapshot.focused_monitor : 0;
+    focused_monitor_ = snapshot.focused_monitor;
     showing_desktop_ = snapshot.showing_desktop;
-    for (size_t m = 0; m < std::min(monitors_.size(), snapshot.monitors.size()); ++m)
+    for (size_t m = 0; m < monitors_.size(); ++m)
     {
         auto& monitor = monitors_[m];
         auto const& record = snapshot.monitors[m];
-        size_t last = monitor.workspaces.size() - 1;
-        monitor.current_workspace = std::min(record.current, last);
-        monitor.previous_workspace = std::min(record.previous, last);
-        for (size_t w = 0; w < std::min(monitor.workspaces.size(), record.workspaces.size()); ++w)
+        monitor.current_workspace = record.current;
+        monitor.previous_workspace = record.previous;
+        for (size_t w = 0; w < monitor.workspaces.size(); ++w)
         {
             monitor.workspaces[w].layout_strategy = record.workspaces[w].strategy;
             monitor.workspaces[w].split_ratios = record.workspaces[w].ratios;
@@ -853,8 +848,13 @@ void State::restore_membership(restart::Snapshot const& snapshot)
         if (find(record.window))
             touch(record.window);
     for (auto const& named : snapshot.named_scratchpads)
-        if (find(named.window) && named_scratchpad(named.name))
-            claim_scratchpad(named.name, named.window);
+        if (named_scratchpad(named.name))
+        {
+            if (!named.window)
+                scratchpad_pending(named.name, true);
+            else if (find(*named.window))
+                claim_scratchpad(named.name, *named.window);
+        }
     for (auto window : snapshot.pool)
         if (find(window))
             pool_scratchpad(window);

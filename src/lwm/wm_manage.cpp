@@ -35,27 +35,37 @@ char const* classification_name(WindowClassification::Kind kind)
 
 void WindowManager::scan_existing_windows(bool handoff)
 {
-    // Windows without a saved record join the restored current workspace.
-    if (handoff_)
-        state_.restore_workspaces(*handoff_);
+    // Observe the display before restoring placement. All dock reservations must
+    // be known when a saved floating client is fitted to a changed topology.
+    std::vector<std::pair<xcb_window_t, ClassificationResult>> clients;
     auto* tree = xcb_query_tree_reply(conn_.get(), xcb_query_tree(conn_.get(), conn_.screen()->root), nullptr);
     if (tree)
     {
         auto* children = xcb_query_tree_children(tree);
         for (int i = 0; i < xcb_query_tree_children_length(tree); ++i)
         {
-            auto* attributes = xcb_get_window_attributes_reply(
-                conn_.get(),
-                xcb_get_window_attributes(conn_.get(), children[i]),
-                nullptr
-            );
+            auto window = children[i];
+            auto* attributes =
+                xcb_get_window_attributes_reply(conn_.get(), xcb_get_window_attributes(conn_.get(), window), nullptr);
             bool adopt = attributes && attributes->map_state == XCB_MAP_STATE_VIEWABLE && !attributes->override_redirect;
             free(attributes);
-            if (adopt)
-                manage_window(children[i], true);
+            if (!adopt)
+                continue;
+            auto initial = classify_window(window);
+            if (initial.classification.kind == WindowClassification::Kind::Dock
+                || initial.classification.kind == WindowClassification::Kind::Desktop)
+                manage_window(window, std::move(initial), true);
+            else
+                clients.emplace_back(window, std::move(initial));
         }
         free(tree);
     }
+    if (std::exchange(workareas_dirty_, false))
+        refresh_workareas();
+    // Windows without a saved record join the restored current workspace.
+    if (handoff_)
+        state_.restore_workspaces(*handoff_);
+    for (auto& [window, initial] : clients) manage_window(window, std::move(initial), true);
 
     if (handoff_)
     {
@@ -64,6 +74,11 @@ void WindowManager::scan_existing_windows(bool handoff)
             focus_window(active->id, false);
         else
             focus_fallback(state_.focused_monitor(), false);
+        // A requested application may have mapped while the WM was absent.
+        // Saved claims take precedence; pending launches can claim the remaining
+        // adopted clients exactly as they would a later map or metadata update.
+        for (auto const* client : state_.clients_by_order())
+            claim_pending_scratchpad(client->id, window_match_info(*client), client->rule ? &*client->rule : nullptr);
         handoff_.reset();
         return;
     }
@@ -111,9 +126,8 @@ ClassificationResult WindowManager::classify_window(xcb_window_t window)
     return result;
 }
 
-void WindowManager::manage_window(xcb_window_t window, bool adopting)
+void WindowManager::manage_window(xcb_window_t window, ClassificationResult initial, bool adopting)
 {
-    auto initial = classify_window(window);
     switch (initial.classification.kind)
     {
         case WindowClassification::Kind::Desktop:
@@ -312,16 +326,13 @@ WindowManager::SizeHints WindowManager::read_size_hints(xcb_window_t window, boo
 
 void WindowManager::manage_client(xcb_window_t window, ClassificationResult const& initial, bool start_iconic, bool adopting)
 {
-    // Placement below reads workareas; docks registered earlier in this operation count.
-    if (std::exchange(workareas_dirty_, false))
-        refresh_workareas();
     Client candidate = initial_client(window, initial);
     bool hinted_urgent = read_initial_state(candidate, !adopting);
+    auto hinted_fullscreen_monitors = candidate.fullscreen_monitors;
     candidate.iconic |= start_iconic;
 
     auto const* saved = adopting && handoff_ ? handoff_->find(window) : nullptr;
-    if (saved && saved->monitor < state_.monitors().size()
-        && saved->workspace < state_.monitors()[saved->monitor].workspaces.size())
+    if (saved)
     {
         // Restart restores saved intent directly rather than replaying rules.
         candidate.monitor = saved->monitor;
@@ -334,9 +345,8 @@ void WindowManager::manage_client(xcb_window_t window, ClassificationResult cons
         candidate.urgency.sources = saved->urgency;
         candidate.borderless = saved->borderless;
         candidate.desktop_pinned = saved->desktop_pinned;
+        candidate.fullscreen_monitors = saved->fullscreen_monitors;
     }
-    else
-        saved = nullptr;
     state_.insert(std::move(candidate));
 
     uint32_t mask = kManagedWindowEventMask;
@@ -359,6 +369,9 @@ void WindowManager::manage_client(xcb_window_t window, ClassificationResult cons
     output.mapped = adopting;
     // Publication writes WM_HINTS only when urgency differs from what it already says.
     output.urgent = hinted_urgent;
+    // Restoration can clear an obsolete monitor-index hint. Remember the
+    // observed property so publication removes it instead of assuming absence.
+    output.fullscreen_monitors.emplace(hinted_fullscreen_monitors);
 
     // The matched rule is remembered either way, so later metadata changes
     // apply rules only when the result changes.

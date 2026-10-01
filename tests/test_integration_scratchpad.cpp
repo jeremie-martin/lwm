@@ -1,6 +1,7 @@
-#include "wm_observations.hpp"
+#include "restart_handoff.hpp"
 #include <X11/Xlib.h>
 #include <catch2/catch_test_macros.hpp>
+#include <catch2/generators/catch_generators.hpp>
 #include <cerrno>
 #include <chrono>
 #include <cstring>
@@ -536,4 +537,121 @@ commands = [{ shell = 'exec 3>"$XDG_RUNTIME_DIR/child-marker"; for fd in /proc/$
     INFO(descriptors);
     CHECK(descriptors.find("socket:") == std::string::npos);
     CHECK(descriptors.find(".log") == std::string::npos);
+}
+
+TEST_CASE("Integration: pending scratchpad launches continue through restart", "[integration][scratchpad][restart]")
+{
+    bool failed_exec = GENERATE(false, true);
+    auto env = TestEnvironment::create(R"(
+[[scratchpads]]
+name = "late"
+spawn = { shell = 'printf "launch\n" >> "$XDG_RUNTIME_DIR/launches"' }
+match = { class = "LaunchTest", title = "ready" }
+)");
+    REQUIRE(env);
+    auto& conn = env->conn;
+    auto socket = wait_for_ipc_socket_path(conn);
+    REQUIRE(socket);
+    ipc_ok(*socket, "scratchpad toggle late");
+    auto launches = std::filesystem::path(env->wm.runtime_dir()) / "launches";
+    REQUIRE(wait_for_condition([&] { return read_text_file(launches) == "launch\n"; }, kTimeout));
+    auto previous = wm_instance(conn);
+    REQUIRE(previous);
+    ipc_ok(*socket, failed_exec ? "exec /definitely/missing/lwm" : "restart");
+    REQUIRE(wait_for_wm_restart(conn, std::chrono::seconds(5), *previous));
+    socket = wait_for_ipc_socket_path(conn);
+    REQUIRE(socket);
+    auto scratchpads = [&] { return ipc_json(*socket, "scratchpad list"); };
+    REQUIRE(scratchpads()["named"][0]["pending"] == true);
+    ipc_ok(*socket, "scratchpad toggle late");
+    auto children = std::filesystem::path("/proc") / std::to_string(env->wm.pid()) / "task"
+        / std::to_string(env->wm.pid()) / "children";
+    REQUIRE(wait_for_condition([&] { return read_text_file(children).empty(); }, kTimeout));
+    CHECK(read_text_file(launches) == "launch\n");
+    auto arrival = GENERATE("map", "metadata", "cancelled");
+    CAPTURE(failed_exec, arrival);
+    bool cancelled = std::string_view(arrival) == "cancelled";
+    bool late_metadata = std::string_view(arrival) == "metadata";
+    if (cancelled)
+    {
+        ipc_ok(*socket, "scratchpad cancel-launch late");
+        REQUIRE(scratchpads()["named"][0]["pending"] == false);
+    }
+    auto window = create_window(conn, 10, 10, 240, 160);
+    set_window_wm_class(conn, window, "launch", "LaunchTest");
+    // A matching title arrives after registration; this must fulfill the same
+    // pending request retained through exec, rather than launch another process.
+    if (!late_metadata)
+        set_window_title(conn, window, "ready");
+    map_window(conn, window);
+    if (late_metadata)
+    {
+        REQUIRE(wait_for_condition(
+            [&]
+            {
+                return get_window_property_string(conn.get(), window, intern_atom(conn.get(), "_LWM_WINDOW_CLASS"))
+                    == "tiled";
+            },
+            kTimeout
+        ));
+        set_window_title(conn, window, "ready");
+    }
+    REQUIRE(wait_for_condition([&] { return scratchpads()["named"][0]["window"] == window; }, kTimeout));
+    CHECK(scratchpads()["named"][0]["pending"] == false);
+    if (cancelled)
+        REQUIRE(wait_for_condition([&] { return is_hidden_offscreen(conn, window); }, kTimeout));
+    else
+    {
+        REQUIRE(wait_for_active_window(conn, window, kTimeout));
+        CHECK_FALSE(is_hidden_offscreen(conn, window));
+    }
+    destroy_window(conn, window);
+}
+
+TEST_CASE("Integration: a pending scratchpad can arrive during exec handoff", "[integration][scratchpad][restart]")
+{
+    auto config = title_scratchpad_match_config();
+    config += R"(
+[[scratchpads]]
+name = "second"
+spawn = { ref = "terminal" }
+match = { class = "ScratchpadClass", title = "dropdown" }
+size = { width = 0.8, height = 0.6 }
+)";
+    auto env = TestEnvironment::create(config);
+    REQUIRE(env);
+    auto& conn = env->conn;
+    auto socket = wait_for_ipc_socket_path(conn);
+    REQUIRE(socket);
+    auto claimed = create_window(conn, 20, 20, 240, 160);
+    set_window_wm_class(conn, claimed, "scratchpad-instance", "ScratchpadClass");
+    set_window_title(conn, claimed, "dropdown");
+    map_window(conn, claimed);
+    REQUIRE(wait_for_condition([&] { return is_hidden_offscreen(conn, claimed); }, kTimeout));
+    ipc_ok(*socket, "scratchpad toggle second");
+    auto previous = wm_instance(conn);
+    REQUIRE(previous);
+    PausedRestart restart(env->wm, *socket);
+    auto window = create_window(conn, 10, 10, 240, 160);
+    set_window_wm_class(conn, window, "scratchpad-instance", "ScratchpadClass");
+    set_window_title(conn, window, "dropdown");
+    map_window(conn, window);
+    REQUIRE(get_window_geometry(conn, window)); // Server processed the map before adoption.
+    restart.resume();
+    REQUIRE(wait_for_wm_restart(conn, std::chrono::seconds(5), *previous));
+    socket = wait_for_ipc_socket_path(conn);
+    REQUIRE(socket);
+    auto slots = ipc_json(*socket, "scratchpad list")["named"];
+    REQUIRE(slots.size() == 2);
+    CHECK(slots[0]["window"] == claimed);
+    CHECK(is_hidden_offscreen(conn, claimed));
+    auto slot = slots[1];
+    CHECK(slot["window"] == window);
+    CHECK(slot["pending"] == false);
+    REQUIRE(wait_for_active_window(conn, window, kTimeout));
+    REQUIRE(wait_for_window_geometry(conn, window, 128, 144, 1024, 432));
+    ipc_ok(*socket, "scratchpad toggle second");
+    REQUIRE(wait_for_condition([&] { return is_hidden_offscreen(conn, window); }, kTimeout));
+    destroy_window(conn, window);
+    destroy_window(conn, claimed);
 }

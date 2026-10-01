@@ -1,4 +1,5 @@
 #include "restart.hpp"
+#include "policy.hpp"
 #include <bit>
 #include <cstring>
 #include <unordered_set>
@@ -150,6 +151,62 @@ ClientRecord const* Snapshot::find(xcb_window_t window) const
     return nullptr;
 }
 
+MonitorRecord capture_monitor(Monitor const& monitor)
+{
+    MonitorRecord record{ monitor.name,
+                          monitor.geometry(),
+                          monitor.current_workspace,
+                          monitor.previous_workspace,
+                          { } };
+    for (auto const& workspace : monitor.workspaces)
+        record.workspaces.push_back(
+            { workspace.layout_strategy, workspace.split_ratios, workspace.windows, workspace.focused_window }
+        );
+    return record;
+}
+
+void Snapshot::rebind(std::span<Monitor const> discovered)
+{
+    assert(!discovered.empty());
+    bool changed = monitors.size() != discovered.size();
+    std::vector<Monitor> previous;
+    for (size_t i = 0; i < monitors.size(); ++i)
+    {
+        auto const& saved = monitors[i];
+        changed |=
+            i >= discovered.size() || saved.name != discovered[i].name || saved.geometry != discovered[i].geometry();
+        Monitor monitor;
+        monitor.name = saved.name;
+        monitor.current_workspace = saved.current;
+        monitor.previous_workspace = saved.previous;
+        for (auto const& workspace : saved.workspaces)
+            monitor.workspaces.push_back(
+                { workspace.tiles, workspace.focused, { }, workspace.strategy, workspace.ratios }
+            );
+        previous.push_back(std::move(monitor));
+    }
+    std::vector<Monitor> targets(discovered.begin(), discovered.end());
+    auto destinations = hotplug_policy::preserve_workspaces(previous, targets);
+    focused_monitor = focused_monitor < destinations.size() ? destinations[focused_monitor] : 0;
+    for (auto& client : clients)
+    {
+        size_t target = destinations.at(client.monitor);
+        bool displaced = monitors[client.monitor].name != targets[target].name;
+        client.monitor = target;
+        client.workspace = std::min(client.workspace, targets[target].workspaces.size() - 1);
+        if (changed)
+        {
+            client.fullscreen_monitors.reset();
+            if (client.kind == Client::Kind::Floating)
+                client.geometry =
+                    hotplug_policy::fit_floating(client.geometry, targets[target].working_area(), displaced);
+        }
+        // Admission discards tile-return slots whose original workspace vanished.
+    }
+    monitors.clear();
+    for (auto const& target : targets) monitors.push_back(capture_monitor(target));
+}
+
 std::vector<uint32_t> encode(Snapshot const& snapshot)
 {
     Writer out;
@@ -160,6 +217,8 @@ std::vector<uint32_t> encode(Snapshot const& snapshot)
     out.count(snapshot.monitors.size());
     for (auto const& monitor : snapshot.monitors)
     {
+        out.text(monitor.name);
+        out.geometry(monitor.geometry);
         out.count(monitor.current);
         out.count(monitor.previous);
         out.count(monitor.workspaces.size());
@@ -200,12 +259,22 @@ std::vector<uint32_t> encode(Snapshot const& snapshot)
             out.text(client.tile_slot->output);
             out.count(client.tile_slot->workspace);
         }
+        out.flag(client.fullscreen_monitors.has_value());
+        if (auto const& m = client.fullscreen_monitors)
+        {
+            out.word(m->top);
+            out.word(m->bottom);
+            out.word(m->left);
+            out.word(m->right);
+        }
     }
     out.count(snapshot.named_scratchpads.size());
     for (auto const& named : snapshot.named_scratchpads)
     {
         out.text(named.name);
-        out.word(named.window);
+        out.flag(named.window.has_value());
+        if (named.window)
+            out.word(*named.window);
     }
     out.count(snapshot.pool.size());
     for (auto window : snapshot.pool) out.word(window);
@@ -223,12 +292,20 @@ std::optional<Snapshot> decode(std::span<uint32_t const> words)
     snapshot.focused_monitor = in.word();
     snapshot.active = in.word();
     snapshot.showing_desktop = in.flag();
-    snapshot.monitors.resize(in.count(3));
+    snapshot.monitors.resize(in.count(8));
+    std::unordered_set<std::string> outputs;
     for (auto& monitor : snapshot.monitors)
     {
+        monitor.name = in.text();
+        if (monitor.name.empty() || !outputs.insert(monitor.name).second)
+            return std::nullopt;
+        monitor.geometry = in.geometry();
         monitor.current = in.word();
         monitor.previous = in.word();
         monitor.workspaces.resize(in.count(4));
+        if (monitor.workspaces.empty() || monitor.current >= monitor.workspaces.size()
+            || monitor.previous >= monitor.workspaces.size())
+            return std::nullopt;
         for (auto& workspace : monitor.workspaces)
         {
             workspace.strategy = static_cast<LayoutStrategy>(in.bounded(static_cast<uint32_t>(LayoutStrategy::Monocle)));
@@ -246,12 +323,17 @@ std::optional<Snapshot> decode(std::span<uint32_t const> words)
             for (auto& window : workspace.tiles) window = in.word();
         }
     }
-    snapshot.clients.resize(in.count(21));
+    if (!snapshot.monitors.empty() && snapshot.focused_monitor >= snapshot.monitors.size())
+        return std::nullopt;
+    snapshot.clients.resize(in.count(22));
     for (auto& client : snapshot.clients)
     {
         client.window = in.word();
         client.monitor = in.word();
         client.workspace = in.word();
+        if (client.monitor >= snapshot.monitors.size()
+            || client.workspace >= snapshot.monitors[client.monitor].workspaces.size())
+            return std::nullopt;
         client.kind = in.flag() ? Client::Kind::Floating : Client::Kind::Tiled;
         client.geometry = in.geometry();
         client.floating = in.optional_geometry();
@@ -274,12 +356,24 @@ std::optional<Snapshot> decode(std::span<uint32_t const> words)
                 return std::nullopt;
             client.tile_slot = std::move(slot);
         }
+        if (in.flag())
+            client.fullscreen_monitors = FullscreenMonitors{ in.word(), in.word(), in.word(), in.word() };
     }
     snapshot.named_scratchpads.resize(in.count(2));
+    std::unordered_set<std::string> names;
+    std::unordered_set<xcb_window_t> claimed;
     for (auto& named : snapshot.named_scratchpads)
     {
         named.name = in.text();
-        named.window = in.word();
+        if (!names.insert(named.name).second)
+            return std::nullopt;
+        if (in.flag())
+        {
+            auto window = in.word();
+            if (window == XCB_NONE || !claimed.insert(window).second || !snapshot.find(window))
+                return std::nullopt;
+            named.window = window;
+        }
     }
     snapshot.pool.resize(in.count());
     for (auto& window : snapshot.pool) window = in.word();

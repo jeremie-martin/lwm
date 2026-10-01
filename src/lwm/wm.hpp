@@ -265,7 +265,7 @@ private:
     // wm_manage.cpp: classification, registration, rules
     void scan_existing_windows(bool handoff);
     ClassificationResult classify_window(xcb_window_t window);
-    void manage_window(xcb_window_t window, bool adopting);
+    void manage_window(xcb_window_t window, ClassificationResult initial, bool adopting);
     void manage_client(xcb_window_t window, ClassificationResult const& initial, bool start_iconic, bool adopting);
     void manage_fixture(xcb_window_t window, Fixture::Role role, bool adopting);
     // Returns whether WM_HINTS currently carries the urgency flag.
