@@ -347,19 +347,27 @@ void WindowManager::swap_active_tile(int offset)
 {
     size_t monitor = state_.focused_monitor();
     auto const& workspace = state_.monitors()[monitor].current();
-    auto it = workspace.find_window(workspace.focused_window);
-    size_t count = workspace.windows.size();
-    if (it == workspace.windows.end() || count < 2)
+    std::vector<size_t> eligible;
+    auto owner = state_.fullscreen_owner(monitor);
+    for (size_t i = 0; i < workspace.windows.size(); ++i)
+    {
+        auto const& client = state_.require(workspace.windows[i]);
+        if (!client.fullscreen && state_.visible(client, owner))
+            eligible.push_back(i);
+    }
+    auto it = std::ranges::find_if(eligible, [&](auto i) { return workspace.windows[i] == workspace.focused_window; });
+    size_t count = eligible.size();
+    if (it == eligible.end() || count < 2)
         return;
-    size_t index = static_cast<size_t>(it - workspace.windows.begin());
+    size_t index = static_cast<size_t>(it - eligible.begin());
     size_t other = static_cast<size_t>((static_cast<int>(index) + offset % static_cast<int>(count) + static_cast<int>(count))
                                        % static_cast<int>(count));
     // Every monocle slot shares one rectangle, so swapping would change nothing
     // visible: focus the adjacent tile instead.
     if (workspace.layout_strategy == LayoutStrategy::Monocle)
-        focus_window(workspace.windows[other]);
+        focus_window(workspace.windows[eligible[other]]);
     else
-        state_.swap_tiles(monitor, index, other);
+        state_.swap_tiles(monitor, eligible[index], eligible[other]);
 }
 
 } // namespace lwm

@@ -1,5 +1,6 @@
 #include "ipc_subscription.hpp"
 #include "wm_observations.hpp"
+#include <catch2/generators/catch_generators.hpp>
 
 using namespace lwm::test;
 
@@ -17,6 +18,66 @@ nlohmann::json window_entry(std::string const& path, xcb_window_t window)
 }
 
 } // namespace
+
+TEST_CASE("Integration: tile swaps skip stashed windows", "[integration][ipc][actions][scratchpad]")
+{
+    auto layout = GENERATE("monocle", "master-stack");
+    auto direction = GENERATE("next", "prev");
+    auto extra_tile = GENERATE(false, true);
+    CAPTURE(layout, direction, extra_tile);
+    auto env = TestEnvironment::create();
+    if (!env)
+        SKIP("X11 unavailable");
+    auto& conn = env->conn;
+    auto path = wait_for_ipc_socket_path(conn);
+    REQUIRE(path);
+    ipc_ok(*path, std::string("layout set ") + layout);
+
+    auto first = create_window(conn, 10, 10, 200, 150);
+    auto hidden = create_window(conn, 10, 10, 200, 150);
+    map_window(conn, first);
+    REQUIRE(wait_for_active_window(conn, first, kTimeout));
+    map_window(conn, hidden);
+    REQUIRE(wait_for_active_window(conn, hidden, kTimeout));
+    ipc_ok(*path, "scratchpad stash");
+    REQUIRE(wait_for_active_window(conn, first, kTimeout));
+    REQUIRE(is_hidden_offscreen(conn, hidden));
+
+    xcb_window_t active = first;
+    if (extra_tile)
+    {
+        active = create_window(conn, 10, 10, 200, 150);
+        map_window(conn, active);
+        REQUIRE(wait_for_active_window(conn, active, kTimeout));
+    }
+    auto before = get_window_geometry(conn, first);
+    REQUIRE(before);
+    // Repeated swaps exercise both adjacency and wraparound past the hidden slot.
+    for (int i = 0; i < 2; ++i)
+    {
+        ipc_ok(*path, std::string("window swap ") + direction);
+        CHECK(window_entry(*path, hidden).at("iconic") == true);
+        CHECK(is_hidden_offscreen(conn, hidden));
+        auto expected = extra_tile && std::string_view(layout) == "monocle" && i == 0 ? first : active;
+        REQUIRE(wait_for_active_window(conn, expected, kTimeout));
+        if (extra_tile && std::string_view(layout) == "master-stack")
+        {
+            REQUIRE(wait_for_condition(
+                [&]
+                {
+                    auto after = get_window_geometry(conn, first);
+                    return after && ((after->x != before->x) == (i == 0));
+                },
+                kTimeout
+            ));
+        }
+    }
+
+    if (extra_tile)
+        destroy_window(conn, active);
+    destroy_window(conn, hidden);
+    destroy_window(conn, first);
+}
 
 TEST_CASE("Integration: IPC window actions execute the key-binding operations", "[integration][ipc][actions]")
 {
