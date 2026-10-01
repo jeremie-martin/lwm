@@ -14,7 +14,7 @@ behavior belongs in [X11.md](X11.md); the local wire contract belongs in
 | `src/lwm/config/` | strict TOML parsing into typed values and built-in defaults |
 | `src/lwm/layout/` | pure master-stack and monocle geometry, split ratios, hit testing |
 | `src/lwm/core/types.hpp` | domain records: clients, fixtures, monitors, workspaces, geometry |
-| `src/lwm/core/state.*` | the domain model: registry, placement, mode, focus memory, scratchpads, derived visibility |
+| `src/lwm/core/state.*`, `geometry.cpp` | the domain model: registry, placement, mode, focus memory, scratchpads, derived visibility |
 | `src/lwm/core/classification.*` | window-type defaults and effective layer and skip values |
 | `src/lwm/core/action.*` | every user-triggerable WM operation, shared by bindings and IPC |
 | `src/lwm/core/focus.*`, `stacking.*`, `floating.*`, `policy.hpp` | pure focus selection, stacking order, floating geometry, desktop numbering |
@@ -66,9 +66,9 @@ The important authorities are:
 - `Client`: placement, mode, requested state (fullscreen, iconic, sticky, maximize,
   modal), explicit preferences, urgency provenance, protocol hints, and the actions of
   the rule matched last.
-- `TiledMode`: the layout target and the floating rectangle to restore when floated
-  again. `FloatingMode`: the one normal rectangle and the tile slot to restore when
-  tiled again on the same workspace.
+- `TiledMode`: only the optional floating rectangle to restore when floated again.
+  `FloatingMode`: the one normal rectangle and the tile slot to restore when tiled
+  again on the same workspace.
 - `Workspace::windows`: tiled membership and layout order. `preferred_tile` records
   explicit destination intent after relocation; actual tiled focus clears it.
 - `Client::mru_order`: completed focus recency, zero for never-focused clients. `Client::fullscreen_claim`: fullscreen claim
@@ -92,8 +92,7 @@ Derived values are functions, not stored fields:
 
 `State` exposes const views only. Every mutation is a named operation that keeps
 membership, focus memory and scratchpad claims consistent, and increments a revision
-counter. Layout targets are the exception: `place_tile()` stores recomputed geometry
-without counting as a change.
+counter. Tile rectangles are derived views, so arrangement does not mutate the model.
 
 ## Lifecycle and transitions
 
@@ -105,9 +104,9 @@ explicit crossing-event drain. `complete_transition()` then runs in this order:
 
 1. Skip everything when the revision is unchanged and nothing is pending.
 2. Refresh dock workareas if requested. Validate an active drag, repair focus that can
-   no longer hold, and arrange the tiles of every monitor's current workspace. Clear
-   urgency on an explicitly focused window.
-3. Freeze the model. Project each client: hide it, write geometry (skipping an
+   no longer hold, and clear urgency on an explicitly focused window.
+3. Freeze the model and derive one per-client projection, including the drag preview.
+   Publish each client: hide it, write geometry (skipping an
    unchanged rectangle and border), acknowledge remaining ConfigureRequests, map new
    windows, commit an explicit focus request, and publish border color, `WM_HINTS`
    urgency, `_NET_WM_DESKTOP`, `WM_STATE`, allowed actions and `_LWM_WINDOW_CLASS`,
@@ -174,10 +173,9 @@ writes `WM_STATE=WithdrawnState` and removes the focused state.
 when the monitor changes: preserve it, center it, or translate it within the workarea. A
 tiled reorder within one workspace keeps membership and focus history.
 `State::floating()` records explicit mode intent. Tile-to-float conversion restores the
-remembered floating rectangle, otherwise the layout target; a rectangle lying entirely
-outside the monitor's workarea is centered on it, because an unarranged tile can still
-hold an off-monitor initial or hotplug rectangle. Float-to-tile conversion remembers the
-floating rectangle and restores the tile slot on the same workspace. A slot identifies
+remembered floating rectangle, otherwise its current derived tile rectangle. A remembered
+rectangle lying entirely outside the monitor's workarea is centered on it. Float-to-tile
+conversion remembers the floating rectangle and restores the tile slot on the same workspace. A slot identifies
 its original output by name and its workspace by index, so monitor reordering cannot
 retarget it. Visiting another workspace while floating keeps that identity; tiling
 elsewhere uses normal insertion. Topology replacement and client admission discard a
@@ -186,12 +184,35 @@ does not revive a discarded slot. Type and transient
 updates apply the default mode unless the user chose one or a scratchpad owns the
 window.
 
+Startup registers the complete scene and applies tiled rules before placing new
+floating clients. Floating parents are placed before their transient children, using
+one bounded dependency walk. Live admission uses the same placement operation. Saved
+restart modes are restored directly, without initial-placement policy. Consequently a
+dialog's center depends on its parent's derived rectangle rather than whether the parent
+has already been arranged or happened to precede it in the server's stacking order.
+
 Hotplug is a single `State::replace_monitors()` operation: discovery supplies output
 geometry and freshly read dock struts, surviving outputs keep their workspace graphs,
 clients are reassigned, and floating rectangles are clamped (survivors) or centered
 (displaced clients).
 
 ## Layout and geometry
+
+`State` owns the configured pure `Layout` calculation. `project()` produces one entry
+per managed client, in registration order. A rectangle means visible; absence means
+hidden. Tile layout, fullscreen and maximize are resolved before publication; the WM
+adds only its active tiled drag preview. Publication uses this one view for geometry,
+visibility and client ordering, without merging a second list or selecting geometry.
+Visible ConfigureRequest acknowledgements reuse the projected rectangle. Hidden clients
+still receive geometry replies as separate protocol obligations.
+
+Hit-testing and dropping use the same ordered participants and subdivision as layout.
+`normal_geometry()` uses that calculation on demand,
+including before the first publication. A hidden, minimized, or fullscreen tile has the
+normal slot it would occupy when revealed in its workspace, with fullscreen occlusion
+removed. Sticky tiles use the current workspace. Original X-requested tile geometry is
+neither retained nor used for later mode changes. Drag previews and fullscreen/maximize
+remain presentation overrides; published X rectangles remain output bookkeeping only.
 
 `Layout` computes rectangles and resize boundaries without X calls. Master-stack is
 evaluated as an iterative sequence of cuts: split 0 divides master from stack, and split
@@ -424,9 +445,12 @@ decisions.
 
 Graceful restart encodes `State::snapshot()` into the root property `_LWM_RESTART`:
 focus, showing-desktop, per-workspace layout, ratios, tile order and destination preference,
-and per-client placement, mode, geometry, preferences, urgency and fullscreen-monitor
+and per-client placement, mode, preferences, urgency and fullscreen-monitor
 hints. Each client retains its actual focus rank, including zero for never-focused
 clients; adoption does not reconstruct focus by replaying the client list.
+The codec uses the domain mode type: floating clients retain their normal rectangle
+and tile-return slot; tiles retain only an optional remembered floating rectangle.
+Derived tile rectangles are never serialized.
 Named scratchpad records contain either a claimed window or a pending launch;
 empty slots need no record. Floating clients also retain their tile-return slots,
 including original output names.

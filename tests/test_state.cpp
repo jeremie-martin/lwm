@@ -53,11 +53,11 @@ TEST_CASE("Mode changes keep tile slots and one normal floating rectangle", "[st
 {
     auto state = test::state();
     for (xcb_window_t id : { 1, 2, 3 }) add(state, id);
-    state.place_tile(2, { 100, 0, 400, 800 });
+    auto expected = state.normal_geometry(state.require(2));
     state.floating(2, true);
     auto const& client = state.require(2);
     REQUIRE(client.kind() == Client::Kind::Floating);
-    CHECK(floating_mode(client)->geometry == Geometry{ 100, 0, 400, 800 });
+    CHECK(floating_mode(client)->geometry == expected);
     state.geometry(2, { 50, 60, 300, 200 });
     state.floating(2, false);
     CHECK(state.monitors()[0].current().windows == std::vector<xcb_window_t>{ 1, 2, 3 });
@@ -71,11 +71,12 @@ TEST_CASE("Mode changes keep tile slots and one normal floating rectangle", "[st
         state.floating(2, false);
         CHECK(state.monitors()[0].workspaces[1].windows == std::vector<xcb_window_t>{ 2 });
     }
-    SECTION("An unarranged tile's off-monitor rectangle is recovered onto the monitor")
+    SECTION("A hidden tile derives its normal rectangle without ever being arranged")
     {
         add(state, 4, { .workspace = 1, .geometry = { -5000, 10, 200, 100 } });
+        auto normal = state.normal_geometry(state.require(4));
         state.floating(4, true);
-        CHECK(floating_mode(state.require(4))->geometry == Geometry{ 400, 350, 200, 100 });
+        CHECK(floating_mode(state.require(4))->geometry == normal);
     }
 }
 
@@ -410,12 +411,15 @@ TEST_CASE("Topology replacement rebinds clients and fits floating rectangles", "
     CHECK(floating_mode(state.require(3))->geometry == Geometry{ 800, 10, 200, 100 });
 }
 
-TEST_CASE("Revision tracks domain mutations but not layout targets", "[state]")
+TEST_CASE("Geometry derivation does not mutate the domain", "[state]")
 {
     auto state = test::state();
     add(state, 1);
     auto revision = state.revision();
-    state.place_tile(1, { 1, 2, 3, 4 });
+    state.freeze();
+    state.project(state.fullscreen_visibility());
+    state.normal_geometry(state.require(1));
+    state.thaw();
     CHECK(state.revision() == revision);
     state.title(1, "changed");
     CHECK(state.revision() > revision);
@@ -431,4 +435,76 @@ TEST_CASE("Maximize presentation preserves normal placement", "[state][floating]
     CHECK(floating::presentation_geometry(normal, area, true, false) == Geometry{ 0, 120, 1920, 360 });
     CHECK(floating::presentation_geometry(normal, area, false, true) == Geometry{ 100, 0, 500, 1080 });
     CHECK(floating::presentation_geometry(normal, area, true, true) == area);
+}
+
+TEST_CASE("Tile geometry is a current projection independent of publication", "[state][geometry][layout]")
+{
+    auto state = test::state();
+    state.configure_layout({ .padding = 0, .border_width = 0 }, { });
+    for (xcb_window_t id : { 1, 2, 3 }) add(state, id);
+    CHECK(state.normal_geometry(state.require(2)) == Geometry{ 500, 0, 500, 400 });
+    state.iconic(3, true);
+    CHECK(state.normal_geometry(state.require(2)) == Geometry{ 500, 0, 500, 800 });
+    state.ratio(0, SplitAddress{ 0 }, 0.25);
+    CHECK(state.normal_geometry(state.require(2)) == Geometry{ 250, 0, 750, 800 });
+    state.workarea(0, { .top = 100 });
+    CHECK(state.normal_geometry(state.require(2)) == Geometry{ 250, 100, 750, 700 });
+    auto expected = state.normal_geometry(state.require(2));
+    SECTION("Hidden") { state.switch_workspace(0, 1); }
+    SECTION("Minimized") { state.iconic(2, true); }
+    SECTION("Fullscreen") { state.fullscreen(2, true); }
+    SECTION("Shown")
+    {
+        auto clients = state.project(state.fullscreen_visibility());
+        REQUIRE(clients.size() == 3);
+        CHECK(clients[1].client->id == 2);
+        CHECK(clients[1].geometry == expected);
+        CHECK_FALSE(clients[2].geometry);
+    }
+    CHECK(state.normal_geometry(state.require(2)) == expected);
+    state.floating(2, true);
+    CHECK(floating_mode(state.require(2))->geometry == expected);
+}
+
+TEST_CASE("A projection contains every client once with its final visible rectangle", "[state][geometry][projection]")
+{
+    auto state = test::state(2);
+    state.configure_layout({ .padding = 0, .border_width = 0 }, { });
+    add(state, 9);
+    add_floating(state, 2);
+    state.insert_fixture(99, Fixture::Role::Dock);
+    add(state, 7, { .workspace = 1 });
+    add(state, 4);
+    add(state, 8, { .monitor = 1 });
+    add(state, 6, { .workspace = 1 });
+    state.iconic(4, true);
+    state.sticky(6, true);
+    state.maximize(2, true, false);
+    bool fullscreen = false;
+    SECTION("Normal and maximized") { }
+    SECTION("Fullscreen and its floating transient")
+    {
+        fullscreen = true;
+        state.fullscreen(9, true);
+        state.transient(2, 9);
+    }
+    SECTION("Showing desktop") { state.show_desktop(true); }
+    state.freeze();
+    auto clients = state.project(state.fullscreen_visibility());
+    state.thaw();
+    std::vector<xcb_window_t> order;
+    for (auto const& projected : clients) order.push_back(projected.client->id);
+    REQUIRE(order == std::vector<xcb_window_t>{ 9, 2, 7, 4, 8, 6 });
+    if (state.showing_desktop())
+    {
+        for (size_t i = 0; i < 5; ++i) CHECK_FALSE(clients[i].geometry);
+        CHECK(clients[5].geometry == Geometry{ 0, 0, 1000, 800 });
+        return;
+    }
+    CHECK(clients[0].geometry == Geometry{ 0, 0, static_cast<uint16_t>(fullscreen ? 1000 : 500), 800 });
+    CHECK(clients[1].geometry == Geometry{ 0, 10, 1000, 100 });
+    CHECK_FALSE(clients[2].geometry);
+    CHECK_FALSE(clients[3].geometry);
+    CHECK(clients[4].geometry == Geometry{ 1000, 0, 1000, 800 });
+    CHECK(clients[5].geometry == (fullscreen ? std::nullopt : std::optional{ Geometry{ 500, 0, 500, 800 } }));
 }

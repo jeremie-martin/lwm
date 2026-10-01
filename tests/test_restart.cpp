@@ -26,10 +26,10 @@ restart::Snapshot sample()
          { } }                                       },
         { "M1", { 1000, 0, 1000, 800 }, 0, 0, { { } } }
     };
-    snapshot.clients = { { 0x100, 0, 0, Client::Kind::Tiled, { 1, 2, 3, 4 }, Geometry{ -5, -6, 70, 80 }, { true, false, std::nullopt, LayerHint::Below }, 3, true, false },
-                         { 0x200, 1, 0, Client::Kind::Floating, { -32768, 32767, 65535, 1 }, std::nullopt, { }, 0, false, true } };
+    snapshot.clients = { { 0x100, 0, 0, TiledMode{ Geometry{ -5, -6, 70, 80 } }, { true, false, std::nullopt, LayerHint::Below }, 3, true, false },
+                         { 0x200, 1, 0, FloatingMode{ { -32768, 32767, 65535, 1 } }, { }, 0, false, true } };
     snapshot.clients[1].mru_order = (uint64_t{ 1 } << 40) + 7;
-    snapshot.clients[1].tile_slot = TileSlot{ 7, "output with spaces", 1 };
+    std::get<FloatingMode>(snapshot.clients[1].mode).tile_slot = TileSlot{ 7, "output with spaces", 1 };
     snapshot.named_scratchpads = {
         { "tëxt with spaces",        0x200 },
         {                 "",        0x100 },
@@ -97,11 +97,10 @@ TEST_CASE("Restart decoding rejects other formats and malformed records", "[rest
     CHECK_FALSE(restart::decode(restart::encode(snapshot)));
 }
 
-TEST_CASE("Restart rejects tile slots on tiled clients or without output identity", "[restart][codec][tile-slot]")
+TEST_CASE("Restart rejects tile slots without output identity", "[restart][codec][tile-slot]")
 {
     auto snapshot = sample();
-    SECTION("Tiled client") { snapshot.clients[0].tile_slot = TileSlot{ 1, "M0", 0 }; }
-    SECTION("Empty output") { snapshot.clients[1].tile_slot->output.clear(); }
+    std::get<FloatingMode>(snapshot.clients[1].mode).tile_slot->output.clear();
     CHECK_FALSE(restart::decode(restart::encode(snapshot)));
 }
 
@@ -114,7 +113,7 @@ TEST_CASE("Restored tile slots are admitted only while the original workspace ex
     REQUIRE(snapshot);
     REQUIRE(snapshot->find(2));
     auto const& saved = *snapshot->find(2);
-    REQUIRE(saved.tile_slot == TileSlot{ 1, "M0", 0 });
+    REQUIRE(std::get<FloatingMode>(saved.mode).tile_slot == TileSlot{ 1, "M0", 0 });
     auto target = test::state();
     SECTION("Original workspace exists") { }
     SECTION("Original output disappeared") { target.replace_monitors({ test::monitor("replacement") }); }
@@ -122,7 +121,7 @@ TEST_CASE("Restored tile slots are admitted only while the original workspace ex
     {
         for (auto& record : snapshot->clients)
             if (record.window == 2)
-                record.tile_slot->workspace = 99;
+                std::get<FloatingMode>(record.mode).tile_slot->workspace = 99;
     }
     // Client records are in recency order, so find the floating client by ID.
     auto record = *snapshot->find(2);
@@ -130,10 +129,10 @@ TEST_CASE("Restored tile slots are admitted only while the original workspace ex
     add(target, 3);
     Client client;
     client.id = 2;
-    client.mode = FloatingMode{ record.geometry, record.tile_slot };
+    client.mode = FloatingMode{ std::get<FloatingMode>(record.mode).geometry, std::get<FloatingMode>(record.mode).tile_slot };
     target.insert(client);
     target.floating(2, false);
-    bool valid = target.monitors()[0].name == "M0" && record.tile_slot->workspace == 0;
+    bool valid = target.monitors()[0].name == "M0" && std::get<FloatingMode>(record.mode).tile_slot->workspace == 0;
     CHECK(target.monitors()[0].current().windows
           == (valid ? std::vector<xcb_window_t>{ 1, 2, 3 } : std::vector<xcb_window_t>{ 1, 3, 2 }));
 }
@@ -165,7 +164,7 @@ TEST_CASE("State snapshots restore workspaces, order, recency and scratchpads", 
     target.restore_workspaces(*snapshot);
     for (xcb_window_t id : { 3, 2, 1 }) add(target, id);
     auto const& saved = *snapshot->find(4);
-    add(target, 4, { .monitor = saved.monitor, .workspace = saved.workspace, .floating = true, .geometry = saved.geometry });
+    add(target, 4, { .monitor = saved.monitor, .workspace = saved.workspace, .floating = true, .geometry = std::get<FloatingMode>(saved.mode).geometry });
     target.restore_membership(*snapshot);
 
     auto const& workspace = target.monitors()[0].workspaces[0];
@@ -185,7 +184,7 @@ TEST_CASE("State snapshots restore workspaces, order, recency and scratchpads", 
 TEST_CASE("Restart claim order is explicit in the wire format", "[restart][codec]")
 {
     std::vector<uint32_t> words{
-        9, 0,  0,   0,  1, // format, focus, active, desktop, monitor count
+        10, 0, 0,   0,  1, // format, focus, active, desktop, monitor count
         1, 77,             // one-byte output name "M"
         0, 0,  100, 80,    // output geometry
         0, 0,  1,          // current, previous, workspace count
@@ -193,11 +192,9 @@ TEST_CASE("Restart claim order is explicit in the wire format", "[restart][codec
         1,                 // client count
         7, 0, 0,           // id, never focused (64 bit)
         0, 0, 0,           // monitor, workspace, tiled
-        0, 0,  100, 80,    // normal geometry
-        0, 0,  0,   0,  0, // absent remembered floating geometry
+        0,                 // absent remembered floating geometry
         0, 0,  0,   0,     // unset preferences
         0, 0,  0,          // urgency, borderless, pinned
-        0,                 // absent tile return slot
         0,                 // absent fullscreen monitor hint
         1, 7,              // registration order
         0, 0,              // named slots, pool
@@ -316,9 +313,7 @@ TEST_CASE("Restart rebinding matches live output reconciliation", "[restart][sta
         client.id = it->window;
         client.monitor = it->monitor;
         client.workspace = it->workspace;
-        client.mode = it->kind == Client::Kind::Tiled
-            ? ClientMode{ TiledMode{ it->floating, it->geometry } }
-            : ClientMode{ FloatingMode{ it->geometry, it->tile_slot } };
+        client.mode = it->mode;
         client.fullscreen_monitors = it->fullscreen_monitors;
         restored.insert(std::move(client));
     }

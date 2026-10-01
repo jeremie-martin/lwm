@@ -163,14 +163,6 @@ private:
 
     using StateUpdates = std::vector<std::pair<xcb_window_t, std::vector<xcb_atom_t>>>;
 
-    // One client as seen by a completion pass.
-    struct Projected
-    {
-        Client const* client;
-        Output* output;
-        bool visible;
-    };
-
     struct SplitBorderHit
     {
         SplitHitResult hit;
@@ -180,7 +172,6 @@ private:
     Config config_;
     Connection conn_;
     Ewmh ewmh_;
-    Layout layout_;
     Atoms atoms_{ };
     State state_;
     std::unordered_map<xcb_window_t, Output> outputs_;
@@ -271,7 +262,7 @@ private:
     // Returns whether WM_HINTS currently carries the urgency flag.
     bool read_initial_state(Client& client, bool honor_initial_state);
     Client initial_client(xcb_window_t window, ClassificationResult const& initial);
-    Geometry initial_floating_geometry(xcb_window_t window, ClassificationResult const& initial, Client& candidate);
+    Geometry initial_floating_geometry(Client& candidate);
     struct SizeHints
     {
         std::optional<std::pair<int16_t, int16_t>> position;
@@ -279,6 +270,7 @@ private:
         std::optional<uint16_t> height;
     };
     SizeHints read_size_hints(xcb_window_t window, bool anchored) const;
+    void place_new_client(xcb_window_t window);
     void unmanage_window(xcb_window_t window);
     void apply_rule(xcb_window_t window, RuleActions const& rule);
     void reevaluate_metadata(xcb_window_t window);
@@ -289,14 +281,11 @@ private:
 
     // wm_transition.cpp: operation completion and publication
     void complete_transition();
-    void arrange_tiles(State::FullscreenVisibility const& fullscreen);
-    std::vector<xcb_window_t> tiled_participants(Monitor const& monitor) const;
-    std::vector<xcb_window_t> tiled_participants(Monitor const& monitor, State::FullscreenVisibility const& fullscreen) const;
     Geometry presentation_geometry(Client const& client) const;
-    Geometry fullscreen_geometry(Client const& client) const;
+    std::optional<Geometry> drag_preview(Client const& client) const;
     uint32_t border_width(Client const& client) const;
     uint32_t border_color(Client const& client) const;
-    bool publish_clients(std::vector<Projected> const& clients);
+    bool publish_clients(std::vector<State::Projected> const& clients);
     bool write_geometry(Client const& client, Output& output, Geometry geometry, uint32_t border);
     void send_configure_notify(xcb_window_t window, Geometry geometry, uint32_t border);
     bool publish_properties(Client const& client, Output& output, StateUpdates& states);
@@ -304,7 +293,7 @@ private:
     void publish_window_class(xcb_window_t window, char const* kind);
     void publish_urgency(Client const& client, Output& output);
     void publish_fixtures();
-    void publish_root(std::vector<Projected> const& clients, bool urgency_changed);
+    void publish_root(std::vector<State::Projected> const& clients, bool urgency_changed);
     DesktopLayout desktop_layout() const;
     void reconcile_stacking(State::FullscreenVisibility const& fullscreen, bool reassert);
     void withdraw_removed();

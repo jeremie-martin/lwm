@@ -10,6 +10,7 @@ add_library(liblwm STATIC
     core/floating.cpp
     core/stacking.cpp
     core/state.cpp
+    core/geometry.cpp
     core/focus.cpp
     core/ipc_command.cpp
     core/ipc_server.cpp

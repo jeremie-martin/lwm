@@ -373,10 +373,9 @@ void State::set_mode(xcb_window_t id, bool floating)
     LWM_LOG_DEBUG("Client kind changed: window={:#x} floating={}", id, floating);
     if (auto* tiled = tiled_mode(client))
     {
-        // An unarranged tile can still hold an off-monitor initial or hotplug rectangle.
         auto rectangle = floating::recover_to_area(
             monitors_[client.monitor].working_area(),
-            tiled->floating.value_or(tiled->layout)
+            tiled->floating ? *tiled->floating : normal_geometry(client)
         );
         auto slot = detach(client);
         client.mode = FloatingMode{ rectangle, slot };
@@ -387,8 +386,7 @@ void State::set_mode(xcb_window_t id, bool floating)
     if (mode.tile_slot && mode.tile_slot->output == monitors_[client.monitor].name
         && mode.tile_slot->workspace == client.workspace)
         index = mode.tile_slot->index;
-    // Until layout runs, the floating rectangle is also the tile's best known geometry.
-    client.mode = TiledMode{ mode.geometry, mode.geometry };
+    client.mode = TiledMode{ mode.geometry };
     attach(client, index);
 }
 
@@ -407,14 +405,6 @@ void State::geometry(xcb_window_t id, Geometry rectangle)
         return;
     mutated();
     mode->geometry = rectangle;
-}
-
-void State::place_tile(xcb_window_t id, Geometry rectangle)
-{
-    assert(!frozen_);
-    // Layout targets are recomputed from state and are not part of the revision.
-    if (auto* mode = tiled_mode(clients_.at(id)))
-        mode->layout = rectangle;
 }
 
 void State::swap_tiles(size_t monitor, size_t a, size_t b)
@@ -788,19 +778,15 @@ restart::Snapshot State::snapshot() const
     for (auto const& monitor : monitors_) snapshot.monitors.push_back(restart::capture_monitor(monitor));
     for (auto const* c : clients_by_order())
     {
-        auto const* tiled = tiled_mode(*c);
         snapshot.clients.push_back(
             { c->id,
               c->monitor,
               c->workspace,
-              c->kind(),
-              tiled ? tiled->layout : floating_mode(*c)->geometry,
-              tiled ? tiled->floating : std::nullopt,
+              c->mode,
               c->preferences,
               c->urgency.sources,
               c->borderless,
               c->desktop_pinned,
-              tiled ? std::nullopt : floating_mode(*c)->tile_slot,
               c->fullscreen_monitors,
               c->mru_order }
         );

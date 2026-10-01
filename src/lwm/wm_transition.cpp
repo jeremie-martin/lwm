@@ -4,7 +4,6 @@
 #include "lwm/core/stacking.hpp"
 #include "wm.hpp"
 #include <algorithm>
-#include <limits>
 #include <xcb/xcb_icccm.h>
 
 namespace lwm {
@@ -26,10 +25,8 @@ void WindowManager::complete_transition()
         refresh_workareas();
     validate_drag();
     auto focus_request = state_.complete_focus();
-    // Arrangement and urgency clearing leave fullscreen ancestry and ownership unchanged.
     auto fullscreen = state_.fullscreen_visibility();
     auto const& owners = fullscreen.owners;
-    arrange_tiles(fullscreen);
     published_revision_ = state_.revision();
 
     // Publication reads a frozen model.
@@ -42,11 +39,17 @@ void WindowManager::complete_transition()
             LWM_LOG_DEBUG("Fullscreen owner changed: monitor={} window={:#x} -> {:#x}", m, before, after);
     }
     root_.fullscreen_owners = owners;
-    // One pass resolves each client's output record and visibility, in registration order.
-    std::vector<Projected> clients;
-    for (auto const* client : state_.clients_by_order())
-        clients.push_back({ client, &outputs_[client->id], state_.visible(*client, fullscreen) });
+    auto clients = state_.project(fullscreen);
+    for (auto& projected : clients)
+        if (projected.geometry)
+            if (auto preview = drag_preview(*projected.client))
+                projected.geometry = preview;
     bool moved = publish_clients(clients);
+    // Visible acknowledgements use the projection. Hidden clients still owe a
+    // geometry reply even though they have no display rectangle.
+    for (auto window : configure_replies_)
+        if (auto const* client = state_.find(window))
+            send_configure_notify(window, presentation_geometry(*client), border_width(*client));
     if (focus_request)
     {
         commit_focus(*focus_request);
@@ -56,7 +59,8 @@ void WindowManager::complete_transition()
     }
     bool urgency_changed = false;
     StateUpdates states;
-    for (auto const& projected : clients) urgency_changed |= publish_properties(*projected.client, *projected.output, states);
+    for (auto const& projected : clients)
+        urgency_changed |= publish_properties(*projected.client, outputs_.at(projected.client->id), states);
     ewmh_.update_window_states(states, owned_state_atoms());
     publish_fixtures();
     publish_root(clients, urgency_changed);
@@ -79,85 +83,10 @@ void WindowManager::complete_transition()
 // Layout
 // ---------------------------------------------------------------------------
 
-// The same ordered windows drive arrangement, split hit-testing and drop
-// targeting: visible members of the current workspace, then visible sticky
-// members of other workspaces. Fullscreen windows take fullscreen geometry.
-std::vector<xcb_window_t> WindowManager::tiled_participants(Monitor const& monitor) const
+// The drag preview is the only geometry input outside the domain model.
+std::optional<Geometry> WindowManager::drag_preview(Client const& client) const
 {
-    return tiled_participants(monitor, state_.fullscreen_visibility());
-}
-
-std::vector<xcb_window_t>
-WindowManager::tiled_participants(Monitor const& monitor, State::FullscreenVisibility const& fullscreen) const
-{
-    std::vector<xcb_window_t> windows;
-    auto collect = [&](Workspace const& workspace, bool current)
-    {
-        for (auto window : workspace.windows)
-        {
-            auto const& client = state_.require(window);
-            if ((current || client.sticky) && !client.fullscreen && state_.visible(client, fullscreen))
-                windows.push_back(window);
-        }
-    };
-    collect(monitor.current(), true);
-    for (size_t i = 0; i < monitor.workspaces.size(); ++i)
-        if (i != monitor.current_workspace)
-            collect(monitor.workspaces[i], false);
-    return windows;
-}
-
-void WindowManager::arrange_tiles(State::FullscreenVisibility const& fullscreen)
-{
-    for (size_t m = 0; m < state_.monitors().size(); ++m)
-    {
-        auto const& monitor = state_.monitors()[m];
-        auto windows = tiled_participants(monitor, fullscreen);
-        auto const& workspace = monitor.current();
-        auto slots =
-            layout_.arrange(windows.size(), monitor.working_area(), workspace.layout_strategy, workspace.split_ratios);
-        for (size_t i = 0; i < windows.size(); ++i) state_.place_tile(windows[i], slots[i]);
-    }
-}
-
-Geometry WindowManager::fullscreen_geometry(Client const& client) const
-{
-    auto const& monitors = state_.monitors();
-    Geometry area = monitors[client.monitor].geometry();
-    if (!client.fullscreen_monitors)
-        return area;
-    auto const& spec = *client.fullscreen_monitors;
-    int32_t min_x = std::numeric_limits<int32_t>::max(), min_y = min_x;
-    int32_t max_x = std::numeric_limits<int32_t>::min(), max_y = max_x;
-    for (auto index : { spec.top, spec.bottom, spec.left, spec.right })
-    {
-        if (index >= monitors.size())
-            continue;
-        auto const& m = monitors[index];
-        min_x = std::min<int32_t>(min_x, m.x);
-        min_y = std::min<int32_t>(min_y, m.y);
-        max_x = std::max<int32_t>(max_x, m.x + m.width);
-        max_y = std::max<int32_t>(max_y, m.y + m.height);
-    }
-    if (min_x > max_x)
-        return area;
-    return { geometry_coordinate(min_x), geometry_coordinate(min_y), geometry_extent(max_x - min_x), geometry_extent(max_y - min_y) };
-}
-
-// Maximize and fullscreen project the normal rectangle; a tiled move preview
-// overrides layout without changing membership.
-Geometry WindowManager::presentation_geometry(Client const& client) const
-{
-    if (client.fullscreen)
-        return fullscreen_geometry(client);
-    if (auto const* floating = floating_mode(client))
-        return floating::presentation_geometry(
-            floating->geometry,
-            state_.monitors()[client.monitor].working_area(),
-            client.maximized_horz,
-            client.maximized_vert
-        );
-    if (drag_)
+    if (drag_ && client.kind() == Client::Kind::Tiled && !client.fullscreen)
         if (auto const* move = std::get_if<WindowDrag>(&drag_->operation); move && move->window == client.id)
             return floating::drag_geometry(
                 move->start_geometry,
@@ -165,7 +94,14 @@ Geometry WindowManager::presentation_geometry(Client const& client) const
                 static_cast<int32_t>(drag_->last_y) - drag_->start_y,
                 move->edges
             );
-    return tiled_mode(client)->layout;
+    return std::nullopt;
+}
+
+Geometry WindowManager::presentation_geometry(Client const& client) const
+{
+    if (auto preview = drag_preview(client))
+        return *preview;
+    return state_.presentation_geometry(client);
 }
 
 uint32_t WindowManager::border_width(Client const& client) const
@@ -188,15 +124,16 @@ uint32_t WindowManager::border_color(Client const& client) const
 
 // Hides, shows, configures and maps clients. Returns whether anything moved
 // under the pointer, whether tiled or floating.
-bool WindowManager::publish_clients(std::vector<Projected> const& clients)
+bool WindowManager::publish_clients(std::vector<State::Projected> const& clients)
 {
     bool moved = false;
-    for (auto const& [client, output, visible] : clients)
+    for (auto const& [client, geometry] : clients)
     {
-        if (visible || output->hidden)
+        auto& output = outputs_[client->id];
+        if (geometry || output.hidden)
             continue;
-        output->hidden = true;
-        output->geometry.reset();
+        output.hidden = true;
+        output.geometry.reset();
         uint32_t x = static_cast<uint32_t>(OFF_SCREEN_X);
         xcb_configure_window(conn_.get(), client->id, XCB_CONFIG_WINDOW_X, &x);
         moved = true;
@@ -205,26 +142,22 @@ bool WindowManager::publish_clients(std::vector<Projected> const& clients)
     bool resizing_tiles = drag_ && std::holds_alternative<TiledResize>(drag_->operation);
     if (resizing_tiles)
         xcb_grab_server(conn_.get());
-    for (auto const& [client, output, visible] : clients)
+    for (auto const& [client, geometry] : clients)
     {
-        if (!visible)
+        if (!geometry)
             continue;
-        if (!write_geometry(*client, *output, presentation_geometry(*client), border_width(*client)))
-            continue;
-        moved = true;
-        // The synthetic ConfigureNotify sent with the write acknowledges any request.
-        configure_replies_.erase(client->id);
+        bool changed = write_geometry(*client, outputs_.at(client->id), *geometry, border_width(*client));
+        moved |= changed;
+        if (configure_replies_.erase(client->id) && !changed)
+            send_configure_notify(client->id, *geometry, border_width(*client));
     }
     if (resizing_tiles)
         xcb_ungrab_server(conn_.get());
-    for (auto window : configure_replies_)
-        if (auto const* client = state_.find(window))
-            send_configure_notify(window, presentation_geometry(*client), border_width(*client));
-    for (auto const& [client, output, visible] : clients)
-        if (!output->mapped)
+    for (auto const& projected : clients)
+        if (auto& output = outputs_.at(projected.client->id); !output.mapped)
         {
-            xcb_map_window(conn_.get(), client->id);
-            output->mapped = true;
+            xcb_map_window(conn_.get(), projected.client->id);
+            output.mapped = true;
         }
     return moved;
 }
@@ -499,7 +432,7 @@ WindowManager::DesktopLayout WindowManager::desktop_layout() const
     return layout;
 }
 
-void WindowManager::publish_root(std::vector<Projected> const& clients, bool urgency_changed)
+void WindowManager::publish_root(std::vector<State::Projected> const& clients, bool urgency_changed)
 {
     // Clients arrive in registration order; fixtures merge into it.
     std::vector<Fixture const*> fixtures;

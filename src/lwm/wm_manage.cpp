@@ -66,10 +66,28 @@ void WindowManager::scan_existing_windows(bool handoff)
     if (handoff_)
         state_.restore_workspaces(*handoff_);
     for (auto& [window, initial] : clients) manage_window(window, std::move(initial), true);
+    if (handoff_)
+        state_.restore_membership(*handoff_);
+
+    // Registration and tiled rules establish the complete layout before any
+    // initial floating placement. Resolve floating parents before their children;
+    // visiting each ID once also bounds malformed transient cycles.
+    auto order = state_.clients_by_order();
+    std::unordered_set<xcb_window_t> pending;
+    for (auto const* client : order)
+        if (floating_mode(*client) && !(handoff_ && handoff_->find(client->id)))
+            pending.insert(client->id);
+    for (auto const* client : order)
+    {
+        std::vector<xcb_window_t> chain;
+        for (auto next = client->id; pending.erase(next); next = state_.require(next).transient_for)
+            chain.push_back(next);
+        for (auto it = chain.rbegin(); it != chain.rend(); ++it)
+            place_new_client(*it);
+    }
 
     if (handoff_)
     {
-        state_.restore_membership(*handoff_);
         if (auto const* active = state_.find(handoff_->active); active && state_.focusable(*active))
             focus_window(active->id, false);
         else
@@ -260,30 +278,27 @@ Client WindowManager::initial_client(xcb_window_t window, ClassificationResult c
     client.ewmh_type = initial.properties.ewmh_type;
     client.transient_for = initial.transient_for;
     if (initial.classification.kind == WindowClassification::Kind::Floating)
-        client.mode = FloatingMode{ initial_floating_geometry(window, initial, client) };
-    else
-        // A tile keeps its requested rectangle until its workspace is arranged.
-        client.mode = TiledMode{ std::nullopt, read_window_geometry(window).value_or(Geometry{ 0, 0, 300, 200 }) };
+        client.mode = FloatingMode{ read_window_geometry(window).value_or(Geometry{ 0, 0, 300, 200 }) };
     return client;
 }
 
 // Transients are centered on their managed parent's workspace. Position hints
 // may choose the monitor of an unanchored window; see X11.md.
-Geometry WindowManager::initial_floating_geometry(xcb_window_t window, ClassificationResult const& initial, Client& candidate)
+Geometry WindowManager::initial_floating_geometry(Client& candidate)
 {
     std::optional<Geometry> parent_geometry;
-    bool transient = initial.transient_for != XCB_NONE;
+    bool transient = candidate.transient_for != XCB_NONE;
     if (transient)
     {
-        if (auto const* parent = state_.find(initial.transient_for))
+        if (auto const* parent = state_.find(candidate.transient_for))
         {
             candidate.monitor = parent->monitor;
             candidate.workspace = parent->workspace;
         }
-        parent_geometry = placement_parent_geometry(initial.transient_for);
+        parent_geometry = placement_parent_geometry(candidate.transient_for);
     }
-    auto geometry = read_window_geometry(window).value_or(Geometry{ 0, 0, 300, 200 });
-    auto hints = read_size_hints(window, transient);
+    auto geometry = floating_mode(candidate)->geometry;
+    auto hints = read_size_hints(candidate.id, transient);
     geometry.width = std::max<uint16_t>(1, hints.width.value_or(geometry.width));
     geometry.height = std::max<uint16_t>(1, hints.height.value_or(geometry.height));
 
@@ -339,10 +354,7 @@ void WindowManager::manage_client(xcb_window_t window, ClassificationResult cons
         // Restart restores saved intent directly rather than replaying rules.
         candidate.monitor = saved->monitor;
         candidate.workspace = saved->workspace;
-        if (saved->kind == Client::Kind::Floating)
-            candidate.mode = FloatingMode{ saved->geometry, saved->tile_slot };
-        else
-            candidate.mode = TiledMode{ saved->floating, saved->geometry };
+        candidate.mode = saved->mode;
         candidate.preferences = saved->preferences;
         candidate.urgency.sources = saved->urgency;
         candidate.borderless = saved->borderless;
@@ -381,12 +393,26 @@ void WindowManager::manage_client(xcb_window_t window, ClassificationResult cons
     // The matched rule is remembered either way, so later metadata changes
     // apply rules only when the result changes.
     state_.rule(window, initial.rule ? std::optional{ *initial.rule } : std::nullopt);
-    if (initial.rule && !saved)
-        apply_rule(window, *initial.rule);
+    if (!saved && (!adopting || !floating_mode(state_.require(window))))
+        place_new_client(window);
 
     auto const& client = state_.require(window);
     if (!adopting && client.monitor == state_.focused_monitor() && state_.focusable(client))
         focus_window(window);
+}
+
+// Both live admission and startup use the same placement, after registration.
+void WindowManager::place_new_client(xcb_window_t window)
+{
+    if (floating_mode(state_.require(window)))
+    {
+        auto candidate = state_.require(window);
+        auto geometry = initial_floating_geometry(candidate);
+        state_.relocate(window, candidate.monitor, candidate.workspace);
+        state_.geometry(window, geometry);
+    }
+    if (auto const& rule = state_.require(window).rule)
+        apply_rule(window, *rule);
 }
 
 void WindowManager::unmanage_window(xcb_window_t window)

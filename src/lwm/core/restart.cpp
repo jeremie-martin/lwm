@@ -23,7 +23,8 @@ public:
     void optional_geometry(std::optional<Geometry> const& g)
     {
         flag(g.has_value());
-        geometry(g.value_or(Geometry{ }));
+        if (g)
+            geometry(*g);
     }
     // 0 = unset, 1 = false, 2 = true.
     void optional_bool(std::optional<bool> value) { word(value ? (*value ? 2 : 1) : 0); }
@@ -99,9 +100,7 @@ public:
     }
     std::optional<Geometry> optional_geometry()
     {
-        bool present = flag();
-        auto g = geometry();
-        return present ? std::optional{ g } : std::nullopt;
+        return flag() ? std::optional{ geometry() } : std::nullopt;
     }
     std::optional<bool> optional_bool()
     {
@@ -197,9 +196,9 @@ void Snapshot::rebind(std::span<Monitor const> discovered)
         if (changed)
         {
             client.fullscreen_monitors.reset();
-            if (client.kind == Client::Kind::Floating)
-                client.geometry =
-                    hotplug_policy::fit_floating(client.geometry, targets[target].working_area(), displaced);
+            if (auto* floating = std::get_if<FloatingMode>(&client.mode))
+                floating->geometry =
+                    hotplug_policy::fit_floating(floating->geometry, targets[target].working_area(), displaced);
         }
         // Admission discards tile-return slots whose original workspace vanished.
     }
@@ -244,9 +243,21 @@ std::vector<uint32_t> encode(Snapshot const& snapshot)
         out.word(static_cast<uint32_t>(client.mru_order >> 32));
         out.count(client.monitor);
         out.count(client.workspace);
-        out.flag(client.kind == Client::Kind::Floating);
-        out.geometry(client.geometry);
-        out.optional_geometry(client.floating);
+        auto const* floating = std::get_if<FloatingMode>(&client.mode);
+        out.flag(floating != nullptr);
+        if (floating)
+        {
+            out.geometry(floating->geometry);
+            out.flag(floating->tile_slot.has_value());
+            if (auto const& slot = floating->tile_slot)
+            {
+                out.count(slot->index);
+                out.text(slot->output);
+                out.count(slot->workspace);
+            }
+        }
+        else
+            out.optional_geometry(std::get<TiledMode>(client.mode).floating);
         out.optional_bool(client.preferences.floating);
         out.optional_bool(client.preferences.skip_taskbar);
         out.optional_bool(client.preferences.skip_pager);
@@ -254,13 +265,6 @@ std::vector<uint32_t> encode(Snapshot const& snapshot)
         out.word(client.urgency);
         out.flag(client.borderless);
         out.flag(client.desktop_pinned);
-        out.flag(client.tile_slot.has_value());
-        if (client.tile_slot)
-        {
-            out.count(client.tile_slot->index);
-            out.text(client.tile_slot->output);
-            out.count(client.tile_slot->workspace);
-        }
         out.flag(client.fullscreen_monitors.has_value());
         if (auto const& m = client.fullscreen_monitors)
         {
@@ -329,7 +333,7 @@ std::optional<Snapshot> decode(std::span<uint32_t const> words)
     }
     if (!snapshot.monitors.empty() && snapshot.focused_monitor >= snapshot.monitors.size())
         return std::nullopt;
-    snapshot.clients.resize(in.count(24));
+    snapshot.clients.resize(in.count(15));
     std::unordered_set<uint64_t> recencies;
     for (auto& client : snapshot.clients)
     {
@@ -343,9 +347,20 @@ std::optional<Snapshot> decode(std::span<uint32_t const> words)
         if (client.monitor >= snapshot.monitors.size()
             || client.workspace >= snapshot.monitors[client.monitor].workspaces.size())
             return std::nullopt;
-        client.kind = in.flag() ? Client::Kind::Floating : Client::Kind::Tiled;
-        client.geometry = in.geometry();
-        client.floating = in.optional_geometry();
+        if (in.flag())
+        {
+            FloatingMode mode{ in.geometry() };
+            if (in.flag())
+            {
+                TileSlot slot{ in.word(), in.text(), in.word() };
+                if (slot.output.empty())
+                    return std::nullopt;
+                mode.tile_slot = std::move(slot);
+            }
+            client.mode = std::move(mode);
+        }
+        else
+            client.mode = TiledMode{ in.optional_geometry() };
         client.preferences.floating = in.optional_bool();
         client.preferences.skip_taskbar = in.optional_bool();
         client.preferences.skip_pager = in.optional_bool();
@@ -355,16 +370,6 @@ std::optional<Snapshot> decode(std::span<uint32_t const> words)
         );
         client.borderless = in.flag();
         client.desktop_pinned = in.flag();
-        if (in.flag())
-        {
-            TileSlot slot;
-            slot.index = in.word();
-            slot.output = in.text();
-            slot.workspace = in.word();
-            if (client.kind != Client::Kind::Floating || slot.output.empty())
-                return std::nullopt;
-            client.tile_slot = std::move(slot);
-        }
         if (in.flag())
             client.fullscreen_monitors = FullscreenMonitors{ in.word(), in.word(), in.word(), in.word() };
     }

@@ -26,10 +26,10 @@ template <typename T> Reply<T> reply(T* value) { return { value, &free }; }
 WindowManager::WindowManager(Config config, SignalPipe& signals, std::string config_path)
     : config_(std::move(config))
     , ewmh_(conn_)
-    , layout_(config_.appearance, config_.layout)
     , signals_(signals)
     , config_path_(std::move(config_path))
 {
+    state_.configure_layout(config_.appearance, config_.layout);
     intern_atoms();
     create_wm_window();
     setup_root();
@@ -533,6 +533,7 @@ std::expected<void, std::string> WindowManager::reload_config()
 
     end_drag(false);
     config_ = std::move(*loaded);
+    state_.configure_layout(config_.appearance, config_.layout);
     configure_scratchpads();
     grab_buttons();
     grab_keys();

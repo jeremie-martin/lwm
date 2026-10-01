@@ -177,13 +177,14 @@ struct TileSlot
 struct TiledMode
 {
     std::optional<Geometry> floating; ///< Floating rectangle to restore when floated again
-    Geometry layout;                  ///< Layout target; the normal rectangle until first arranged
+    bool operator==(TiledMode const&) const = default;
 };
 
 struct FloatingMode
 {
     Geometry geometry; ///< Normal rectangle; maximize and fullscreen only project it
     std::optional<TileSlot> tile_slot;
+    bool operator==(FloatingMode const&) const = default;
 };
 
 using ClientMode = std::variant<TiledMode, FloatingMode>;

@@ -28,7 +28,7 @@ struct SplitHitResult
 class Layout
 {
 public:
-    Layout(AppearanceConfig const& appearance, LayoutConfig const& config)
+    Layout(AppearanceConfig const& appearance = { }, LayoutConfig const& config = { })
         : appearance_(appearance)
         , config_(config)
     { }
@@ -53,8 +53,8 @@ public:
     ) const;
 
 private:
-    AppearanceConfig const& appearance_;
-    LayoutConfig const& config_;
+    AppearanceConfig appearance_;
+    LayoutConfig config_;
 };
 
 } // namespace lwm

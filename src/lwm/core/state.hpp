@@ -2,6 +2,7 @@
 
 #include "restart.hpp"
 #include "types.hpp"
+#include "lwm/layout/layout.hpp"
 #include <optional>
 #include <span>
 #include <string>
@@ -81,6 +82,21 @@ public:
     void insert_fixture(xcb_window_t id, Fixture::Role role, std::span<xcb_window_t const> registration_order = { });
     void erase(xcb_window_t id);
 
+    // Layout is derived, never written back into clients.
+    void configure_layout(AppearanceConfig const& appearance, LayoutConfig const& config);
+    Layout const& layout_engine() const { return layout_; }
+    // One immutable per-pass view per managed client, in registration order.
+    // A rectangle means visible; absence means hidden.
+    struct Projected
+    {
+        Client const* client;
+        std::optional<Geometry> geometry;
+    };
+    std::vector<xcb_window_t> tiled_participants(size_t monitor, FullscreenVisibility const& fullscreen) const;
+    std::vector<Projected> project(FullscreenVisibility const& fullscreen) const;
+    Geometry presentation_geometry(Client const& client) const;
+    Geometry normal_geometry(Client const& client) const;
+
     // Derived views
     // A placement is shown when it is its monitor's current workspace and the desktop is not shown.
     bool shows(size_t monitor, size_t workspace) const;
@@ -127,7 +143,6 @@ public:
     );
     void floating(xcb_window_t id, bool enabled);
     void geometry(xcb_window_t id, Geometry rectangle);
-    void place_tile(xcb_window_t id, Geometry rectangle);
     void swap_tiles(size_t monitor, size_t a, size_t b);
 
     // Client state
@@ -193,6 +208,11 @@ public:
     void thaw() { frozen_ = false; }
 
 private:
+    Geometry fullscreen_geometry(Client const& client) const;
+    Layout layout_;
+    std::vector<xcb_window_t> workspace_tiles(
+        size_t monitor, size_t workspace, FullscreenVisibility const* fullscreen, xcb_window_t include = XCB_NONE
+    ) const;
     Clients clients_;
     Fixtures fixtures_;
     std::vector<Monitor> monitors_;

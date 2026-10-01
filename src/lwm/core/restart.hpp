@@ -11,21 +11,18 @@
 // as on a fresh start.
 namespace lwm::restart {
 
-inline constexpr uint32_t format = 9;
+inline constexpr uint32_t format = 10;
 
 struct ClientRecord
 {
     xcb_window_t window = XCB_NONE;
     size_t monitor = 0;
     size_t workspace = 0;
-    Client::Kind kind = Client::Kind::Tiled;
-    Geometry geometry;                ///< Floating normal rectangle, or the tile's layout target
-    std::optional<Geometry> floating; ///< A tile's remembered floating rectangle
+    ClientMode mode = TiledMode{ };
     ClientPreferences preferences;
     uint8_t urgency = 0;
     bool borderless = false;
     bool desktop_pinned = false;
-    std::optional<TileSlot> tile_slot; ///< Floating client's return position on its original output
     std::optional<FullscreenMonitors> fullscreen_monitors;
 
     uint64_t mru_order = 0; ///< Zero means never focused

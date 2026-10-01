@@ -35,8 +35,8 @@ std::optional<WindowManager::SplitBorderHit> WindowManager::hit_split_border(int
         return std::nullopt;
     auto const& monitor = state_.monitors()[*index];
     auto const& workspace = monitor.current();
-    auto hit = layout_.hit_test(
-        tiled_participants(monitor).size(),
+    auto hit = state_.layout_engine().hit_test(
+        state_.tiled_participants(*index, state_.fullscreen_visibility()).size(),
         monitor.working_area(),
         workspace.layout_strategy,
         workspace.split_ratios,
@@ -65,15 +65,14 @@ void WindowManager::begin_window_drag(xcb_window_t window, int16_t x, int16_t y,
         state_.geometry(window, presentation_geometry(*client));
         state_.maximize(window, false, false);
     }
-    auto const* floating = floating_mode(*client);
-    Geometry start = floating ? floating->geometry : tiled_mode(*client)->layout;
+    Geometry start = state_.normal_geometry(*client);
     drag_ = Drag{ WindowDrag{ window, client->kind(), client->monitor, client->workspace, start, edges }, x, y, x, y, button };
 }
 
 void WindowManager::begin_tiled_resize(SplitHitResult const& hit, size_t monitor, int16_t x, int16_t y, uint8_t button)
 {
     auto const& target = state_.monitors()[monitor];
-    auto participants = tiled_participants(target);
+    auto participants = state_.tiled_participants(monitor, state_.fullscreen_visibility());
     if (!grab_pointer_for_drag(hit.direction == SplitDirection::Horizontal ? cursor_resize_h_ : cursor_resize_v_))
         return;
     drag_ = Drag{
@@ -108,7 +107,8 @@ void WindowManager::validate_drag()
         {
             auto const& monitor = state_.monitors()[split.monitor];
             valid = monitor.current_workspace == split.workspace && monitor.working_area() == split.area
-                && monitor.current().layout_strategy == split.strategy && tiled_participants(monitor) == split.participants;
+                && monitor.current().layout_strategy == split.strategy
+                && state_.tiled_participants(split.monitor, state_.fullscreen_visibility()) == split.participants;
         }
     }
     if (!valid)
@@ -180,9 +180,9 @@ void WindowManager::end_drag(bool commit)
     auto target = focus::monitor_index_at_point(state_.monitors(), drag.last_x, drag.last_y).value_or(client->monitor);
     auto const& monitor = state_.monitors()[target];
     auto const& workspace = monitor.current();
-    auto participants = tiled_participants(monitor);
+    auto participants = state_.tiled_participants(target, state_.fullscreen_visibility());
     std::erase(participants, client->id);
-    size_t slot = layout_.drop_target_index(
+    size_t slot = state_.layout_engine().drop_target_index(
         participants.size() + 1,
         monitor.working_area(),
         workspace.layout_strategy,

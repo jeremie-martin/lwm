@@ -299,3 +299,43 @@ TEST_CASE(
     create(nullptr);
     for (auto window : expected) destroy_window(conn, window);
 }
+
+TEST_CASE("Integration: startup places transient chains against the complete tiled scene", "[integration][placement][adoption]")
+{
+    bool child_first = GENERATE(false, true);
+    CAPTURE(child_first);
+    auto& server = X11TestEnvironment::instance();
+    if (!server.available())
+    {
+        REQUIRE(std::getenv("LWM_TEST_REQUIRE_X11") == nullptr);
+        SKIP("X11 unavailable");
+    }
+    X11Connection conn;
+    REQUIRE(conn.ok());
+    park_pointer(conn);
+    auto create_parent = [&] { return create_window(conn, 40, 50, 200, 150); };
+    auto create_dialog = [&] { return create_window(conn, 0, 0, 100, 80); };
+    // The grandchild is scanned first, and the other tile last.
+    auto grandchild = create_window(conn, 0, 0, 40, 20);
+    auto first = child_first ? create_dialog() : create_parent();
+    auto second = child_first ? create_parent() : create_dialog();
+    auto parent = child_first ? second : first;
+    auto dialog = child_first ? first : second;
+    auto peer = create_window(conn, 20, 20, 200, 150);
+    set_transient_for(conn, dialog, parent);
+    set_transient_for(conn, grandchild, dialog);
+    for (auto window : { grandchild, first, second, peer }) map_window(conn, window);
+    REQUIRE(get_window_geometry(conn, peer));
+    LwmProcess wm(server.display(), "[appearance]\npadding = 0\nborder_width = 0\n");
+    REQUIRE(wait_for_wm_ready(conn, timeout));
+    REQUIRE(wait_for_condition([&]
+    {
+        auto p = get_window_geometry(conn, parent);
+        auto d = get_window_geometry(conn, dialog);
+        auto g = get_window_geometry(conn, grandchild);
+        return p && d && g && p->width == conn.screen()->width_in_pixels / 2
+            && d->x == p->x + (p->width - d->width) / 2 && d->y == p->y + (p->height - d->height) / 2
+            && g->x == d->x + (d->width - g->width) / 2 && g->y == d->y + (d->height - g->height) / 2;
+    }, timeout));
+    for (auto window : { grandchild, dialog, parent, peer }) destroy_window(conn, window);
+}

@@ -332,7 +332,7 @@ apply = { fullscreen = true }
 }
 
 TEST_CASE(
-    "Integration: reclassifying an unarranged client preserves its initial geometry",
+    "Integration: reclassifying a hidden tile derives its workspace geometry",
     "[integration][transition][geometry][property]"
 )
 {
@@ -370,7 +370,9 @@ TEST_CASE(
     REQUIRE(reply);
     REQUIRE(reply->starts_with("ok"));
     REQUIRE(wait_for_condition(
-        [&] { return get_window_geometry(conn, window) == WindowGeometry{ 60, 70, 320, 240 }; },
+        [&] { return get_window_geometry(conn, window)
+                == WindowGeometry{ 12, 12, static_cast<uint16_t>(conn.screen()->width_in_pixels - 24),
+                                   static_cast<uint16_t>(conn.screen()->height_in_pixels - 24) }; },
         timeout
     ));
     destroy_window(conn, window);
@@ -557,7 +559,12 @@ TEST_CASE(
     xcb_configure_window(conn.get(), window, XCB_CONFIG_WINDOW_WIDTH | XCB_CONFIG_WINDOW_HEIGHT, values);
     observe_title_after_events(conn, window);
     REQUIRE(get_window_geometry(conn, window)); // Roundtrip also collects queued X events.
-    auto expected_width = (mode == "fullscreen" || mode == "hidden_tiled") ? rect->width : values[0];
+    auto expected = *rect;
+    if (mode == "hidden_tiled")
+        expected = { 12, 12, static_cast<uint16_t>(conn.screen()->width_in_pixels - 24),
+                     static_cast<uint16_t>(conn.screen()->height_in_pixels - 24) };
+    else if (mode != "fullscreen")
+        expected.width = values[0];
     size_t acknowledgements = 0;
     while (auto* event = xcb_poll_for_event(conn.get()))
     {
@@ -566,33 +573,23 @@ TEST_CASE(
             auto const configure = *reinterpret_cast<xcb_configure_notify_event_t*>(event);
             free(event);
             REQUIRE(configure.window == window);
-            CHECK(configure.width == expected_width);
-            CHECK(configure.x == rect->x);
-            CHECK(configure.y == rect->y);
-            CHECK(configure.height == values[1]);
+            CHECK(configure.width == expected.width);
+            CHECK(configure.x == expected.x);
+            CHECK(configure.y == expected.y);
+            CHECK(configure.height == expected.height);
             ++acknowledgements;
         }
         else
             free(event);
     }
     REQUIRE(acknowledgements == 1);
-    if (mode != "hidden_tiled")
+    if (hidden)
     {
-        if (hidden)
-        {
-            auto reply = send_ipc_command(*socket, "workspace switch 0");
-            REQUIRE(reply);
-            REQUIRE(reply->starts_with("ok"));
-        }
-        REQUIRE(wait_for_condition(
-            [&]
-            {
-                auto actual = get_window_geometry(conn, window);
-                return actual && actual->width == expected_width && actual->height == rect->height;
-            },
-            timeout
-        ));
+        auto reply = send_ipc_command(*socket, "workspace switch 0");
+        REQUIRE(reply);
+        REQUIRE(reply->starts_with("ok"));
     }
+    REQUIRE(wait_for_condition([&] { return get_window_geometry(conn, window) == expected; }, timeout));
     destroy_window(conn, window);
 }
 
@@ -1258,7 +1255,7 @@ TEST_CASE(
 }
 
 TEST_CASE(
-    "Integration: floating an unarranged tile with off-monitor geometry places it on its monitor",
+    "Integration: floating a hidden tile ignores obsolete X-requested geometry",
     "[integration][transition][geometry]"
 )
 {
@@ -1280,7 +1277,7 @@ apply = { workspace = 1 }
         [&] { return get_window_property_string(conn.get(), window, window_class) == "tiled"; },
         timeout
     ));
-    // Its workspace is not arranged, so the requested rectangle is its only tiled geometry.
+    // No publication has arranged its workspace; conversion must derive its slot.
     set_window_type(conn, window, intern_atom(conn.get(), "_NET_WM_WINDOW_TYPE_UTILITY"));
     observe_title_after_events(conn, window);
     REQUIRE(get_window_property_string(conn.get(), window, window_class) == "floating");

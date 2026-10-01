@@ -52,7 +52,7 @@ inline Client const& add(State& state, xcb_window_t id, ClientSpec spec = { })
     if (spec.floating)
         client.mode = FloatingMode{ spec.geometry };
     else
-        client.mode = TiledMode{ std::nullopt, spec.geometry };
+        client.mode = TiledMode{ };
     state.insert(std::move(client));
     return state.require(id);
 }
