@@ -777,7 +777,7 @@ TEST_CASE("Integration: state requests leave dock and desktop windows alone", "[
 
 TEST_CASE(
     "Integration: restart adoption preserves deiconified non-active clients",
-    "[integration][transition][adoption]"
+    "[integration][transition][adoption][restart]"
 )
 {
     auto env = TestEnvironment::create();
@@ -951,7 +951,7 @@ apply = { center = true }
 
 TEST_CASE(
     "Integration: subscriptions and state snapshots have a recoverable ordering boundary",
-    "[integration][ipc][subscribe]"
+    "[integration][ipc][subscribe][restart]"
 )
 {
     auto env = TestEnvironment::create();
@@ -1115,7 +1115,7 @@ TEST_CASE(
 
 TEST_CASE(
     "Integration: generated state requests converge to the declared preferences",
-    "[integration][transition][sequence]"
+    "[integration][transition][sequence][restart]"
 )
 {
     auto env = TestEnvironment::create();
@@ -1453,7 +1453,7 @@ TEST_CASE(
 
 TEST_CASE(
     "Integration: geometry rules do not veto subsequent application requests",
-    "[integration][transition][geometry][rules][geometry-authority]"
+    "[integration][transition][geometry][rules][geometry-authority][restart]"
 )
 {
     auto trigger = GENERATE("admission", "reload", "metadata", "restart");

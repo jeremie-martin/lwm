@@ -25,7 +25,7 @@ void park_pointer(X11Connection& conn)
 
 TEST_CASE(
     "Integration: relocation preserves source history and destination membership through both entry paths",
-    "[integration][placement]"
+    "[integration][placement][focus][restart]"
 )
 {
     auto env = TestEnvironment::create(config);

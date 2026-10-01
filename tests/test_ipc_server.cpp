@@ -158,21 +158,53 @@ TEST_CASE("IPC releases stalled readers and writers at the deadline", "[ipc][tra
     CHECK(f.receive(next) == "ok pong\n");
 }
 
-TEST_CASE("IPC subscription acknowledgement precedes filtered events", "[ipc][transport]")
+TEST_CASE("IPC queues filtered events behind a pending subscription acknowledgement", "[ipc][transport][subscribe]")
 {
     Fixture f;
     Peer peer(f.server.path());
-    CHECK_FALSE(f.server.has_subscribers(lwm::Event_All));
+    f.pump(); // Accept the connection, before it sends a request.
+    std::string padding;
+    SECTION("Writable socket") { }
+    SECTION("Acknowledgement blocked by socket backpressure")
+    {
+        // The poll interface exposes the actual accepted socket. Fill its kernel
+        // buffer with disposable bytes so even the small acknowledgement must
+        // remain queued. The fixture supplies neither acknowledgement nor events.
+        std::vector<pollfd> fds;
+        f.server.append_poll_fds(fds);
+        REQUIRE(fds.size() == 2);
+        int size = 4096;
+        REQUIRE(setsockopt(fds.back().fd, SOL_SOCKET, SO_SNDBUF, &size, sizeof(size)) == 0);
+        std::string bytes(1, 'x');
+        for (;;)
+        {
+            auto count = send(fds.back().fd, bytes.data(), bytes.size(), MSG_NOSIGNAL | MSG_DONTWAIT);
+            if (count < 0)
+            {
+                REQUIRE((errno == EAGAIN || errno == EWOULDBLOCK));
+                break;
+            }
+            REQUIRE(count > 0);
+            padding.append(bytes.data(), count);
+            REQUIRE(padding.size() < 65536);
+        }
+        REQUIRE_FALSE(padding.empty());
+    }
+    REQUIRE_FALSE(f.server.has_subscribers(lwm::Event_All));
     peer.send("subscribe focus_change\n");
-    CHECK(f.receive(peer, false) == "ok subscribed\n");
-    CHECK(f.requests.empty());
-    CHECK(f.server.has_subscribers(lwm::Event_FocusChange));
+    f.pump(); // Register and attempt the acknowledgement, without reading it.
+    REQUIRE(f.server.has_subscribers(lwm::Event_FocusChange));
     CHECK_FALSE(f.server.has_subscribers(lwm::Event_WindowMap));
+    CHECK(f.requests.empty());
     f.server.emit(lwm::Event_WindowMap, "ignored");
     f.server.emit(lwm::Event_FocusChange, "{\"event\":\"focus_change\"}");
+    auto received = f.receive(peer, false);
+    REQUIRE(received.starts_with(padding + "ok subscribed\n"));
+    if (std::count(received.begin(), received.end(), '\n') < 2)
+        received += f.receive(peer, false);
     CHECK(
-        f.receive(peer, false)
-        == "{\"instance\":\"" + f.server.instance() + "\",\"sequence\":1,\"event\":\"focus_change\"}\n"
+        received == padding + "ok subscribed\n{\"instance\":\"" + f.server.instance()
+            + "\",\"sequence\":1,\"event\":\"focus_change\"}\n"
     );
 }
 

@@ -407,7 +407,7 @@ TEST_CASE(
 
 TEST_CASE(
     "Integration: tile return slots survive output reorder and expire on removal",
-    "[integration][tile-slot][multioutput][.multioutput]"
+    "[integration][tile-slot][multioutput][.multioutput][restart]"
 )
 {
     auto* server = std::getenv("LWM_TEST_XSERVER");

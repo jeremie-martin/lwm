@@ -171,7 +171,7 @@ TEST_CASE(
     destroy_window(conn, tiled);
 }
 
-TEST_CASE("Integration: floating scratchpad preserves kind and geometry across restart", "[integration][scratchpad]")
+TEST_CASE("Integration: floating scratchpad preserves kind and geometry across restart", "[integration][scratchpad][restart]")
 {
     auto test_env = TestEnvironment::create(scratchpad_match_config());
     if (!test_env)
@@ -363,7 +363,7 @@ TEST_CASE("Integration: tiled scratchpad pool preserves prior floating geometry"
     destroy_window(conn, window);
 }
 
-TEST_CASE("Integration: visible scratchpad pool window keeps cycling after restart", "[integration][scratchpad]")
+TEST_CASE("Integration: visible scratchpad pool window keeps cycling after restart", "[integration][scratchpad][restart]")
 {
     auto test_env = TestEnvironment::create(scratchpad_match_config());
     if (!test_env)
@@ -407,7 +407,7 @@ TEST_CASE("Integration: visible scratchpad pool window keeps cycling after resta
     destroy_window(conn, pooled);
 }
 
-TEST_CASE("Integration: hidden scratchpad stays hidden across restart", "[integration][scratchpad]")
+TEST_CASE("Integration: hidden scratchpad stays hidden across restart", "[integration][scratchpad][restart]")
 {
     auto test_env = TestEnvironment::create(scratchpad_match_config());
     if (!test_env)

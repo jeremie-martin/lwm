@@ -1,4 +1,4 @@
-#include "wm_observations.hpp"
+#include "restart_handoff.hpp"
 #include <X11/Xlib.h>
 #include <algorithm>
 #include <array>
@@ -709,62 +709,6 @@ TEST_CASE("Integration: managed windows publish zero frame extents", "[integrati
     destroy_window(conn, window);
 }
 
-TEST_CASE("Integration: monocle layout survives exec restart", "[integration][layout][monocle][restart]")
-{
-    auto test_env = TestEnvironment::create("[workspaces]\ncount = 2\n");
-    if (!test_env)
-        SKIP("Test environment not available");
-
-    auto& conn = test_env->conn;
-    auto socket_path = wait_for_ipc_socket_path(conn);
-    REQUIRE(socket_path.has_value());
-
-    xcb_window_t w1 = create_window(conn, 10, 10, 200, 150);
-    map_window(conn, w1);
-    REQUIRE(wait_for_active_window(conn, w1, kTimeout));
-    xcb_window_t w2 = create_window(conn, 40, 40, 200, 150);
-    map_window(conn, w2);
-    REQUIRE(wait_for_active_window(conn, w2, kTimeout));
-
-    auto set_layout = run_lwmctl(test_env->wm, { "layout", "set", "monocle" }, *socket_path);
-    REQUIRE(set_layout.has_value());
-    REQUIRE(set_layout->exit_code == 0);
-    REQUIRE(wait_for_condition(
-        [&]()
-        {
-            auto first = get_window_geometry(conn, w1);
-            auto second = get_window_geometry(conn, w2);
-            return first && second && *first == *second;
-        },
-        kTimeout
-    ));
-
-    auto previous = wm_instance(conn);
-    REQUIRE(previous);
-
-    auto restart = run_lwmctl(test_env->wm, { "restart" }, *socket_path);
-    REQUIRE(restart.has_value());
-    REQUIRE(restart->exit_code == 0);
-    REQUIRE(wait_for_wm_restart(conn, std::chrono::seconds(5), *previous));
-
-    REQUIRE(wait_for_condition(
-        [&]()
-        {
-            auto first = get_window_geometry(conn, w1);
-            auto second = get_window_geometry(conn, w2);
-            return first && second && *first == *second;
-        },
-        kTimeout
-    ));
-    auto list = run_lwmctl(test_env->wm, { "workspace", "list" });
-    REQUIRE(list.has_value());
-    REQUIRE(list->exit_code == 0);
-    REQUIRE(list->stdout_text.find("\"layout\":\"monocle\"") != std::string::npos);
-
-    destroy_window(conn, w2);
-    destroy_window(conn, w1);
-}
-
 TEST_CASE("Integration: monocle swap focuses adjacent tiled window", "[integration][layout][monocle][swap]")
 {
     auto test_env = TestEnvironment::create(R"(
@@ -817,7 +761,7 @@ swap_next = true
     destroy_window(conn, w1);
 }
 
-TEST_CASE("Integration: workspace, fullscreen, scratchpad and restart transitions compose", "[integration][sequence]")
+TEST_CASE("Integration: workspace, fullscreen, scratchpad and restart transitions compose", "[integration][sequence][restart]")
 {
     auto env = TestEnvironment::create("[workspaces]\ncount = 2\n");
     if (!env)
@@ -915,19 +859,36 @@ TEST_CASE("Integration: invalid ratio commands cannot poison layout state", "[in
     destroy_window(conn, window);
 }
 
-TEST_CASE("Integration: an unreadable restart snapshot adopts windows afresh", "[integration][restart][malformed]")
+TEST_CASE("Integration: restart consumes its handoff and rejects damaged snapshots", "[integration][restart][malformed][layout][monocle]")
 {
-    auto& x11 = X11TestEnvironment::instance();
-    if (!x11.available())
+    auto env = TestEnvironment::create("[workspaces]\ncount = 2\n");
+    if (!env)
         SKIP("X11 unavailable");
-    X11Connection conn;
-    REQUIRE(conn.ok());
-    auto window = create_window(conn, 10, 10, 200, 150);
-    map_window(conn, window);
+    auto& conn = env->conn;
+    auto socket = wait_for_ipc_socket_path(conn);
+    REQUIRE(socket);
+    ipc_ok(*socket, "workspace switch 1");
+    auto first = create_window(conn, 10, 10, 200, 150);
+    auto second = create_window(conn, 40, 40, 200, 150);
+    for (auto window : { first, second })
+    {
+        map_window(conn, window);
+        REQUIRE(wait_for_active_window(conn, window, kTimeout));
+    }
+    ipc_ok(*socket, "layout set monocle");
+    REQUIRE(require_window_geometry(conn, first) == require_window_geometry(conn, second));
+    auto instance = wm_instance(conn);
+    REQUIRE(instance);
+    PausedRestart restart(env->wm, *socket);
     auto property = intern_atom(conn.get(), "_LWM_RESTART");
-    std::vector<uint32_t> snapshot;
-    SECTION("another format") { snapshot = { 3, 0, window, 0, 1, 0, 0 }; }
-    SECTION("truncated record") { snapshot = { 4, 0, window }; }
+    auto snapshot = read_property32(conn.get(), conn.root(), property, XCB_ATOM_CARDINAL);
+    REQUIRE(snapshot);
+    REQUIRE(snapshot->size() > 1);
+    bool intact = false;
+    SECTION("Intact handoff preserves layout") { intact = true; }
+    SECTION("Incompatible format") { ++snapshot->front(); }
+    SECTION("Current format with a truncated record") { snapshot->pop_back(); }
+    SECTION("Current format with trailing data") { snapshot->push_back(0); }
     xcb_change_property(
         conn.get(),
         XCB_PROP_MODE_REPLACE,
@@ -935,19 +896,31 @@ TEST_CASE("Integration: an unreadable restart snapshot adopts windows afresh", "
         property,
         XCB_ATOM_CARDINAL,
         32,
-        static_cast<uint32_t>(snapshot.size()),
-        snapshot.data()
+        static_cast<uint32_t>(snapshot->size()),
+        snapshot->data()
     );
-    xcb_flush(conn.get());
-    LwmProcess wm(x11.display(), "[workspaces]\ncount = 2\n");
-    REQUIRE(wm.running());
-    REQUIRE(wait_for_wm_ready(conn, kTimeout));
-    auto kind = intern_atom(conn.get(), "_LWM_WINDOW_CLASS");
-    REQUIRE(wait_for_condition([&] { return get_window_property_string(conn.get(), window, kind) == "tiled"; }, kTimeout));
-    CHECK(get_window_border_width(conn, window) == 2);
-    // The snapshot is consumed; it cannot affect a later start.
-    CHECK_FALSE(get_window_property_string(conn.get(), conn.root(), property));
-    destroy_window(conn, window);
+    REQUIRE(get_window_geometry(conn, conn.root())); // Finish the edit before resuming startup.
+    restart.resume();
+    REQUIRE(wait_for_wm_restart(conn, kTimeout, *instance));
+    CHECK_FALSE(read_property32(conn.get(), conn.root(), property, XCB_ATOM_CARDINAL));
+    auto workspaces = ipc_json(*socket, "workspace list");
+    CHECK(
+        workspaces.at("monitors").at(0).at("workspaces").at(1).at("layout")
+        == (intact ? "monocle" : "master-stack")
+    );
+    // A rejected handoff still adopts both clients on their EWMH desktop and
+    // arranges them afresh; it must neither lose them nor apply partial state.
+    ipc_ok(*socket, "workspace switch 1");
+    auto desktop = intern_atom(conn.get(), "_NET_WM_DESKTOP");
+    for (auto window : { first, second })
+    {
+        CHECK(require_property_cardinal(conn.get(), window, desktop) == 1);
+        CHECK(get_window_border_width(conn, window) == 2);
+        CHECK_FALSE(is_hidden_offscreen(conn, window));
+    }
+    CHECK((require_window_geometry(conn, first) == require_window_geometry(conn, second)) == intact);
+    destroy_window(conn, second);
+    destroy_window(conn, first);
 }
 
 TEST_CASE("Integration: restart places unrecorded windows on the restored workspace", "[integration][restart]")

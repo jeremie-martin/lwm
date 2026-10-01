@@ -7,8 +7,9 @@
  * means the window *looks* focused (border color) but the user cannot type in it.
  */
 
-#include "x11_test_harness.hpp"
+#include "wm_observations.hpp"
 #include <catch2/catch_test_macros.hpp>
+#include <catch2/generators/catch_generators.hpp>
 #include <chrono>
 #include <optional>
 #include <vector>
@@ -77,51 +78,107 @@ TEST_CASE("Integration: X input focus matches _NET_ACTIVE_WINDOW for passive win
     destroy_window(conn, w1);
 }
 
-// =============================================================================
-// Bug (d78347b): A "Globally Active" window (WM_HINTS.input=false, WM_TAKE_FOCUS in
-//        WM_PROTOCOLS) should receive X input focus, not leave it on root.
-//
-// Per ICCCM the WM should let the client call SetInputFocus via WM_TAKE_FOCUS,
-// but following dwm/i3 convention the WM should always set focus directly so
-// that keyboard input isn't lost if the client is slow or ignores the message.
-// =============================================================================
-TEST_CASE("Integration: globally active window receives X input focus", "[integration][focus][input]")
+TEST_CASE("Integration: focus delivers WM_TAKE_FOCUS and reasserts keyboard focus", "[integration][focus][input]")
 {
-    auto test_env = TestEnvironment::create();
-    if (!test_env)
-        SKIP("Test environment not available");
-    auto& conn = test_env->conn;
+    bool accepts_input = GENERATE(false, true);
+    CAPTURE(accepts_input);
+    auto env = TestEnvironment::create();
+    if (!env)
+        SKIP("X11 unavailable");
+    auto& conn = env->conn;
+    auto take_focus = intern_atom(conn.get(), "WM_TAKE_FOCUS");
+    auto protocols = intern_atom(conn.get(), "WM_PROTOCOLS");
+    auto active = intern_atom(conn.get(), "_NET_ACTIVE_WINDOW");
+    auto window = create_window(conn, 10, 10, 200, 150);
+    set_wm_hints_input(conn, window, accepts_input);
+    set_wm_protocols(conn, window, { take_focus });
+    auto messages = [&]
+    {
+        std::vector<xcb_client_message_event_t> result;
+        while (auto* event = xcb_poll_for_event(conn.get()))
+        {
+            if ((event->response_type & ~0x80) == XCB_CLIENT_MESSAGE)
+                result.push_back(*reinterpret_cast<xcb_client_message_event_t*>(event));
+            free(event);
+        }
+        return result;
+    };
+    auto require_delivery = [&](std::optional<uint32_t> timestamp = std::nullopt)
+    {
+        REQUIRE(wait_for_x_input_focus(conn, window, kTimeout));
+        std::vector<xcb_client_message_event_t> received;
+        REQUIRE(wait_for_condition(
+            [&]
+            {
+                received = messages();
+                return !received.empty();
+            },
+            kTimeout
+        ));
+        REQUIRE(received.size() == 1);
+        CHECK(received[0].response_type == (XCB_CLIENT_MESSAGE | 0x80));
+        CHECK(received[0].window == window);
+        CHECK(received[0].type == protocols);
+        CHECK(received[0].format == 32);
+        CHECK(received[0].data.data32[0] == take_focus);
+        if (timestamp)
+            CHECK(received[0].data.data32[1] == *timestamp);
+    };
+    map_window(conn, window);
+    REQUIRE(wait_for_active_window(conn, window, kTimeout));
+    require_delivery();
 
-    xcb_atom_t wm_take_focus = intern_atom(conn.get(), "WM_TAKE_FOCUS");
-    REQUIRE(wm_take_focus != XCB_NONE);
+    // Use real server timestamps from an unmapped client-owned window. Invented
+    // future/stale values can make X reject SetInputFocus for an unrelated reason.
+    auto clock_window = create_window(conn, 0, 0, 1, 1);
+    auto marker = intern_atom(conn.get(), "_LWM_TEST_FOCUS_TIME");
+    for (uint32_t iteration : { 1, 2 })
+    {
+        xcb_set_input_focus(conn.get(), XCB_INPUT_FOCUS_POINTER_ROOT, conn.root(), XCB_CURRENT_TIME);
+        REQUIRE(wait_for_x_input_focus(conn, conn.root(), kTimeout));
+        xcb_change_property(
+            conn.get(), XCB_PROP_MODE_REPLACE, clock_window, marker, XCB_ATOM_CARDINAL, 32, 1, &iteration
+        );
+        xcb_flush(conn.get());
+        std::optional<uint32_t> timestamp;
+        REQUIRE(wait_for_condition(
+            [&]
+            {
+                while (auto* event = xcb_poll_for_event(conn.get()))
+                {
+                    if ((event->response_type & ~0x80) == XCB_PROPERTY_NOTIFY)
+                    {
+                        auto const& property = *reinterpret_cast<xcb_property_notify_event_t*>(event);
+                        if (property.window == clock_window && property.atom == marker)
+                            timestamp = property.time;
+                    }
+                    free(event);
+                }
+                return timestamp.has_value();
+            },
+            kTimeout
+        ));
+        REQUIRE(*timestamp != XCB_CURRENT_TIME);
+        send_client_message(conn, window, active, 1, *timestamp);
+        require_delivery(timestamp);
+        CHECK(wait_for_active_window(conn, window, kTimeout));
+    }
 
-    // Create a "Globally Active" window: input=false, supports WM_TAKE_FOCUS
-    xcb_window_t w1 = create_window(conn, 10, 10, 200, 150);
-    set_wm_hints_input(conn, w1, false);
-    set_wm_protocols(conn, w1, { wm_take_focus });
-    map_window(conn, w1);
-
-    // The WM should set _NET_ACTIVE_WINDOW to w1
-    REQUIRE(wait_for_active_window(conn, w1, kTimeout));
-
-    xcb_atom_t wm_hints = intern_atom(conn.get(), "WM_HINTS");
-    REQUIRE(wm_hints != XCB_NONE);
-    auto hints_cookie = xcb_get_property(conn.get(), 0, w1, wm_hints, wm_hints, 0, 9);
-    auto* hints_reply = xcb_get_property_reply(conn.get(), hints_cookie, nullptr);
-    REQUIRE(hints_reply != nullptr);
-    REQUIRE(hints_reply->type == wm_hints);
-    REQUIRE(hints_reply->format == 32);
-    REQUIRE(xcb_get_property_value_length(hints_reply) >= 8);
-    auto* hints = static_cast<uint32_t*>(xcb_get_property_value(hints_reply));
-    REQUIRE((hints[0] & 1u) != 0);
-    REQUIRE(hints[1] == 0);
-    free(hints_reply);
-
-    // The actual X input focus should also be on w1 (not on root).
-    // Before the fix, the WM sets focus to root for globally active windows.
-    CHECK(wait_for_x_input_focus(conn, w1, kTimeout));
-
-    destroy_window(conn, w1);
+    // Withdrawing the protocol must stop delivery. Only clients accepting direct
+    // input remain eligible; otherwise completion repairs focus to the root.
+    set_wm_protocols(conn, window, { });
+    observe_title_after_events(conn, window);
+    REQUIRE(wait_for_x_input_focus(conn, accepts_input ? window : conn.root(), kTimeout));
+    if (accepts_input)
+    {
+        xcb_set_input_focus(conn.get(), XCB_INPUT_FOCUS_POINTER_ROOT, conn.root(), XCB_CURRENT_TIME);
+        REQUIRE(wait_for_x_input_focus(conn, conn.root(), kTimeout));
+        send_client_message(conn, window, active, 2);
+        REQUIRE(wait_for_x_input_focus(conn, window, kTimeout));
+    }
+    CHECK(messages().empty());
+    destroy_window(conn, clock_window);
+    destroy_window(conn, window);
 }
 
 // =============================================================================
