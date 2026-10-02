@@ -206,6 +206,18 @@ struct ClientIntent
     bool operator==(ClientIntent const&) const = default;
 };
 
+// The same value owns a named slot in memory and in the handoff. Null means a
+// pending launch; NONE means an empty slot; another ID means a claimed client.
+struct NamedScratchpad
+{
+    std::string name;
+    std::optional<xcb_window_t> window = XCB_NONE;
+
+    xcb_window_t claimed_window() const { return window.value_or(XCB_NONE); }
+    bool pending_launch() const { return !window; }
+    bool operator==(NamedScratchpad const&) const = default;
+};
+
 /// A managed normal window. Placement is always a valid monitor/workspace pair;
 /// docks and desktop windows are Fixtures and never Clients.
 struct Client : ClientIntent

@@ -7,35 +7,13 @@
 
 namespace lwm {
 
-namespace {
-
-char const* classification_name(WindowClassification::Kind kind)
-{
-    switch (kind)
-    {
-        case WindowClassification::Kind::Tiled:
-            return "tiled";
-        case WindowClassification::Kind::Floating:
-            return "floating";
-        case WindowClassification::Kind::Dock:
-            return "dock";
-        case WindowClassification::Kind::Desktop:
-            return "desktop";
-        case WindowClassification::Kind::Popup:
-            return "popup";
-    }
-    return "unknown";
-}
-
-} // namespace
-
 // Adoption and classification
 
 void WindowManager::scan_existing_windows(bool handoff)
 {
     // Observe the display before restoring placement. All dock reservations must
     // be known when a saved floating client is fitted to a changed topology.
-    std::vector<std::pair<xcb_window_t, ClassificationResult>> clients;
+    std::vector<Client> clients;
     auto* tree = xcb_query_tree_reply(conn_.get(), xcb_query_tree(conn_.get(), conn_.screen()->root), nullptr);
     if (tree)
     {
@@ -49,12 +27,11 @@ void WindowManager::scan_existing_windows(bool handoff)
             free(attributes);
             if (!adopt)
                 continue;
-            auto initial = classify_window(window);
-            if (initial.classification.kind == WindowClassification::Kind::Dock
-                || initial.classification.kind == WindowClassification::Kind::Desktop)
-                manage_window(window, std::move(initial), true);
+            auto candidate = read_client(window, true);
+            if (default_floating(candidate).has_value())
+                clients.push_back(std::move(candidate));
             else
-                clients.emplace_back(window, std::move(initial));
+                manage_window(std::move(candidate), true);
         }
         free(tree);
     }
@@ -64,15 +41,8 @@ void WindowManager::scan_existing_windows(bool handoff)
     // Application properties are live observations; private intent comes from
     // the handoff. Docks above already supplied the discovered workareas.
     if (handoff_)
-    {
-        std::vector<Client> observed;
-        for (auto const& [window, initial] : clients)
-            if (initial.classification.kind == WindowClassification::Kind::Tiled
-                || initial.classification.kind == WindowClassification::Kind::Floating)
-                observed.push_back(read_client(window, initial, true));
-        state_.restore_graph(*handoff_, std::move(observed));
-    }
-    for (auto& [window, initial] : clients) manage_window(window, std::move(initial), true);
+        state_.restore_graph(*handoff_, clients);
+    for (auto& candidate : clients) manage_window(std::move(candidate), true);
 
     // Registration and tiled rules establish the complete layout before any
     // initial floating placement. Resolve floating parents before their children;
@@ -120,60 +90,54 @@ void WindowManager::scan_existing_windows(bool handoff)
         for (auto const& command : config_.autostart) launch_program(command, "autostart");
 }
 
-// One set of property values drives classification, rules and registration.
-ClassificationResult WindowManager::classify_window(xcb_window_t window)
+void WindowManager::manage_window(Client candidate, bool adopting)
 {
-    ClassificationResult result;
-    result.transient_for = read_transient_for(window).value_or(XCB_NONE);
-    auto [instance, name] = read_wm_class(window);
-    result.properties = { std::move(name),
-                          std::move(instance),
-                          read_window_name(window),
-                          ewmh_.get_window_type_enum(window),
-                          result.transient_for != XCB_NONE };
-    result.classification = classify_window_type(result.properties.ewmh_type, result.properties.is_transient);
-    result.rule = match_window_rules(config_.rules, result.properties);
-    auto natural = result.classification.kind;
-    bool normal = natural == WindowClassification::Kind::Tiled || natural == WindowClassification::Kind::Floating;
-    if (normal && result.rule && result.rule->floating)
-        result.classification.kind =
-            *result.rule->floating ? WindowClassification::Kind::Floating : WindowClassification::Kind::Tiled;
-    LWM_LOG_DEBUG(
-        "Classification resolved: window={:#x} transient_for={:#x} natural={} resolved={} rules_matched={}",
-        window,
-        result.transient_for,
-        classification_name(natural),
-        classification_name(result.classification.kind),
-        result.rule != nullptr
-    );
-    return result;
-}
-
-void WindowManager::manage_window(xcb_window_t window, ClassificationResult initial, bool adopting)
-{
-    switch (initial.classification.kind)
+    auto window = candidate.id;
+    if (!default_floating(candidate))
     {
-        case WindowClassification::Kind::Desktop:
-            manage_fixture(window, Fixture::Role::Desktop, adopting);
-            return;
-        case WindowClassification::Kind::Dock:
-            manage_fixture(window, Fixture::Role::Dock, adopting);
-            return;
-        case WindowClassification::Kind::Popup:
-            // Popup-only types are mapped directly and never registered.
-            if (!adopting)
-                xcb_map_window(conn_.get(), window);
-            return;
-        case WindowClassification::Kind::Tiled:
-        case WindowClassification::Kind::Floating:
-            break;
+        if (candidate.ewmh_type == WindowType::Desktop || candidate.ewmh_type == WindowType::Dock)
+            manage_fixture(window, candidate.ewmh_type == WindowType::Dock ? Fixture::Role::Dock : Fixture::Role::Desktop, adopting);
+        else if (!adopting)
+            xcb_map_window(conn_.get(), window);
+        return;
     }
-    // A new window claimed by a named scratchpad starts hidden and floating, so
-    // it never enters the tiled layout.
-    auto scratchpad = adopting ? std::nullopt : match_scratchpad(initial.properties, initial.rule);
+    // Named matches enter the scene hidden and floating; pending claims then
+    // recall them through the ordinary scratchpad operation.
+    auto scratchpad = adopting ? std::nullopt
+        : match_scratchpad(window_match_info(candidate), candidate.rule ? &*candidate.rule : nullptr);
     if (scratchpad)
-        initial.classification.kind = WindowClassification::Kind::Floating;
-    manage_client(window, initial, scratchpad.has_value(), adopting);
+    {
+        candidate.iconic = true;
+        if (!floating_mode(candidate))
+            candidate.mode = FloatingMode{ read_window_geometry(window).value_or(Geometry{ 0, 0, 300, 200 }) };
+    }
+    if (!state_.find(window))
+        state_.insert(std::move(candidate));
+
+    uint32_t mask = kManagedWindowEventMask;
+    xcb_change_window_attributes(conn_.get(), window, XCB_CW_EVENT_MASK, &mask);
+    xcb_grab_button(
+        conn_.get(),
+        0,
+        window,
+        XCB_EVENT_MASK_BUTTON_PRESS,
+        XCB_GRAB_MODE_SYNC,
+        XCB_GRAB_MODE_ASYNC,
+        XCB_NONE,
+        XCB_NONE,
+        XCB_BUTTON_INDEX_ANY,
+        XCB_MOD_MASK_ANY
+    );
+    xcb_ewmh_set_frame_extents(ewmh_.get(), window, 0, 0, 0, 0);
+    read_sync_counter(window);
+
+    bool saved = adopting && handoff_ && handoff_->find(window);
+    if (!saved && (!adopting || !floating_mode(state_.require(window))))
+        place_new_client(window);
+
+    auto const& client = state_.require(window);
+    if (!adopting && client.monitor == state_.focused_monitor() && state_.focusable(client))
+        state_.focus(window);
     if (scratchpad)
         claim_scratchpad(window, *scratchpad);
 }
@@ -254,37 +218,6 @@ bool WindowManager::read_initial_state(Client& client, bool honor_initial_state)
     return hinted_urgent;
 }
 
-// A concrete _NET_WM_DESKTOP places the client; a missing or sticky hint means
-// the focused monitor's current workspace.
-Client WindowManager::initial_client(xcb_window_t window, ClassificationResult const& initial)
-{
-    Client client;
-    client.id = window;
-    client.monitor = state_.focused_monitor();
-    client.workspace = state_.monitors()[client.monitor].current_workspace;
-    if (auto desktop = read_window_desktop(window))
-    {
-        if (*desktop == 0xFFFFFFFF)
-            client.sticky = true;
-        else if (auto placement =
-                     ewmh_policy::desktop_placement(*desktop, config_.workspaces.count, state_.monitors().size()))
-        {
-            std::tie(client.monitor, client.workspace) = *placement;
-            client.desktop_pinned = true;
-        }
-        else
-            LWM_LOG_WARN("Ignoring out-of-range _NET_WM_DESKTOP: window={:#x} desktop={}", window, *desktop);
-    }
-    client.name = initial.properties.title;
-    client.wm_class = initial.properties.wm_class;
-    client.wm_class_name = initial.properties.wm_class_name;
-    client.ewmh_type = initial.properties.ewmh_type;
-    client.transient_for = initial.transient_for;
-    if (initial.classification.kind == WindowClassification::Kind::Floating)
-        client.mode = FloatingMode{ read_window_geometry(window).value_or(Geometry{ 0, 0, 300, 200 }) };
-    return client;
-}
-
 // Transients are centered on their managed parent's workspace. Position hints
 // may choose the monitor of an unanchored window; see X11.md.
 Geometry WindowManager::initial_floating_geometry(Client& candidate)
@@ -344,53 +277,50 @@ WindowManager::SizeHints WindowManager::read_size_hints(xcb_window_t window, boo
     return result;
 }
 
-Client WindowManager::read_client(xcb_window_t window, ClassificationResult const& initial, bool adopting)
+// One observation owns the classification inputs, matched rule and application
+// flags. The same candidate is admitted live, at startup, or over a saved graph.
+Client WindowManager::read_client(xcb_window_t window, bool adopting)
 {
-    Client candidate = initial_client(window, initial);
+    Client client;
+    client.id = window;
+    client.transient_for = read_transient_for(window).value_or(XCB_NONE);
+    std::tie(client.wm_class_name, client.wm_class) = read_wm_class(window);
+    client.name = read_window_name(window);
+    client.ewmh_type = ewmh_.get_window_type_enum(window);
+    auto const* rule = match_window_rules(config_.rules, window_match_info(client));
+    client.rule = rule ? std::optional{ *rule } : std::nullopt;
+    auto natural = default_floating(client);
+    if (!natural)
+        return client; // Fixtures and popups have no client state or placement.
+    if (rule && rule->floating ? *rule->floating : *natural)
+        client.mode = FloatingMode{ read_window_geometry(window).value_or(Geometry{ 0, 0, 300, 200 }) };
+    LWM_LOG_DEBUG(
+        "Client observed: window={:#x} transient_for={:#x} natural={} resolved={} rules_matched={}",
+        window,
+        client.transient_for,
+        client_kind_str(*natural ? Client::Kind::Floating : Client::Kind::Tiled),
+        client_kind_str(client.kind()),
+        rule != nullptr
+    );
+    client.monitor = state_.focused_monitor();
+    client.workspace = state_.monitors()[client.monitor].current_workspace;
+    if (auto desktop = read_window_desktop(window))
+    {
+        if (*desktop == 0xFFFFFFFF)
+            client.sticky = true;
+        else if (auto placement = ewmh_policy::desktop_placement(*desktop, config_.workspaces.count, state_.monitors().size()))
+        {
+            std::tie(client.monitor, client.workspace) = *placement;
+            client.desktop_pinned = true;
+        }
+        else
+            LWM_LOG_WARN("Ignoring out-of-range _NET_WM_DESKTOP: window={:#x} desktop={}", window, *desktop);
+    }
     auto& output = outputs_[window];
     output.mapped = adopting;
-    output.urgent = read_initial_state(candidate, !adopting);
-    // Remember the observed property so restoration can remove obsolete hints.
-    output.fullscreen_monitors.emplace(candidate.fullscreen_monitors);
-    return candidate;
-}
-
-void WindowManager::manage_client(xcb_window_t window, ClassificationResult const& initial, bool start_iconic, bool adopting)
-{
-    if (!state_.find(window))
-    {
-        auto candidate = read_client(window, initial, adopting);
-        candidate.iconic |= start_iconic;
-        state_.insert(std::move(candidate));
-    }
-
-    uint32_t mask = kManagedWindowEventMask;
-    xcb_change_window_attributes(conn_.get(), window, XCB_CW_EVENT_MASK, &mask);
-    xcb_grab_button(
-        conn_.get(),
-        0,
-        window,
-        XCB_EVENT_MASK_BUTTON_PRESS,
-        XCB_GRAB_MODE_SYNC,
-        XCB_GRAB_MODE_ASYNC,
-        XCB_NONE,
-        XCB_NONE,
-        XCB_BUTTON_INDEX_ANY,
-        XCB_MOD_MASK_ANY
-    );
-    xcb_ewmh_set_frame_extents(ewmh_.get(), window, 0, 0, 0, 0);
-    read_sync_counter(window);
-
-    // The matched rule is remembered either way, so later metadata changes
-    // apply rules only when the result changes.
-    state_.rule(window, initial.rule ? std::optional{ *initial.rule } : std::nullopt);
-    bool saved = adopting && handoff_ && handoff_->find(window);
-    if (!saved && (!adopting || !floating_mode(state_.require(window))))
-        place_new_client(window);
-
-    auto const& client = state_.require(window);
-    if (!adopting && client.monitor == state_.focused_monitor() && state_.focusable(client))
-        state_.focus(window);
+    output.urgent = read_initial_state(client, !adopting);
+    output.fullscreen_monitors.emplace(client.fullscreen_monitors);
+    return client;
 }
 
 // Both live admission and startup use the same placement, after registration.

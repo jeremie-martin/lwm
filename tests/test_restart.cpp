@@ -56,10 +56,11 @@ restart::Snapshot sample()
     std::get<FloatingMode>(snapshot.clients[1].mode).tile_slot = TileSlot{ 7, "output with spaces", 1 };
     snapshot.named_scratchpads = {
         { "tëxt with spaces",        0x200 },
-        {                  "",        0x100 },
+        {              "tile",        0x100 },
         {           "pending", std::nullopt }
     };
     snapshot.clients[1].fullscreen_monitors = FullscreenMonitors{ 0, 1, 0, 1 };
+    snapshot.clients.push_back({ .id = 0x300, .monitor = 1, .mode = FloatingMode{ Geometry{ 20, 30, 80, 60 } } });
     snapshot.pool = { 0x300 };
     snapshot.registration_order = { 0x200, 0x300, 0x100 };
     snapshot.fullscreen_claims = { 0x200, 0x100 };
@@ -413,7 +414,7 @@ TEST_CASE("Restart preserves pending requests only for surviving scratchpad name
     CHECK_FALSE(restored.named_scratchpad("empty")->pending_launch());
     CHECK_FALSE(restored.named_scratchpad("new")->pending_launch());
     CHECK_FALSE(restored.named_scratchpad("claimed")->pending_launch());
-    CHECK(restored.named_scratchpad("claimed")->window() == (restored.find(1) ? 1 : XCB_NONE));
+    CHECK(restored.named_scratchpad("claimed")->claimed_window() == (restored.find(1) ? 1 : XCB_NONE));
     restored.scratchpad_pending("pending", false);
     CHECK_FALSE(restored.named_scratchpad("pending")->pending_launch());
 }
@@ -643,5 +644,76 @@ TEST_CASE("Graph restoration separates saved intent from live observations and n
     CHECK_FALSE(target.find(3));
     REQUIRE(target.fullscreen_claims().size() == 3);
     CHECK(target.fullscreen_claims().front() == 1);
+    CHECK_FALSE(invariants::validate(target));
+}
+
+TEST_CASE("Persistent graph validation rejects scratchpad ownership before reconciliation", "[restart][codec][invariants][scratchpad]")
+{
+    auto graph = sample();
+    REQUIRE_FALSE(invariants::validate(graph));
+    REQUIRE(restart::decode(restart::encode(graph)) == graph);
+    SECTION("Unmanaged pool member") { graph.pool.push_back(999); }
+    SECTION("Fixture registration is not a pool client")
+    {
+        graph.registration_order.push_back(0x400);
+        graph.pool.push_back(0x400);
+    }
+    SECTION("Duplicate pool member") { graph.pool.push_back(graph.pool.front()); }
+    SECTION("Named and pooled claims overlap") { graph.pool.push_back(0x200); }
+    SECTION("Zero is not a pooled client") { graph.pool.push_back(XCB_NONE); }
+    SECTION("Empty named identity") { graph.named_scratchpads.front().name.clear(); }
+    SECTION("Active registration is not a client")
+    {
+        graph.registration_order.push_back(0x400);
+        graph.active = 0x400;
+    }
+    SECTION("Unmanaged active window") { graph.active = 999; }
+    REQUIRE(invariants::validate(graph));
+    CHECK_FALSE(restart::decode(restart::encode(graph)));
+}
+
+TEST_CASE("Valid ownership survives changed observations and filters vanished clients", "[restart][state][scratchpad]")
+{
+    auto source = test::state();
+    source.configure_scratchpads(std::vector<std::string>{ "named", "pending" });
+    for (xcb_window_t id : { 1, 2, 3, 4 }) add(source, id);
+    source.claim_scratchpad("named", 1);
+    source.scratchpad_pending("pending", true);
+    source.pool_scratchpad(2);
+    source.pool_scratchpad(3);
+    source.iconic(2, true);
+    source.window_type(4, WindowType::Dialog);
+    auto graph = restart::decode(restart::encode(source.snapshot()));
+    REQUIRE(graph);
+    auto target = test::state();
+    target.configure_scratchpads(std::vector<std::string>{ "named", "pending" });
+    std::vector<Client> observed;
+    for (auto id : { 1, 3, 4 })
+    {
+        Client client;
+        client.id = id;
+        client.ewmh_type = id == 4 ? WindowType::Normal : WindowType::Utility;
+        client.mode = id == 4 ? ClientMode{ TiledMode{} } : ClientMode{ FloatingMode{ Geometry{ 1, 2, 30, 40 } } };
+        observed.push_back(client);
+    }
+    target.restore_graph(*graph, observed);
+    CHECK(target.require(1).kind() == Client::Kind::Tiled);
+    CHECK(target.require(3).kind() == Client::Kind::Tiled);
+    CHECK(target.require(4).kind() == Client::Kind::Floating);
+    CHECK_FALSE(target.require(4).preferences.floating);
+    CHECK(target.scratchpad_claim(1)->name == "named");
+    CHECK(target.named_scratchpad("pending")->pending_launch());
+    CHECK(target.scratchpad_pool() == std::vector<xcb_window_t>{ 3 });
+    CHECK_FALSE(target.find(2));
+    CHECK_FALSE(invariants::validate(target));
+    // Restoration preserves saved representation. A subsequent metadata update
+    // still follows defaults for an ordinary client, while claims retain mode.
+    target.window_type(4, WindowType::Utility);
+    target.window_type(4, WindowType::Normal);
+    CHECK(target.require(4).kind() == Client::Kind::Tiled);
+    target.window_type(1, WindowType::Dialog);
+    target.window_type(3, WindowType::Dialog);
+    CHECK(target.require(1).kind() == Client::Kind::Tiled);
+    CHECK(target.require(3).kind() == Client::Kind::Tiled);
     CHECK_FALSE(invariants::validate(target));
 }

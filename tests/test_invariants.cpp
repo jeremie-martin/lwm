@@ -183,3 +183,17 @@ TEST_CASE("Generated State operation sequences preserve model invariants", "[inv
         }
     }
 }
+
+TEST_CASE("Live ownership uses the same persistent graph validation as restart", "[invariants][scratchpad]")
+{
+    auto state = test::state();
+    state.configure_scratchpads(std::vector<std::string>{ "named" });
+    add(state, 1);
+    state.insert_fixture(2, Fixture::Role::Dock);
+    REQUIRE_FALSE(invariants::validate(state));
+    SECTION("Pool cannot own a fixture") { state.pool_scratchpad(2); }
+    SECTION("Named claim cannot own an unmanaged ID") { state.claim_scratchpad("named", 999); }
+    CHECK(invariants::validate(state));
+    CHECK(invariants::validate(state.snapshot()));
+    CHECK_FALSE(restart::decode(restart::encode(state.snapshot())));
+}

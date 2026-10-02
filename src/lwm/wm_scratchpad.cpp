@@ -26,7 +26,7 @@ std::optional<std::string> WindowManager::match_scratchpad(WindowMatchInfo const
     auto unclaimed = [&](std::string const& name)
     {
         auto const* slot = state_.named_scratchpad(name);
-        return slot && slot->window() == XCB_NONE;
+        return slot && slot->claimed_window() == XCB_NONE;
     };
     if (rule && rule->scratchpad && unclaimed(*rule->scratchpad))
         return rule->scratchpad;
@@ -41,7 +41,7 @@ std::optional<std::string> WindowManager::match_scratchpad(WindowMatchInfo const
 void WindowManager::claim_scratchpad(xcb_window_t window, std::string const& name)
 {
     auto const* slot = state_.named_scratchpad(name);
-    if (!slot || slot->window() != XCB_NONE)
+    if (!slot || slot->claimed_window() != XCB_NONE)
         return;
     bool requested = slot->pending_launch();
     state_.claim_scratchpad(name, window);
@@ -71,7 +71,7 @@ std::expected<void, std::string> WindowManager::toggle_scratchpad(std::string_vi
     if (!slot)
         return std::unexpected("unknown scratchpad: " + std::string(name));
     auto const& config = *scratchpad_config(name);
-    xcb_window_t window = slot->window();
+    xcb_window_t window = slot->claimed_window();
     if (window == XCB_NONE)
     {
         if (!slot->pending_launch() && launch_program(config.spawn, "scratchpad"))

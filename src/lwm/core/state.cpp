@@ -711,17 +711,17 @@ void State::replace_monitors(std::vector<Monitor> monitors, bool fit_unchanged)
 
 // Scratchpads
 
-State::NamedScratchpad const* State::named_scratchpad(std::string_view name) const
+NamedScratchpad const* State::named_scratchpad(std::string_view name) const
 {
     auto it = std::ranges::find(named_scratchpads_, name, &NamedScratchpad::name);
     return it == named_scratchpads_.end() ? nullptr : &*it;
 }
 
-State::NamedScratchpad const* State::scratchpad_claim(xcb_window_t id) const
+NamedScratchpad const* State::scratchpad_claim(xcb_window_t id) const
 {
     if (id == XCB_NONE)
         return nullptr;
-    auto it = std::ranges::find(named_scratchpads_, id, &NamedScratchpad::window);
+    auto it = std::ranges::find(named_scratchpads_, id, &NamedScratchpad::claimed_window);
     return it == named_scratchpads_.end() ? nullptr : &*it;
 }
 
@@ -730,8 +730,8 @@ bool State::pooled(xcb_window_t id) const { return std::ranges::find(scratchpad_
 void State::release_scratchpad(xcb_window_t id)
 {
     for (auto& slot : named_scratchpads_)
-        if (slot.window() == id)
-            slot.state = NamedScratchpad::Empty{ };
+        if (slot.claimed_window() == id)
+            slot.window = XCB_NONE;
     std::erase(scratchpad_pool_, id);
 }
 
@@ -748,8 +748,8 @@ void State::configure_scratchpads(std::span<std::string const> names)
     }
     std::vector<xcb_window_t> released;
     for (auto const& slot : named_scratchpads_)
-        if (slot.window() != XCB_NONE && std::ranges::find(names, slot.name) == names.end())
-            released.push_back(slot.window());
+        if (slot.claimed_window() != XCB_NONE && std::ranges::find(names, slot.name) == names.end())
+            released.push_back(slot.claimed_window());
     named_scratchpads_ = std::move(slots);
     for (auto id : released) iconic(id, false);
 }
@@ -760,7 +760,7 @@ void State::claim_scratchpad(std::string_view name, xcb_window_t id)
     release_scratchpad(id);
     auto it = std::ranges::find(named_scratchpads_, name, &NamedScratchpad::name);
     assert(it != named_scratchpads_.end());
-    it->state = NamedScratchpad::Claimed{ id };
+    it->window = id;
 }
 
 void State::pool_scratchpad(xcb_window_t id)
@@ -783,13 +783,10 @@ void State::advance_scratchpad_pool()
 void State::scratchpad_pending(std::string_view name, bool pending)
 {
     auto it = std::ranges::find(named_scratchpads_, name, &NamedScratchpad::name);
-    if (it == named_scratchpads_.end() || it->window() != XCB_NONE)
+    if (it == named_scratchpads_.end() || it->claimed_window() != XCB_NONE)
         return;
     mutated();
-    if (pending)
-        it->state = NamedScratchpad::LaunchPending{ };
-    else
-        it->state = NamedScratchpad::Empty{ };
+    it->window = pending ? std::nullopt : std::optional<xcb_window_t>{ XCB_NONE };
 }
 
 // Exec handoff
@@ -808,10 +805,8 @@ restart::Snapshot State::snapshot() const
     for (auto const& monitor : monitors_) snapshot.monitors.push_back(monitor);
     for (auto const* client : clients_by_order()) snapshot.clients.push_back(*client);
     for (auto const& slot : named_scratchpads_)
-        if (slot.window() != XCB_NONE || slot.pending_launch())
-            snapshot.named_scratchpads.push_back(
-                { slot.name, slot.pending_launch() ? std::nullopt : std::optional{ slot.window() } }
-            );
+        if (slot.claimed_window() != XCB_NONE || slot.pending_launch())
+            snapshot.named_scratchpads.push_back(slot);
     snapshot.pool = scratchpad_pool_;
     snapshot.fullscreen_claims = fullscreen_claims_;
     return snapshot;

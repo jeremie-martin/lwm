@@ -339,3 +339,77 @@ TEST_CASE("Integration: startup places transient chains against the complete til
     }, timeout));
     for (auto window : { grandchild, dialog, parent, peer }) destroy_window(conn, window);
 }
+
+TEST_CASE(
+    "Integration: restart preserves representation while observing classification and restoring pool ownership",
+    "[integration][restart][placement][property][scratchpad]"
+)
+{
+    auto env = TestEnvironment::create("[workspaces]\ncount = 2\n");
+    if (!env)
+        SKIP("X11 unavailable");
+    auto& conn = env->conn;
+    park_pointer(conn);
+    auto socket = wait_for_ipc_socket_path(conn);
+    REQUIRE(socket);
+    auto parent = create_window(conn, 20, 20, 200, 150);
+    auto pooled = create_window(conn, 40, 40, 200, 150);
+    for (auto window : { parent, pooled })
+    {
+        map_window(conn, window);
+        REQUIRE(wait_for_active_window(conn, window, timeout));
+    }
+    ipc_ok(*socket, "scratchpad stash");
+    REQUIRE(wait_for_active_window(conn, parent, timeout));
+    REQUIRE(is_hidden_offscreen(conn, pooled));
+    auto geometry = require_window_geometry(conn, parent);
+    auto previous = wm_instance(conn);
+    REQUIRE(previous);
+    PausedRestart restart(env->wm, *socket);
+    auto utility = intern_atom(conn.get(), "_NET_WM_WINDOW_TYPE_UTILITY");
+    auto dialog = intern_atom(conn.get(), "_NET_WM_WINDOW_TYPE_DIALOG");
+    auto normal = intern_atom(conn.get(), "_NET_WM_WINDOW_TYPE_NORMAL");
+    auto states = intern_atom(conn.get(), "_NET_WM_STATE");
+    auto skip = intern_atom(conn.get(), "_NET_WM_STATE_SKIP_TASKBAR");
+    auto kind = intern_atom(conn.get(), "_LWM_WINDOW_CLASS");
+    REQUIRE(set_window_type(conn, parent, utility));
+    REQUIRE(set_window_type(conn, pooled, utility));
+    set_transient_for(conn, parent, pooled);
+    auto child = create_window(conn, 0, 0, 120, 80);
+    REQUIRE(set_window_type(conn, child, dialog));
+    set_transient_for(conn, child, parent);
+    map_window(conn, child);
+    REQUIRE(get_window_geometry(conn, child)); // Complete the handoff edits on X.
+    restart.resume();
+    REQUIRE(wait_for_wm_restart(conn, timeout, *previous));
+    REQUIRE(wait_for_condition(
+        [&] { return get_window_property_string(conn.get(), parent, kind) == "tiled"
+                   && get_window_property_string(conn.get(), child, kind) == "floating"; },
+        timeout
+    ));
+    CHECK(require_window_geometry(conn, parent) == geometry);
+    CHECK(property_has_atom(conn.get(), parent, states, skip));
+    CHECK(get_window_property_string(conn.get(), pooled, kind) == "tiled");
+    CHECK(is_hidden_offscreen(conn, pooled));
+    CHECK(ipc_json(*socket, "scratchpad list").at("pool") == nlohmann::json::array({ pooled }));
+    CHECK(wait_for_active_window(conn, parent, timeout));
+    auto child_geometry = require_window_geometry(conn, child);
+    CHECK(child_geometry.x == geometry.x + (geometry.width - child_geometry.width) / 2);
+    CHECK(child_geometry.y == geometry.y + (geometry.height - child_geometry.height) / 2);
+
+    // The observed type drives layer/skip defaults immediately, but saved mode
+    // is private intent. Later metadata changes still drive ordinary mode defaults.
+    REQUIRE(set_window_type(conn, parent, dialog));
+    observe_title_after_events(conn, parent);
+    CHECK(get_window_property_string(conn.get(), parent, kind) == "floating");
+    xcb_delete_property(conn.get(), parent, intern_atom(conn.get(), "WM_TRANSIENT_FOR"));
+    REQUIRE(set_window_type(conn, parent, normal));
+    observe_title_after_events(conn, parent);
+    CHECK(get_window_property_string(conn.get(), parent, kind) == "tiled");
+    ipc_ok(*socket, "scratchpad cycle");
+    REQUIRE(wait_for_active_window(conn, pooled, timeout));
+    CHECK(get_window_property_string(conn.get(), pooled, kind) == "tiled");
+    CHECK_FALSE(is_hidden_offscreen(conn, pooled));
+    CHECK(ipc_json(*socket, "scratchpad list").at("pool") == nlohmann::json::array({ pooled }));
+    for (auto window : { child, pooled, parent }) destroy_window(conn, window);
+}

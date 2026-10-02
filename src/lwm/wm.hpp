@@ -40,14 +40,6 @@ enum class RunResult
     Failed
 };
 
-struct ClassificationResult
-{
-    WindowClassification classification;
-    RuleActions const* rule = nullptr;
-    xcb_window_t transient_for = XCB_NONE;
-    WindowMatchInfo properties;
-};
-
 // The imperative shell around State: it translates X input and IPC requests
 // into State operations, and completion projects State onto the X server.
 class WindowManager
@@ -245,14 +237,11 @@ private:
 
     // wm_manage.cpp: classification, registration, rules
     void scan_existing_windows(bool handoff);
-    ClassificationResult classify_window(xcb_window_t window);
-    void manage_window(xcb_window_t window, ClassificationResult initial, bool adopting);
-    void manage_client(xcb_window_t window, ClassificationResult const& initial, bool start_iconic, bool adopting);
+    void manage_window(Client candidate, bool adopting);
     void manage_fixture(xcb_window_t window, Fixture::Role role, bool adopting);
     // Returns whether WM_HINTS currently carries the urgency flag.
     bool read_initial_state(Client& client, bool honor_initial_state);
-    Client read_client(xcb_window_t window, ClassificationResult const& initial, bool adopting);
-    Client initial_client(xcb_window_t window, ClassificationResult const& initial);
+    Client read_client(xcb_window_t window, bool adopting);
     Geometry initial_floating_geometry(Client& candidate);
     struct SizeHints
     {

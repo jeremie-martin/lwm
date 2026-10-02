@@ -36,28 +36,6 @@ public:
         }
     };
 
-    struct NamedScratchpad
-    {
-        struct Empty
-        { };
-        struct LaunchPending
-        { };
-        struct Claimed
-        {
-            xcb_window_t window = XCB_NONE;
-        };
-
-        std::string name;
-        std::variant<Empty, LaunchPending, Claimed> state = Empty{ };
-
-        xcb_window_t window() const
-        {
-            auto const* claimed = std::get_if<Claimed>(&state);
-            return claimed ? claimed->window : XCB_NONE;
-        }
-        bool pending_launch() const { return std::holds_alternative<LaunchPending>(state); }
-    };
-
     enum class RelocationGeometry
     {
         Preserve,  ///< The caller already chose the floating rectangle

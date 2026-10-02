@@ -139,7 +139,10 @@ projection; hidden clients use their derived presentation geometry.
 
 ### Admission and topology
 
-Admission reads one property set for classification, matching, and registration.
+Admission reads one client candidate for classification, matching, application
+state and registration. Live maps and startup use that same observation; restart
+overlays saved private intent on it rather than building a parallel classification
+record. Fixtures and popups use the candidate's metadata without client placement.
 Fresh clients use desktop hints or the focused monitor, apply initial state, and then
 rules. Startup registers the complete scene and applies tiled rules before placing
 floating clients. A bounded parent walk places floating parents before children,
@@ -273,10 +276,15 @@ such as fullscreen, sticky, iconic, and maximize travel through `_NET_WM_STATE`.
 
 Adoption proceeds in this order:
 
-1. Register fixtures and read dock reservations.
-2. Read application properties for all normal clients. `State::restore_graph()`
+1. Scan each window's application properties once, register fixtures, and refresh
+   dock reservations before rebinding or placing normal clients.
+2. For the normal client candidates, `State::restore_graph()`
    overlays saved `ClientIntent` values on surviving observations and installs the
-   saved `MonitorState`/`Workspace` graph directly, including tiled order.
+   saved `MonitorState`/`Workspace` graph directly, including tiled order. Saved
+   mode wins even when observed type/transient defaults now suggest another mode;
+   restoration preserves representation instead of replaying metadata changes or
+   rules. Observed metadata still drives layer/skip defaults, input eligibility and
+   transient stacking. Subsequent metadata changes use the ordinary live policy.
 3. Rebind through the same `replace_monitors()` implementation as live hotplug.
    Fewer configured workspaces fold into the last; additional workspaces keep
    defaults. Changed topology fits floating rectangles and clears fullscreen-monitor
@@ -295,8 +303,15 @@ The live persistent value types are also the snapshot schema; X observations,
 RandR handles, dock reservations and publication caches are not serialized.
 Native C++26 reflection and bundled yyjson encode
 required fields (optional values use null), tagged modes, and checked integers.
-LWM also rejects duplicate/extra fields and invalid relationships between records,
-including incomplete, duplicate, or misplaced tiled membership.
+LWM also rejects duplicate/extra fields. One persistent graph validator serves
+both decoded snapshots and Debug model checks: placement, identities, tiled
+membership, focus ranks, fullscreen claims and exclusive scratchpad ownership are
+checked before reconciliation. Pool members must be distinct saved clients, disjoint
+from named claims; fixture registration is insufficient. Active IDs must name saved
+clients, and named slots require nonempty unique names. Valid clients that disappear
+during handoff are filtered later; invalid saved ownership rejects the whole graph.
+Named slots share one value type in memory and on the wire: null is launch-pending,
+NONE is empty in memory (omitted from the handoff), and a client ID is claimed.
 The CARDINAL32 envelope contains a format word, byte length, and zero-padded JSON;
 length and padding must match exactly. Output names preserve opaque bytes. The
 current format is 12 and follows the domain values directly, with no legacy field
@@ -344,7 +359,10 @@ registration and nonzero focus ranks; fullscreen claims consistent with fullscre
 and excluding maximize; valid non-iconic tile preferences; exclusive live scratchpad
 membership; and a managed, eligible active window.
 
-Debug builds check on event-loop entry and after completed operations, logging and
-aborting on violation. Release omits these checks. Derived visibility and ownership
-need no synchronized copies. Model invariants do not establish X delivery or ordering;
+Debug builds validate the persistent snapshot graph, then add live registry/order
+bounds, iconic preferences, fullscreen flags and focus eligibility checks. They
+check on event-loop entry and after completed operations, logging and aborting on
+violation. Snapshot construction is confined to these Debug checks and actual
+handoff; Release publication does not materialize validation snapshots. Derived
+visibility and ownership need no synchronized copies. Model invariants do not establish X delivery or ordering;
 those require integration tests.

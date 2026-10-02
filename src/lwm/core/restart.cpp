@@ -1,4 +1,5 @@
 #include "restart.hpp"
+#include "invariants.hpp"
 #include <cstring>
 #include <memory>
 #include <rfl/AddTagsToVariants.hpp>
@@ -60,78 +61,6 @@ struct Reader : rfl::json::Reader
 
 using Wire = rfl::Processors<rfl::NoExtraFields, rfl::NoOptionals, rfl::AddTagsToVariants>;
 
-// Structural validity belongs to the decoder. Relationships between records
-// belong here, and must hold before any part of the snapshot is adopted.
-bool valid(Snapshot const& snapshot)
-{
-    std::unordered_set<std::string> outputs;
-    for (auto const& monitor : snapshot.monitors)
-    {
-        if (monitor.name.empty() || !outputs.insert(monitor.name).second || monitor.workspaces.empty()
-            || monitor.current_workspace >= monitor.workspaces.size() || monitor.previous_workspace >= monitor.workspaces.size())
-            return false;
-        for (auto const& workspace : monitor.workspaces)
-            for (auto const& [address, ratio] : workspace.split_ratios)
-                if (!(ratio > 0 && ratio < 1))
-                    return false;
-    }
-    if (!snapshot.monitors.empty() && snapshot.focused_monitor >= snapshot.monitors.size())
-        return false;
-    std::unordered_set<uint64_t> recencies;
-    std::unordered_set<xcb_window_t> registered;
-    for (auto window : snapshot.registration_order)
-        if (window == XCB_NONE || !registered.insert(window).second)
-            return false;
-    for (auto const& client : snapshot.clients)
-    {
-        if (client.mru_order == UINT64_MAX || (client.mru_order && !recencies.insert(client.mru_order).second)
-            || client.monitor >= snapshot.monitors.size()
-            || client.workspace >= snapshot.monitors[client.monitor].workspaces.size()
-            || client.urgency.sources
-                > (static_cast<uint8_t>(UrgencySource::WmInitiated) | static_cast<uint8_t>(UrgencySource::App))
-            || !registered.erase(client.id))
-            return false;
-        if (auto const* floating = std::get_if<FloatingMode>(&client.mode);
-            floating && floating->tile_slot && floating->tile_slot->output.empty())
-            return false;
-    }
-    // The handoff is a graph, not ordering hints to replay through admission.
-    // Every tile must occur exactly once at its client's placement.
-    std::unordered_set<xcb_window_t> tiles;
-    for (size_t m = 0; m < snapshot.monitors.size(); ++m)
-        for (size_t w = 0; w < snapshot.monitors[m].workspaces.size(); ++w)
-        {
-            auto const& workspace = snapshot.monitors[m].workspaces[w];
-            for (auto id : workspace.windows)
-            {
-                auto const* client = snapshot.find(id);
-                if (!client || client->monitor != m || client->workspace != w
-                    || !std::holds_alternative<TiledMode>(client->mode) || !tiles.insert(id).second)
-                    return false;
-            }
-            if (workspace.preferred_tile != XCB_NONE && workspace.find_window(workspace.preferred_tile) == workspace.windows.end())
-                return false;
-        }
-    for (auto const& client : snapshot.clients)
-        if (std::holds_alternative<TiledMode>(client.mode) && !tiles.contains(client.id))
-            return false;
-    std::unordered_set<xcb_window_t> claims;
-    for (auto id : snapshot.fullscreen_claims)
-        if (!snapshot.find(id) || !claims.insert(id).second)
-            return false;
-    std::unordered_set<std::string> names;
-    std::unordered_set<xcb_window_t> claimed;
-    for (auto const& named : snapshot.named_scratchpads)
-    {
-        if (!names.insert(named.name).second)
-            return false;
-        if (named.window
-            && (*named.window == XCB_NONE || !claimed.insert(*named.window).second || !snapshot.find(*named.window)))
-            return false;
-    }
-    return true;
-}
-
 } // namespace
 
 ClientIntent const* Snapshot::find(xcb_window_t window) const
@@ -172,7 +101,7 @@ std::optional<Snapshot> decode(std::span<uint32_t const> words)
         Reader{},
         Reader::InputVarType(yyjson_doc_get_root(document.get()))
     );
-    if (!snapshot || !valid(*snapshot))
+    if (!snapshot || invariants::validate(*snapshot).has_value())
         return std::nullopt;
     return std::move(*snapshot);
 }

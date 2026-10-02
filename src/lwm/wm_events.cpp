@@ -156,7 +156,7 @@ void WindowManager::handle_map_request(xcb_map_request_event_t const& e)
     }
     if (state_.find_fixture(e.window) || is_override_redirect(e.window))
         return;
-    manage_window(e.window, classify_window(e.window), false);
+    manage_window(read_client(e.window, false), false);
     if (!ipc_.has_subscribers(Event_WindowMap))
         return;
     if (auto const* client = state_.find(e.window))

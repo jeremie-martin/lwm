@@ -4,6 +4,7 @@
 #include <array>
 #include <catch2/catch_test_macros.hpp>
 #include <chrono>
+#include <cstring>
 #include <filesystem>
 #include <initializer_list>
 #include <map>
@@ -889,6 +890,18 @@ TEST_CASE("Integration: restart consumes its handoff and rejects damaged snapsho
     SECTION("Incompatible format") { ++snapshot->front(); }
     SECTION("Current format with a truncated record") { snapshot->pop_back(); }
     SECTION("Current format with trailing data") { snapshot->push_back(0); }
+    SECTION("Current format with conflicting scratchpad ownership")
+    {
+        auto bytes = reinterpret_cast<char const*>(snapshot->data() + 2);
+        auto graph = JsonValue::parse(bytes, bytes + (*snapshot)[1]);
+        graph["named_scratchpads"] = JsonValue::array({ { { "name", "saved" }, { "window", first } } });
+        graph["pool"] = JsonValue::array({ first });
+        auto payload = graph.dump();
+        snapshot->assign(2 + (payload.size() + 3) / 4, 0);
+        (*snapshot)[0] = 12;
+        (*snapshot)[1] = payload.size();
+        std::memcpy(snapshot->data() + 2, payload.data(), payload.size());
+    }
     xcb_change_property(
         conn.get(),
         XCB_PROP_MODE_REPLACE,

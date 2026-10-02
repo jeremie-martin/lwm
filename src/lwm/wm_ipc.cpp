@@ -96,7 +96,7 @@ std::string WindowManager::scratchpad_list_json() const
     auto const& named = state_.named_scratchpads();
     for (size_t i = 0; i < named.size(); ++i)
         json += std::string(i ? "," : "") + "{\"name\":" + json_string(named[i].name)
-            + ",\"window\":" + std::to_string(named[i].window()) + ",\"pending\":" + json_bool(named[i].pending_launch()) + "}";
+            + ",\"window\":" + std::to_string(named[i].claimed_window()) + ",\"pending\":" + json_bool(named[i].pending_launch()) + "}";
     json += "],\"pool\":[";
     auto const& pool = state_.scratchpad_pool();
     for (size_t i = 0; i < pool.size(); ++i) json += std::string(i ? "," : "") + std::to_string(pool[i]);
