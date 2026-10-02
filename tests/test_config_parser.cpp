@@ -1,4 +1,5 @@
 #include "lwm/config/config.hpp"
+#include "lwm/core/command.hpp"
 #include "test_resources.hpp"
 #include <X11/keysym.h>
 #include <catch2/catch_test_macros.hpp>
@@ -95,7 +96,7 @@ spawn = { ref = "terminal" }
 
 [[binds]]
 key = "super+u"
-toggle_scratchpad = "term"
+action = "scratchpad toggle term"
 
 [[workspace_binds]]
 mode = "switch"
@@ -115,10 +116,9 @@ apply = { floating = true, scratchpad = "term", center = true }
     REQUIRE(loaded.has_value());
 
     auto const& cfg = *loaded;
-    REQUIRE(cfg.commands.contains("terminal"));
-    REQUIRE(cfg.commands.at("terminal").kind == CommandConfig::Kind::Argv);
-    REQUIRE(cfg.autostart.commands.size() == 1);
-    REQUIRE(cfg.autostart.commands.front().argv.front() == "/usr/bin/printf");
+    REQUIRE(cfg.scratchpads.front().spawn == std::vector<std::string>{ "/usr/bin/ghostty" });
+    REQUIRE(cfg.autostart.size() == 1);
+    REQUIRE(cfg.autostart.front().front() == "/usr/bin/printf");
     REQUIRE(cfg.scratchpads.size() == 1);
     REQUIRE(cfg.keybinds.size() == 8);
     REQUIRE(action_as<action::Spawn>(cfg.keybinds.at({ XCB_MOD_MASK_4, XK_Return })) != nullptr);
@@ -134,11 +134,11 @@ TEST_CASE("Config parser recognizes swap_next and swap_prev actions", "[config][
     auto loaded = load_from_string(R"(
 [[binds]]
 key = "super+shift+j"
-swap_next = true
+action = "window swap next"
 
 [[binds]]
 key = "super+shift+k"
-swap_prev = true
+action = "window swap prev"
 )");
 
     REQUIRE(loaded.has_value());
@@ -175,7 +175,7 @@ TEST_CASE("Config parser rejects wrong top-level section types", "[config]")
     auto loaded = load_from_string(R"(
 [binds]
 key = "super+q"
-kill = true
+action = "window close"
 )");
 
     REQUIRE_FALSE(loaded.has_value());
@@ -197,7 +197,7 @@ count = 3
     REQUIRE_FALSE(loaded->keybinds.empty());
     auto const* spawn_action = action_as<action::Spawn>(loaded->keybinds.at({ XCB_MOD_MASK_4, XK_Return }));
     REQUIRE(spawn_action != nullptr);
-    REQUIRE(spawn_action->command.argv.front() == "/usr/bin/ghostty");
+    REQUIRE(spawn_action->argv.front() == "/usr/bin/ghostty");
 
     size_t switch_bind_count = 0;
     for (auto const& keybind : loaded->keybinds)
@@ -235,7 +235,7 @@ keys = ["F1", "F2", "F3"]
         if (auto const* spawn = action_as<action::Spawn>(keybind.second); spawn && keybind.first.keysym == XK_Return)
         {
             saw_terminal_spawn =
-                spawn->command.kind == CommandConfig::Kind::Argv && spawn->command.argv.front() == "/usr/bin/ghostty";
+                spawn->argv.front() == "/usr/bin/ghostty";
         }
         if (action_as<action::FocusMonitor>(keybind.second))
             saw_focus_monitor = true;
@@ -258,7 +258,7 @@ TEST_CASE("Config parser rejects invalid key combos and duplicate bindings", "[c
         auto loaded = load_from_string(R"(
 [[binds]]
 key = "super+DefinitelyNotAKeysym"
-kill = true
+action = "window close"
 )");
 
         REQUIRE_FALSE(loaded.has_value());
@@ -273,7 +273,7 @@ count = 2
 
 [[binds]]
 key = "super+1"
-switch_workspace = 0
+action = "workspace switch 0"
 
 [[workspace_binds]]
 mode = "switch"
@@ -436,7 +436,7 @@ keys = ["F1", "F2"]
     for (std::string combo : { "super+", "super++a", "+a", "super+super+a", "ctrl+control+a", "unknown+a" })
     {
         CAPTURE(combo);
-        CHECK_FALSE(load_from_string("[[binds]]\nkey = \"" + combo + "\"\nkill = true\n"));
+        CHECK_FALSE(load_from_string("[[binds]]\nkey = \"" + combo + "\"\naction = 'window close'\n"));
     }
     for (std::string modifiers : { "super+", "+super", "super++shift", "ctrl+control" })
     {
@@ -448,10 +448,10 @@ keys = ["F1", "F2"]
     auto duplicate = load_from_string(R"(
 [[binds]]
 key = "control+shift+a"
-kill = true
+action = "window close"
 [[binds]]
 key = "shift+ctrl+a"
-restart = true
+action = "restart"
 )");
     REQUIRE_FALSE(duplicate);
     CHECK(duplicate.error().find("duplicates") != std::string::npos);
@@ -496,27 +496,27 @@ match = { class = "Term" }
 
 [[binds]]
 key = "super+m"
-set_layout = "monocle"
+action = "layout set monocle"
 
 [[binds]]
 key = "super+r"
-set_ratio = 0.4
+action = "ratio set 0.4"
 
 [[binds]]
 key = "super+l"
-adjust_ratio = 0.05
+action = "ratio adjust 0.05"
 
 [[binds]]
 key = "super+e"
-exec = "/usr/local/bin/lwm"
+action = "exec /usr/local/bin/lwm"
 
 [[binds]]
 key = "super+c"
-cancel_scratchpad_launch = "term"
+action = "scratchpad cancel-launch term"
 
 [[binds]]
 key = "super+n"
-next_workspace = true
+action = "workspace next"
 )");
     REQUIRE(loaded);
     auto const& binds = loaded->keybinds;
@@ -528,9 +528,9 @@ next_workspace = true
     CHECK(binds.at({ XCB_MOD_MASK_4, XK_n }) == Action{ action::CycleWorkspace{ 1 } });
 
     for (auto const* text : { "[[binds]]\nkey = \"super+a\"\nset_layout = \"spiral\"\n",
-                              "[layout]\nmin_ratio = 0.2\n[[binds]]\nkey = \"super+a\"\nset_ratio = 0.9\n",
-                              "[[binds]]\nkey = \"super+a\"\nexec = \"\"\n",
-                              "[[binds]]\nkey = \"super+a\"\ntoggle_scratchpad = \"missing\"\n",
+                              "[layout]\nmin_ratio = 0.2\n[[binds]]\nkey = \"super+a\"\naction = 'ratio set 0.9'\n",
+                              "[[binds]]\nkey = \"super+a\"\naction = 'exec'\n",
+                              "[[binds]]\nkey = \"super+a\"\naction = 'scratchpad toggle missing'\n",
                               "[[binds]]\nkey = \"super+a\"\nratio_grow = true\n" })
     {
         CAPTURE(text);
@@ -606,10 +606,10 @@ TEST_CASE("Configuration rejects malformed nested values at their owning field",
              {                                 "[appearance]\nborder_color = 4294967296",                  "border_color" },
              {                    "[[mousebinds]]\nbutton = 256\naction = 'drag_window'",                        "button" },
              {                                  "[[mousebinds]]\naction = 'drag_window'",                        "button" },
-             {                                                  "[[binds]]\nkill = true",                           "key" },
-             {                                         "[[binds]]\nkey = 'F1'\nkill = 1",                          "kill" },
-             {                                     "[[binds]]\nkey = 'F1'\nkill = false",                          "kill" },
-             {                           "[[binds]]\nkey = 'F1'\nswitch_workspace = 1.0",              "switch_workspace" },
+             {                                                  "[[binds]]\naction = 'window close'",                           "key" },
+             {                                         "[[binds]]\nkey = 'F1'\naction = 1",                          "action" },
+             {                                     "[[binds]]\nkey = 'F1'\naction = false",                          "action" },
+             {                           "[[binds]]\nkey = 'F1'\naction = 'workspace switch 1.0'",              "workspace index" },
              {         "[[binds]]\nkey = 'F1'\nspawn = { argv = ['true'], typo = true }",                          "typo" },
              {                           "[commands]\nterminal = { argv = ['true', 1] }",                          "argv" },
              {                                               "[commands]\nterminal = {}",                      "terminal" },
@@ -617,7 +617,7 @@ TEST_CASE("Configuration rejects malformed nested values at their owning field",
              {                              "[commands]\nterminal = { ref = 'browser' }",                           "ref" },
              {                                    "[commands]\nterminal = { argv = [] }",                          "argv" },
              {                                  "[commands]\nterminal = { argv = [''] }",                          "argv" },
-             {                      "[[binds]]\nkey = 'F1'\nkill = true\nrestart = true",            "exactly one action" },
+             {                      "[[binds]]\nkey = 'F1'\naction = 'window close'\nspawn = {argv = ['true']}",            "exactly one of" },
              { "[[scratchpads]]\nname = 'term'\nspawn = { argv = ['true'] }\nmatch = {}",                       "matcher" },
              {                                         "[unknown_section]\nvalue = true",               "unknown_section" },
              {                    "[[rules]]\napply.geometry = { width = 10, typo = 1 }",                          "typo" },
@@ -644,7 +644,7 @@ match = { class = 'Term' }
 size = { width = 1, height = 1 }
 [[binds]]
 key = 'F1'
-adjust_ratio = 0
+action = "ratio adjust 0"
 )");
     REQUIRE(loaded);
     CHECK(loaded->appearance.border_color == UINT32_MAX);
@@ -655,12 +655,74 @@ adjust_ratio = 0
     for (std::string value : { "nan", "inf", "-inf", "true", "'0.5'" })
     {
         CAPTURE(value);
-        CHECK_FALSE(load_from_string("[[binds]]\nkey = 'F1'\nadjust_ratio = " + value));
-        CHECK_FALSE(load_from_string("[[binds]]\nkey = 'F1'\nset_ratio = " + value));
+        CHECK_FALSE(load_from_string("[[binds]]\nkey = 'F1'\naction = \"ratio adjust " + value + "\""));
+        CHECK_FALSE(load_from_string("[[binds]]\nkey = 'F1'\naction = \"ratio set " + value + "\""));
         CHECK_FALSE(load_from_string(
             "[[scratchpads]]\nname = 'term'\nspawn = { argv = ['true'] }\n"
             "match = { class = 'Term' }\nsize = { width = "
             + value + " }"
         ));
+    }
+}
+
+TEST_CASE("Bindings use the shared command grammar and reject non-actions", "[config][command][keybind]")
+{
+    for (std::string text : { "window fullscreen", "workspace switch 2", "monitor focus left",
+                             "focus window=0x123", "notify-attention window=0x123", "ratio adjust +0.25",
+                             "exec /tmp/a wm", "scratchpad toggle a name with spaces" })
+    {
+        CAPTURE(text);
+        auto loaded = load_from_string(
+            "[[scratchpads]]\nname = 'a name with spaces'\nspawn = {argv = ['true']}\nmatch = {class = 'Term'}\n"
+            "[[binds]]\nkey = 'F1'\naction = '" + text + "'\n");
+        REQUIRE(loaded);
+        auto parsed = command::parse_command(text);
+        REQUIRE(parsed);
+        CHECK(loaded->keybinds.at({ 0, XK_F1 }) == std::get<Action>(*parsed));
+    }
+    for (std::string text : { "ping", "state", "window list", "subscribe", "subscribe focus_change",
+                             "workspace switch 10", "window to-workspace 10", "monitor focus up",
+                             "scratchpad toggle missing", "scratchpad cancel-launch missing", "ratio set 0.99" })
+    {
+        CAPTURE(text);
+        CHECK_FALSE(load_from_string("[[binds]]\nkey = 'F1'\naction = '" + text + "'\n"));
+    }
+    CHECK_FALSE(load_from_string("[[binds]]\nkey = 'F1'\n"));
+    CHECK_FALSE(load_from_string("[[binds]]\nkey = 'F1'\nkill = true\n"));
+    CHECK_FALSE(load_from_string("[[binds]]\nkey = 'F1'\naction = 'window close'\nspawn = {argv = ['true']}\n"));
+}
+
+TEST_CASE("Command references and shell syntax are fully resolved during configuration loading", "[config][spawn]")
+{
+    auto loaded = load_from_string(R"(
+[commands]
+literal = {argv = ['/bin/printf', '%s', '', '$HOME; two words']}
+script = {shell = 'printf "%s" "$HOME"'}
+[autostart]
+commands = [{ref = 'literal'}, {ref = 'script'}]
+[[scratchpads]]
+name = 'term'
+spawn = {ref = 'script'}
+match = {class = 'Term'}
+[[binds]]
+key = 'F1'
+spawn = {ref = 'literal'}
+[[binds]]
+key = 'F2'
+spawn = {ref = 'script'}
+)");
+    REQUIRE(loaded);
+    std::vector<std::string> literal{ "/bin/printf", "%s", "", "$HOME; two words" };
+    std::vector<std::string> shell{ "/bin/sh", "-c", "printf \"%s\" \"$HOME\"" };
+    CHECK(std::get<action::Spawn>(loaded->keybinds.at({ 0, XK_F1 })).argv == literal);
+    CHECK(std::get<action::Spawn>(loaded->keybinds.at({ 0, XK_F2 })).argv == shell);
+    CHECK(loaded->autostart == std::vector<std::vector<std::string>>{ literal, shell });
+    CHECK(loaded->scratchpads.front().spawn == shell);
+    for (std::string command : { R"({shell = "echo\u0000hidden"})", R"({argv = ["true", "a\u0000b"]})" })
+    {
+        CAPTURE(command);
+        auto rejected = load_from_string("[autostart]\ncommands = [" + command + "]\n");
+        REQUIRE_FALSE(rejected);
+        CHECK(rejected.error().find("NUL") != std::string::npos);
     }
 }

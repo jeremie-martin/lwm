@@ -83,6 +83,12 @@ are harmless and directories are left in place.
 
 [config.toml.example](config.toml.example) is the configuration reference and
 starter file, including bindings, rules, scratchpads, defaults, and reload limits.
+Bindings use `action = "COMMAND"` with the same command text as `lwmctl`, or
+`spawn = { ref = "terminal" }` (also accepting explicit `argv` or `shell`). Old
+per-action fields such as `toggle_fullscreen = true` are rejected; update existing
+configurations before installing this version. Invalid reloads keep the active
+configuration.
+
 Each monitor has its own workspaces. Commands target the focused monitor and use
 zero-based indices.
 

@@ -52,7 +52,7 @@ Result WindowManager::execute(Action const& action, std::string_view source)
             [&](Exec const& exec) { return restart(exec.binary); },
             [&](Spawn const& spawn) -> Result
             {
-                if (!launch_program(spawn.command, source))
+                if (!launch_program(spawn.argv, source))
                     return std::unexpected("launch failed");
                 return "";
             },

@@ -378,10 +378,10 @@ count = 2
 names = ["before", "two"]
 [[binds]]
 key = "F5"
-reload_config = true
+action = "reload-config"
 [[binds]]
 key = "F6"
-switch_workspace = 1
+action = "workspace switch 1"
 )");
     REQUIRE(env);
     auto& conn = env->conn;
@@ -394,7 +394,7 @@ count = 2
 names = ["after", "two"]
 [[binds]]
 key = "F6"
-switch_workspace = 0
+action = "workspace switch 0"
 )"));
     REQUIRE(send_key(conn, XK_F5));
     REQUIRE(wait_for_desktop_names(conn, { "after", "two" }));
@@ -408,7 +408,7 @@ count = 2
 names = ["invalid", "two"]
 [[binds]]
 key = "F6"
-switch_workspace = 1
+action = "workspace switch 1"
 [[rules]]
 match = { title = "[invalid" }
 apply = { floating = true }
@@ -484,4 +484,43 @@ match = { class = "Pending" }
     CHECK(remaining["named"][0]["pending"] == true);
     REQUIRE(wait_for_active_window(conn, window, kTimeout));
     REQUIRE(wait_for_condition([&] { return !has_state(conn, window, hidden); }, kTimeout));
+}
+
+TEST_CASE("Integration: resolved launch bindings preserve argv and replace references on reload", "[integration][reload][keybind][spawn]")
+{
+    auto env = TestEnvironment::create();
+    if (!env)
+        SKIP("X11 unavailable");
+    auto socket = wait_for_ipc_socket_path(env->conn);
+    REQUIRE(socket);
+    auto literal_path = std::filesystem::path(env->wm.runtime_dir()) / "literal output";
+    auto shell_path = std::filesystem::path(env->wm.runtime_dir()) / "shell output";
+    auto config = [&](std::string const& marker)
+    {
+        return "[commands]\n"
+            "literal = {argv = ['/bin/sh', '-c', 'out=$1; shift; printf \"<%s>\" \"$@\" > \"$out\"', "
+            "'capture', '" + literal_path.string() + "', '', '$HOME; untouched', 'two words']}\n"
+            "script = {shell = \"printf '%s' \\\"$(printf " + marker + ")\\\" > '" + shell_path.string() + "'\"}\n"
+            "[[binds]]\nkey = 'F6'\nspawn = {ref = 'literal'}\n"
+            "[[binds]]\nkey = 'F7'\nspawn = {ref = 'script'}\n";
+    };
+    REQUIRE(env->wm.write_config(config("first")));
+    REQUIRE(send_ipc_command(*socket, "reload-config") == "ok reloaded");
+    REQUIRE(send_key(env->conn, XK_F6));
+    REQUIRE(wait_for_condition([&] { return read_text_file(literal_path) == "<><$HOME; untouched><two words>"; }, kTimeout));
+    REQUIRE(send_key(env->conn, XK_F7));
+    REQUIRE(wait_for_condition([&] { return read_text_file(shell_path) == "first"; }, kTimeout));
+
+    REQUIRE(env->wm.write_config(config("second")));
+    REQUIRE(send_ipc_command(*socket, "reload-config") == "ok reloaded");
+    REQUIRE(send_key(env->conn, XK_F7));
+    REQUIRE(wait_for_condition([&] { return read_text_file(shell_path) == "second"; }, kTimeout));
+
+    REQUIRE(env->wm.write_config(config("rejected") + "[[binds]]\nkey = 'F8'\naction = 'state'\n"));
+    auto rejected = send_ipc_command(*socket, "reload-config");
+    REQUIRE(rejected);
+    REQUIRE(rejected->starts_with("error "));
+    REQUIRE(std::filesystem::remove(shell_path));
+    REQUIRE(send_key(env->conn, XK_F7));
+    REQUIRE(wait_for_condition([&] { return read_text_file(shell_path) == "second"; }, kTimeout));
 }

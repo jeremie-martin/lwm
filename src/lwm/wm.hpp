@@ -226,7 +226,7 @@ private:
     void dispatch_event(xcb_generic_event_t const& event, size_t& remaining, std::chrono::steady_clock::time_point deadline);
     std::expected<void, std::string> reload_config();
     void report_reload(std::expected<void, std::string> const& result, std::string_view source);
-    bool launch_program(CommandConfig const& command, std::string_view source);
+    bool launch_program(std::vector<std::string> const& command, std::string_view source);
     void kill_window(xcb_window_t window);
     void handle_timeouts();
     std::optional<Geometry> read_window_geometry(xcb_window_t window) const;
@@ -361,7 +361,7 @@ private:
     bool claim_pending_scratchpad(xcb_window_t window, WindowMatchInfo const& properties, RuleActions const* rule);
 
     // wm_ipc.cpp
-    std::string handle_request(ipc::Request const& request);
+    std::string handle_request(command::Request const& request);
     std::string workspace_list_json() const;
     std::string window_list_json() const;
     std::string scratchpad_list_json() const;

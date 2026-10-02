@@ -96,15 +96,10 @@ struct LayoutConfig
     uint32_t resize_grab_threshold = 8; // pixels from split border to trigger resize
 };
 
-struct AutostartConfig
-{
-    std::vector<CommandConfig> commands;
-};
-
 struct ScratchpadConfig
 {
     std::string name;
-    CommandConfig spawn;
+    std::vector<std::string> spawn;
     WindowMatcher match;
     double width = 0.8;   ///< Fraction of monitor working area
     double height = 0.7;
@@ -115,9 +110,8 @@ struct Config
     AppearanceConfig appearance;
     LayoutConfig layout;
     FocusConfig focus;
-    std::map<std::string, CommandConfig> commands;
     WorkspacesConfig workspaces;
-    AutostartConfig autostart;
+    std::vector<std::vector<std::string>> autostart;
     std::map<KeyBinding, Action> keybinds;
     std::vector<MousebindConfig> mousebinds;
     std::vector<WindowRuleConfig> rules;

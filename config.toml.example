@@ -6,7 +6,7 @@
 # Omitted settings use built-in defaults; the active entries below are a starter
 # configuration, not an exhaustive dump of defaults. README.md explains file selection.
 #
-# Reload with `lwmctl reload-config`, a reload_config binding, or SIGHUP. Invalid
+# Reload with `lwmctl reload-config`, an action = "reload-config" binding, or SIGHUP. Invalid
 # input leaves the active configuration unchanged. Reload updates appearance,
 # bindings, names, focus/layout parameters, commands, scratchpads, and matched rules.
 # It does not run autostart, change workspace count, or replace the layout strategy
@@ -56,6 +56,8 @@ names = ["1", "2", "3", "4", "5", "6", "7", "8", "9", "10"]
 # - { ref = "name" } to reuse an entry from [commands]
 # - { argv = ["cmd", "--flag"] } for structured execution without a shell
 # - { shell = "cd ~/proj && make run" } for explicit /bin/sh -c execution
+# Empty arguments are preserved; executable/shell text must be nonempty.
+# Neither argv strings nor shell text may contain NUL.
 [autostart]
 commands = [
 ]
@@ -84,7 +86,9 @@ action = "toggle_float"
 
 # Explicit bindings
 # key: one combo string, e.g. "super+Return", "super+shift+Left", "Print"
-# Exactly one action field is allowed in each [[binds]] entry.
+# Each [[binds]] entry has exactly one of action = "COMMAND" or spawn = {...}.
+# Actions use the same command text as lwmctl, without the executable name.
+# Queries and subscriptions cannot be bound; invalid commands fail configuration loading.
 # Keys use X11 keysym names. Duplicate modifier/keysym pairs are rejected,
 # including aliases and reordered modifiers.
 # Defining any [[binds]] starts from an empty key-binding set; list every
@@ -99,92 +103,73 @@ spawn = { ref = "launcher" }
 
 [[binds]]
 key = "super+q"
-kill = true
+action = "window close"
 
 [[binds]]
 key = "super+Left"
-focus_monitor = -1
+action = "monitor focus left"
 
 [[binds]]
 key = "super+Right"
-focus_monitor = 1
+action = "monitor focus right"
 
 [[binds]]
 key = "super+shift+Left"
-move_to_monitor = -1
+action = "window to-monitor left"
 
 [[binds]]
 key = "super+shift+Right"
-move_to_monitor = 1
+action = "window to-monitor right"
 
 [[binds]]
 key = "super+f"
-toggle_fullscreen = true
+action = "window fullscreen"
 
 [[binds]]
 key = "super+shift+f"
-toggle_float = true
+action = "window float"
 
 [[binds]]
 key = "super+j"
-focus_next = true
+action = "focus next"
 
 [[binds]]
 key = "super+k"
-focus_prev = true
+action = "focus prev"
 
 [[binds]]
 key = "super+h"
-adjust_ratio = -0.05
+action = "ratio adjust -0.05"
 
 [[binds]]
 key = "super+l"
-adjust_ratio = 0.05
+action = "ratio adjust 0.05"
 
 [[binds]]
 key = "super+shift+j"
-swap_next = true
+action = "window swap next"
 
 [[binds]]
 key = "super+shift+k"
-swap_prev = true
+action = "window swap prev"
 
 [[binds]]
 key = "super+shift+r"
-reload_config = true
+action = "reload-config"
 
-# Action reference (exactly one action per [[binds]] entry):
-# | action syntax | required value type |
-# |---------------|---------------------|
-# | spawn = { ref = "command" } (or an argv/shell table) | table |
-# | kill = true | boolean true |
-# | reload_config = true | boolean true |
-# | restart = true | boolean true |
-# | switch_workspace = 0 | integer workspace index (0-based) |
-# | toggle_workspace = true | boolean true |
-# | move_to_workspace = 0 | integer workspace index (0-based) |
-# | focus_monitor = -1 (or 1) | integer direction (-1 or 1) |
-# | move_to_monitor = -1 (or 1) | integer direction (-1 or 1) |
-# | toggle_fullscreen = true | boolean true |
-# | toggle_float = true | boolean true |
-# | focus_next = true | boolean true |
-# | focus_prev = true | boolean true |
-# | next_workspace = true | boolean true |
-# | prev_workspace = true | boolean true |
-# | set_layout = "monocle" | string "master-stack" or "monocle" |
-# | set_ratio = 0.5 | number within [min_ratio, 1 - min_ratio] |
-# | adjust_ratio = 0.05 | finite number; the result is clamped |
-# | reset_ratios = true | boolean true |
-# | swap_next = true | boolean true |
-# | swap_prev = true | boolean true |
-# | toggle_scratchpad = "terminal" | string named scratchpad |
-# | cancel_scratchpad_launch = "terminal" | string named scratchpad |
-# | scratchpad_stash = true | boolean true |
-# | scratchpad_cycle = true | boolean true |
-# | exec = "/usr/local/bin/lwm" | string binary to restart into |
-#
-# Every action except spawn is also an lwmctl command (see IPC.md), executed
-# identically. The action name is reported by key_action events.
+# The command reference is `lwmctl --help` and IPC.md. For example:
+# action = "workspace toggle"
+# action = "layout set monocle"
+# action = "scratchpad toggle terminal"
+# action = "exec /usr/local/bin/lwm"
+# Text arguments consume the remainder of the command: names and paths may
+# contain spaces without shell quoting inside the TOML string. Commands must
+# fit the same 4096-byte request limit as IPC and contain no newline or NUL.
+# Workspace indices, ratio bounds, and scratchpad names are checked at load time.
+# spawn uses the structured command syntax documented above. Its shell/argv/ref
+# forms are resolved while loading; runtime launch always receives an argv vector.
+# Old per-action fields such as toggle_fullscreen = true are rejected.
+# key_action events report semantic labels (see IPC.md), not source command text.
 
 # Generated workspace binding groups. If [[binds]] is absent, the first group
 # for a mode/modifier pair replaces that built-in group. If [[binds]] is

@@ -8,6 +8,9 @@
 
 namespace lwm::ipc {
 
+inline constexpr size_t max_reply_bytes = 8 * 1024 * 1024;
+inline constexpr size_t max_event_bytes = 1024 * 1024;
+
 std::string sanitize_display_name(std::string_view display);
 std::filesystem::path socket_directory();
 std::filesystem::path default_socket_path();

@@ -1,10 +1,10 @@
 #pragma once
 
-#include "lwm/core/command.hpp"
 #include "lwm/core/types.hpp"
 #include <string>
 #include <string_view>
 #include <variant>
+#include <vector>
 
 namespace lwm {
 
@@ -30,7 +30,7 @@ struct Exec
 };
 struct Spawn
 {
-    CommandConfig command;
+    std::vector<std::string> argv;
     bool operator==(Spawn const&) const = default;
 };
 struct ToggleFullscreen
@@ -159,7 +159,7 @@ using Action = std::variant<
     action::ScratchpadCancelLaunch,
     action::NotifyAttention>;
 
-/// Event name; bindable actions use their config key, plus direction for monitor actions.
+/// Semantic label for key_action and layout_change events; not command syntax.
 std::string_view action_name(Action const& action);
 
 } // namespace lwm

@@ -1,7 +1,8 @@
 #pragma once
 
 #include "events.hpp"
-#include "ipc_command.hpp"
+#include "command.hpp"
+#include "ipc.hpp"
 #include <chrono>
 #include <functional>
 #include <optional>
@@ -19,7 +20,7 @@ class Server
 {
 public:
     using Clock = std::chrono::steady_clock;
-    using Handler = std::function<std::string(Request const&)>;
+    using Handler = std::function<std::string(command::Request const&)>;
     Server() = default;
     ~Server() { stop(); }
     Server(Server const&) = delete;

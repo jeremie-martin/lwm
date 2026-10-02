@@ -1708,10 +1708,10 @@ TEST_CASE(
 count = 2
 [[binds]]
 key = "F5"
-focus_next = true
+action = "focus next"
 [[binds]]
 key = "F6"
-focus_prev = true
+action = "focus prev"
 )");
     if (!env)
         SKIP("X11 unavailable");

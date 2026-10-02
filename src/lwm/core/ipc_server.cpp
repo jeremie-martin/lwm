@@ -148,7 +148,7 @@ void Server::read_request(Client& client, Handler const& handler)
             std::string_view chunk(buffer, received);
             auto end = chunk.find('\n');
             client.input.append(chunk.substr(0, end));
-            if (client.input.size() + 1 >= max_request_bytes)
+            if (client.input.size() + 1 >= command::max_request_bytes)
             {
                 respond(client, "error request too large");
                 return;
@@ -178,13 +178,13 @@ void Server::read_request(Client& client, Handler const& handler)
 
 void Server::execute(Client& client, Handler const& handler)
 {
-    auto command = parse_command(client.input);
-    if (!command)
+    auto request = command::parse_command(client.input);
+    if (!request)
     {
-        respond(client, "error " + command.error());
+        respond(client, "error " + request.error());
         return;
     }
-    if (auto const* subscribe = std::get_if<Subscribe>(&*command))
+    if (auto const* subscribe = std::get_if<command::Subscribe>(&*request))
     {
         auto subscribers =
             std::count_if(clients_.begin(), clients_.end(), [](auto const& c) { return c.fd >= 0 && c.mask; });
@@ -199,7 +199,7 @@ void Server::execute(Client& client, Handler const& handler)
         }
     }
     else
-        respond(client, handler(*command));
+        respond(client, handler(*request));
 }
 
 void Server::respond(Client& client, std::string response)

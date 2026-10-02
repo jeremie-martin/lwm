@@ -717,7 +717,7 @@ count = 2
 
 [[binds]]
 key = "super+j"
-swap_next = true
+action = "window swap next"
 )");
     if (!test_env)
         SKIP("Test environment not available");
@@ -966,10 +966,10 @@ TEST_CASE("Integration: restart preserves the selected workspace and previous-wo
 count = 4
 [[binds]]
 key = "super+Tab"
-toggle_workspace = true
+action = "workspace toggle"
 [[binds]]
 key = "super+r"
-restart = true
+action = "restart"
 )");
     if (!env)
         SKIP("X11 unavailable");

@@ -194,10 +194,10 @@ count = 2
 warp_cursor_on_monitor_change = false
 [[binds]]
 key = "F9"
-move_to_monitor = 1
+action = "window to-monitor right"
 [[binds]]
 key = "F10"
-move_to_workspace = 1
+action = "window to-workspace 1"
 )");
     REQUIRE(env);
     RestoreOutputs restore;

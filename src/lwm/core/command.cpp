@@ -1,10 +1,10 @@
-#include "ipc_command.hpp"
+#include "command.hpp"
 #include "events.hpp"
 #include <algorithm>
 #include <charconv>
 #include <cmath>
 
-namespace lwm::ipc {
+namespace lwm::command {
 namespace {
 using namespace lwm::action;
 
@@ -209,4 +209,4 @@ std::expected<std::string, std::string> encode_command(std::span<std::string con
     return text;
 }
 
-} // namespace lwm::ipc
+} // namespace lwm::command

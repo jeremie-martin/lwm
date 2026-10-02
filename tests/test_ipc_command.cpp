@@ -1,10 +1,10 @@
 #include "lwm/core/events.hpp"
-#include "lwm/core/ipc_command.hpp"
+#include "lwm/core/command.hpp"
 #include <catch2/catch_test_macros.hpp>
 #include <vector>
 
 using namespace lwm;
-using namespace lwm::ipc;
+using namespace lwm::command;
 
 TEST_CASE("IPC grammar preserves public command spellings and typed requests", "[ipc][command]")
 {

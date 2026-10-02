@@ -399,7 +399,7 @@ RunResult WindowManager::run()
             }
             ipc_.dispatch(
                 std::span(poll_fds).subspan(POLL_IPC),
-                [this](ipc::Request const& request)
+                [this](command::Request const& request)
                 {
                     auto response = handle_request(request);
                     complete_transition();
@@ -542,15 +542,12 @@ void WindowManager::report_reload(std::expected<void, std::string> const& result
 
 // Processes and window lifetime
 
-bool WindowManager::launch_program(CommandConfig const& command, std::string_view source)
+bool WindowManager::launch_program(std::vector<std::string> const& command, std::string_view source)
 {
     if (command.empty())
         return false;
     std::vector<char*> argv;
-    if (command.kind == CommandConfig::Kind::Shell)
-        argv = { const_cast<char*>("/bin/sh"), const_cast<char*>("-c"), const_cast<char*>(command.shell.c_str()) };
-    else
-        for (auto const& arg : command.argv) argv.push_back(const_cast<char*>(arg.c_str()));
+    for (auto const& arg : command) argv.push_back(const_cast<char*>(arg.c_str()));
     argv.push_back(nullptr);
 
     // posix_spawn reports exec failure to the parent. Owned WM descriptors are

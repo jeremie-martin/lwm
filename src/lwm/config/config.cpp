@@ -1,4 +1,6 @@
 #include "config.hpp"
+#include "lwm/core/command.hpp"
+#include "lwm/core/overloaded.hpp"
 #include <X11/Xlib.h>
 // Xlib defines stacking-mode macros that collide with LayerHint enumerators.
 #undef Above
@@ -6,7 +8,6 @@
 #include <algorithm>
 #include <cctype>
 #include <cmath>
-#include <rfl/ExtraFields.hpp>
 #include <rfl/NoExtraFields.hpp>
 #include <rfl/Rename.hpp>
 #include <rfl/Validator.hpp>
@@ -110,11 +111,11 @@ struct Rule
     std::optional<RuleMatch> match;
     RuleActions apply;
 };
-using Argument = std::variant<bool, int64_t, Number, std::string, Command>;
 struct Bind
 {
     std::string key;
-    rfl::ExtraFields<Argument> actions;
+    Text action;
+    std::optional<Command> spawn;
 };
 struct WorkspaceBind
 {
@@ -264,10 +265,12 @@ template <typename Match> WindowMatcher parse_matchers(Match const& input, std::
              pattern(input.title, "title") };
 }
 
-CommandConfig parse_command(
+using Commands = std::map<std::string, std::vector<std::string>>;
+
+std::vector<std::string> resolve_command(
     schema::Command const& input,
     std::string const& context,
-    std::map<std::string, CommandConfig> const& registry,
+    Commands const& registry,
     bool allow_ref = true
 )
 {
@@ -284,13 +287,15 @@ CommandConfig parse_command(
     }
     if (input.shell)
     {
-        if (input.shell->empty())
-            throw std::runtime_error(context + ".shell must not be empty");
-        return CommandConfig::shell_command(*input.shell);
+        if (input.shell->empty() || input.shell->contains('\0'))
+            throw std::runtime_error(context + ".shell must be nonempty text without NUL");
+        return { "/bin/sh", "-c", *input.shell };
     }
     if (input.argv->empty() || input.argv->front().empty())
         throw std::runtime_error(context + ".argv must contain a nonempty executable");
-    return CommandConfig::argv_command(*input.argv);
+    if (std::ranges::any_of(*input.argv, [](auto const& arg) { return arg.contains('\0'); }))
+        throw std::runtime_error(context + ".argv must not contain NUL");
+    return *input.argv;
 }
 
 size_t parse_workspace_index(int64_t index, std::string const& context, size_t count)
@@ -314,112 +319,34 @@ double parse_ratio(double value, std::string const& context, LayoutConfig const&
     return value;
 }
 
-template <typename T> T const& argument(schema::Argument const& value, std::string const& context)
+Action parse_binding(schema::Bind const& input, std::string const& context, Config const& config, Commands const& commands)
 {
-    if (auto result = std::get_if<T>(&value))
-        return *result;
-    throw std::runtime_error(context + " has the wrong action argument type");
+    if (input.action.has_value() + input.spawn.has_value() != 1)
+        throw std::runtime_error(context + " must define exactly one of 'action' or 'spawn'");
+    if (input.spawn)
+        return action::Spawn{ resolve_command(*input.spawn, context + ".spawn", commands) };
+    auto request = command::parse_command(*input.action);
+    if (!request)
+        throw std::runtime_error(context + ".action: " + request.error());
+    auto* operation = std::get_if<Action>(&*request);
+    if (!operation)
+        throw std::runtime_error(context + ".action must be an operation, not a query or subscription");
+    // Resolve configuration references now; execution still checks live state.
+    std::visit(
+        Overloaded{
+            [&](action::SwitchWorkspace const& a) { parse_workspace_index(a.workspace, context, config.workspaces.count); },
+            [&](action::MoveToWorkspace const& a) { parse_workspace_index(a.workspace, context, config.workspaces.count); },
+            [&](action::SetRatio const& a) { parse_ratio(a.value, context, config.layout); },
+            [&](action::ScratchpadToggle const& a) { parse_scratchpad_name(a.name, context, config); },
+            [&](action::ScratchpadCancelLaunch const& a) { parse_scratchpad_name(a.name, context, config); },
+            [](auto const&) { }
+        },
+        *operation
+    );
+    return std::move(*operation);
 }
 
-double number(schema::Argument const& value, std::string const& context)
-{
-    if (auto integer = std::get_if<int64_t>(&value))
-        return static_cast<double>(*integer);
-    return argument<schema::Number>(value, context).value;
-}
-
-Action parse_bind_action(
-    std::string_view name,
-    schema::Argument const& value,
-    std::string const& context,
-    Config const& config
-)
-{
-    std::string const field = context + "." + std::string(name);
-    using namespace action;
-    // Actions without a value are enabled with `name = true`; names come from action_name().
-    static Action const flags[] = {
-        Kill{},
-        ReloadConfig{},
-        Restart{},
-        ToggleFullscreen{},
-        ToggleFloat{},
-        FocusCycle{ true },
-        FocusCycle{ false },
-        ToggleWorkspace{},
-        CycleWorkspace{ 1 },
-        CycleWorkspace{ -1 },
-        SwapTile{ 1 },
-        SwapTile{ -1 },
-        ResetRatios{},
-        ScratchpadStash{},
-        ScratchpadCycle{},
-    };
-    for (auto const& action : flags)
-    {
-        if (action_name(action) != name)
-            continue;
-        auto enabled = argument<bool>(value, field);
-        if (!enabled)
-            throw std::runtime_error(field + " must be true when present");
-        return action;
-    }
-    if (name == "spawn")
-    {
-        auto command = parse_command(argument<schema::Command>(value, field), field, config.commands);
-        return Spawn{ std::move(command) };
-    }
-    if (name == "exec")
-    {
-        auto binary = argument<std::string>(value, field);
-        if (binary.empty())
-            throw std::runtime_error(field + " must not be empty");
-        return Exec{ std::move(binary) };
-    }
-    if (name == "switch_workspace" || name == "move_to_workspace")
-    {
-        auto workspace = parse_workspace_index(argument<int64_t>(value, field), field, config.workspaces.count);
-        return name == "switch_workspace" ? Action{ SwitchWorkspace{ workspace } }
-                                          : Action{ MoveToWorkspace{ workspace } };
-    }
-    if (name == "focus_monitor" || name == "move_to_monitor")
-    {
-        auto direction = argument<int64_t>(value, field);
-        if (direction != -1 && direction != 1)
-            throw std::runtime_error(field + " must be -1 or 1");
-        int step = static_cast<int>(direction);
-        return name == "focus_monitor" ? Action{ FocusMonitor{ step } } : Action{ MoveToMonitor{ step } };
-    }
-    if (name == "toggle_scratchpad" || name == "cancel_scratchpad_launch")
-    {
-        auto scratchpad = parse_scratchpad_name(argument<std::string>(value, field), field, config);
-        return name == "toggle_scratchpad" ? Action{ ScratchpadToggle{ std::move(scratchpad) } }
-                                           : Action{ ScratchpadCancelLaunch{ std::move(scratchpad) } };
-    }
-    if (name == "set_layout")
-    {
-        auto text = argument<std::string>(value, field);
-        auto strategy = parse_layout_strategy(text);
-        if (!strategy)
-            throw std::runtime_error(
-                field + " has unknown value '" + text + "' (expected 'master-stack' or 'monocle')"
-            );
-        return SetLayout{ *strategy };
-    }
-    if (name == "set_ratio")
-    {
-        auto ratio = parse_ratio(number(value, field), field, config.layout);
-        return SetRatio{ ratio };
-    }
-    if (name == "adjust_ratio")
-    {
-        auto delta = number(value, field);
-        return AdjustRatio{ delta };
-    }
-    throw std::runtime_error(context + " has unknown key '" + std::string(name) + "'");
-}
-
-void parse_scratchpad(schema::Scratchpad const& input, std::string const& context, Config& config)
+void parse_scratchpad(schema::Scratchpad const& input, std::string const& context, Config& config, Commands const& commands)
 {
     if (input.name.empty())
         throw std::runtime_error(context + ".name must not be empty");
@@ -427,7 +354,7 @@ void parse_scratchpad(schema::Scratchpad const& input, std::string const& contex
         throw std::runtime_error(context + ".name duplicates scratchpad '" + input.name + "'");
     ScratchpadConfig scratchpad;
     scratchpad.name = input.name;
-    scratchpad.spawn = parse_command(input.spawn, context + ".spawn", config.commands);
+    scratchpad.spawn = resolve_command(input.spawn, context + ".spawn", commands);
     scratchpad.match = parse_matchers(input.match, context + ".match");
     if (scratchpad.match.empty())
         throw std::runtime_error(context + ".match must define at least one matcher");
@@ -510,7 +437,7 @@ void parse_rule(schema::Rule const& input, std::string const& context, Config& c
     config.rules.push_back(std::move(rule));
 }
 
-void add_default_keybinds(Config& config)
+void add_default_keybinds(Config& config, Commands const& commands)
 {
     using namespace action;
     auto key = [](char const* name) { return static_cast<xcb_keysym_t>(XStringToKeysym(name)); };
@@ -523,7 +450,7 @@ void add_default_keybinds(Config& config)
              std::pair{ "Return", "terminal" },
              std::pair{      "d", "launcher" }
     })
-        if (auto it = config.commands.find(command); it != config.commands.end())
+        if (auto it = commands.find(command); it != commands.end())
             bind(super, name, Spawn{ it->second });
     bind(super, "q", Kill{});
     char const* const azerty[] = { "ampersand", "eacute", "quotedbl",   "apostrophe", "parenleft",
@@ -547,14 +474,16 @@ void add_default_keybinds(Config& config)
     bind(super, "l", AdjustRatio{ 0.05 });
 }
 
+Commands default_commands()
+{
+    return { { "terminal", { "/usr/local/bin/st" } }, { "browser", { "/usr/bin/firefox" } }, { "launcher", { "dmenu_run" } } };
+}
+
 Config default_values()
 {
     Config config;
     config.workspaces.names.resize(config.workspaces.count);
     for (size_t i = 0; i < config.workspaces.names.size(); ++i) config.workspaces.names[i] = std::to_string(i + 1);
-    config.commands["terminal"] = CommandConfig::argv_command({ "/usr/local/bin/st" });
-    config.commands["browser"] = CommandConfig::argv_command({ "/usr/bin/firefox" });
-    config.commands["launcher"] = CommandConfig::argv_command({ "dmenu_run" });
     config.mousebinds = {
         { XCB_MOD_MASK_4, 1,     MouseAction::DragWindow },
         { XCB_MOD_MASK_4, 3, MouseAction::ResizeFloating },
@@ -568,7 +497,7 @@ Config default_values()
 Config default_config()
 {
     auto config = default_values();
-    add_default_keybinds(config);
+    add_default_keybinds(config, default_commands());
     return config;
 }
 
@@ -582,6 +511,7 @@ ConfigLoadResult load_config_result(std::string const& path)
             throw std::runtime_error(decoded.error().what());
         auto const& input = *decoded;
         Config config = default_values();
+        auto commands = default_commands();
         if (auto const& appearance = input.appearance)
         {
             assign(appearance->padding, config.appearance.padding);
@@ -610,7 +540,7 @@ ConfigLoadResult load_config_result(std::string const& path)
             config.focus.warp_cursor_on_monitor_change = input.focus->warp_cursor_on_monitor_change.value_or(false);
         if (input.commands)
             for (auto const& [name, command] : *input.commands)
-                config.commands[name] = parse_command(command, "[commands]." + name, config.commands, false);
+                commands[name] = resolve_command(command, "[commands]." + name, commands, false);
         if (input.workspaces)
         {
             auto names = input.workspaces->names.value_or(std::vector<std::string>{});
@@ -628,29 +558,26 @@ ConfigLoadResult load_config_result(std::string const& path)
         for_each(
             input.scratchpads,
             "scratchpads",
-            [&](auto const& value, auto const& context) { parse_scratchpad(value, context, config); }
+            [&](auto const& value, auto const& context) { parse_scratchpad(value, context, config, commands); }
         );
         if (input.autostart)
             for_each(
                 input.autostart->commands,
                 "autostart.commands",
                 [&](auto const& value, auto const& context)
-                { config.autostart.commands.push_back(parse_command(value, context, config.commands)); }
+                { config.autostart.push_back(resolve_command(value, context, commands)); }
             );
         if (!input.binds)
-            add_default_keybinds(config);
+            add_default_keybinds(config, commands);
         for_each(
             input.binds,
             "binds",
             [&](auto const& value, auto const& context)
             {
-                if (value.actions.size() != 1)
-                    throw std::runtime_error(context + " must define exactly one action");
-                auto const& [name, argument] = *value.actions.begin();
                 add_binding(
                     config,
                     parse_key_combo(value.key, context + ".key"),
-                    parse_bind_action(name, argument, context, config),
+                    parse_binding(value, context, config, commands),
                     context
                 );
             }

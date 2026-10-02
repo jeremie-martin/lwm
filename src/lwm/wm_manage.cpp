@@ -117,7 +117,7 @@ void WindowManager::scan_existing_windows(bool handoff)
     }
     state_.focus_fallback(state_.focused_monitor(), false);
     if (!handoff)
-        for (auto const& command : config_.autostart.commands) launch_program(command, "autostart");
+        for (auto const& command : config_.autostart) launch_program(command, "autostart");
 }
 
 // One set of property values drives classification, rules and registration.

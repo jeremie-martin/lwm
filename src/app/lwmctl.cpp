@@ -1,6 +1,6 @@
 #include "lwm/core/events.hpp"
 #include "lwm/core/ipc.hpp"
-#include "lwm/core/ipc_command.hpp"
+#include "lwm/core/command.hpp"
 #include <array>
 #include <cerrno>
 #include <charconv>
@@ -25,7 +25,7 @@ bool print_usage(std::ostream& out, std::string_view group = {})
 {
     out << "usage: lwmctl [--socket PATH] [--timeout MS] [--] <command>\n\n";
     bool found = false;
-    for (auto const& spec : lwm::ipc::command_specs())
+    for (auto const& spec : lwm::command::command_specs())
         if (group.empty() || spec.name == group || (spec.name.starts_with(group) && spec.name[group.size()] == ' '))
         {
             out << "  " << spec.usage << "\n      " << spec.description << '\n';
@@ -320,7 +320,7 @@ int main(int argc, char* argv[])
             print_usage(std::cerr);
             return 1;
         }
-        auto request = lwm::ipc::encode_command(arguments);
+        auto request = lwm::command::encode_command(arguments);
         if (!request)
             throw std::runtime_error(request.error());
         return run(resolve_socket_path(socket), *request, arguments.front() == "subscribe", timeout);

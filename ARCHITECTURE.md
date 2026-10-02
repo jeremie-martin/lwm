@@ -20,7 +20,7 @@ Paths below are relative to `src/`.
 | Client/fixture/workspace records and mutations | `lwm/core/types.hpp`, `state.*` |
 | Derived layout, geometry, visibility, focus, stacking | `lwm/core/geometry.cpp`, `focus.*`, `stacking.*`, `floating.*`, `classification.*`; `lwm/layout/` |
 | Desktop numbering and output rebinding | `lwm/core/policy.hpp` |
-| Actions, IPC grammar/transport, event encoding | `lwm/core/action.*`, `ipc*`, `events.*` |
+| Actions, command grammar, IPC transport, event encoding | `lwm/core/action.*`, `command.*`, `ipc*`, `events.*` |
 | X resource ownership, properties, struts | `lwm/core/connection.*`, `ewmh.*`, `xproperty.hpp`, `workarea.*` |
 | Process signals, logging, snapshot codec | `lwm/core/signals.*`, `log.*`, `restart.*` |
 | Event loop, X reads, reload, spawning | `lwm/wm.cpp` |
@@ -225,7 +225,14 @@ launch cancellation is specified in [IPC.md](IPC.md#commands).
 A private reflect-cpp schema validates TOML structure over toml++; LWM resolves names,
 bounds, commands, `Action`s, and compiled regexes into ordinary runtime values.
 Workspace names resolve at load time; monitor names resolve against current outputs
-when rules apply. No unresolved input escapes a successful load.
+when rules apply. Bindings' `action` strings and IPC requests use the same command
+parser; bindings require an `Action`, rejecting queries and subscriptions. Configuration
+also validates workspace bounds, ratios, and scratchpad names before installation.
+`spawn` remains structured input because process arguments are not WM commands.
+Shell text becomes `/bin/sh -c` argv, and named command references resolve during
+loading. The command registry is local to the loader; runtime bindings, autostart,
+and scratchpads retain only argument vectors. Event action labels describe executed
+operations independently of their input spelling.
 
 Reload validates the candidate and workspace-count compatibility before replacing
 `Config`, reconciling scratchpad slots, regrabbing input, and reapplying matching

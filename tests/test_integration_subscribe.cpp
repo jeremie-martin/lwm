@@ -156,7 +156,7 @@ TEST_CASE("Integration: subscription preserves monitor direction in key_action e
 
 TEST_CASE("Integration: bindings and IPC report the same action events", "[integration][subscribe][actions]")
 {
-    auto env = TestEnvironment::create("[[binds]]\nkey = \"super+l\"\nadjust_ratio = 0.05\n");
+    auto env = TestEnvironment::create("[[binds]]\nkey = \"super+l\"\naction = 'ratio adjust 0.05'\n");
     if (!env)
         SKIP("X11 unavailable");
     auto& conn = env->conn;

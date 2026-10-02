@@ -12,7 +12,7 @@ add_library(liblwm STATIC
     core/state.cpp
     core/geometry.cpp
     core/focus.cpp
-    core/ipc_command.cpp
+    core/command.cpp
     core/ipc_server.cpp
     core/restart.cpp
     core/ipc.cpp

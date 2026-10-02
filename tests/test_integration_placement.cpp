@@ -11,10 +11,10 @@ constexpr auto config = R"(
 count = 2
 [[binds]]
 key = "F5"
-move_to_workspace = 1
+action = "window to-workspace 1"
 [[binds]]
 key = "F6"
-toggle_float = true
+action = "window float"
 )";
 void park_pointer(X11Connection& conn)
 {

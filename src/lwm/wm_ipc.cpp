@@ -11,27 +11,27 @@ std::string ok(std::string const& value) { return value.empty() ? "ok" : "ok " +
 
 } // namespace
 
-std::string WindowManager::handle_request(ipc::Request const& request)
+std::string WindowManager::handle_request(command::Request const& request)
 {
     return std::visit(
         Overloaded{
-            [&](ipc::Query query) -> std::string
+            [&](command::Query query) -> std::string
             {
                 switch (query)
                 {
-                    case ipc::Query::Ping:
+                    case command::Query::Ping:
                         return ok("pong");
-                    case ipc::Query::Version:
+                    case command::Query::Version:
                         return ok(LWM_VERSION);
-                    case ipc::Query::LogStatus:
+                    case command::Query::LogStatus:
                         return ok(log::status_json());
-                    case ipc::Query::WorkspaceList:
+                    case command::Query::WorkspaceList:
                         return ok(workspace_list_json());
-                    case ipc::Query::WindowList:
+                    case command::Query::WindowList:
                         return ok(window_list_json());
-                    case ipc::Query::ScratchpadList:
+                    case command::Query::ScratchpadList:
                         return ok(scratchpad_list_json());
-                    case ipc::Query::State:
+                    case command::Query::State:
                         return ok(
                             "{\"instance\":\"" + ipc_.instance() + "\",\"sequence\":" + std::to_string(ipc_.sequence())
                             + "," + state_json().substr(1)
@@ -40,7 +40,7 @@ std::string WindowManager::handle_request(ipc::Request const& request)
                 return "error unknown query";
             },
             // The server answers subscriptions itself.
-            [&](ipc::Subscribe const&) -> std::string { return "error unexpected subscription"; },
+            [&](command::Subscribe const&) -> std::string { return "error unexpected subscription"; },
             [&](Action const& action) -> std::string
             {
                 auto result = execute(action, "ipc");
