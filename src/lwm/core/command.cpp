@@ -3,67 +3,142 @@
 #include <algorithm>
 #include <charconv>
 #include <cmath>
+#include <type_traits>
+#include <utility>
 
 namespace lwm::command {
 namespace {
 using namespace lwm::action;
+constexpr std::string_view spaces = " \t\r\n\v\f";
 
-template <auto query> Request make_query(Value const&) { return query; }
-template <auto action> Request make_action(Value const&) { return Action{ action }; }
-Request make_subscribe(Value const& value) { return Subscribe{ std::get<uint32_t>(value) }; }
-Request make_exec(Value const& value) { return Action{ Exec{ std::get<std::string>(value) } }; }
-Request make_layout(Value const& value) { return Action{ SetLayout{ std::get<LayoutStrategy>(value) } }; }
-Request make_set_ratio(Value const& value) { return Action{ SetRatio{ std::get<double>(value) } }; }
-Request make_adjust_ratio(Value const& value) { return Action{ AdjustRatio{ std::get<double>(value) } }; }
-Request make_attention(Value const& value) { return Action{ NotifyAttention{ std::get<uint32_t>(value) } }; }
-Request make_switch(Value const& value) { return Action{ SwitchWorkspace{ std::get<uint32_t>(value) } }; }
-Request make_move(Value const& value) { return Action{ MoveToWorkspace{ std::get<uint32_t>(value) } }; }
-Request make_focus_window(Value const& value) { return Action{ FocusWindow{ std::get<uint32_t>(value) } }; }
-Request make_focus_monitor(Value const& value) { return Action{ FocusMonitor{ std::get<int>(value) } }; }
-Request make_move_monitor(Value const& value) { return Action{ MoveToMonitor{ std::get<int>(value) } }; }
-Request make_toggle(Value const& value) { return Action{ ScratchpadToggle{ std::get<std::string>(value) } }; }
-Request make_cancel(Value const& value) { return Action{ ScratchpadCancelLaunch{ std::get<std::string>(value) } }; }
+auto usage(CommandSpec const& spec) { return std::unexpected("usage: " + std::string(spec.usage)); }
+
+std::expected<std::string, std::string> text(std::string_view value, CommandSpec const& spec)
+{
+    if (value.empty()) return usage(spec);
+    return std::string(value);
+}
+
+std::expected<LayoutStrategy, std::string> layout(std::string_view value, CommandSpec const& spec)
+{
+    if (value.empty()) return usage(spec);
+    if (auto strategy = parse_layout_strategy(value)) return *strategy;
+    return std::unexpected("unknown layout: " + std::string(value));
+}
+
+std::expected<int, std::string> direction(std::string_view value, CommandSpec const& spec)
+{
+    if (value == "left") return -1;
+    if (value == "right") return 1;
+    return usage(spec);
+}
+
+std::expected<uint32_t, std::string> filter(std::string_view value, CommandSpec const&)
+{
+    auto mask = parse_event_filter(value);
+    if (!mask) return std::unexpected("no recognized event types in filter");
+    return mask;
+}
+
+std::expected<double, std::string> number(std::string_view value, CommandSpec const& spec)
+{
+    auto digits = value;
+    if (digits.starts_with('+')) digits.remove_prefix(1);
+    if (digits.empty()) return usage(spec);
+    double result = 0;
+    auto [end, error] = std::from_chars(digits.data(), digits.data() + digits.size(), result);
+    if (error != std::errc{} || end != digits.data() + digits.size() || !std::isfinite(result))
+        return std::unexpected(
+            std::string(spec.name == "ratio set" ? "invalid ratio value: " : "invalid delta value: ") + std::string(value)
+        );
+    return result;
+}
+
+template <bool Window> std::expected<uint32_t, std::string> integer(std::string_view value, CommandSpec const& spec)
+{
+    if (value.empty() || value.find_first_of(spaces) != value.npos) return usage(spec);
+    if constexpr (Window)
+    {
+        if (!value.starts_with("window=")) return usage(spec);
+        value.remove_prefix(7);
+    }
+    auto digits = value;
+    int base = 10;
+    if (Window && (digits.starts_with("0x") || digits.starts_with("0X")))
+    {
+        digits.remove_prefix(2);
+        base = 16;
+    }
+    uint32_t result = 0;
+    auto [end, error] = std::from_chars(digits.data(), digits.data() + digits.size(), result, base);
+    if (digits.empty() || error != std::errc{} || end != digits.data() + digits.size())
+        return std::unexpected(
+            std::string(Window ? "invalid window id: " : "invalid workspace index: ") + std::string(value)
+        );
+    return result;
+}
+
+// Each declaration binds its typed parser to the request constructor. CLI arity
+// follows that declaration; no intermediate value or runtime extraction is needed.
+template <typename T, auto Parse>
+constexpr CommandSpec takes(std::string_view name, std::string_view help, std::string_view description)
+{
+    return { name, std::is_same_v<T, Subscribe> ? std::nullopt : std::optional<size_t>{1}, help, description,
+             [](std::string_view value, CommandSpec const& spec) -> std::expected<Request, std::string>
+             {
+                 return Parse(value, spec).transform([](auto parsed) { return Request{ T{ std::move(parsed) } }; });
+             } };
+}
+
+template <auto Value>
+constexpr CommandSpec fixed(std::string_view name, std::string_view help, std::string_view description)
+{
+    return { name, 0, help, description,
+             [](std::string_view value, CommandSpec const& spec) -> std::expected<Request, std::string>
+             {
+                 if (!value.empty()) return usage(spec);
+                 return Request{ Value };
+             } };
+}
 
 // Spawn is the only action without an IPC spelling: IPC callers can start processes themselves.
-CommandSpec const specs[] = {
-    { "ping", Argument::None, "ping", "check whether the WM is running", make_query<Query::Ping> },
-    { "version", Argument::None, "version", "show WM version", make_query<Query::Version> },
-    { "log status", Argument::None, "log status", "show logging configuration and backend notifications as JSON", make_query<Query::LogStatus> },
-    { "state", Argument::None, "state", "print one consistent state snapshot", make_query<Query::State> },
-    { "subscribe", Argument::Filter, "subscribe [FILTER]", "stream filtered JSON events", make_subscribe },
-    { "reload-config", Argument::None, "reload-config", "reload configuration", make_action<ReloadConfig{ }> },
-    { "restart", Argument::None, "restart", "restart the WM", make_action<Restart{ }> },
-    { "exec", Argument::Text, "exec PATH", "restart with another binary", make_exec },
-    { "layout set", Argument::Layout, "layout set NAME", "select master-stack or monocle", make_layout },
-    { "ratio set", Argument::Number, "ratio set VALUE", "set the root split ratio", make_set_ratio },
-    { "ratio reset", Argument::None, "ratio reset", "reset workspace split ratios", make_action<ResetRatios{ }> },
-    { "ratio adjust", Argument::Number, "ratio adjust DELTA", "adjust the root split ratio", make_adjust_ratio },
-    { "notify-attention", Argument::Window, "notify-attention window=<xid>", "mark an exact window urgent", make_attention },
-    { "workspace switch", Argument::Index, "workspace switch N", "switch workspace (zero-based)", make_switch },
-    { "workspace next", Argument::None, "workspace next", "switch to the next workspace", make_action<CycleWorkspace{ 1 }> },
-    { "workspace prev", Argument::None, "workspace prev", "switch to the previous workspace", make_action<CycleWorkspace{ -1 }> },
-    { "workspace toggle", Argument::None, "workspace toggle", "switch back to the previous workspace", make_action<ToggleWorkspace{ }> },
-    { "workspace list", Argument::None, "workspace list", "print workspaces as JSON", make_query<Query::WorkspaceList> },
-    { "monitor focus", Argument::Direction, "monitor focus left|right", "focus the adjacent monitor", make_focus_monitor },
-    { "focus next", Argument::None, "focus next", "focus the next MRU window", make_action<FocusCycle{ true }> },
-    { "focus prev", Argument::None, "focus prev", "focus the previous MRU window", make_action<FocusCycle{ false }> },
-    { "focus", Argument::Window, "focus window=<xid>", "focus an exact window", make_focus_window },
-    { "window list", Argument::None, "window list", "print normal clients as JSON", make_query<Query::WindowList> },
-    { "window close", Argument::None, "window close", "close the active window", make_action<Kill{ }> },
-    { "window fullscreen", Argument::None, "window fullscreen", "toggle fullscreen on the active window", make_action<ToggleFullscreen{ }> },
-    { "window float", Argument::None, "window float", "toggle floating on the active window", make_action<ToggleFloat{ }> },
-    { "window swap next", Argument::None, "window swap next", "swap the active tile with the next one", make_action<SwapTile{ 1 }> },
-    { "window swap prev", Argument::None, "window swap prev", "swap the active tile with the previous one", make_action<SwapTile{ -1 }> },
-    { "window to-workspace", Argument::Index, "window to-workspace N", "move the active window to workspace N", make_move },
-    { "window to-monitor", Argument::Direction, "window to-monitor left|right", "move the active window to the adjacent monitor", make_move_monitor },
-    { "scratchpad stash", Argument::None, "scratchpad stash", "stash the active window", make_action<ScratchpadStash{ }> },
-    { "scratchpad cycle", Argument::None, "scratchpad cycle", "cycle the scratchpad pool", make_action<ScratchpadCycle{ }> },
-    { "scratchpad toggle", Argument::Text, "scratchpad toggle NAME", "toggle a named scratchpad", make_toggle },
-    { "scratchpad cancel-launch", Argument::Text, "scratchpad cancel-launch NAME", "cancel pending launch state", make_cancel },
-    { "scratchpad list", Argument::None, "scratchpad list", "print scratchpads as JSON", make_query<Query::ScratchpadList> },
+constexpr CommandSpec specs[] = {
+    fixed<Query::Ping>("ping", "ping", "check whether the WM is running"),
+    fixed<Query::Version>("version", "version", "show WM version"),
+    fixed<Query::LogStatus>("log status", "log status", "show logging configuration and backend notifications as JSON"),
+    fixed<Query::State>("state", "state", "print one consistent state snapshot"),
+    takes<Subscribe, filter>("subscribe", "subscribe [FILTER]", "stream filtered JSON events"),
+    fixed<ReloadConfig{ }>("reload-config", "reload-config", "reload configuration"),
+    fixed<Restart{ }>("restart", "restart", "restart the WM"),
+    takes<Exec, text>("exec", "exec PATH", "restart with another binary"),
+    takes<SetLayout, layout>("layout set", "layout set NAME", "select master-stack or monocle"),
+    takes<SetRatio, number>("ratio set", "ratio set VALUE", "set the root split ratio"),
+    fixed<ResetRatios{ }>("ratio reset", "ratio reset", "reset workspace split ratios"),
+    takes<AdjustRatio, number>("ratio adjust", "ratio adjust DELTA", "adjust the root split ratio"),
+    takes<NotifyAttention, integer<true>>("notify-attention", "notify-attention window=<xid>", "mark an exact window urgent"),
+    takes<SwitchWorkspace, integer<false>>("workspace switch", "workspace switch N", "switch workspace (zero-based)"),
+    fixed<CycleWorkspace{ 1 }>("workspace next", "workspace next", "switch to the next workspace"),
+    fixed<CycleWorkspace{ -1 }>("workspace prev", "workspace prev", "switch to the previous workspace"),
+    fixed<ToggleWorkspace{ }>("workspace toggle", "workspace toggle", "switch back to the previous workspace"),
+    fixed<Query::WorkspaceList>("workspace list", "workspace list", "print workspaces as JSON"),
+    takes<FocusMonitor, direction>("monitor focus", "monitor focus left|right", "focus the adjacent monitor"),
+    fixed<FocusCycle{ true }>("focus next", "focus next", "focus the next MRU window"),
+    fixed<FocusCycle{ false }>("focus prev", "focus prev", "focus the previous MRU window"),
+    takes<FocusWindow, integer<true>>("focus", "focus window=<xid>", "focus an exact window"),
+    fixed<Query::WindowList>("window list", "window list", "print normal clients as JSON"),
+    fixed<Kill{ }>("window close", "window close", "close the active window"),
+    fixed<ToggleFullscreen{ }>("window fullscreen", "window fullscreen", "toggle fullscreen on the active window"),
+    fixed<ToggleFloat{ }>("window float", "window float", "toggle floating on the active window"),
+    fixed<SwapTile{ 1 }>("window swap next", "window swap next", "swap the active tile with the next one"),
+    fixed<SwapTile{ -1 }>("window swap prev", "window swap prev", "swap the active tile with the previous one"),
+    takes<MoveToWorkspace, integer<false>>("window to-workspace", "window to-workspace N", "move the active window to workspace N"),
+    takes<MoveToMonitor, direction>("window to-monitor", "window to-monitor left|right", "move the active window to the adjacent monitor"),
+    fixed<ScratchpadStash{ }>("scratchpad stash", "scratchpad stash", "stash the active window"),
+    fixed<ScratchpadCycle{ }>("scratchpad cycle", "scratchpad cycle", "cycle the scratchpad pool"),
+    takes<ScratchpadToggle, text>("scratchpad toggle", "scratchpad toggle NAME", "toggle a named scratchpad"),
+    takes<ScratchpadCancelLaunch, text>("scratchpad cancel-launch", "scratchpad cancel-launch NAME", "cancel pending launch state"),
+    fixed<Query::ScratchpadList>("scratchpad list", "scratchpad list", "print scratchpads as JSON"),
 };
-
-constexpr std::string_view spaces = " \t\r\n\v\f";
 
 std::string_view trim(std::string_view text)
 {
@@ -76,85 +151,6 @@ std::string_view trim(std::string_view text)
 bool matches(std::string_view text, std::string_view name)
 {
     return text == name || (text.starts_with(name) && text.size() > name.size() && spaces.contains(text[name.size()]));
-}
-
-std::expected<Value, std::string> parse_value(CommandSpec const& spec, std::string_view value)
-{
-    auto usage = [&] { return std::unexpected("usage: " + std::string(spec.usage)); };
-    switch (spec.argument)
-    {
-        case Argument::None:
-            if (!value.empty())
-                return usage();
-            return Value{ };
-        case Argument::Text:
-            if (value.empty())
-                return usage();
-            return Value{ std::string(value) };
-        case Argument::Layout:
-            if (value.empty())
-                return usage();
-            if (auto strategy = parse_layout_strategy(value))
-                return Value{ *strategy };
-            return std::unexpected("unknown layout: " + std::string(value));
-        case Argument::Direction:
-            if (value == "left")
-                return Value{ -1 };
-            if (value == "right")
-                return Value{ 1 };
-            return usage();
-        case Argument::Filter:
-        {
-            auto mask = parse_event_filter(value);
-            if (!mask)
-                return std::unexpected("no recognized event types in filter");
-            return Value{ mask };
-        }
-        case Argument::Number:
-        {
-            auto digits = value;
-            if (digits.starts_with('+'))
-                digits.remove_prefix(1);
-            if (digits.empty())
-                return usage();
-            double number = 0;
-            auto [end, error] = std::from_chars(digits.data(), digits.data() + digits.size(), number);
-            if (error != std::errc{ } || end != digits.data() + digits.size() || !std::isfinite(number))
-                return std::unexpected(
-                    std::string(spec.name == "ratio set" ? "invalid ratio value: " : "invalid delta value: ")
-                    + std::string(value)
-                );
-            return Value{ number };
-        }
-        case Argument::Window:
-        case Argument::Index:
-        {
-            bool window = spec.argument == Argument::Window;
-            if (value.empty() || value.find_first_of(spaces) != value.npos)
-                return usage();
-            if (window)
-            {
-                if (!value.starts_with("window="))
-                    return usage();
-                value.remove_prefix(7);
-            }
-            auto digits = value;
-            int base = 10;
-            if (window && (digits.starts_with("0x") || digits.starts_with("0X")))
-            {
-                digits.remove_prefix(2);
-                base = 16;
-            }
-            uint32_t number = 0;
-            auto [end, error] = std::from_chars(digits.data(), digits.data() + digits.size(), number, base);
-            if (digits.empty() || error != std::errc{ } || end != digits.data() + digits.size())
-                return std::unexpected(
-                    std::string(window ? "invalid window id: " : "invalid workspace index: ") + std::string(value)
-                );
-            return Value{ number };
-        }
-    }
-    return usage();
 }
 
 CommandSpec const* find_spec(std::string_view text)
@@ -182,10 +178,7 @@ std::expected<Request, std::string> parse_command(std::string_view text)
     auto const* spec = find_spec(text);
     if (!spec)
         return std::unexpected("unknown command");
-    auto value = parse_value(*spec, trim(text.substr(spec->name.size())));
-    if (!value)
-        return std::unexpected(value.error());
-    return spec->make(*value);
+    return spec->parse(trim(text.substr(spec->name.size())), *spec);
 }
 
 std::expected<std::string, std::string> encode_command(std::span<std::string const> arguments)
@@ -204,7 +197,7 @@ std::expected<std::string, std::string> encode_command(std::span<std::string con
         return std::unexpected(parsed.error());
     auto const& spec = *find_spec(trim(text));
     size_t words = 1 + std::count(spec.name.begin(), spec.name.end(), ' ');
-    if (spec.argument != Argument::Filter && arguments.size() != words + (spec.argument != Argument::None))
+    if (spec.arguments && arguments.size() != words + *spec.arguments)
         return std::unexpected("usage: " + std::string(spec.usage));
     return text;
 }

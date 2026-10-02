@@ -87,3 +87,46 @@ TEST_CASE("IPC grammar rejects invalid arguments before execution", "[ipc][comma
     CHECK(parse_command("  ping  "));
     CHECK(*parse_command("focus window=0X123") == Request{ Action{ action::FocusWindow{ 0x123 } } });
 }
+
+TEST_CASE("Command diagnostics and CLI arity preserve the public grammar", "[ipc][command]")
+{
+    for (auto const& [input, message] : std::vector<std::pair<std::string, std::string>>{
+             { "ping extra", "usage: ping" },
+             { "exec", "usage: exec PATH" },
+             { "layout set", "usage: layout set NAME" },
+             { "layout set other", "unknown layout: other" },
+             { "monitor focus up", "usage: monitor focus left|right" },
+             { "subscribe unknown", "no recognized event types in filter" },
+             { "ratio set +", "usage: ratio set VALUE" },
+             { "ratio set nan", "invalid ratio value: nan" },
+             { "ratio adjust inf", "invalid delta value: inf" },
+             { "workspace switch 4294967296", "invalid workspace index: 4294967296" },
+             { "workspace switch 0x10", "invalid workspace index: 0x10" },
+             { "focus 10", "usage: focus window=<xid>" },
+             { "focus window=0x", "invalid window id: 0x" },
+             { "focus window=1 2", "usage: focus window=<xid>" },
+         })
+    {
+        CAPTURE(input);
+        auto parsed = parse_command(input);
+        REQUIRE_FALSE(parsed);
+        CHECK(parsed.error() == message);
+    }
+    // Text is one CLI argument even when its wire value contains spaces;
+    // subscriptions alone accept an arbitrary list of CLI filter arguments.
+    CHECK(encode_command(std::vector<std::string>{ "exec", "a path with spaces" }) == "exec a path with spaces");
+    auto invalid_argv = [](std::vector<std::string> const& argv, std::string const& message)
+    {
+        auto encoded = encode_command(argv);
+        REQUIRE_FALSE(encoded);
+        CHECK(encoded.error() == message);
+    };
+    invalid_argv({ "exec", "a", "path" }, "usage: exec PATH");
+    invalid_argv({ "ping", "" }, "usage: ping");
+    invalid_argv({ "workspace", "switch", "2", "" }, "usage: workspace switch N");
+    CHECK(encode_command(std::vector<std::string>{ "subscribe", "focus_change", "state_change", "window_map" })
+          == "subscribe focus_change,state_change,window_map");
+    CHECK(*parse_command("workspace switch 4294967295")
+          == Request{ Action{ action::SwitchWorkspace{ 4294967295U } } });
+    CHECK(*parse_command("focus window=0xffffffff") == Request{ Action{ action::FocusWindow{ 4294967295U } } });
+}

@@ -3,6 +3,7 @@
 #include "lwm/core/action.hpp"
 #include <cstdint>
 #include <expected>
+#include <optional>
 #include <span>
 #include <string>
 #include <string_view>
@@ -31,27 +32,13 @@ struct Subscribe
 // Mutating commands are ordinary WM actions, executed like key bindings.
 using Request = std::variant<Query, Subscribe, Action>;
 
-enum class Argument
-{
-    None,
-    Text,
-    Number,
-    Index,
-    Window,
-    Filter,
-    Direction,
-    Layout,
-};
-
-using Value = std::variant<std::monostate, std::string, double, uint32_t, int, LayoutStrategy>;
-
 struct CommandSpec
 {
     std::string_view name;
-    Argument argument;
+    std::optional<size_t> arguments; ///< Fixed CLI argument count, or an arbitrary subscription filter list
     std::string_view usage;
     std::string_view description;
-    Request (*make)(Value const&);
+    std::expected<Request, std::string> (*parse)(std::string_view, CommandSpec const&);
 };
 
 inline constexpr size_t max_request_bytes = 4096;

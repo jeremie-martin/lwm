@@ -253,8 +253,10 @@ A private reflect-cpp schema validates TOML structure over toml++; LWM resolves 
 bounds, commands, `Action`s, and compiled regexes into ordinary runtime values.
 Workspace names resolve at load time; monitor names resolve against current outputs
 when rules apply. Bindings' `action` strings and IPC requests use the same command
-parser; bindings require an `Action`, rejecting queries and subscriptions. Configuration
-also validates workspace bounds, ratios, and scratchpad names before installation.
+parser; bindings require an `Action`, rejecting queries and subscriptions.
+Command declarations bind typed argument parsers directly to requests and derive CLI
+argument counts, without an intermediate value variant or runtime extraction.
+Configuration also validates workspace bounds, ratios, and scratchpad names before installation.
 A binding has one `action` value: WM command text or a structured process command.
 The schema models command forms as variants; named declarations can contain only
 executables, while use sites can also contain references. One resolver lowers both
