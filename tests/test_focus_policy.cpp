@@ -77,12 +77,12 @@ TEST_CASE("Fullscreen transients and either input protocol keep focus eligibilit
     add(state, 1);
     add_floating(state, 2);
     state.fullscreen(1, true);
-    state.transient(2, 1);
+    state.transient(2, 1, { });
     state.focus_hints(2, false, true);
     CHECK(state.focusable(state.require(2)));
     state.focus_hints(2, true, false);
     CHECK(state.focusable(state.require(2)));
-    state.transient(2, XCB_NONE);
+    state.transient(2, XCB_NONE, { });
     CHECK_FALSE(state.focusable(state.require(2)));
 }
 

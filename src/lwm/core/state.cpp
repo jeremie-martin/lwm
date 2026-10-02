@@ -506,7 +506,6 @@ void State::maximize(xcb_window_t id, bool horizontal, bool vertical)
 }
 
 void State::modal(xcb_window_t id, bool enabled) { assign(id, &Client::modal, enabled); }
-void State::borderless(xcb_window_t id, bool enabled) { assign(id, &Client::borderless, enabled); }
 
 void State::layer(xcb_window_t id, LayerHint hint)
 {
@@ -551,26 +550,6 @@ void State::pin_desktop(xcb_window_t id, bool pinned) { assign(id, &Client::desk
 
 // Metadata
 
-void State::title(xcb_window_t id, std::string value) { assign(id, &Client::name, std::move(value)); }
-
-void State::window_class(xcb_window_t id, std::string instance, std::string name)
-{
-    assign(id, &Client::wm_class_name, std::move(instance));
-    assign(id, &Client::wm_class, std::move(name));
-}
-
-void State::window_type(xcb_window_t id, WindowType type)
-{
-    if (assign(id, &Client::ewmh_type, type))
-        apply_default_mode(id);
-}
-
-void State::transient(xcb_window_t id, xcb_window_t parent)
-{
-    if (assign(id, &Client::transient_for, parent))
-        apply_default_mode(id);
-}
-
 // Type and transient updates change classification defaults. The default mode
 // applies unless the user chose one or a scratchpad owns the representation.
 void State::apply_default_mode(xcb_window_t id)
@@ -596,8 +575,6 @@ void State::user_time(xcb_window_t id, uint32_t time, xcb_window_t window)
     c.user_time = time;
     c.user_time_window = window;
 }
-
-void State::rule(xcb_window_t id, std::optional<RuleActions> actions) { assign(id, &Client::rule, std::move(actions)); }
 
 // Workspaces and monitors
 
@@ -733,30 +710,21 @@ void State::release_scratchpad(xcb_window_t id)
 
 // Surviving names keep claims and pending launches; removed names release
 // their windows and deiconify them; workspace/fullscreen visibility still applies.
-void State::configure_scratchpads(std::span<std::string const> names)
+void State::configure_scratchpads(std::span<ScratchpadConfig const> configs)
 {
     mutated();
     std::vector<NamedScratchpad> slots;
-    for (auto const& name : names)
+    for (auto const& config : configs)
     {
-        auto const* existing = named_scratchpad(name);
-        slots.push_back(existing ? *existing : NamedScratchpad{ name });
+        auto const* existing = named_scratchpad(config.name);
+        slots.push_back(existing ? *existing : NamedScratchpad{ config.name });
     }
     std::vector<xcb_window_t> released;
     for (auto const& slot : named_scratchpads_)
-        if (slot.claimed_window() != XCB_NONE && std::ranges::find(names, slot.name) == names.end())
+        if (slot.claimed_window() != XCB_NONE && std::ranges::find(configs, slot.name, &ScratchpadConfig::name) == configs.end())
             released.push_back(slot.claimed_window());
     named_scratchpads_ = std::move(slots);
     for (auto id : released) iconic(id, false);
-}
-
-void State::claim_scratchpad(std::string_view name, xcb_window_t id)
-{
-    mutated();
-    release_scratchpad(id);
-    auto it = std::ranges::find(named_scratchpads_, name, &NamedScratchpad::name);
-    assert(it != named_scratchpads_.end());
-    it->window = id;
 }
 
 void State::pool_scratchpad(xcb_window_t id)
@@ -869,14 +837,12 @@ void State::restore_graph(restart::Snapshot const& snapshot, std::vector<Client>
             insert(std::move(observation));
         }
     }
-    for (auto const& named : snapshot.named_scratchpads)
-        if (named_scratchpad(named.name))
-        {
-            if (!named.window)
-                scratchpad_pending(named.name, true);
-            else if (find(*named.window))
-                claim_scratchpad(named.name, *named.window);
-        }
+    for (auto& slot : named_scratchpads_)
+    {
+        auto saved = std::ranges::find(snapshot.named_scratchpads, slot.name, &NamedScratchpad::name);
+        if (saved != snapshot.named_scratchpads.end() && (!saved->window || find(*saved->window)))
+            slot.window = saved->window;
+    }
     for (auto window : snapshot.pool)
         if (find(window))
             pool_scratchpad(window);

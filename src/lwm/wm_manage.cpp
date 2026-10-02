@@ -87,7 +87,7 @@ void WindowManager::scan_existing_windows(bool handoff)
     {
         // Saved claims precede pending launches that mapped while the WM was absent.
         for (auto const* client : state_.clients_by_order())
-            claim_pending_scratchpad(client->id, window_match_info(*client), client->rule ? &*client->rule : nullptr);
+            state_.claim_pending_scratchpad(client->id, config_.scratchpads);
         handoff_.reset();
     }
     if (!handoff)
@@ -199,7 +199,7 @@ std::optional<Client> WindowManager::admit_window(xcb_window_t window, bool adop
     std::tie(client.wm_class_name, client.wm_class) = read_wm_class(window);
     client.name = read_window_name(window);
     client.ewmh_type = ewmh_.get_window_type_enum(window);
-    auto const* rule = match_window_rules(config_.rules, window_match_info(client));
+    auto const* rule = match_window_rules(config_.rules, client);
     client.rule = rule ? std::optional{ *rule } : std::nullopt;
     auto natural = default_floating(client);
     // Established ownership wins; metadata chooses a role only for newcomers.
@@ -297,7 +297,7 @@ std::optional<Client> WindowManager::admit_window(xcb_window_t window, bool adop
 
     if (adopting)
         return client; // Startup registers the complete scene before floating placement.
-    auto scratchpad = match_scratchpad(window_match_info(client), client.rule ? &*client.rule : nullptr);
+    auto scratchpad = state_.match_scratchpad(client, config_.scratchpads);
     if (scratchpad)
     {
         client.iconic = true;
@@ -310,7 +310,7 @@ std::optional<Client> WindowManager::admit_window(xcb_window_t window, bool adop
     if (admitted.monitor == state_.focused_monitor() && state_.focusable(admitted))
         state_.focus(window);
     if (scratchpad)
-        claim_scratchpad(window, *scratchpad);
+        state_.claim_scratchpad(window, *scratchpad);
     return std::nullopt;
 }
 
@@ -318,105 +318,7 @@ std::optional<Client> WindowManager::admit_window(xcb_window_t window, bool adop
 void WindowManager::place_new_client(xcb_window_t window)
 {
     apply_size_hints(window, true);
-    if (auto const& rule = state_.require(window).rule)
-        apply_rule(window, *rule);
-}
-
-// Rules
-
-// Rules apply only the actions they specify.
-void WindowManager::apply_rule(xcb_window_t window, RuleActions const& rule)
-{
-    LWM_LOG_DEBUG("Applying matched rule: window={:#x}", window);
-    if (rule.floating)
-        state_.floating(window, *rule.floating);
-
-    auto const& client = state_.require(window);
-    auto monitor = resolve_rule_monitor(rule, state_.monitors());
-    if (monitor || rule.workspace)
-    {
-        size_t target = monitor.value_or(client.monitor);
-        size_t workspace = std::min(rule.workspace.value_or(client.workspace), state_.monitors()[target].workspaces.size() - 1);
-        state_.relocate(window, target, workspace, State::RelocationGeometry::Center);
-    }
-
-    if (auto const* floating = floating_mode(state_.require(window)))
-    {
-        auto geometry = rule.geometry.value_or(floating->geometry);
-        if (rule.center)
-            geometry = floating::place_floating(
-                state_.monitors()[client.monitor].working_area(),
-                geometry.width,
-                geometry.height,
-                std::nullopt
-            );
-        state_.geometry(window, geometry);
-    }
-
-    if (rule.skip_taskbar)
-        state_.skip_taskbar(window, *rule.skip_taskbar);
-    if (rule.skip_pager)
-        state_.skip_pager(window, *rule.skip_pager);
-    if (rule.sticky)
-        state_.sticky(window, *rule.sticky);
-    if (rule.layer)
-        state_.layer(window, *rule.layer);
-    if (rule.borderless)
-        state_.borderless(window, *rule.borderless);
-    if (rule.fullscreen)
-        state_.fullscreen(window, *rule.fullscreen);
-}
-
-// Metadata changes apply a rule only when its result changes; losing a match
-// leaves previous actions in place. A pending named scratchpad can claim the
-// window regardless.
-void WindowManager::reevaluate_metadata(xcb_window_t window)
-{
-    auto const& client = state_.require(window);
-    auto properties = window_match_info(client);
-    auto const* rule = match_window_rules(config_.rules, properties);
-    std::optional<RuleActions> current = rule ? std::optional{ *rule } : std::nullopt;
-    bool changed = current != client.rule;
-    state_.rule(window, current);
-    if (claim_pending_scratchpad(window, properties, rule))
-        return;
-    if (rule && changed)
-        apply_rule(window, *rule);
-}
-
-// Explicit reload reapplies every matching rule, including unchanged placement.
-void WindowManager::reapply_rules()
-{
-    std::vector<xcb_window_t> order;
-    for (auto const* client : state_.clients_by_order()) order.push_back(client->id);
-    for (auto window : order)
-    {
-        auto const* rule = match_window_rules(config_.rules, window_match_info(state_.require(window)));
-        state_.rule(window, rule ? std::optional{ *rule } : std::nullopt);
-        if (rule)
-            apply_rule(window, *rule);
-    }
-    presentation_dirty_ = true;
-}
-
-void WindowManager::relocate_to_transient_parent(xcb_window_t window, xcb_window_t previous_transient_for)
-{
-    auto const& client = state_.require(window);
-    if (client.transient_for == previous_transient_for || client.transient_for == XCB_NONE)
-        return;
-    auto const* parent = state_.find(client.transient_for);
-    if (!parent || !state_.relocate(window, parent->monitor, parent->workspace))
-        return;
-    if (auto const* floating = floating_mode(state_.require(window)))
-        state_.geometry(
-            window,
-            floating::place_floating(
-                state_.monitors()[parent->monitor].working_area(),
-                floating->geometry.width,
-                floating->geometry.height,
-                placement_parent_geometry(client.transient_for)
-            )
-        );
+    state_.apply_initial_rule(window);
 }
 
 // Managed parents use their intended presentation; server reads are for unmanaged parents.

@@ -167,7 +167,7 @@ TEST_CASE("Restored tile slots are admitted only while the original workspace ex
 TEST_CASE("State snapshots restore workspaces, order, recency and scratchpads", "[restart][state]")
 {
     auto source = test::state(2);
-    source.configure_scratchpads(std::vector<std::string>{ "term" });
+    source.configure_scratchpads(std::vector<ScratchpadConfig>{ { .name = "term" } });
     add(source, 1);
     add(source, 2);
     add(source, 3);
@@ -178,14 +178,14 @@ TEST_CASE("State snapshots restore workspaces, order, recency and scratchpads", 
     source.switch_workspace(1, 2);
     test::focus(source, 1);
     test::focus(source, 4);
-    source.claim_scratchpad("term", 2);
+    source.claim_scratchpad(2, ScratchpadConfig{ .name = "term" });
     source.pool_scratchpad(3);
     source.skip_pager(4, true);
     auto snapshot = restart::decode(restart::encode(source.snapshot()));
     REQUIRE(snapshot);
 
     auto target = test::state(2);
-    target.configure_scratchpads(std::vector<std::string>{ "term" });
+    target.configure_scratchpads(std::vector<ScratchpadConfig>{ { .name = "term" } });
     // Observation order differs from saved membership and registration order.
     target.restore_graph(*snapshot, { source.require(3), source.require(2), source.require(1), source.require(4) });
     auto const& saved = *snapshot->find(4);
@@ -399,15 +399,15 @@ TEST_CASE("Unchanged restart topology preserves intentional floating geometry an
 TEST_CASE("Restart preserves pending requests only for surviving scratchpad names", "[restart][state][scratchpad]")
 {
     auto source = test::state();
-    source.configure_scratchpads(std::vector<std::string>{ "pending", "removed", "claimed", "empty" });
+    source.configure_scratchpads(std::vector<ScratchpadConfig>{ { .name = "pending" }, { .name = "removed" }, { .name = "claimed" }, { .name = "empty" } });
     source.scratchpad_pending("pending", true);
     source.scratchpad_pending("removed", true);
     add(source, 1);
-    source.claim_scratchpad("claimed", 1);
+    source.claim_scratchpad(1, ScratchpadConfig{ .name = "claimed" });
     auto snapshot = restart::decode(restart::encode(source.snapshot()));
     REQUIRE(snapshot);
     auto restored = test::state();
-    restored.configure_scratchpads(std::vector<std::string>{ "pending", "claimed", "empty", "new" });
+    restored.configure_scratchpads(std::vector<ScratchpadConfig>{ { .name = "pending" }, { .name = "claimed" }, { .name = "empty" }, { .name = "new" } });
     std::vector<Client> observed;
     SECTION("Claimed client survives") { observed.push_back(source.require(1)); }
     SECTION("Claimed client disappeared") { }
@@ -604,7 +604,9 @@ TEST_CASE("Graph restoration separates saved intent from live observations and n
     source.switch_workspace(1, 2);
     source.focus_monitor(1);
     source.fullscreen(1, true);
-    source.borderless(2, true);
+    Config rules;
+    rules.rules.push_back({ .actions = { .borderless = true } });
+    source.title(2, "apply private preference", rules);
     source.skip_pager(2, false);
     auto snapshot = source.snapshot();
 
@@ -683,18 +685,18 @@ TEST_CASE("Persistent graph validation rejects scratchpad ownership before recon
 TEST_CASE("Valid ownership survives changed observations and filters vanished clients", "[restart][state][scratchpad]")
 {
     auto source = test::state();
-    source.configure_scratchpads(std::vector<std::string>{ "named", "pending" });
+    source.configure_scratchpads(std::vector<ScratchpadConfig>{ { .name = "named" }, { .name = "pending" } });
     for (xcb_window_t id : { 1, 2, 3, 4 }) add(source, id);
-    source.claim_scratchpad("named", 1);
+    source.claim_scratchpad(1, ScratchpadConfig{ .name = "named" });
     source.scratchpad_pending("pending", true);
     source.pool_scratchpad(2);
     source.pool_scratchpad(3);
     source.iconic(2, true);
-    source.window_type(4, WindowType::Dialog);
+    source.window_type(4, WindowType::Dialog, { });
     auto graph = restart::decode(restart::encode(source.snapshot()));
     REQUIRE(graph);
     auto target = test::state();
-    target.configure_scratchpads(std::vector<std::string>{ "named", "pending" });
+    target.configure_scratchpads(std::vector<ScratchpadConfig>{ { .name = "named" }, { .name = "pending" } });
     std::vector<Client> observed;
     for (auto id : { 1, 3, 4 })
     {
@@ -716,11 +718,11 @@ TEST_CASE("Valid ownership survives changed observations and filters vanished cl
     CHECK_FALSE(invariants::validate(target));
     // Restoration preserves saved representation. A subsequent metadata update
     // still follows defaults for an ordinary client, while claims retain mode.
-    target.window_type(4, WindowType::Utility);
-    target.window_type(4, WindowType::Normal);
+    target.window_type(4, WindowType::Utility, { });
+    target.window_type(4, WindowType::Normal, { });
     CHECK(target.require(4).kind() == Client::Kind::Tiled);
-    target.window_type(1, WindowType::Dialog);
-    target.window_type(3, WindowType::Dialog);
+    target.window_type(1, WindowType::Dialog, { });
+    target.window_type(3, WindowType::Dialog, { });
     CHECK(target.require(1).kind() == Client::Kind::Tiled);
     CHECK(target.require(3).kind() == Client::Kind::Tiled);
     CHECK_FALSE(invariants::validate(target));

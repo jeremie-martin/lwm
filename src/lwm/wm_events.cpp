@@ -668,31 +668,19 @@ void WindowManager::handle_property_notify(xcb_property_notify_event_t const& e)
     auto* ewmh = ewmh_.get();
     auto const* client = state_.find(e.window);
     if (client && (e.atom == ewmh->_NET_WM_NAME || e.atom == XCB_ATOM_WM_NAME))
-    {
-        if (auto name = read_window_name(e.window); name != client->name)
-        {
-            state_.title(e.window, std::move(name));
-            reevaluate_metadata(e.window);
-        }
-    }
+        state_.title(e.window, read_window_name(e.window), config_);
     else if (client && e.atom == XCB_ATOM_WM_CLASS)
     {
         auto [instance, name] = read_wm_class(e.window);
-        if (instance != client->wm_class_name || name != client->wm_class)
-        {
-            state_.window_class(e.window, std::move(instance), std::move(name));
-            reevaluate_metadata(e.window);
-        }
+        state_.window_class(e.window, std::move(instance), std::move(name), config_);
     }
-    else if (client && (e.atom == ewmh->_NET_WM_WINDOW_TYPE || e.atom == XCB_ATOM_WM_TRANSIENT_FOR))
+    else if (client && e.atom == ewmh->_NET_WM_WINDOW_TYPE)
+        state_.window_type(e.window, ewmh_.get_window_type_enum(e.window), config_);
+    else if (client && e.atom == XCB_ATOM_WM_TRANSIENT_FOR)
     {
-        auto previous_parent = client->transient_for;
-        if (e.atom == ewmh->_NET_WM_WINDOW_TYPE)
-            state_.window_type(e.window, ewmh_.get_window_type_enum(e.window));
-        else
-            state_.transient(e.window, read_transient_for(e.window).value_or(XCB_NONE));
-        relocate_to_transient_parent(e.window, previous_parent);
-        reevaluate_metadata(e.window);
+        auto parent = read_transient_for(e.window).value_or(XCB_NONE);
+        auto const* target = state_.find(parent);
+        state_.transient(e.window, parent, config_, target ? drag_preview(*target) : std::nullopt);
     }
     else if (client && e.atom == XCB_ATOM_WM_NORMAL_HINTS)
         apply_size_hints(e.window, false);

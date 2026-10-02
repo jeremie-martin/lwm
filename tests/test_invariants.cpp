@@ -63,7 +63,7 @@ TEST_CASE("Generated State operation sequences preserve model invariants", "[inv
         return value;
     };
     auto state = test::state(2);
-    state.configure_scratchpads(std::vector<std::string>{ "a", "b" });
+    state.configure_scratchpads(std::vector<ScratchpadConfig>{ { .name = "a" }, { .name = "b" } });
     std::vector<xcb_window_t> windows;
     xcb_window_t next = 1;
     std::vector<std::string> trace;
@@ -125,11 +125,11 @@ TEST_CASE("Generated State operation sequences preserve model invariants", "[inv
                 break;
             case 11:
                 if (auto const* name = pick(2) ? "a" : "b"; state.named_scratchpad(name))
-                    state.claim_scratchpad(name, window);
+                    state.claim_scratchpad(window, ScratchpadConfig{ .name = name });
                 trace.push_back("claim");
                 break;
             case 12:
-                state.configure_scratchpads(pick(2) ? std::vector<std::string>{ "a" } : std::vector<std::string>{ "a", "b" });
+                state.configure_scratchpads(pick(2) ? std::vector<ScratchpadConfig>{ { .name = "a" } } : std::vector<ScratchpadConfig>{ { .name = "a" }, { .name = "b" } });
                 trace.push_back("configure");
                 break;
             case 13:
@@ -151,11 +151,11 @@ TEST_CASE("Generated State operation sequences preserve model invariants", "[inv
                 trace.push_back("desktop");
                 break;
             case 15:
-                state.window_type(window, pick(2) ? WindowType::Dialog : WindowType::Normal);
+                state.window_type(window, pick(2) ? WindowType::Dialog : WindowType::Normal, { });
                 trace.push_back("type");
                 break;
             case 16:
-                state.transient(window, pick(2) ? windows[pick(windows.size())] : XCB_NONE);
+                state.transient(window, pick(2) ? windows[pick(windows.size())] : XCB_NONE, { });
                 trace.push_back("transient");
                 break;
             case 17:
@@ -187,12 +187,21 @@ TEST_CASE("Generated State operation sequences preserve model invariants", "[inv
 TEST_CASE("Live ownership uses the same persistent graph validation as restart", "[invariants][scratchpad]")
 {
     auto state = test::state();
-    state.configure_scratchpads(std::vector<std::string>{ "named" });
+    state.configure_scratchpads(std::vector<ScratchpadConfig>{ { .name = "named" } });
     add(state, 1);
     state.insert_fixture(2, Fixture::Role::Dock);
     REQUIRE_FALSE(invariants::validate(state));
     SECTION("Pool cannot own a fixture") { state.pool_scratchpad(2); }
-    SECTION("Named claim cannot own an unmanaged ID") { state.claim_scratchpad("named", 999); }
+    SECTION("Named claim refuses an unmanaged ID; malformed snapshots still reject it")
+    {
+        state.claim_scratchpad(999, ScratchpadConfig{ .name = "named" });
+        CHECK_FALSE(invariants::validate(state));
+        auto snapshot = state.snapshot();
+        snapshot.named_scratchpads.push_back({ "named", 999 });
+        CHECK(invariants::validate(snapshot));
+        CHECK_FALSE(restart::decode(restart::encode(snapshot)));
+        return;
+    }
     CHECK(invariants::validate(state));
     CHECK(invariants::validate(state.snapshot()));
     CHECK_FALSE(restart::decode(restart::encode(state.snapshot())));

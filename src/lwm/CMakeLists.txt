@@ -5,6 +5,7 @@ add_library(liblwm STATIC
     core/signals.cpp
     core/workarea.cpp
     core/log.cpp
+    core/client_policy.cpp
     core/classification.cpp
     core/ewmh.cpp
     core/floating.cpp

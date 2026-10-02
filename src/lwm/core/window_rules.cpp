@@ -3,11 +3,11 @@
 
 namespace lwm {
 
-RuleActions const* match_window_rules(std::span<WindowRuleConfig const> rules, WindowMatchInfo const& info)
+RuleActions const* match_window_rules(std::span<WindowRuleConfig const> rules, Client const& client)
 {
     for (auto const& rule : rules)
-        if (rule.match.matches(info.wm_class, info.wm_class_name, info.title)
-            && (!rule.type || *rule.type == info.ewmh_type) && (!rule.transient || *rule.transient == info.is_transient))
+        if (rule.match.matches(client.wm_class, client.wm_class_name, client.name)
+            && (!rule.type || *rule.type == client.ewmh_type) && (!rule.transient || *rule.transient == (client.transient_for != XCB_NONE)))
             return &rule.actions;
     return nullptr;
 }

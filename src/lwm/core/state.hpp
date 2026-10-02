@@ -136,7 +136,6 @@ public:
     void request_fullscreen(xcb_window_t id);
     void maximize(xcb_window_t id, bool horizontal, bool vertical);
     void modal(xcb_window_t id, bool enabled);
-    void borderless(xcb_window_t id, bool enabled);
     void layer(xcb_window_t id, LayerHint hint);
     void skip_taskbar(xcb_window_t id, bool enabled);
     void skip_pager(xcb_window_t id, bool enabled);
@@ -145,14 +144,17 @@ public:
     void fullscreen_monitors(xcb_window_t id, std::optional<FullscreenMonitors> value);
     void pin_desktop(xcb_window_t id, bool pinned);
 
-    // Metadata
-    void title(xcb_window_t id, std::string value);
-    void window_class(xcb_window_t id, std::string instance, std::string name);
-    void window_type(xcb_window_t id, WindowType type);
-    void transient(xcb_window_t id, xcb_window_t parent);
+    // Metadata updates include classification, placement, changed rules and pending claims.
+    void title(xcb_window_t id, std::string value, Config const& config);
+    void window_class(xcb_window_t id, std::string instance, std::string name, Config const& config);
+    void window_type(xcb_window_t id, WindowType type, Config const& config);
+    void transient(
+        xcb_window_t id, xcb_window_t parent, Config const& config, std::optional<Geometry> parent_preview = std::nullopt
+    );
     void focus_hints(xcb_window_t id, bool input, bool take_focus);
     void user_time(xcb_window_t id, uint32_t time, xcb_window_t window);
-    void rule(xcb_window_t id, std::optional<RuleActions> actions);
+    void apply_initial_rule(xcb_window_t id);
+    void reapply_rules(std::span<WindowRuleConfig const> rules);
 
     // Workspaces and monitors
     bool switch_workspace(size_t monitor, size_t workspace);
@@ -171,8 +173,12 @@ public:
     NamedScratchpad const* named_scratchpad(std::string_view name) const;
     NamedScratchpad const* scratchpad_claim(xcb_window_t id) const;
     bool pooled(xcb_window_t id) const;
-    void configure_scratchpads(std::span<std::string const> names);
-    void claim_scratchpad(std::string_view name, xcb_window_t id);
+    void configure_scratchpads(std::span<ScratchpadConfig const> configs);
+    ScratchpadConfig const* match_scratchpad(Client const& client, std::span<ScratchpadConfig const> configs) const;
+    void claim_scratchpad(xcb_window_t id, ScratchpadConfig const& config);
+    bool claim_pending_scratchpad(xcb_window_t id, std::span<ScratchpadConfig const> configs);
+    // Returns whether the shell should attempt a launch.
+    bool toggle_scratchpad(ScratchpadConfig const& config);
     void pool_scratchpad(xcb_window_t id);
     void advance_scratchpad_pool();
     void scratchpad_pending(std::string_view name, bool pending);
@@ -222,6 +228,9 @@ private:
     void select_focus(xcb_window_t id, uint32_t time = 0, bool record_user_time = true);
     void set_mode(xcb_window_t id, bool floating);
     void apply_default_mode(xcb_window_t id);
+    void apply_rule(xcb_window_t id, RuleActions const& rule);
+    bool match_rule(xcb_window_t id, std::span<WindowRuleConfig const> rules);
+    void reconcile_metadata(xcb_window_t id, Config const& config);
     // Records a field change; an unchanged value is not a mutation.
     template <typename Owner, typename T, typename V> bool assign(xcb_window_t id, T Owner::* field, V&& value)
     {
@@ -235,6 +244,7 @@ private:
     void attach(Client const& client, std::optional<size_t> index = std::nullopt);
     std::optional<TileSlot> detach(Client const& client);
     void release_scratchpad(xcb_window_t id);
+    void show_named_scratchpad(xcb_window_t id, ScratchpadConfig const& config);
     void forget_missing_tile_slot(Client& client) const;
     void replace_monitors(std::vector<Monitor> monitors, bool fit_unchanged);
 };

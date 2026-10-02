@@ -24,14 +24,14 @@ TEST_CASE("Urgency tracks app and WM sources independently", "[state][urgency]")
 TEST_CASE("Registration attaches tiles and removal releases every membership", "[state][registry]")
 {
     auto state = test::state();
-    state.configure_scratchpads(std::vector<std::string>{ "term" });
+    state.configure_scratchpads(std::vector<ScratchpadConfig>{ { .name = "term" } });
     add(state, 1);
     add_floating(state, 2);
     add(state, 3);
     auto const& workspace = state.monitors()[0].workspaces[0];
     CHECK(workspace.windows == std::vector<xcb_window_t>{ 1, 3 });
     test::focus(state, 3);
-    state.claim_scratchpad("term", 3);
+    state.claim_scratchpad(3, ScratchpadConfig{ .name = "term" });
     state.pool_scratchpad(2);
     state.erase(3);
     CHECK(workspace.windows == std::vector<xcb_window_t>{ 1 });
@@ -126,20 +126,20 @@ TEST_CASE("Type and transient updates change only default modes", "[state][mode]
 {
     auto state = test::state();
     add(state, 1);
-    state.transient(1, 99);
+    state.transient(1, 99, { });
     CHECK(state.require(1).kind() == Client::Kind::Floating);
-    state.transient(1, XCB_NONE);
+    state.transient(1, XCB_NONE, { });
     CHECK(state.require(1).kind() == Client::Kind::Tiled);
     state.floating(1, false);
-    state.window_type(1, WindowType::Dialog);
+    state.window_type(1, WindowType::Dialog, { });
     CHECK(state.require(1).kind() == Client::Kind::Tiled);
     add(state, 2);
     state.pool_scratchpad(2);
-    state.window_type(2, WindowType::Dialog);
+    state.window_type(2, WindowType::Dialog, { });
     CHECK(state.require(2).kind() == Client::Kind::Tiled);
     // Runtime conversion into a dock type has no normal default.
     add(state, 3);
-    state.window_type(3, WindowType::Dock);
+    state.window_type(3, WindowType::Dock, { });
     CHECK(state.require(3).kind() == Client::Kind::Tiled);
 }
 
@@ -174,7 +174,7 @@ TEST_CASE("The most recent fullscreen claim in view owns its monitor", "[state][
     CHECK_FALSE(state.visible(state.require(1)));
     CHECK_FALSE(state.visible(state.require(3)));
     // A direct transient of the owner stays visible.
-    state.transient(4, 2);
+    state.transient(4, 2, { });
     CHECK(state.visible(state.require(4)));
     // Re-entering fullscreen or restoring a minimized fullscreen client reclaims.
     state.request_fullscreen(1);
@@ -209,8 +209,8 @@ TEST_CASE(
     add_floating(state, 2);
     add_floating(state, 3);
     add_floating(state, 4);
-    state.transient(2, 1);
-    state.transient(3, 2);
+    state.transient(2, 1, { });
+    state.transient(3, 2, { });
     state.fullscreen(1, true);
     CHECK(state.visible(state.require(3)));
     CHECK(state.focusable(state.require(3)));
@@ -243,7 +243,7 @@ TEST_CASE(
         state.fullscreen(4, true);
         state.relocate(3, 1, 0);
         CHECK_FALSE(state.visible(state.require(3)));
-        state.transient(2, 4);
+        state.transient(2, 4, { });
         CHECK(state.visible(state.require(3)));
     }
     SECTION("Removing an intermediate parent breaks the exemption")
@@ -253,9 +253,9 @@ TEST_CASE(
     }
     SECTION("Reparenting an intermediate node updates descendants immediately")
     {
-        state.transient(2, 4);
+        state.transient(2, 4, { });
         CHECK_FALSE(state.visible(state.require(3)));
-        state.transient(4, 1);
+        state.transient(4, 1, { });
         CHECK(state.visible(state.require(3)));
     }
 }
@@ -265,19 +265,19 @@ TEST_CASE("Fullscreen ancestry terminates on missing parents and cycles", "[stat
     auto state = test::state();
     for (xcb_window_t id : { 1, 2, 3, 4 }) add_floating(state, id);
     state.fullscreen(1, true);
-    state.transient(4, 3);
-    state.transient(3, 2);
-    SECTION("Missing parent") { state.transient(2, 99); }
-    SECTION("Self-link") { state.transient(2, 2); }
-    SECTION("Cycle unrelated to the owner") { state.transient(2, 3); }
+    state.transient(4, 3, { });
+    state.transient(3, 2, { });
+    SECTION("Missing parent") { state.transient(2, 99, { }); }
+    SECTION("Self-link") { state.transient(2, 2, { }); }
+    SECTION("Cycle unrelated to the owner") { state.transient(2, 3, { }); }
     CHECK(state.suppressed(state.require(4)));
     state.fullscreen(1, false);
     CHECK_FALSE(state.suppressed(state.require(4)));
     state.fullscreen(1, true);
     // Even a cycle containing the owner grants an exemption when the walk
     // reaches it. Hints remain intact; stacking resolves ordering separately.
-    state.transient(2, 1);
-    state.transient(1, 4);
+    state.transient(2, 1, { });
+    state.transient(1, 4, { });
     CHECK_FALSE(state.suppressed(state.require(4)));
     CHECK(state.require(1).transient_for == 4);
 }
@@ -290,7 +290,7 @@ TEST_CASE(
     auto state = test::state();
     constexpr xcb_window_t count = 2048;
     for (xcb_window_t id = 1; id <= count; ++id) add_floating(state, id);
-    for (xcb_window_t id = 2; id <= count; ++id) state.transient(id, id - 1);
+    for (xcb_window_t id = 2; id <= count; ++id) state.transient(id, id - 1, { });
     state.fullscreen(1, true);
     auto revision = state.revision();
     auto fullscreen = state.fullscreen_visibility();
@@ -298,7 +298,7 @@ TEST_CASE(
     CHECK(state.revision() == revision);
 
     // A long cycle with no route to the owner grants no exemption.
-    state.transient(2, count);
+    state.transient(2, count, { });
     fullscreen = state.fullscreen_visibility();
     for (auto const& [id, client] : state.clients()) CHECK(state.visible(client, fullscreen) == (id == 1));
 }
@@ -373,21 +373,21 @@ TEST_CASE("Fullscreen admission establishes priority and excludes maximize", "[s
 TEST_CASE("Scratchpad names and the pool are the only membership records", "[state][scratchpad]")
 {
     auto state = test::state();
-    state.configure_scratchpads(std::vector<std::string>{ "a", "b" });
+    state.configure_scratchpads(std::vector<ScratchpadConfig>{ { .name = "a" }, { .name = "b" } });
     add(state, 1);
     add(state, 2);
     state.scratchpad_pending("a", true);
     CHECK(state.named_scratchpad("a")->pending_launch());
     state.pool_scratchpad(1);
-    state.claim_scratchpad("a", 1);
+    state.claim_scratchpad(1, ScratchpadConfig{ .name = "a" });
     CHECK_FALSE(state.pooled(1));
     CHECK(state.scratchpad_claim(1)->name == "a");
     state.pool_scratchpad(1);
     CHECK_FALSE(state.pooled(1));
     // Surviving names keep claims; removed names release and deiconify windows.
-    state.claim_scratchpad("b", 2);
+    state.claim_scratchpad(2, ScratchpadConfig{ .name = "b" });
     state.iconic(2, true);
-    state.configure_scratchpads(std::vector<std::string>{ "a" });
+    state.configure_scratchpads(std::vector<ScratchpadConfig>{ { .name = "a" } });
     CHECK(state.scratchpad_claim(1));
     CHECK_FALSE(state.scratchpad_claim(2));
     CHECK_FALSE(state.require(2).iconic);
@@ -421,7 +421,7 @@ TEST_CASE("Geometry derivation does not mutate the domain", "[state]")
     state.normal_geometry(state.require(1));
     state.thaw();
     CHECK(state.revision() == revision);
-    state.title(1, "changed");
+    state.title(1, "changed", { });
     CHECK(state.revision() > revision);
     revision = state.revision();
     state.user_time(1, 0, XCB_NONE);
@@ -486,7 +486,8 @@ TEST_CASE("A projection contains every client once with its final visible rectan
     {
         fullscreen = true;
         state.fullscreen(9, true);
-        state.transient(2, 9);
+        state.transient(2, 9, { });
+        state.geometry(2, { 10, 10, 200, 100 });
     }
     SECTION("Showing desktop") { state.show_desktop(true); }
     state.freeze();

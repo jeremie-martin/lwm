@@ -249,10 +249,6 @@ private:
     };
     SizeHints read_size_hints(xcb_window_t window, bool anchored) const;
     void place_new_client(xcb_window_t window);
-    void apply_rule(xcb_window_t window, RuleActions const& rule);
-    void reevaluate_metadata(xcb_window_t window);
-    void reapply_rules();
-    void relocate_to_transient_parent(xcb_window_t window, xcb_window_t previous_transient_for);
     std::optional<Geometry> placement_parent_geometry(xcb_window_t window) const;
     void follow_floating_geometry(xcb_window_t window);
 
@@ -334,17 +330,11 @@ private:
     std::optional<SplitBorderHit> hit_split_border(int16_t x, int16_t y) const;
 
     // wm_scratchpad.cpp
-    void configure_scratchpads();
     ScratchpadConfig const* scratchpad_config(std::string_view name) const;
-    std::optional<std::string> match_scratchpad(WindowMatchInfo const& properties, RuleActions const* rule) const;
     std::expected<void, std::string> toggle_scratchpad(std::string_view name);
     void stash_window(xcb_window_t window);
     void cycle_scratchpad_pool();
-    void hide_scratchpad(xcb_window_t window);
-    void show_named_scratchpad(xcb_window_t window, ScratchpadConfig const& config);
     void show_pooled_scratchpad(xcb_window_t window);
-    void claim_scratchpad(xcb_window_t window, std::string const& name);
-    bool claim_pending_scratchpad(xcb_window_t window, WindowMatchInfo const& properties, RuleActions const* rule);
 
     // wm_ipc.cpp
     std::string handle_request(command::Request const& request);

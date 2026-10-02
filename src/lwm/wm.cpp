@@ -37,7 +37,7 @@ WindowManager::WindowManager(Config config, SignalPipe& signals, std::string con
     bool handoff = release_predecessor();
     create_cursors();
     grab_buttons();
-    configure_scratchpads();
+    state_.configure_scratchpads(config_.scratchpads);
     refresh_topology();
     ewmh_.init_atoms({ ewmh_.get()->_NET_WM_USER_TIME_WINDOW, atoms_.net_wm_state_focused, atoms_.lwm_window_class });
     ewmh_.set_wm_name("lwm");
@@ -523,10 +523,11 @@ std::expected<void, std::string> WindowManager::reload_config()
     end_drag(false);
     config_ = std::move(*loaded);
     state_.configure_layout(config_.appearance, config_.layout);
-    configure_scratchpads();
+    state_.configure_scratchpads(config_.scratchpads);
     grab_buttons();
     grab_keys();
-    reapply_rules();
+    state_.reapply_rules(config_.rules);
+    presentation_dirty_ = true;
     state_.request_focus_repair();
     return { };
 }

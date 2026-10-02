@@ -24,7 +24,8 @@ Paths below are relative to `src/`.
 | X resource ownership, properties, struts | `lwm/core/connection.*`, `ewmh.*`, `xproperty.hpp`, `workarea.*` |
 | Process signals, logging, snapshot codec | `lwm/core/signals.*`, `log.*`, `restart.*` |
 | Event loop, X reads, reload, spawning | `lwm/wm.cpp` |
-| Admission, initial placement, rules | `lwm/wm_manage.cpp` |
+| X admission and initial size observations | `lwm/wm_manage.cpp` |
+| Metadata consequences, rule actions, named scratchpad operations | `lwm/core/client_policy.cpp` |
 | X events and protocol requests | `lwm/wm_events.cpp` |
 | Action execution, pointer interactions, scratchpads | `lwm/wm_actions.cpp`, `wm_drag.cpp`, `wm_scratchpad.cpp` |
 | Completion and X publication | `lwm/wm_transition.cpp` |
@@ -156,6 +157,21 @@ only unmanaged parents require X geometry reads. Initial placement and subsequen
 size-hint updates share one implementation. Initial placement follows a managed
 parent's workspace and centers without a position hint; later size-only updates
 preserve the chosen origin.
+
+Metadata operations belong to State: updating title, class, type, or transient parent
+also resolves classification defaults, parent placement, changed rule actions, and
+pending named scratchpad claims. Adapters supply the current configuration without
+retaining another policy copy. For transient updates, the model derives a managed
+parent's presentation after membership changes; the shell supplies only an active
+drag preview override. No X-reading callback enters the model.
+
+Metadata applies a rule only when its resulting actions change; losing a match leaves
+previous actions in place. Pending scratchpad claims take precedence over changed
+rule actions. Explicit reload reapplies every matching rule, including unchanged
+actions, without claiming pending launches. Initial rule application uses the admitted
+match; restart restores saved ownership and history without replaying placement.
+Named scratchpad matching, claiming, presentation, and toggling are model operations;
+a toggle can request a launch, which the shell performs before marking it pending.
 
 Topology notifications are coalesced. Discovery reads new geometry and dock struts
 before `State::replace_monitors()`. Output names identify survivors, whose complete
