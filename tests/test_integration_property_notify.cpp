@@ -141,7 +141,7 @@ count = 2
 names = ["one", "two"]
 
 [[rules]]
-match = { type = "utility" }
+match = { type = "Utility" }
 apply = { workspace = 1 }
 )";
 }
@@ -974,7 +974,7 @@ TEST_CASE("Integration: rules apply explicit actions without undo on match remov
 border_width = 4
 [[rules]]
 match = { title = "ruled" }
-apply = { borderless = true, sticky = false, fullscreen = false, above = false, skip_taskbar = false, skip_pager = false, floating = )"
+apply = { borderless = true, sticky = false, fullscreen = false, layer = "normal", skip_taskbar = false, skip_pager = false, floating = )"
                   )
         + (floating ? "true" : "false") + " }\n";
     auto test_env = TestEnvironment::create(config);
@@ -1026,7 +1026,7 @@ TEST_CASE("Integration: rule reload preserves unspecified effective state", "[in
 {
     auto test_env = TestEnvironment::create(R"(
 [[rules]]
-apply = { floating = true, borderless = true, below = true, sticky = true, skip_taskbar = true, skip_pager = true }
+apply = { floating = true, borderless = true, layer = "below", sticky = true, skip_taskbar = true, skip_pager = true }
 )");
     if (!test_env)
         SKIP("Test environment not available");

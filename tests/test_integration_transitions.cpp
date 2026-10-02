@@ -883,7 +883,7 @@ TEST_CASE(
 padding = 0
 border_width = 0
 [[rules]]
-match = { type = "dialog" }
+match = { type = "Dialog" }
 apply = { center = true }
 )");
     REQUIRE(wait_for_wm_ready(conn, timeout));
@@ -1021,7 +1021,7 @@ TEST_CASE("Integration: application state requests do not replay rule placement"
     auto env = TestEnvironment::create(R"(
 [[rules]]
 match = { class = "Positioned" }
-apply = { floating = true, below = true, geometry = { x = 60, y = 70, width = 300, height = 200 } }
+apply = { floating = true, layer = "below", geometry = { x = 60, y = 70, width = 300, height = 200 } }
 )");
     if (!env)
         SKIP("X11 unavailable");

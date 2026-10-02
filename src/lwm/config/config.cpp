@@ -6,8 +6,10 @@
 #undef Above
 #undef Below
 #include <algorithm>
-#include <cctype>
+#include <array>
 #include <cmath>
+#include <rfl/Field.hpp>
+#include <rfl/Literal.hpp>
 #include <rfl/NoExtraFields.hpp>
 #include <rfl/Rename.hpp>
 #include <rfl/Validator.hpp>
@@ -62,11 +64,11 @@ struct Workspaces
     OptionalInteger<1, 65535> count;
     std::optional<std::vector<std::string>> names;
 };
-struct Command
-{
-    Text ref, shell;
-    std::optional<std::vector<std::string>> argv;
-};
+using Argv = rfl::Field<"argv", std::vector<std::string>>;
+using Shell = rfl::Field<"shell", std::string>;
+using Reference = rfl::Field<"ref", std::string>;
+using Executable = std::variant<Argv, Shell>;
+using Command = std::variant<Argv, Shell, Reference>;
 struct Autostart
 {
     std::optional<std::vector<Command>> commands;
@@ -79,7 +81,8 @@ struct Match
 struct RuleMatch
 {
     rfl::Rename<"class", Text> class_name;
-    Text instance, title, type;
+    Text instance, title;
+    std::optional<WindowType> type;
     Flag transient;
 };
 struct Size
@@ -100,10 +103,11 @@ struct Geometry
 };
 struct RuleActions
 {
-    Flag floating, fullscreen, above, below, sticky, skip_taskbar, skip_pager, borderless, center;
-    OptionalInteger<0, 65534> workspace;
-    OptionalInteger<0, 2147483647> monitor;
-    Text workspace_name, monitor_name, scratchpad;
+    Flag floating, fullscreen, sticky, skip_taskbar, skip_pager, borderless, center;
+    std::optional<std::variant<Integer<0, 65534>, std::string>> workspace;
+    std::optional<std::variant<Integer<0, 2147483647>, std::string>> monitor;
+    std::optional<rfl::Literal<"normal", "above", "below">> layer;
+    Text scratchpad;
     std::optional<Geometry> geometry;
 };
 struct Rule
@@ -114,19 +118,19 @@ struct Rule
 struct Bind
 {
     std::string key;
-    Text action;
-    std::optional<Command> spawn;
+    std::variant<std::string, Command> action;
 };
 struct WorkspaceBind
 {
-    std::string mode, mod;
+    rfl::Literal<"switch", "move"> mode;
+    std::string mod;
     std::vector<std::string> keys;
 };
 struct MouseBind
 {
     Text mod;
     Integer<1, 255> button;
-    std::string action;
+    rfl::Literal<"drag_window", "resize_floating", "toggle_float"> action;
 };
 struct Config
 {
@@ -134,7 +138,7 @@ struct Config
     std::optional<Layout> layout;
     std::optional<Focus> focus;
     std::optional<Workspaces> workspaces;
-    std::optional<std::map<std::string, Command>> commands;
+    std::optional<std::map<std::string, Executable>> commands;
     std::optional<Autostart> autostart;
     std::optional<std::vector<Scratchpad>> scratchpads;
     std::optional<std::vector<Bind>> binds;
@@ -163,33 +167,6 @@ void for_each(std::optional<std::vector<T>> const& input, std::string const& nam
 {
     if (input)
         for (size_t i = 0; i < input->size(); ++i) handler((*input)[i], "[[" + name + "]]#" + std::to_string(i));
-}
-
-WindowType parse_window_type(std::string type, std::string const& context)
-{
-    std::ranges::transform(type, type.begin(), [](unsigned char c) { return std::tolower(c); });
-    static constexpr std::pair<std::string_view, WindowType> types[] = {
-        {       "desktop",      WindowType::Desktop },
-        {          "dock",         WindowType::Dock },
-        {       "toolbar",      WindowType::Toolbar },
-        {          "menu",         WindowType::Menu },
-        {       "utility",      WindowType::Utility },
-        {        "splash",       WindowType::Splash },
-        {        "dialog",       WindowType::Dialog },
-        { "dropdown_menu", WindowType::DropdownMenu },
-        {  "dropdownmenu", WindowType::DropdownMenu },
-        {    "popup_menu",    WindowType::PopupMenu },
-        {     "popupmenu",    WindowType::PopupMenu },
-        {       "tooltip",      WindowType::Tooltip },
-        {  "notification", WindowType::Notification },
-        {         "combo",        WindowType::Combo },
-        {           "dnd",          WindowType::Dnd },
-        {        "normal",       WindowType::Normal },
-    };
-    for (auto const& [name, value] : types)
-        if (name == type)
-            return value;
-    throw std::runtime_error(context + " has unknown window type '" + type + "'");
 }
 
 uint16_t parse_modifiers(std::string_view text, std::string const& context)
@@ -267,35 +244,33 @@ template <typename Match> WindowMatcher parse_matchers(Match const& input, std::
 
 using Commands = std::map<std::string, std::vector<std::string>>;
 
-std::vector<std::string> resolve_command(
-    schema::Command const& input,
-    std::string const& context,
-    Commands const& registry,
-    bool allow_ref = true
-)
+template <typename Command>
+std::vector<std::string> resolve_command(Command const& input, std::string const& context, Commands const& registry)
 {
-    if (input.ref.has_value() + input.shell.has_value() + input.argv.has_value() != 1)
-        throw std::runtime_error(context + " must contain exactly one of 'ref', 'shell', or 'argv'");
-    if (input.ref)
-    {
-        if (!allow_ref)
-            throw std::runtime_error(context + ".ref is only allowed at command use sites");
-        auto it = registry.find(*input.ref);
-        if (it == registry.end())
-            throw std::runtime_error(context + ".ref points to unknown command '" + *input.ref + "'");
-        return it->second;
-    }
-    if (input.shell)
-    {
-        if (input.shell->empty() || input.shell->contains('\0'))
-            throw std::runtime_error(context + ".shell must be nonempty text without NUL");
-        return { "/bin/sh", "-c", *input.shell };
-    }
-    if (input.argv->empty() || input.argv->front().empty())
+    auto argv = std::visit(
+        Overloaded{
+            [](schema::Argv const& value) { return value.value(); },
+            [&](schema::Shell const& value) -> std::vector<std::string>
+            {
+                if (value.value().empty())
+                    throw std::runtime_error(context + ".shell must be nonempty text");
+                return { "/bin/sh", "-c", value.value() };
+            },
+            [&](schema::Reference const& value)
+            {
+                auto it = registry.find(value.value());
+                if (it == registry.end())
+                    throw std::runtime_error(context + ".ref points to unknown command '" + value.value() + "'");
+                return it->second;
+            }
+        },
+        input
+    );
+    if (argv.empty() || argv.front().empty())
         throw std::runtime_error(context + ".argv must contain a nonempty executable");
-    if (std::ranges::any_of(*input.argv, [](auto const& arg) { return arg.contains('\0'); }))
-        throw std::runtime_error(context + ".argv must not contain NUL");
-    return *input.argv;
+    if (std::ranges::any_of(argv, [](auto const& arg) { return arg.contains('\0'); }))
+        throw std::runtime_error(context + " must not contain NUL");
+    return argv;
 }
 
 size_t parse_workspace_index(int64_t index, std::string const& context, size_t count)
@@ -321,11 +296,9 @@ double parse_ratio(double value, std::string const& context, LayoutConfig const&
 
 Action parse_binding(schema::Bind const& input, std::string const& context, Config const& config, Commands const& commands)
 {
-    if (input.action.has_value() + input.spawn.has_value() != 1)
-        throw std::runtime_error(context + " must define exactly one of 'action' or 'spawn'");
-    if (input.spawn)
-        return action::Spawn{ resolve_command(*input.spawn, context + ".spawn", commands) };
-    auto request = command::parse_command(*input.action);
+    if (auto spawn = std::get_if<schema::Command>(&input.action))
+        return action::Spawn{ resolve_command(*spawn, context + ".action", commands) };
+    auto request = command::parse_command(std::get<std::string>(input.action));
     if (!request)
         throw std::runtime_error(context + ".action: " + request.error());
     auto* operation = std::get_if<Action>(&*request);
@@ -380,42 +353,39 @@ void parse_rule(schema::Rule const& input, std::string const& context, Config& c
     if (input.match)
     {
         rule.match = parse_matchers(*input.match, context + ".match");
-        if (input.match->type)
-            rule.type = parse_window_type(*input.match->type, context + ".match.type");
+        rule.type = input.match->type;
         rule.transient = input.match->transient;
     }
     auto const& in = input.apply;
     auto& out = rule.actions;
-    if (!in.floating && !in.fullscreen && !in.above && !in.below && !in.sticky && !in.skip_taskbar && !in.skip_pager
-        && !in.borderless && !in.center && !in.workspace && !in.workspace_name && !in.monitor && !in.monitor_name
-        && !in.scratchpad && !in.geometry)
+    if (!in.floating && !in.fullscreen && !in.layer && !in.sticky && !in.skip_taskbar && !in.skip_pager
+        && !in.borderless && !in.center && !in.workspace && !in.monitor && !in.scratchpad && !in.geometry)
         throw std::runtime_error(context + ".apply must define at least one action");
-    if (in.workspace && in.workspace_name)
-        throw std::runtime_error(context + ".apply cannot define both 'workspace' and 'workspace_name'");
-    if (in.monitor && in.monitor_name)
-        throw std::runtime_error(context + ".apply cannot define both 'monitor' and 'monitor_name'");
     if (in.workspace)
-        out.workspace =
-            parse_workspace_index(in.workspace->value(), context + ".apply.workspace", config.workspaces.count);
-    if (in.workspace_name)
     {
-        auto it = std::ranges::find(config.workspaces.names, *in.workspace_name);
-        if (it == config.workspaces.names.end())
-            throw std::runtime_error(
-                context + ".apply.workspace_name points to unknown workspace '" + *in.workspace_name + "'"
+        if (auto name = std::get_if<std::string>(&*in.workspace))
+        {
+            auto it = std::ranges::find(config.workspaces.names, *name);
+            if (it == config.workspaces.names.end())
+                throw std::runtime_error(context + ".apply.workspace points to unknown workspace '" + *name + "'");
+            out.workspace = static_cast<size_t>(it - config.workspaces.names.begin());
+        }
+        else
+            out.workspace = parse_workspace_index(
+                std::get<schema::Integer<0, 65534>>(*in.workspace).value(),
+                context + ".apply.workspace",
+                config.workspaces.count
             );
-        out.workspace = static_cast<size_t>(it - config.workspaces.names.begin());
     }
     if (in.monitor)
-        out.monitor = static_cast<size_t>(in.monitor->value());
-    if (in.monitor_name)
-        out.monitor = *in.monitor_name;
-    if (in.above.value_or(false) && in.below.value_or(false))
-        throw std::runtime_error(context + ".apply cannot set both 'above' and 'below' to true");
-    if (in.above || in.below)
-        out.layer = in.above.value_or(false) ? LayerHint::Above
-            : in.below.value_or(false)       ? LayerHint::Below
-                                             : LayerHint::Normal;
+    {
+        if (auto name = std::get_if<std::string>(&*in.monitor))
+            out.monitor = *name;
+        else
+            out.monitor = static_cast<size_t>(std::get<schema::Integer<0, 2147483647>>(*in.monitor).value());
+    }
+    if (in.layer)
+        out.layer = std::array{ LayerHint::Normal, LayerHint::Above, LayerHint::Below }[in.layer->value()];
     out.floating = in.floating;
     out.fullscreen = in.fullscreen;
     out.sticky = in.sticky;
@@ -540,7 +510,7 @@ ConfigLoadResult load_config_result(std::string const& path)
             config.focus.warp_cursor_on_monitor_change = input.focus->warp_cursor_on_monitor_change.value_or(false);
         if (input.commands)
             for (auto const& [name, command] : *input.commands)
-                commands[name] = resolve_command(command, "[commands]." + name, commands, false);
+                commands[name] = resolve_command(command, "[commands]." + name, commands);
         if (input.workspaces)
         {
             auto names = input.workspaces->names.value_or(std::vector<std::string>{});
@@ -588,8 +558,6 @@ ConfigLoadResult load_config_result(std::string const& path)
             "workspace_binds",
             [&](auto const& value, auto const& context)
             {
-                if (value.mode != "switch" && value.mode != "move")
-                    throw std::runtime_error(context + ".mode must be 'switch' or 'move'");
                 bool move = value.mode == "move";
                 auto mod = parse_modifiers(value.mod, context + ".mod");
                 if (value.keys.size() != config.workspaces.count)
@@ -627,15 +595,8 @@ ConfigLoadResult load_config_result(std::string const& path)
             "mousebinds",
             [&](auto const& value, auto const& context)
             {
-                MouseAction action;
-                if (value.action == "drag_window")
-                    action = MouseAction::DragWindow;
-                else if (value.action == "resize_floating")
-                    action = MouseAction::ResizeFloating;
-                else if (value.action == "toggle_float")
-                    action = MouseAction::ToggleFloat;
-                else
-                    throw std::runtime_error(context + ".action has unknown mouse action '" + value.action + "'");
+                auto action = std::array{ MouseAction::DragWindow, MouseAction::ResizeFloating, MouseAction::ToggleFloat }
+                                  [value.action.value()];
                 config.mousebinds.push_back({ parse_modifiers(value.mod.value_or(""), context + ".mod"),
                                               static_cast<uint8_t>(value.button.value()),
                                               action });

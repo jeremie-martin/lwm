@@ -239,7 +239,13 @@ Workspace names resolve at load time; monitor names resolve against current outp
 when rules apply. Bindings' `action` strings and IPC requests use the same command
 parser; bindings require an `Action`, rejecting queries and subscriptions. Configuration
 also validates workspace bounds, ratios, and scratchpad names before installation.
-`spawn` remains structured input because process arguments are not WM commands.
+A binding has one `action` value: WM command text or a structured process command.
+The schema models command forms as variants; named declarations can contain only
+executables, while use sites can also contain references. One resolver lowers both
+variants to argv and validates process arguments. Rule selectors each accept an
+index or name, and layer is one of normal/above/below, so conflict reconciliation
+is unnecessary.
+Window types decode directly from the runtime enum instead of a second registry.
 Shell text becomes `/bin/sh -c` argv, and named command references resolve during
 loading. The command registry is local to the loader; runtime bindings, autostart,
 and scratchpads retain only argument vectors. Event action labels describe executed

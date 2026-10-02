@@ -92,7 +92,7 @@ commands = [{ ref = "notify" }]
 
 [[binds]]
 key = "super+Return"
-spawn = { ref = "terminal" }
+action = { ref = "terminal" }
 
 [[binds]]
 key = "super+u"
@@ -293,7 +293,7 @@ TEST_CASE("Config parser rejects missing command refs and invalid regexes", "[co
         auto loaded = load_from_string(R"(
 [[binds]]
 key = "super+Return"
-spawn = { ref = "missing_alias" }
+action = { ref = "missing_alias" }
 )");
 
         REQUIRE_FALSE(loaded.has_value());
@@ -333,7 +333,7 @@ names = ["code", "chat"]
 
 [[rules]]
 match = { class = "Ghostty" }
-apply = { workspace_name = "oops" }
+apply = { workspace = "oops" }
 )");
 
         REQUIRE_FALSE(loaded.has_value());
@@ -353,7 +353,7 @@ apply = { workspace = 0, workspace_name = "code" }
 )");
 
         REQUIRE_FALSE(loaded.has_value());
-        REQUIRE(loaded.error().find("cannot define both 'workspace' and 'workspace_name'") != std::string::npos);
+        REQUIRE(loaded.error().find("workspace_name") != std::string::npos);
     }
 
     SECTION("conflicting monitor selectors")
@@ -365,7 +365,7 @@ apply = { monitor = 0, monitor_name = "HDMI-1" }
 )");
 
         REQUIRE_FALSE(loaded.has_value());
-        REQUIRE(loaded.error().find("cannot define both 'monitor' and 'monitor_name'") != std::string::npos);
+        REQUIRE(loaded.error().find("monitor_name") != std::string::npos);
     }
 }
 
@@ -461,7 +461,7 @@ TEST_CASE("Parsed matchers preserve full matching and reject invalid rules and s
 {
     auto loaded = load_from_string(R"(
 [[rules]]
-match = { class = "Firefox|Chromium", instance = "Navigator", title = ".*Video.*", type = "DIALOG" }
+match = { class = "Firefox|Chromium", instance = "Navigator", title = ".*Video.*", type = "Dialog" }
 apply = { floating = true }
 )");
     REQUIRE(loaded);
@@ -546,11 +546,11 @@ names = ["web", "code", "chat"]
 
 [[rules]]
 match = { class = "A" }
-apply = { workspace_name = "chat", monitor_name = "HDMI-1", below = true, geometry = { x = 5 } }
+apply = { workspace = "chat", monitor = "HDMI-1", layer = "below", geometry = { x = 5 } }
 
 [[rules]]
 match = { class = "B" }
-apply = { above = false }
+apply = { layer = "normal" }
 )");
     REQUIRE(loaded);
     auto const& first = loaded->rules[0].actions;
@@ -558,7 +558,7 @@ apply = { above = false }
     CHECK(first.monitor == std::variant<size_t, std::string>{ std::string("HDMI-1") });
     CHECK(first.layer == LayerHint::Below);
     CHECK(first.geometry == Geometry{ 5, 0, 800, 600 });
-    // An explicit false clears a layer preference rather than leaving it unspecified.
+    // Selecting normal explicitly clears a layer preference.
     CHECK(loaded->rules[1].actions.layer == LayerHint::Normal);
     CHECK(loaded->layout.strategy == LayoutStrategy::MasterStack);
 }
@@ -610,14 +610,14 @@ TEST_CASE("Configuration rejects malformed nested values at their owning field",
              {                                         "[[binds]]\nkey = 'F1'\naction = 1",                          "action" },
              {                                     "[[binds]]\nkey = 'F1'\naction = false",                          "action" },
              {                           "[[binds]]\nkey = 'F1'\naction = 'workspace switch 1.0'",              "workspace index" },
-             {         "[[binds]]\nkey = 'F1'\nspawn = { argv = ['true'], typo = true }",                          "typo" },
+             {         "[[binds]]\nkey = 'F1'\naction = { argv = ['true'], typo = true }",                          "action" },
              {                           "[commands]\nterminal = { argv = ['true', 1] }",                          "argv" },
              {                                               "[commands]\nterminal = {}",                      "terminal" },
              {              "[commands]\nterminal = { argv = ['true'], shell = 'true' }",                      "terminal" },
              {                              "[commands]\nterminal = { ref = 'browser' }",                           "ref" },
              {                                    "[commands]\nterminal = { argv = [] }",                          "argv" },
              {                                  "[commands]\nterminal = { argv = [''] }",                          "argv" },
-             {                      "[[binds]]\nkey = 'F1'\naction = 'window close'\nspawn = {argv = ['true']}",            "exactly one of" },
+             {                      "[[binds]]\nkey = 'F1'\naction = 'window close'\nspawn = {argv = ['true']}",            "spawn" },
              { "[[scratchpads]]\nname = 'term'\nspawn = { argv = ['true'] }\nmatch = {}",                       "matcher" },
              {                                         "[unknown_section]\nvalue = true",               "unknown_section" },
              {                    "[[rules]]\napply.geometry = { width = 10, typo = 1 }",                          "typo" },
@@ -706,10 +706,10 @@ spawn = {ref = 'script'}
 match = {class = 'Term'}
 [[binds]]
 key = 'F1'
-spawn = {ref = 'literal'}
+action = {ref = 'literal'}
 [[binds]]
 key = 'F2'
-spawn = {ref = 'script'}
+action = {ref = 'script'}
 )");
     REQUIRE(loaded);
     std::vector<std::string> literal{ "/bin/printf", "%s", "", "$HOME; two words" };
@@ -724,5 +724,99 @@ spawn = {ref = 'script'}
         auto rejected = load_from_string("[autostart]\ncommands = [" + command + "]\n");
         REQUIRE_FALSE(rejected);
         CHECK(rejected.error().find("NUL") != std::string::npos);
+    }
+}
+
+TEST_CASE("Configuration choices lower to one runtime meaning", "[config][rules]")
+{
+    for (std::string selector : { "1", "'code'" })
+    {
+        CAPTURE(selector);
+        auto config = load_from_string(
+            "[workspaces]\nnames = ['web', 'code']\n[[rules]]\napply = {workspace = " + selector + "}\n"
+        );
+        REQUIRE(config);
+        CHECK(config->rules.front().actions.workspace == 1);
+        CHECK_FALSE(config->rules.front().actions.monitor);
+        CHECK_FALSE(config->rules.front().actions.layer);
+    }
+    for (auto const& [name, layer] : {
+             std::pair{ "normal", LayerHint::Normal },
+             std::pair{ "above", LayerHint::Above },
+             std::pair{ "below", LayerHint::Below }
+         })
+    {
+        CAPTURE(name);
+        auto config = load_from_string("[[rules]]\napply = {layer = '" + std::string(name) + "'}\n");
+        REQUIRE(config);
+        CHECK(config->rules.front().actions.layer == layer);
+    }
+    auto monitor = load_from_string("[[rules]]\napply = {monitor = 0}\n[[rules]]\napply = {monitor = 'DUMMY1'}\n");
+    REQUIRE(monitor);
+    CHECK(monitor->rules[0].actions.monitor == std::variant<size_t, std::string>{ size_t{ 0 } });
+    CHECK(monitor->rules[1].actions.monitor == std::variant<size_t, std::string>{ std::string("DUMMY1") });
+
+    auto maximum = load_from_string("[[rules]]\napply = {monitor = 2147483647}\n");
+    REQUIRE(maximum);
+    CHECK(maximum->rules.front().actions.monitor == std::variant<size_t, std::string>{ size_t{ 2147483647 } });
+    for (std::string field : { "workspace", "monitor" })
+        for (std::string invalid : { "true", "1.0", "-1", "65535", "2147483648", "[]", "{}" })
+        {
+            // Monitor indices have a wider range than workspace indices.
+            if (field == "monitor" && invalid == "65535")
+                continue;
+            CAPTURE(field, invalid);
+            CHECK_FALSE(load_from_string("[[rules]]\napply = {" + field + " = " + invalid + "}\n"));
+        }
+    for (std::string apply : { "workspace_name = 'web'", "monitor_name = 'DUMMY1'", "above = true", "below = false",
+                              "layer = true", "layer = 'Above'", "layer = 'invalid'" })
+    {
+        CAPTURE(apply);
+        CHECK_FALSE(load_from_string("[[rules]]\napply = {" + apply + "}\n"));
+    }
+}
+
+TEST_CASE("Command forms are exclusive at every configuration use site", "[config][spawn]")
+{
+    for (std::string command : {
+             "{}", "{ref = 'terminal', argv = ['true']}", "{ref = 'terminal', shell = 'true'}",
+             "{argv = ['true'], shell = 'true'}", "{ref = 'terminal', typo = true}", "{ref = ''}",
+             "{argv = []}", "{argv = ['']}", "{shell = ''}", "{argv = ['true', 1]}"
+         })
+    {
+        CAPTURE(command);
+        CHECK_FALSE(load_from_string("[autostart]\ncommands = [" + command + "]\n"));
+        CHECK_FALSE(load_from_string("[[binds]]\nkey = 'F1'\naction = " + command + "\n"));
+        CHECK_FALSE(load_from_string(
+            "[[scratchpads]]\nname = 'term'\nmatch = {class = 'Term'}\nspawn = " + command + "\n"
+        ));
+    }
+    CHECK_FALSE(load_from_string("[commands]\nterminal = {ref = 'browser'}\n"));
+    CHECK_FALSE(load_from_string("[[binds]]\nkey = 'F1'\nspawn = {argv = ['true']}\n"));
+}
+
+TEST_CASE("Rule window types decode from the runtime enum", "[config][rules]")
+{
+    for (auto const& [name, type] : {
+             std::pair{ "Desktop", WindowType::Desktop }, std::pair{ "Dock", WindowType::Dock },
+             std::pair{ "Toolbar", WindowType::Toolbar }, std::pair{ "Menu", WindowType::Menu },
+             std::pair{ "Utility", WindowType::Utility }, std::pair{ "Splash", WindowType::Splash },
+             std::pair{ "Dialog", WindowType::Dialog }, std::pair{ "DropdownMenu", WindowType::DropdownMenu },
+             std::pair{ "PopupMenu", WindowType::PopupMenu }, std::pair{ "Tooltip", WindowType::Tooltip },
+             std::pair{ "Notification", WindowType::Notification }, std::pair{ "Combo", WindowType::Combo },
+             std::pair{ "Dnd", WindowType::Dnd }, std::pair{ "Normal", WindowType::Normal }
+         })
+    {
+        CAPTURE(name);
+        auto config = load_from_string(
+            "[[rules]]\nmatch = {type = '" + std::string(name) + "'}\napply = {floating = true}\n"
+        );
+        REQUIRE(config);
+        CHECK(config->rules.front().type == type);
+    }
+    for (std::string invalid : { "'dialog'", "'DIALOG'", "'popup_menu'", "0", "true" })
+    {
+        CAPTURE(invalid);
+        CHECK_FALSE(load_from_string("[[rules]]\nmatch = {type = " + invalid + "}\napply = {floating = true}\n"));
     }
 }

@@ -58,7 +58,7 @@ TEST_CASE(
 count = 2
 [[rules]]
 match = { class = "FloatingOutput" }
-apply = { floating = true, monitor_name = "DUMMY1" }
+apply = { floating = true, monitor = "DUMMY1" }
 )");
     REQUIRE(env);
     REQUIRE(env->x11_env.owns_display());

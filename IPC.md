@@ -68,7 +68,7 @@ cannot be represented by this line protocol.
 Queries read current state. Mutating commands are also accepted verbatim in a
 binding's `action` string, for example `action = "window fullscreen"`; both use one
 parser and executor. Queries and subscriptions cannot be bound. Bindings use a
-structured `spawn` field to launch processes; IPC callers can launch processes
+structured `action` table to launch processes; IPC callers can launch processes
 themselves. Commands concerning the active window return
 `error no active window` when none is selected. Relative monitor/workspace commands
 target the focused monitor; indices are zero-based.

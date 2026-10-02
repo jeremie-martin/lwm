@@ -84,9 +84,14 @@ are harmless and directories are left in place.
 [config.toml.example](config.toml.example) is the configuration reference and
 starter file, including bindings, rules, scratchpads, defaults, and reload limits.
 Bindings use `action = "COMMAND"` with the same command text as `lwmctl`, or
-`spawn = { ref = "terminal" }` (also accepting explicit `argv` or `shell`). Old
+`action = { ref = "terminal" }` (also accepting explicit `argv` or `shell`). Old
 per-action fields such as `toggle_fullscreen = true` are rejected; update existing
-configurations before installing this version. Invalid reloads keep the active
+configurations before installing this version. Rule placement uses `workspace` and
+`monitor`, each accepting an index or a name; replace `workspace_name` and
+`monitor_name` with those fields. Replace rule `above`/`below` flags with
+`layer = "normal"`, `"above"`, or `"below"`. Rule window types use their enum
+names, e.g. `Dialog` and `PopupMenu`, with exact casing. Binding `spawn` becomes
+an `action` table; scratchpad `spawn` is unchanged. Invalid reloads keep the active
 configuration.
 
 Each monitor has its own workspaces. Commands target the focused monitor and use

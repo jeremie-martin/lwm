@@ -86,7 +86,7 @@ action = "toggle_float"
 
 # Explicit bindings
 # key: one combo string, e.g. "super+Return", "super+shift+Left", "Print"
-# Each [[binds]] entry has exactly one of action = "COMMAND" or spawn = {...}.
+# Each [[binds]] entry has one action: WM command text or a process command table.
 # Actions use the same command text as lwmctl, without the executable name.
 # Queries and subscriptions cannot be bound; invalid commands fail configuration loading.
 # Keys use X11 keysym names. Duplicate modifier/keysym pairs are rejected,
@@ -95,11 +95,11 @@ action = "toggle_float"
 # non-workspace binding to retain. The workspace groups below are then added.
 [[binds]]
 key = "super+Return"
-spawn = { ref = "terminal" }
+action = { ref = "terminal" }
 
 [[binds]]
 key = "super+d"
-spawn = { ref = "launcher" }
+action = { ref = "launcher" }
 
 [[binds]]
 key = "super+q"
@@ -166,7 +166,7 @@ action = "reload-config"
 # contain spaces without shell quoting inside the TOML string. Commands must
 # fit the same 4096-byte request limit as IPC and contain no newline or NUL.
 # Workspace indices, ratio bounds, and scratchpad names are checked at load time.
-# spawn uses the structured command syntax documented above. Its shell/argv/ref
+# An action table uses the structured command syntax above. Its shell/argv/ref
 # forms are resolved while loading; runtime launch always receives an argv vector.
 # Old per-action fields such as toggle_fullscreen = true are rejected.
 # key_action events report semantic labels (see IPC.md), not source command text.
@@ -213,23 +213,21 @@ keys = ["1", "2", "3", "4", "5", "6", "7", "8", "9", "0"]
 #
 # match keys:
 #   class, instance, title  => regex
-#   type                    => EWMH type string
+#   type                    => WindowType enum name (case-sensitive)
 #   transient               => true/false
-# type: normal, desktop, dock, toolbar, menu, utility, splash, dialog,
-#       dropdown_menu, popup_menu, tooltip, notification, combo, or dnd
+# type: Normal, Desktop, Dock, Toolbar, Menu, Utility, Splash, Dialog,
+#       DropdownMenu, PopupMenu, Tooltip, Notification, Combo, or Dnd
 #
 # apply must contain at least one action. Keys:
-#   floating, fullscreen, above, below, sticky, skip_taskbar, skip_pager
+#   floating, fullscreen, sticky, skip_taskbar, skip_pager
 #   borderless, center      => true/false
 #   geometry = { x = 100, y = 100, width = 800, height = 600 }
-#   workspace = 1           # zero-based; use workspace_name when possible
-#   monitor = 0
-#   workspace_name = "dev"   # optional if you prefer names
-#   monitor_name = "HDMI-1"  # optional if you prefer names
+#   workspace = 1 or "dev"  # zero-based index or configured workspace name
+#   monitor = 0 or "HDMI-1" # zero-based index or output name
+#   layer = "normal", "above", or "below"
 #   scratchpad = "music"
-# Use either workspace or workspace_name, and either monitor or monitor_name.
-# workspace_name must appear in [workspaces].names. above and below cannot both
-# be true; explicitly setting both false selects the normal layer. Missing geometry
+# Workspace names must appear in [workspaces].names. Omitting layer leaves the
+# preference unchanged; layer = "normal" explicitly clears it. Missing geometry
 # fields default to x=0, y=0, width=800, height=600. Match regexes must be valid
 # and nonempty; they are compiled when loading the configuration. Malformed
 # configuration is rejected before any rules apply.
@@ -249,13 +247,13 @@ keys = ["1", "2", "3", "4", "5", "6", "7", "8", "9", "0"]
 
 # Example: float and center dialog windows
 # [[rules]]
-# match = { type = "dialog" }
+# match = { type = "Dialog" }
 # apply = { floating = true, center = true }
 
 # Example: pin Slack to a monitor/workspace
 # [[rules]]
 # match = { class = "Slack" }
-# apply = { monitor_name = "HDMI-1", workspace_name = "2" }
+# apply = { monitor = "HDMI-1", workspace = "2" }
 
 # Named scratchpads
 # Each entry requires a unique name, a spawn command, and at least one
@@ -267,11 +265,11 @@ keys = ["1", "2", "3", "4", "5", "6", "7", "8", "9", "0"]
 # Toggle with:
 #   [[binds]]
 #   key = "super+u"
-#   toggle_scratchpad = "terminal"
+#   action = "scratchpad toggle terminal"
 #
 # Generic scratchpad pool actions:
-#   scratchpad_stash = true
-#   scratchpad_cycle = true
+#   action = "scratchpad stash"
+#   action = "scratchpad cycle"
 
 # [[scratchpads]]
 # name = "terminal"

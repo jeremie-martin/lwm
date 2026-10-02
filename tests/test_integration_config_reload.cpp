@@ -243,7 +243,7 @@ TEST_CASE(
 
     std::string rules = R"(
 [[rules]]
-match = { type = "dialog" }
+match = { type = "Dialog" }
 apply = { geometry = { x = 300, y = 200, width = 240, height = 160 } }
 )";
     REQUIRE(env->wm.write_config(make_config("left", "right", 2, {}, rules)));
@@ -501,8 +501,8 @@ TEST_CASE("Integration: resolved launch bindings preserve argv and replace refer
             "literal = {argv = ['/bin/sh', '-c', 'out=$1; shift; printf \"<%s>\" \"$@\" > \"$out\"', "
             "'capture', '" + literal_path.string() + "', '', '$HOME; untouched', 'two words']}\n"
             "script = {shell = \"printf '%s' \\\"$(printf " + marker + ")\\\" > '" + shell_path.string() + "'\"}\n"
-            "[[binds]]\nkey = 'F6'\nspawn = {ref = 'literal'}\n"
-            "[[binds]]\nkey = 'F7'\nspawn = {ref = 'script'}\n";
+            "[[binds]]\nkey = 'F6'\naction = {ref = 'literal'}\n"
+            "[[binds]]\nkey = 'F7'\naction = {ref = 'script'}\n";
     };
     REQUIRE(env->wm.write_config(config("first")));
     REQUIRE(send_ipc_command(*socket, "reload-config") == "ok reloaded");
@@ -516,11 +516,20 @@ TEST_CASE("Integration: resolved launch bindings preserve argv and replace refer
     REQUIRE(send_key(env->conn, XK_F7));
     REQUIRE(wait_for_condition([&] { return read_text_file(shell_path) == "second"; }, kTimeout));
 
-    REQUIRE(env->wm.write_config(config("rejected") + "[[binds]]\nkey = 'F8'\naction = 'state'\n"));
-    auto rejected = send_ipc_command(*socket, "reload-config");
-    REQUIRE(rejected);
-    REQUIRE(rejected->starts_with("error "));
-    REQUIRE(std::filesystem::remove(shell_path));
-    REQUIRE(send_key(env->conn, XK_F7));
-    REQUIRE(wait_for_condition([&] { return read_text_file(shell_path) == "second"; }, kTimeout));
+    for (std::string invalid : {
+             "[[binds]]\nkey = 'F8'\naction = 'state'\n",
+             "[[binds]]\nkey = 'F8'\naction = {argv = ['true'], shell = 'true'}\n",
+             "[[rules]]\napply = {workspace = 0, workspace_name = '1'}\n",
+             "[[rules]]\napply = {layer = 'above', below = true}\n"
+         })
+    {
+        CAPTURE(invalid);
+        REQUIRE(env->wm.write_config(config("rejected") + invalid));
+        auto rejected = send_ipc_command(*socket, "reload-config");
+        REQUIRE(rejected);
+        REQUIRE(rejected->starts_with("error "));
+        REQUIRE(std::filesystem::remove(shell_path));
+        REQUIRE(send_key(env->conn, XK_F7));
+        REQUIRE(wait_for_condition([&] { return read_text_file(shell_path) == "second"; }, kTimeout));
+    }
 }
