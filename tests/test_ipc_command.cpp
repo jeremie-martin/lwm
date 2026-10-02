@@ -32,9 +32,9 @@ TEST_CASE("IPC grammar preserves public command spellings and typed requests", "
     check(
         { "subscribe", "focus_change", "state_change" },
         "subscribe focus_change,state_change",
-        Subscribe{ Event_FocusChange | Event_StateChange }
+        Subscribe{ event_mask<event::focus_change> | event_mask<event::state_change> }
     );
-    check({ "subscribe" }, "subscribe", Subscribe{ Event_All });
+    check({ "subscribe" }, "subscribe", Subscribe{ all_events });
 }
 
 TEST_CASE("IPC exposes every key-binding action except process launch", "[ipc][command]")

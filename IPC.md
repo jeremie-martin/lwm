@@ -230,8 +230,8 @@ name is rejected.
 only). Docks and desktops have no workspace. `config_reload.source` is `ipc`, `sighup`,
 or `keybind`. LWM does not emit a `focus_change` event when focus is cleared.
 
-`key_action.action` is the binding's action name as written in the configuration; the
-monitor actions add their direction (`focus_monitor_left`, `move_to_monitor_right`).
+`key_action.action` is the executed operation's semantic label;
+monitor actions include their direction (`focus_monitor_left`, `move_to_monitor_right`).
 `layout_change.action` names the layout action (`set_layout` with a string `value`,
 `set_ratio` with a numeric `value`, `adjust_ratio` with a `delta`, `reset_ratios`,
 `swap_next`, `swap_prev`), whether triggered by a binding or IPC, or `resize_split` with

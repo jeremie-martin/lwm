@@ -253,10 +253,20 @@ Execution copies a binding's action because reload can replace its owning config
 See the example's reload and rule sections for user-visible semantics.
 
 Workspace events compare current indices by output name with the last completion.
-Focus events describe the final explicit focus request. Other events are typed facts
-queued where they occur; their wire fields are encoded with reflect-cpp at one
-boundary. Layout values remain typed until encoding. IPC queries serialize derived
-views directly. A new subscription records the exposed snapshot as its baseline;
+Focus events describe the final explicit focus request. Completion emits these final
+results first, then queued map/unmap facts, then action/reload outcomes in occurrence
+order, and finally any state invalidation. It needs one fact buffer and no priority
+sort or merged event buffer.
+
+Event records define the subscription wire schema. Their C++ type names are the
+public event names; changing a name is a protocol change. Native reflection derives
+the filter-name list, while the event variant defines internal filter bits. Placement
+constructors provide either both immutable indices or neither. Optional fields are
+omitted and layout values retain their JSON types. `ipc::Server::emit()` accepts only
+a typed event, checks subscribers, assigns the sequence, and serializes one complete
+instance/sequence/event envelope over the record by reference. Event identity and filtering cannot contradict the payload type. Queued facts own captured metadata;
+borrowed action/kind/source labels refer to static strings. Transport retains only
+encoded bytes. IPC queries serialize derived views directly. A new subscription records the exposed snapshot as its baseline;
 `state_change` is emitted only when that snapshot changes, with revision checks
 avoiding unnecessary comparisons. [IPC.md](IPC.md#subscriptions) owns ordering and
 consumer synchronization guarantees.

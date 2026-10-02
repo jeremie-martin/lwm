@@ -190,21 +190,22 @@ TEST_CASE("IPC queues filtered events behind a pending subscription acknowledgem
         }
         REQUIRE_FALSE(padding.empty());
     }
-    REQUIRE_FALSE(f.server.has_subscribers(lwm::Event_All));
+    REQUIRE_FALSE(f.server.has_subscribers(lwm::all_events));
     peer.send("subscribe focus_change\n");
     f.pump(); // Register and attempt the acknowledgement, without reading it.
-    REQUIRE(f.server.has_subscribers(lwm::Event_FocusChange));
-    CHECK_FALSE(f.server.has_subscribers(lwm::Event_WindowMap));
+    REQUIRE(f.server.has_subscribers(lwm::event_mask<lwm::event::focus_change>));
+    CHECK_FALSE(f.server.has_subscribers(lwm::event_mask<lwm::event::window_map>));
     CHECK(f.requests.empty());
-    f.server.emit(lwm::Event_WindowMap, "ignored");
-    f.server.emit(lwm::Event_FocusChange, "{\"event\":\"focus_change\"}");
+    f.server.emit(lwm::event::window_map{ 2, "", "popup", {} });
+    CHECK(f.server.sequence() == 0);
+    f.server.emit(lwm::event::focus_change{ 1, "", "" });
     auto received = f.receive(peer, false);
     REQUIRE(received.starts_with(padding + "ok subscribed\n"));
     if (std::count(received.begin(), received.end(), '\n') < 2)
         received += f.receive(peer, false);
     CHECK(
         received == padding + "ok subscribed\n{\"instance\":\"" + f.server.instance()
-            + "\",\"sequence\":1,\"event\":\"focus_change\"}\n"
+            + "\",\"sequence\":1,\"event\":\"focus_change\",\"window\":1,\"class\":\"\",\"title\":\"\"}\n"
     );
 }
 
@@ -242,23 +243,24 @@ TEST_CASE("IPC buffers subscription writes and disconnects overflow instead of d
     Peer peer(f.server.path());
     peer.send("subscribe focus_change\n");
     REQUIRE(f.receive(peer, false) == "ok subscribed\n");
-    std::string event = "{\"event\":\"focus_change\",\"title\":\"" + std::string(20000, 'x') + "\"}";
+    lwm::event::focus_change event{ 1, "", std::string(20000, 'x') };
+    auto payload = "{\"event\":\"focus_change\",\"window\":1,\"class\":\"\",\"title\":\"" + event.title + "\"}";
     SECTION("queued events remain complete and ordered")
     {
-        for (int i = 0; i < 10; ++i) f.server.emit(lwm::Event_FocusChange, event);
+        for (int i = 0; i < 10; ++i) f.server.emit(event);
         std::string received;
         for (int i = 0; std::count(received.begin(), received.end(), '\n') < 10 && i < 100; ++i)
             received += f.receive(peer, false);
         std::string expected;
         for (int i = 1; i <= 10; ++i)
             expected += "{\"instance\":\"" + f.server.instance() + "\",\"sequence\":" + std::to_string(i) + ","
-                + event.substr(1) + "\n";
+                + payload.substr(1) + "\n";
         CHECK(received == expected);
     }
     SECTION("queue overflow closes the subscriber")
     {
-        for (int i = 0; i < 60; ++i) f.server.emit(lwm::Event_FocusChange, event);
-        CHECK_FALSE(f.server.has_subscribers(lwm::Event_FocusChange));
+        for (int i = 0; i < 60; ++i) f.server.emit(event);
+        CHECK_FALSE(f.server.has_subscribers(lwm::event_mask<lwm::event::focus_change>));
         CHECK(f.receive(peer).empty());
         Peer next(f.server.path());
         next.send("ping\n");
@@ -272,8 +274,9 @@ TEST_CASE("IPC subscriptions may drain continuously beyond one response deadline
     Peer peer(f.server.path());
     peer.send("subscribe focus_change\n");
     REQUIRE(f.receive(peer, false) == "ok subscribed\n");
-    std::string event = "{\"event\":\"focus_change\",\"title\":\"" + std::string(700000, 'x') + "\"}";
-    f.server.emit(lwm::Event_FocusChange, event);
+    lwm::event::focus_change event{ 1, "", std::string(700000, 'x') };
+    auto payload = "{\"event\":\"focus_change\",\"window\":1,\"class\":\"\",\"title\":\"" + event.title + "\"}";
+    f.server.emit(event);
     std::string received;
     for (int i = 0; i < 8; ++i)
     {
@@ -284,7 +287,30 @@ TEST_CASE("IPC subscriptions may drain continuously beyond one response deadline
         received.append(buffer, count);
         std::this_thread::sleep_for(std::chrono::milliseconds(100));
     }
-    CHECK(f.server.has_subscribers(lwm::Event_FocusChange));
+    CHECK(f.server.has_subscribers(lwm::event_mask<lwm::event::focus_change>));
     received += f.receive(peer, false);
-    CHECK(received == "{\"instance\":\"" + f.server.instance() + "\",\"sequence\":1," + event.substr(1) + "\n");
+    CHECK(received == "{\"instance\":\"" + f.server.instance() + "\",\"sequence\":1," + payload.substr(1) + "\n");
+}
+
+TEST_CASE("IPC filters typed events and preserves sequence gaps across subscribers", "[ipc][transport][subscribe]")
+{
+    Fixture f;
+    Peer focus(f.server.path()), all(f.server.path());
+    focus.send("subscribe focus_change\n");
+    all.send("subscribe\n");
+    REQUIRE(f.receive(focus, false) == "ok subscribed\n");
+    REQUIRE(f.receive(all, false) == "ok subscribed\n");
+    f.server.emit(lwm::event::state_change{});
+    lwm::event::focus_change fact{ 42, "app", "captured" };
+    f.server.emit(fact);
+    fact.title = "later";
+    auto expected = "{\"instance\":\"" + f.server.instance()
+        + "\",\"sequence\":2,\"event\":\"focus_change\",\"window\":42,\"class\":\"app\",\"title\":\"captured\"}\n";
+    CHECK(f.receive(focus, false) == expected);
+    auto received = f.receive(all, false);
+    if (std::count(received.begin(), received.end(), '\n') < 2)
+        received += f.receive(all, false);
+    CHECK(received == "{\"instance\":\"" + f.server.instance()
+        + "\",\"sequence\":1,\"event\":\"state_change\"}\n" + expected);
+    CHECK(f.server.sequence() == 2);
 }

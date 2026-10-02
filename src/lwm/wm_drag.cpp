@@ -167,7 +167,7 @@ void WindowManager::end_drag(bool commit)
         auto const& ratios = state_.monitors()[resize->monitor].workspaces[resize->workspace].split_ratios;
         auto it = ratios.find(resize->split.address);
         if (commit && it != ratios.end() && it->second != resize->split.ratio)
-            queue_event(event::LayoutChange{ "resize_split", it->second, std::nullopt });
+            queue_event(event::layout_change{ "resize_split", it->second, std::nullopt });
         return;
     }
     auto const& move = std::get<WindowDrag>(drag.operation);

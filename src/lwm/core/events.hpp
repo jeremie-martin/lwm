@@ -2,111 +2,94 @@
 
 #include <cstdint>
 #include <optional>
+#include <span>
 #include <string>
 #include <string_view>
 #include <variant>
+#include <type_traits>
+#include <utility>
+#include <rfl/Flatten.hpp>
+#include <rfl/Rename.hpp>
 
 namespace lwm {
 
-enum EventType : uint32_t
-{
-    Event_WindowMap = 1 << 0,
-    Event_WindowUnmap = 1 << 1,
-    Event_FocusChange = 1 << 2,
-    Event_WorkspaceSwitch = 1 << 3,
-    Event_LayoutChange = 1 << 4,
-    Event_ConfigReload = 1 << 5,
-    Event_KeyAction = 1 << 6,
-    Event_StateChange = 1 << 7,
-    Event_All = 0xFFFFFFFF,
-};
-
-struct NamedEvent
-{
-    std::string_view name;
-    EventType type;
-};
-inline constexpr NamedEvent event_specs[] = {
-    {       "window_map",       Event_WindowMap },
-    {     "window_unmap",     Event_WindowUnmap },
-    {     "focus_change",     Event_FocusChange },
-    { "workspace_switch", Event_WorkspaceSwitch },
-    {    "layout_change",    Event_LayoutChange },
-    {    "config_reload",    Event_ConfigReload },
-    {       "key_action",       Event_KeyAction },
-    {     "state_change",     Event_StateChange },
-};
-
-/// Parse a comma-separated filter string (e.g. "focus_change,window_map") into bitmask.
-/// Returns Event_All if filter is empty; unknown names are ignored.
-uint32_t parse_event_filter(std::string_view filter);
-
-/// A quoted JSON string, including opaque X metadata bytes.
-std::string json_string(std::string_view input);
-inline char const* json_bool(bool value) { return value ? "true" : "false"; }
-
+// Event records are the wire payloads. Type names are their subscription names.
+// Placement is immutable: a window has both coordinates or neither.
 struct Placement
 {
-    size_t monitor;
-    size_t workspace;
+    std::optional<size_t> const monitor, workspace;
+    Placement() : monitor(std::nullopt), workspace(std::nullopt) { }
+    Placement(size_t monitor, size_t workspace) : monitor(monitor), workspace(workspace) { }
 };
 
-// Subscription events are typed facts; JSON is produced in one place.
 namespace event {
-struct WorkspaceSwitch
+struct workspace_switch
 {
     size_t monitor, from, to;
 };
-struct FocusChange
+struct focus_change
 {
     uint32_t window;
-    std::string wm_class, title;
+    rfl::Rename<"class", std::string> wm_class;
+    std::string title;
 };
-struct WindowMap
+struct window_map
 {
     uint32_t window;
-    std::string wm_class;
+    rfl::Rename<"class", std::string> wm_class;
     std::string_view kind;
-    std::optional<Placement> placement; ///< Absent for fixtures and direct-mapped popups
+    rfl::Flatten<Placement> placement;
 };
-struct WindowUnmap
+struct window_unmap
 {
     uint32_t window;
     std::string_view kind;
-    std::optional<Placement> placement; ///< Absent for fixtures
+    rfl::Flatten<Placement> placement;
 };
 using LayoutValue = std::variant<std::string, double>;
-struct LayoutChange
+struct layout_change
 {
     std::string_view action;
     std::optional<LayoutValue> value;
     std::optional<double> delta;
 };
-struct KeyAction
+struct key_action
 {
     std::string_view action;
 };
-struct ConfigReload
+struct config_reload
 {
     bool success;
     std::string_view source;
-    std::string error;
+    std::optional<std::string> error;
 };
+struct state_change { };
 } // namespace event
 
-// Variant order is the documented delivery order within one operation.
 using Event = std::variant<
-    event::WorkspaceSwitch,
-    event::FocusChange,
-    event::WindowMap,
-    event::WindowUnmap,
-    event::LayoutChange,
-    event::KeyAction,
-    event::ConfigReload>;
+    event::workspace_switch,
+    event::focus_change,
+    event::window_map,
+    event::window_unmap,
+    event::layout_change,
+    event::key_action,
+    event::config_reload,
+    event::state_change>;
 
-EventType event_type(Event const& event);
-// Workspace changes, then focus, then map/unmap, then action and reload outcomes.
-int event_priority(Event const& event);
-std::string event_json(Event const& event);
+// Filters are derived from the same variant as delivery; their bits are internal.
+static_assert(std::variant_size_v<Event> <= 32);
+inline constexpr uint32_t all_events = 0xFFFFFFFF;
+template <typename T> inline constexpr uint32_t event_mask = []<size_t... I>(std::index_sequence<I...>)
+{
+    static_assert((std::is_same_v<T, std::variant_alternative_t<I, Event>> || ...));
+    return ((std::is_same_v<T, std::variant_alternative_t<I, Event>> ? uint32_t{ 1 } << I : 0) | ...);
+}(std::make_index_sequence<std::variant_size_v<Event>>{});
+std::span<std::string_view const> event_names();
+uint32_t parse_event_filter(std::string_view filter);
+std::string event_json(Event const& event, std::string_view instance, uint64_t sequence);
+
+/// A quoted JSON string, including opaque X metadata bytes.
+std::string json_string(std::string_view input);
+inline char const* json_bool(bool value) { return value ? "true" : "false"; }
 
 } // namespace lwm

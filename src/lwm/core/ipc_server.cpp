@@ -240,21 +240,20 @@ void Server::write_response(Client& client)
     }
 }
 
-bool Server::has_subscribers(EventType type) const
+bool Server::has_subscribers(uint32_t mask) const
 {
-    return std::ranges::any_of(clients_, [type](auto const& c) { return c.fd >= 0 && (c.mask & type); });
+    return std::ranges::any_of(clients_, [mask](auto const& c) { return c.fd >= 0 && (c.mask & mask); });
 }
 
-void Server::emit(EventType type, std::string_view json)
+void Server::emit(Event const& event)
 {
-    if (!has_subscribers(type))
+    uint32_t mask = uint32_t{ 1 } << event.index();
+    if (!has_subscribers(mask))
         return;
-    // Event objects are constructed by the WM; sequence is additive wire metadata.
-    std::string line = "{\"instance\":\"" + instance_ + "\",\"sequence\":" + std::to_string(++sequence_) + ","
-        + std::string(json.substr(1)) + "\n";
+    auto line = event_json(event, instance_, ++sequence_) + "\n";
     for (auto& client : clients_)
     {
-        if (client.fd < 0 || !(client.mask & type))
+        if (client.fd < 0 || !(client.mask & mask))
             continue;
         if (client.output.size() - client.sent + line.size() > max_event_bytes)
         {

@@ -34,7 +34,7 @@ bool print_usage(std::ostream& out, std::string_view group = {})
     if (group.empty() || group == "subscribe")
     {
         out << "\nSubscription filters:";
-        for (auto const& event : lwm::event_specs) out << ' ' << event.name;
+        for (auto name : lwm::event_names()) out << ' ' << name;
         out << '\n';
     }
     out << "\nTimeout defaults to 2000 ms; idle subscriptions do not time out.\n"

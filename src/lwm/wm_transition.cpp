@@ -551,33 +551,32 @@ void WindowManager::queue_event(Event event) { events_.push_back(std::move(event
 // fires when the exposed state snapshot actually differs.
 void WindowManager::emit_events(bool focus_requested)
 {
-    std::vector<Event> events;
     auto const& monitors = state_.monitors();
     std::map<std::string, size_t> workspaces;
     for (size_t m = 0; m < monitors.size(); ++m)
     {
         auto current = monitors[m].current_workspace;
         if (auto it = root_.workspaces.find(monitors[m].name); it != root_.workspaces.end() && it->second != current)
-            events.emplace_back(event::WorkspaceSwitch{ m, it->second, current });
+            ipc_.emit(event::workspace_switch{ m, it->second, current });
         workspaces.emplace(monitors[m].name, current);
     }
     root_.workspaces = std::move(workspaces);
     if (auto const* active = state_.find(state_.active_window()); active && focus_requested)
-        events.emplace_back(event::FocusChange{ active->id, active->wm_class, active->name });
-    std::ranges::move(events_, std::back_inserter(events));
+        ipc_.emit(event::focus_change{ active->id, active->wm_class, active->name });
+    // Map/unmap facts precede outcomes; each group retains occurrence order.
+    for (bool mappings : { true, false })
+        for (auto const& event : events_)
+            if ((std::holds_alternative<event::window_map>(event) || std::holds_alternative<event::window_unmap>(event)) == mappings)
+                ipc_.emit(event);
     events_.clear();
-    std::ranges::stable_sort(events, { }, event_priority);
-    for (auto const& event : events)
-        if (auto type = event_type(event); ipc_.has_subscribers(type))
-            ipc_.emit(type, event_json(event));
     // Only a new revision can change the exposed state.
-    if (ipc_.has_subscribers(Event_StateChange) && state_.revision() != root_.snapshot_revision)
+    if (ipc_.has_subscribers(event_mask<event::state_change>) && state_.revision() != root_.snapshot_revision)
     {
         root_.snapshot_revision = state_.revision();
         if (auto snapshot = state_json(); snapshot != root_.snapshot)
         {
             root_.snapshot = std::move(snapshot);
-            ipc_.emit(Event_StateChange, "{\"event\":\"state_change\"}");
+            ipc_.emit(event::state_change{});
         }
     }
 }

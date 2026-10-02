@@ -537,7 +537,7 @@ void WindowManager::report_reload(std::expected<void, std::string> const& result
         LWM_LOG_INFO("Config reloaded successfully ({})", source);
     else
         LWM_LOG_WARN_LIMIT(std::chrono::seconds(5), "Config reload failed ({}): {}", source, result.error());
-    queue_event(event::ConfigReload{ result.has_value(), source, result ? std::string() : result.error() });
+    queue_event(event::config_reload{ result.has_value(), source, result ? std::nullopt : std::optional{ result.error() } });
 }
 
 // Processes and window lifetime

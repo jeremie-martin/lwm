@@ -29,12 +29,12 @@ public:
     void start(std::string path);
     void stop();
     std::string const& path() const { return path_; }
-    bool has_subscribers(EventType type) const;
+    bool has_subscribers(uint32_t mask) const;
     std::optional<Clock::time_point> deadline() const;
     void append_poll_fds(std::vector<pollfd>& fds) const;
     void dispatch(std::span<pollfd const> fds, Handler const& handler);
     void expire();
-    void emit(EventType type, std::string_view json);
+    void emit(Event const& event);
     uint64_t sequence() const { return sequence_; }
     // Counts accepted subscriptions, so the owner can take a baseline for new subscribers.
     uint64_t subscriptions() const { return subscriptions_; }

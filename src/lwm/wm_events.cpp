@@ -157,26 +157,26 @@ void WindowManager::handle_map_request(xcb_map_request_event_t const& e)
     if (state_.find_fixture(e.window) || is_override_redirect(e.window))
         return;
     admit_window(e.window, false);
-    if (!ipc_.has_subscribers(Event_WindowMap))
+    if (!ipc_.has_subscribers(event_mask<event::window_map>))
         return;
     if (auto const* client = state_.find(e.window))
-        queue_event(event::WindowMap{ e.window,
+        queue_event(event::window_map{ e.window,
                                       client->wm_class,
                                       client_kind_str(client->kind()),
                                       Placement{ client->monitor, client->workspace } });
     else if (auto const* fixture = state_.find_fixture(e.window))
-        queue_event(event::WindowMap{ e.window, "", fixture_role_str(fixture->role), std::nullopt });
+        queue_event(event::window_map{ e.window, "", fixture_role_str(fixture->role), {} });
     else
-        queue_event(event::WindowMap{ e.window, "", "popup", std::nullopt });
+        queue_event(event::window_map{ e.window, "", "popup", {} });
 }
 
 void WindowManager::handle_window_removal(xcb_window_t window)
 {
     if (auto const* client = state_.find(window))
-        queue_event(event::WindowUnmap{ window, client_kind_str(client->kind()), Placement{ client->monitor, client->workspace } });
+        queue_event(event::window_unmap{ window, client_kind_str(client->kind()), Placement{ client->monitor, client->workspace } });
     else if (auto const* fixture = state_.find_fixture(window))
     {
-        queue_event(event::WindowUnmap{ window, fixture_role_str(fixture->role), std::nullopt });
+        queue_event(event::window_unmap{ window, fixture_role_str(fixture->role), {} });
         workareas_dirty_ |= fixture->role == Fixture::Role::Dock;
     }
     else
@@ -373,7 +373,7 @@ void WindowManager::handle_key_press(xcb_key_press_event_t const& e)
     LWM_LOG_TRACE("Key action: action={} keysym={:#x} modifiers={:#x}", action_name(action), keysym, e.state);
     if (std::holds_alternative<action::ToggleWorkspace>(action) && is_auto_repeat_toggle(keysym, e.time))
         return;
-    queue_event(event::KeyAction{ action_name(action) });
+    queue_event(event::key_action{ action_name(action) });
     if (auto result = execute(action, "keybind"); !result)
         LWM_LOG_DEBUG("Key action {} failed: {}", action_name(action), result.error());
 }

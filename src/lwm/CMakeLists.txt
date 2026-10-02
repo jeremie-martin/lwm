@@ -38,7 +38,8 @@ target_link_libraries(liblwm PUBLIC
     lwm_build_options
     PkgConfig::XCB
     quill::quill
-    PRIVATE PkgConfig::SYSTEMD reflectcpp::reflectcpp
+    reflectcpp::reflectcpp
+    PRIVATE PkgConfig::SYSTEMD
 )
 
 # Keep every logging call available in every build; the owned logger applies runtime gates.

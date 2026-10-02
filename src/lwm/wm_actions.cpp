@@ -219,7 +219,7 @@ void WindowManager::layout_changed(
     std::optional<double> delta
 )
 {
-    queue_event(event::LayoutChange{ action_name(action), std::move(value), delta });
+    queue_event(event::layout_change{ action_name(action), std::move(value), delta });
 }
 
 // Window state
