@@ -251,6 +251,7 @@ private:
     void manage_fixture(xcb_window_t window, Fixture::Role role, bool adopting);
     // Returns whether WM_HINTS currently carries the urgency flag.
     bool read_initial_state(Client& client, bool honor_initial_state);
+    Client read_client(xcb_window_t window, ClassificationResult const& initial, bool adopting);
     Client initial_client(xcb_window_t window, ClassificationResult const& initial);
     Geometry initial_floating_geometry(Client& candidate);
     struct SizeHints

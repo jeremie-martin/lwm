@@ -60,12 +60,19 @@ void WindowManager::scan_existing_windows(bool handoff)
     }
     if (std::exchange(workareas_dirty_, false))
         refresh_workareas();
-    // Windows without a saved record join the restored current workspace.
+    // Restore the surviving graph before newcomers choose their placement.
+    // Application properties are live observations; private intent comes from
+    // the handoff. Docks above already supplied the discovered workareas.
     if (handoff_)
-        state_.restore_workspaces(*handoff_);
+    {
+        std::vector<Client> observed;
+        for (auto const& [window, initial] : clients)
+            if (initial.classification.kind == WindowClassification::Kind::Tiled
+                || initial.classification.kind == WindowClassification::Kind::Floating)
+                observed.push_back(read_client(window, initial, true));
+        state_.restore_graph(*handoff_, std::move(observed));
+    }
     for (auto& [window, initial] : clients) manage_window(window, std::move(initial), true);
-    if (handoff_)
-        state_.restore_membership(*handoff_);
 
     // Registration and tiled rules establish the complete layout before any
     // initial floating placement. Resolve floating parents before their children;
@@ -337,30 +344,25 @@ WindowManager::SizeHints WindowManager::read_size_hints(xcb_window_t window, boo
     return result;
 }
 
-void WindowManager::manage_client(xcb_window_t window, ClassificationResult const& initial, bool start_iconic, bool adopting)
+Client WindowManager::read_client(xcb_window_t window, ClassificationResult const& initial, bool adopting)
 {
     Client candidate = initial_client(window, initial);
-    bool hinted_urgent = read_initial_state(candidate, !adopting);
-    auto hinted_fullscreen_monitors = candidate.fullscreen_monitors;
-    candidate.iconic |= start_iconic;
+    auto& output = outputs_[window];
+    output.mapped = adopting;
+    output.urgent = read_initial_state(candidate, !adopting);
+    // Remember the observed property so restoration can remove obsolete hints.
+    output.fullscreen_monitors.emplace(candidate.fullscreen_monitors);
+    return candidate;
+}
 
-    auto const* saved = adopting && handoff_ ? handoff_->find(window) : nullptr;
-    if (saved)
+void WindowManager::manage_client(xcb_window_t window, ClassificationResult const& initial, bool start_iconic, bool adopting)
+{
+    if (!state_.find(window))
     {
-        // Restart restores saved intent directly rather than replaying rules.
-        candidate.monitor = saved->monitor;
-        candidate.workspace = saved->workspace;
-        candidate.mode = saved->mode;
-        candidate.preferences = saved->preferences;
-        candidate.urgency.sources = saved->urgency;
-        candidate.borderless = saved->borderless;
-        candidate.desktop_pinned = saved->desktop_pinned;
-        candidate.fullscreen_monitors = saved->fullscreen_monitors;
+        auto candidate = read_client(window, initial, adopting);
+        candidate.iconic |= start_iconic;
+        state_.insert(std::move(candidate));
     }
-    state_.insert(
-        std::move(candidate),
-        adopting && handoff_ ? std::span(handoff_->registration_order) : std::span<xcb_window_t const>{ }
-    );
 
     uint32_t mask = kManagedWindowEventMask;
     xcb_change_window_attributes(conn_.get(), window, XCB_CW_EVENT_MASK, &mask);
@@ -378,17 +380,11 @@ void WindowManager::manage_client(xcb_window_t window, ClassificationResult cons
     );
     xcb_ewmh_set_frame_extents(ewmh_.get(), window, 0, 0, 0, 0);
     read_sync_counter(window);
-    auto& output = outputs_[window];
-    output.mapped = adopting;
-    // Publication writes WM_HINTS only when urgency differs from what it already says.
-    output.urgent = hinted_urgent;
-    // Restoration can clear an obsolete monitor-index hint. Remember the
-    // observed property so publication removes it instead of assuming absence.
-    output.fullscreen_monitors.emplace(hinted_fullscreen_monitors);
 
     // The matched rule is remembered either way, so later metadata changes
     // apply rules only when the result changes.
     state_.rule(window, initial.rule ? std::optional{ *initial.rule } : std::nullopt);
+    bool saved = adopting && handoff_ && handoff_->find(window);
     if (!saved && (!adopting || !floating_mode(state_.require(window))))
         place_new_client(window);
 

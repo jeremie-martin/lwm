@@ -314,17 +314,17 @@ TEST_CASE("Fullscreen assignments preserve history while requests renew it", "[s
     SECTION("Off workspace") { state.switch_workspace(0, 1); }
     SECTION("Minimized") { state.iconic(1, true); }
     SECTION("Showing desktop") { state.show_desktop(true); }
-    auto claims = state.snapshot().fullscreen_claims;
+    auto claims = state.fullscreen_claims();
     state.complete_focus();
     auto revision = state.revision();
     state.fullscreen(2, true);
     state.fullscreen(1, true);
-    CHECK(state.snapshot().fullscreen_claims == claims);
+    CHECK(state.fullscreen_claims() == claims);
     CHECK(state.revision() == revision);
     CHECK_FALSE(state.complete_focus());
 
     state.request_fullscreen(1);
-    CHECK(state.snapshot().fullscreen_claims == std::vector<xcb_window_t>{ 2, 1 });
+    CHECK(state.fullscreen_claims() == std::vector<xcb_window_t>{ 2, 1 });
     CHECK(state.revision() > revision);
     state.complete_focus();
     CHECK(state.active_window() == (state.focusable(state.require(1)) ? 1
@@ -366,7 +366,7 @@ TEST_CASE("Fullscreen admission establishes priority and excludes maximize", "[s
     state.fullscreen(2, true);
     CHECK(state.revision() == revision);
     state.fullscreen(2, false);
-    CHECK(state.require(2).fullscreen_claim == 0);
+    CHECK(state.fullscreen_claims() == std::vector<xcb_window_t>{ 1 });
     CHECK(state.fullscreen_owner(0) == 1);
 }
 

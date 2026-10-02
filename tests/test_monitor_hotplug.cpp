@@ -7,9 +7,9 @@ Monitor monitor(std::string name, int16_t x = 0)
 {
     Monitor m;
     m.name = std::move(name);
-    m.x = x;
-    m.width = 1000;
-    m.height = 800;
+    m.geometry.x = x;
+    m.geometry.width = 1000;
+    m.geometry.height = 800;
     m.workspaces.resize(3);
     return m;
 }
@@ -34,7 +34,7 @@ TEST_CASE("Output reconciliation preserves complete surviving workspace state", 
     CHECK(restored.split_ratios.at(SplitAddress{ 1 }) == 0.3);
     CHECK(next[1].current_workspace == 2);
     CHECK(next[1].previous_workspace == 1);
-    CHECK(next[1].x == -1000);
+    CHECK(next[1].geometry.x == -1000);
     CHECK(next[2].workspaces[2].windows.empty());
 }
 TEST_CASE("Removed outputs merge tiled membership without replacing surviving policy", "[hotplug][monitor]")

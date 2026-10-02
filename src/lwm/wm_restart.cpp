@@ -16,7 +16,15 @@ void WindowManager::read_handoff()
         return;
     handoff_ = restart::decode(words);
     if (!handoff_)
-        LWM_LOG_WARN("Ignoring restart state from an incompatible LWM version; adopting windows afresh");
+        LWM_LOG_WARN(
+            "Ignoring restart state: reason={} format={} expected={}; adopting windows afresh",
+            words.front() != restart::format ? "format mismatch" : "malformed snapshot",
+            words.front(),
+            restart::format
+        );
+    else
+        LWM_LOG_INFO("Restart state accepted: format={} monitors={} clients={} focused_monitor={} active_window={:#x}",
+                     words.front(), handoff_->monitors.size(), handoff_->clients.size(), handoff_->focused_monitor, handoff_->active);
 }
 
 void WindowManager::prepare_restart()

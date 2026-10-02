@@ -150,13 +150,13 @@ TEST_CASE("Position hint guard respects non-zero monitor origin", "[floating]")
 TEST_CASE("Runtime position hints distinguish assigned desktops from WM publication", "[floating][monitor]")
 {
     Monitor left;
-    left.x = 0;
-    left.y = 0;
-    left.width = 1920;
-    left.height = 1080;
+    left.geometry.x = 0;
+    left.geometry.y = 0;
+    left.geometry.width = 1920;
+    left.geometry.height = 1080;
 
     Monitor right = left;
-    right.x = 1920;
+    right.geometry.x = 1920;
 
     std::vector<Monitor> monitors{ left, right };
     Geometry hinted{ 2200, 100, 400, 300 };

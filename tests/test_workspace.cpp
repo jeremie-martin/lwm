@@ -35,10 +35,10 @@ TEST_CASE("Window can be found across workspaces", "[workspace]")
 TEST_CASE("Monitor working_area accounts for struts", "[monitor]")
 {
     Monitor mon;
-    mon.x = 0;
-    mon.y = 0;
-    mon.width = 1920;
-    mon.height = 1080;
+    mon.geometry.x = 0;
+    mon.geometry.y = 0;
+    mon.geometry.width = 1920;
+    mon.geometry.height = 1080;
     init_workspaces(mon);
 
     // No strut
@@ -77,10 +77,10 @@ TEST_CASE("Working area handles int16_t coordinate boundaries", "[workspace][edg
 {
     Monitor mon;
     init_workspaces(mon);
-    mon.x = 32700;
-    mon.y = 32700;
-    mon.width = 100;
-    mon.height = 100;
+    mon.geometry.x = 32700;
+    mon.geometry.y = 32700;
+    mon.geometry.width = 100;
+    mon.geometry.height = 100;
     mon.strut.top = 10;
     mon.strut.left = 10;
 
@@ -94,10 +94,10 @@ TEST_CASE("Working area handles int16_t coordinate boundaries", "[workspace][edg
 TEST_CASE("Working area handles negative coordinates", "[workspace][edge]")
 {
     Monitor mon;
-    mon.x = -1000;
-    mon.y = -1000;
-    mon.width = 1920;
-    mon.height = 1080;
+    mon.geometry.x = -1000;
+    mon.geometry.y = -1000;
+    mon.geometry.width = 1920;
+    mon.geometry.height = 1080;
     init_workspaces(mon);
     mon.strut.top = 50;
     mon.strut.left = 50;
@@ -112,10 +112,10 @@ TEST_CASE("Working area handles negative coordinates", "[workspace][edge]")
 TEST_CASE("Working area handles maximum uint16_t dimensions", "[workspace][edge]")
 {
     Monitor mon;
-    mon.x = 0;
-    mon.y = 0;
-    mon.width = 65535;
-    mon.height = 65535;
+    mon.geometry.x = 0;
+    mon.geometry.y = 0;
+    mon.geometry.width = 65535;
+    mon.geometry.height = 65535;
     init_workspaces(mon);
     mon.strut.left = 100;
     mon.strut.top = 100;
@@ -130,10 +130,10 @@ TEST_CASE("Working area handles maximum uint16_t dimensions", "[workspace][edge]
 TEST_CASE("Working area with zero struts returns full monitor area", "[workspace][edge]")
 {
     Monitor mon;
-    mon.x = 100;
-    mon.y = 100;
-    mon.width = 1920;
-    mon.height = 1080;
+    mon.geometry.x = 100;
+    mon.geometry.y = 100;
+    mon.geometry.width = 1920;
+    mon.geometry.height = 1080;
     init_workspaces(mon);
     mon.strut = {};
 
@@ -147,10 +147,10 @@ TEST_CASE("Working area with zero struts returns full monitor area", "[workspace
 TEST_CASE("Working area subtracts each strut independently", "[workspace][edge]")
 {
     Monitor mon;
-    mon.x = 0;
-    mon.y = 0;
-    mon.width = 1920;
-    mon.height = 1080;
+    mon.geometry.x = 0;
+    mon.geometry.y = 0;
+    mon.geometry.width = 1920;
+    mon.geometry.height = 1080;
     init_workspaces(mon);
 
     SECTION("Top strut")

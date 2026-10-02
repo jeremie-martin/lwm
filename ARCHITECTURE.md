@@ -53,7 +53,7 @@ The following state is authoritative:
 | `Workspace::preferred_tile` | Destination intent after relocation; actual tiled focus clears it |
 | `Client::order` / `Fixture::order` | Registration order across both registries |
 | `Client::mru_order` | Completed focus recency; zero means never focused |
-| `Client::fullscreen_claim` | Fullscreen interaction recency; zero exactly when fullscreen is disabled |
+| `State::fullscreen_claims_` | Fullscreen clients in interaction order, oldest to newest |
 | `active_window` | Final selected managed window, or none |
 | Named scratchpad slots and pool | The only scratchpad membership records |
 
@@ -267,29 +267,37 @@ such as fullscreen, sticky, iconic, and maximize travel through `_NET_WM_STATE`.
 Adoption proceeds in this order:
 
 1. Register fixtures and read dock reservations.
-2. `restore_workspaces()` rebinds the saved graph by output name using the live
-   topology policy. Fewer configured workspaces fold into the last; additional
-   workspaces keep defaults. Changed topology fits floating rectangles and clears
-   fullscreen-monitor hints; unchanged topology preserves them.
-3. Admit clients directly from saved records, without replaying rules. Reserve all
-   saved registration ranks so new windows follow survivors even when fixtures were
-   scanned first. Unsaved windows join the restored current workspace.
-4. `restore_membership()` orders tiles and restores preferences, recency, and
-   scratchpad claims. Restore surviving fullscreen claims in saved order, then
-   append new adoption claims. Restore focus and allow pending launches to claim
-   remaining matching clients.
+2. Read application properties for all normal clients. `State::restore_graph()`
+   overlays saved `ClientIntent` values on surviving observations and installs the
+   saved `MonitorState`/`Workspace` graph directly, including tiled order.
+3. Rebind through the same `replace_monitors()` implementation as live hotplug.
+   Fewer configured workspaces fold into the last; additional workspaces keep
+   defaults. Changed topology fits floating rectangles and clears fullscreen-monitor
+   hints; unchanged restart topology preserves them. Filter vanished clients after
+   merging, retaining the existing workspace-preference precedence.
+4. Admit newcomers on the restored current workspace unless a concrete desktop hint
+   places them elsewhere. Saved registration ranks remain reserved, including when
+   fixtures were scanned first. Preserve surviving fullscreen claims and append new
+   claims in observation order. Restore scratchpad claims, place new floating clients,
+   restore focus, and let pending launches claim remaining matching clients.
 
 Missing clients and removed scratchpad names are skipped. Autostart is suppressed
 whenever a predecessor handed over, even if the snapshot is unusable.
 
-Snapshot structs are the schema. Native C++26 reflection and bundled yyjson encode
+The live persistent value types are also the snapshot schema; X observations,
+RandR handles, dock reservations and publication caches are not serialized.
+Native C++26 reflection and bundled yyjson encode
 required fields (optional values use null), tagged modes, and checked integers.
-LWM also rejects duplicate/extra fields and invalid relationships between records.
+LWM also rejects duplicate/extra fields and invalid relationships between records,
+including incomplete, duplicate, or misplaced tiled membership.
 The CARDINAL32 envelope contains a format word, byte length, and zero-padded JSON;
-length and padding must match exactly. Output names preserve opaque bytes. Change
-the format version when changing the schema. Any incompatible or malformed snapshot
-is rejected as a whole and falls back to fresh adoption; there is no cross-version
-codec.
+length and padding must match exactly. Output names preserve opaque bytes. The
+current format is 12 and follows the domain values directly, with no legacy field
+aliases or conversion layer. Schema changes require a format bump. Incompatible
+or malformed snapshots are rejected as a whole; windows are adopted afresh through
+the normal startup path. There is no migration codec. Consequently, the first
+restart from a format-11 binary loses private workspace and focus history;
+subsequent same-format restarts preserve it.
 
 ## Logging
 

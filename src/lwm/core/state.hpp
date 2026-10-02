@@ -100,6 +100,7 @@ public:
     bool shows(size_t monitor, size_t workspace) const;
     bool in_view(Client const& client) const;
     xcb_window_t fullscreen_owner(size_t monitor) const;
+    std::vector<xcb_window_t> const& fullscreen_claims() const { return fullscreen_claims_; }
     std::vector<xcb_window_t> fullscreen_owners() const;
     FullscreenVisibility fullscreen_visibility() const;
     bool visible(Client const& client) const;
@@ -202,11 +203,9 @@ public:
 
     // Exec handoff
     restart::Snapshot snapshot() const;
-    // Before adoption: resolve the handoff onto current outputs and restore the
-    // workspace graph. The rebound records then place clients and rank membership.
-    void restore_workspaces(restart::Snapshot& snapshot);
-    // After adoption placed each saved client: order, tile preference, recency and claims.
-    void restore_membership(restart::Snapshot const& snapshot);
+    // Install a validated saved graph over freshly observed application state,
+    // rebind it to discovered outputs, then admit newcomers in observation order.
+    void restore_graph(restart::Snapshot const& snapshot, std::vector<Client> observed);
 
     // Publication reads a frozen model; Debug builds reject mutation meanwhile.
     void freeze() { frozen_ = true; }
@@ -236,20 +235,19 @@ private:
     bool repair_focus_ = false;
     uint64_t next_order_ = 0;
     uint64_t next_recency_ = 1;
-    uint64_t next_fullscreen_claim_ = 0;
+    std::vector<xcb_window_t> fullscreen_claims_;
     uint64_t revision_ = 0;
     bool frozen_ = false;
 
     uint64_t register_window(xcb_window_t id, std::span<xcb_window_t const> registration_order);
     Client& edit(xcb_window_t id);
-    std::vector<xcb_window_t> fullscreen_claim_order() const;
     Workspace& edit_workspace(size_t monitor, size_t workspace);
     void mutated();
     void select_focus(xcb_window_t id, uint32_t time = 0, bool record_user_time = true);
     void set_mode(xcb_window_t id, bool floating);
     void apply_default_mode(xcb_window_t id);
     // Records a field change; an unchanged value is not a mutation.
-    template <typename T, typename V> bool assign(xcb_window_t id, T Client::* field, V&& value)
+    template <typename Owner, typename T, typename V> bool assign(xcb_window_t id, T Owner::* field, V&& value)
     {
         auto& client = clients_.at(id);
         if (client.*field == value)
@@ -262,6 +260,7 @@ private:
     std::optional<TileSlot> detach(Client const& client);
     void release_scratchpad(xcb_window_t id);
     void forget_missing_tile_slot(Client& client) const;
+    void replace_monitors(std::vector<Monitor> monitors, bool fit_unchanged);
 };
 
 } // namespace lwm

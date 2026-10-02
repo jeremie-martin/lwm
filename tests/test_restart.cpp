@@ -1,3 +1,4 @@
+#include "lwm/core/invariants.hpp"
 #include "lwm/core/restart.hpp"
 #include "lwm/core/state.hpp"
 #include "state_fixture.hpp"
@@ -15,7 +16,7 @@ namespace {
 std::vector<uint32_t> pack_json(std::string const& text)
 {
     std::vector<uint32_t> words(2 + (text.size() + 3) / 4);
-    words[0] = 11;
+    words[0] = 12;
     words[1] = static_cast<uint32_t>(text.size());
     std::memcpy(words.data() + 2, text.data(), text.size());
     return words;
@@ -24,7 +25,7 @@ std::vector<uint32_t> pack_json(std::string const& text)
 nlohmann::json unpack_json(std::vector<uint32_t> const& words)
 {
     REQUIRE(words.size() >= 2);
-    REQUIRE(words[0] == 11);
+    REQUIRE(words[0] == 12);
     REQUIRE(words[1] <= (words.size() - 2) * 4);
     auto data = reinterpret_cast<char const*>(words.data() + 2);
     return nlohmann::json::parse(data, data + words[1]);
@@ -36,16 +37,11 @@ restart::Snapshot sample()
     snapshot.focused_monitor = 1;
     snapshot.active = 0x200;
     snapshot.showing_desktop = true;
-    snapshot.monitors = {
-        { "M0",
-         { 0, 0, 1000, 800 },
-         1, 0,
-         { { LayoutStrategy::Monocle,
-         { { SplitAddress{ 0 }, 0.25 }, { SplitAddress{ 40 }, 0.75 } },
-         { 0x100, 0x300 },
-         0x300 },
-         {} }                                       },
-        { "M1", { 1000, 0, 1000, 800 }, 0, 0, { {} } }
+    snapshot.monitors = { test::monitor("M0", 0, 2), test::monitor("M1", 1000, 1) };
+    snapshot.monitors[0].current_workspace = 1;
+    snapshot.monitors[0].workspaces[0] = {
+        { 0x100 }, 0x100, LayoutStrategy::Monocle,
+        { { SplitAddress{ 0 }, 0.25 }, { SplitAddress{ 40 }, 0.75 } }
     };
     snapshot.clients = {
         { 0x100,
@@ -103,15 +99,11 @@ TEST_CASE("Restart decoding rejects other formats and malformed records", "[rest
     // Oversized counts cannot drive allocation.
     std::vector<uint32_t> huge{ restart::format, 0, 0, 0, 0xFFFFFFFF };
     CHECK_FALSE(restart::decode(huge));
-    // Claims must be unique references to saved clients.
-    for (auto claims : {
-             std::vector<xcb_window_t>{ 0x100, 0x100 },
-             std::vector<xcb_window_t>{ XCB_NONE },
-             std::vector<xcb_window_t>{ 0x999 }
-    })
+    // Claims must reference distinct saved clients.
+    for (auto claim : { xcb_window_t{ 0x200 }, xcb_window_t{ XCB_NONE }, xcb_window_t{ 0x999 } })
     {
         auto invalid = sample();
-        invalid.fullscreen_claims = claims;
+        invalid.fullscreen_claims[1] = claim;
         CHECK_FALSE(restart::decode(restart::encode(invalid)));
     }
     auto invalid_recency = sample();
@@ -121,7 +113,7 @@ TEST_CASE("Restart decoding rejects other formats and malformed records", "[rest
     CHECK_FALSE(restart::decode(restart::encode(invalid_recency)));
     // Out-of-range enumerations and ratios are rejected.
     auto snapshot = sample();
-    snapshot.monitors[0].workspaces[0].ratios[SplitAddress{ 1 }] = 1.5;
+    snapshot.monitors[0].workspaces[0].split_ratios[SplitAddress{ 1 }] = 1.5;
     CHECK_FALSE(restart::decode(restart::encode(snapshot)));
 }
 
@@ -148,7 +140,7 @@ TEST_CASE("Restored tile slots are admitted only while the original workspace ex
     SECTION("Saved workspace no longer exists")
     {
         for (auto& record : snapshot->clients)
-            if (record.window == 2)
+            if (record.id == 2)
                 std::get<FloatingMode>(record.mode).tile_slot->workspace = 99;
     }
     // Client records are in recency order, so find the floating client by ID.
@@ -188,20 +180,11 @@ TEST_CASE("State snapshots restore workspaces, order, recency and scratchpads", 
     auto snapshot = restart::decode(restart::encode(source.snapshot()));
     REQUIRE(snapshot);
 
-    // The workspace graph is restored first; adoption then registers windows in
-    // scan order before membership is restored.
     auto target = test::state(2);
     target.configure_scratchpads(std::vector<std::string>{ "term" });
-    target.restore_workspaces(*snapshot);
-    for (xcb_window_t id : { 3, 2, 1 }) add(target, id);
+    // Observation order differs from saved membership and registration order.
+    target.restore_graph(*snapshot, { source.require(3), source.require(2), source.require(1), source.require(4) });
     auto const& saved = *snapshot->find(4);
-    add(target,
-        4,
-        { .monitor = saved.monitor,
-          .workspace = saved.workspace,
-          .floating = true,
-          .geometry = std::get<FloatingMode>(saved.mode).geometry });
-    target.restore_membership(*snapshot);
 
     auto const& workspace = target.monitors()[0].workspaces[0];
     CHECK(workspace.windows == source.monitors()[0].workspaces[0].windows);
@@ -216,18 +199,18 @@ TEST_CASE("State snapshots restore workspaces, order, recency and scratchpads", 
     CHECK(saved.preferences.skip_pager == true);
 }
 
-TEST_CASE("Restart claim order is explicit in the wire format", "[restart][codec]")
+TEST_CASE("Restart wire schema directly represents domain values", "[restart][codec]")
 {
     // Independent literal input: no production encoder constructs this fixture.
     auto document = nlohmann::json::parse(R"({
         "focused_monitor": 0, "active": 0, "showing_desktop": false,
         "monitors": [{"name": "M", "geometry": {"x": 0, "y": 0, "width": 100, "height": 80},
-            "current": 0, "previous": 0, "workspaces": [{"strategy": "MasterStack", "ratios": [],
-            "tiles": [], "preferred_tile": 0}]}],
-        "clients": [{"window": 7, "monitor": 0, "workspace": 0,
+            "current_workspace": 0, "previous_workspace": 0, "workspaces": [{"layout_strategy": "MasterStack", "split_ratios": [],
+            "windows": [7], "preferred_tile": 0}]}],
+        "clients": [{"id": 7, "monitor": 0, "workspace": 0,
             "mode": {"TiledMode": {"floating": null}},
             "preferences": {"floating": null, "skip_taskbar": null, "skip_pager": null, "layer": null},
-            "urgency": 0, "borderless": false, "desktop_pinned": false, "fullscreen_monitors": null, "mru_order": 0}],
+            "urgency": {"sources": 0}, "borderless": false, "desktop_pinned": false, "fullscreen_monitors": null, "mru_order": 0}],
         "registration_order": [7], "named_scratchpads": [], "pool": [], "fullscreen_claims": [7]
     })");
     auto decoded = restart::decode(pack_json(document.dump()));
@@ -248,16 +231,10 @@ TEST_CASE("Restart restores claim history independently of focus and adoption or
     CHECK(snapshot.fullscreen_claims == std::vector<xcb_window_t>{ 2, 3, 1 });
 
     auto target = test::state();
-    target.restore_workspaces(snapshot);
-    for (xcb_window_t id : { 3, 1, 2 })
-    {
-        add(target, id);
-        target.fullscreen(id, true);
-    }
-    target.iconic(3, true);
+    std::vector<Client> observed{ source.require(3), source.require(1), source.require(2) };
     SECTION("hidden and minimized candidates retain their order")
     {
-        target.restore_membership(snapshot);
+        target.restore_graph(snapshot, observed);
         CHECK(target.fullscreen_owner(0) == XCB_NONE);
         target.switch_workspace(0, 0);
         CHECK(target.fullscreen_owner(0) == 1);
@@ -270,11 +247,11 @@ TEST_CASE("Restart restores claim history independently of focus and adoption or
     }
     SECTION("missing clients are skipped and new arrivals retain newer claims")
     {
-        target.erase(1);
-        target.fullscreen(3, false); // The application withdrew this saved claim.
+        std::erase_if(observed, [](auto const& client) { return client.id == 1; });
+        observed.front().fullscreen = false; // The application withdrew this saved claim.
+        target.restore_graph(snapshot, observed);
         add(target, 4);
         target.fullscreen(4, true);
-        target.restore_membership(snapshot);
         target.switch_workspace(0, 0);
         CHECK(target.fullscreen_owner(0) == 4);
         target.fullscreen(4, false);
@@ -352,19 +329,12 @@ TEST_CASE("Restart rebinding matches live output reconciliation", "[restart][sta
 
     State restored;
     restored.replace_monitors(discovered);
-    restored.restore_workspaces(*snapshot);
-    // Admission order deliberately differs from saved tile order.
+    // Observation order deliberately differs from saved tile order. Private
+    // placement is restored even though these observations carry new indices.
+    std::vector<Client> observed;
     for (auto it = snapshot->clients.rbegin(); it != snapshot->clients.rend(); ++it)
-    {
-        Client client;
-        client.id = it->window;
-        client.monitor = it->monitor;
-        client.workspace = it->workspace;
-        client.mode = it->mode;
-        client.fullscreen_monitors = it->fullscreen_monitors;
-        restored.insert(std::move(client));
-    }
-    restored.restore_membership(*snapshot);
+        observed.push_back(source.require(it->id));
+    restored.restore_graph(*snapshot, std::move(observed));
     CHECK(restored.focused_monitor() == source.focused_monitor());
     for (size_t m = 0; m < source.monitors().size(); ++m)
     {
@@ -417,9 +387,9 @@ TEST_CASE("Unchanged restart topology preserves intentional floating geometry an
     });
     source.fullscreen_monitors(1, FullscreenMonitors{});
     auto snapshot = source.snapshot();
-    auto before = snapshot.clients;
-    snapshot.rebind(test::state().monitors());
-    CHECK(snapshot.clients == before);
+    auto restored = test::state();
+    restored.restore_graph(snapshot, { source.require(1) });
+    CHECK(restored.snapshot().clients == snapshot.clients);
 }
 
 TEST_CASE("Restart preserves pending requests only for surviving scratchpad names", "[restart][state][scratchpad]")
@@ -434,9 +404,10 @@ TEST_CASE("Restart preserves pending requests only for surviving scratchpad name
     REQUIRE(snapshot);
     auto restored = test::state();
     restored.configure_scratchpads(std::vector<std::string>{ "pending", "claimed", "empty", "new" });
-    SECTION("Claimed client survives") { add(restored, 1); }
+    std::vector<Client> observed;
+    SECTION("Claimed client survives") { observed.push_back(source.require(1)); }
     SECTION("Claimed client disappeared") { }
-    restored.restore_membership(*snapshot);
+    restored.restore_graph(*snapshot, std::move(observed));
     CHECK(restored.named_scratchpad("pending")->pending_launch());
     CHECK_FALSE(restored.named_scratchpad("removed"));
     CHECK_FALSE(restored.named_scratchpad("empty")->pending_launch());
@@ -512,18 +483,18 @@ TEST_CASE("Restart decoder rejects malformed typed values before narrowing or de
     auto original = unpack_json(restart::encode(sample()));
     REQUIRE(restart::decode(pack_json(original.dump())) == sample());
     for (auto const& [path, value] : std::vector<std::pair<std::string, nlohmann::json>>{
-             {                 "/clients/0/window",                                uint64_t{ 1 } << 32 },
+             {                 "/clients/0/id",                                uint64_t{ 1 } << 32 },
              {                "/clients/0/monitor",                                                 -1 },
              {              "/clients/0/mru_order",                                                 -1 },
-             {                "/clients/0/urgency",                                                256 },
-             {                "/clients/0/urgency",                                                  4 },
+             {                "/clients/0/urgency/sources",                                                256 },
+             {                "/clients/0/urgency/sources",                                                  4 },
              {             "/clients/0/borderless",                                                  1 },
              {            "/monitors/0/geometry/x",                                              32768 },
              {            "/monitors/0/geometry/y",                                             -32769 },
              {        "/monitors/0/geometry/width",                                              65536 },
              {       "/monitors/0/geometry/height",                                                 -1 },
              {        "/monitors/0/geometry/width",                                                1.0 },
-             { "/monitors/0/workspaces/0/strategy",                                          "Unknown" },
+             { "/monitors/0/workspaces/0/layout_strategy",                                          "Unknown" },
              {      "/clients/0/preferences/layer",                                          "Unknown" },
              {                   "/clients/0/mode",                           nlohmann::json::object() },
              {                   "/clients/0/mode", { { "UnknownMode", { { "floating", nullptr } } } } },
@@ -597,4 +568,80 @@ TEST_CASE("Restart preserves full-width recency and opaque output names", "[rest
     source.clients[0].mru_order = UINT64_MAX - 1;
     source.monitors[0].name = std::string("output\0", 7) + char(0xff);
     CHECK(restart::decode(restart::encode(source)) == source);
+}
+
+TEST_CASE("Restart rejects inconsistent workspace graphs before restoration", "[restart][codec]")
+{
+    auto snapshot = sample();
+    auto& workspace = snapshot.monitors[0].workspaces[0];
+    SECTION("Duplicate tile") { workspace.windows.push_back(0x100); }
+    SECTION("Unregistered tile") { workspace.windows.push_back(0x999); }
+    SECTION("Fixture in tiled membership") { workspace.windows.push_back(0x300); }
+    SECTION("Floating client in tiled membership") { snapshot.monitors[1].workspaces[0].windows.push_back(0x200); }
+    SECTION("Missing tile") { workspace.windows.clear(); workspace.preferred_tile = XCB_NONE; }
+    SECTION("Wrong placement") { snapshot.clients[0].workspace = 1; }
+    SECTION("Preference outside membership") { workspace.preferred_tile = 0x200; }
+    CHECK_FALSE(restart::decode(restart::encode(snapshot)));
+}
+
+TEST_CASE("Graph restoration separates saved intent from live observations and new claims", "[restart][state]")
+{
+    auto source = test::state(2);
+    add(source, 1, { .monitor = 1, .workspace = 2 });
+    add(source, 2, { .monitor = 1, .workspace = 2 });
+    add(source, 3, { .monitor = 1, .workspace = 2 });
+    source.switch_workspace(1, 2);
+    source.focus_monitor(1);
+    source.fullscreen(1, true);
+    source.borderless(2, true);
+    source.skip_pager(2, false);
+    auto snapshot = source.snapshot();
+
+    // Fresh property reads carry no saved placement or private preferences.
+    Client first, saved, newcomer, pinned;
+    first.id = 1;
+    first.fullscreen = true;
+    saved.id = 2;
+    saved.name = "new title";
+    saved.transient_for = 1;
+    saved.accepts_input = false;
+    saved.supports_take_focus = true;
+    saved.fullscreen = saved.maximized_horz = true;
+    newcomer.id = 4;
+    newcomer.fullscreen = true;
+    pinned.id = 5;
+    pinned.desktop_pinned = true;
+    pinned.monitor = pinned.workspace = 0;
+    auto target = test::state(2);
+    // Reverse the outputs. A concrete desktop hint uses discovered indices;
+    // saved placement instead follows output identity, and defaults follow focus.
+    target.replace_monitors({ test::monitor("M1"), test::monitor("M0", 1000) });
+    SECTION("Newcomer requested fullscreen before the saved client")
+    {
+        target.restore_graph(snapshot, { first, newcomer, saved, pinned });
+        CHECK(target.fullscreen_owner(0) == 2);
+    }
+    SECTION("Saved client requested fullscreen before the newcomer")
+    {
+        target.restore_graph(snapshot, { first, saved, newcomer, pinned });
+        CHECK(target.fullscreen_owner(0) == 4);
+    }
+    auto const& restored = target.require(2);
+    CHECK(restored.monitor == 0);
+    CHECK(restored.workspace == 2);
+    CHECK(restored.borderless);
+    CHECK(restored.preferences.skip_pager == false);
+    CHECK(restored.name == "new title");
+    CHECK(restored.transient_for == 1);
+    CHECK_FALSE(restored.accepts_input);
+    CHECK(restored.supports_take_focus);
+    CHECK_FALSE(restored.maximized_horz);
+    CHECK(target.require(4).monitor == 0);
+    CHECK(target.require(4).workspace == 2);
+    CHECK(target.require(5).workspace == 0);
+    CHECK(target.monitors()[0].workspaces[2].windows == std::vector<xcb_window_t>{ 1, 2, 4 });
+    CHECK_FALSE(target.find(3));
+    REQUIRE(target.fullscreen_claims().size() == 3);
+    CHECK(target.fullscreen_claims().front() == 1);
+    CHECK_FALSE(invariants::validate(target));
 }

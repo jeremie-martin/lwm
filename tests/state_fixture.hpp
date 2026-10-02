@@ -12,9 +12,9 @@ inline Monitor monitor(std::string name, int16_t x = 0, size_t workspaces = 3)
 {
     Monitor monitor;
     monitor.name = std::move(name);
-    monitor.x = x;
-    monitor.width = 1000;
-    monitor.height = 800;
+    monitor.geometry.x = x;
+    monitor.geometry.width = 1000;
+    monitor.geometry.height = 800;
     monitor.workspaces.assign(workspaces, Workspace{ });
     return monitor;
 }

@@ -1,5 +1,4 @@
 #include "restart.hpp"
-#include "policy.hpp"
 #include <cstring>
 #include <memory>
 #include <rfl/AddTagsToVariants.hpp>
@@ -69,10 +68,10 @@ bool valid(Snapshot const& snapshot)
     for (auto const& monitor : snapshot.monitors)
     {
         if (monitor.name.empty() || !outputs.insert(monitor.name).second || monitor.workspaces.empty()
-            || monitor.current >= monitor.workspaces.size() || monitor.previous >= monitor.workspaces.size())
+            || monitor.current_workspace >= monitor.workspaces.size() || monitor.previous_workspace >= monitor.workspaces.size())
             return false;
         for (auto const& workspace : monitor.workspaces)
-            for (auto const& [address, ratio] : workspace.ratios)
+            for (auto const& [address, ratio] : workspace.split_ratios)
                 if (!(ratio > 0 && ratio < 1))
                     return false;
     }
@@ -88,14 +87,38 @@ bool valid(Snapshot const& snapshot)
         if (client.mru_order == UINT64_MAX || (client.mru_order && !recencies.insert(client.mru_order).second)
             || client.monitor >= snapshot.monitors.size()
             || client.workspace >= snapshot.monitors[client.monitor].workspaces.size()
-            || client.urgency
+            || client.urgency.sources
                 > (static_cast<uint8_t>(UrgencySource::WmInitiated) | static_cast<uint8_t>(UrgencySource::App))
-            || !registered.erase(client.window))
+            || !registered.erase(client.id))
             return false;
         if (auto const* floating = std::get_if<FloatingMode>(&client.mode);
             floating && floating->tile_slot && floating->tile_slot->output.empty())
             return false;
     }
+    // The handoff is a graph, not ordering hints to replay through admission.
+    // Every tile must occur exactly once at its client's placement.
+    std::unordered_set<xcb_window_t> tiles;
+    for (size_t m = 0; m < snapshot.monitors.size(); ++m)
+        for (size_t w = 0; w < snapshot.monitors[m].workspaces.size(); ++w)
+        {
+            auto const& workspace = snapshot.monitors[m].workspaces[w];
+            for (auto id : workspace.windows)
+            {
+                auto const* client = snapshot.find(id);
+                if (!client || client->monitor != m || client->workspace != w
+                    || !std::holds_alternative<TiledMode>(client->mode) || !tiles.insert(id).second)
+                    return false;
+            }
+            if (workspace.preferred_tile != XCB_NONE && workspace.find_window(workspace.preferred_tile) == workspace.windows.end())
+                return false;
+        }
+    for (auto const& client : snapshot.clients)
+        if (std::holds_alternative<TiledMode>(client.mode) && !tiles.contains(client.id))
+            return false;
+    std::unordered_set<xcb_window_t> claims;
+    for (auto id : snapshot.fullscreen_claims)
+        if (!snapshot.find(id) || !claims.insert(id).second)
+            return false;
     std::unordered_set<std::string> names;
     std::unordered_set<xcb_window_t> claimed;
     for (auto const& named : snapshot.named_scratchpads)
@@ -106,74 +129,17 @@ bool valid(Snapshot const& snapshot)
             && (*named.window == XCB_NONE || !claimed.insert(*named.window).second || !snapshot.find(*named.window)))
             return false;
     }
-    std::unordered_set<xcb_window_t> candidates;
-    for (auto const& client : snapshot.clients) candidates.insert(client.window);
-    for (auto window : snapshot.fullscreen_claims)
-        if (!candidates.erase(window))
-            return false;
     return true;
 }
 
 } // namespace
 
-ClientRecord const* Snapshot::find(xcb_window_t window) const
+ClientIntent const* Snapshot::find(xcb_window_t window) const
 {
     for (auto const& record : clients)
-        if (record.window == window)
+        if (record.id == window)
             return &record;
     return nullptr;
-}
-
-MonitorRecord capture_monitor(Monitor const& monitor)
-{
-    MonitorRecord record{ monitor.name, monitor.geometry(), monitor.current_workspace, monitor.previous_workspace, {} };
-    for (auto const& workspace : monitor.workspaces)
-        record.workspaces.push_back(
-            { workspace.layout_strategy, workspace.split_ratios, workspace.windows, workspace.preferred_tile }
-        );
-    return record;
-}
-
-void Snapshot::rebind(std::span<Monitor const> discovered)
-{
-    assert(!discovered.empty());
-    bool changed = monitors.size() != discovered.size();
-    std::vector<Monitor> previous;
-    for (size_t i = 0; i < monitors.size(); ++i)
-    {
-        auto const& saved = monitors[i];
-        changed |=
-            i >= discovered.size() || saved.name != discovered[i].name || saved.geometry != discovered[i].geometry();
-        Monitor monitor;
-        monitor.name = saved.name;
-        monitor.current_workspace = saved.current;
-        monitor.previous_workspace = saved.previous;
-        for (auto const& workspace : saved.workspaces)
-            monitor.workspaces.push_back(
-                { workspace.tiles, workspace.preferred_tile, workspace.strategy, workspace.ratios }
-            );
-        previous.push_back(std::move(monitor));
-    }
-    std::vector<Monitor> targets(discovered.begin(), discovered.end());
-    auto destinations = hotplug_policy::preserve_workspaces(previous, targets);
-    focused_monitor = focused_monitor < destinations.size() ? destinations[focused_monitor] : 0;
-    for (auto& client : clients)
-    {
-        size_t target = destinations.at(client.monitor);
-        bool displaced = monitors[client.monitor].name != targets[target].name;
-        client.monitor = target;
-        client.workspace = std::min(client.workspace, targets[target].workspaces.size() - 1);
-        if (changed)
-        {
-            client.fullscreen_monitors.reset();
-            if (auto* floating = std::get_if<FloatingMode>(&client.mode))
-                floating->geometry =
-                    hotplug_policy::fit_floating(floating->geometry, targets[target].working_area(), displaced);
-        }
-        // Admission discards tile-return slots whose original workspace vanished.
-    }
-    monitors.clear();
-    for (auto const& target : targets) monitors.push_back(capture_monitor(target));
 }
 
 std::vector<uint32_t> encode(Snapshot const& snapshot)

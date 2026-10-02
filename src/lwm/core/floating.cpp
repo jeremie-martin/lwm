@@ -107,7 +107,7 @@ PositionHintResolution resolve_position_hint(
     if (constrained_to_assigned_monitor)
     {
         auto const& g = hinted_geometry;
-        return { hint_targets_monitor(monitors[fallback_monitor].geometry(), g.x, g.y, g.width, g.height),
+        return { hint_targets_monitor(monitors[fallback_monitor].geometry, g.x, g.y, g.width, g.height),
                  fallback_monitor };
     }
     if (auto monitor = monitor_at_center(monitors, hinted_geometry))
@@ -118,7 +118,7 @@ PositionHintResolution resolve_position_hint(
 std::optional<size_t> monitor_at_center(std::span<Monitor const> monitors, Geometry geometry)
 {
     for (size_t i = 0; i < monitors.size(); ++i)
-        if (hint_targets_monitor(monitors[i].geometry(), geometry.x, geometry.y, geometry.width, geometry.height))
+        if (hint_targets_monitor(monitors[i].geometry, geometry.x, geometry.y, geometry.width, geometry.height))
             return i;
     return std::nullopt;
 }

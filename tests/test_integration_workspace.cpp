@@ -959,6 +959,59 @@ TEST_CASE("Integration: restart places unrecorded windows on the restored worksp
     destroy_window(conn, window);
 }
 
+TEST_CASE("Integration: restart preserves the selected workspace and previous-workspace key binding", "[integration][restart][workspace][keybind]")
+{
+    auto env = TestEnvironment::create(R"(
+[workspaces]
+count = 4
+[[binds]]
+key = "super+Tab"
+toggle_workspace = true
+[[binds]]
+key = "super+r"
+restart = true
+)");
+    if (!env)
+        SKIP("X11 unavailable");
+    auto& conn = env->conn;
+    auto socket = wait_for_ipc_socket_path(conn);
+    REQUIRE(socket);
+    bool populated = false;
+    SECTION("Empty workspaces") { }
+    SECTION("Workspaces with clients") { populated = true; }
+    std::vector<xcb_window_t> windows;
+    for (size_t workspace : { 1, 2 })
+    {
+        ipc_ok(*socket, "workspace switch " + std::to_string(workspace));
+        if (populated)
+        {
+            auto window = create_window(conn, 20, 20, 200, 150);
+            windows.push_back(window);
+            map_window(conn, window);
+            REQUIRE(wait_for_active_window(conn, window, kTimeout));
+        }
+    }
+    auto current = [&] { return ipc_json(*socket, "workspace list").at("monitors").at(0).at("current_workspace"); };
+    for (int iteration = 0; iteration < 2; ++iteration)
+    {
+        CAPTURE(iteration, populated);
+        auto instance = wm_instance(conn);
+        REQUIRE(instance);
+        REQUIRE(send_key_chord(conn, XStringToKeysym("Super_L"), XStringToKeysym("r")));
+        REQUIRE(wait_for_wm_restart(conn, kTimeout, *instance));
+        CHECK(current() == 2);
+        if (populated)
+            CHECK(wait_for_active_window(conn, windows[1], kTimeout));
+        REQUIRE(send_key_chord(conn, XStringToKeysym("Super_L"), XStringToKeysym("Tab")));
+        REQUIRE(wait_for_condition([&] { return current() == 1; }, kTimeout));
+        if (populated)
+            CHECK(wait_for_active_window(conn, windows[0], kTimeout));
+        ipc_ok(*socket, "workspace toggle");
+        CHECK(current() == 2);
+    }
+    for (auto window : windows) destroy_window(conn, window);
+}
+
 TEST_CASE("Integration: startup replaces client lists left by a previous manager", "[integration][ewmh]")
 {
     auto& x11 = X11TestEnvironment::instance();

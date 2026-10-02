@@ -113,6 +113,7 @@ enum class UrgencySource : uint8_t
 struct Urgency
 {
     uint8_t sources = 0;
+    bool operator==(Urgency const&) const = default;
 
     bool active() const { return sources != 0; }
 
@@ -187,20 +188,33 @@ struct FloatingMode
 
 using ClientMode = std::variant<TiledMode, FloatingMode>;
 
+// Private intent survives exec; application properties are observed afresh.
+// This is also the handoff value, so restoration cannot omit individual fields.
+struct ClientIntent
+{
+    xcb_window_t id = XCB_NONE;
+    size_t monitor = 0;
+    size_t workspace = 0;
+    ClientMode mode = TiledMode{ };
+    ClientPreferences preferences;
+    Urgency urgency;
+    bool borderless = false;
+    bool desktop_pinned = false;
+    std::optional<FullscreenMonitors> fullscreen_monitors;
+    uint64_t mru_order = 0; ///< Completed focus recency; zero means never focused
+
+    bool operator==(ClientIntent const&) const = default;
+};
+
 /// A managed normal window. Placement is always a valid monitor/workspace pair;
 /// docks and desktop windows are Fixtures and never Clients.
-struct Client
+struct Client : ClientIntent
 {
     enum class Kind
     {
         Tiled,
         Floating
     };
-
-    xcb_window_t id = XCB_NONE;
-    size_t monitor = 0;
-    size_t workspace = 0;
-    ClientMode mode = TiledMode{ };
 
     Kind kind() const { return std::holds_alternative<TiledMode>(mode) ? Kind::Tiled : Kind::Floating; }
 
@@ -216,11 +230,6 @@ struct Client
     bool maximized_horz = false; ///< Retained for any mode; only floating presentation honors it
     bool maximized_vert = false;
     bool modal = false;          ///< _NET_WM_STATE_MODAL
-    bool borderless = false;     ///< WM-managed zero-border window
-    ClientPreferences preferences;
-    Urgency urgency;             ///< _NET_WM_STATE_DEMANDS_ATTENTION provenance
-    std::optional<FullscreenMonitors> fullscreen_monitors;
-    bool desktop_pinned = false; ///< Client supplied a concrete _NET_WM_DESKTOP assignment
 
     bool accepts_input = true;        ///< WM_HINTS input field (ICCCM default: true)
     bool supports_take_focus = false; ///< WM_PROTOCOLS contains WM_TAKE_FOCUS
@@ -228,8 +237,6 @@ struct Client
     xcb_window_t user_time_window = XCB_NONE;
 
     uint64_t order = 0;            ///< Registration order (_NET_CLIENT_LIST)
-    uint64_t mru_order = 0;        ///< Completed focus recency; zero means never focused
-    uint64_t fullscreen_claim = 0; ///< Latest fullscreen claim; zero exactly when fullscreen is disabled
 
     /// Actions of the rule matched at the last manage, metadata change, or
     /// reload. Metadata changes apply a rule only when this result changes.
@@ -320,28 +327,33 @@ struct Workspace
     auto find_window(xcb_window_t id) { return std::ranges::find(windows, id); }
 
     auto find_window(xcb_window_t id) const { return std::ranges::find(windows, id); }
+    bool operator==(Workspace const&) const = default;
 };
 
-struct Monitor
+// The workspace graph and output identity survive exec. RandR handles and dock
+// reservations belong to the discovered monitor, not to the saved graph.
+struct MonitorState
 {
-    xcb_randr_output_t output = XCB_NONE;
     std::string name;
-    int16_t x = 0;
-    int16_t y = 0;
-    uint16_t width = 0;
-    uint16_t height = 0;
+    Geometry geometry;
     std::vector<Workspace> workspaces;
     size_t current_workspace = 0;
     size_t previous_workspace = 0;
-    Strut strut = {};
 
     Workspace& current() { return workspaces[current_workspace]; }
     Workspace const& current() const { return workspaces[current_workspace]; }
 
-    Geometry geometry() const { return { x, y, width, height }; }
+    bool operator==(MonitorState const&) const = default;
+};
+
+struct Monitor : MonitorState
+{
+    xcb_randr_output_t output = XCB_NONE;
+    Strut strut = {};
 
     Geometry working_area() const
     {
+        auto const& [x, y, width, height] = geometry;
         uint64_t horizontal = static_cast<uint64_t>(strut.left) + strut.right;
         uint64_t vertical = static_cast<uint64_t>(strut.top) + strut.bottom;
         // Oversized struts consume the extent without shifting the origin.

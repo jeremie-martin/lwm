@@ -250,10 +250,7 @@ std::vector<Monitor> WindowManager::discover_monitors()
         Monitor monitor;
         monitor.output = output;
         monitor.name = std::move(name);
-        monitor.x = geometry.x;
-        monitor.y = geometry.y;
-        monitor.width = geometry.width;
-        monitor.height = geometry.height;
+        monitor.geometry = geometry;
         Workspace workspace;
         workspace.layout_strategy = config_.layout.strategy;
         monitor.workspaces.assign(config_.workspaces.count, workspace);
@@ -303,7 +300,7 @@ std::vector<Monitor> WindowManager::discover_monitors()
     }
     if (discovered.empty())
         add("default", XCB_NONE, { 0, 0, conn_.screen()->width_in_pixels, conn_.screen()->height_in_pixels });
-    std::ranges::sort(discovered, { }, &Monitor::x);
+    std::ranges::sort(discovered, { }, [](Monitor const& monitor) { return monitor.geometry.x; });
     return discovered;
 }
 
@@ -347,7 +344,7 @@ std::vector<Strut> WindowManager::dock_struts(std::span<Monitor const> monitors)
         }
         for (size_t i = 0; i < monitors.size(); ++i)
         {
-            auto strut = monitor_strut(reservation, *root, monitors[i].geometry());
+            auto strut = monitor_strut(reservation, *root, monitors[i].geometry);
             struts[i].left = std::max(struts[i].left, strut.left);
             struts[i].right = std::max(struts[i].right, strut.right);
             struts[i].top = std::max(struts[i].top, strut.top);

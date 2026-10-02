@@ -90,7 +90,7 @@ Geometry State::normal_geometry(Client const& client) const
 Geometry State::fullscreen_geometry(Client const& client) const
 {
     auto const& monitors = monitors_;
-    Geometry area = monitors[client.monitor].geometry();
+    Geometry area = monitors[client.monitor].geometry;
     if (!client.fullscreen_monitors)
         return area;
     auto const& spec = *client.fullscreen_monitors;
@@ -101,10 +101,10 @@ Geometry State::fullscreen_geometry(Client const& client) const
         if (index >= monitors.size())
             continue;
         auto const& m = monitors[index];
-        min_x = std::min<int32_t>(min_x, m.x);
-        min_y = std::min<int32_t>(min_y, m.y);
-        max_x = std::max<int32_t>(max_x, m.x + m.width);
-        max_y = std::max<int32_t>(max_y, m.y + m.height);
+        min_x = std::min<int32_t>(min_x, m.geometry.x);
+        min_y = std::min<int32_t>(min_y, m.geometry.y);
+        max_x = std::max<int32_t>(max_x, m.geometry.x + m.geometry.width);
+        max_y = std::max<int32_t>(max_y, m.geometry.y + m.geometry.height);
     }
     if (min_x > max_x)
         return area;

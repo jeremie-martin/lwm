@@ -393,14 +393,14 @@ uint32_t WindowManager::desktop_index(size_t monitor, size_t workspace) const
 WindowManager::DesktopLayout WindowManager::desktop_layout() const
 {
     auto const& monitors = state_.monitors();
-    int32_t min_x = monitors.front().x, min_y = monitors.front().y;
+    int32_t min_x = monitors.front().geometry.x, min_y = monitors.front().geometry.y;
     int32_t max_x = min_x, max_y = min_y;
     for (auto const& m : monitors)
     {
-        min_x = std::min<int32_t>(min_x, m.x);
-        min_y = std::min<int32_t>(min_y, m.y);
-        max_x = std::max<int32_t>(max_x, m.x + m.width);
-        max_y = std::max<int32_t>(max_y, m.y + m.height);
+        min_x = std::min<int32_t>(min_x, m.geometry.x);
+        min_y = std::min<int32_t>(min_y, m.geometry.y);
+        max_x = std::max<int32_t>(max_x, m.geometry.x + m.geometry.width);
+        max_y = std::max<int32_t>(max_y, m.geometry.y + m.geometry.height);
     }
     DesktopLayout layout;
     layout.count = static_cast<uint32_t>(monitors.size() * config_.workspaces.count);
@@ -411,8 +411,8 @@ WindowManager::DesktopLayout WindowManager::desktop_layout() const
         Geometry area = m.working_area();
         area.x = static_cast<int16_t>(std::clamp<int32_t>(area.x - min_x, 0, std::numeric_limits<int16_t>::max()));
         area.y = static_cast<int16_t>(std::clamp<int32_t>(area.y - min_y, 0, std::numeric_limits<int16_t>::max()));
-        std::pair<uint32_t, uint32_t> viewport{ static_cast<uint32_t>(std::max<int32_t>(0, m.x - min_x)),
-                                                static_cast<uint32_t>(std::max<int32_t>(0, m.y - min_y)) };
+        std::pair<uint32_t, uint32_t> viewport{ static_cast<uint32_t>(std::max<int32_t>(0, m.geometry.x - min_x)),
+                                                static_cast<uint32_t>(std::max<int32_t>(0, m.geometry.y - min_y)) };
         for (auto const& name : config_.workspaces.names)
         {
             layout.names.push_back(name);

@@ -127,8 +127,8 @@ TEST_CASE("Extreme padding and dock struts saturate instead of wrapping", "[layo
         CHECK(g.height == 1);
     }
     Monitor monitor;
-    monitor.width = 1000;
-    monitor.height = 800;
+    monitor.geometry.width = 1000;
+    monitor.geometry.height = 800;
     monitor.strut = { UINT32_MAX, UINT32_MAX, UINT32_MAX, UINT32_MAX };
     CHECK(monitor.working_area() == Geometry{ 0, 0, 1, 1 });
 }

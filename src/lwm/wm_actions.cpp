@@ -270,8 +270,8 @@ void WindowManager::warp_to_monitor(Monitor const& monitor)
         0,
         0,
         0,
-        static_cast<int16_t>(monitor.x + monitor.width / 2),
-        static_cast<int16_t>(monitor.y + monitor.height / 2)
+        static_cast<int16_t>(monitor.geometry.x + monitor.geometry.width / 2),
+        static_cast<int16_t>(monitor.geometry.y + monitor.geometry.height / 2)
     );
 }
 

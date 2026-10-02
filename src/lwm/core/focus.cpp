@@ -106,7 +106,7 @@ std::optional<size_t> monitor_index_at_point(std::span<Monitor const> monitors, 
     for (size_t i = 0; i < monitors.size(); ++i)
     {
         auto const& monitor = monitors[i];
-        if (x >= monitor.x && x < monitor.x + monitor.width && y >= monitor.y && y < monitor.y + monitor.height)
+        if (x >= monitor.geometry.x && x < monitor.geometry.x + monitor.geometry.width && y >= monitor.geometry.y && y < monitor.geometry.y + monitor.geometry.height)
             return i;
     }
     return std::nullopt;

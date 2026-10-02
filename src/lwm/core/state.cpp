@@ -71,7 +71,6 @@ void State::insert(Client client, std::span<xcb_window_t const> registration_ord
     forget_missing_tile_slot(client);
     client.order = register_window(client.id, registration_order);
     client.mru_order = 0;
-    client.fullscreen_claim = 0;
     auto [it, inserted] = clients_.emplace(client.id, std::move(client));
     assert(inserted);
     if (it->second.kind() == Client::Kind::Tiled)
@@ -102,6 +101,7 @@ void State::erase(xcb_window_t id)
     release_scratchpad(id);
     bool active = active_window_ == id;
     clients_.erase(id);
+    std::erase(fullscreen_claims_, id);
     if (active)
         focus_fallback(focused_monitor_);
 }
@@ -138,40 +138,15 @@ bool State::in_view(Client const& client) const
     return !client.iconic && (client.sticky || shows(client.monitor, client.workspace));
 }
 
-namespace {
-bool claims_before(Client const& a, Client const& b)
-{
-    return std::tie(a.fullscreen_claim, a.order, a.id) < std::tie(b.fullscreen_claim, b.order, b.id);
-}
-}
-
 // The most recent fullscreen claim among clients in view owns each monitor.
 std::vector<xcb_window_t> State::fullscreen_owners() const
 {
-    std::vector<Client const*> owners(monitors_.size(), nullptr);
+    std::vector<xcb_window_t> owners(monitors_.size(), XCB_NONE);
     if (!showing_desktop_)
-        for (auto const& [id, client] : clients_)
-            if (client.fullscreen && in_view(client)
-                && (!owners[client.monitor] || claims_before(*owners[client.monitor], client)))
-                owners[client.monitor] = &client;
-    std::vector<xcb_window_t> result;
-    result.reserve(owners.size());
-    for (auto const* owner : owners) result.push_back(owner ? owner->id : XCB_NONE);
-    return result;
-}
-
-// Persistence records claim order, not an owner or process-local counter values.
-std::vector<xcb_window_t> State::fullscreen_claim_order() const
-{
-    std::vector<Client const*> clients;
-    for (auto const& [id, client] : clients_)
-        if (client.fullscreen)
-            clients.push_back(&client);
-    std::ranges::sort(clients, [](auto const* a, auto const* b) { return claims_before(*a, *b); });
-    std::vector<xcb_window_t> order;
-    order.reserve(clients.size());
-    for (auto const* client : clients) order.push_back(client->id);
-    return order;
+        for (auto id : fullscreen_claims_)
+            if (auto const& client = require(id); in_view(client))
+                owners[client.monitor] = id;
+    return owners;
 }
 
 xcb_window_t State::fullscreen_owner(size_t monitor) const { return fullscreen_owners().at(monitor); }
@@ -506,7 +481,7 @@ void State::fullscreen(xcb_window_t id, bool enabled)
     auto& c = edit(id);
     LWM_LOG_DEBUG("Fullscreen changed: window={:#x} enabled={}", id, false);
     c.fullscreen = false;
-    c.fullscreen_claim = 0;
+    std::erase(fullscreen_claims_, id);
     repair_focus_ = true;
 }
 
@@ -517,7 +492,8 @@ void State::request_fullscreen(xcb_window_t id)
         LWM_LOG_DEBUG("Fullscreen changed: window={:#x} enabled={}", id, true);
     c.fullscreen = true;
     c.maximized_horz = c.maximized_vert = false;
-    c.fullscreen_claim = ++next_fullscreen_claim_;
+    std::erase(fullscreen_claims_, id);
+    fullscreen_claims_.push_back(id);
     repair_focus_ = true;
 }
 
@@ -678,7 +654,9 @@ void State::workarea(size_t monitor, Strut strut)
     monitors_[monitor].strut = strut;
 }
 
-void State::replace_monitors(std::vector<Monitor> monitors)
+void State::replace_monitors(std::vector<Monitor> monitors) { replace_monitors(std::move(monitors), true); }
+
+void State::replace_monitors(std::vector<Monitor> monitors, bool fit_unchanged)
 {
     assert(!monitors.empty());
     mutated();
@@ -687,7 +665,7 @@ void State::replace_monitors(std::vector<Monitor> monitors)
         || !std::ranges::equal(monitors_,
                                monitors,
                                [](auto const& a, auto const& b)
-                               { return a.name == b.name && a.geometry() == b.geometry(); });
+                               { return a.name == b.name && a.geometry == b.geometry; });
     if (topology_changed)
     {
         LWM_LOG_INFO("Monitor topology changed: count={} -> {}", monitors_.size(), monitors.size());
@@ -698,10 +676,10 @@ void State::replace_monitors(std::vector<Monitor> monitors)
                 "Monitor: index={} name={} x={} y={} width={} height={}",
                 i,
                 m.name,
-                m.x,
-                m.y,
-                m.width,
-                m.height
+                m.geometry.x,
+                m.geometry.y,
+                m.geometry.width,
+                m.geometry.height
             );
         }
     }
@@ -719,13 +697,14 @@ void State::replace_monitors(std::vector<Monitor> monitors)
         bool displaced = !survives(c.monitor);
         c.monitor = c.monitor < destinations.size() ? destinations[c.monitor] : 0;
         c.workspace = std::min(c.workspace, monitors_[c.monitor].workspaces.size() - 1);
-        // Monitor indices in the hint may name different outputs now.
-        c.fullscreen_monitors.reset();
         forget_missing_tile_slot(c);
-        if (auto* mode = floating_mode(c))
+        // Restart with unchanged topology preserves intentional off-workarea
+        // geometry and monitor hints; live refresh still fits to current struts.
+        if (topology_changed || fit_unchanged)
         {
-            auto area = monitors_[c.monitor].working_area();
-            mode->geometry = hotplug_policy::fit_floating(mode->geometry, area, displaced);
+            c.fullscreen_monitors.reset();
+            if (auto* mode = floating_mode(c))
+                mode->geometry = hotplug_policy::fit_floating(mode->geometry, monitors_[c.monitor].working_area(), displaced);
         }
     }
 }
@@ -826,89 +805,72 @@ restart::Snapshot State::snapshot() const
     snapshot.focused_monitor = focused_monitor_;
     snapshot.active = active_window_;
     snapshot.showing_desktop = showing_desktop_;
-    for (auto const& monitor : monitors_) snapshot.monitors.push_back(restart::capture_monitor(monitor));
-    for (auto const* c : clients_by_order())
-    {
-        snapshot.clients.push_back(
-            { c->id,
-              c->monitor,
-              c->workspace,
-              c->mode,
-              c->preferences,
-              c->urgency.sources,
-              c->borderless,
-              c->desktop_pinned,
-              c->fullscreen_monitors,
-              c->mru_order }
-        );
-    }
+    for (auto const& monitor : monitors_) snapshot.monitors.push_back(monitor);
+    for (auto const* client : clients_by_order()) snapshot.clients.push_back(*client);
     for (auto const& slot : named_scratchpads_)
         if (slot.window() != XCB_NONE || slot.pending_launch())
             snapshot.named_scratchpads.push_back(
                 { slot.name, slot.pending_launch() ? std::nullopt : std::optional{ slot.window() } }
             );
     snapshot.pool = scratchpad_pool_;
-    snapshot.fullscreen_claims = fullscreen_claim_order();
+    snapshot.fullscreen_claims = fullscreen_claims_;
     return snapshot;
 }
 
-void State::restore_workspaces(restart::Snapshot& snapshot)
+void State::restore_graph(restart::Snapshot const& snapshot, std::vector<Client> observed)
 {
     assert(clients_.empty());
-    snapshot.rebind(monitors_);
     mutated();
+    auto discovered = std::move(monitors_);
+    monitors_.clear();
+    for (auto const& monitor : snapshot.monitors) monitors_.push_back(Monitor{ monitor });
     focused_monitor_ = snapshot.focused_monitor;
     showing_desktop_ = snapshot.showing_desktop;
-    for (size_t m = 0; m < monitors_.size(); ++m)
+    for (auto& client : observed)
     {
-        auto& monitor = monitors_[m];
-        auto const& record = snapshot.monitors[m];
-        monitor.current_workspace = record.current;
-        monitor.previous_workspace = record.previous;
-        for (size_t w = 0; w < monitor.workspaces.size(); ++w)
+        auto const* saved = snapshot.find(client.id);
+        if (!saved)
+            continue;
+        static_cast<ClientIntent&>(client) = *saved;
+        client.order = register_window(client.id, snapshot.registration_order);
+        if (client.fullscreen)
+            client.maximized_horz = client.maximized_vert = false;
+        next_recency_ = std::max(next_recency_, client.mru_order + 1);
+        clients_.emplace(client.id, std::move(client));
+    }
+    for (auto id : snapshot.fullscreen_claims)
+        if (auto const* client = find(id); client && client->fullscreen)
+            fullscreen_claims_.push_back(id);
+    replace_monitors(std::move(discovered), false);
+    // Filter only after merging: surviving workspace preferences have precedence
+    // over incoming ones, even when their former target disappeared during exec.
+    for (auto& monitor : monitors_)
+        for (auto& workspace : monitor.workspaces)
         {
-            monitor.workspaces[w].layout_strategy = record.workspaces[w].strategy;
-            monitor.workspaces[w].split_ratios = record.workspaces[w].ratios;
+            std::erase_if(workspace.windows, [&](auto id) { return !find(id); });
+            auto const* preferred = find(workspace.preferred_tile);
+            if (!preferred || preferred->iconic)
+                workspace.preferred_tile = XCB_NONE;
+        }
+    // Newcomers choose the restored current workspace. New fullscreen requests
+    // follow saved claims in scan order, including those from saved clients.
+    for (auto& observation : observed)
+    {
+        if (auto const* client = find(observation.id))
+        {
+            if (client->fullscreen && !std::ranges::contains(fullscreen_claims_, client->id))
+                request_fullscreen(client->id);
+        }
+        else
+        {
+            if (!observation.desktop_pinned)
+            {
+                observation.monitor = focused_monitor_;
+                observation.workspace = monitors_[focused_monitor_].current_workspace;
+            }
+            insert(std::move(observation), snapshot.registration_order);
         }
     }
-}
-
-void State::restore_membership(restart::Snapshot const& snapshot)
-{
-    mutated();
-    auto adopted_claims = fullscreen_claim_order();
-    next_fullscreen_claim_ = 0;
-    for (auto id : adopted_claims) clients_.at(id).fullscreen_claim = 0;
-    auto restore_claim = [&](xcb_window_t id)
-    {
-        auto it = clients_.find(id);
-        if (it != clients_.end() && it->second.fullscreen && it->second.fullscreen_claim == 0)
-            it->second.fullscreen_claim = ++next_fullscreen_claim_;
-    };
-    for (auto id : snapshot.fullscreen_claims) restore_claim(id);
-    // Windows arriving during handoff have newer claims than the saved clients.
-    // Keep their adoption order; stale saved IDs cannot steal ownership.
-    for (auto id : adopted_claims) restore_claim(id);
-
-    for (size_t m = 0; m < std::min(monitors_.size(), snapshot.monitors.size()); ++m)
-        for (size_t w = 0; w < std::min(monitors_[m].workspaces.size(), snapshot.monitors[m].workspaces.size()); ++w)
-        {
-            auto& workspace = monitors_[m].workspaces[w];
-            auto const& saved = snapshot.monitors[m].workspaces[w];
-            // Adoption appended tiles in scan order; saved order ranks known members first.
-            auto rank = [&](xcb_window_t id)
-            { return static_cast<size_t>(std::ranges::find(saved.tiles, id) - saved.tiles.begin()); };
-            std::ranges::stable_sort(workspace.windows, {}, rank);
-            if (auto const* preferred = find(saved.preferred_tile);
-                preferred && workspace.find_window(saved.preferred_tile) != workspace.windows.end() && !preferred->iconic)
-                workspace.preferred_tile = saved.preferred_tile;
-        }
-    for (auto const& record : snapshot.clients)
-        if (auto it = clients_.find(record.window); it != clients_.end())
-        {
-            it->second.mru_order = record.mru_order;
-            next_recency_ = std::max(next_recency_, record.mru_order + 1);
-        }
     for (auto const& named : snapshot.named_scratchpads)
         if (named_scratchpad(named.name))
         {

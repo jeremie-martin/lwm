@@ -52,6 +52,10 @@ inline std::optional<Violation> validate(State const& state)
         }
     }
 
+    std::unordered_set<xcb_window_t> claims;
+    for (auto id : state.fullscreen_claims())
+        if (!state.find(id) || !claims.insert(id).second)
+            return Violation{ "Fullscreen claim is missing or duplicated", id };
     std::unordered_set<uint64_t> registrations;
     std::unordered_set<uint64_t> recencies;
     for (auto const& [id, client] : clients)
@@ -69,7 +73,7 @@ inline std::optional<Violation> validate(State const& state)
             return Violation{ "Client has invalid monitor or workspace placement", id };
         if (client.kind() == Client::Kind::Tiled && !tiled_windows.contains(id))
             return Violation{ "Tiled client is absent from workspace membership", id };
-        if (client.fullscreen != (client.fullscreen_claim != 0))
+        if (client.fullscreen != claims.contains(id))
             return Violation{ "Fullscreen state disagrees with its claim", id };
         if (client.fullscreen && (client.maximized_horz || client.maximized_vert))
             return Violation{ "Fullscreen client retains maximize state", id };
