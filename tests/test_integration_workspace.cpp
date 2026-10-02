@@ -1,4 +1,5 @@
 #include "restart_handoff.hpp"
+#include "lwm/core/restart.hpp"
 #include <X11/Xlib.h>
 #include <algorithm>
 #include <array>
@@ -898,7 +899,7 @@ TEST_CASE("Integration: restart consumes its handoff and rejects damaged snapsho
         graph["pool"] = JsonValue::array({ first });
         auto payload = graph.dump();
         snapshot->assign(2 + (payload.size() + 3) / 4, 0);
-        (*snapshot)[0] = 12;
+        (*snapshot)[0] = lwm::restart::format;
         (*snapshot)[1] = payload.size();
         std::memcpy(snapshot->data() + 2, payload.data(), payload.size());
     }

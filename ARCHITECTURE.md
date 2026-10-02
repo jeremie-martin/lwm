@@ -139,15 +139,23 @@ projection; hidden clients use their derived presentation geometry.
 
 ### Admission and topology
 
-Admission reads one client candidate for classification, matching, application
-state and registration. Live maps and startup use that same observation; restart
-overlays saved private intent on it rather than building a parallel classification
-record. Fixtures and popups use the candidate's metadata without client placement.
+Admission owns classification, matching, application observations and X resource
+setup once per window. Live maps register their candidate immediately; startup
+passes observations to State once, then places registered clients by ID. There is
+no second manage pass or conditional insertion of an already registered client.
+A valid handoff establishes client identity and fixture role before current metadata
+can choose fresh admission defaults; surviving clients receive full observations even
+when their current type would admit a dock or popup. Fresh fixtures and popups have
+no client placement.
 Fresh clients use desktop hints or the focused monitor, apply initial state, and then
 rules. Startup registers the complete scene and applies tiled rules before placing
-floating clients. A bounded parent walk places floating parents before children,
-including malformed cycles. Managed parents supply derived presentation geometry;
-only unmanaged parents require X geometry reads.
+floating clients. Cold startup applies each tiled rule at admission, preserving
+fullscreen-claim priority relative to subsequent application claims. A bounded
+parent walk places floating parents before children, including malformed cycles. Managed parents supply derived presentation geometry;
+only unmanaged parents require X geometry reads. Initial placement and subsequent
+size-hint updates share one implementation. Initial placement follows a managed
+parent's workspace and centers without a position hint; later size-only updates
+preserve the chosen origin.
 
 Topology notifications are coalesced. Discovery reads new geometry and dock struts
 before `State::replace_monitors()`. Output names identify survivors, whose complete
@@ -270,14 +278,18 @@ marker and kills that retained X client before continuing initialization.
 `State::snapshot()` records private intent in `_LWM_RESTART`: placement, modes,
 preferences, urgency, focus ranks, workspace layouts/ratios/order/preferences,
 scratchpad claims/pending launches/pool order, and fullscreen-monitor hints.
+Client intents and fixture records carry their registration ranks directly; fixture
+roles also survive. There is no separate registration-ID list.
 Registration order spans clients and fixtures; fullscreen claim order is separate
 from focus and server stacking. Derived rectangles are omitted. Requested flags
 such as fullscreen, sticky, iconic, and maximize travel through `_NET_WM_STATE`.
 
 Adoption proceeds in this order:
 
-1. Scan each window's application properties once, register fixtures, and refresh
-   dock reservations before rebinding or placing normal clients.
+1. Resolve each surviving window's established registry identity before fresh
+   classification. Observe clients, register fixtures with their saved roles, and
+   refresh dock reservations before rebinding or placing clients. Only newcomers
+   choose admission roles from current type hints.
 2. For the normal client candidates, `State::restore_graph()`
    overlays saved `ClientIntent` values on surviving observations and installs the
    saved `MonitorState`/`Workspace` graph directly, including tiled order. Saved
@@ -314,11 +326,11 @@ Named slots share one value type in memory and on the wire: null is launch-pendi
 NONE is empty in memory (omitted from the handoff), and a client ID is claimed.
 The CARDINAL32 envelope contains a format word, byte length, and zero-padded JSON;
 length and padding must match exactly. Output names preserve opaque bytes. The
-current format is 12 and follows the domain values directly, with no legacy field
+current format is 13 and follows the domain values directly, with no legacy field
 aliases or conversion layer. Schema changes require a format bump. Incompatible
 or malformed snapshots are rejected as a whole; windows are adopted afresh through
 the normal startup path. There is no migration codec. Consequently, the first
-restart from a format-11 binary loses private workspace and focus history;
+restart from a format-12 binary loses private workspace and focus history;
 subsequent same-format restarts preserve it.
 
 ## Logging

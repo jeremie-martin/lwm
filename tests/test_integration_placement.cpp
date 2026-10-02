@@ -1,5 +1,6 @@
 #include "restart_handoff.hpp"
 #include <X11/keysym.h>
+#include <xcb/xcb_icccm.h>
 #include <catch2/catch_test_macros.hpp>
 #include <catch2/generators/catch_generators.hpp>
 
@@ -412,4 +413,286 @@ TEST_CASE(
     CHECK_FALSE(is_hidden_offscreen(conn, pooled));
     CHECK(ipc_json(*socket, "scratchpad list").at("pool") == nlohmann::json::array({ pooled }));
     for (auto window : { child, pooled, parent }) destroy_window(conn, window);
+}
+
+TEST_CASE("Integration: restart preserves client ownership across non-client type hints",
+          "[integration][restart][placement][property][scratchpad][fullscreen]")
+{
+    auto type = GENERATE("DOCK", "DESKTOP", "POPUP_MENU");
+    auto path = GENERATE("restart", "failed-exec", "handoff");
+    CAPTURE(type, path);
+    auto env = TestEnvironment::create(R"(
+[workspaces]
+count = 2
+[[scratchpads]]
+name = "named"
+spawn = { argv = ["/bin/true"] }
+match = { class = "NamedOwner" }
+)");
+    REQUIRE(env);
+    auto& conn = env->conn;
+    park_pointer(conn);
+    auto socket = wait_for_ipc_socket_path(conn);
+    REQUIRE(socket);
+    std::vector<xcb_window_t> windows;
+    for (int i = 0; i < 4; ++i)
+    {
+        auto window = create_window(conn, 20, 30, 160, 100);
+        if (i == 3) set_window_wm_class(conn, window, "named", "NamedOwner");
+        map_window(conn, window);
+        windows.push_back(window);
+        REQUIRE(wait_for_condition([&] { return ipc_json(*socket, "window list")["windows"].size() == windows.size(); }, timeout));
+    }
+    auto tile = windows[0], remote = windows[1], pooled = windows[2], named = windows[3];
+    ipc_ok(*socket, "focus window=" + std::to_string(remote));
+    ipc_ok(*socket, "window to-workspace 1");
+    ipc_ok(*socket, "focus window=" + std::to_string(pooled));
+    ipc_ok(*socket, "window float");
+    ipc_ok(*socket, "scratchpad stash");
+    ipc_ok(*socket, "focus window=" + std::to_string(tile));
+    ipc_ok(*socket, "window fullscreen");
+    // A client that advertises dock struts still has no dock ownership.
+    auto strut_atom = intern_atom(conn.get(), "_NET_WM_STRUT");
+    uint32_t strut[] = { 0, 0, 160, 0 };
+    xcb_change_property(conn.get(), XCB_PROP_MODE_REPLACE, tile, strut_atom, XCB_ATOM_CARDINAL, 32, 4, strut);
+    observe_title_after_events(conn, tile);
+    auto workarea_atom = intern_atom(conn.get(), "_NET_WORKAREA");
+    auto workarea = read_property32(conn.get(), conn.root(), workarea_atom, XCB_ATOM_CARDINAL);
+    REQUIRE(workarea);
+    auto before = ipc_json(*socket, "state");
+    auto geometry = require_window_geometry(conn, tile);
+    auto previous = wm_instance(conn);
+    REQUIRE(previous);
+    auto changed_type = intern_atom(conn.get(), (std::string("_NET_WM_WINDOW_TYPE_") + type).c_str());
+    auto change = [&]
+    {
+        for (auto window : windows) REQUIRE(set_window_type(conn, window, changed_type));
+    };
+    if (std::string_view(path) == "handoff")
+    {
+        PausedRestart restart(env->wm, *socket);
+        change();
+        REQUIRE(get_window_geometry(conn, tile));
+        restart.resume();
+    }
+    else
+    {
+        change();
+        observe_title_after_events(conn, tile);
+        ipc_ok(*socket, std::string_view(path) == "failed-exec" ? "exec /definitely/missing/lwm" : "restart");
+    }
+    REQUIRE(wait_for_wm_restart(conn, timeout, *previous));
+    auto after = ipc_json(*socket, "state");
+    CHECK(after["scratchpads"] == before["scratchpads"]);
+    CHECK(after["workspaces"] == before["workspaces"]);
+    REQUIRE(after["windows"]["windows"].size() == windows.size());
+    for (size_t i = 0; i < windows.size(); ++i)
+        for (auto field : { "id", "kind", "monitor", "workspace", "iconic", "fullscreen" })
+            CHECK(after["windows"]["windows"][i][field] == before["windows"]["windows"][i][field]);
+    CHECK(wait_for_active_window(conn, tile, timeout));
+    CHECK(require_window_geometry(conn, tile) == geometry);
+    CHECK(read_property32(conn.get(), conn.root(), workarea_atom, XCB_ATOM_CARDINAL) == workarea);
+    CHECK(is_hidden_offscreen(conn, pooled));
+    CHECK(is_hidden_offscreen(conn, named));
+    auto list_atom = intern_atom(conn.get(), "_NET_CLIENT_LIST");
+    CHECK(get_window_property_windows(conn.get(), conn.root(), list_atom) == windows);
+
+    // Identical hints still choose fresh admission roles for a newcomer.
+    auto fresh = create_window(conn, 0, 0, 80, 40);
+    REQUIRE(set_window_type(conn, fresh, changed_type));
+    map_window(conn, fresh);
+    observe_title_after_events(conn, tile);
+    CHECK(ipc_json(*socket, "window list")["windows"].size() == windows.size());
+    if (std::string_view(type) != "POPUP_MENU") windows.push_back(fresh);
+    CHECK(get_window_property_windows(conn.get(), conn.root(), list_atom) == windows);
+    destroy_window(conn, fresh);
+    for (auto window : { tile, remote, pooled, named }) destroy_window(conn, window);
+}
+
+TEST_CASE("Integration: restart preserves fixture roles across changed admission hints",
+          "[integration][restart][property][fixture]")
+{
+    auto role = GENERATE("DOCK", "DESKTOP");
+    auto type = GENERATE("NORMAL", "DOCK", "DESKTOP", "POPUP_MENU");
+    auto path = GENERATE("restart", "failed-exec", "handoff");
+    CAPTURE(role, type, path);
+    auto env = TestEnvironment::create();
+    REQUIRE(env);
+    auto& conn = env->conn;
+    park_pointer(conn);
+    auto socket = wait_for_ipc_socket_path(conn);
+    REQUIRE(socket);
+    auto fixture = create_window(conn, 0, 0, 100, 30);
+    REQUIRE(set_window_type(conn, fixture, intern_atom(conn.get(), (std::string("_NET_WM_WINDOW_TYPE_") + role).c_str())));
+    uint32_t strut[] = { 0, 0, 40, 0 };
+    xcb_change_property(conn.get(), XCB_PROP_MODE_REPLACE, fixture, intern_atom(conn.get(), "_NET_WM_STRUT"),
+                        XCB_ATOM_CARDINAL, 32, 4, strut);
+    map_window(conn, fixture);
+    auto kind = intern_atom(conn.get(), "_LWM_WINDOW_CLASS");
+    auto expected = std::string_view(role) == "DOCK" ? "dock" : "desktop";
+    REQUIRE(wait_for_condition([&] { return get_window_property_string(conn.get(), fixture, kind) == expected; }, timeout));
+    auto client = create_window(conn, 40, 40, 100, 80);
+    map_window(conn, client);
+    REQUIRE(wait_for_active_window(conn, client, timeout));
+    auto workarea_atom = intern_atom(conn.get(), "_NET_WORKAREA");
+    auto workarea = read_property32(conn.get(), conn.root(), workarea_atom, XCB_ATOM_CARDINAL);
+    REQUIRE(workarea);
+    auto geometry = require_window_geometry(conn, client);
+    auto previous = wm_instance(conn);
+    REQUIRE(previous);
+    auto change = [&] { REQUIRE(set_window_type(conn, fixture, intern_atom(conn.get(), (std::string("_NET_WM_WINDOW_TYPE_") + type).c_str()))); };
+    if (std::string_view(path) == "handoff")
+    {
+        PausedRestart restart(env->wm, *socket);
+        change();
+        REQUIRE(get_window_geometry(conn, fixture));
+        restart.resume();
+    }
+    else
+    {
+        change();
+        observe_title_after_events(conn, client);
+        ipc_ok(*socket, std::string_view(path) == "failed-exec" ? "exec /definitely/missing/lwm" : "restart");
+    }
+    REQUIRE(wait_for_wm_restart(conn, timeout, *previous));
+    CHECK(get_window_property_string(conn.get(), fixture, kind) == expected);
+    CHECK(ipc_json(*socket, "window list")["windows"].size() == 1);
+    CHECK(wait_for_active_window(conn, client, timeout));
+    CHECK(read_property32(conn.get(), conn.root(), workarea_atom, XCB_ATOM_CARDINAL) == workarea);
+    CHECK(require_window_geometry(conn, client) == geometry);
+    CHECK(get_window_property_windows(conn.get(), conn.root(), intern_atom(conn.get(), "_NET_CLIENT_LIST"))
+          == std::vector<xcb_window_t>{ fixture, client });
+    destroy_window(conn, fixture);
+    destroy_window(conn, client);
+}
+
+TEST_CASE("Integration: floating hints agree across live admission, startup and restart",
+          "[integration][placement][adoption][wm_normal_hints][restart]")
+{
+    bool startup = GENERATE(false, true);
+    bool anchored = GENERATE(false, true);
+    auto position = GENERATE("absent", "accepted", "rejected");
+    CAPTURE(startup, anchored, position);
+    auto& server = X11TestEnvironment::instance();
+    if (!server.available())
+    {
+        REQUIRE(std::getenv("LWM_TEST_REQUIRE_X11") == nullptr);
+        SKIP("X11 unavailable");
+    }
+    X11Connection conn;
+    REQUIRE(conn.ok());
+    park_pointer(conn);
+    std::unique_ptr<LwmProcess> wm;
+    auto start = [&]
+    {
+        wm = std::make_unique<LwmProcess>(server.display(), "[appearance]\npadding = 0\nborder_width = 0\n");
+        REQUIRE(wait_for_wm_ready(conn, timeout));
+    };
+    if (!startup)
+        start();
+    auto parent = create_window(conn, 0, 0, 200, 150);
+    auto peer = create_window(conn, 0, 0, 200, 150);
+    for (auto window : { parent, peer }) map_window(conn, window);
+    if (!startup)
+        REQUIRE(wait_for_active_window(conn, peer, timeout));
+    auto dialog = create_window(conn, 0, 0, 150, 90);
+    set_window_type(conn, dialog, intern_atom(conn.get(), "_NET_WM_WINDOW_TYPE_DIALOG"));
+    if (anchored)
+        set_transient_for(conn, dialog, parent);
+    xcb_size_hints_t hints{};
+    hints.flags = XCB_ICCCM_SIZE_HINT_US_SIZE;
+    hints.width = 150;
+    hints.height = 90;
+    if (std::string_view(position) != "absent")
+    {
+        hints.flags |= XCB_ICCCM_SIZE_HINT_US_POSITION;
+        hints.x = std::string_view(position) == "accepted" ? 120 : 2000;
+        hints.y = 130;
+    }
+    xcb_icccm_set_wm_normal_hints(conn.get(), dialog, &hints);
+    map_window(conn, dialog);
+    if (startup)
+        start();
+    // Both paths must use the complete tiled scene when centering on a parent.
+    REQUIRE(wait_for_condition([&]
+    {
+        auto rectangle = get_window_geometry(conn, parent);
+        return rectangle && rectangle->width == conn.screen()->width_in_pixels / 2;
+    }, timeout));
+    auto area = anchored ? require_window_geometry(conn, parent)
+                         : WindowGeometry{ 0, 0, conn.screen()->width_in_pixels, conn.screen()->height_in_pixels };
+    int16_t x = std::string_view(position) == "accepted" ? 120 : area.x + (area.width - 150) / 2;
+    int16_t y = std::string_view(position) == "accepted" ? 130 : area.y + (area.height - 90) / 2;
+    REQUIRE(wait_for_window_geometry(conn, dialog, x, y, 150, 90));
+    // Repeating positional hints is stable. A size-only update preserves the
+    // chosen origin rather than replaying initial centering.
+    xcb_icccm_set_wm_normal_hints(conn.get(), dialog, &hints);
+    observe_title_after_events(conn, dialog);
+    CHECK(require_window_geometry(conn, dialog) == WindowGeometry{ x, y, 150, 90 });
+    hints.flags = XCB_ICCCM_SIZE_HINT_US_SIZE;
+    hints.width = 170;
+    hints.height = 110;
+    xcb_icccm_set_wm_normal_hints(conn.get(), dialog, &hints);
+    REQUIRE(wait_for_window_geometry(conn, dialog, x, y, 170, 110));
+    auto socket = wait_for_ipc_socket_path(conn);
+    REQUIRE(socket);
+    auto previous = wm_instance(conn);
+    REQUIRE(previous);
+    ipc_ok(*socket, "restart");
+    REQUIRE(wait_for_wm_restart(conn, timeout, *previous));
+    CHECK(require_window_geometry(conn, dialog) == WindowGeometry{ x, y, 170, 110 });
+    for (auto window : { dialog, peer, parent }) destroy_window(conn, window);
+}
+
+TEST_CASE("Integration: cold startup preserves fullscreen claim order across tiled rules and application state",
+          "[integration][placement][adoption][rules][fullscreen][restart]")
+{
+    bool rule_first = GENERATE(false, true);
+    bool floating_application = GENERATE(false, true);
+    CAPTURE(rule_first, floating_application);
+    auto& server = X11TestEnvironment::instance();
+    if (!server.available())
+    {
+        REQUIRE(std::getenv("LWM_TEST_REQUIRE_X11") == nullptr);
+        SKIP("X11 unavailable");
+    }
+    X11Connection conn;
+    REQUIRE(conn.ok());
+    park_pointer(conn);
+    auto first = create_window(conn, 20, 30, 200, 150);
+    auto second = create_window(conn, 40, 50, 220, 160);
+    auto ruled = rule_first ? first : second;
+    auto application = rule_first ? second : first;
+    set_window_wm_class(conn, ruled, "test", "StartupFullscreen");
+    if (floating_application)
+        set_window_type(conn, application, intern_atom(conn.get(), "_NET_WM_WINDOW_TYPE_DIALOG"));
+    auto fullscreen = intern_atom(conn.get(), "_NET_WM_STATE_FULLSCREEN");
+    auto states = intern_atom(conn.get(), "_NET_WM_STATE");
+    xcb_change_property(conn.get(), XCB_PROP_MODE_REPLACE, application, states, XCB_ATOM_ATOM, 32, 1, &fullscreen);
+    for (auto window : { first, second }) map_window(conn, window);
+    REQUIRE(get_window_geometry(conn, second));
+    LwmProcess wm(server.display(), R"(
+[appearance]
+padding = 0
+border_width = 0
+[[rules]]
+match = { class = "StartupFullscreen" }
+apply = { fullscreen = true }
+)");
+    REQUIRE(wait_for_wm_ready(conn, timeout));
+    REQUIRE(wait_for_active_window(conn, second, timeout));
+    REQUIRE(wait_for_window_geometry(conn, second, 0, 0, conn.screen()->width_in_pixels, conn.screen()->height_in_pixels));
+    REQUIRE(wait_for_condition([&]
+    {
+        auto geometry = get_window_geometry(conn, first);
+        return geometry && geometry->x < 0;
+    }, timeout));
+    auto socket = wait_for_ipc_socket_path(conn);
+    REQUIRE(socket);
+    auto previous = wm_instance(conn);
+    REQUIRE(previous);
+    ipc_ok(*socket, "restart");
+    REQUIRE(wait_for_wm_restart(conn, timeout, *previous));
+    CHECK(wait_for_active_window(conn, second, timeout));
+    for (auto window : { first, second }) destroy_window(conn, window);
 }

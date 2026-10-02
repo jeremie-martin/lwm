@@ -16,7 +16,7 @@ namespace {
 std::vector<uint32_t> pack_json(std::string const& text)
 {
     std::vector<uint32_t> words(2 + (text.size() + 3) / 4);
-    words[0] = 12;
+    words[0] = restart::format;
     words[1] = static_cast<uint32_t>(text.size());
     std::memcpy(words.data() + 2, text.data(), text.size());
     return words;
@@ -25,7 +25,7 @@ std::vector<uint32_t> pack_json(std::string const& text)
 nlohmann::json unpack_json(std::vector<uint32_t> const& words)
 {
     REQUIRE(words.size() >= 2);
-    REQUIRE(words[0] == 12);
+    REQUIRE(words[0] == restart::format);
     REQUIRE(words[1] <= (words.size() - 2) * 4);
     auto data = reinterpret_cast<char const*>(words.data() + 2);
     return nlohmann::json::parse(data, data + words[1]);
@@ -62,7 +62,10 @@ restart::Snapshot sample()
     snapshot.clients[1].fullscreen_monitors = FullscreenMonitors{ 0, 1, 0, 1 };
     snapshot.clients.push_back({ .id = 0x300, .monitor = 1, .mode = FloatingMode{ Geometry{ 20, 30, 80, 60 } } });
     snapshot.pool = { 0x300 };
-    snapshot.registration_order = { 0x200, 0x300, 0x100 };
+    snapshot.clients[0].order = 2;
+    snapshot.clients[1].order = 0;
+    snapshot.clients[2].order = 1;
+    snapshot.fixtures = { { 0x400, Fixture::Role::Dock, 3 } };
     snapshot.fullscreen_claims = { 0x200, 0x100 };
     return snapshot;
 }
@@ -211,8 +214,8 @@ TEST_CASE("Restart wire schema directly represents domain values", "[restart][co
         "clients": [{"id": 7, "monitor": 0, "workspace": 0,
             "mode": {"TiledMode": {"floating": null}},
             "preferences": {"floating": null, "skip_taskbar": null, "skip_pager": null, "layer": null},
-            "urgency": {"sources": 0}, "borderless": false, "desktop_pinned": false, "fullscreen_monitors": null, "mru_order": 0}],
-        "registration_order": [7], "named_scratchpads": [], "pool": [], "fullscreen_claims": [7]
+            "urgency": {"sources": 0}, "borderless": false, "desktop_pinned": false, "fullscreen_monitors": null, "mru_order": 0, "order": 0}],
+        "fixtures": [], "named_scratchpads": [], "pool": [], "fullscreen_claims": [7]
     })");
     auto decoded = restart::decode(pack_json(document.dump()));
     REQUIRE(decoded);
@@ -437,10 +440,15 @@ TEST_CASE("Restart rejects ambiguous output identities and scratchpad ownership"
 TEST_CASE("Restart rejects ambiguous or missing registration identities", "[restart][codec][registration]")
 {
     auto snapshot = sample();
-    SECTION("Duplicate registration") { snapshot.registration_order.push_back(0x100); }
-    SECTION("Zero registration") { snapshot.registration_order.push_back(XCB_NONE); }
-    SECTION("Missing client") { std::erase(snapshot.registration_order, 0x100); }
+    SECTION("Duplicate rank") { snapshot.clients[0].order = snapshot.clients[1].order; }
+    SECTION("Zero identity") { snapshot.fixtures.front().id = XCB_NONE; }
+    SECTION("Client and fixture identity overlap") { snapshot.fixtures.front().id = 0x100; }
     SECTION("Duplicate client") { snapshot.clients.push_back(snapshot.clients.front()); }
+    SECTION("Duplicate fixture") { snapshot.fixtures.push_back(snapshot.fixtures.front()); }
+    SECTION("Fixture and client rank overlap") { snapshot.fixtures.front().order = snapshot.clients.front().order; }
+    SECTION("Unbounded rank") { snapshot.clients.front().order = UINT64_MAX; }
+    SECTION("Unbounded fixture rank") { snapshot.fixtures.front().order = UINT64_MAX; }
+    SECTION("Rank leaves no room for newcomers") { snapshot.fixtures.front().order = UINT64_MAX - 1; }
     CHECK_FALSE(restart::decode(restart::encode(snapshot)));
 }
 
@@ -455,34 +463,36 @@ TEST_CASE("Admission preserves shared registration ranks independently of scan o
     source.swap_tiles(0, 0, 1);
     auto snapshot = restart::decode(restart::encode(source.snapshot()));
     REQUIRE(snapshot);
-    REQUIRE(snapshot->registration_order == std::vector<xcb_window_t>{ 1, 2, 3, 4 });
+    REQUIRE(snapshot->find(3)->order == 2);
+    REQUIRE(snapshot->find_fixture(2)->role == Fixture::Role::Dock);
 
     auto target = test::state();
-    auto const& order = snapshot->registration_order;
-    // A new fixture arrives first; client 1 disappeared during handoff.
-    target.insert_fixture(5, Fixture::Role::Dock, order);
-    target.insert_fixture(4, Fixture::Role::Desktop, order);
-    target.insert_fixture(2, Fixture::Role::Dock, order);
+    // Fixture observations precede client restoration; newcomer 5 arrives first.
+    target.insert_fixture(5, Fixture::Role::Dock);
+    target.insert_fixture(4, Fixture::Role::Desktop);
+    target.insert_fixture(2, Fixture::Role::Dock);
     Client newcomer;
     newcomer.id = 6;
-    target.insert(newcomer, order);
     Client survivor;
     survivor.id = 3;
-    target.insert(survivor, order);
+    target.restore_graph(*snapshot, { newcomer, survivor });
     CHECK(target.require(3).order == 2);
     CHECK(target.find_fixture(2)->order == 1);
     CHECK(target.find_fixture(4)->order == 3);
     CHECK(target.find_fixture(5)->order == 4);
-    CHECK(target.require(6).order == 5);
+    CHECK(target.require(6).order > target.find_fixture(5)->order);
     add(target, 7);
-    CHECK(target.require(7).order == 6);
-    CHECK(target.snapshot().registration_order == std::vector<xcb_window_t>{ 2, 3, 4, 5, 6, 7 });
+    CHECK(target.require(7).order > target.require(6).order);
+    CHECK_FALSE(invariants::validate(target));
 }
 
 TEST_CASE("Restart decoder rejects malformed typed values before narrowing or defaulting", "[restart][codec]")
 {
     auto original = unpack_json(restart::encode(sample()));
     REQUIRE(restart::decode(pack_json(original.dump())) == sample());
+    auto invalid_role = original;
+    invalid_role["fixtures"][0]["role"] = "Popup";
+    CHECK_FALSE(restart::decode(pack_json(invalid_role.dump())));
     for (auto const& [path, value] : std::vector<std::pair<std::string, nlohmann::json>>{
              {                 "/clients/0/id",                                uint64_t{ 1 } << 32 },
              {                "/clients/0/monitor",                                                 -1 },
@@ -577,7 +587,7 @@ TEST_CASE("Restart rejects inconsistent workspace graphs before restoration", "[
     auto& workspace = snapshot.monitors[0].workspaces[0];
     SECTION("Duplicate tile") { workspace.windows.push_back(0x100); }
     SECTION("Unregistered tile") { workspace.windows.push_back(0x999); }
-    SECTION("Fixture in tiled membership") { workspace.windows.push_back(0x300); }
+    SECTION("Fixture in tiled membership") { workspace.windows.push_back(0x400); }
     SECTION("Floating client in tiled membership") { snapshot.monitors[1].workspaces[0].windows.push_back(0x200); }
     SECTION("Missing tile") { workspace.windows.clear(); workspace.preferred_tile = XCB_NONE; }
     SECTION("Wrong placement") { snapshot.clients[0].workspace = 1; }
@@ -655,7 +665,6 @@ TEST_CASE("Persistent graph validation rejects scratchpad ownership before recon
     SECTION("Unmanaged pool member") { graph.pool.push_back(999); }
     SECTION("Fixture registration is not a pool client")
     {
-        graph.registration_order.push_back(0x400);
         graph.pool.push_back(0x400);
     }
     SECTION("Duplicate pool member") { graph.pool.push_back(graph.pool.front()); }
@@ -664,7 +673,6 @@ TEST_CASE("Persistent graph validation rejects scratchpad ownership before recon
     SECTION("Empty named identity") { graph.named_scratchpads.front().name.clear(); }
     SECTION("Active registration is not a client")
     {
-        graph.registration_order.push_back(0x400);
         graph.active = 0x400;
     }
     SECTION("Unmanaged active window") { graph.active = 999; }

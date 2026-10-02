@@ -237,12 +237,10 @@ private:
 
     // wm_manage.cpp: classification, registration, rules
     void scan_existing_windows(bool handoff);
-    void manage_window(Client candidate, bool adopting);
     void manage_fixture(xcb_window_t window, Fixture::Role role, bool adopting);
-    // Returns whether WM_HINTS currently carries the urgency flag.
-    bool read_initial_state(Client& client, bool honor_initial_state);
-    Client read_client(xcb_window_t window, bool adopting);
-    Geometry initial_floating_geometry(Client& candidate);
+    // Startup receives deferred observations; live admission registers immediately.
+    std::optional<Client> admit_window(xcb_window_t window, bool adopting);
+    void apply_size_hints(xcb_window_t window, bool initial);
     struct SizeHints
     {
         std::optional<std::pair<int16_t, int16_t>> position;
@@ -303,7 +301,6 @@ private:
     void handle_showing_desktop(xcb_client_message_event_t const& e);
     void handle_configure_request(xcb_configure_request_event_t const& e);
     void handle_property_notify(xcb_property_notify_event_t const& e);
-    void handle_normal_hints(Client const& client);
     void handle_wm_hints(Client const& client);
     void update_floating_geometry(Client const& client, Geometry geometry);
     MousebindConfig const* resolve_mouse_binding(uint16_t state, uint8_t button) const;

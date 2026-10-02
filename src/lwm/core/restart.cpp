@@ -65,10 +65,14 @@ using Wire = rfl::Processors<rfl::NoExtraFields, rfl::NoOptionals, rfl::AddTagsT
 
 ClientIntent const* Snapshot::find(xcb_window_t window) const
 {
-    for (auto const& record : clients)
-        if (record.id == window)
-            return &record;
-    return nullptr;
+    auto record = std::ranges::find(clients, window, &ClientIntent::id);
+    return record == clients.end() ? nullptr : &*record;
+}
+
+Fixture const* Snapshot::find_fixture(xcb_window_t window) const
+{
+    auto fixture = std::ranges::find(fixtures, window, &Fixture::id);
+    return fixture == fixtures.end() ? nullptr : &*fixture;
 }
 
 std::vector<uint32_t> encode(Snapshot const& snapshot)

@@ -53,23 +53,19 @@ Workspace& State::edit_workspace(size_t monitor, size_t workspace)
 
 // Registry
 
-uint64_t State::register_window(xcb_window_t id, std::span<xcb_window_t const> registration_order)
+uint64_t State::register_window(xcb_window_t id)
 {
     focus_cycle_.clear();
     assert(id != XCB_NONE && !find(id) && !find_fixture(id));
-    // Fixtures may be admitted before clients. Reserve every saved rank so a
-    // newcomer cannot take the rank of a survivor that has not been admitted yet.
-    next_order_ = std::max<uint64_t>(next_order_, registration_order.size());
-    auto saved = std::ranges::find(registration_order, id);
-    return saved == registration_order.end() ? next_order_++ : static_cast<uint64_t>(saved - registration_order.begin());
+    return next_order_++;
 }
 
-void State::insert(Client client, std::span<xcb_window_t const> registration_order)
+void State::insert(Client client)
 {
     assert(client.monitor < monitors_.size() && client.workspace < monitors_[client.monitor].workspaces.size());
     mutated();
     forget_missing_tile_slot(client);
-    client.order = register_window(client.id, registration_order);
+    client.order = register_window(client.id);
     client.mru_order = 0;
     auto [it, inserted] = clients_.emplace(client.id, std::move(client));
     assert(inserted);
@@ -79,10 +75,10 @@ void State::insert(Client client, std::span<xcb_window_t const> registration_ord
         request_fullscreen(it->first);
 }
 
-void State::insert_fixture(xcb_window_t id, Fixture::Role role, std::span<xcb_window_t const> registration_order)
+void State::insert_fixture(xcb_window_t id, Fixture::Role role)
 {
     mutated();
-    fixtures_.emplace(id, Fixture{ id, role, register_window(id, registration_order) });
+    fixtures_.emplace(id, Fixture{ id, role, register_window(id) });
 }
 
 void State::erase(xcb_window_t id)
@@ -794,11 +790,8 @@ void State::scratchpad_pending(std::string_view name, bool pending)
 restart::Snapshot State::snapshot() const
 {
     restart::Snapshot snapshot;
-    std::vector<std::pair<uint64_t, xcb_window_t>> registration;
-    for (auto const& [id, client] : clients_) registration.emplace_back(client.order, id);
-    for (auto const& [id, fixture] : fixtures_) registration.emplace_back(fixture.order, id);
-    std::ranges::sort(registration);
-    for (auto const& [order, id] : registration) snapshot.registration_order.push_back(id);
+    for (auto const& [id, fixture] : fixtures_) snapshot.fixtures.push_back(fixture);
+    std::ranges::sort(snapshot.fixtures, {}, &Fixture::order);
     snapshot.focused_monitor = focused_monitor_;
     snapshot.active = active_window_;
     snapshot.showing_desktop = showing_desktop_;
@@ -816,6 +809,17 @@ void State::restore_graph(restart::Snapshot const& snapshot, std::vector<Client>
 {
     assert(clients_.empty());
     mutated();
+    // Fixture observations precede workarea discovery. Restore their ranks here,
+    // reserving the complete saved range before allocating newcomer ranks.
+    uint64_t bound = 0;
+    for (auto const& client : snapshot.clients) bound = std::max(bound, client.order + 1);
+    for (auto const& fixture : snapshot.fixtures) bound = std::max(bound, fixture.order + 1);
+    for (auto& [id, fixture] : fixtures_)
+        if (auto const* saved = snapshot.find_fixture(id))
+            fixture.order = saved->order;
+        else
+            fixture.order += bound;
+    next_order_ += bound;
     auto discovered = std::move(monitors_);
     monitors_.clear();
     for (auto const& monitor : snapshot.monitors) monitors_.push_back(Monitor{ monitor });
@@ -827,7 +831,6 @@ void State::restore_graph(restart::Snapshot const& snapshot, std::vector<Client>
         if (!saved)
             continue;
         static_cast<ClientIntent&>(client) = *saved;
-        client.order = register_window(client.id, snapshot.registration_order);
         if (client.fullscreen)
             client.maximized_horz = client.maximized_vert = false;
         next_recency_ = std::max(next_recency_, client.mru_order + 1);
@@ -863,7 +866,7 @@ void State::restore_graph(restart::Snapshot const& snapshot, std::vector<Client>
                 observation.monitor = focused_monitor_;
                 observation.workspace = monitors_[focused_monitor_].current_workspace;
             }
-            insert(std::move(observation), snapshot.registration_order);
+            insert(std::move(observation));
         }
     }
     for (auto const& named : snapshot.named_scratchpads)

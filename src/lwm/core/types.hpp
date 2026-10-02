@@ -202,6 +202,7 @@ struct ClientIntent
     bool desktop_pinned = false;
     std::optional<FullscreenMonitors> fullscreen_monitors;
     uint64_t mru_order = 0; ///< Completed focus recency; zero means never focused
+    uint64_t order = 0; ///< Registration rank shared by clients and fixtures
 
     bool operator==(ClientIntent const&) const = default;
 };
@@ -248,8 +249,6 @@ struct Client : ClientIntent
     uint32_t user_time = 0;
     xcb_window_t user_time_window = XCB_NONE;
 
-    uint64_t order = 0;            ///< Registration order (_NET_CLIENT_LIST)
-
     /// Actions of the rule matched at the last manage, metadata change, or
     /// reload. Metadata changes apply a rule only when this result changes.
     std::optional<RuleActions> rule;
@@ -285,6 +284,7 @@ struct Fixture
     xcb_window_t id = XCB_NONE;
     Role role = Role::Dock;
     uint64_t order = 0;
+    bool operator==(Fixture const&) const = default;
 };
 
 inline char const* fixture_role_str(Fixture::Role role) { return role == Fixture::Role::Dock ? "dock" : "desktop"; }

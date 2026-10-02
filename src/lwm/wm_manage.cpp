@@ -27,11 +27,8 @@ void WindowManager::scan_existing_windows(bool handoff)
             free(attributes);
             if (!adopt)
                 continue;
-            auto candidate = read_client(window, true);
-            if (default_floating(candidate).has_value())
-                clients.push_back(std::move(candidate));
-            else
-                manage_window(std::move(candidate), true);
+            if (auto candidate = admit_window(window, true))
+                clients.push_back(std::move(*candidate));
         }
         free(tree);
     }
@@ -41,13 +38,23 @@ void WindowManager::scan_existing_windows(bool handoff)
     // Application properties are live observations; private intent comes from
     // the handoff. Docks above already supplied the discovered workareas.
     if (handoff_)
-        state_.restore_graph(*handoff_, clients);
-    for (auto& candidate : clients) manage_window(std::move(candidate), true);
+        state_.restore_graph(*handoff_, std::move(clients));
+    else
+        for (auto& candidate : clients)
+        {
+            auto window = candidate.id;
+            state_.insert(std::move(candidate));
+            if (!floating_mode(state_.require(window)))
+                place_new_client(window);
+        }
 
     // Registration and tiled rules establish the complete layout before any
     // initial floating placement. Resolve floating parents before their children;
     // visiting each ID once also bounds malformed transient cycles.
     auto order = state_.clients_by_order();
+    for (auto const* client : order)
+        if (handoff_ && !floating_mode(*client) && !handoff_->find(client->id))
+            place_new_client(client->id);
     std::unordered_set<xcb_window_t> pending;
     for (auto const* client : order)
         if (floating_mode(*client) && !(handoff_ && handoff_->find(client->id)))
@@ -61,20 +68,6 @@ void WindowManager::scan_existing_windows(bool handoff)
             place_new_client(*it);
     }
 
-    if (handoff_)
-    {
-        if (auto const* active = state_.find(handoff_->active); active && state_.focusable(*active))
-            state_.focus(active->id, 0, false);
-        else
-            state_.focus_fallback(state_.focused_monitor(), false);
-        // A requested application may have mapped while the WM was absent.
-        // Saved claims take precedence; pending launches can claim the remaining
-        // adopted clients exactly as they would a later map or metadata update.
-        for (auto const* client : state_.clients_by_order())
-            claim_pending_scratchpad(client->id, window_match_info(*client), client->rule ? &*client->rule : nullptr);
-        handoff_.reset();
-        return;
-    }
     if (!handoff)
     {
         auto* pointer =
@@ -85,61 +78,20 @@ void WindowManager::scan_existing_windows(bool handoff)
             );
         free(pointer);
     }
-    state_.focus_fallback(state_.focused_monitor(), false);
+    auto const* active = handoff_ ? state_.find(handoff_->active) : nullptr;
+    if (active && state_.focusable(*active))
+        state_.focus(active->id, 0, false);
+    else
+        state_.focus_fallback(state_.focused_monitor(), false);
+    if (handoff_)
+    {
+        // Saved claims precede pending launches that mapped while the WM was absent.
+        for (auto const* client : state_.clients_by_order())
+            claim_pending_scratchpad(client->id, window_match_info(*client), client->rule ? &*client->rule : nullptr);
+        handoff_.reset();
+    }
     if (!handoff)
         for (auto const& command : config_.autostart) launch_program(command, "autostart");
-}
-
-void WindowManager::manage_window(Client candidate, bool adopting)
-{
-    auto window = candidate.id;
-    if (!default_floating(candidate))
-    {
-        if (candidate.ewmh_type == WindowType::Desktop || candidate.ewmh_type == WindowType::Dock)
-            manage_fixture(window, candidate.ewmh_type == WindowType::Dock ? Fixture::Role::Dock : Fixture::Role::Desktop, adopting);
-        else if (!adopting)
-            xcb_map_window(conn_.get(), window);
-        return;
-    }
-    // Named matches enter the scene hidden and floating; pending claims then
-    // recall them through the ordinary scratchpad operation.
-    auto scratchpad = adopting ? std::nullopt
-        : match_scratchpad(window_match_info(candidate), candidate.rule ? &*candidate.rule : nullptr);
-    if (scratchpad)
-    {
-        candidate.iconic = true;
-        if (!floating_mode(candidate))
-            candidate.mode = FloatingMode{ read_window_geometry(window).value_or(Geometry{ 0, 0, 300, 200 }) };
-    }
-    if (!state_.find(window))
-        state_.insert(std::move(candidate));
-
-    uint32_t mask = kManagedWindowEventMask;
-    xcb_change_window_attributes(conn_.get(), window, XCB_CW_EVENT_MASK, &mask);
-    xcb_grab_button(
-        conn_.get(),
-        0,
-        window,
-        XCB_EVENT_MASK_BUTTON_PRESS,
-        XCB_GRAB_MODE_SYNC,
-        XCB_GRAB_MODE_ASYNC,
-        XCB_NONE,
-        XCB_NONE,
-        XCB_BUTTON_INDEX_ANY,
-        XCB_MOD_MASK_ANY
-    );
-    xcb_ewmh_set_frame_extents(ewmh_.get(), window, 0, 0, 0, 0);
-    read_sync_counter(window);
-
-    bool saved = adopting && handoff_ && handoff_->find(window);
-    if (!saved && (!adopting || !floating_mode(state_.require(window))))
-        place_new_client(window);
-
-    auto const& client = state_.require(window);
-    if (!adopting && client.monitor == state_.focused_monitor() && state_.focusable(client))
-        state_.focus(window);
-    if (scratchpad)
-        claim_scratchpad(window, *scratchpad);
 }
 
 void WindowManager::manage_fixture(xcb_window_t window, Fixture::Role role, bool adopting)
@@ -154,9 +106,7 @@ void WindowManager::manage_fixture(xcb_window_t window, Fixture::Role role, bool
         uint32_t below = XCB_STACK_MODE_BELOW;
         xcb_configure_window(conn_.get(), window, XCB_CONFIG_WINDOW_STACK_MODE, &below);
     }
-    state_.insert_fixture(
-        window, role, adopting && handoff_ ? std::span(handoff_->registration_order) : std::span<xcb_window_t const>{ }
-    );
+    state_.insert_fixture(window, role);
     outputs_[window].mapped = adopting;
     if (role == Fixture::Role::Dock)
         workareas_dirty_ = true;
@@ -164,97 +114,54 @@ void WindowManager::manage_fixture(xcb_window_t window, Fixture::Role role, bool
 
 // Client registration
 
-bool WindowManager::read_initial_state(Client& client, bool honor_initial_state)
+// Initial placement and later hint changes share the same geometry policy.
+// Only initial placement follows the parent's workspace and centers by default.
+void WindowManager::apply_size_hints(xcb_window_t window, bool initial)
 {
-    auto* ewmh = ewmh_.get();
-    xcb_ewmh_get_atoms_reply_t states;
-    if (xcb_ewmh_get_wm_state_reply(ewmh, xcb_ewmh_get_wm_state(ewmh, client.id), &states, nullptr))
+    auto const& client = state_.require(window);
+    if (!floating_mode(client))
+        return;
+    bool anchored = client.transient_for != XCB_NONE;
+    auto parent_geometry = initial && anchored ? placement_parent_geometry(client.transient_for) : std::nullopt;
+    if (initial && anchored)
+        if (auto const* parent = state_.find(client.transient_for))
+            state_.relocate(window, parent->monitor, parent->workspace);
+    auto geometry = floating_mode(client)->geometry;
+    auto hints = read_size_hints(window, anchored);
+    geometry.width = hints.width.value_or(geometry.width);
+    geometry.height = hints.height.value_or(geometry.height);
+    if (initial)
     {
-        for (uint32_t i = 0; i < states.atoms_len; ++i)
-        {
-            xcb_atom_t atom = states.atoms[i];
-            if (atom == ewmh->_NET_WM_STATE_ABOVE)
-                client.preferences.layer = LayerHint::Above;
-            else if (atom == ewmh->_NET_WM_STATE_BELOW && client.preferences.layer != LayerHint::Above)
-                client.preferences.layer = LayerHint::Below;
-            else if (atom == ewmh->_NET_WM_STATE_STICKY)
-                client.sticky = true;
-            else if (atom == ewmh->_NET_WM_STATE_MODAL)
-                client.modal = true;
-            else if (atom == ewmh->_NET_WM_STATE_SKIP_TASKBAR)
-                client.preferences.skip_taskbar = true;
-            else if (atom == ewmh->_NET_WM_STATE_SKIP_PAGER)
-                client.preferences.skip_pager = true;
-            else if (atom == ewmh->_NET_WM_STATE_FULLSCREEN)
-                client.fullscreen = true;
-            else if (atom == ewmh->_NET_WM_STATE_MAXIMIZED_HORZ)
-                client.maximized_horz = true;
-            else if (atom == ewmh->_NET_WM_STATE_MAXIMIZED_VERT)
-                client.maximized_vert = true;
-            else if (atom == ewmh->_NET_WM_STATE_HIDDEN)
-                client.iconic = true;
-            else if (atom == ewmh->_NET_WM_STATE_DEMANDS_ATTENTION)
-                client.urgency.add(UrgencySource::App);
-        }
-        xcb_ewmh_get_atoms_reply_wipe(&states);
+        geometry.width = std::max<uint16_t>(1, geometry.width);
+        geometry.height = std::max<uint16_t>(1, geometry.height);
     }
-    bool hinted_urgent = false;
-    xcb_icccm_wm_hints_t hints;
-    if (xcb_icccm_get_wm_hints_reply(conn_.get(), xcb_icccm_get_wm_hints(conn_.get(), client.id), &hints, nullptr))
-    {
-        client.accepts_input = !(hints.flags & XCB_ICCCM_WM_HINT_INPUT) || hints.input;
-        // Adoption preserves the current minimized state instead of the initial hint.
-        if (honor_initial_state && (hints.flags & XCB_ICCCM_WM_HINT_STATE)
-            && hints.initial_state == XCB_ICCCM_WM_STATE_ICONIC)
-            client.iconic = true;
-        hinted_urgent = (hints.flags & XUrgencyHint) != 0;
-        if (hinted_urgent)
-            client.urgency.add(UrgencySource::App);
-    }
-    client.supports_take_focus = supports_protocol(client.id, atoms_.wm_take_focus);
-    client.user_time_window = read_user_time_window(client.id);
-    client.user_time = read_user_time(client.id, client.user_time_window);
-    client.fullscreen_monitors = read_fullscreen_monitors(client.id);
-    return hinted_urgent;
-}
-
-// Transients are centered on their managed parent's workspace. Position hints
-// may choose the monitor of an unanchored window; see X11.md.
-Geometry WindowManager::initial_floating_geometry(Client& candidate)
-{
-    std::optional<Geometry> parent_geometry;
-    bool transient = candidate.transient_for != XCB_NONE;
-    if (transient)
-    {
-        if (auto const* parent = state_.find(candidate.transient_for))
-        {
-            candidate.monitor = parent->monitor;
-            candidate.workspace = parent->workspace;
-        }
-        parent_geometry = placement_parent_geometry(candidate.transient_for);
-    }
-    auto geometry = floating_mode(candidate)->geometry;
-    auto hints = read_size_hints(candidate.id, transient);
-    geometry.width = std::max<uint16_t>(1, hints.width.value_or(geometry.width));
-    geometry.height = std::max<uint16_t>(1, hints.height.value_or(geometry.height));
-
-    auto const& monitors = state_.monitors();
+    auto monitor = client.monitor;
+    bool center = initial;
     if (hints.position)
     {
         Geometry hinted{ hints.position->first, hints.position->second, geometry.width, geometry.height };
-        auto target =
-            floating::resolve_position_hint(monitors, candidate.monitor, transient || candidate.desktop_pinned, hinted);
+        auto target = floating::resolve_position_hint(state_.monitors(), monitor, anchored || client.desktop_pinned, hinted);
+        monitor = target.monitor;
+        center = !target.accepted;
         if (target.accepted)
         {
-            if (target.monitor != candidate.monitor)
-            {
-                candidate.monitor = target.monitor;
-                candidate.workspace = monitors[target.monitor].current_workspace;
-            }
-            return hinted;
+            geometry = hinted;
+            if (initial && monitor != client.monitor)
+                state_.relocate(window, monitor, state_.monitors()[monitor].current_workspace);
         }
     }
-    return floating::place_floating(monitors[candidate.monitor].working_area(), geometry.width, geometry.height, parent_geometry);
+    if (center)
+    {
+        if (!initial && anchored)
+            parent_geometry = placement_parent_geometry(client.transient_for);
+        geometry = floating::place_floating(
+            state_.monitors()[monitor].working_area(), geometry.width, geometry.height, parent_geometry
+        );
+    }
+    if (initial)
+        state_.geometry(window, geometry);
+    else
+        update_floating_geometry(client, geometry);
 }
 
 // Position hints of anchored (transient) windows count only when the user supplied them.
@@ -277,10 +184,15 @@ WindowManager::SizeHints WindowManager::read_size_hints(xcb_window_t window, boo
     return result;
 }
 
-// One observation owns the classification inputs, matched rule and application
-// flags. The same candidate is admitted live, at startup, or over a saved graph.
-Client WindowManager::read_client(xcb_window_t window, bool adopting)
+// Admission owns classification, application observations and X resources.
+// Startup defers client registration until every dock reservation is known.
+std::optional<Client> WindowManager::admit_window(xcb_window_t window, bool adopting)
 {
+    if (auto const* fixture = handoff_ ? handoff_->find_fixture(window) : nullptr)
+    {
+        manage_fixture(window, fixture->role, adopting);
+        return std::nullopt;
+    }
     Client client;
     client.id = window;
     client.transient_for = read_transient_for(window).value_or(XCB_NONE);
@@ -290,15 +202,22 @@ Client WindowManager::read_client(xcb_window_t window, bool adopting)
     auto const* rule = match_window_rules(config_.rules, window_match_info(client));
     client.rule = rule ? std::optional{ *rule } : std::nullopt;
     auto natural = default_floating(client);
-    if (!natural)
-        return client; // Fixtures and popups have no client state or placement.
-    if (rule && rule->floating ? *rule->floating : *natural)
+    // Established ownership wins; metadata chooses a role only for newcomers.
+    if (!natural && !(handoff_ && handoff_->find(window)))
+    {
+        if (client.ewmh_type == WindowType::Desktop || client.ewmh_type == WindowType::Dock)
+            manage_fixture(window, client.ewmh_type == WindowType::Dock ? Fixture::Role::Dock : Fixture::Role::Desktop, adopting);
+        else if (!adopting)
+            xcb_map_window(conn_.get(), window);
+        return std::nullopt;
+    }
+    if (rule && rule->floating ? *rule->floating : natural.value_or(false))
         client.mode = FloatingMode{ read_window_geometry(window).value_or(Geometry{ 0, 0, 300, 200 }) };
     LWM_LOG_DEBUG(
         "Client observed: window={:#x} transient_for={:#x} natural={} resolved={} rules_matched={}",
         window,
         client.transient_for,
-        client_kind_str(*natural ? Client::Kind::Floating : Client::Kind::Tiled),
+        natural ? (*natural ? "floating" : "tiled") : "retained",
         client_kind_str(client.kind()),
         rule != nullptr
     );
@@ -318,21 +237,87 @@ Client WindowManager::read_client(xcb_window_t window, bool adopting)
     }
     auto& output = outputs_[window];
     output.mapped = adopting;
-    output.urgent = read_initial_state(client, !adopting);
+    auto* ewmh = ewmh_.get();
+    xcb_ewmh_get_atoms_reply_t states;
+    if (xcb_ewmh_get_wm_state_reply(ewmh, xcb_ewmh_get_wm_state(ewmh, client.id), &states, nullptr))
+    {
+        auto atoms = std::span(states.atoms, states.atoms_len);
+        auto has = [&](xcb_atom_t atom) { return std::ranges::contains(atoms, atom); };
+        if (has(ewmh->_NET_WM_STATE_ABOVE) || has(ewmh->_NET_WM_STATE_BELOW))
+            client.preferences.layer = has(ewmh->_NET_WM_STATE_ABOVE) ? LayerHint::Above : LayerHint::Below;
+        if (has(ewmh->_NET_WM_STATE_SKIP_TASKBAR))
+            client.preferences.skip_taskbar = true;
+        if (has(ewmh->_NET_WM_STATE_SKIP_PAGER))
+            client.preferences.skip_pager = true;
+        client.sticky |= has(ewmh->_NET_WM_STATE_STICKY);
+        client.modal = has(ewmh->_NET_WM_STATE_MODAL);
+        client.fullscreen = has(ewmh->_NET_WM_STATE_FULLSCREEN);
+        client.maximized_horz = has(ewmh->_NET_WM_STATE_MAXIMIZED_HORZ);
+        client.maximized_vert = has(ewmh->_NET_WM_STATE_MAXIMIZED_VERT);
+        client.iconic = has(ewmh->_NET_WM_STATE_HIDDEN);
+        if (has(ewmh->_NET_WM_STATE_DEMANDS_ATTENTION))
+            client.urgency.add(UrgencySource::App);
+        xcb_ewmh_get_atoms_reply_wipe(&states);
+    }
+    bool hinted_urgent = false;
+    xcb_icccm_wm_hints_t hints;
+    if (xcb_icccm_get_wm_hints_reply(conn_.get(), xcb_icccm_get_wm_hints(conn_.get(), client.id), &hints, nullptr))
+    {
+        client.accepts_input = !(hints.flags & XCB_ICCCM_WM_HINT_INPUT) || hints.input;
+        // Adoption preserves the current minimized state instead of the initial hint.
+        if (!adopting && (hints.flags & XCB_ICCCM_WM_HINT_STATE)
+            && hints.initial_state == XCB_ICCCM_WM_STATE_ICONIC)
+            client.iconic = true;
+        hinted_urgent = (hints.flags & XUrgencyHint) != 0;
+        if (hinted_urgent)
+            client.urgency.add(UrgencySource::App);
+    }
+    client.supports_take_focus = supports_protocol(client.id, atoms_.wm_take_focus);
+    client.user_time_window = read_user_time_window(client.id);
+    client.user_time = read_user_time(client.id, client.user_time_window);
+    client.fullscreen_monitors = read_fullscreen_monitors(client.id);
+    output.urgent = hinted_urgent;
     output.fullscreen_monitors.emplace(client.fullscreen_monitors);
-    return client;
+    uint32_t mask = kManagedWindowEventMask;
+    xcb_change_window_attributes(conn_.get(), window, XCB_CW_EVENT_MASK, &mask);
+    xcb_grab_button(
+        conn_.get(),
+        0,
+        window,
+        XCB_EVENT_MASK_BUTTON_PRESS,
+        XCB_GRAB_MODE_SYNC,
+        XCB_GRAB_MODE_ASYNC,
+        XCB_NONE,
+        XCB_NONE,
+        XCB_BUTTON_INDEX_ANY,
+        XCB_MOD_MASK_ANY
+    );
+    xcb_ewmh_set_frame_extents(ewmh_.get(), window, 0, 0, 0, 0);
+    read_sync_counter(window);
+
+    if (adopting)
+        return client; // Startup registers the complete scene before floating placement.
+    auto scratchpad = match_scratchpad(window_match_info(client), client.rule ? &*client.rule : nullptr);
+    if (scratchpad)
+    {
+        client.iconic = true;
+        if (!floating_mode(client))
+            client.mode = FloatingMode{ read_window_geometry(window).value_or(Geometry{ 0, 0, 300, 200 }) };
+    }
+    state_.insert(std::move(client));
+    place_new_client(window);
+    auto const& admitted = state_.require(window);
+    if (admitted.monitor == state_.focused_monitor() && state_.focusable(admitted))
+        state_.focus(window);
+    if (scratchpad)
+        claim_scratchpad(window, *scratchpad);
+    return std::nullopt;
 }
 
 // Both live admission and startup use the same placement, after registration.
 void WindowManager::place_new_client(xcb_window_t window)
 {
-    if (floating_mode(state_.require(window)))
-    {
-        auto candidate = state_.require(window);
-        auto geometry = initial_floating_geometry(candidate);
-        state_.relocate(window, candidate.monitor, candidate.workspace);
-        state_.geometry(window, geometry);
-    }
+    apply_size_hints(window, true);
     if (auto const& rule = state_.require(window).rule)
         apply_rule(window, *rule);
 }

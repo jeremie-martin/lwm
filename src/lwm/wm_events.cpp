@@ -156,7 +156,7 @@ void WindowManager::handle_map_request(xcb_map_request_event_t const& e)
     }
     if (state_.find_fixture(e.window) || is_override_redirect(e.window))
         return;
-    manage_window(read_client(e.window, false), false);
+    admit_window(e.window, false);
     if (!ipc_.has_subscribers(Event_WindowMap))
         return;
     if (auto const* client = state_.find(e.window))
@@ -695,7 +695,7 @@ void WindowManager::handle_property_notify(xcb_property_notify_event_t const& e)
         reevaluate_metadata(e.window);
     }
     else if (client && e.atom == XCB_ATOM_WM_NORMAL_HINTS)
-        handle_normal_hints(*client);
+        apply_size_hints(e.window, false);
     else if (client && e.atom == XCB_ATOM_WM_HINTS)
         handle_wm_hints(*client);
     else if (client && e.atom == ewmh->WM_PROTOCOLS)
@@ -718,37 +718,6 @@ void WindowManager::handle_property_notify(xcb_property_notify_event_t const& e)
             state_.user_time(e.window, read_user_time(e.window, time_window), time_window);
         }
     }
-}
-
-// Position and size hints update the normal floating rectangle, even while
-// maximized or fullscreen. See X11.md for anchoring rules.
-void WindowManager::handle_normal_hints(Client const& client)
-{
-    if (client.kind() != Client::Kind::Floating)
-        return;
-    bool anchored = client.transient_for != XCB_NONE;
-    auto hints = read_size_hints(client.id, anchored);
-    auto geometry = floating_mode(client)->geometry;
-    geometry.width = hints.width.value_or(geometry.width);
-    geometry.height = hints.height.value_or(geometry.height);
-    if (hints.position)
-    {
-        Geometry hinted{ hints.position->first, hints.position->second, geometry.width, geometry.height };
-        auto target = floating::resolve_position_hint(
-            state_.monitors(),
-            client.monitor,
-            anchored || client.desktop_pinned,
-            hinted
-        );
-        geometry = target.accepted ? hinted
-                                   : floating::place_floating(
-                                         state_.monitors()[target.monitor].working_area(),
-                                         geometry.width,
-                                         geometry.height,
-                                         anchored ? placement_parent_geometry(client.transient_for) : std::nullopt
-                                     );
-    }
-    update_floating_geometry(client, geometry);
 }
 
 void WindowManager::handle_wm_hints(Client const& client)

@@ -32,15 +32,22 @@ inline std::optional<Violation> validate(restart::Snapshot const& graph)
     if (graph.focused_monitor >= std::max<size_t>(1, graph.monitors.size()))
         return Violation{ "Focused monitor is invalid" };
     std::unordered_set<xcb_window_t> registered;
-    for (auto id : graph.registration_order)
-        if (id == XCB_NONE || !registered.insert(id).second)
-            return Violation{ "Registration identity is missing or duplicated", id };
+    std::unordered_set<uint64_t> ranks;
+    // Leave rank headroom for a whole X11 window-ID space during adoption.
+    auto register_window = [&](auto const& window)
+    {
+        return window.id != XCB_NONE && registered.insert(window.id).second
+            && window.order < UINT64_MAX - UINT32_MAX && ranks.insert(window.order).second;
+    };
+    for (auto const& fixture : graph.fixtures)
+        if (!register_window(fixture))
+            return Violation{ "Fixture identity or registration rank is invalid or duplicated", fixture.id };
     std::unordered_map<xcb_window_t, ClientIntent const*> clients;
     std::unordered_set<uint64_t> recencies;
     for (auto const& client : graph.clients)
     {
-        if (!registered.erase(client.id))
-            return Violation{ "Client registration is missing or duplicated", client.id };
+        if (!register_window(client))
+            return Violation{ "Client identity or registration rank is invalid or duplicated", client.id };
         if (client.monitor >= graph.monitors.size()
             || client.workspace >= graph.monitors[client.monitor].workspaces.size())
             return Violation{ "Client has invalid monitor or workspace placement", client.id };
@@ -96,13 +103,12 @@ inline std::optional<Violation> validate(State const& state)
 {
     if (auto violation = validate(state.snapshot()))
         return violation;
-    std::unordered_set<uint64_t> registrations;
     std::unordered_set<xcb_window_t> claims(state.fullscreen_claims().begin(), state.fullscreen_claims().end());
     for (auto const& [id, client] : state.clients())
     {
-        if (id != client.id || state.find_fixture(id))
+        if (id != client.id)
             return Violation{ "Client registry identity is inconsistent", id };
-        if (client.order >= state.next_order() || !registrations.insert(client.order).second)
+        if (client.order >= state.next_order())
             return Violation{ "Client registration order is invalid or duplicated", id };
         if (client.mru_order >= state.next_recency())
             return Violation{ "Client focus recency exceeds its bound", id };
@@ -113,7 +119,7 @@ inline std::optional<Violation> validate(State const& state)
             return Violation{ "Workspace tile preference is iconic", id };
     }
     for (auto const& [id, fixture] : state.fixtures())
-        if (id != fixture.id || fixture.order >= state.next_order() || !registrations.insert(fixture.order).second)
+        if (id != fixture.id || fixture.order >= state.next_order())
             return Violation{ "Fixture registry identity or order is inconsistent", id };
     if (auto const* active = state.find(state.active_window()); active && !state.focusable(*active))
         return Violation{ "Active window cannot hold focus", active->id };

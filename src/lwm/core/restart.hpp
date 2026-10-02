@@ -10,7 +10,7 @@
 // incompatible formats are rejected rather than migrated.
 namespace lwm::restart {
 
-inline constexpr uint32_t format = 12; // Bump when the snapshot schema changes.
+inline constexpr uint32_t format = 13; // Bump when the snapshot schema changes.
 
 struct Snapshot
 {
@@ -19,12 +19,13 @@ struct Snapshot
     bool showing_desktop = false;
     std::vector<MonitorState> monitors;
     std::vector<ClientIntent> clients; ///< Registration order
-    std::vector<xcb_window_t> registration_order; ///< Clients and fixtures, oldest registration first
+    std::vector<Fixture> fixtures; ///< Established roles and registration ranks
     std::vector<NamedScratchpad> named_scratchpads;
     std::vector<xcb_window_t> pool;
     std::vector<xcb_window_t> fullscreen_claims; ///< Oldest to newest, including hidden and iconic clients
 
     ClientIntent const* find(xcb_window_t window) const;
+    Fixture const* find_fixture(xcb_window_t window) const;
     bool operator==(Snapshot const&) const = default;
 };
 
