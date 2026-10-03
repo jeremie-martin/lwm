@@ -1,6 +1,7 @@
 #include "lwm/core/events.hpp"
 #include "lwm/core/ipc.hpp"
 #include "lwm/core/command.hpp"
+#include "lwm/core/xproperty.hpp"
 #include <array>
 #include <cerrno>
 #include <charconv>
@@ -9,7 +10,7 @@
 #include <cstring>
 #include <iostream>
 #include <optional>
-#include <poll.h>
+#include <sys/time.h>
 #include <stdexcept>
 #include <string>
 #include <sys/socket.h>
@@ -18,9 +19,6 @@
 #include <vector>
 
 namespace {
-using Clock = std::chrono::steady_clock;
-using Deadline = std::optional<Clock::time_point>;
-
 bool print_usage(std::ostream& out, std::string_view group = {})
 {
     out << "usage: lwmctl [--socket PATH] [--timeout MS] [--] <command>\n\n";
@@ -42,27 +40,38 @@ bool print_usage(std::ostream& out, std::string_view group = {})
     return found;
 }
 
+// The running WM publishes its socket path on the root window.
 std::optional<std::string> root_socket_path()
 {
     int screen_index = 0;
     xcb_connection_t* conn = xcb_connect(nullptr, &screen_index);
-    if (!conn || xcb_connection_has_error(conn))
-    {
-        if (conn)
-            xcb_disconnect(conn);
-        return std::nullopt;
-    }
-
-    xcb_screen_iterator_t iter = xcb_setup_roots_iterator(xcb_get_setup(conn));
-    for (int i = 0; iter.rem && i < screen_index; ++i)
-        xcb_screen_next(&iter);
-    if (!iter.rem)
+    std::optional<std::string> value;
+    if (xcb_connection_has_error(conn))
     {
         xcb_disconnect(conn);
-        return std::nullopt;
+        return value;
     }
-
-    auto value = lwm::ipc::get_root_text_property(conn, iter.data->root, "_LWM_IPC_SOCKET");
+    auto iter = xcb_setup_roots_iterator(xcb_get_setup(conn));
+    for (int i = 0; iter.rem && i < screen_index; ++i) xcb_screen_next(&iter);
+    if (iter.rem)
+    {
+        auto atom = [&](char const* name)
+        {
+            auto* reply = xcb_intern_atom_reply(conn, xcb_intern_atom(conn, 1, std::strlen(name), name), nullptr);
+            xcb_atom_t result = reply ? reply->atom : XCB_NONE;
+            free(reply);
+            return result;
+        };
+        xcb_atom_t property = atom("_LWM_IPC_SOCKET"), utf8 = atom("UTF8_STRING");
+        if (property != XCB_NONE)
+            if (auto reply = lwm::xproperty::read(conn, iter.data->root, property, utf8, 4096);
+                lwm::xproperty::complete(reply, utf8, 8))
+            {
+                std::string_view text(static_cast<char const*>(xcb_get_property_value(reply.get())), xcb_get_property_value_length(reply.get()));
+                if (!text.empty() && !text.contains('\0'))
+                    value = std::string(text);
+            }
+    }
     xcb_disconnect(conn);
     return value;
 }
@@ -81,90 +90,46 @@ std::string resolve_socket_path(std::optional<std::string> const& cli_socket)
     return lwm::ipc::default_socket_path().string();
 }
 
-// One owner for connection, deadlines, buffering, and complete-line framing.
+// One owner for the connection, timeouts, buffering and complete-line framing.
+// Blocking calls with kernel timeouts bound every handshake step; a Unix
+// connect also waits for listener capacity within the send timeout.
 class Socket
 {
 public:
-    explicit Socket(std::chrono::milliseconds timeout)
-        : timeout_(timeout)
-    { }
-    ~Socket()
-    {
-        if (fd_ >= 0)
-            close(fd_);
-    }
-    Socket(Socket const&) = delete;
-    Socket& operator=(Socket const&) = delete;
-
-    void connect_to(std::string const& path)
+    Socket(std::string const& path, std::chrono::milliseconds timeout)
+        : timeout_{ static_cast<time_t>(timeout.count() / 1000), static_cast<suseconds_t>(timeout.count() % 1000 * 1000) }
     {
         if (path.empty() || path.size() >= sizeof(sockaddr_un::sun_path) || path.find('\0') != path.npos)
             throw std::runtime_error("invalid socket path");
-        fd_ = socket(AF_UNIX, SOCK_STREAM | SOCK_NONBLOCK | SOCK_CLOEXEC, 0);
+        fd_ = socket(AF_UNIX, SOCK_STREAM | SOCK_CLOEXEC, 0);
         if (fd_ < 0)
             fail("create socket");
+        limit(SO_SNDTIMEO, true);
         sockaddr_un address{};
         address.sun_family = AF_UNIX;
         std::memcpy(address.sun_path, path.c_str(), path.size() + 1);
-        auto deadline = Clock::now() + timeout_;
-        for (;;)
-        {
-            auto remaining = std::chrono::ceil<std::chrono::milliseconds>(deadline - Clock::now());
-            if (remaining.count() <= 0)
-                throw std::runtime_error("socket operation timed out");
-            if (::connect(fd_, reinterpret_cast<sockaddr*>(&address), sizeof(address)) == 0)
-                return;
-            if (errno == EINTR)
-                continue;
-            if (errno == EAGAIN || errno == EWOULDBLOCK)
-            {
-                // A full Unix listener queue leaves the socket unconnected, not in progress.
-                // It can poll writable immediately, so pause before retrying connect itself.
-                int pause_ms = static_cast<int>(remaining.count() < 10 ? remaining.count() : 10);
-                if (poll(nullptr, 0, pause_ms) < 0 && errno != EINTR)
-                    fail("wait for connection capacity");
-                continue;
-            }
-            if (errno != EINPROGRESS)
-                fail("connect to " + path);
-            wait(POLLOUT, deadline);
-            int error = 0;
-            socklen_t length = sizeof(error);
-            if (getsockopt(fd_, SOL_SOCKET, SO_ERROR, &error, &length) < 0)
-                fail("check connection");
-            if (error)
-            {
-                errno = error;
-                fail("connect to " + path);
-            }
-            return;
-        }
+        if (::connect(fd_, reinterpret_cast<sockaddr*>(&address), sizeof(address)) < 0)
+            fail("connect to " + path);
     }
+    ~Socket() { close(fd_); }
+    Socket(Socket const&) = delete;
+    Socket& operator=(Socket const&) = delete;
 
     void send(std::string request)
     {
         request += '\n';
-        auto deadline = Clock::now() + timeout_;
-        std::string_view remaining = request;
-        while (!remaining.empty())
+        for (std::string_view remaining = request; !remaining.empty();)
         {
-            wait(POLLOUT, deadline);
             auto count = ::send(fd_, remaining.data(), remaining.size(), MSG_NOSIGNAL);
             if (count < 0)
-            {
-                if (errno == EINTR || errno == EAGAIN || errno == EWOULDBLOCK)
-                    continue;
                 fail("send request");
-            }
-            if (!count)
-                throw std::runtime_error("connection closed while sending request");
-            remaining.remove_prefix(count);
+            remaining.remove_prefix(static_cast<size_t>(count));
         }
     }
 
+    // An idle subscription waits indefinitely for the next line to begin.
     std::optional<std::string> line(size_t limit, bool idle = false)
     {
-        Deadline deadline = idle && buffer_.empty() ? Deadline{} : Deadline{ Clock::now() + timeout_ };
         for (;;)
         {
             auto end = buffer_.find('\n');
@@ -176,63 +141,42 @@ public:
                 buffer_.erase(0, end + 1);
                 return result;
             }
-            wait(POLLIN, deadline);
+            this->limit(SO_RCVTIMEO, !idle || !buffer_.empty());
             std::array<char, 8192> bytes;
             auto count = recv(fd_, bytes.data(), bytes.size(), 0);
             if (count < 0)
-            {
-                if (errno == EINTR || errno == EAGAIN || errno == EWOULDBLOCK)
-                    continue;
                 fail("read response");
-            }
             if (!count)
             {
                 if (!buffer_.empty())
                     throw std::runtime_error("incomplete response line");
                 return {};
             }
-            if (!deadline)
-                deadline = Clock::now() + timeout_;
-            buffer_.append(bytes.data(), count);
+            buffer_.append(bytes.data(), static_cast<size_t>(count));
         }
     }
 
 private:
     int fd_ = -1;
-    std::chrono::milliseconds timeout_;
+    timeval timeout_;
     std::string buffer_;
+
+    void limit(int option, bool bounded)
+    {
+        timeval unbounded{};
+        setsockopt(fd_, SOL_SOCKET, option, bounded ? &timeout_ : &unbounded, sizeof(timeval));
+    }
     [[noreturn]] static void fail(std::string const& operation)
     {
+        if (errno == EAGAIN || errno == EWOULDBLOCK || errno == EINPROGRESS)
+            throw std::runtime_error("socket operation timed out");
         throw std::runtime_error(operation + ": " + std::strerror(errno));
-    }
-    void wait(short events, Deadline deadline)
-    {
-        for (;;)
-        {
-            int milliseconds = -1;
-            if (deadline)
-            {
-                auto remaining = std::chrono::ceil<std::chrono::milliseconds>(*deadline - Clock::now());
-                if (remaining.count() <= 0)
-                    throw std::runtime_error("socket operation timed out");
-                milliseconds = static_cast<int>(remaining.count());
-            }
-            pollfd descriptor{ fd_, events, 0 };
-            int result = poll(&descriptor, 1, milliseconds);
-            if (result > 0)
-                return; // recv/send report EOF and socket errors.
-            if (result < 0 && errno != EINTR)
-                fail("poll socket");
-            if (!result)
-                throw std::runtime_error("socket operation timed out");
-        }
     }
 };
 
 int run(std::string const& path, std::string const& request, bool subscribe, std::chrono::milliseconds timeout)
 {
-    Socket socket(timeout);
-    socket.connect_to(path);
+    Socket socket(path, timeout);
     socket.send(request);
     auto response = socket.line(lwm::ipc::max_reply_bytes);
     if (!response)

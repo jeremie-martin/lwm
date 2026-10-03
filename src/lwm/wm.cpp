@@ -229,7 +229,10 @@ void WindowManager::grab_keys()
 void WindowManager::setup_ipc()
 {
     ipc_.start(ipc::default_socket_path().string());
-    ipc::set_root_text_property(conn_.get(), conn_.screen()->root, atoms_.lwm_ipc_socket, ewmh_.get()->UTF8_STRING, ipc_.path());
+    auto const& path = ipc_.path();
+    xcb_change_property(
+        conn_.get(), XCB_PROP_MODE_REPLACE, conn_.screen()->root, atoms_.lwm_ipc_socket, ewmh_.get()->UTF8_STRING, 8, path.size(), path.data()
+    );
     conn_.flush();
 }
 
@@ -238,7 +241,7 @@ void WindowManager::cleanup_ipc()
     ipc_.stop();
     if (conn_.get() && !xcb_connection_has_error(conn_.get()))
     {
-        ipc::delete_root_property(conn_.get(), conn_.screen()->root, atoms_.lwm_ipc_socket);
+        xcb_delete_property(conn_.get(), conn_.screen()->root, atoms_.lwm_ipc_socket);
         conn_.flush();
     }
 }
