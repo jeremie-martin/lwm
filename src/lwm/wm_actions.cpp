@@ -21,6 +21,14 @@ Result WindowManager::execute(Action const& action, std::string_view source)
     auto const& focused = state_.monitors()[monitor];
     bool has_active = state_.find(active) != nullptr;
     auto const no_active = std::unexpected(std::string("no active window"));
+    // Operations on the active client reply with empty success text.
+    auto on_active = [&](auto operation) -> Result
+    {
+        if (!has_active)
+            return no_active;
+        operation();
+        return "";
+    };
     auto restart = [&](std::string binary) -> Result
     {
         LWM_LOG_INFO("Restart requested: source={} binary={}", source, binary.empty() ? "current" : binary);
@@ -31,13 +39,7 @@ Result WindowManager::execute(Action const& action, std::string_view source)
     };
     return std::visit(
         Overloaded{
-            [&](Kill const&) -> Result
-            {
-                if (!has_active)
-                    return no_active;
-                kill_window(active);
-                return "";
-            },
+            [&](Kill const&) { return on_active([&] { kill_window(active); }); },
             [&](ReloadConfig const&) -> Result
             {
                 auto result = reload_config();
@@ -54,20 +56,9 @@ Result WindowManager::execute(Action const& action, std::string_view source)
                     return std::unexpected("launch failed");
                 return "";
             },
-            [&](ToggleFullscreen const&) -> Result
-            {
-                if (!has_active)
-                    return no_active;
-                state_.fullscreen(active, !state_.require(active).fullscreen);
-                return "";
-            },
-            [&](ToggleFloat const&) -> Result
-            {
-                if (!has_active)
-                    return no_active;
-                state_.toggle_floating(active);
-                return "";
-            },
+            [&](ToggleFullscreen const&)
+            { return on_active([&] { state_.fullscreen(active, !state_.require(active).fullscreen); }); },
+            [&](ToggleFloat const&) { return on_active([&] { state_.toggle_floating(active); }); },
             [&](FocusCycle const& cycle) -> Result
             {
                 if (!state_.cycle_focus(cycle.forward))
@@ -92,13 +83,12 @@ Result WindowManager::execute(Action const& action, std::string_view source)
                     warp_to_monitor(state_.monitors()[state_.focused_monitor()]);
                 return "";
             },
-            [&](MoveToMonitor const& move) -> Result
+            [&](MoveToMonitor const& move)
             {
-                if (!has_active)
-                    return no_active;
-                if (state_.move_to_monitor(move.direction))
-                    warp_to_monitor(state_.monitors()[state_.require(active).monitor]);
-                return "";
+                return on_active([&] {
+                    if (state_.move_to_monitor(move.direction))
+                        warp_to_monitor(state_.monitors()[state_.require(active).monitor]);
+                });
             },
             [&](SwitchWorkspace const& target) -> Result
             {
@@ -113,10 +103,7 @@ Result WindowManager::execute(Action const& action, std::string_view source)
             {
                 if (target.workspace >= focused.workspaces.size())
                     return std::unexpected("workspace out of range");
-                if (!has_active)
-                    return no_active;
-                state_.relocate(active, state_.require(active).monitor, target.workspace);
-                return "";
+                return on_active([&] { state_.relocate(active, state_.require(active).monitor, target.workspace); });
             },
             [&](SwapTile const& swap) -> Result
             {
@@ -154,13 +141,7 @@ Result WindowManager::execute(Action const& action, std::string_view source)
                 layout_changed(action);
                 return "ratios reset";
             },
-            [&](ScratchpadStash const&) -> Result
-            {
-                if (!has_active)
-                    return no_active;
-                state_.stash(active);
-                return "";
-            },
+            [&](ScratchpadStash const&) { return on_active([&] { state_.stash(active); }); },
             [&](ScratchpadCycle const&) -> Result
             {
                 state_.cycle_scratchpad_pool();
