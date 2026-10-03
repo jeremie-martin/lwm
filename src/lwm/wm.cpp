@@ -441,7 +441,6 @@ RunResult WindowManager::run()
         if (std::exchange(monitors_dirty_, false))
         {
             refresh_topology();
-            state_.focus_fallback(state_.focused_monitor());
             drain_requested_ = true;
         }
         complete_transition();

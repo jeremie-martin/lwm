@@ -246,7 +246,6 @@ private:
     void release_scratchpad(xcb_window_t id);
     void show_named_scratchpad(xcb_window_t id, ScratchpadConfig const& config);
     void forget_missing_tile_slot(Client& client) const;
-    void replace_monitors(std::vector<Monitor> monitors, bool fit_unchanged);
 };
 
 } // namespace lwm

@@ -161,6 +161,32 @@ TEST_CASE("Integration: client message to invalid window ID is ignored", "[integ
     destroy_window(conn, w1);
 }
 
+TEST_CASE("Integration: close requests for LWM's own windows are ignored", "[integration][client_message][edge]")
+{
+    auto test_env = TestEnvironment::create();
+    if (!test_env)
+        SKIP("Test environment not available");
+
+    auto& conn = test_env->conn;
+    auto& wm = test_env->wm;
+    xcb_window_t w1 = create_window(conn, 10, 10, 200, 150);
+    map_window(conn, w1);
+    REQUIRE(wait_for_active_window(conn, w1, kTimeout));
+
+    // The supporting window lacks WM_DELETE_WINDOW, so a close would kill LWM's connection.
+    auto supporting = supporting_wm_window(conn);
+    REQUIRE(supporting.has_value());
+    send_client_message(conn, *supporting, intern_atom(conn.get(), "_NET_CLOSE_WINDOW"), XCB_CURRENT_TIME, 2);
+    observe_title_after_events(conn, w1);
+
+    auto ping = run_lwmctl(wm, { "ping" });
+    REQUIRE(ping.has_value());
+    REQUIRE(ping->exit_code == 0);
+    REQUIRE(supporting_wm_window(conn) == supporting);
+
+    destroy_window(conn, w1);
+}
+
 TEST_CASE(
     "Integration: move focused window updates source workspace focus",
     "[integration][client_message][workspace][focus]"

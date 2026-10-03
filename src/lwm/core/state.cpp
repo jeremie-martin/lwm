@@ -627,9 +627,7 @@ void State::workarea(size_t monitor, Strut strut)
     monitors_[monitor].strut = strut;
 }
 
-void State::replace_monitors(std::vector<Monitor> monitors) { replace_monitors(std::move(monitors), true); }
-
-void State::replace_monitors(std::vector<Monitor> monitors, bool fit_unchanged)
+void State::replace_monitors(std::vector<Monitor> monitors)
 {
     assert(!monitors.empty());
     mutated();
@@ -671,9 +669,9 @@ void State::replace_monitors(std::vector<Monitor> monitors, bool fit_unchanged)
         c.monitor = c.monitor < destinations.size() ? destinations[c.monitor] : 0;
         c.workspace = std::min(c.workspace, monitors_[c.monitor].workspaces.size() - 1);
         forget_missing_tile_slot(c);
-        // Restart with unchanged topology preserves intentional off-workarea
-        // geometry and monitor hints; live refresh still fits to current struts.
-        if (topology_changed || fit_unchanged)
+        // An unchanged topology preserves intentional off-workarea geometry
+        // and index-based monitor hints.
+        if (topology_changed)
         {
             c.fullscreen_monitors.reset();
             if (auto* mode = floating_mode(c))
@@ -807,7 +805,7 @@ void State::restore_graph(restart::Snapshot const& snapshot, std::vector<Client>
     for (auto id : snapshot.fullscreen_claims)
         if (auto const* client = find(id); client && client->fullscreen)
             fullscreen_claims_.push_back(id);
-    replace_monitors(std::move(discovered), false);
+    replace_monitors(std::move(discovered));
     // Filter only after merging: surviving workspace preferences have precedence
     // over incoming ones, even when their former target disappeared during exec.
     for (auto& monitor : monitors_)

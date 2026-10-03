@@ -172,6 +172,7 @@ void WindowManager::handle_map_request(xcb_map_request_event_t const& e)
 
 void WindowManager::handle_window_removal(xcb_window_t window)
 {
+    pending_kills_.erase(window);
     if (auto const* client = state_.find(window))
         queue_event(event::window_unmap{ window, client_kind_str(client->kind()), Placement{ client->monitor, client->workspace } });
     else if (auto const* fixture = state_.find_fixture(window))
@@ -181,7 +182,6 @@ void WindowManager::handle_window_removal(xcb_window_t window)
     }
     else
         return;
-    pending_kills_.erase(window);
     state_.erase(window);
 }
 
@@ -396,7 +396,8 @@ void WindowManager::handle_client_message(xcb_client_message_event_t const& e)
         xcb_window_t window = e.data.data32[2] != XCB_NONE ? e.data.data32[2] : e.window;
         pending_kills_.erase(window);
     }
-    else if (e.type == ewmh->_NET_CLOSE_WINDOW)
+    // Only managed windows can be closed; LWM's own windows are never targets.
+    else if (e.type == ewmh->_NET_CLOSE_WINDOW && (client || state_.find_fixture(e.window)))
         kill_window(e.window);
     else if (e.type == ewmh->_NET_WM_FULLSCREEN_MONITORS && client)
         state_.fullscreen_monitors(
