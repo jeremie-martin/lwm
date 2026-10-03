@@ -8,24 +8,16 @@ namespace lwm {
 
 void WindowManager::scan_existing_windows(bool handoff)
 {
-    // Only viewable, redirected windows are adopted; others are never observed further.
-    std::vector<xcb_window_t> candidates;
+    std::vector<xcb_window_t> children;
     if (auto* tree = xcb_query_tree_reply(conn_.get(), xcb_query_tree(conn_.get(), conn_.screen()->root), nullptr))
     {
-        std::span children(xcb_query_tree_children(tree), static_cast<size_t>(xcb_query_tree_children_length(tree)));
-        std::vector<xcb_get_window_attributes_cookie_t> cookies;
-        for (auto window : children) cookies.push_back(xcb_get_window_attributes(conn_.get(), window));
-        for (size_t i = 0; i < children.size(); ++i)
-            if (auto* attributes = xcb_get_window_attributes_reply(conn_.get(), cookies[i], nullptr))
-            {
-                if (attributes->map_state == XCB_MAP_STATE_VIEWABLE && !attributes->override_redirect)
-                    candidates.push_back(children[i]);
-                free(attributes);
-            }
+        auto* first = xcb_query_tree_children(tree);
+        children.assign(first, first + xcb_query_tree_children_length(tree));
         free(tree);
     }
-    auto observed = observe(candidates);
-    std::erase_if(observed, [](auto const& window) { return !window.exists; });
+    // Only viewable, redirected windows are adopted.
+    auto observed = observe(children, true);
+    std::erase_if(observed, [](auto const& window) { return !window.manageable; });
     std::vector<WindowObservation> windows;
     for (auto const& window : observed) windows.push_back(window.window);
 

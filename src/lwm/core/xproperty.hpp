@@ -60,16 +60,4 @@ inline std::vector<uint32_t> read_words(
     return { values.begin(), values.end() };
 }
 
-// Titles are display metadata: preserve the existing bounded-prefix behavior.
-inline std::optional<std::string>
-text_prefix(xcb_connection_t* connection, xcb_window_t window, xcb_atom_t property, xcb_atom_t type, uint32_t limit)
-{
-    auto reply = read(connection, window, property, type, limit);
-    if (!reply || reply->type != type || reply->format != 8)
-        return std::nullopt;
-    return std::string(
-        static_cast<char const*>(xcb_get_property_value(reply.get())),
-        xcb_get_property_value_length(reply.get())
-    );
-}
 } // namespace lwm::xproperty

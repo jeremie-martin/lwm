@@ -82,7 +82,6 @@ struct EdgeReservation
 struct DockStrut
 {
     EdgeReservation left, right, top, bottom;
-    bool empty() const { return !left.depth && !right.depth && !top.depth && !bottom.depth; }
     bool operator==(DockStrut const&) const = default;
 };
 

@@ -61,8 +61,8 @@ everything the model needs:
 
 Observation is pipelined. `observe()` sends identity requests for a batch of windows,
 lets `State::role()` choose what each role needs, then sends only those requests, so a
-startup scan costs a fixed number of round trips. Single-property updates reuse the
-same decoders. No X-reading callback enters the model.
+startup scan costs a fixed number of round trips. Property notifications read only
+the changed property with the same decoders. No X-reading callback enters the model.
 
 The pointer grab is an effect derived from the model: the shell acquires it before a
 drag starts and completion releases it once the model no longer has a drag, whether

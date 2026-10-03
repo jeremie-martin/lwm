@@ -157,8 +157,8 @@ void WindowManager::handle_map_request(xcb_map_request_event_t const& e)
     if (state_.find_fixture(e.window))
         return;
     xcb_window_t window = e.window;
-    auto observed = std::move(observe({ &window, 1 }).front());
-    if (!observed.exists || observed.override_redirect)
+    auto observed = std::move(observe({ &window, 1 }, false).front());
+    if (!observed.manageable)
         return;
     state_.admit(observed.window);
     manage(observed, false);
@@ -576,70 +576,6 @@ void WindowManager::handle_configure_request(xcb_configure_request_event_t const
     xcb_configure_window(conn_.get(), e.window, e.value_mask, values);
     if (e.value_mask & XCB_CONFIG_WINDOW_STACK_MODE)
         restack_requested_ = true;
-}
-
-void WindowManager::handle_property_notify(xcb_property_notify_event_t const& e)
-{
-    auto* ewmh = ewmh_.get();
-    xcb_window_t window = e.window;
-    // User time may live on a separate, unmanaged window.
-    if (e.atom == ewmh->_NET_WM_USER_TIME)
-        return state_.user_time(window, read_user_time(window));
-    if (state_.find_fixture(window))
-    {
-        if (e.atom == ewmh->_NET_WM_STRUT || e.atom == ewmh->_NET_WM_STRUT_PARTIAL)
-            state_.reserve(window, read_strut(window));
-        return;
-    }
-    auto const* client = state_.find(window);
-    if (!client)
-        return;
-    if (e.atom == ewmh->_NET_WM_NAME || e.atom == XCB_ATOM_WM_NAME)
-        state_.title(window, read_name(window));
-    else if (e.atom == XCB_ATOM_WM_CLASS)
-    {
-        auto [instance, name] = read_class(window);
-        state_.window_class(window, std::move(instance), std::move(name));
-    }
-    else if (e.atom == ewmh->_NET_WM_WINDOW_TYPE)
-        state_.window_type(window, read_type(window));
-    else if (e.atom == XCB_ATOM_WM_TRANSIENT_FOR)
-        state_.transient(window, read_transient_for(window));
-    else if (e.atom == XCB_ATOM_WM_NORMAL_HINTS)
-    {
-        auto parent = client->transient_for;
-        state_.size_hints(window, read_size_hints(window), parent && !state_.find(parent) ? read_window_geometry(parent) : std::nullopt);
-    }
-    else if (e.atom == XCB_ATOM_WM_HINTS)
-        handle_wm_hints(*client);
-    else if (e.atom == ewmh->WM_PROTOCOLS)
-        state_.focus_hints(window, client->accepts_input, std::ranges::contains(read_protocols(window), atoms_.wm_take_focus));
-    else if (e.atom == ewmh->_NET_WM_USER_TIME_WINDOW)
-    {
-        auto time_window = read_user_time_window(window);
-        if (time_window != XCB_NONE && time_window != window)
-            watch_user_time_window(time_window);
-        state_.user_time_window(window, time_window, read_user_time(time_window != XCB_NONE ? time_window : window));
-    }
-}
-
-void WindowManager::handle_wm_hints(Client const& client)
-{
-    xcb_window_t id = client.id;
-    auto& output = outputs_[id];
-    auto [accepts_input, hinted_urgent] = read_input_hints(id);
-    state_.focus_hints(id, accepts_input, client.supports_take_focus);
-    // WM_HINTS is shared with the application. A changed hint invalidates our
-    // publication cache regardless of which urgency sources remain in State.
-    if (output.urgent != hinted_urgent)
-    {
-        output.urgent.reset();
-        presentation_dirty_ = true;
-    }
-    // Clearing or deleting the hint withdraws only the application's request.
-    // Publication reasserts any remaining WM-initiated urgency.
-    if (!std::exchange(output.ignore_urgency_echo, false) || !hinted_urgent)
-        state_.hint_urgency(id, hinted_urgent);
 }
 
 } // namespace lwm

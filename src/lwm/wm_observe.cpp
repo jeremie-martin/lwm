@@ -57,7 +57,7 @@ std::pair<std::string, std::string> wm_class(xcb_connection_t* conn, xcb_get_pro
     return result;
 }
 
-xcb_window_t transient_for(xcb_connection_t* conn, xcb_get_property_cookie_t cookie)
+xcb_window_t window_value(xcb_connection_t* conn, xcb_get_property_cookie_t cookie)
 {
     return scalar(conn, cookie, XCB_ATOM_WINDOW).value_or(XCB_NONE);
 }
@@ -137,7 +137,7 @@ DockStrut strut(xcb_connection_t* conn, StrutCookies cookies)
 } // namespace
 
 // Two pipelined stages: identity and role first, then only what the role needs.
-std::vector<WindowManager::Observed> WindowManager::observe(std::span<xcb_window_t const> windows)
+std::vector<WindowManager::Observed> WindowManager::observe(std::span<xcb_window_t const> windows, bool adopting)
 {
     auto* c = conn_.get();
     auto* e = ewmh_.get();
@@ -160,12 +160,12 @@ std::vector<WindowManager::Observed> WindowManager::observe(std::span<xcb_window
         w.id = windows[i];
         if (auto* attributes = xcb_get_window_attributes_reply(c, identities[i].attributes, nullptr))
         {
-            observed.exists = true;
-            observed.override_redirect = attributes->override_redirect;
+            observed.manageable =
+                !attributes->override_redirect && (!adopting || attributes->map_state == XCB_MAP_STATE_VIEWABLE);
             free(attributes);
         }
         w.type = window_type(identities[i].type);
-        w.transient_for = transient_for(c, identities[i].transient);
+        w.transient_for = window_value(c, identities[i].transient);
         observed.role = State::role(w.id, w.type, w.transient_for != XCB_NONE, handoff_ ? &*handoff_ : nullptr);
     }
 
@@ -181,6 +181,8 @@ std::vector<WindowManager::Observed> WindowManager::observe(std::span<xcb_window
     for (size_t i = 0; i < windows.size(); ++i)
     {
         auto window = windows[i];
+        if (!result[i].manageable)
+            continue;
         // Subscribe before reading, so a later reservation change cannot be missed.
         if (result[i].role == WindowRole::Dock)
         {
@@ -237,7 +239,7 @@ std::vector<WindowManager::Observed> WindowManager::observe(std::span<xcb_window
         w.size_hints = size_hints(c, cookie.normal_hints);
         auto supported = protocols(c, cookie.protocols);
         w.supports_take_focus = std::ranges::contains(supported, atoms_.wm_take_focus);
-        w.user_time_window = transient_for(c, cookie.time_window);
+        w.user_time_window = window_value(c, cookie.time_window);
         w.user_time = scalar(c, cookie.time, XCB_ATOM_CARDINAL).value_or(0);
         xcb_ewmh_get_wm_fullscreen_monitors_reply_t monitors;
         if (xcb_ewmh_get_wm_fullscreen_monitors_reply(e, cookie.fullscreen_monitors, &monitors, nullptr))
@@ -253,7 +255,7 @@ std::vector<WindowManager::Observed> WindowManager::observe(std::span<xcb_window
         if (w.user_time_window != XCB_NONE && w.user_time_window != w.id)
         {
             watch_user_time_window(w.user_time_window);
-            w.user_time = read_user_time(w.user_time_window);
+            w.user_time = scalar(c, request(c, w.user_time_window, e->_NET_WM_USER_TIME, XCB_ATOM_CARDINAL, 1), XCB_ATOM_CARDINAL).value_or(0);
         }
         if (w.transient_for != XCB_NONE && !state_.find(w.transient_for))
             w.unmanaged_parent = read_window_geometry(w.transient_for);
@@ -287,64 +289,84 @@ WindowType WindowManager::window_type(xcb_get_property_cookie_t cookie) const
     return result;
 }
 
-// Title updates are frequent; the legacy name is read only when needed.
-std::string WindowManager::read_name(xcb_window_t window) const
+// Property updates read only the changed property, with the admission decoders.
+void WindowManager::handle_property_notify(xcb_property_notify_event_t const& event)
 {
+    auto* c = conn_.get();
     auto* e = ewmh_.get();
-    if (auto net = text(conn_.get(), request(conn_.get(), window, e->_NET_WM_NAME, e->UTF8_STRING, kTitleLimit), e->UTF8_STRING))
-        return *net;
-    return text(conn_.get(), request(conn_.get(), window, XCB_ATOM_WM_NAME, XCB_ATOM_STRING, kTitleLimit), XCB_ATOM_STRING)
-        .value_or("Unnamed");
-}
-
-std::pair<std::string, std::string> WindowManager::read_class(xcb_window_t window) const
-{
-    return wm_class(conn_.get(), xcb_icccm_get_wm_class(conn_.get(), window));
-}
-
-WindowType WindowManager::read_type(xcb_window_t window) const
-{
-    return window_type(xcb_ewmh_get_wm_window_type(ewmh_.get(), window));
-}
-
-xcb_window_t WindowManager::read_transient_for(xcb_window_t window) const
-{
-    return transient_for(conn_.get(), request(conn_.get(), window, XCB_ATOM_WM_TRANSIENT_FOR, XCB_ATOM_WINDOW, 1));
-}
-
-SizeHints WindowManager::read_size_hints(xcb_window_t window) const
-{
-    return size_hints(conn_.get(), xcb_icccm_get_wm_normal_hints(conn_.get(), window));
-}
-
-std::pair<bool, bool> WindowManager::read_input_hints(xcb_window_t window) const
-{
-    auto observed = hints(conn_.get(), xcb_icccm_get_wm_hints(conn_.get(), window));
-    return { observed.accepts_input, observed.urgent };
+    xcb_window_t window = event.window;
+    xcb_atom_t atom = event.atom;
+    auto user_time = [&](xcb_window_t source)
+    { return scalar(c, request(c, source, e->_NET_WM_USER_TIME, XCB_ATOM_CARDINAL, 1), XCB_ATOM_CARDINAL).value_or(0); };
+    // User time may live on a separate, unmanaged window.
+    if (atom == e->_NET_WM_USER_TIME)
+        return state_.user_time(window, user_time(window));
+    if (state_.find_fixture(window))
+    {
+        if (atom == e->_NET_WM_STRUT || atom == e->_NET_WM_STRUT_PARTIAL)
+            state_.reserve(window,
+                           strut(c,
+                                 { request(c, window, e->_NET_WM_STRUT_PARTIAL, XCB_ATOM_CARDINAL, 12),
+                                   request(c, window, e->_NET_WM_STRUT, XCB_ATOM_CARDINAL, 4) }));
+        return;
+    }
+    auto const* client = state_.find(window);
+    if (!client)
+        return;
+    if (atom == e->_NET_WM_NAME || atom == XCB_ATOM_WM_NAME)
+    {
+        // Title updates are frequent; the legacy name is read only when needed.
+        auto net = text(c, request(c, window, e->_NET_WM_NAME, e->UTF8_STRING, kTitleLimit), e->UTF8_STRING);
+        state_.title(window, net ? *net : text(c, request(c, window, XCB_ATOM_WM_NAME, XCB_ATOM_STRING, kTitleLimit), XCB_ATOM_STRING).value_or("Unnamed"));
+    }
+    else if (atom == XCB_ATOM_WM_CLASS)
+    {
+        auto [instance, name] = wm_class(c, xcb_icccm_get_wm_class(c, window));
+        state_.window_class(window, std::move(instance), std::move(name));
+    }
+    else if (atom == e->_NET_WM_WINDOW_TYPE)
+        state_.window_type(window, window_type(xcb_ewmh_get_wm_window_type(e, window)));
+    else if (atom == XCB_ATOM_WM_TRANSIENT_FOR)
+        state_.transient(window, window_value(c, request(c, window, XCB_ATOM_WM_TRANSIENT_FOR, XCB_ATOM_WINDOW, 1)));
+    else if (atom == XCB_ATOM_WM_NORMAL_HINTS)
+    {
+        auto parent = client->transient_for;
+        state_.size_hints(window,
+                          size_hints(c, xcb_icccm_get_wm_normal_hints(c, window)),
+                          parent && !state_.find(parent) ? read_window_geometry(parent) : std::nullopt);
+    }
+    else if (atom == XCB_ATOM_WM_HINTS)
+    {
+        auto observed = hints(c, xcb_icccm_get_wm_hints(c, window));
+        state_.focus_hints(window, observed.accepts_input, client->supports_take_focus);
+        // WM_HINTS is shared with the application. A changed hint invalidates our
+        // publication cache regardless of which urgency sources remain in State.
+        auto& output = outputs_[window];
+        if (output.urgent != observed.urgent)
+        {
+            output.urgent.reset();
+            presentation_dirty_ = true;
+        }
+        // Clearing or deleting the hint withdraws only the application's request;
+        // publication reasserts any remaining WM-initiated urgency. Our own write
+        // echoes back once and is not an application request.
+        if (!std::exchange(output.ignore_urgency_echo, false) || !observed.urgent)
+            state_.hint_urgency(window, observed.urgent);
+    }
+    else if (atom == e->WM_PROTOCOLS)
+        state_.focus_hints(window, client->accepts_input, std::ranges::contains(read_protocols(window), atoms_.wm_take_focus));
+    else if (atom == e->_NET_WM_USER_TIME_WINDOW)
+    {
+        auto time_window = window_value(c, request(c, window, e->_NET_WM_USER_TIME_WINDOW, XCB_ATOM_WINDOW, 1));
+        if (time_window != XCB_NONE && time_window != window)
+            watch_user_time_window(time_window);
+        state_.user_time_window(window, time_window, user_time(time_window != XCB_NONE ? time_window : window));
+    }
 }
 
 std::vector<xcb_atom_t> WindowManager::read_protocols(xcb_window_t window) const
 {
     return protocols(conn_.get(), xcb_icccm_get_wm_protocols(conn_.get(), window, ewmh_.get()->WM_PROTOCOLS));
-}
-
-DockStrut WindowManager::read_strut(xcb_window_t window) const
-{
-    auto* e = ewmh_.get();
-    return strut(conn_.get(),
-                 { request(conn_.get(), window, e->_NET_WM_STRUT_PARTIAL, XCB_ATOM_CARDINAL, 12),
-                   request(conn_.get(), window, e->_NET_WM_STRUT, XCB_ATOM_CARDINAL, 4) });
-}
-
-uint32_t WindowManager::read_user_time(xcb_window_t window) const
-{
-    return scalar(conn_.get(), request(conn_.get(), window, ewmh_.get()->_NET_WM_USER_TIME, XCB_ATOM_CARDINAL, 1), XCB_ATOM_CARDINAL)
-        .value_or(0);
-}
-
-xcb_window_t WindowManager::read_user_time_window(xcb_window_t window) const
-{
-    return transient_for(conn_.get(), request(conn_.get(), window, ewmh_.get()->_NET_WM_USER_TIME_WINDOW, XCB_ATOM_WINDOW, 1));
 }
 
 // Observe user-time updates on a separate window without replacing its mask.

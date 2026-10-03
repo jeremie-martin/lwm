@@ -174,32 +174,18 @@ private:
     {
         WindowObservation window;
         WindowRole role = WindowRole::Popup;
-        bool exists = false;
-        bool override_redirect = false;
+        bool manageable = false; ///< Exists and is not override-redirect (and is viewable when adopting)
         uint32_t sync_counter = 0;
         uint64_t sync_value = 0;
     };
-    std::vector<Observed> observe(std::span<xcb_window_t const> windows);
+    std::vector<Observed> observe(std::span<xcb_window_t const> windows, bool adopting);
     WindowStates window_states(std::span<xcb_atom_t const> atoms) const;
     WindowType window_type(xcb_get_property_cookie_t cookie) const;
-    std::string read_name(xcb_window_t window) const;
-    std::pair<std::string, std::string> read_class(xcb_window_t window) const;
-    WindowType read_type(xcb_window_t window) const;
-    xcb_window_t read_transient_for(xcb_window_t window) const;
-    SizeHints read_size_hints(xcb_window_t window) const;
-    std::pair<bool, bool> read_input_hints(xcb_window_t window) const; ///< WM_HINTS input and urgency
     std::vector<xcb_atom_t> read_protocols(xcb_window_t window) const;
-    DockStrut read_strut(xcb_window_t window) const;
-    uint32_t read_user_time(xcb_window_t window) const;
-    xcb_window_t read_user_time_window(xcb_window_t window) const;
     void watch_user_time_window(xcb_window_t window);
     std::optional<Geometry> read_window_geometry(xcb_window_t window) const;
 
     // wm_manage.cpp: admission adapters
-    bool publish(
-        xcb_window_t window, xcb_atom_t property, xcb_atom_t type, uint8_t format, std::optional<std::string_view> bytes
-    );
-    bool publish(xcb_window_t window, xcb_atom_t property, xcb_atom_t type, std::span<uint32_t const> words);
     void scan_existing_windows(bool handoff);
     void manage(Observed const& observed, bool adopting);
 
@@ -210,6 +196,10 @@ private:
     bool publish_clients(std::vector<State::Projected> const& clients);
     bool write_geometry(Client const& client, Output& output, Geometry geometry, uint32_t border);
     void send_configure_notify(xcb_window_t window, Geometry geometry, uint32_t border);
+    bool publish(
+        xcb_window_t window, xcb_atom_t property, xcb_atom_t type, uint8_t format, std::optional<std::string_view> bytes
+    );
+    bool publish(xcb_window_t window, xcb_atom_t property, xcb_atom_t type, std::span<uint32_t const> words);
     bool publish_properties(Client const& client, Output& output, StateUpdates& updates);
     void publish_urgency(Client const& client, Output& output);
     void publish_fixtures();
@@ -238,8 +228,7 @@ private:
     void handle_moveresize_window(xcb_client_message_event_t const& e);
     void handle_wm_moveresize(xcb_client_message_event_t const& e);
     void handle_configure_request(xcb_configure_request_event_t const& e);
-    void handle_property_notify(xcb_property_notify_event_t const& e);
-    void handle_wm_hints(Client const& client);
+    void handle_property_notify(xcb_property_notify_event_t const& event);
     MousebindConfig const* resolve_mouse_binding(uint16_t state, uint8_t button) const;
     bool grab_pointer(xcb_cursor_t cursor = XCB_NONE);
     void release_pointer();
