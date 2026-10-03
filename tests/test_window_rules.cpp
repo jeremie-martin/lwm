@@ -88,20 +88,21 @@ TEST_CASE("Metadata compares rule actions while reload deliberately reapplies th
     auto second = first;
     second.match.title_regex.emplace("second");
     config.rules = { first, second };
+    test::configure(state, [&](Config& installed) { installed.rules = config.rules; });
 
-    state.title(1, "first", config);
+    state.title(1, "first");
     REQUIRE(floating_mode(state.require(1)));
     CHECK(floating_mode(state.require(1))->geometry == Geometry{ 70, 80, 200, 100 });
     state.geometry(1, { 10, 20, 300, 150 });
     state.fullscreen(2, true);
-    state.title(1, "second", config);
+    state.title(1, "second");
     CHECK(floating_mode(state.require(1))->geometry == Geometry{ 10, 20, 300, 150 });
     CHECK(state.fullscreen_owner(0) == 2);
 
-    state.reapply_rules(config.rules);
+    test::configure(state, [](Config&) { });
     CHECK(floating_mode(state.require(1))->geometry == Geometry{ 70, 80, 200, 100 });
     CHECK(state.fullscreen_owner(0) == 2);
-    state.title(1, "unmatched", config);
+    state.title(1, "unmatched");
     CHECK_FALSE(state.require(1).rule);
     CHECK(state.require(1).fullscreen);
     CHECK(floating_mode(state.require(1))->geometry == Geometry{ 70, 80, 200, 100 });
@@ -110,27 +111,26 @@ TEST_CASE("Metadata compares rule actions while reload deliberately reapplies th
 TEST_CASE("Transient metadata places against the parent's resulting presentation", "[state][rules][placement]")
 {
     auto state = test::state();
-    state.configure_layout({ .padding = 0, .border_width = 0 }, { });
+    test::configure(state, [](Config& config) { config.appearance = { .padding = 0, .border_width = 0 }; });
     test::add(state, 1);
     test::add(state, 2);
     REQUIRE(state.presentation_geometry(state.require(1)) == Geometry{ 0, 0, 500, 800 });
-    state.transient(2, 1, { });
+    state.transient(2, 1);
     CHECK(state.presentation_geometry(state.require(1)) == Geometry{ 0, 0, 1000, 800 });
     REQUIRE(floating_mode(state.require(2)));
     CHECK(floating_mode(state.require(2))->geometry == Geometry{ 250, 0, 500, 800 });
 
     SECTION("An observed preview overrides the derived parent rectangle")
     {
-        state.transient(2, XCB_NONE, { });
-        state.transient(2, 1, { }, Geometry{ 100, 100, 400, 400 });
+        state.transient(2, XCB_NONE);
+        state.transient(2, 1, Geometry{ 100, 100, 400, 400 });
         CHECK(floating_mode(state.require(2))->geometry == Geometry{ 50, 0, 500, 800 });
     }
     SECTION("Explicit placement rules follow parent relocation")
     {
-        Config config;
-        config.rules.push_back({ .transient = true, .actions = { .workspace = 1 } });
-        state.transient(2, XCB_NONE, config);
-        state.transient(2, 1, config);
+        test::configure(state, [](Config& config) { config.rules.push_back({ .transient = true, .actions = { .workspace = 1 } }); });
+        state.transient(2, XCB_NONE);
+        state.transient(2, 1);
         CHECK(state.require(2).workspace == 1);
     }
 }
@@ -147,11 +147,14 @@ TEST_CASE("Pending metadata claims precede rule actions but reload does not clai
     matched.actions.geometry = Geometry{ 1, 2, 300, 200 };
     matched.actions.scratchpad = "term";
     config.rules.push_back(matched);
-    state.configure_scratchpads(config.scratchpads);
+    test::configure(state, [&](Config& installed) {
+        installed.scratchpads = config.scratchpads;
+        installed.rules = config.rules;
+    });
     state.scratchpad_pending("term", true);
     state.focus_monitor(1);
 
-    state.title(1, "ready", config);
+    state.title(1, "ready");
     CHECK(state.named_scratchpad("term")->claimed_window() == 1);
     CHECK(state.require(1).monitor == 1);
     CHECK(state.require(1).workspace == 0);
@@ -161,30 +164,29 @@ TEST_CASE("Pending metadata claims precede rule actions but reload does not clai
 
     auto reloaded = test::state();
     test::add(reloaded, 1);
-    reloaded.title(1, "ready", { });
-    reloaded.configure_scratchpads(config.scratchpads);
+    reloaded.title(1, "ready");
+    test::configure(reloaded, [&](Config& installed) { installed.scratchpads = config.scratchpads; });
     reloaded.scratchpad_pending("term", true);
-    reloaded.reapply_rules(config.rules);
+    test::configure(reloaded, [&](Config& installed) { installed.rules = config.rules; });
     CHECK(reloaded.named_scratchpad("term")->pending_launch());
     CHECK_FALSE(reloaded.scratchpad_claim(1));
     CHECK(reloaded.require(1).workspace == 2);
     CHECK_FALSE(floating_mode(reloaded.require(1)));
     // A repeated title/class observation is inert; type notifications still reconcile.
-    reloaded.title(1, "ready", config);
+    reloaded.title(1, "ready");
     CHECK(reloaded.named_scratchpad("term")->pending_launch());
-    reloaded.window_type(1, WindowType::Normal, config);
+    reloaded.window_type(1, WindowType::Normal);
     CHECK(reloaded.named_scratchpad("term")->claimed_window() == 1);
 }
 
 TEST_CASE("Named scratchpad operations refuse unmanaged clients and suppress pending launches", "[state][scratchpad]")
 {
     auto state = test::state();
-    ScratchpadConfig config{ .name = "term" };
-    state.configure_scratchpads(std::vector{ config });
-    state.claim_scratchpad(999, config);
+    test::configure(state, [](Config& config) { config.scratchpads = { { .name = "term" } }; });
+    state.claim_scratchpad(999, state.config().scratchpads.front());
     CHECK(state.named_scratchpad("term")->claimed_window() == XCB_NONE);
-    CHECK(state.toggle_scratchpad(config));
+    CHECK(state.toggle_scratchpad("term") == &state.config().scratchpads.front());
     state.scratchpad_pending("term", true);
-    CHECK_FALSE(state.toggle_scratchpad(config));
-    CHECK_FALSE(state.toggle_scratchpad(ScratchpadConfig{ .name = "unknown" }));
+    CHECK(state.toggle_scratchpad("term") == nullptr);
+    CHECK_FALSE(state.toggle_scratchpad("unknown"));
 }

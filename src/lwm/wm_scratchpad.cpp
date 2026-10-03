@@ -6,20 +6,14 @@
 
 namespace lwm {
 
-ScratchpadConfig const* WindowManager::scratchpad_config(std::string_view name) const
-{
-    auto it = std::ranges::find(config_.scratchpads, name, &ScratchpadConfig::name);
-    return it == config_.scratchpads.end() ? nullptr : &*it;
-}
-
 // Launch-pending state begins only after successful process creation and
 // suppresses duplicate launches until a matching window arrives or IPC cancels it.
 std::expected<void, std::string> WindowManager::toggle_scratchpad(std::string_view name)
 {
-    auto const* config = scratchpad_config(name);
-    if (!config)
-        return std::unexpected("unknown scratchpad: " + std::string(name));
-    if (state_.toggle_scratchpad(*config) && launch_program(config->spawn, "scratchpad"))
+    auto launch = state_.toggle_scratchpad(name);
+    if (!launch)
+        return std::unexpected(launch.error());
+    if (*launch && launch_program((*launch)->spawn, "scratchpad"))
         state_.scratchpad_pending(name, true);
     return { };
 }

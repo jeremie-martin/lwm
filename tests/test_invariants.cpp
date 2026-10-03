@@ -63,7 +63,7 @@ TEST_CASE("Generated State operation sequences preserve model invariants", "[inv
         return value;
     };
     auto state = test::state(2);
-    state.configure_scratchpads(std::vector<ScratchpadConfig>{ { .name = "a" }, { .name = "b" } });
+    test::configure(state, [](Config& config) { config.scratchpads = { { .name = "a" }, { .name = "b" } }; });
     std::vector<xcb_window_t> windows;
     xcb_window_t next = 1;
     std::vector<std::string> trace;
@@ -129,20 +129,21 @@ TEST_CASE("Generated State operation sequences preserve model invariants", "[inv
                 trace.push_back("claim");
                 break;
             case 12:
-                state.configure_scratchpads(pick(2) ? std::vector<ScratchpadConfig>{ { .name = "a" } } : std::vector<ScratchpadConfig>{ { .name = "a" }, { .name = "b" } });
+                test::configure(state, [&](Config& config) {
+                    config.scratchpads = pick(2) ? std::vector<ScratchpadConfig>{ { .name = "a" } }
+                                                 : std::vector<ScratchpadConfig>{ { .name = "a" }, { .name = "b" } };
+                });
                 trace.push_back("configure");
                 break;
             case 13:
             {
-                std::vector<Monitor> outputs;
+                std::vector<Topology::Output> outputs;
                 for (size_t i = 0, count = 1 + pick(3); i < count; ++i)
-                    outputs.push_back(test::monitor(
-                        "M" + std::to_string(pick(3)), static_cast<int16_t>(i * 1000), 1 + pick(4)
-                    ));
-                std::ranges::sort(outputs, { }, &Monitor::name);
-                auto [first, last] = std::ranges::unique(outputs, { }, &Monitor::name);
+                    outputs.push_back(test::output("M" + std::to_string(pick(3)), static_cast<int16_t>(i * 1000)));
+                std::ranges::sort(outputs, { }, &Topology::Output::name);
+                auto [first, last] = std::ranges::unique(outputs, { }, &Topology::Output::name);
                 outputs.erase(first, last);
-                state.replace_monitors(std::move(outputs));
+                test::outputs(state, std::move(outputs));
                 trace.push_back("topology");
                 break;
             }
@@ -151,7 +152,7 @@ TEST_CASE("Generated State operation sequences preserve model invariants", "[inv
                 trace.push_back("desktop");
                 break;
             case 15:
-                state.window_type(window, pick(2) ? WindowType::Dialog : WindowType::Normal, { });
+                state.window_type(window, pick(2) ? WindowType::Dialog : WindowType::Normal);
                 trace.push_back("type");
                 break;
             case 16:
@@ -187,7 +188,7 @@ TEST_CASE("Generated State operation sequences preserve model invariants", "[inv
 TEST_CASE("Live ownership uses the same persistent graph validation as restart", "[invariants][scratchpad]")
 {
     auto state = test::state();
-    state.configure_scratchpads(std::vector<ScratchpadConfig>{ { .name = "named" } });
+    test::configure(state, [](Config& config) { config.scratchpads = { { .name = "named" } }; });
     add(state, 1);
     state.insert_fixture(2, Fixture::Role::Dock);
     REQUIRE_FALSE(invariants::validate(state));

@@ -152,7 +152,6 @@ private:
         size_t monitor;
     };
 
-    Config config_;
     Connection conn_;
     Ewmh ewmh_;
     Atoms atoms_{ };
@@ -169,7 +168,6 @@ private:
     // Obligations of the current operation that are not projections of state.
     std::set<xcb_window_t> configure_replies_;
     std::vector<Event> events_;
-    bool workareas_dirty_ = false;
     bool restack_requested_ = false;
     bool drain_requested_ = false;
     bool monitors_dirty_ = false;
@@ -209,10 +207,9 @@ private:
     bool release_predecessor();
     void grab_buttons();
     void grab_keys();
-    std::vector<Monitor> discover_monitors();
+    Config const& config() const { return state_.config(); }
+    Topology discover_topology();
     void refresh_topology();
-    void refresh_workareas();
-    std::vector<Strut> dock_struts(std::span<Monitor const> monitors);
     void setup_ipc();
     void cleanup_ipc();
     void dispatch_event(xcb_generic_event_t const& event, size_t& remaining, std::chrono::steady_clock::time_point deadline);
@@ -330,7 +327,6 @@ private:
     std::optional<SplitBorderHit> hit_split_border(int16_t x, int16_t y) const;
 
     // wm_scratchpad.cpp
-    ScratchpadConfig const* scratchpad_config(std::string_view name) const;
     std::expected<void, std::string> toggle_scratchpad(std::string_view name);
     void stash_window(xcb_window_t window);
     void cycle_scratchpad_pool();

@@ -32,8 +32,6 @@ void WindowManager::scan_existing_windows(bool handoff)
         }
         free(tree);
     }
-    if (std::exchange(workareas_dirty_, false))
-        refresh_workareas();
     // Restore the surviving graph before newcomers choose their placement.
     // Application properties are live observations; private intent comes from
     // the handoff. Docks above already supplied the discovered workareas.
@@ -87,11 +85,11 @@ void WindowManager::scan_existing_windows(bool handoff)
     {
         // Saved claims precede pending launches that mapped while the WM was absent.
         for (auto const* client : state_.clients_by_order())
-            state_.claim_pending_scratchpad(client->id, config_.scratchpads);
+            state_.claim_pending_scratchpad(client->id);
         handoff_.reset();
     }
     if (!handoff)
-        for (auto const& command : config_.autostart) launch_program(command, "autostart");
+        for (auto const& command : config().autostart) launch_program(command, "autostart");
 }
 
 void WindowManager::manage_fixture(xcb_window_t window, Fixture::Role role, bool adopting)
@@ -106,10 +104,8 @@ void WindowManager::manage_fixture(xcb_window_t window, Fixture::Role role, bool
         uint32_t below = XCB_STACK_MODE_BELOW;
         xcb_configure_window(conn_.get(), window, XCB_CONFIG_WINDOW_STACK_MODE, &below);
     }
-    state_.insert_fixture(window, role);
+    state_.insert_fixture(window, role, role == Fixture::Role::Dock ? ewmh_.get_window_strut(window) : DockStrut{ });
     outputs_[window].mapped = adopting;
-    if (role == Fixture::Role::Dock)
-        workareas_dirty_ = true;
 }
 
 // Client registration
@@ -199,7 +195,7 @@ std::optional<Client> WindowManager::admit_window(xcb_window_t window, bool adop
     std::tie(client.wm_class_name, client.wm_class) = read_wm_class(window);
     client.name = read_window_name(window);
     client.ewmh_type = ewmh_.get_window_type_enum(window);
-    auto const* rule = match_window_rules(config_.rules, client);
+    auto const* rule = match_window_rules(config().rules, client);
     client.rule = rule ? std::optional{ *rule } : std::nullopt;
     auto natural = default_floating(client);
     // Established ownership wins; metadata chooses a role only for newcomers.
@@ -227,7 +223,7 @@ std::optional<Client> WindowManager::admit_window(xcb_window_t window, bool adop
     {
         if (*desktop == 0xFFFFFFFF)
             client.sticky = true;
-        else if (auto placement = ewmh_policy::desktop_placement(*desktop, config_.workspaces.count, state_.monitors().size()))
+        else if (auto placement = ewmh_policy::desktop_placement(*desktop, config().workspaces.count, state_.monitors().size()))
         {
             std::tie(client.monitor, client.workspace) = *placement;
             client.desktop_pinned = true;
@@ -297,7 +293,7 @@ std::optional<Client> WindowManager::admit_window(xcb_window_t window, bool adop
 
     if (adopting)
         return client; // Startup registers the complete scene before floating placement.
-    auto scratchpad = state_.match_scratchpad(client, config_.scratchpads);
+    auto scratchpad = state_.match_scratchpad(client);
     if (scratchpad)
     {
         client.iconic = true;

@@ -48,16 +48,16 @@ void State::apply_rule(xcb_window_t window, RuleActions const& rule)
 }
 
 // Metadata reconciles changed rule actions; losing a match leaves prior actions.
-void State::reconcile_metadata(xcb_window_t id, Config const& config)
+void State::reconcile_metadata(xcb_window_t id)
 {
-    bool changed = match_rule(id, config.rules);
-    if (!claim_pending_scratchpad(id, config.scratchpads) && changed)
+    bool changed = match_rule(id);
+    if (!claim_pending_scratchpad(id) && changed)
         apply_initial_rule(id);
 }
 
-bool State::match_rule(xcb_window_t id, std::span<WindowRuleConfig const> rules)
+bool State::match_rule(xcb_window_t id)
 {
-    auto const* rule = match_window_rules(rules, require(id));
+    auto const* rule = match_window_rules(config_.rules, require(id));
     return assign(id, &Client::rule, rule ? std::optional{ *rule } : std::nullopt);
 }
 
@@ -68,40 +68,38 @@ void State::apply_initial_rule(xcb_window_t id)
 }
 
 // Reload deliberately reapplies unchanged actions and does not claim pending launches.
-void State::reapply_rules(std::span<WindowRuleConfig const> rules)
+void State::reapply_rules()
 {
     for (auto const* client : clients_by_order())
     {
-        match_rule(client->id, rules);
+        match_rule(client->id);
         apply_initial_rule(client->id);
     }
 }
 
-void State::title(xcb_window_t id, std::string value, Config const& config)
+void State::title(xcb_window_t id, std::string value)
 {
     if (assign(id, &Client::name, std::move(value)))
-        reconcile_metadata(id, config);
+        reconcile_metadata(id);
 }
 
-void State::window_class(xcb_window_t id, std::string instance, std::string name, Config const& config)
+void State::window_class(xcb_window_t id, std::string instance, std::string name)
 {
     bool changed = assign(id, &Client::wm_class_name, std::move(instance));
     changed |= assign(id, &Client::wm_class, std::move(name));
     if (changed)
-        reconcile_metadata(id, config);
+        reconcile_metadata(id);
 }
 
-void State::window_type(xcb_window_t id, WindowType type, Config const& config)
+void State::window_type(xcb_window_t id, WindowType type)
 {
     if (assign(id, &Client::ewmh_type, type))
         apply_default_mode(id);
-    reconcile_metadata(id, config);
+    reconcile_metadata(id);
 }
 
 // Derive managed-parent geometry after relocation; only an active preview comes from the adapter.
-void State::transient(
-    xcb_window_t id, xcb_window_t parent, Config const& config, std::optional<Geometry> parent_preview
-)
+void State::transient(xcb_window_t id, xcb_window_t parent, std::optional<Geometry> parent_preview)
 {
     if (assign(id, &Client::transient_for, parent))
     {
@@ -118,12 +116,13 @@ void State::transient(
                     )
                 );
     }
-    reconcile_metadata(id, config);
+    reconcile_metadata(id);
 }
 
 // A rule naming a scratchpad takes precedence over matchers; claimed names cannot match.
-ScratchpadConfig const* State::match_scratchpad(Client const& client, std::span<ScratchpadConfig const> configs) const
+ScratchpadConfig const* State::match_scratchpad(Client const& client) const
 {
+    auto const& configs = config_.scratchpads;
     auto matches = [&](ScratchpadConfig const& config)
     {
         auto const* slot = named_scratchpad(config.name);
@@ -139,15 +138,16 @@ ScratchpadConfig const* State::match_scratchpad(Client const& client, std::span<
     return nullptr;
 }
 
-// True asks the adapter to launch; pending begins only after spawn succeeds.
-bool State::toggle_scratchpad(ScratchpadConfig const& config)
+// A returned configuration asks the adapter to launch; pending begins only after spawn succeeds.
+std::expected<ScratchpadConfig const*, std::string> State::toggle_scratchpad(std::string_view name)
 {
-    auto const* slot = named_scratchpad(config.name);
+    auto const* slot = named_scratchpad(name);
     if (!slot)
-        return false;
+        return std::unexpected("unknown scratchpad: " + std::string(name));
+    auto const& config = *std::ranges::find(config_.scratchpads, name, &ScratchpadConfig::name);
     auto window = slot->claimed_window();
     if (window == XCB_NONE)
-        return !slot->pending_launch();
+        return slot->pending_launch() ? nullptr : &config;
     auto const& client = require(window);
     if (client.monitor != focused_monitor_ || !visible(client))
         show_named_scratchpad(window, config);
@@ -155,7 +155,7 @@ bool State::toggle_scratchpad(ScratchpadConfig const& config)
         iconic(window, true);
     else
         focus(window);
-    return false;
+    return nullptr;
 }
 
 // Pending launches show their window; an unrequested live match starts hidden.
@@ -174,11 +174,11 @@ void State::claim_scratchpad(xcb_window_t id, ScratchpadConfig const& config)
         iconic(id, true);
 }
 
-bool State::claim_pending_scratchpad(xcb_window_t id, std::span<ScratchpadConfig const> configs)
+bool State::claim_pending_scratchpad(xcb_window_t id)
 {
     if (scratchpad_claim(id) || pooled(id))
         return false;
-    auto const* config = match_scratchpad(require(id), configs);
+    auto const* config = match_scratchpad(require(id));
     if (!config || !named_scratchpad(config->name)->pending_launch())
         return false;
     claim_scratchpad(id, *config);

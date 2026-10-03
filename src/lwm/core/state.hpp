@@ -3,6 +3,7 @@
 #include "restart.hpp"
 #include "types.hpp"
 #include "lwm/layout/layout.hpp"
+#include <expected>
 #include <optional>
 #include <span>
 #include <string>
@@ -53,11 +54,16 @@ public:
     Fixture const* find_fixture(xcb_window_t id) const;
     // The candidate's placement must be valid; tiled clients join their workspace.
     void insert(Client client);
-    void insert_fixture(xcb_window_t id, Fixture::Role role);
+    // Dock reservations shape every monitor's workarea while the dock is registered.
+    void insert_fixture(xcb_window_t id, Fixture::Role role, DockStrut strut = { });
+    void reserve(xcb_window_t id, DockStrut strut);
     void erase(xcb_window_t id);
 
+    // The installed configuration. Layout, scratchpad slots and matching rules
+    // follow it; the workspace count is fixed once monitors exist.
+    Config const& config() const { return config_; }
+    std::expected<void, std::string> configure(Config config);
     // Layout is derived, never written back into clients.
-    void configure_layout(AppearanceConfig const& appearance, LayoutConfig const& config);
     Layout const& layout_engine() const { return layout_; }
     // One immutable per-pass view per managed client, in registration order.
     // A rectangle means visible; absence means hidden.
@@ -145,16 +151,13 @@ public:
     void pin_desktop(xcb_window_t id, bool pinned);
 
     // Metadata updates include classification, placement, changed rules and pending claims.
-    void title(xcb_window_t id, std::string value, Config const& config);
-    void window_class(xcb_window_t id, std::string instance, std::string name, Config const& config);
-    void window_type(xcb_window_t id, WindowType type, Config const& config);
-    void transient(
-        xcb_window_t id, xcb_window_t parent, Config const& config, std::optional<Geometry> parent_preview = std::nullopt
-    );
+    void title(xcb_window_t id, std::string value);
+    void window_class(xcb_window_t id, std::string instance, std::string name);
+    void window_type(xcb_window_t id, WindowType type);
+    void transient(xcb_window_t id, xcb_window_t parent, std::optional<Geometry> parent_preview = std::nullopt);
     void focus_hints(xcb_window_t id, bool input, bool take_focus);
     void user_time(xcb_window_t id, uint32_t time, xcb_window_t window);
     void apply_initial_rule(xcb_window_t id);
-    void reapply_rules(std::span<WindowRuleConfig const> rules);
 
     // Workspaces and monitors
     bool switch_workspace(size_t monitor, size_t workspace);
@@ -162,10 +165,9 @@ public:
     void ratio(size_t monitor, SplitAddress address, double value);
     void erase_ratio(size_t monitor, SplitAddress address);
     void reset_ratios(size_t monitor);
-    void workarea(size_t monitor, Strut strut);
-    // Rebind workspaces by output name, reassign clients, and fit floating
-    // rectangles into the discovered workareas.
-    void replace_monitors(std::vector<Monitor> monitors);
+    // Rebind workspaces by output name and reassign clients. A changed topology
+    // fits floating rectangles into the new workareas and clears monitor hints.
+    void replace_topology(Topology topology);
 
     // Scratchpads: the named slots and the pool are the only membership records.
     std::vector<NamedScratchpad> const& named_scratchpads() const { return named_scratchpads_; }
@@ -173,12 +175,11 @@ public:
     NamedScratchpad const* named_scratchpad(std::string_view name) const;
     NamedScratchpad const* scratchpad_claim(xcb_window_t id) const;
     bool pooled(xcb_window_t id) const;
-    void configure_scratchpads(std::span<ScratchpadConfig const> configs);
-    ScratchpadConfig const* match_scratchpad(Client const& client, std::span<ScratchpadConfig const> configs) const;
+    ScratchpadConfig const* match_scratchpad(Client const& client) const;
     void claim_scratchpad(xcb_window_t id, ScratchpadConfig const& config);
-    bool claim_pending_scratchpad(xcb_window_t id, std::span<ScratchpadConfig const> configs);
-    // Returns whether the shell should attempt a launch.
-    bool toggle_scratchpad(ScratchpadConfig const& config);
+    bool claim_pending_scratchpad(xcb_window_t id);
+    // Returns the configuration whose command the shell should launch, if any.
+    std::expected<ScratchpadConfig const*, std::string> toggle_scratchpad(std::string_view name);
     void pool_scratchpad(xcb_window_t id);
     void advance_scratchpad_pool();
     void scratchpad_pending(std::string_view name, bool pending);
@@ -195,7 +196,9 @@ public:
 
 private:
     Geometry fullscreen_geometry(Client const& client) const;
+    Config config_;
     Layout layout_;
+    Geometry screen_;
     std::vector<xcb_window_t> workspace_tiles(
         size_t monitor, size_t workspace, FullscreenVisibility const* fullscreen, xcb_window_t include = XCB_NONE
     ) const;
@@ -229,8 +232,8 @@ private:
     void set_mode(xcb_window_t id, bool floating);
     void apply_default_mode(xcb_window_t id);
     void apply_rule(xcb_window_t id, RuleActions const& rule);
-    bool match_rule(xcb_window_t id, std::span<WindowRuleConfig const> rules);
-    void reconcile_metadata(xcb_window_t id, Config const& config);
+    bool match_rule(xcb_window_t id);
+    void reconcile_metadata(xcb_window_t id);
     // Records a field change; an unchanged value is not a mutation.
     template <typename Owner, typename T, typename V> bool assign(xcb_window_t id, T Owner::* field, V&& value)
     {
@@ -246,6 +249,11 @@ private:
     void release_scratchpad(xcb_window_t id);
     void show_named_scratchpad(xcb_window_t id, ScratchpadConfig const& config);
     void forget_missing_tile_slot(Client& client) const;
+    void reconcile_scratchpads();
+    void reapply_rules();
+    Monitor fresh_monitor(std::string name, Geometry geometry) const;
+    void rebind(std::vector<Monitor> monitors);
+    void update_workareas();
 };
 
 } // namespace lwm

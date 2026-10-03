@@ -24,7 +24,7 @@ TEST_CASE("Urgency tracks app and WM sources independently", "[state][urgency]")
 TEST_CASE("Registration attaches tiles and removal releases every membership", "[state][registry]")
 {
     auto state = test::state();
-    state.configure_scratchpads(std::vector<ScratchpadConfig>{ { .name = "term" } });
+    test::configure(state, [](Config& config) { config.scratchpads = { { .name = "term" } }; });
     add(state, 1);
     add_floating(state, 2);
     add(state, 3);
@@ -88,14 +88,14 @@ TEST_CASE("Tile return slots follow output identity and expire with their worksp
     REQUIRE(floating_mode(state.require(2))->tile_slot == TileSlot{ 1, "M0", 0 });
     SECTION("Reordering outputs preserves the original slot")
     {
-        state.replace_monitors({ test::monitor("M1"), test::monitor("M0", 1000) });
+        test::outputs(state, { test::output("M1"), test::output("M0", 1000) });
         REQUIRE(state.require(2).monitor == 1);
         state.floating(2, false);
         CHECK(state.monitors()[1].current().windows == std::vector<xcb_window_t>{ 1, 2, 3 });
     }
     SECTION("Removal never lends the slot to the replacement output")
     {
-        state.replace_monitors({ test::monitor("M1") });
+        test::outputs(state, { test::output("M1") });
         CHECK_FALSE(floating_mode(state.require(2))->tile_slot);
         state.floating(2, false);
         CHECK(state.monitors()[0].current().windows == std::vector<xcb_window_t>{ 1, 3, 2 });
@@ -103,9 +103,9 @@ TEST_CASE("Tile return slots follow output identity and expire with their worksp
     SECTION("A slot expires even while its client lives on another output")
     {
         state.relocate(2, 1, 0);
-        state.replace_monitors({ test::monitor("M1") });
+        test::outputs(state, { test::output("M1") });
         CHECK_FALSE(floating_mode(state.require(2))->tile_slot);
-        state.replace_monitors({ test::monitor("M1"), test::monitor("M0", 1000) });
+        test::outputs(state, { test::output("M1"), test::output("M0", 1000) });
         add(state, 4, { .monitor = 1 });
         add(state, 5, { .monitor = 1 });
         state.relocate(2, 1, 0);
@@ -115,7 +115,7 @@ TEST_CASE("Tile return slots follow output identity and expire with their worksp
     SECTION("Visiting another workspace does not erase the original identity")
     {
         state.relocate(2, 1, 1);
-        state.replace_monitors({ test::monitor("M1"), test::monitor("M0", 1000) });
+        test::outputs(state, { test::output("M1"), test::output("M0", 1000) });
         state.relocate(2, 1, 0);
         state.floating(2, false);
         CHECK(state.monitors()[1].current().windows == std::vector<xcb_window_t>{ 1, 2, 3 });
@@ -126,20 +126,20 @@ TEST_CASE("Type and transient updates change only default modes", "[state][mode]
 {
     auto state = test::state();
     add(state, 1);
-    state.transient(1, 99, { });
+    state.transient(1, 99);
     CHECK(state.require(1).kind() == Client::Kind::Floating);
-    state.transient(1, XCB_NONE, { });
+    state.transient(1, XCB_NONE);
     CHECK(state.require(1).kind() == Client::Kind::Tiled);
     state.floating(1, false);
-    state.window_type(1, WindowType::Dialog, { });
+    state.window_type(1, WindowType::Dialog);
     CHECK(state.require(1).kind() == Client::Kind::Tiled);
     add(state, 2);
     state.pool_scratchpad(2);
-    state.window_type(2, WindowType::Dialog, { });
+    state.window_type(2, WindowType::Dialog);
     CHECK(state.require(2).kind() == Client::Kind::Tiled);
     // Runtime conversion into a dock type has no normal default.
     add(state, 3);
-    state.window_type(3, WindowType::Dock, { });
+    state.window_type(3, WindowType::Dock);
     CHECK(state.require(3).kind() == Client::Kind::Tiled);
 }
 
@@ -174,7 +174,7 @@ TEST_CASE("The most recent fullscreen claim in view owns its monitor", "[state][
     CHECK_FALSE(state.visible(state.require(1)));
     CHECK_FALSE(state.visible(state.require(3)));
     // A direct transient of the owner stays visible.
-    state.transient(4, 2, { });
+    state.transient(4, 2);
     CHECK(state.visible(state.require(4)));
     // Re-entering fullscreen or restoring a minimized fullscreen client reclaims.
     state.request_fullscreen(1);
@@ -209,8 +209,8 @@ TEST_CASE(
     add_floating(state, 2);
     add_floating(state, 3);
     add_floating(state, 4);
-    state.transient(2, 1, { });
-    state.transient(3, 2, { });
+    state.transient(2, 1);
+    state.transient(3, 2);
     state.fullscreen(1, true);
     CHECK(state.visible(state.require(3)));
     CHECK(state.focusable(state.require(3)));
@@ -243,7 +243,7 @@ TEST_CASE(
         state.fullscreen(4, true);
         state.relocate(3, 1, 0);
         CHECK_FALSE(state.visible(state.require(3)));
-        state.transient(2, 4, { });
+        state.transient(2, 4);
         CHECK(state.visible(state.require(3)));
     }
     SECTION("Removing an intermediate parent breaks the exemption")
@@ -253,9 +253,9 @@ TEST_CASE(
     }
     SECTION("Reparenting an intermediate node updates descendants immediately")
     {
-        state.transient(2, 4, { });
+        state.transient(2, 4);
         CHECK_FALSE(state.visible(state.require(3)));
-        state.transient(4, 1, { });
+        state.transient(4, 1);
         CHECK(state.visible(state.require(3)));
     }
 }
@@ -265,19 +265,19 @@ TEST_CASE("Fullscreen ancestry terminates on missing parents and cycles", "[stat
     auto state = test::state();
     for (xcb_window_t id : { 1, 2, 3, 4 }) add_floating(state, id);
     state.fullscreen(1, true);
-    state.transient(4, 3, { });
-    state.transient(3, 2, { });
-    SECTION("Missing parent") { state.transient(2, 99, { }); }
-    SECTION("Self-link") { state.transient(2, 2, { }); }
-    SECTION("Cycle unrelated to the owner") { state.transient(2, 3, { }); }
+    state.transient(4, 3);
+    state.transient(3, 2);
+    SECTION("Missing parent") { state.transient(2, 99); }
+    SECTION("Self-link") { state.transient(2, 2); }
+    SECTION("Cycle unrelated to the owner") { state.transient(2, 3); }
     CHECK(state.suppressed(state.require(4)));
     state.fullscreen(1, false);
     CHECK_FALSE(state.suppressed(state.require(4)));
     state.fullscreen(1, true);
     // Even a cycle containing the owner grants an exemption when the walk
     // reaches it. Hints remain intact; stacking resolves ordering separately.
-    state.transient(2, 1, { });
-    state.transient(1, 4, { });
+    state.transient(2, 1);
+    state.transient(1, 4);
     CHECK_FALSE(state.suppressed(state.require(4)));
     CHECK(state.require(1).transient_for == 4);
 }
@@ -290,7 +290,7 @@ TEST_CASE(
     auto state = test::state();
     constexpr xcb_window_t count = 2048;
     for (xcb_window_t id = 1; id <= count; ++id) add_floating(state, id);
-    for (xcb_window_t id = 2; id <= count; ++id) state.transient(id, id - 1, { });
+    for (xcb_window_t id = 2; id <= count; ++id) state.transient(id, id - 1);
     state.fullscreen(1, true);
     auto revision = state.revision();
     auto fullscreen = state.fullscreen_visibility();
@@ -298,7 +298,7 @@ TEST_CASE(
     CHECK(state.revision() == revision);
 
     // A long cycle with no route to the owner grants no exemption.
-    state.transient(2, count, { });
+    state.transient(2, count);
     fullscreen = state.fullscreen_visibility();
     for (auto const& [id, client] : state.clients()) CHECK(state.visible(client, fullscreen) == (id == 1));
 }
@@ -373,7 +373,7 @@ TEST_CASE("Fullscreen admission establishes priority and excludes maximize", "[s
 TEST_CASE("Scratchpad names and the pool are the only membership records", "[state][scratchpad]")
 {
     auto state = test::state();
-    state.configure_scratchpads(std::vector<ScratchpadConfig>{ { .name = "a" }, { .name = "b" } });
+    test::configure(state, [](Config& config) { config.scratchpads = { { .name = "a" }, { .name = "b" } }; });
     add(state, 1);
     add(state, 2);
     state.scratchpad_pending("a", true);
@@ -387,7 +387,7 @@ TEST_CASE("Scratchpad names and the pool are the only membership records", "[sta
     // Surviving names keep claims; removed names release and deiconify windows.
     state.claim_scratchpad(2, ScratchpadConfig{ .name = "b" });
     state.iconic(2, true);
-    state.configure_scratchpads(std::vector<ScratchpadConfig>{ { .name = "a" } });
+    test::configure(state, [](Config& config) { config.scratchpads = { { .name = "a" } }; });
     CHECK(state.scratchpad_claim(1));
     CHECK_FALSE(state.scratchpad_claim(2));
     CHECK_FALSE(state.require(2).iconic);
@@ -400,7 +400,7 @@ TEST_CASE("Topology replacement rebinds clients and fits floating rectangles", "
     add(state, 2, { .monitor = 1, .workspace = 1, .floating = true, .geometry = { 1200, 10, 200, 100 } });
     add(state, 3, { .monitor = 0, .floating = true, .geometry = { 900, 10, 200, 100 } });
     state.focus_monitor(1);
-    state.replace_monitors({ test::monitor("M0") });
+    test::outputs(state, { test::output("M0") });
     auto const& tile = state.require(1);
     CHECK(tile.monitor == 0);
     CHECK(tile.workspace == 2);
@@ -421,7 +421,7 @@ TEST_CASE("Geometry derivation does not mutate the domain", "[state]")
     state.normal_geometry(state.require(1));
     state.thaw();
     CHECK(state.revision() == revision);
-    state.title(1, "changed", { });
+    state.title(1, "changed");
     CHECK(state.revision() > revision);
     revision = state.revision();
     state.user_time(1, 0, XCB_NONE);
@@ -440,14 +440,14 @@ TEST_CASE("Maximize presentation preserves normal placement", "[state][floating]
 TEST_CASE("Tile geometry is a current projection independent of publication", "[state][geometry][layout]")
 {
     auto state = test::state();
-    state.configure_layout({ .padding = 0, .border_width = 0 }, { });
+    test::configure(state, [](Config& config) { config.appearance = { .padding = 0, .border_width = 0 }; });
     for (xcb_window_t id : { 1, 2, 3 }) add(state, id);
     CHECK(state.normal_geometry(state.require(2)) == Geometry{ 500, 0, 500, 400 });
     state.iconic(3, true);
     CHECK(state.normal_geometry(state.require(2)) == Geometry{ 500, 0, 500, 800 });
     state.ratio(0, SplitAddress{ 0 }, 0.25);
     CHECK(state.normal_geometry(state.require(2)) == Geometry{ 250, 0, 750, 800 });
-    state.workarea(0, { .top = 100 });
+    state.insert_fixture(99, Fixture::Role::Dock, DockStrut{ .top = { 100 } });
     CHECK(state.normal_geometry(state.require(2)) == Geometry{ 250, 100, 750, 700 });
     auto expected = state.normal_geometry(state.require(2));
     SECTION("Hidden") { state.switch_workspace(0, 1); }
@@ -469,7 +469,7 @@ TEST_CASE("Tile geometry is a current projection independent of publication", "[
 TEST_CASE("A projection contains every client once with its final visible rectangle", "[state][geometry][projection]")
 {
     auto state = test::state(2);
-    state.configure_layout({ .padding = 0, .border_width = 0 }, { });
+    test::configure(state, [](Config& config) { config.appearance = { .padding = 0, .border_width = 0 }; });
     add(state, 9);
     add_floating(state, 2);
     state.insert_fixture(99, Fixture::Role::Dock);
@@ -486,7 +486,7 @@ TEST_CASE("A projection contains every client once with its final visible rectan
     {
         fullscreen = true;
         state.fullscreen(9, true);
-        state.transient(2, 9, { });
+        state.transient(2, 9);
         state.geometry(2, { 10, 10, 200, 100 });
     }
     SECTION("Showing desktop") { state.show_desktop(true); }
@@ -508,4 +508,30 @@ TEST_CASE("A projection contains every client once with its final visible rectan
     CHECK_FALSE(clients[3].geometry);
     CHECK(clients[4].geometry == Geometry{ 1000, 0, 1000, 800 });
     CHECK(clients[5].geometry == (fullscreen ? std::nullopt : std::optional{ Geometry{ 500, 0, 500, 800 } }));
+}
+
+TEST_CASE("Workareas follow dock reservations and unchanged topology preserves intent", "[state][hotplug][workarea]")
+{
+    auto state = test::state(2);
+    add(state, 1, { .floating = true, .geometry = { -100, -100, 1500, 1000 } });
+    state.fullscreen_monitors(1, FullscreenMonitors{ 0, 0, 0, 1 });
+    state.insert_fixture(9, Fixture::Role::Dock, DockStrut{ .top = { 40 } });
+    CHECK(state.monitors()[0].working_area() == Geometry{ 0, 40, 1000, 760 });
+    CHECK(state.monitors()[1].working_area() == Geometry{ 1000, 40, 1000, 760 });
+    state.reserve(9, DockStrut{ .top = { 60 } });
+    CHECK(state.monitors()[1].working_area() == Geometry{ 1000, 60, 1000, 740 });
+    // Desktop windows never reserve space.
+    state.insert_fixture(10, Fixture::Role::Desktop, DockStrut{ .left = { 300 } });
+    CHECK(state.monitors()[0].working_area().x == 0);
+    state.erase(9);
+    CHECK(state.monitors()[0].working_area() == state.monitors()[0].geometry);
+
+    // A spurious refresh of the same outputs keeps intentional geometry and monitor hints.
+    test::outputs(state, { test::output("M0"), test::output("M1", 1000) });
+    CHECK(floating_mode(state.require(1))->geometry == Geometry{ -100, -100, 1500, 1000 });
+    CHECK(state.require(1).fullscreen_monitors);
+    // A changed topology invalidates index-based hints and fits the rectangle.
+    test::outputs(state, { test::output("M0") });
+    CHECK_FALSE(state.require(1).fullscreen_monitors);
+    CHECK(floating_mode(state.require(1))->geometry == Geometry{ 0, 0, 1500, 1000 });
 }

@@ -12,14 +12,12 @@ namespace lwm {
 // Compare complete projections with prior output, so mutations need no change lists.
 void WindowManager::complete_transition()
 {
-    bool obligations = workareas_dirty_ || !configure_replies_.empty() || !events_.empty() || restack_requested_
+    bool obligations = !configure_replies_.empty() || !events_.empty() || restack_requested_
         || drain_requested_ || presentation_dirty_;
     if (!obligations && state_.revision() == published_revision_)
         return;
 
     // Inputs and domain resolution; State may still change.
-    if (std::exchange(workareas_dirty_, false))
-        refresh_workareas();
     validate_drag();
     auto focus_request = state_.complete_focus(last_input_time_);
     auto fullscreen = state_.fullscreen_visibility();
@@ -101,15 +99,15 @@ Geometry WindowManager::presentation_geometry(Client const& client) const
 
 uint32_t WindowManager::border_width(Client const& client) const
 {
-    return client.fullscreen || client.borderless ? 0U : config_.appearance.border_width;
+    return client.fullscreen || client.borderless ? 0U : config().appearance.border_width;
 }
 
 uint32_t WindowManager::border_color(Client const& client) const
 {
     if (client.id == state_.active_window())
-        return config_.appearance.border_color;
+        return config().appearance.border_color;
     if (client.urgency.active())
-        return config_.appearance.urgent_border_color;
+        return config().appearance.urgent_border_color;
     return conn_.screen()->black_pixel;
 }
 
@@ -385,7 +383,7 @@ void WindowManager::commit_focus(uint32_t time)
 
 uint32_t WindowManager::desktop_index(size_t monitor, size_t workspace) const
 {
-    return ewmh_policy::desktop_index(monitor, workspace, config_.workspaces.count);
+    return ewmh_policy::desktop_index(monitor, workspace, config().workspaces.count);
 }
 
 // Monitor-major flat desktops. Workareas and viewports are relative to the
@@ -403,7 +401,7 @@ WindowManager::DesktopLayout WindowManager::desktop_layout() const
         max_y = std::max<int32_t>(max_y, m.geometry.y + m.geometry.height);
     }
     DesktopLayout layout;
-    layout.count = static_cast<uint32_t>(monitors.size() * config_.workspaces.count);
+    layout.count = static_cast<uint32_t>(monitors.size() * config().workspaces.count);
     layout.width = static_cast<uint32_t>(std::max<int32_t>(1, max_x - min_x));
     layout.height = static_cast<uint32_t>(std::max<int32_t>(1, max_y - min_y));
     for (auto const& m : monitors)
@@ -413,7 +411,7 @@ WindowManager::DesktopLayout WindowManager::desktop_layout() const
         area.y = static_cast<int16_t>(std::clamp<int32_t>(area.y - min_y, 0, std::numeric_limits<int16_t>::max()));
         std::pair<uint32_t, uint32_t> viewport{ static_cast<uint32_t>(std::max<int32_t>(0, m.geometry.x - min_x)),
                                                 static_cast<uint32_t>(std::max<int32_t>(0, m.geometry.y - min_y)) };
-        for (auto const& name : config_.workspaces.names)
+        for (auto const& name : config().workspaces.names)
         {
             layout.names.push_back(name);
             layout.viewports.push_back(viewport);

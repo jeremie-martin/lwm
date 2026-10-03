@@ -9,7 +9,6 @@
 #include <string_view>
 #include <variant>
 #include <vector>
-#include <xcb/randr.h>
 #include <xcb/xcb.h>
 
 namespace lwm {
@@ -64,6 +63,22 @@ constexpr uint16_t geometry_extent(int64_t value)
     return static_cast<uint16_t>(std::clamp<int64_t>(value, 1, 65535));
 }
 
+// Root-relative dock reservation (_NET_WM_STRUT_PARTIAL or legacy _NET_WM_STRUT).
+struct EdgeReservation
+{
+    uint32_t depth = 0;
+    uint32_t start = 0;
+    uint32_t end = UINT32_MAX; // Inclusive root-coordinate range; legacy struts span the edge.
+    bool operator==(EdgeReservation const&) const = default;
+};
+struct DockStrut
+{
+    EdgeReservation left, right, top, bottom;
+    bool empty() const { return !left.depth && !right.depth && !top.depth && !bottom.depth; }
+    bool operator==(DockStrut const&) const = default;
+};
+
+/// One monitor's reserved edges, projected from every dock reservation.
 struct Strut
 {
     uint32_t left = 0;
@@ -272,8 +287,8 @@ inline bool presents_maximized(Client const& client)
 }
 
 /// Docks and desktop windows: registered, listed and stacked, but outside
-/// workspaces, layout, and focus.
-struct Fixture
+/// workspaces, layout, and focus. Role and registration rank survive exec.
+struct FixtureIntent
 {
     enum class Role
     {
@@ -284,7 +299,12 @@ struct Fixture
     xcb_window_t id = XCB_NONE;
     Role role = Role::Dock;
     uint64_t order = 0;
-    bool operator==(Fixture const&) const = default;
+    bool operator==(FixtureIntent const&) const = default;
+};
+
+struct Fixture : FixtureIntent
+{
+    DockStrut strut; ///< Observed reservation; only docks reserve workarea
 };
 
 inline char const* fixture_role_str(Fixture::Role role) { return role == Fixture::Role::Dock ? "dock" : "desktop"; }
@@ -342,8 +362,20 @@ struct Workspace
     bool operator==(Workspace const&) const = default;
 };
 
-// The workspace graph and output identity survive exec. RandR handles and dock
-// reservations belong to the discovered monitor, not to the saved graph.
+// Discovered outputs and the root extent that right/bottom reservations refer to.
+struct Topology
+{
+    struct Output
+    {
+        std::string name;
+        Geometry geometry;
+    };
+    std::vector<Output> outputs;
+    Geometry screen;
+};
+
+// The workspace graph and output identity survive exec. Workarea reservations
+// are derived from the current docks, not saved.
 struct MonitorState
 {
     std::string name;
@@ -360,8 +392,7 @@ struct MonitorState
 
 struct Monitor : MonitorState
 {
-    xcb_randr_output_t output = XCB_NONE;
-    Strut strut = {};
+    Strut strut = {}; ///< Derived from dock reservations
 
     Geometry working_area() const
     {

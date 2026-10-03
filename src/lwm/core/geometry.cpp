@@ -6,12 +6,6 @@
 
 namespace lwm {
 
-void State::configure_layout(AppearanceConfig const& appearance, LayoutConfig const& config)
-{
-    mutated();
-    layout_ = Layout{ appearance, config };
-}
-
 // Current workspace first, then sticky tiles in workspace order. A prospective
 // view reveals one tile in its normal workspace, without fullscreen occlusion.
 std::vector<xcb_window_t> State::workspace_tiles(

@@ -64,7 +64,7 @@ std::string WindowManager::workspace_list_json() const
         {
             auto const& workspace = monitor.workspaces[w];
             json += std::string(w ? "," : "") + "{\"index\":" + std::to_string(w) + ",\"name\":"
-                + json_string(config_.workspaces.names[w]) + ",\"current\":" + json_bool(w == monitor.current_workspace)
+                + json_string(config().workspaces.names[w]) + ",\"current\":" + json_bool(w == monitor.current_workspace)
                 + ",\"window_count\":" + std::to_string(workspace.windows.size()) + ",\"layout\":"
                 + json_string(layout_strategy_str(workspace.layout_strategy)) + "}";
         }

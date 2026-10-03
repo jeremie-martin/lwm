@@ -176,10 +176,7 @@ void WindowManager::handle_window_removal(xcb_window_t window)
     if (auto const* client = state_.find(window))
         queue_event(event::window_unmap{ window, client_kind_str(client->kind()), Placement{ client->monitor, client->workspace } });
     else if (auto const* fixture = state_.find_fixture(window))
-    {
         queue_event(event::window_unmap{ window, fixture_role_str(fixture->role), {} });
-        workareas_dirty_ |= fixture->role == Fixture::Role::Dock;
-    }
     else
         return;
     state_.erase(window);
@@ -234,7 +231,7 @@ void WindowManager::handle_motion_notify(xcb_motion_notify_event_t const& e)
 MousebindConfig const* WindowManager::resolve_mouse_binding(uint16_t state, uint8_t button) const
 {
     auto modifiers = binding_modifiers(state);
-    for (auto const& binding : config_.mousebinds)
+    for (auto const& binding : config().mousebinds)
         if (binding.button == button && binding.modifier == modifiers)
             return &binding;
     return nullptr;
@@ -362,8 +359,9 @@ bool WindowManager::is_auto_repeat_toggle(xcb_keysym_t keysym, xcb_timestamp_t t
 void WindowManager::handle_key_press(xcb_key_press_event_t const& e)
 {
     xcb_keysym_t keysym = xcb_key_press_lookup_keysym(conn_.keysyms(), const_cast<xcb_key_press_event_t*>(&e), 0);
-    auto binding = config_.keybinds.find({ binding_modifiers(e.state), keysym });
-    if (binding == config_.keybinds.end())
+    auto const& keybinds = config().keybinds;
+    auto binding = keybinds.find({ binding_modifiers(e.state), keysym });
+    if (binding == keybinds.end())
     {
         LWM_LOG_TRACE("Key unbound: keysym={:#x} modifiers={:#x}", keysym, e.state);
         return;
@@ -545,7 +543,7 @@ void WindowManager::handle_desktop_change(xcb_client_message_event_t const& e)
         state_.sticky(e.window, true);
         return;
     }
-    auto placement = ewmh_policy::desktop_placement(desktop, config_.workspaces.count, state_.monitors().size());
+    auto placement = ewmh_policy::desktop_placement(desktop, config().workspaces.count, state_.monitors().size());
     if (!placement)
         return;
     auto [monitor, workspace] = *placement;
@@ -669,19 +667,19 @@ void WindowManager::handle_property_notify(xcb_property_notify_event_t const& e)
     auto* ewmh = ewmh_.get();
     auto const* client = state_.find(e.window);
     if (client && (e.atom == ewmh->_NET_WM_NAME || e.atom == XCB_ATOM_WM_NAME))
-        state_.title(e.window, read_window_name(e.window), config_);
+        state_.title(e.window, read_window_name(e.window));
     else if (client && e.atom == XCB_ATOM_WM_CLASS)
     {
         auto [instance, name] = read_wm_class(e.window);
-        state_.window_class(e.window, std::move(instance), std::move(name), config_);
+        state_.window_class(e.window, std::move(instance), std::move(name));
     }
     else if (client && e.atom == ewmh->_NET_WM_WINDOW_TYPE)
-        state_.window_type(e.window, ewmh_.get_window_type_enum(e.window), config_);
+        state_.window_type(e.window, ewmh_.get_window_type_enum(e.window));
     else if (client && e.atom == XCB_ATOM_WM_TRANSIENT_FOR)
     {
         auto parent = read_transient_for(e.window).value_or(XCB_NONE);
         auto const* target = state_.find(parent);
-        state_.transient(e.window, parent, config_, target ? drag_preview(*target) : std::nullopt);
+        state_.transient(e.window, parent, target ? drag_preview(*target) : std::nullopt);
     }
     else if (client && e.atom == XCB_ATOM_WM_NORMAL_HINTS)
         apply_size_hints(e.window, false);
@@ -691,7 +689,7 @@ void WindowManager::handle_property_notify(xcb_property_notify_event_t const& e)
         state_.focus_hints(e.window, client->accepts_input, supports_protocol(e.window, atoms_.wm_take_focus));
     else if (auto const* fixture = state_.find_fixture(e.window); fixture && fixture->role == Fixture::Role::Dock
              && (e.atom == ewmh->_NET_WM_STRUT || e.atom == ewmh->_NET_WM_STRUT_PARTIAL))
-        workareas_dirty_ = true;
+        state_.reserve(e.window, ewmh_.get_window_strut(e.window));
 
     if (e.atom == ewmh->_NET_WM_USER_TIME || e.atom == ewmh->_NET_WM_USER_TIME_WINDOW)
     {

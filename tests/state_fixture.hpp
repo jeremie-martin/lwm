@@ -4,6 +4,8 @@
 // from states the WM can actually reach.
 
 #include "lwm/core/state.hpp"
+#include <algorithm>
+#include <stdexcept>
 #include <string>
 
 namespace lwm::test {
@@ -19,13 +21,39 @@ inline Monitor monitor(std::string name, int16_t x = 0, size_t workspaces = 3)
     return monitor;
 }
 
+// Installs a configuration edited from the current one through State's own reload path.
+template <typename Edit> void configure(State& state, Edit edit)
+{
+    auto config = state.config();
+    edit(config);
+    if (!state.configure(std::move(config)))
+        throw std::logic_error("test configuration rejected");
+}
+
+inline Topology::Output output(std::string name, int16_t x = 0)
+{
+    return { std::move(name), { x, 0, 1000, 800 } };
+}
+
+// The screen spans every output from the root origin, as RandR reports it.
+inline void outputs(State& state, std::vector<Topology::Output> outputs)
+{
+    Geometry screen;
+    for (auto const& output : outputs)
+    {
+        screen.width = std::max<uint16_t>(screen.width, geometry_extent(output.geometry.x + output.geometry.width));
+        screen.height = std::max<uint16_t>(screen.height, geometry_extent(output.geometry.y + output.geometry.height));
+    }
+    state.replace_topology({ std::move(outputs), screen });
+}
+
 inline State state(size_t monitors = 1, size_t workspaces = 3)
 {
     State state;
-    std::vector<Monitor> outputs;
-    for (size_t i = 0; i < monitors; ++i)
-        outputs.push_back(monitor("M" + std::to_string(i), static_cast<int16_t>(i * 1000), workspaces));
-    state.replace_monitors(std::move(outputs));
+    configure(state, [&](Config& config) { config.workspaces.count = workspaces; });
+    std::vector<Topology::Output> discovered;
+    for (size_t i = 0; i < monitors; ++i) discovered.push_back(output("M" + std::to_string(i), static_cast<int16_t>(i * 1000)));
+    outputs(state, std::move(discovered));
     return state;
 }
 

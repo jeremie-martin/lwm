@@ -4,6 +4,7 @@
 #include "focus.hpp"
 #include "log.hpp"
 #include "policy.hpp"
+#include "workarea.hpp"
 #include <algorithm>
 #include <cassert>
 #include <tuple>
@@ -75,10 +76,21 @@ void State::insert(Client client)
         request_fullscreen(it->first);
 }
 
-void State::insert_fixture(xcb_window_t id, Fixture::Role role)
+void State::insert_fixture(xcb_window_t id, Fixture::Role role, DockStrut strut)
 {
     mutated();
-    fixtures_.emplace(id, Fixture{ id, role, register_window(id) });
+    fixtures_.emplace(id, Fixture{ { id, role, register_window(id) }, strut });
+    update_workareas();
+}
+
+void State::reserve(xcb_window_t id, DockStrut strut)
+{
+    auto it = fixtures_.find(id);
+    if (it == fixtures_.end() || it->second.strut == strut)
+        return;
+    mutated();
+    it->second.strut = strut;
+    update_workareas();
 }
 
 void State::erase(xcb_window_t id)
@@ -86,6 +98,7 @@ void State::erase(xcb_window_t id)
     if (fixtures_.erase(id))
     {
         mutated();
+        update_workareas();
         return;
     }
     auto const* client = find(id);
@@ -619,15 +632,67 @@ void State::reset_ratios(size_t monitor)
         edit_workspace(monitor, monitors_[monitor].current_workspace).split_ratios.clear();
 }
 
-void State::workarea(size_t monitor, Strut strut)
+// Configuration
+
+std::expected<void, std::string> State::configure(Config config)
 {
-    if (monitors_.at(monitor).strut == strut)
-        return;
+    if (!monitors_.empty() && config.workspaces.count != config_.workspaces.count)
+        return std::unexpected("live reload of [workspaces].count is unsupported; restart required");
     mutated();
-    monitors_[monitor].strut = strut;
+    config_ = std::move(config);
+    layout_ = Layout{ config_.appearance, config_.layout };
+    reconcile_scratchpads();
+    reapply_rules();
+    repair_focus_ = true;
+    return { };
 }
 
-void State::replace_monitors(std::vector<Monitor> monitors)
+// Topology
+
+Monitor State::fresh_monitor(std::string name, Geometry geometry) const
+{
+    Monitor monitor;
+    monitor.name = std::move(name);
+    monitor.geometry = geometry;
+    Workspace workspace;
+    workspace.layout_strategy = config_.layout.strategy;
+    monitor.workspaces.assign(config_.workspaces.count, workspace);
+    return monitor;
+}
+
+void State::replace_topology(Topology topology)
+{
+    assert(!topology.outputs.empty());
+    std::vector<Monitor> monitors;
+    for (auto& output : topology.outputs) monitors.push_back(fresh_monitor(std::move(output.name), output.geometry));
+    screen_ = topology.screen;
+    rebind(std::move(monitors));
+}
+
+// Each monitor reserves the deepest projection of any dock on each edge.
+void State::update_workareas()
+{
+    for (auto& monitor : monitors_)
+    {
+        Strut strut;
+        for (auto const& [id, fixture] : fixtures_)
+        {
+            if (fixture.role != Fixture::Role::Dock)
+                continue;
+            auto projected = monitor_strut(fixture.strut, screen_, monitor.geometry);
+            strut.left = std::max(strut.left, projected.left);
+            strut.right = std::max(strut.right, projected.right);
+            strut.top = std::max(strut.top, projected.top);
+            strut.bottom = std::max(strut.bottom, projected.bottom);
+        }
+        if (monitor.strut == strut)
+            continue;
+        mutated();
+        monitor.strut = strut;
+    }
+}
+
+void State::rebind(std::vector<Monitor> monitors)
 {
     assert(!monitors.empty());
     mutated();
@@ -658,6 +723,7 @@ void State::replace_monitors(std::vector<Monitor> monitors)
     auto destinations = hotplug_policy::preserve_workspaces(previous, monitors);
     focused_monitor_ = focused_monitor_ < destinations.size() ? destinations[focused_monitor_] : 0;
     monitors_ = std::move(monitors);
+    update_workareas();
     auto survives = [&](size_t index)
     {
         return index < previous.size()
@@ -708,9 +774,9 @@ void State::release_scratchpad(xcb_window_t id)
 
 // Surviving names keep claims and pending launches; removed names release
 // their windows and deiconify them; workspace/fullscreen visibility still applies.
-void State::configure_scratchpads(std::span<ScratchpadConfig const> configs)
+void State::reconcile_scratchpads()
 {
-    mutated();
+    auto const& configs = config_.scratchpads;
     std::vector<NamedScratchpad> slots;
     for (auto const& config : configs)
     {
@@ -786,7 +852,8 @@ void State::restore_graph(restart::Snapshot const& snapshot, std::vector<Client>
         else
             fixture.order += bound;
     next_order_ += bound;
-    auto discovered = std::move(monitors_);
+    std::vector<Monitor> discovered;
+    for (auto const& monitor : monitors_) discovered.push_back(fresh_monitor(monitor.name, monitor.geometry));
     monitors_.clear();
     for (auto const& monitor : snapshot.monitors) monitors_.push_back(Monitor{ monitor });
     focused_monitor_ = snapshot.focused_monitor;
@@ -805,7 +872,7 @@ void State::restore_graph(restart::Snapshot const& snapshot, std::vector<Client>
     for (auto id : snapshot.fullscreen_claims)
         if (auto const* client = find(id); client && client->fullscreen)
             fullscreen_claims_.push_back(id);
-    replace_monitors(std::move(discovered));
+    rebind(std::move(discovered));
     // Filter only after merging: surviving workspace preferences have precedence
     // over incoming ones, even when their former target disappeared during exec.
     for (auto& monitor : monitors_)

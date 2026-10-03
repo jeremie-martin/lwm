@@ -24,12 +24,11 @@ template <typename T> Reply<T> reply(T* value) { return { value, &free }; }
 } // namespace
 
 WindowManager::WindowManager(Config config, SignalPipe& signals, std::string config_path)
-    : config_(std::move(config))
-    , ewmh_(conn_)
+    : ewmh_(conn_)
     , signals_(signals)
     , config_path_(std::move(config_path))
 {
-    state_.configure_layout(config_.appearance, config_.layout);
+    (void)state_.configure(std::move(config));
     intern_atoms();
     create_wm_window();
     setup_root();
@@ -37,7 +36,6 @@ WindowManager::WindowManager(Config config, SignalPipe& signals, std::string con
     bool handoff = release_predecessor();
     create_cursors();
     grab_buttons();
-    state_.configure_scratchpads(config_.scratchpads);
     refresh_topology();
     ewmh_.init_atoms({ ewmh_.get()->_NET_WM_USER_TIME_WINDOW, atoms_.net_wm_state_focused, atoms_.lwm_window_class });
     ewmh_.set_wm_name("lwm");
@@ -193,7 +191,7 @@ void WindowManager::grab_buttons()
 {
     xcb_window_t root = conn_.screen()->root;
     xcb_ungrab_button(conn_.get(), XCB_BUTTON_INDEX_ANY, root, XCB_MOD_MASK_ANY);
-    for (auto const& binding : config_.mousebinds)
+    for (auto const& binding : config().mousebinds)
         for (uint16_t lock : kIgnoredModifierCombinations)
             xcb_grab_button(
                 conn_.get(),
@@ -214,7 +212,7 @@ void WindowManager::grab_keys()
 {
     xcb_window_t root = conn_.screen()->root;
     xcb_ungrab_key(conn_.get(), XCB_GRAB_ANY, root, XCB_MOD_MASK_ANY);
-    for (auto const& [binding, action] : config_.keybinds)
+    for (auto const& [binding, action] : config().keybinds)
     {
         auto keycodes = reply(xcb_key_symbols_get_keycode(conn_.keysyms(), binding.keysym));
         for (auto* keycode = keycodes.get(); keycode && *keycode != XCB_NO_SYMBOL; ++keycode)
@@ -240,22 +238,14 @@ void WindowManager::cleanup_ipc()
     }
 }
 
-// Monitors and workareas
+// Topology
 
-std::vector<Monitor> WindowManager::discover_monitors()
+Topology WindowManager::discover_topology()
 {
-    std::vector<Monitor> discovered;
-    auto add = [&](std::string name, xcb_randr_output_t output, Geometry geometry)
-    {
-        Monitor monitor;
-        monitor.output = output;
-        monitor.name = std::move(name);
-        monitor.geometry = geometry;
-        Workspace workspace;
-        workspace.layout_strategy = config_.layout.strategy;
-        monitor.workspaces.assign(config_.workspaces.count, workspace);
-        discovered.push_back(std::move(monitor));
-    };
+    Topology topology;
+    auto root = read_window_geometry(conn_.screen()->root);
+    topology.screen = { 0, 0, root ? root->width : conn_.screen()->width_in_pixels, root ? root->height : conn_.screen()->height_in_pixels };
+    auto& outputs = topology.outputs;
     if (conn_.has_randr())
     {
         auto resources = reply(xcb_randr_get_screen_resources_current_reply(
@@ -266,17 +256,17 @@ std::vector<Monitor> WindowManager::discover_monitors()
         if (!resources)
             LWM_LOG_WARN_LIMIT(std::chrono::seconds(5), "randr: screen resources unavailable; using one monitor");
         int count = resources ? xcb_randr_get_screen_resources_current_outputs_length(resources.get()) : 0;
-        auto* outputs = resources ? xcb_randr_get_screen_resources_current_outputs(resources.get()) : nullptr;
+        auto* ids = resources ? xcb_randr_get_screen_resources_current_outputs(resources.get()) : nullptr;
         for (int i = 0; i < count; ++i)
         {
             auto output = reply(xcb_randr_get_output_info_reply(
                 conn_.get(),
-                xcb_randr_get_output_info(conn_.get(), outputs[i], resources->config_timestamp),
+                xcb_randr_get_output_info(conn_.get(), ids[i], resources->config_timestamp),
                 nullptr
             ));
             if (!output)
             {
-                LWM_LOG_WARN_LIMIT(std::chrono::seconds(5), "randr: output {:#x} unavailable, skipping", outputs[i]);
+                LWM_LOG_WARN_LIMIT(std::chrono::seconds(5), "randr: output {:#x} unavailable, skipping", ids[i]);
                 continue;
             }
             if (output->connection != XCB_RANDR_CONNECTION_CONNECTED || output->crtc == XCB_NONE)
@@ -295,63 +285,19 @@ std::vector<Monitor> WindowManager::discover_monitors()
                 LWM_LOG_WARN_LIMIT(std::chrono::seconds(5), "randr: output {} has no usable CRTC, skipping", name);
                 continue;
             }
-            add(std::move(name), outputs[i], { crtc->x, crtc->y, crtc->width, crtc->height });
+            outputs.push_back({ std::move(name), { crtc->x, crtc->y, crtc->width, crtc->height } });
         }
     }
-    if (discovered.empty())
-        add("default", XCB_NONE, { 0, 0, conn_.screen()->width_in_pixels, conn_.screen()->height_in_pixels });
-    std::ranges::sort(discovered, { }, [](Monitor const& monitor) { return monitor.geometry.x; });
-    return discovered;
+    if (outputs.empty())
+        outputs.push_back({ "default", topology.screen });
+    std::ranges::stable_sort(outputs, { }, [](auto const& output) { return output.geometry.x; });
+    return topology;
 }
 
-// Discovery and dock reservations are read before the model changes, so
-// rebinding and floating fit use the new workareas in one state operation.
 void WindowManager::refresh_topology()
 {
     end_drag(false);
-    auto monitors = discover_monitors();
-    auto struts = dock_struts(monitors);
-    for (size_t i = 0; i < monitors.size(); ++i) monitors[i].strut = struts[i];
-    state_.replace_monitors(std::move(monitors));
-    workareas_dirty_ = false;
-}
-
-void WindowManager::refresh_workareas()
-{
-    auto struts = dock_struts(state_.monitors());
-    for (size_t i = 0; i < struts.size(); ++i) state_.workarea(i, struts[i]);
-}
-
-// Reads current dock properties and, when a reservation exists, the root
-// geometry once. There is no persistent dock-property cache.
-std::vector<Strut> WindowManager::dock_struts(std::span<Monitor const> monitors)
-{
-    std::vector<Strut> struts(monitors.size());
-    std::optional<Geometry> root;
-    for (auto const& [id, fixture] : state_.fixtures())
-    {
-        if (fixture.role != Fixture::Role::Dock)
-            continue;
-        auto reservation = ewmh_.get_window_strut(id);
-        if (reservation.empty())
-            continue;
-        if (!root)
-        {
-            auto geometry = read_window_geometry(conn_.screen()->root);
-            if (!geometry)
-                break;
-            root = Geometry{ 0, 0, geometry->width, geometry->height };
-        }
-        for (size_t i = 0; i < monitors.size(); ++i)
-        {
-            auto strut = monitor_strut(reservation, *root, monitors[i].geometry);
-            struts[i].left = std::max(struts[i].left, strut.left);
-            struts[i].right = std::max(struts[i].right, strut.right);
-            struts[i].top = std::max(struts[i].top, strut.top);
-            struts[i].bottom = std::max(struts[i].bottom, strut.bottom);
-        }
-    }
-    return struts;
+    state_.replace_topology(discover_topology());
 }
 
 // Event loop
@@ -516,18 +462,12 @@ std::expected<void, std::string> WindowManager::reload_config()
     auto loaded = load_config_result(config_path_);
     if (!loaded)
         return std::unexpected(loaded.error());
-    if (loaded->workspaces.count != config_.workspaces.count)
-        return std::unexpected("live reload of [workspaces].count is unsupported; restart required");
-
     end_drag(false);
-    config_ = std::move(*loaded);
-    state_.configure_layout(config_.appearance, config_.layout);
-    state_.configure_scratchpads(config_.scratchpads);
+    if (auto installed = state_.configure(std::move(*loaded)); !installed)
+        return installed;
     grab_buttons();
     grab_keys();
-    state_.reapply_rules(config_.rules);
     presentation_dirty_ = true;
-    state_.request_focus_repair();
     return { };
 }
 

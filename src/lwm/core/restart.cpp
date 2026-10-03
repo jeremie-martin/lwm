@@ -69,9 +69,9 @@ ClientIntent const* Snapshot::find(xcb_window_t window) const
     return record == clients.end() ? nullptr : &*record;
 }
 
-Fixture const* Snapshot::find_fixture(xcb_window_t window) const
+FixtureIntent const* Snapshot::find_fixture(xcb_window_t window) const
 {
-    auto fixture = std::ranges::find(fixtures, window, &Fixture::id);
+    auto fixture = std::ranges::find(fixtures, window, &FixtureIntent::id);
     return fixture == fixtures.end() ? nullptr : &*fixture;
 }
 

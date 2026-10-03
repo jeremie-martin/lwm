@@ -19,13 +19,13 @@ struct Snapshot
     bool showing_desktop = false;
     std::vector<MonitorState> monitors;
     std::vector<ClientIntent> clients; ///< Registration order
-    std::vector<Fixture> fixtures; ///< Established roles and registration ranks
+    std::vector<FixtureIntent> fixtures; ///< Established roles and registration ranks
     std::vector<NamedScratchpad> named_scratchpads;
     std::vector<xcb_window_t> pool;
     std::vector<xcb_window_t> fullscreen_claims; ///< Oldest to newest, including hidden and iconic clients
 
     ClientIntent const* find(xcb_window_t window) const;
-    Fixture const* find_fixture(xcb_window_t window) const;
+    FixtureIntent const* find_fixture(xcb_window_t window) const;
     bool operator==(Snapshot const&) const = default;
 };
 

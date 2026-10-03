@@ -147,8 +147,8 @@ Result WindowManager::execute(Action const& action, std::string_view source)
             },
             [&](SetRatio const& ratio) -> Result
             {
-                double min = config_.layout.min_ratio;
-                if (!config_.layout.accepts_ratio(ratio.value))
+                double min = config().layout.min_ratio;
+                if (!config().layout.accepts_ratio(ratio.value))
                     return std::unexpected(
                         "ratio out of range [" + std::to_string(min) + ", " + std::to_string(1.0 - min) + "]"
                     );
@@ -160,8 +160,8 @@ Result WindowManager::execute(Action const& action, std::string_view source)
             {
                 auto const& ratios = focused.current().split_ratios;
                 auto it = ratios.find(SplitAddress{ 0 });
-                double current = it == ratios.end() ? config_.layout.default_ratio : it->second;
-                double adjusted = config_.layout.clamp_ratio(current + adjust.delta);
+                double current = it == ratios.end() ? config().layout.default_ratio : it->second;
+                double adjusted = config().layout.clamp_ratio(current + adjust.delta);
                 if (adjusted == current)
                     return "ratio unchanged";
                 state_.ratio(monitor, SplitAddress{ 0 }, adjusted);
@@ -241,7 +241,7 @@ void WindowManager::toggle_float(xcb_window_t window)
 void WindowManager::switch_to_desktop(uint32_t desktop)
 {
     LWM_LOG_DEBUG("_NET_CURRENT_DESKTOP request: desktop={}", desktop);
-    auto placement = ewmh_policy::desktop_placement(desktop, config_.workspaces.count, state_.monitors().size());
+    auto placement = ewmh_policy::desktop_placement(desktop, config().workspaces.count, state_.monitors().size());
     if (!placement)
         return;
     auto [monitor, workspace] = *placement;
@@ -260,7 +260,7 @@ size_t WindowManager::wrap_monitor(int index) const
 
 void WindowManager::warp_to_monitor(Monitor const& monitor)
 {
-    if (!config_.focus.warp_cursor_on_monitor_change)
+    if (!config().focus.warp_cursor_on_monitor_change)
         return;
     xcb_warp_pointer(
         conn_.get(),

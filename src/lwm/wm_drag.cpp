@@ -147,7 +147,7 @@ void WindowManager::update_drag(int16_t x, int16_t y)
     if (split.available_extent <= 0)
         return;
     int32_t delta = split.direction == SplitDirection::Horizontal ? dx : dy;
-    double ratio = config_.layout.clamp_ratio(split.ratio + static_cast<double>(delta) / split.available_extent);
+    double ratio = config().layout.clamp_ratio(split.ratio + static_cast<double>(delta) / split.available_extent);
     // Validation guarantees the resized workspace is still current.
     state_.ratio(resize.monitor, split.address, ratio);
 }

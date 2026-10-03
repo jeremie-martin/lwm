@@ -140,7 +140,7 @@ TEST_CASE("Restored tile slots are admitted only while the original workspace ex
     REQUIRE(std::get<FloatingMode>(saved.mode).tile_slot == TileSlot{ 1, "M0", 0 });
     auto target = test::state();
     SECTION("Original workspace exists") { }
-    SECTION("Original output disappeared") { target.replace_monitors({ test::monitor("replacement") }); }
+    SECTION("Original output disappeared") { test::outputs(target, { test::output("replacement") }); }
     SECTION("Saved workspace no longer exists")
     {
         for (auto& record : snapshot->clients)
@@ -167,7 +167,7 @@ TEST_CASE("Restored tile slots are admitted only while the original workspace ex
 TEST_CASE("State snapshots restore workspaces, order, recency and scratchpads", "[restart][state]")
 {
     auto source = test::state(2);
-    source.configure_scratchpads(std::vector<ScratchpadConfig>{ { .name = "term" } });
+    test::configure(source, [](Config& config) { config.scratchpads = { { .name = "term" } }; });
     add(source, 1);
     add(source, 2);
     add(source, 3);
@@ -185,7 +185,7 @@ TEST_CASE("State snapshots restore workspaces, order, recency and scratchpads", 
     REQUIRE(snapshot);
 
     auto target = test::state(2);
-    target.configure_scratchpads(std::vector<ScratchpadConfig>{ { .name = "term" } });
+    test::configure(target, [](Config& config) { config.scratchpads = { { .name = "term" } }; });
     // Observation order differs from saved membership and registration order.
     target.restore_graph(*snapshot, { source.require(3), source.require(2), source.require(1), source.require(4) });
     auto const& saved = *snapshot->find(4);
@@ -292,47 +292,45 @@ TEST_CASE("Restart rebinding matches live output reconciliation", "[restart][sta
     auto snapshot = restart::decode(restart::encode(source.snapshot()));
     REQUIRE(snapshot);
 
-    std::vector<Monitor> discovered;
-    bool fewer_workspaces = false;
+    std::vector<Topology::Output> discovered;
+    size_t workspaces = 3;
     SECTION("Reordered outputs")
     {
-        discovered = { test::monitor("M2"), test::monitor("M0", 1000), test::monitor("M1", 2000) };
+        discovered = { test::output("M2"), test::output("M0", 1000), test::output("M1", 2000) };
     }
-    SECTION("Removed first output") { discovered = { test::monitor("M1"), test::monitor("M2", 1000) }; }
-    SECTION("Removed non-first outputs") { discovered = { test::monitor("M0") }; }
-    SECTION("All outputs replaced") { discovered = { test::monitor("new") }; }
+    SECTION("Removed first output") { discovered = { test::output("M1"), test::output("M2", 1000) }; }
+    SECTION("Removed non-first outputs") { discovered = { test::output("M0") }; }
+    SECTION("All outputs replaced") { discovered = { test::output("new") }; }
     SECTION("New output before survivors")
     {
-        discovered = { test::monitor("new"),
-                       test::monitor("M0", 1000),
-                       test::monitor("M1", 2000),
-                       test::monitor("M2", 3000) };
+        discovered = { test::output("new"), test::output("M0", 1000), test::output("M1", 2000), test::output("M2", 3000) };
     }
     SECTION("Fewer workspaces")
     {
-        discovered = { test::monitor("M1", 0, 1), test::monitor("M0", 1000, 1) };
-        fewer_workspaces = true;
+        discovered = { test::output("M1"), test::output("M0", 1000) };
+        workspaces = 1;
     }
-    SECTION("Additional workspaces") { discovered = { test::monitor("M1", 0, 4), test::monitor("M0", 1000, 4) }; }
-    for (auto& monitor : discovered) monitor.strut.top = 40;
-    // Different new-workspace defaults ensure removed outputs cannot replace them.
-    discovered[0].workspaces[0].layout_strategy = LayoutStrategy::Monocle;
-    source.replace_monitors(discovered);
-    if (fewer_workspaces)
+    SECTION("Additional workspaces")
     {
-        // Both restoration and live reconciliation use preserve_workspaces.
-        // Anchor their agreement to the contract: retain the survivor's order,
-        // fold higher workspaces in order, then append displaced output members.
-        CHECK(source.monitors()[0].current().windows == std::vector<xcb_window_t>{ 4, 5 });
-        CHECK(source.monitors()[1].current().windows == std::vector<xcb_window_t>{ 1, 3 });
-        CHECK(source.require(4).monitor == 0);
-        CHECK(source.require(5).monitor == 0);
-        CHECK(source.require(1).monitor == 1);
-        for (auto const& [id, client] : source.clients()) CHECK(client.workspace == 0);
+        discovered = { test::output("M1"), test::output("M0", 1000) };
+        workspaces = 4;
     }
+    // Both paths see the same dock reservation. A different new-workspace
+    // default ensures removed outputs cannot replace fresh workspaces.
+    auto prepare = [&](State& state, size_t count)
+    {
+        test::configure(state, [&](Config& config) {
+            config.workspaces.count = count;
+            config.layout.strategy = LayoutStrategy::Monocle;
+        });
+        state.insert_fixture(99, Fixture::Role::Dock, DockStrut{ .top = { 40 } });
+        test::outputs(state, discovered);
+    };
+    // The live workspace count is fixed, so live reconciliation uses the saved count.
+    prepare(source, 3);
 
     State restored;
-    restored.replace_monitors(discovered);
+    prepare(restored, workspaces);
     // Observation order deliberately differs from saved tile order. Private
     // placement is restored even though these observations carry new indices.
     std::vector<Client> observed;
@@ -340,6 +338,23 @@ TEST_CASE("Restart rebinding matches live output reconciliation", "[restart][sta
         observed.push_back(source.require(it->id));
     restored.restore_graph(*snapshot, std::move(observed));
     CHECK(restored.focused_monitor() == source.focused_monitor());
+    for (auto const& monitor : restored.monitors())
+        CHECK(monitor.strut.top == 40);
+    if (workspaces == 1)
+    {
+        // Retain the survivor's order, fold higher workspaces in order, then
+        // append displaced output members.
+        CHECK(restored.monitors()[0].current().windows == std::vector<xcb_window_t>{ 4, 5 });
+        CHECK(restored.monitors()[1].current().windows == std::vector<xcb_window_t>{ 1, 3 });
+        CHECK(restored.require(4).monitor == 0);
+        CHECK(restored.require(5).monitor == 0);
+        CHECK(restored.require(1).monitor == 1);
+        for (auto const& [id, client] : restored.clients()) CHECK(client.workspace == 0);
+        // The tile slot's workspace no longer exists, so the client appends.
+        restored.floating(2, false);
+        CHECK(restored.monitors()[1].current().windows == std::vector<xcb_window_t>{ 1, 3, 2 });
+        return;
+    }
     for (size_t m = 0; m < source.monitors().size(); ++m)
     {
         auto const& expected = source.monitors()[m];
@@ -347,13 +362,18 @@ TEST_CASE("Restart rebinding matches live output reconciliation", "[restart][sta
         CHECK(actual.name == expected.name);
         CHECK(actual.current_workspace == expected.current_workspace);
         CHECK(actual.previous_workspace == expected.previous_workspace);
-        REQUIRE(actual.workspaces.size() == expected.workspaces.size());
-        for (size_t w = 0; w < actual.workspaces.size(); ++w)
+        REQUIRE(actual.workspaces.size() == workspaces);
+        for (size_t w = 0; w < expected.workspaces.size(); ++w)
         {
             CHECK(actual.workspaces[w].windows == expected.workspaces[w].windows);
             CHECK(actual.workspaces[w].preferred_tile == expected.workspaces[w].preferred_tile);
             CHECK(actual.workspaces[w].layout_strategy == expected.workspaces[w].layout_strategy);
             CHECK(actual.workspaces[w].split_ratios == expected.workspaces[w].split_ratios);
+        }
+        for (size_t w = expected.workspaces.size(); w < workspaces; ++w)
+        {
+            CHECK(actual.workspaces[w].windows.empty());
+            CHECK(actual.workspaces[w].layout_strategy == LayoutStrategy::Monocle);
         }
     }
     for (auto const& [id, expected] : source.clients())
@@ -399,7 +419,7 @@ TEST_CASE("Unchanged restart topology preserves intentional floating geometry an
 TEST_CASE("Restart preserves pending requests only for surviving scratchpad names", "[restart][state][scratchpad]")
 {
     auto source = test::state();
-    source.configure_scratchpads(std::vector<ScratchpadConfig>{ { .name = "pending" }, { .name = "removed" }, { .name = "claimed" }, { .name = "empty" } });
+    test::configure(source, [](Config& config) { config.scratchpads = { { .name = "pending" }, { .name = "removed" }, { .name = "claimed" }, { .name = "empty" } }; });
     source.scratchpad_pending("pending", true);
     source.scratchpad_pending("removed", true);
     add(source, 1);
@@ -407,7 +427,7 @@ TEST_CASE("Restart preserves pending requests only for surviving scratchpad name
     auto snapshot = restart::decode(restart::encode(source.snapshot()));
     REQUIRE(snapshot);
     auto restored = test::state();
-    restored.configure_scratchpads(std::vector<ScratchpadConfig>{ { .name = "pending" }, { .name = "claimed" }, { .name = "empty" }, { .name = "new" } });
+    test::configure(restored, [](Config& config) { config.scratchpads = { { .name = "pending" }, { .name = "claimed" }, { .name = "empty" }, { .name = "new" } }; });
     std::vector<Client> observed;
     SECTION("Claimed client survives") { observed.push_back(source.require(1)); }
     SECTION("Claimed client disappeared") { }
@@ -604,9 +624,12 @@ TEST_CASE("Graph restoration separates saved intent from live observations and n
     source.switch_workspace(1, 2);
     source.focus_monitor(1);
     source.fullscreen(1, true);
-    Config rules;
-    rules.rules.push_back({ .actions = { .borderless = true } });
-    source.title(2, "apply private preference", rules);
+    test::configure(source, [](Config& config) {
+        WindowRuleConfig rule{ .actions = { .borderless = true } };
+        rule.match.title_regex.emplace("apply private preference");
+        config.rules.push_back(std::move(rule));
+    });
+    source.title(2, "apply private preference");
     source.skip_pager(2, false);
     auto snapshot = source.snapshot();
 
@@ -628,7 +651,7 @@ TEST_CASE("Graph restoration separates saved intent from live observations and n
     auto target = test::state(2);
     // Reverse the outputs. A concrete desktop hint uses discovered indices;
     // saved placement instead follows output identity, and defaults follow focus.
-    target.replace_monitors({ test::monitor("M1"), test::monitor("M0", 1000) });
+    test::outputs(target, { test::output("M1"), test::output("M0", 1000) });
     SECTION("Newcomer requested fullscreen before the saved client")
     {
         target.restore_graph(snapshot, { first, newcomer, saved, pinned });
@@ -684,19 +707,25 @@ TEST_CASE("Persistent graph validation rejects scratchpad ownership before recon
 
 TEST_CASE("Valid ownership survives changed observations and filters vanished clients", "[restart][state][scratchpad]")
 {
+    // Metadata updates below must not satisfy the pending launch.
+    auto scratchpads = [](Config& config)
+    {
+        config.scratchpads = { { .name = "named" }, { .name = "pending" } };
+        for (auto& scratchpad : config.scratchpads) scratchpad.match.class_regex.emplace("unmatched");
+    };
     auto source = test::state();
-    source.configure_scratchpads(std::vector<ScratchpadConfig>{ { .name = "named" }, { .name = "pending" } });
+    test::configure(source, scratchpads);
     for (xcb_window_t id : { 1, 2, 3, 4 }) add(source, id);
     source.claim_scratchpad(1, ScratchpadConfig{ .name = "named" });
     source.scratchpad_pending("pending", true);
     source.pool_scratchpad(2);
     source.pool_scratchpad(3);
     source.iconic(2, true);
-    source.window_type(4, WindowType::Dialog, { });
+    source.window_type(4, WindowType::Dialog);
     auto graph = restart::decode(restart::encode(source.snapshot()));
     REQUIRE(graph);
     auto target = test::state();
-    target.configure_scratchpads(std::vector<ScratchpadConfig>{ { .name = "named" }, { .name = "pending" } });
+    test::configure(target, scratchpads);
     std::vector<Client> observed;
     for (auto id : { 1, 3, 4 })
     {
@@ -718,11 +747,11 @@ TEST_CASE("Valid ownership survives changed observations and filters vanished cl
     CHECK_FALSE(invariants::validate(target));
     // Restoration preserves saved representation. A subsequent metadata update
     // still follows defaults for an ordinary client, while claims retain mode.
-    target.window_type(4, WindowType::Utility, { });
-    target.window_type(4, WindowType::Normal, { });
+    target.window_type(4, WindowType::Utility);
+    target.window_type(4, WindowType::Normal);
     CHECK(target.require(4).kind() == Client::Kind::Tiled);
-    target.window_type(1, WindowType::Dialog, { });
-    target.window_type(3, WindowType::Dialog, { });
+    target.window_type(1, WindowType::Dialog);
+    target.window_type(3, WindowType::Dialog);
     CHECK(target.require(1).kind() == Client::Kind::Tiled);
     CHECK(target.require(3).kind() == Client::Kind::Tiled);
     CHECK_FALSE(invariants::validate(target));
