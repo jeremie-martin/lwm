@@ -457,7 +457,7 @@ void WindowManager::handle_client_message(xcb_client_message_event_t const& e)
     else if (e.type == ewmh->_NET_WM_DESKTOP)
     {
         LWM_LOG_DEBUG("_NET_WM_DESKTOP request: window={:#x} desktop={}", e.window, e.data.data32[0]);
-        drain_requested_ |= state_.request_desktop(e.window, e.data.data32[0]);
+        state_.request_desktop(e.window, e.data.data32[0]);
     }
     else if (e.type == ewmh->_NET_REQUEST_FRAME_EXTENTS)
         xcb_ewmh_set_frame_extents(ewmh_.get(), e.window, 0, 0, 0, 0);
@@ -465,11 +465,8 @@ void WindowManager::handle_client_message(xcb_client_message_event_t const& e)
         handle_moveresize_window(e);
     else if (e.type == ewmh->_NET_WM_MOVERESIZE)
         handle_wm_moveresize(e);
-    else if (e.type == ewmh->_NET_SHOWING_DESKTOP && (e.data.data32[0] != 0) != state_.showing_desktop())
-    {
+    else if (e.type == ewmh->_NET_SHOWING_DESKTOP)
         state_.show_desktop(e.data.data32[0] != 0);
-        drain_requested_ = true;
-    }
     else if (e.type == ewmh->_NET_RESTACK_WINDOW)
         handle_restack_message(e);
 }

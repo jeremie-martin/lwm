@@ -80,23 +80,18 @@ void State::request_activation(xcb_window_t id, bool application, uint32_t times
     focus(id, application ? timestamp : 0);
 }
 
-bool State::request_desktop(xcb_window_t id, uint32_t desktop)
+void State::request_desktop(xcb_window_t id, uint32_t desktop)
 {
     if (!find(id))
-        return false;
+        return;
     if (desktop == 0xFFFFFFFF)
+        return sticky(id, true);
+    if (auto placement = desktop_placement(desktop))
     {
-        sticky(id, true);
-        return false;
+        sticky(id, false);
+        relocate(id, placement->first, placement->second, RelocationGeometry::Center);
+        pin_desktop(id, true);
     }
-    auto placement = desktop_placement(desktop);
-    if (!placement)
-        return false;
-    sticky(id, false);
-    if (!relocate(id, placement->first, placement->second, RelocationGeometry::Center))
-        return false;
-    pin_desktop(id, true);
-    return true;
 }
 
 void State::switch_desktop(uint32_t desktop)

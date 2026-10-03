@@ -386,10 +386,7 @@ RunResult WindowManager::run()
         ipc_.expire();
         handle_timeouts();
         if (std::exchange(monitors_dirty_, false))
-        {
             refresh_topology();
-            drain_requested_ = true;
-        }
         complete_transition();
         // Flush direct protocol replies even when no managed transition was needed.
         conn_.flush();
@@ -467,7 +464,6 @@ std::expected<void, std::string> WindowManager::reload_config()
         return installed;
     grab_buttons();
     grab_keys();
-    presentation_dirty_ = true;
     return { };
 }
 

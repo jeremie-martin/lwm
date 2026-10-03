@@ -128,7 +128,6 @@ Result WindowManager::execute(Action const& action, std::string_view source)
             {
                 std::string name = layout_strategy_str(layout.strategy);
                 state_.layout(monitor, layout.strategy);
-                drain_requested_ = true;
                 layout_changed(action, name);
                 return "layout set to " + name;
             },

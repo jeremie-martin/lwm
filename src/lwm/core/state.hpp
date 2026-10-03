@@ -212,8 +212,8 @@ public:
     // timestamp no older than its user time; refusals demand attention. No request
     // surfaces a window suppressed by the fullscreen owner of its placement.
     void request_activation(xcb_window_t id, bool application, uint32_t timestamp);
-    // _NET_WM_DESKTOP: returns whether the client moved to a concrete desktop.
-    bool request_desktop(xcb_window_t id, uint32_t desktop);
+    // _NET_WM_DESKTOP: a concrete desktop pins the placement; the sticky value sticks.
+    void request_desktop(xcb_window_t id, uint32_t desktop);
     // _NET_CURRENT_DESKTOP names a monitor and one of its workspaces.
     void switch_desktop(uint32_t desktop);
     // An application's ConfigureRequest; tiled and fullscreen clients keep WM-owned geometry.
