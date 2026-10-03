@@ -1,5 +1,6 @@
 #pragma once
 
+#include "floating.hpp"
 #include "restart.hpp"
 #include "types.hpp"
 #include "lwm/layout/layout.hpp"
@@ -37,6 +38,38 @@ public:
         }
     };
 
+    // A pointer interaction. The shell holds the pointer grab while one exists.
+    struct WindowDrag
+    {
+        xcb_window_t window;
+        Client::Kind kind;
+        size_t monitor;
+        size_t workspace;
+        Geometry start_geometry;
+        floating::ResizeEdge edges;
+    };
+    struct SplitDrag
+    {
+        size_t monitor;
+        size_t workspace;
+        SplitHitResult split;
+        Geometry area;
+        LayoutStrategy strategy;
+        std::vector<xcb_window_t> participants;
+    };
+    struct Drag
+    {
+        std::variant<WindowDrag, SplitDrag> operation;
+        int16_t start_x, start_y;
+        int16_t last_x, last_y;
+        uint8_t button; ///< Zero accepts any release (unspecified EWMH button)
+    };
+    struct SplitHit
+    {
+        SplitHitResult hit;
+        size_t monitor;
+    };
+
     enum class RelocationGeometry
     {
         Preserve,  ///< The caller already chose the floating rectangle
@@ -44,14 +77,27 @@ public:
         Translate, ///< Keep the offset within the workarea when the monitor changes
     };
 
-    // Registry
+    // Registry and admission
     Clients const& clients() const { return clients_; }
     Fixtures const& fixtures() const { return fixtures_; }
     std::vector<Monitor> const& monitors() const { return monitors_; }
     Client const* find(xcb_window_t id) const;
-    std::vector<Client const*> clients_by_order() const;
     Client const& require(xcb_window_t id) const;
     Fixture const* find_fixture(xcb_window_t id) const;
+    std::vector<Client const*> clients_by_order() const;
+    // Established identity wins: saved fixtures keep their role and saved
+    // clients stay clients. Only newcomers choose a role from current metadata.
+    static WindowRole role(xcb_window_t id, WindowType type, bool transient, restart::Snapshot const* handoff);
+    // A live map: classify, register, place and focus one window. Docks and
+    // desktops become fixtures; popups stay unregistered for the shell to map.
+    void admit(WindowObservation const& window);
+    // Startup: register the whole scene, restore a valid predecessor graph,
+    // place newcomers, and choose focus. A pointer selects the initial monitor.
+    void adopt(
+        std::vector<WindowObservation> const& windows,
+        restart::Snapshot const* handoff,
+        std::optional<std::pair<int16_t, int16_t>> pointer
+    );
     // The candidate's placement must be valid; tiled clients join their workspace.
     void insert(Client client);
     // Dock reservations shape every monitor's workarea while the dock is registered.
@@ -59,31 +105,28 @@ public:
     void reserve(xcb_window_t id, DockStrut strut);
     void erase(xcb_window_t id);
 
-    // The installed configuration. Layout, scratchpad slots and matching rules
-    // follow it; the workspace count is fixed once monitors exist.
+    // Configuration and topology
+    // Layout, scratchpad slots and matching rules follow the installed
+    // configuration; the workspace count is fixed once monitors exist.
     Config const& config() const { return config_; }
     std::expected<void, std::string> configure(Config config);
-    // Layout is derived, never written back into clients.
-    Layout const& layout_engine() const { return layout_; }
-    // One immutable per-pass view per managed client, in registration order.
-    // A rectangle means visible; absence means hidden.
-    struct Projected
-    {
-        Client const* client;
-        std::optional<Geometry> geometry;
-    };
-    std::vector<xcb_window_t> tiled_participants(size_t monitor, FullscreenVisibility const& fullscreen) const;
-    std::vector<Projected> project(FullscreenVisibility const& fullscreen) const;
-    Geometry presentation_geometry(Client const& client) const;
-    Geometry normal_geometry(Client const& client) const;
+    // Rebind workspaces by output name and reassign clients. A changed topology
+    // fits floating rectangles into the new workareas and clears monitor hints.
+    void replace_topology(Topology topology);
+    // EWMH desktops are monitor-major: monitor * workspaces + workspace.
+    uint32_t desktop_index(size_t monitor, size_t workspace) const;
+    // A concrete desktop on an existing monitor; the sticky value is not a placement.
+    std::optional<std::pair<size_t, size_t>> desktop_placement(uint32_t desktop) const;
 
-    // Derived views
-    // A placement is shown when it is its monitor's current workspace and the desktop is not shown.
-    bool shows(size_t monitor, size_t workspace) const;
+    // Derived views. Layout and visibility are never written back into clients.
+    uint64_t revision() const { return revision_; }
+    // Monotonic bounds for registration and completed focus ranks.
+    uint64_t next_order() const { return next_order_; }
+    uint64_t next_recency() const { return next_recency_; }
     bool in_view(Client const& client) const;
-    xcb_window_t fullscreen_owner(size_t monitor) const;
     std::vector<xcb_window_t> const& fullscreen_claims() const { return fullscreen_claims_; }
     std::vector<xcb_window_t> fullscreen_owners() const;
+    xcb_window_t fullscreen_owner(size_t monitor) const;
     FullscreenVisibility fullscreen_visibility() const;
     bool visible(Client const& client) const;
     // Hot loops share fullscreen owners and descendant membership.
@@ -93,10 +136,16 @@ public:
     static bool accepts_focus(Client const& client) { return client.accepts_input || client.supports_take_focus; }
     bool focusable(Client const& client) const;
     bool focusable(Client const& client, FullscreenVisibility const& fullscreen) const;
-    uint64_t revision() const { return revision_; }
-    // Monotonic bounds for registration and completed focus ranks.
-    uint64_t next_order() const { return next_order_; }
-    uint64_t next_recency() const { return next_recency_; }
+    // One immutable per-pass view per managed client, in registration order.
+    // A rectangle means visible; absence means hidden.
+    struct Projected
+    {
+        Client const* client;
+        std::optional<Geometry> geometry;
+    };
+    std::vector<Projected> project(FullscreenVisibility const& fullscreen) const;
+    Geometry presentation_geometry(Client const& client) const;
+    Geometry normal_geometry(Client const& client) const;
 
     // Focus
     xcb_window_t active_window() const { return active_window_; }
@@ -105,19 +154,19 @@ public:
     // Activation restores a minimized client and selects its workspace. Unknown or
     // clients without input or WM_TAKE_FOCUS are refused; NONE clears focus.
     void focus(xcb_window_t id, uint32_t time = 0, bool record_user_time = true);
-    void focus_fallback(size_t monitor, bool record_user_time = true);
     bool cycle_focus(bool forward);
     void restore(xcb_window_t id, bool activate);
     void focus_monitor(size_t monitor);
+    // Focus the adjacent monitor's fallback; returns whether the monitor changed.
+    bool focus_adjacent_monitor(int direction);
+    // Focus follows the pointer into visible clients; elsewhere the pointer
+    // selects the monitor under it and clears focus there.
+    void hover(xcb_window_t window, int16_t x, int16_t y);
     void show_desktop(bool enabled);
-    void request_focus_repair()
-    {
-        mutated();
-        repair_focus_ = true;
-    }
-    // Resolve eligibility, recency and user time only for the final focus, once
-    // per transition. input_time is the latest observed input timestamp.
-    std::optional<uint32_t> complete_focus(uint32_t input_time = 0);
+    // Settle one operation: end a drag whose context changed, then resolve
+    // eligibility, recency and user time for the final focus. input_time is the
+    // latest observed input timestamp. Returns the explicit focus request's time.
+    std::optional<uint32_t> settle(uint32_t input_time = 0);
 
     // Placement and mode
     // Moving the active client follows a shown destination or chooses replacement
@@ -129,9 +178,17 @@ public:
         RelocationGeometry geometry = RelocationGeometry::Preserve,
         std::optional<size_t> tile_index = std::nullopt
     );
+    // Move the active client to the adjacent monitor's current workspace.
+    bool move_to_monitor(int direction);
     void floating(xcb_window_t id, bool enabled);
+    // The user's float toggle focuses the client; it leaves fullscreen, minimized
+    // and show-desktop presentation alone. Leaving floating also leaves maximize.
+    void toggle_floating(xcb_window_t id);
     void geometry(xcb_window_t id, Geometry rectangle);
     void swap_tiles(size_t monitor, size_t a, size_t b);
+    // Swap the focused monitor's current tile with the eligible tile `offset`
+    // positions away; monocle focuses it instead, since every slot is shared.
+    void swap_tile(int offset);
 
     // Client state
     void iconic(xcb_window_t id, bool enabled);
@@ -146,28 +203,50 @@ public:
     void skip_taskbar(xcb_window_t id, bool enabled);
     void skip_pager(xcb_window_t id, bool enabled);
     void urgency(xcb_window_t id, UrgencySource source, bool enabled);
-    void clear_urgency(xcb_window_t id);
     void fullscreen_monitors(xcb_window_t id, std::optional<FullscreenMonitors> value);
-    void pin_desktop(xcb_window_t id, bool pinned);
 
-    // Metadata updates include classification, placement, changed rules and pending claims.
+    // Application and pager requests, already decoded by the shell
+    // _NET_WM_STATE: read the complete request first; fullscreen dominates maximize.
+    void request_states(xcb_window_t id, StateChange change, WindowStates requested);
+    // _NET_ACTIVE_WINDOW. Application requests against another active client need a
+    // timestamp no older than its user time; refusals demand attention. No request
+    // surfaces a window suppressed by the fullscreen owner of its placement.
+    void request_activation(xcb_window_t id, bool application, uint32_t timestamp);
+    // _NET_WM_DESKTOP: returns whether the client moved to a concrete desktop.
+    bool request_desktop(xcb_window_t id, uint32_t desktop);
+    // _NET_CURRENT_DESKTOP names a monitor and one of its workspaces.
+    void switch_desktop(uint32_t desktop);
+    // An application's ConfigureRequest; tiled and fullscreen clients keep WM-owned geometry.
+    void configure_request(xcb_window_t id, GeometryRequest request);
+    // A pager's _NET_MOVERESIZE_WINDOW changes the normal floating rectangle.
+    void moveresize_request(xcb_window_t id, GeometryRequest request);
+    // WM_HINTS urgency is the application's own request; the active client has none.
+    void hint_urgency(xcb_window_t id, bool urgent);
+
+    // Metadata updates resolve classification defaults, parent placement,
+    // changed rule actions and pending scratchpad claims.
     void title(xcb_window_t id, std::string value);
     void window_class(xcb_window_t id, std::string instance, std::string name);
     void window_type(xcb_window_t id, WindowType type);
-    void transient(xcb_window_t id, xcb_window_t parent, std::optional<Geometry> parent_preview = std::nullopt);
+    void transient(xcb_window_t id, xcb_window_t parent);
+    void size_hints(xcb_window_t id, SizeHints hints, std::optional<Geometry> unmanaged_parent = std::nullopt);
     void focus_hints(xcb_window_t id, bool input, bool take_focus);
-    void user_time(xcb_window_t id, uint32_t time, xcb_window_t window);
-    void apply_initial_rule(xcb_window_t id);
+    // Activation-time bookkeeping is neither published nor a revision.
+    void user_time(xcb_window_t source, uint32_t time);
+    void user_time_window(xcb_window_t id, xcb_window_t window, uint32_t time);
 
-    // Workspaces and monitors
+    // Workspaces
     bool switch_workspace(size_t monitor, size_t workspace);
+    // Focused-monitor workspace navigation; each returns the resulting workspace.
+    size_t cycle_workspace(int step);
+    size_t toggle_workspace();
     void layout(size_t monitor, LayoutStrategy strategy);
     void ratio(size_t monitor, SplitAddress address, double value);
+    // The focused monitor's root split, within the configured ratio bounds.
+    bool set_ratio(double value);
+    bool adjust_ratio(double delta);
     void erase_ratio(size_t monitor, SplitAddress address);
     void reset_ratios(size_t monitor);
-    // Rebind workspaces by output name and reassign clients. A changed topology
-    // fits floating rectangles into the new workareas and clears monitor hints.
-    void replace_topology(Topology topology);
 
     // Scratchpads: the named slots and the pool are the only membership records.
     std::vector<NamedScratchpad> const& named_scratchpads() const { return named_scratchpads_; }
@@ -175,14 +254,27 @@ public:
     NamedScratchpad const* named_scratchpad(std::string_view name) const;
     NamedScratchpad const* scratchpad_claim(xcb_window_t id) const;
     bool pooled(xcb_window_t id) const;
-    ScratchpadConfig const* match_scratchpad(Client const& client) const;
     void claim_scratchpad(xcb_window_t id, ScratchpadConfig const& config);
-    bool claim_pending_scratchpad(xcb_window_t id);
     // Returns the configuration whose command the shell should launch, if any.
     std::expected<ScratchpadConfig const*, std::string> toggle_scratchpad(std::string_view name);
-    void pool_scratchpad(xcb_window_t id);
-    void advance_scratchpad_pool();
     void scratchpad_pending(std::string_view name, bool pending);
+    void pool_scratchpad(xcb_window_t id);
+    // Hide the client in the pool. Claims, fullscreen, minimized and dragged
+    // clients are left alone.
+    void stash(xcb_window_t id);
+    // Recall or focus the pool target; an active local target rotates the pool.
+    void cycle_scratchpad_pool();
+
+    // Pointer interactions. Domain changes start only after the shell acquires
+    // the grab; a drag ends when its client or split context stops existing.
+    std::optional<Drag> const& drag() const { return drag_; }
+    bool can_drag(xcb_window_t id) const;
+    void begin_window_drag(xcb_window_t id, int16_t x, int16_t y, uint8_t button, floating::ResizeEdge edges);
+    std::optional<SplitHit> split_at(int16_t x, int16_t y) const;
+    void begin_split_drag(SplitHit const& hit, int16_t x, int16_t y, uint8_t button);
+    void drag_to(int16_t x, int16_t y);
+    // Commit applies a tiled drop. Returns a committed split ratio change.
+    std::optional<double> end_drag(bool commit);
 
     // Exec handoff
     restart::Snapshot snapshot() const;
@@ -195,45 +287,37 @@ public:
     void thaw() { frozen_ = false; }
 
 private:
-    Geometry fullscreen_geometry(Client const& client) const;
-    Config config_;
-    Layout layout_;
-    Geometry screen_;
-    std::vector<xcb_window_t> workspace_tiles(
-        size_t monitor, size_t workspace, FullscreenVisibility const* fullscreen, xcb_window_t include = XCB_NONE
-    ) const;
-    Clients clients_;
-    Fixtures fixtures_;
-    std::vector<Monitor> monitors_;
-    std::vector<NamedScratchpad> named_scratchpads_;
-    std::vector<xcb_window_t> scratchpad_pool_;
-    xcb_window_t active_window_ = XCB_NONE;
-    size_t focused_monitor_ = 0;
-    bool showing_desktop_ = false;
     struct FocusRequest
     {
         uint32_t time;
         bool record_user_time;
     };
+
+    Config config_;
+    Layout layout_;
+    Geometry screen_;
+    Clients clients_;
+    Fixtures fixtures_;
+    std::vector<Monitor> monitors_;
+    std::vector<NamedScratchpad> named_scratchpads_;
+    std::vector<xcb_window_t> scratchpad_pool_;
+    std::vector<xcb_window_t> fullscreen_claims_;
+    xcb_window_t active_window_ = XCB_NONE;
+    size_t focused_monitor_ = 0;
+    bool showing_desktop_ = false;
     std::optional<FocusRequest> focus_request_;
     std::vector<xcb_window_t> focus_cycle_;
     bool repair_focus_ = false;
+    std::optional<Drag> drag_;
     uint64_t next_order_ = 0;
     uint64_t next_recency_ = 1;
-    std::vector<xcb_window_t> fullscreen_claims_;
     uint64_t revision_ = 0;
     bool frozen_ = false;
 
-    uint64_t register_window(xcb_window_t id);
+    // Mutation bookkeeping
+    void mutated();
     Client& edit(xcb_window_t id);
     Workspace& edit_workspace(size_t monitor, size_t workspace);
-    void mutated();
-    void select_focus(xcb_window_t id, uint32_t time = 0, bool record_user_time = true);
-    void set_mode(xcb_window_t id, bool floating);
-    void apply_default_mode(xcb_window_t id);
-    void apply_rule(xcb_window_t id, RuleActions const& rule);
-    bool match_rule(xcb_window_t id);
-    void reconcile_metadata(xcb_window_t id);
     // Records a field change; an unchanged value is not a mutation.
     template <typename Owner, typename T, typename V> bool assign(xcb_window_t id, T Owner::* field, V&& value)
     {
@@ -244,16 +328,58 @@ private:
         client.*field = std::forward<V>(value);
         return true;
     }
+    uint64_t register_window(xcb_window_t id);
     void attach(Client const& client, std::optional<size_t> index = std::nullopt);
     std::optional<TileSlot> detach(Client const& client);
-    void release_scratchpad(xcb_window_t id);
-    void show_named_scratchpad(xcb_window_t id, ScratchpadConfig const& config);
-    void forget_missing_tile_slot(Client& client) const;
-    void reconcile_scratchpads();
+
+    // Admission, rules and metadata
+    std::optional<Client> classify(WindowObservation const& window, restart::Snapshot const* handoff, bool adopting);
+    void place(xcb_window_t id, std::optional<Geometry> unmanaged_parent);
+    void apply_size_hints(xcb_window_t id, bool initial, std::optional<Geometry> unmanaged_parent);
+    void apply_default_mode(xcb_window_t id);
+    void apply_rule(xcb_window_t id, RuleActions const& rule);
+    void apply_initial_rule(xcb_window_t id);
+    bool match_rule(xcb_window_t id);
     void reapply_rules();
+    void reconcile_metadata(xcb_window_t id);
+
+    // Configuration and topology
     Monitor fresh_monitor(std::string name, Geometry geometry) const;
     void rebind(std::vector<Monitor> monitors);
     void update_workareas();
+    void forget_missing_tile_slot(Client& client) const;
+
+    // Views and geometry
+    bool shows(size_t monitor, size_t workspace) const;
+    // Eligible tiles of the current workspace, then sticky tiles of others.
+    std::vector<xcb_window_t> tiled_participants(size_t monitor, FullscreenVisibility const& fullscreen) const;
+    std::vector<xcb_window_t> workspace_tiles(
+        size_t monitor, size_t workspace, FullscreenVisibility const* fullscreen, xcb_window_t include = XCB_NONE
+    ) const;
+    Geometry fullscreen_geometry(Client const& client) const;
+    void request_geometry(xcb_window_t id, Geometry rectangle);
+    void set_mode(xcb_window_t id, bool floating);
+    size_t wrap_monitor(int index) const;
+
+    // Focus and client state
+    void select_focus(xcb_window_t id, uint32_t time = 0, bool record_user_time = true);
+    void focus_fallback(size_t monitor, bool record_user_time = true);
+    std::optional<uint32_t> complete_focus(uint32_t input_time);
+    void clear_urgency(xcb_window_t id);
+    void pin_desktop(xcb_window_t id, bool pinned);
+
+    // Scratchpads
+    ScratchpadConfig const* match_scratchpad(Client const& client) const;
+    bool claim_pending_scratchpad(xcb_window_t id);
+    void show_named_scratchpad(xcb_window_t id, ScratchpadConfig const& config);
+    void show_pooled_scratchpad(xcb_window_t id);
+    void advance_scratchpad_pool();
+    void release_scratchpad(xcb_window_t id);
+    void reconcile_scratchpads();
+
+    // Pointer interactions
+    bool drag_valid() const;
+    std::optional<Geometry> drag_preview(Client const& client) const;
 };
 
 } // namespace lwm

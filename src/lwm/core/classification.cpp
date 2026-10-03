@@ -60,6 +60,25 @@ bool skips_pager(Client const& client)
     return client.preferences.skip_pager.value_or(defaults(client).skip_pager || client.transient_for != XCB_NONE);
 }
 
+WindowStates published_states(Client const& client, bool focused)
+{
+    auto layer = effective_layer(client);
+    WindowStates states;
+    states.set(WindowState::Fullscreen, client.fullscreen);
+    states.set(WindowState::Above, layer == LayerHint::Above);
+    states.set(WindowState::Below, layer == LayerHint::Below);
+    states.set(WindowState::Sticky, client.sticky);
+    states.set(WindowState::Modal, client.modal);
+    states.set(WindowState::SkipTaskbar, skips_taskbar(client));
+    states.set(WindowState::SkipPager, skips_pager(client));
+    states.set(WindowState::MaximizedHorz, client.maximized_horz);
+    states.set(WindowState::MaximizedVert, client.maximized_vert);
+    states.set(WindowState::Hidden, client.iconic);
+    states.set(WindowState::DemandsAttention, client.urgency.active());
+    states.set(WindowState::Focused, focused);
+    return states;
+}
+
 std::optional<bool> default_floating(Client const& client)
 {
     auto kind = defaults(client).kind;

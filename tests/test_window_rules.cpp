@@ -120,11 +120,15 @@ TEST_CASE("Transient metadata places against the parent's resulting presentation
     REQUIRE(floating_mode(state.require(2)));
     CHECK(floating_mode(state.require(2))->geometry == Geometry{ 250, 0, 500, 800 });
 
-    SECTION("An observed preview overrides the derived parent rectangle")
+    SECTION("A tiled drag preview is the parent's presentation")
     {
         state.transient(2, XCB_NONE);
-        state.transient(2, 1, Geometry{ 100, 100, 400, 400 });
-        CHECK(floating_mode(state.require(2))->geometry == Geometry{ 50, 0, 500, 800 });
+        REQUIRE(state.can_drag(1));
+        state.begin_window_drag(1, 500, 400, 1, floating::ResizeEdge::None);
+        state.drag_to(400, 500);
+        REQUIRE(state.presentation_geometry(state.require(1)) == Geometry{ -100, 100, 500, 800 });
+        state.transient(2, 1);
+        CHECK(floating_mode(state.require(2))->geometry == Geometry{ 0, 0, 500, 800 });
     }
     SECTION("Explicit placement rules follow parent relocation")
     {

@@ -5,7 +5,10 @@ add_library(liblwm STATIC
     core/signals.cpp
     core/workarea.cpp
     core/log.cpp
-    core/client_policy.cpp
+    core/admission.cpp
+    core/scratchpad.cpp
+    core/requests.cpp
+    core/drag.cpp
     core/classification.cpp
     core/ewmh.cpp
     core/floating.cpp
@@ -22,13 +25,12 @@ add_library(liblwm STATIC
     layout/layout.cpp
     wm_actions.cpp
     wm_manage.cpp
+    wm_observe.cpp
     wm_ipc.cpp
     wm_transition.cpp
     wm.cpp
     wm_events.cpp
-    wm_drag.cpp
     wm_restart.cpp
-    wm_scratchpad.cpp
 )
 
 target_include_directories(liblwm PUBLIC

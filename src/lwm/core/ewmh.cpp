@@ -1,5 +1,4 @@
 #include "ewmh.hpp"
-#include "xproperty.hpp"
 #include <algorithm>
 #include <cstring>
 
@@ -216,41 +215,13 @@ void Ewmh::update_window_states(
     }
 }
 
-WindowType Ewmh::get_window_type_enum(xcb_window_t window) const
+WindowType Ewmh::window_type(std::span<xcb_atom_t const> atoms) const
 {
-    xcb_ewmh_get_atoms_reply_t types;
-    if (!xcb_ewmh_get_wm_window_type_reply(&ewmh_, xcb_ewmh_get_wm_window_type(&ewmh_, window), &types, nullptr))
-        return WindowType::Normal;
-    WindowType result = WindowType::Normal;
-    for (uint32_t i = 0; i < types.atoms_len; ++i)
-        if (auto entry =
-                std::ranges::find(window_types, types.atoms[i], [&](auto const& entry) { return ewmh_.*entry.atom; });
+    for (auto atom : atoms)
+        if (auto entry = std::ranges::find(window_types, atom, [&](auto const& entry) { return ewmh_.*entry.atom; });
             entry != std::end(window_types))
-        {
-            result = entry->type;
-            break;
-        }
-    xcb_ewmh_get_atoms_reply_wipe(&types);
-
-    return result;
+            return entry->type;
+    return WindowType::Normal;
 }
 
-DockStrut Ewmh::get_window_strut(xcb_window_t window) const
-{
-    auto partial_reply = xproperty::read(conn_.get(), window, ewmh_._NET_WM_STRUT_PARTIAL, XCB_ATOM_CARDINAL, 12);
-    auto partial = xproperty::words(partial_reply, XCB_ATOM_CARDINAL);
-    if (partial.size() == 12)
-        return {
-            { partial[0],  partial[4],  partial[5] },
-            { partial[1],  partial[6],  partial[7] },
-            { partial[2],  partial[8],  partial[9] },
-            { partial[3], partial[10], partial[11] }
-        };
-    auto legacy_reply = xproperty::read(conn_.get(), window, ewmh_._NET_WM_STRUT, XCB_ATOM_CARDINAL, 4);
-    auto legacy = xproperty::words(legacy_reply, XCB_ATOM_CARDINAL);
-    if (legacy.size() == 4)
-        return { { legacy[0] }, { legacy[1] }, { legacy[2] }, { legacy[3] } };
-    return { };
-}
-
-}
+} // namespace lwm

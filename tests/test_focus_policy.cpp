@@ -77,12 +77,12 @@ TEST_CASE("Fullscreen transients and either input protocol keep focus eligibilit
     add(state, 1);
     add_floating(state, 2);
     state.fullscreen(1, true);
-    state.transient(2, 1, { });
+    state.transient(2, 1);
     state.focus_hints(2, false, true);
     CHECK(state.focusable(state.require(2)));
     state.focus_hints(2, true, false);
     CHECK(state.focusable(state.require(2)));
-    state.transient(2, XCB_NONE, { });
+    state.transient(2, XCB_NONE);
     CHECK_FALSE(state.focusable(state.require(2)));
 }
 
@@ -138,23 +138,23 @@ TEST_CASE("Only completed focus contributes to recency", "[focus][state]")
     state.focus(1, 10);
     state.focus(2, 20);
     CHECK(state.require(1).mru_order == 0);
-    CHECK(state.complete_focus() == 20);
+    CHECK(state.settle() == 20);
     CHECK(state.require(1).mru_order == 0);
     CHECK(state.require(1).user_time == 0);
     CHECK(state.require(2).mru_order == 1);
     CHECK(state.require(2).user_time == 20);
-    CHECK_FALSE(state.complete_focus());
+    CHECK_FALSE(state.settle());
     CHECK(state.require(2).mru_order == 1);
 
     state.focus(3);
     state.iconic(3, true);
-    state.complete_focus();
+    state.settle();
     CHECK(state.active_window() == 1);
     CHECK(state.require(1).mru_order == 2);
     CHECK(state.require(3).mru_order == 0);
-    state.request_focus_repair();
+    test::configure(state, [](Config&) { }); // Reload requests a focus repair.
     state.focus(XCB_NONE);
-    state.complete_focus();
+    state.settle();
     CHECK(state.active_window() == XCB_NONE);
 }
 
@@ -170,7 +170,7 @@ TEST_CASE("Activation owns restoration and placement and refuses ineligible clie
     CHECK(state.focused_monitor() == 1);
     CHECK(state.monitors()[1].current_workspace == 2);
     CHECK(state.active_window() == 2);
-    CHECK(state.complete_focus() == 42);
+    CHECK(state.settle() == 42);
 
     SECTION("Unknown ID") { state.focus(99); }
     SECTION("No input protocol")

@@ -1,5 +1,5 @@
 #include "lwm/core/focus.hpp"
-#include "lwm/core/policy.hpp"
+#include "state_fixture.hpp"
 #include <catch2/catch_test_macros.hpp>
 using namespace lwm;
 namespace {
@@ -16,61 +16,71 @@ Monitor monitor(std::string name, int16_t x = 0)
 }
 TEST_CASE("Output reconciliation preserves complete surviving workspace state", "[hotplug][monitor]")
 {
-    std::vector<Monitor> old{ monitor("A"), monitor("B", 1000) };
-    old[0].current_workspace = 2;
-    old[0].previous_workspace = 1;
-    auto& ws = old[0].workspaces[2];
-    ws.windows = { 10, 20 };
-    ws.preferred_tile = 10;
-    ws.layout_strategy = LayoutStrategy::Monocle;
-    ws.split_ratios[SplitAddress{ 1 }] = 0.3;
-    std::vector<Monitor> next{ monitor("B"), monitor("A", -1000), monitor("C", 1000) };
-    auto destinations = hotplug_policy::preserve_workspaces(old, next);
-    REQUIRE(destinations == std::vector<size_t>{ 1, 0 });
-    auto const& restored = next[1].workspaces[2];
+    auto state = test::state(2);
+    test::outputs(state, { test::output("A"), test::output("B", 1000) });
+    test::add(state, 10);
+    state.relocate(10, 0, 2); // A hidden destination remembers the tile preference.
+    test::add(state, 20, { .workspace = 2 });
+    state.switch_workspace(0, 1);
+    state.switch_workspace(0, 2);
+    state.layout(0, LayoutStrategy::Monocle);
+    state.ratio(0, SplitAddress{ 1 }, 0.3);
+    test::outputs(state, { test::output("B"), test::output("A", -1000), test::output("C", 1000) });
+    auto const& restored = state.monitors()[1].workspaces[2];
+    CHECK(state.monitors()[1].name == "A");
     CHECK(restored.windows == std::vector<xcb_window_t>{ 10, 20 });
     CHECK(restored.preferred_tile == 10);
     CHECK(restored.layout_strategy == LayoutStrategy::Monocle);
     CHECK(restored.split_ratios.at(SplitAddress{ 1 }) == 0.3);
-    CHECK(next[1].current_workspace == 2);
-    CHECK(next[1].previous_workspace == 1);
-    CHECK(next[1].geometry.x == -1000);
-    CHECK(next[2].workspaces[2].windows.empty());
+    CHECK(state.monitors()[1].current_workspace == 2);
+    CHECK(state.monitors()[1].previous_workspace == 1);
+    CHECK(state.monitors()[1].geometry.x == -1000);
+    CHECK(state.require(10).monitor == 1);
+    CHECK(state.monitors()[2].workspaces[2].windows.empty());
 }
+
 TEST_CASE("Removed outputs merge tiled membership without replacing surviving policy", "[hotplug][monitor]")
 {
-    std::vector<Monitor> old{ monitor("gone"), monitor("kept") };
-    old[0].workspaces[1].windows = { 10, 20 };
-    old[0].workspaces[1].preferred_tile = 20;
-    old[0].workspaces[1].split_ratios[SplitAddress{ 0 }] = 0.8;
-    old[1].workspaces[1].split_ratios[SplitAddress{ 0 }] = 0.4;
+    auto state = test::state(2);
+    test::outputs(state, { test::output("gone"), test::output("kept", 1000) });
+    state.switch_workspace(0, 1);
+    state.ratio(0, SplitAddress{ 0 }, 0.8);
+    state.switch_workspace(0, 0);
+    state.switch_workspace(1, 1);
+    state.ratio(1, SplitAddress{ 0 }, 0.4);
+    state.switch_workspace(1, 0);
+    xcb_window_t expected = 20;
     SECTION("surviving focus takes precedence")
     {
-        old[1].workspaces[1].windows = { 30 };
-        old[1].workspaces[1].preferred_tile = 30;
+        test::add(state, 30, { .monitor = 1 });
+        state.relocate(30, 1, 1);
+        expected = 30;
     }
     SECTION("empty destination inherits incoming focus") { }
-    auto expected = old[1].workspaces[1].preferred_tile == 30 ? 30u : 20u;
-    std::vector<Monitor> next{ monitor("kept") };
-    REQUIRE(hotplug_policy::preserve_workspaces(old, next) == std::vector<size_t>{ 0, 0 });
-    auto const& ws = next[0].workspaces[1];
+    for (xcb_window_t id : { 10, 20 })
+    {
+        test::add(state, id);
+        state.relocate(id, 0, 1);
+    }
+    REQUIRE(state.monitors()[0].workspaces[1].preferred_tile == 20);
+    test::outputs(state, { test::output("kept") });
+    auto const& ws = state.monitors()[0].workspaces[1];
     CHECK(ws.preferred_tile == expected);
     CHECK(ws.windows[ws.windows.size() - 2] == 10);
     CHECK(ws.windows.back() == 20);
     CHECK(ws.split_ratios.at(SplitAddress{ 0 }) == 0.4);
 }
+
 TEST_CASE("Repeated output refresh does not duplicate membership or discard ratios", "[hotplug][monitor][sequence]")
 {
-    std::vector<Monitor> state{ monitor("A") };
-    state[0].workspaces[0].windows = { 42 };
-    state[0].workspaces[0].split_ratios[SplitAddress{ 0 }] = 0.7;
+    auto state = test::state();
+    test::add(state, 42);
+    state.ratio(0, SplitAddress{ 0 }, 0.7);
     for (int i = 0; i < 20; ++i)
     {
-        std::vector<Monitor> next{ monitor("A", static_cast<int16_t>(i * 10)) };
-        hotplug_policy::preserve_workspaces(state, next);
-        state = std::move(next);
-        REQUIRE(state[0].workspaces[0].windows == std::vector<xcb_window_t>{ 42 });
-        REQUIRE(state[0].workspaces[0].split_ratios.at(SplitAddress{ 0 }) == 0.7);
+        test::outputs(state, { test::output("M0", static_cast<int16_t>(i * 10)) });
+        REQUIRE(state.monitors()[0].workspaces[0].windows == std::vector<xcb_window_t>{ 42 });
+        REQUIRE(state.monitors()[0].workspaces[0].split_ratios.at(SplitAddress{ 0 }) == 0.7);
     }
 }
 

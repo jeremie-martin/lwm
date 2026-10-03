@@ -156,7 +156,7 @@ TEST_CASE("Generated State operation sequences preserve model invariants", "[inv
                 trace.push_back("type");
                 break;
             case 16:
-                state.transient(window, pick(2) ? windows[pick(windows.size())] : XCB_NONE, { });
+                state.transient(window, pick(2) ? windows[pick(windows.size())] : XCB_NONE);
                 trace.push_back("transient");
                 break;
             case 17:
@@ -169,7 +169,7 @@ TEST_CASE("Generated State operation sequences preserve model invariants", "[inv
                 break;
         }
         trace.back() += " draws(value/bound): " + choices;
-        state.complete_focus();
+        state.settle();
         CAPTURE(step);
         // The registry must retain exactly the independently tracked live IDs.
         // Internal consistency alone would accept accidentally losing a client.

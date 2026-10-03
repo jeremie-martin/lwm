@@ -1,6 +1,6 @@
 #include "lwm/core/invariants.hpp"
+#include "lwm/core/classification.hpp"
 #include "lwm/core/log.hpp"
-#include "lwm/core/policy.hpp"
 #include "lwm/core/stacking.hpp"
 #include "wm.hpp"
 #include <algorithm>
@@ -18,8 +18,9 @@ void WindowManager::complete_transition()
         return;
 
     // Inputs and domain resolution; State may still change.
-    validate_drag();
-    auto focus_request = state_.complete_focus(last_input_time_);
+    auto focus_request = state_.settle(last_input_time_);
+    if (!state_.drag())
+        release_pointer();
     auto fullscreen = state_.fullscreen_visibility();
     auto const& owners = fullscreen.owners;
     published_revision_ = state_.revision();
@@ -35,16 +36,12 @@ void WindowManager::complete_transition()
     }
     root_.fullscreen_owners = owners;
     auto clients = state_.project(fullscreen);
-    for (auto& projected : clients)
-        if (projected.geometry)
-            if (auto preview = drag_preview(*projected.client))
-                projected.geometry = preview;
     bool moved = publish_clients(clients);
     // Visible acknowledgements use the projection. Hidden clients still owe a
     // geometry reply even though they have no display rectangle.
     for (auto window : configure_replies_)
         if (auto const* client = state_.find(window))
-            send_configure_notify(window, presentation_geometry(*client), border_width(*client));
+            send_configure_notify(window, state_.presentation_geometry(*client), border_width(*client));
     if (focus_request)
     {
         commit_focus(*focus_request);
@@ -56,12 +53,12 @@ void WindowManager::complete_transition()
     StateUpdates states;
     for (auto const& projected : clients)
         urgency_changed |= publish_properties(*projected.client, outputs_.at(projected.client->id), states);
-    ewmh_.update_window_states(states, owned_state_atoms());
+    ewmh_.update_window_states(states, state_atoms_);
     publish_fixtures();
     publish_root(clients, urgency_changed);
     reconcile_stacking(fullscreen, focus_request.has_value());
     withdraw_removed();
-    if (drain_requested_ || (moved && !drag_active()))
+    if (drain_requested_ || (moved && !state_.drag()))
         flush_and_drain_crossing();
     conn_.flush();
     emit_events(focus_request.has_value());
@@ -72,29 +69,6 @@ void WindowManager::complete_transition()
     drain_requested_ = false;
     presentation_dirty_ = false;
     LWM_ASSERT_INVARIANTS(state_);
-}
-
-// Layout
-
-// The drag preview is the only geometry input outside the domain model.
-std::optional<Geometry> WindowManager::drag_preview(Client const& client) const
-{
-    if (drag_ && client.kind() == Client::Kind::Tiled && !client.fullscreen)
-        if (auto const* move = std::get_if<WindowDrag>(&drag_->operation); move && move->window == client.id)
-            return floating::drag_geometry(
-                move->start_geometry,
-                static_cast<int32_t>(drag_->last_x) - drag_->start_x,
-                static_cast<int32_t>(drag_->last_y) - drag_->start_y,
-                move->edges
-            );
-    return std::nullopt;
-}
-
-Geometry WindowManager::presentation_geometry(Client const& client) const
-{
-    if (auto preview = drag_preview(client))
-        return *preview;
-    return state_.presentation_geometry(client);
 }
 
 uint32_t WindowManager::border_width(Client const& client) const
@@ -130,7 +104,8 @@ bool WindowManager::publish_clients(std::vector<State::Projected> const& clients
         moved = true;
     }
     // Keep a split resize's configure requests together on the server.
-    bool resizing_tiles = drag_ && std::holds_alternative<TiledResize>(drag_->operation);
+    auto const& drag = state_.drag();
+    bool resizing_tiles = drag && std::holds_alternative<State::SplitDrag>(drag->operation);
     if (resizing_tiles)
         xcb_grab_server(conn_.get());
     for (auto const& [client, geometry] : clients)
@@ -216,7 +191,7 @@ void WindowManager::send_configure_notify(xcb_window_t window, Geometry geometry
 
 // Per-window properties. Returns whether published urgency changed, which
 // panels observe through a client-list notification.
-bool WindowManager::publish_properties(Client const& client, Output& output, StateUpdates& states)
+bool WindowManager::publish_properties(Client const& client, Output& output, StateUpdates& updates)
 {
     xcb_window_t id = client.id;
     if (auto color = border_color(client); output.border_color != color)
@@ -227,7 +202,7 @@ bool WindowManager::publish_properties(Client const& client, Output& output, Sta
     bool urgency_changed = output.urgent != client.urgency.active();
     if (urgency_changed)
         publish_urgency(client, output);
-    uint32_t desktop = client.sticky ? 0xFFFFFFFF : desktop_index(client.monitor, client.workspace);
+    uint32_t desktop = client.sticky ? 0xFFFFFFFF : state_.desktop_index(client.monitor, client.workspace);
     if (output.desktop != desktop)
     {
         xcb_ewmh_set_wm_desktop(ewmh_.get(), id, desktop);
@@ -265,43 +240,16 @@ bool WindowManager::publish_properties(Client const& client, Output& output, Sta
             xcb_delete_property(conn_.get(), id, ewmh_.get()->_NET_WM_FULLSCREEN_MONITORS);
         output.fullscreen_monitors = client.fullscreen_monitors;
     }
-    auto layer = effective_layer(client);
-    // Same order as owned_state_atoms(); bit i of Output::states is atom i.
-    bool const enabled[] = { client.fullscreen,
-                             layer == LayerHint::Above,
-                             layer == LayerHint::Below,
-                             client.sticky,
-                             client.modal,
-                             skips_taskbar(client),
-                             skips_pager(client),
-                             client.maximized_horz,
-                             client.maximized_vert,
-                             client.iconic,
-                             client.urgency.active(),
-                             id == state_.active_window() };
-    uint32_t bits = 0;
-    for (size_t i = 0; i < std::size(enabled); ++i) bits |= enabled[i] ? 1U << i : 0;
-    if (output.states != bits)
+    if (auto states = published_states(client, id == state_.active_window()); output.states != states)
     {
-        auto owned = owned_state_atoms();
         std::vector<xcb_atom_t> atoms;
-        for (size_t i = 0; i < owned.size(); ++i)
-            if (enabled[i])
-                atoms.push_back(owned[i]);
-        states.emplace_back(id, std::move(atoms));
-        output.states = bits;
+        for (size_t i = 0; i < state_atoms_.size(); ++i)
+            if (states.has(static_cast<WindowState>(i)))
+                atoms.push_back(state_atoms_[i]);
+        updates.emplace_back(id, std::move(atoms));
+        output.states = states;
     }
     return urgency_changed;
-}
-
-// The _NET_WM_STATE atoms LWM owns; other atoms on a window are preserved.
-std::array<xcb_atom_t, 12> WindowManager::owned_state_atoms() const
-{
-    auto* e = ewmh_.get();
-    return { e->_NET_WM_STATE_FULLSCREEN,       e->_NET_WM_STATE_ABOVE,          e->_NET_WM_STATE_BELOW,
-             e->_NET_WM_STATE_STICKY,           e->_NET_WM_STATE_MODAL,          e->_NET_WM_STATE_SKIP_TASKBAR,
-             e->_NET_WM_STATE_SKIP_PAGER,       e->_NET_WM_STATE_MAXIMIZED_HORZ, e->_NET_WM_STATE_MAXIMIZED_VERT,
-             e->_NET_WM_STATE_HIDDEN,           e->_NET_WM_STATE_DEMANDS_ATTENTION, atoms_.net_wm_state_focused };
 }
 
 void WindowManager::publish_window_class(xcb_window_t window, char const* kind)
@@ -381,11 +329,6 @@ void WindowManager::commit_focus(uint32_t time)
 
 // Root publication
 
-uint32_t WindowManager::desktop_index(size_t monitor, size_t workspace) const
-{
-    return ewmh_policy::desktop_index(monitor, workspace, config().workspaces.count);
-}
-
 // Monitor-major flat desktops. Workareas and viewports are relative to the
 // origin of the combined monitor bounds.
 WindowManager::DesktopLayout WindowManager::desktop_layout() const
@@ -453,7 +396,7 @@ void WindowManager::publish_root(std::vector<State::Projected> const& clients, b
         root_.desktops = std::move(layout);
     }
     auto const& focused = state_.monitors()[state_.focused_monitor()];
-    if (auto desktop = desktop_index(state_.focused_monitor(), focused.current_workspace); root_.current_desktop != desktop)
+    if (auto desktop = state_.desktop_index(state_.focused_monitor(), focused.current_workspace); root_.current_desktop != desktop)
     {
         xcb_ewmh_set_current_desktop(ewmh_.get(), 0, desktop);
         root_.current_desktop = desktop;

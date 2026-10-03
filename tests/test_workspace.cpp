@@ -1,5 +1,5 @@
-#include "lwm/core/policy.hpp"
 #include "lwm/core/types.hpp"
+#include "state_fixture.hpp"
 #include <catch2/catch_test_macros.hpp>
 
 using namespace lwm;
@@ -189,4 +189,17 @@ TEST_CASE("find_window on empty workspace returns end", "[workspace][edge]")
     Workspace ws;
     REQUIRE(ws.windows.empty());
     REQUIRE(ws.find_window(0x1000) == ws.windows.end());
+}
+
+TEST_CASE("Workspace switches reject the current and out-of-range workspaces", "[workspace][policy]")
+{
+    auto state = test::state(1, 3);
+    REQUIRE(state.switch_workspace(0, 1));
+    auto revision = state.revision();
+    CHECK_FALSE(state.switch_workspace(0, 1));
+    CHECK_FALSE(state.switch_workspace(0, 5));
+    CHECK_FALSE(state.switch_workspace(4, 0));
+    CHECK(state.revision() == revision);
+    CHECK(state.monitors()[0].current_workspace == 1);
+    CHECK(state.monitors()[0].previous_workspace == 0);
 }

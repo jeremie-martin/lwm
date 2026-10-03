@@ -4,15 +4,11 @@
 #include "lwm/core/connection.hpp"
 #include "lwm/core/events.hpp"
 #include "lwm/core/ewmh.hpp"
-#include "lwm/core/floating.hpp"
 #include "lwm/core/ipc_server.hpp"
 #include "lwm/core/signals.hpp"
 #include "lwm/core/state.hpp"
-#include "lwm/core/window_rules.hpp"
-#include "lwm/layout/layout.hpp"
 #include <array>
 #include <chrono>
-#include <xcb/sync.h>
 #include <deque>
 #include <expected>
 #include <map>
@@ -20,8 +16,8 @@
 #include <set>
 #include <string>
 #include <unordered_map>
-#include <variant>
 #include <vector>
+#include <xcb/sync.h>
 
 namespace lwm {
 
@@ -32,6 +28,8 @@ namespace lwm {
 // selected motion events before another window took focus.
 constexpr uint32_t kManagedWindowEventMask =
     XCB_EVENT_MASK_ENTER_WINDOW | XCB_EVENT_MASK_PROPERTY_CHANGE | XCB_EVENT_MASK_POINTER_MOTION;
+// Docks select crossing for pointer monitor selection and properties for struts.
+constexpr uint32_t kDockEventMask = kManagedWindowEventMask;
 
 enum class RunResult
 {
@@ -79,7 +77,7 @@ private:
         std::optional<uint32_t> border_color;
         std::optional<uint32_t> wm_state;
         std::optional<uint32_t> desktop;
-        std::optional<uint32_t> states; ///< Owned _NET_WM_STATE atoms as bits
+        std::optional<WindowStates> states; ///< Owned _NET_WM_STATE values
         char const* window_class = nullptr;
         std::optional<bool> urgent;
         std::optional<std::optional<FullscreenMonitors>> fullscreen_monitors;
@@ -116,46 +114,14 @@ private:
         uint64_t subscriptions = 0;               ///< Subscriptions seen when the snapshot was taken
     };
 
-    struct WindowDrag
-    {
-        xcb_window_t window;
-        Client::Kind kind;
-        size_t monitor;
-        size_t workspace;
-        Geometry start_geometry;
-        floating::ResizeEdge edges;
-    };
-
-    struct TiledResize
-    {
-        size_t monitor;
-        size_t workspace;
-        SplitHitResult split;
-        Geometry area;
-        LayoutStrategy strategy;
-        std::vector<xcb_window_t> participants;
-    };
-
-    struct Drag
-    {
-        std::variant<WindowDrag, TiledResize> operation;
-        int16_t start_x, start_y;
-        int16_t last_x, last_y;
-        uint8_t button; // Zero accepts any release (unspecified EWMH button).
-    };
-
     using StateUpdates = std::vector<std::pair<xcb_window_t, std::vector<xcb_atom_t>>>;
-
-    struct SplitBorderHit
-    {
-        SplitHitResult hit;
-        size_t monitor;
-    };
 
     Connection conn_;
     Ewmh ewmh_;
     Atoms atoms_{ };
     State state_;
+    // _NET_WM_STATE atoms indexed by WindowState; other parties' atoms are preserved.
+    std::array<xcb_atom_t, static_cast<size_t>(WindowState::Count)> state_atoms_{ };
     std::unordered_map<xcb_window_t, Output> outputs_;
     RootOutput root_;
     ipc::Server ipc_;
@@ -171,14 +137,14 @@ private:
     bool restack_requested_ = false;
     bool drain_requested_ = false;
     bool monitors_dirty_ = false;
-    // Projection inputs outside State (drag preview, configuration, outputs
-    // forgotten after an external change). State changes are tracked by revision.
+    // Projection inputs outside State (outputs forgotten after an external
+    // change). State changes are tracked by revision.
     bool presentation_dirty_ = false;
     uint64_t published_revision_ = UINT64_MAX;
 
     std::deque<xcb_generic_event_t> deferred_events_;
     std::unordered_map<xcb_window_t, std::chrono::steady_clock::time_point> pending_kills_;
-    std::optional<Drag> drag_;
+    bool pointer_grabbed_ = false; ///< Held exactly while State has a drag
     bool running_ = true;
     bool restarting_ = false;
     std::string restart_binary_;
@@ -218,48 +184,48 @@ private:
     bool launch_program(std::vector<std::string> const& command, std::string_view source);
     void kill_window(xcb_window_t window);
     void handle_timeouts();
-    std::optional<Geometry> read_window_geometry(xcb_window_t window) const;
-    std::string read_window_name(xcb_window_t window) const;
-    std::pair<std::string, std::string> read_wm_class(xcb_window_t window) const;
-    std::optional<uint32_t> read_window_desktop(xcb_window_t window) const;
-    std::optional<xcb_window_t> read_transient_for(xcb_window_t window) const;
-    uint32_t read_user_time(xcb_window_t window, xcb_window_t time_window) const;
-    xcb_window_t read_user_time_window(xcb_window_t window);
-    std::optional<FullscreenMonitors> read_fullscreen_monitors(xcb_window_t window) const;
-    bool is_override_redirect(xcb_window_t window) const;
-    bool supports_protocol(xcb_window_t window, xcb_atom_t protocol) const;
     void send_protocol_message(xcb_window_t window, xcb_atom_t protocol, uint32_t timestamp, uint32_t d2 = 0, uint32_t d3 = 0);
-    void read_sync_counter(xcb_window_t window);
     void set_root_cursor(xcb_cursor_t cursor);
 
-    // wm_manage.cpp: classification, registration, rules
-    void scan_existing_windows(bool handoff);
-    void manage_fixture(xcb_window_t window, Fixture::Role role, bool adopting);
-    // Startup receives deferred observations; live admission registers immediately.
-    std::optional<Client> admit_window(xcb_window_t window, bool adopting);
-    void apply_size_hints(xcb_window_t window, bool initial);
-    struct SizeHints
+    // wm_observe.cpp: X reads. Requests are pipelined; decoders are shared by
+    // batch admission and single-property updates.
+    struct Observed
     {
-        std::optional<std::pair<int16_t, int16_t>> position;
-        std::optional<uint16_t> width;
-        std::optional<uint16_t> height;
+        WindowObservation window;
+        WindowRole role = WindowRole::Popup;
+        bool exists = false;
+        bool override_redirect = false;
+        uint32_t sync_counter = 0;
+        uint64_t sync_value = 0;
     };
-    SizeHints read_size_hints(xcb_window_t window, bool anchored) const;
-    void place_new_client(xcb_window_t window);
-    std::optional<Geometry> placement_parent_geometry(xcb_window_t window) const;
-    void follow_floating_geometry(xcb_window_t window);
+    std::vector<Observed> observe(std::span<xcb_window_t const> windows);
+    WindowStates window_states(std::span<xcb_atom_t const> atoms) const;
+    WindowType window_type(xcb_get_property_cookie_t cookie) const;
+    std::string read_name(xcb_window_t window) const;
+    std::pair<std::string, std::string> read_class(xcb_window_t window) const;
+    WindowType read_type(xcb_window_t window) const;
+    xcb_window_t read_transient_for(xcb_window_t window) const;
+    SizeHints read_size_hints(xcb_window_t window) const;
+    std::pair<bool, bool> read_input_hints(xcb_window_t window) const; ///< WM_HINTS input and urgency
+    std::vector<xcb_atom_t> read_protocols(xcb_window_t window) const;
+    DockStrut read_strut(xcb_window_t window) const;
+    uint32_t read_user_time(xcb_window_t window) const;
+    xcb_window_t read_user_time_window(xcb_window_t window) const;
+    void watch_user_time_window(xcb_window_t window);
+    std::optional<Geometry> read_window_geometry(xcb_window_t window) const;
+
+    // wm_manage.cpp: admission adapters
+    void scan_existing_windows(bool handoff);
+    void manage(Observed const& observed, bool adopting);
 
     // wm_transition.cpp: operation completion and publication
     void complete_transition();
-    Geometry presentation_geometry(Client const& client) const;
-    std::optional<Geometry> drag_preview(Client const& client) const;
     uint32_t border_width(Client const& client) const;
     uint32_t border_color(Client const& client) const;
     bool publish_clients(std::vector<State::Projected> const& clients);
     bool write_geometry(Client const& client, Output& output, Geometry geometry, uint32_t border);
     void send_configure_notify(xcb_window_t window, Geometry geometry, uint32_t border);
-    bool publish_properties(Client const& client, Output& output, StateUpdates& states);
-    std::array<xcb_atom_t, 12> owned_state_atoms() const;
+    bool publish_properties(Client const& client, Output& output, StateUpdates& updates);
     void publish_window_class(xcb_window_t window, char const* kind);
     void publish_urgency(Client const& client, Output& output);
     void publish_fixtures();
@@ -271,7 +237,6 @@ private:
     void flush_and_drain_crossing();
     void emit_events(bool focus_requested);
     void queue_event(Event event);
-    uint32_t desktop_index(size_t monitor, size_t workspace) const;
 
     // wm_events.cpp: X event handlers
     void handle_event(xcb_generic_event_t const& event);
@@ -287,50 +252,25 @@ private:
     void handle_client_message(xcb_client_message_event_t const& e);
     void handle_restack_message(xcb_client_message_event_t const& e);
     void handle_wm_state_change(xcb_client_message_event_t const& e);
-    void handle_active_window_request(xcb_client_message_event_t const& e);
-    void handle_desktop_change(xcb_client_message_event_t const& e);
     void handle_moveresize_window(xcb_client_message_event_t const& e);
     void handle_wm_moveresize(xcb_client_message_event_t const& e);
-    void handle_showing_desktop(xcb_client_message_event_t const& e);
     void handle_configure_request(xcb_configure_request_event_t const& e);
     void handle_property_notify(xcb_property_notify_event_t const& e);
     void handle_wm_hints(Client const& client);
-    void update_floating_geometry(Client const& client, Geometry geometry);
     MousebindConfig const* resolve_mouse_binding(uint16_t state, uint8_t button) const;
+    bool grab_pointer(xcb_cursor_t cursor = XCB_NONE);
+    void release_pointer();
+    void begin_window_drag(xcb_window_t window, int16_t x, int16_t y, uint8_t button, floating::ResizeEdge edges);
+    void begin_split_drag(State::SplitHit const& hit, int16_t x, int16_t y, uint8_t button);
 
     // wm_actions.cpp: the one executor for key bindings and IPC
     std::expected<std::string, std::string> execute(Action const& action, std::string_view source);
-    void toggle_float(xcb_window_t window);
-    void switch_to_desktop(uint32_t desktop);
-    void focus_adjacent_monitor(int direction);
-    void move_active_to_monitor(int direction);
-    size_t wrap_monitor(int index) const;
     void warp_to_monitor(Monitor const& monitor);
-    void swap_active_tile(int offset);
     void layout_changed(
         Action const& action,
         std::optional<event::LayoutValue> value = {},
         std::optional<double> delta = {}
     );
-
-    // wm_events.cpp: pointer-driven monitor selection
-    void focus_monitor_at_point(int16_t x, int16_t y);
-
-    // wm_drag.cpp
-    bool drag_active() const { return drag_.has_value(); }
-    bool grab_pointer_for_drag(xcb_cursor_t cursor = XCB_NONE);
-    void begin_window_drag(xcb_window_t window, int16_t x, int16_t y, uint8_t button, floating::ResizeEdge edges = floating::ResizeEdge::None);
-    void begin_tiled_resize(SplitHitResult const& hit, size_t monitor, int16_t x, int16_t y, uint8_t button);
-    void update_drag(int16_t x, int16_t y);
-    void end_drag(bool commit = true);
-    void validate_drag();
-    std::optional<SplitBorderHit> hit_split_border(int16_t x, int16_t y) const;
-
-    // wm_scratchpad.cpp
-    std::expected<void, std::string> toggle_scratchpad(std::string_view name);
-    void stash_window(xcb_window_t window);
-    void cycle_scratchpad_pool();
-    void show_pooled_scratchpad(xcb_window_t window);
 
     // wm_ipc.cpp
     std::string handle_request(command::Request const& request);

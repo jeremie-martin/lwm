@@ -1,9 +1,7 @@
 #pragma once
 
-#include "classification.hpp"
 #include "connection.hpp"
 #include "types.hpp"
-#include "workarea.hpp"
 #include <span>
 #include <string>
 #include <vector>
@@ -35,10 +33,8 @@ public:
         std::span<xcb_atom_t const> owned
     );
 
-    // First recognized _NET_WM_WINDOW_TYPE, or Normal.
-    WindowType get_window_type_enum(xcb_window_t window) const;
-
-    DockStrut get_window_strut(xcb_window_t window) const;
+    // First recognized _NET_WM_WINDOW_TYPE atom, or Normal.
+    WindowType window_type(std::span<xcb_atom_t const> atoms) const;
 
     void destroy_for_restart();
 

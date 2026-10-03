@@ -41,7 +41,7 @@ TEST_CASE("Global stacking ranks kinds, focus, layers, fixtures and fullscreen v
     REQUIRE(scene.order() == std::vector<xcb_window_t>{ 6, 3, 1, 4, 2, 5 });
     scene.state.fullscreen(2, true);
     REQUIRE(scene.order() == std::vector<xcb_window_t>{ 4, 6, 3, 1, 5, 2 });
-    scene.state.transient(4, 2, { });
+    scene.state.transient(4, 2);
     REQUIRE(scene.order() == std::vector<xcb_window_t>{ 6, 3, 1, 5, 2, 4 });
 }
 
@@ -51,7 +51,7 @@ TEST_CASE("Hidden clients precede visible clients and do not constrain visible t
     scene.add(1, true);
     scene.add(2);
     scene.add(3, true);
-    scene.state.transient(1, 2, { });
+    scene.state.transient(1, 2);
     scene.state.fullscreen(2, true);
     scene.state.modal(3, true);
     SECTION("Off workspace") { scene.state.relocate(2, 0, 1); }
@@ -82,7 +82,7 @@ TEST_CASE(
             parents[i] = encoded % 5;
             encoded /= 5;
             scene.add(i + 1, true);
-            scene.state.transient(i + 1, parents[i] ? parents[i] : 999, { });
+            scene.state.transient(i + 1, parents[i] ? parents[i] : 999);
             if (parents[i])
                 reach[i][parents[i] - 1] = true;
         }
@@ -120,7 +120,7 @@ TEST_CASE("Long transient chains use bounded iterative ordering", "[stacking][po
     for (xcb_window_t i = 1; i <= 10000; ++i)
     {
         scene.add(i, true);
-        scene.state.transient(i, i + 1, { });
+        scene.state.transient(i, i + 1);
     }
     auto order = scene.order();
     REQUIRE(order.size() == 10000);

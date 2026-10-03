@@ -56,6 +56,10 @@ std::vector<State::Projected> State::project(FullscreenVisibility const& fullscr
         else if (client.fullscreen || floating_mode(client))
             result.push_back({ &client, presentation_geometry(client) });
     }
+    for (auto& projected : result)
+        if (projected.geometry)
+            if (auto preview = drag_preview(*projected.client))
+                projected.geometry = preview;
     std::ranges::sort(result, { }, [](auto const& projected) { return projected.client->order; });
     return result;
 }
@@ -107,6 +111,8 @@ Geometry State::fullscreen_geometry(Client const& client) const
 
 Geometry State::presentation_geometry(Client const& client) const
 {
+    if (auto preview = drag_preview(client))
+        return *preview;
     if (client.fullscreen)
         return fullscreen_geometry(client);
     if (auto const* floating = floating_mode(client))
@@ -114,6 +120,15 @@ Geometry State::presentation_geometry(Client const& client) const
             floating->geometry, monitors_[client.monitor].working_area(), client.maximized_horz, client.maximized_vert
         );
     return normal_geometry(client);
+}
+
+void State::request_geometry(xcb_window_t id, Geometry rectangle)
+{
+    geometry(id, rectangle);
+    auto const& client = require(id);
+    if (auto const* floating = floating_mode(client))
+        if (auto monitor = floating::monitor_at_center(monitors_, floating->geometry); monitor && *monitor != client.monitor)
+            relocate(id, *monitor, monitors_[*monitor].current_workspace);
 }
 
 } // namespace lwm

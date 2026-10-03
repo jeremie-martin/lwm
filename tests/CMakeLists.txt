@@ -82,7 +82,6 @@ add_executable(lwm_tests
   test_integration_transitions.cpp
   test_integration_hotplug.cpp
   test_workspace.cpp
-  test_workspace_policy.cpp
   test_integration_logging.cpp
 )
 

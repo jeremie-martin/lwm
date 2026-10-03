@@ -7,6 +7,7 @@
 #include <optional>
 #include <string>
 #include <string_view>
+#include <utility>
 #include <variant>
 #include <vector>
 #include <xcb/xcb.h>
@@ -41,6 +42,13 @@ constexpr uint32_t WM_STATE_ICONIC = 3;
 
 /// ICCCM WM_HINTS urgency flag (not exposed by xcb_icccm as a named constant)
 constexpr uint32_t XUrgencyHint = 256; // 1L << 8
+
+/// X timestamps are 32-bit millisecond counters; ordering treats subtraction
+/// as a signed delta so it survives wraparound.
+inline bool timestamp_is_before(uint32_t timestamp, uint32_t reference)
+{
+    return timestamp != reference && timestamp - reference >= 0x80000000U;
+}
 
 struct Geometry
 {
@@ -158,6 +166,97 @@ struct Urgency
     }
 };
 
+/// How LWM manages an observed window. Popups are mapped but never registered.
+enum class WindowRole
+{
+    Client,
+    Dock,
+    Desktop,
+    Popup
+};
+
+/// _NET_WM_STATE values LWM understands, independent of their atoms.
+enum class WindowState : uint8_t
+{
+    Fullscreen,
+    Above,
+    Below,
+    Sticky,
+    Modal,
+    SkipTaskbar,
+    SkipPager,
+    MaximizedHorz,
+    MaximizedVert,
+    Hidden,
+    DemandsAttention,
+    Focused,
+    Count
+};
+
+struct WindowStates
+{
+    uint16_t bits = 0;
+
+    bool has(WindowState state) const { return (bits >> static_cast<unsigned>(state)) & 1U; }
+    void set(WindowState state, bool enabled = true)
+    {
+        auto bit = static_cast<uint16_t>(1U << static_cast<unsigned>(state));
+        bits = enabled ? bits | bit : bits & static_cast<uint16_t>(~bit);
+    }
+    bool operator==(WindowStates const&) const = default;
+};
+
+/// How a _NET_WM_STATE request changes the named states.
+enum class StateChange : uint8_t
+{
+    Remove,
+    Add,
+    Toggle
+};
+
+/// Requested floating geometry fields; absent fields keep the normal rectangle's values.
+struct GeometryRequest
+{
+    std::optional<int16_t> x, y;
+    std::optional<uint16_t> width, height;
+};
+
+/// WM_NORMAL_HINTS placement fields. User positions always count; program
+/// positions count only for windows that are not transient.
+struct SizeHints
+{
+    std::optional<std::pair<int16_t, int16_t>> user_position;
+    std::optional<std::pair<int16_t, int16_t>> program_position;
+    std::optional<uint16_t> width;
+    std::optional<uint16_t> height;
+    bool operator==(SizeHints const&) const = default;
+};
+
+/// Application properties observed when LWM first sees a window. The model
+/// derives role, placement and initial state from these values alone.
+struct WindowObservation
+{
+    xcb_window_t id = XCB_NONE;
+    std::string name;
+    std::string wm_class;
+    std::string wm_class_name;
+    WindowType type = WindowType::Normal;
+    xcb_window_t transient_for = XCB_NONE;
+    std::optional<Geometry> unmanaged_parent; ///< Server rectangle of a parent LWM does not manage
+    std::optional<uint32_t> desktop;          ///< _NET_WM_DESKTOP, including 0xFFFFFFFF
+    WindowStates states;                      ///< _NET_WM_STATE
+    bool accepts_input = true;                ///< WM_HINTS input (ICCCM default: true)
+    bool initially_iconic = false;            ///< WM_HINTS initial_state
+    bool urgent = false;                      ///< WM_HINTS urgency
+    bool supports_take_focus = false;
+    uint32_t user_time = 0;
+    xcb_window_t user_time_window = XCB_NONE;
+    std::optional<FullscreenMonitors> fullscreen_monitors;
+    std::optional<Geometry> geometry; ///< Current server rectangle
+    SizeHints size_hints;
+    DockStrut strut;
+};
+
 /// Typed actions of a window rule. Unset fields leave the window unchanged.
 struct RuleActions
 {
@@ -263,6 +362,7 @@ struct Client : ClientIntent
     bool supports_take_focus = false; ///< WM_PROTOCOLS contains WM_TAKE_FOCUS
     uint32_t user_time = 0;
     xcb_window_t user_time_window = XCB_NONE;
+    SizeHints size_hints;
 
     /// Actions of the rule matched at the last manage, metadata change, or
     /// reload. Metadata changes apply a rule only when this result changes.

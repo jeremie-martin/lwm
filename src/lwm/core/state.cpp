@@ -3,13 +3,61 @@
 #include "floating.hpp"
 #include "focus.hpp"
 #include "log.hpp"
-#include "policy.hpp"
 #include "workarea.hpp"
 #include <algorithm>
 #include <cassert>
 #include <tuple>
 
 namespace lwm {
+
+namespace {
+
+// One geometry policy for clients affected by live or restart-time topology changes.
+Geometry fit_floating(Geometry rectangle, Geometry area, bool displaced)
+{
+    return displaced ? floating::place_floating(area, rectangle.width, rectangle.height, std::nullopt)
+                     : floating::clamp_to_area(area, rectangle);
+}
+
+void merge_membership(Workspace& target, Workspace& source)
+{
+    target.windows.insert(target.windows.end(), source.windows.begin(), source.windows.end());
+    if (target.preferred_tile == XCB_NONE)
+        target.preferred_tile = source.preferred_tile;
+}
+
+// Transfer complete workspace state for surviving outputs; discovery supplies
+// fresh geometry. A smaller count folds removed workspaces into the last one;
+// additional workspaces keep defaults. Removed outputs fall back to output 0
+// after surviving members, keeping their relative order.
+std::vector<size_t> preserve_workspaces(std::span<Monitor> previous, std::span<Monitor> discovered)
+{
+    std::vector<size_t> destinations(previous.size(), 0);
+    for (size_t old = 0; old < previous.size(); ++old)
+    {
+        auto target = std::ranges::find(discovered, previous[old].name, &Monitor::name);
+        if (target == discovered.end())
+            continue;
+        destinations[old] = static_cast<size_t>(target - discovered.begin());
+        auto& source = previous[old];
+        size_t last = target->workspaces.size() - 1;
+        for (size_t w = 0; w < source.workspaces.size(); ++w)
+            if (w <= last)
+                target->workspaces[w] = std::move(source.workspaces[w]);
+            else
+                merge_membership(target->workspaces[last], source.workspaces[w]);
+        source.workspaces.clear();
+        target->current_workspace = std::min(source.current_workspace, last);
+        target->previous_workspace = std::min(source.previous_workspace, last);
+    }
+    for (auto& source : previous)
+        for (size_t w = 0; w < source.workspaces.size(); ++w)
+            merge_membership(discovered[0].workspaces[std::min(w, discovered[0].workspaces.size() - 1)], source.workspaces[w]);
+    return destinations;
+}
+
+} // namespace
+
 
 Client const* State::find(xcb_window_t id) const
 {
@@ -292,6 +340,13 @@ void State::focus_monitor(size_t monitor)
     }
 }
 
+std::optional<uint32_t> State::settle(uint32_t input_time)
+{
+    if (drag_ && !drag_valid())
+        end_drag(false);
+    return complete_focus(input_time);
+}
+
 std::optional<uint32_t> State::complete_focus(uint32_t input_time)
 {
     bool requested = std::exchange(repair_focus_, false);
@@ -306,13 +361,45 @@ std::optional<uint32_t> State::complete_focus(uint32_t input_time)
         client.mru_order = next_recency_++;
         uint32_t time = request->time ? request->time : input_time;
         if (request->record_user_time && time
-            && (!client.user_time || !ewmh_policy::timestamp_is_before(time, client.user_time)))
+            && (!client.user_time || !timestamp_is_before(time, client.user_time)))
             client.user_time = time;
         if (client.kind() == Client::Kind::Tiled)
             edit_workspace(client.monitor, client.workspace).preferred_tile = XCB_NONE;
         clear_urgency(client.id);
     }
     return request ? std::optional{ request->time } : std::nullopt;
+}
+
+void State::hover(xcb_window_t window, int16_t x, int16_t y)
+{
+    if (auto const* client = find(window))
+    {
+        if (window != active_window_ && visible(*client))
+            focus(window);
+        return;
+    }
+    auto monitor = focus::monitor_index_at_point(monitors_, x, y);
+    if (!monitor || *monitor == focused_monitor_)
+        return;
+    LWM_LOG_TRACE("Pointer changed monitor: {} -> {}", focused_monitor_, *monitor);
+    focus_monitor(*monitor);
+    focus(XCB_NONE);
+}
+
+size_t State::wrap_monitor(int index) const
+{
+    int size = static_cast<int>(monitors_.size());
+    return static_cast<size_t>(((index % size) + size) % size);
+}
+
+bool State::focus_adjacent_monitor(int direction)
+{
+    if (monitors_.size() <= 1)
+        return false;
+    size_t target = wrap_monitor(static_cast<int>(focused_monitor_) + direction);
+    focus_monitor(target);
+    focus_fallback(target);
+    return true;
 }
 
 void State::show_desktop(bool enabled)
@@ -442,6 +529,30 @@ void State::floating(xcb_window_t id, bool enabled)
     set_mode(id, enabled);
 }
 
+void State::toggle_floating(xcb_window_t id)
+{
+    auto const& client = require(id);
+    if (client.fullscreen || client.iconic || showing_desktop_)
+        return;
+    bool floating = client.kind() == Client::Kind::Floating;
+    if (floating)
+        maximize(id, false, false);
+    this->floating(id, !floating);
+    focus(id);
+}
+
+bool State::move_to_monitor(int direction)
+{
+    auto const* client = find(active_window_);
+    if (!client || monitors_.size() <= 1)
+        return false;
+    size_t target = wrap_monitor(static_cast<int>(client->monitor) + direction);
+    if (!relocate(client->id, target, monitors_[target].current_workspace, RelocationGeometry::Center))
+        return false;
+    focus(client->id);
+    return true;
+}
+
 void State::geometry(xcb_window_t id, Geometry rectangle)
 {
     auto* mode = floating_mode(clients_.at(id));
@@ -455,6 +566,27 @@ void State::swap_tiles(size_t monitor, size_t a, size_t b)
 {
     auto& windows = edit_workspace(monitor, monitors_.at(monitor).current_workspace).windows;
     std::swap(windows.at(a), windows.at(b));
+}
+
+void State::swap_tile(int offset)
+{
+    auto const& workspace = monitors_[focused_monitor_].current();
+    auto fullscreen = fullscreen_visibility();
+    std::vector<size_t> eligible;
+    for (size_t i = 0; i < workspace.windows.size(); ++i)
+        if (auto const& client = require(workspace.windows[i]); !client.fullscreen && visible(client, fullscreen))
+            eligible.push_back(i);
+    auto tile = focus::tile(*this, focused_monitor_, fullscreen);
+    auto it = std::ranges::find_if(eligible, [&](auto i) { return workspace.windows[i] == tile; });
+    int count = static_cast<int>(eligible.size());
+    if (it == eligible.end() || count < 2)
+        return;
+    int index = static_cast<int>(it - eligible.begin());
+    size_t other = eligible[static_cast<size_t>((index + offset % count + count) % count)];
+    if (workspace.layout_strategy == LayoutStrategy::Monocle)
+        focus(workspace.windows[other]);
+    else
+        swap_tiles(focused_monitor_, *it, other);
 }
 
 // Client state
@@ -567,16 +699,6 @@ void State::pin_desktop(xcb_window_t id, bool pinned) { assign(id, &Client::desk
 
 // Metadata
 
-// Type and transient updates change classification defaults. The default mode
-// applies unless the user chose one or a scratchpad owns the representation.
-void State::apply_default_mode(xcb_window_t id)
-{
-    auto const& c = require(id);
-    if (!c.preferences.floating && !scratchpad_claim(id) && !pooled(id))
-        if (auto floating = default_floating(c))
-            set_mode(id, *floating);
-}
-
 void State::focus_hints(xcb_window_t id, bool input, bool take_focus)
 {
     bool changed = assign(id, &Client::accepts_input, input);
@@ -585,22 +707,44 @@ void State::focus_hints(xcb_window_t id, bool input, bool take_focus)
 }
 
 // Activation-time bookkeeping is not exposed or published, so it is not a revision.
-void State::user_time(xcb_window_t id, uint32_t time, xcb_window_t window)
+// _NET_WM_USER_TIME lives on a client's user-time window when it names one.
+void State::user_time(xcb_window_t source, uint32_t time)
 {
     assert(!frozen_);
-    auto& c = clients_.at(id);
-    c.user_time = time;
-    c.user_time_window = window;
+    for (auto& [id, client] : clients_)
+        if ((client.user_time_window != XCB_NONE ? client.user_time_window : id) == source)
+            client.user_time = time;
+}
+
+void State::user_time_window(xcb_window_t id, xcb_window_t window, uint32_t time)
+{
+    assert(!frozen_);
+    auto& client = clients_.at(id);
+    client.user_time_window = window;
+    client.user_time = time;
 }
 
 // Workspaces and monitors
+
+uint32_t State::desktop_index(size_t monitor, size_t workspace) const
+{
+    return static_cast<uint32_t>(monitor * config_.workspaces.count + workspace);
+}
+
+std::optional<std::pair<size_t, size_t>> State::desktop_placement(uint32_t desktop) const
+{
+    size_t count = config_.workspaces.count;
+    if (desktop == 0xFFFFFFFF || desktop / count >= monitors_.size())
+        return std::nullopt;
+    return std::pair<size_t, size_t>{ desktop / count, desktop % count };
+}
 
 bool State::switch_workspace(size_t monitor, size_t workspace)
 {
     if (monitor >= monitors_.size())
         return false;
     auto& m = monitors_[monitor];
-    if (!workspace_policy::validate_workspace_switch(m, workspace))
+    if (workspace >= m.workspaces.size() || workspace == m.current_workspace)
         return false;
     mutated();
     LWM_LOG_DEBUG("Workspace changed: monitor={} workspace={} -> {}", monitor, m.current_workspace, workspace);
@@ -609,6 +753,21 @@ bool State::switch_workspace(size_t monitor, size_t workspace)
     if (monitor == focused_monitor_)
         focus_fallback(monitor);
     return true;
+}
+
+size_t State::cycle_workspace(int step)
+{
+    auto const& monitor = monitors_[focused_monitor_];
+    auto count = static_cast<int>(monitor.workspaces.size());
+    switch_workspace(focused_monitor_, static_cast<size_t>(((static_cast<int>(monitor.current_workspace) + step) % count + count) % count));
+    return monitor.current_workspace;
+}
+
+size_t State::toggle_workspace()
+{
+    auto const& monitor = monitors_[focused_monitor_];
+    switch_workspace(focused_monitor_, monitor.previous_workspace);
+    return monitor.current_workspace;
 }
 
 void State::layout(size_t monitor, LayoutStrategy strategy)
@@ -622,6 +781,26 @@ void State::ratio(size_t monitor, SplitAddress address, double value)
     auto const& ratios = monitors_.at(monitor).current().split_ratios;
     if (auto it = ratios.find(address); it == ratios.end() || it->second != value)
         edit_workspace(monitor, monitors_[monitor].current_workspace).split_ratios[address] = value;
+}
+
+bool State::set_ratio(double value)
+{
+    if (!config_.layout.accepts_ratio(value))
+        return false;
+    ratio(focused_monitor_, SplitAddress{ 0 }, value);
+    return true;
+}
+
+bool State::adjust_ratio(double delta)
+{
+    auto const& ratios = monitors_[focused_monitor_].current().split_ratios;
+    auto it = ratios.find(SplitAddress{ 0 });
+    double current = it == ratios.end() ? config_.layout.default_ratio : it->second;
+    double adjusted = config_.layout.clamp_ratio(current + delta);
+    if (adjusted == current)
+        return false;
+    ratio(focused_monitor_, SplitAddress{ 0 }, adjusted);
+    return true;
 }
 
 void State::erase_ratio(size_t monitor, SplitAddress address)
@@ -643,6 +822,7 @@ std::expected<void, std::string> State::configure(Config config)
     if (!monitors_.empty() && config.workspaces.count != config_.workspaces.count)
         return std::unexpected("live reload of [workspaces].count is unsupported; restart required");
     mutated();
+    end_drag(false);
     config_ = std::move(config);
     layout_ = Layout{ config_.appearance, config_.layout };
     reconcile_scratchpads();
@@ -700,6 +880,7 @@ void State::rebind(std::vector<Monitor> monitors)
 {
     assert(!monitors.empty());
     mutated();
+    end_drag(false);
     focus_cycle_.clear();
     bool topology_changed = monitors_.size() != monitors.size()
         || !std::ranges::equal(monitors_,
@@ -724,7 +905,7 @@ void State::rebind(std::vector<Monitor> monitors)
         }
     }
     auto previous = std::move(monitors_);
-    auto destinations = hotplug_policy::preserve_workspaces(previous, monitors);
+    auto destinations = preserve_workspaces(previous, monitors);
     focused_monitor_ = focused_monitor_ < destinations.size() ? destinations[focused_monitor_] : 0;
     monitors_ = std::move(monitors);
     update_workareas();
@@ -745,80 +926,9 @@ void State::rebind(std::vector<Monitor> monitors)
         {
             c.fullscreen_monitors.reset();
             if (auto* mode = floating_mode(c))
-                mode->geometry = hotplug_policy::fit_floating(mode->geometry, monitors_[c.monitor].working_area(), displaced);
+                mode->geometry = fit_floating(mode->geometry, monitors_[c.monitor].working_area(), displaced);
         }
     }
-}
-
-// Scratchpads
-
-NamedScratchpad const* State::named_scratchpad(std::string_view name) const
-{
-    auto it = std::ranges::find(named_scratchpads_, name, &NamedScratchpad::name);
-    return it == named_scratchpads_.end() ? nullptr : &*it;
-}
-
-NamedScratchpad const* State::scratchpad_claim(xcb_window_t id) const
-{
-    if (id == XCB_NONE)
-        return nullptr;
-    auto it = std::ranges::find(named_scratchpads_, id, &NamedScratchpad::claimed_window);
-    return it == named_scratchpads_.end() ? nullptr : &*it;
-}
-
-bool State::pooled(xcb_window_t id) const { return std::ranges::find(scratchpad_pool_, id) != scratchpad_pool_.end(); }
-
-void State::release_scratchpad(xcb_window_t id)
-{
-    for (auto& slot : named_scratchpads_)
-        if (slot.claimed_window() == id)
-            slot.window = XCB_NONE;
-    std::erase(scratchpad_pool_, id);
-}
-
-// Surviving names keep claims and pending launches; removed names release
-// their windows and deiconify them; workspace/fullscreen visibility still applies.
-void State::reconcile_scratchpads()
-{
-    auto const& configs = config_.scratchpads;
-    std::vector<NamedScratchpad> slots;
-    for (auto const& config : configs)
-    {
-        auto const* existing = named_scratchpad(config.name);
-        slots.push_back(existing ? *existing : NamedScratchpad{ config.name });
-    }
-    std::vector<xcb_window_t> released;
-    for (auto const& slot : named_scratchpads_)
-        if (slot.claimed_window() != XCB_NONE && std::ranges::find(configs, slot.name, &ScratchpadConfig::name) == configs.end())
-            released.push_back(slot.claimed_window());
-    named_scratchpads_ = std::move(slots);
-    for (auto id : released) iconic(id, false);
-}
-
-void State::pool_scratchpad(xcb_window_t id)
-{
-    if (scratchpad_claim(id) || pooled(id))
-        return;
-    mutated();
-    scratchpad_pool_.push_back(id);
-}
-
-// The back is the recall target. Advancing preserves every member in rotation.
-void State::advance_scratchpad_pool()
-{
-    if (scratchpad_pool_.size() < 2)
-        return;
-    mutated();
-    std::rotate(scratchpad_pool_.begin(), scratchpad_pool_.end() - 1, scratchpad_pool_.end());
-}
-
-void State::scratchpad_pending(std::string_view name, bool pending)
-{
-    auto it = std::ranges::find(named_scratchpads_, name, &NamedScratchpad::name);
-    if (it == named_scratchpads_.end() || it->claimed_window() != XCB_NONE)
-        return;
-    mutated();
-    it->window = pending ? std::nullopt : std::optional<xcb_window_t>{ XCB_NONE };
 }
 
 // Exec handoff
@@ -839,82 +949,6 @@ restart::Snapshot State::snapshot() const
     snapshot.pool = scratchpad_pool_;
     snapshot.fullscreen_claims = fullscreen_claims_;
     return snapshot;
-}
-
-void State::restore_graph(restart::Snapshot const& snapshot, std::vector<Client> observed)
-{
-    assert(clients_.empty());
-    mutated();
-    // Fixture observations precede workarea discovery. Restore their ranks here,
-    // reserving the complete saved range before allocating newcomer ranks.
-    uint64_t bound = 0;
-    for (auto const& client : snapshot.clients) bound = std::max(bound, client.order + 1);
-    for (auto const& fixture : snapshot.fixtures) bound = std::max(bound, fixture.order + 1);
-    for (auto& [id, fixture] : fixtures_)
-        if (auto const* saved = snapshot.find_fixture(id))
-            fixture.order = saved->order;
-        else
-            fixture.order += bound;
-    next_order_ += bound;
-    std::vector<Monitor> discovered;
-    for (auto const& monitor : monitors_) discovered.push_back(fresh_monitor(monitor.name, monitor.geometry));
-    monitors_.clear();
-    for (auto const& monitor : snapshot.monitors) monitors_.push_back(Monitor{ monitor });
-    focused_monitor_ = snapshot.focused_monitor;
-    showing_desktop_ = snapshot.showing_desktop;
-    for (auto& client : observed)
-    {
-        auto const* saved = snapshot.find(client.id);
-        if (!saved)
-            continue;
-        static_cast<ClientIntent&>(client) = *saved;
-        if (client.fullscreen)
-            client.maximized_horz = client.maximized_vert = false;
-        next_recency_ = std::max(next_recency_, client.mru_order + 1);
-        clients_.emplace(client.id, std::move(client));
-    }
-    for (auto id : snapshot.fullscreen_claims)
-        if (auto const* client = find(id); client && client->fullscreen)
-            fullscreen_claims_.push_back(id);
-    rebind(std::move(discovered));
-    // Filter only after merging: surviving workspace preferences have precedence
-    // over incoming ones, even when their former target disappeared during exec.
-    for (auto& monitor : monitors_)
-        for (auto& workspace : monitor.workspaces)
-        {
-            std::erase_if(workspace.windows, [&](auto id) { return !find(id); });
-            auto const* preferred = find(workspace.preferred_tile);
-            if (!preferred || preferred->iconic)
-                workspace.preferred_tile = XCB_NONE;
-        }
-    // Newcomers choose the restored current workspace. New fullscreen requests
-    // follow saved claims in scan order, including those from saved clients.
-    for (auto& observation : observed)
-    {
-        if (auto const* client = find(observation.id))
-        {
-            if (client->fullscreen && !std::ranges::contains(fullscreen_claims_, client->id))
-                request_fullscreen(client->id);
-        }
-        else
-        {
-            if (!observation.desktop_pinned)
-            {
-                observation.monitor = focused_monitor_;
-                observation.workspace = monitors_[focused_monitor_].current_workspace;
-            }
-            insert(std::move(observation));
-        }
-    }
-    for (auto& slot : named_scratchpads_)
-    {
-        auto saved = std::ranges::find(snapshot.named_scratchpads, slot.name, &NamedScratchpad::name);
-        if (saved != snapshot.named_scratchpads.end() && (!saved->window || find(*saved->window)))
-            slot.window = saved->window;
-    }
-    for (auto window : snapshot.pool)
-        if (find(window))
-            pool_scratchpad(window);
 }
 
 } // namespace lwm

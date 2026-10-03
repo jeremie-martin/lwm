@@ -315,18 +315,18 @@ TEST_CASE("Fullscreen assignments preserve history while requests renew it", "[s
     SECTION("Minimized") { state.iconic(1, true); }
     SECTION("Showing desktop") { state.show_desktop(true); }
     auto claims = state.fullscreen_claims();
-    state.complete_focus();
+    state.settle();
     auto revision = state.revision();
     state.fullscreen(2, true);
     state.fullscreen(1, true);
     CHECK(state.fullscreen_claims() == claims);
     CHECK(state.revision() == revision);
-    CHECK_FALSE(state.complete_focus());
+    CHECK_FALSE(state.settle());
 
     state.request_fullscreen(1);
     CHECK(state.fullscreen_claims() == std::vector<xcb_window_t>{ 2, 1 });
     CHECK(state.revision() > revision);
-    state.complete_focus();
+    state.settle();
     CHECK(state.active_window() == (state.focusable(state.require(1)) ? 1
                                   : state.focusable(state.require(2)) ? 2 : XCB_NONE));
     // A request changes priority, not placement, minimization or show-desktop.
@@ -339,11 +339,11 @@ TEST_CASE("Fullscreen assignments preserve history while requests renew it", "[s
 
     state.fullscreen(1, false);
     CHECK(state.fullscreen_owner(0) == 2);
-    state.complete_focus();
+    state.settle();
     revision = state.revision();
     state.fullscreen(1, false);
     CHECK(state.revision() == revision);
-    CHECK_FALSE(state.complete_focus());
+    CHECK_FALSE(state.settle());
     state.fullscreen(1, true);
     CHECK(state.fullscreen_owner(0) == 1);
 }
@@ -424,7 +424,7 @@ TEST_CASE("Geometry derivation does not mutate the domain", "[state]")
     state.title(1, "changed");
     CHECK(state.revision() > revision);
     revision = state.revision();
-    state.user_time(1, 0, XCB_NONE);
+    state.user_time(1, 0);
     CHECK(state.revision() == revision);
     // Repeating the current placement or mode is not a mutation.
     state.floating(1, false);
@@ -541,4 +541,47 @@ TEST_CASE("Workareas follow dock reservations and unchanged topology preserves i
     test::outputs(state, { test::output("M0") });
     CHECK_FALSE(state.require(1).fullscreen_monitors);
     CHECK(floating_mode(state.require(1))->geometry == Geometry{ 0, 0, 1500, 1000 });
+}
+
+TEST_CASE("Admission derives roles and placement from observations alone", "[state][admission]")
+{
+    auto state = test::state(1, 3);
+    WindowObservation dock{ .id = 1, .type = WindowType::Dock, .strut = { .top = { 30 } } };
+    WindowObservation popup{ .id = 2, .type = WindowType::Tooltip };
+    state.admit(dock);
+    state.admit(popup);
+    REQUIRE(state.find_fixture(1));
+    CHECK(state.monitors()[0].working_area().y == 30);
+    CHECK_FALSE(state.find(2));
+    CHECK_FALSE(state.find_fixture(2));
+
+    WindowObservation parent{ .id = 3, .desktop = 2 };
+    state.admit(parent);
+    CHECK(state.require(3).workspace == 2);
+    CHECK(state.require(3).desktop_pinned);
+
+    // A transient joins its managed parent's workspace in every mode, as a
+    // later WM_TRANSIENT_FOR change would.
+    test::configure(state, [](Config& config) { config.rules.push_back({ .transient = true, .actions = { .floating = false } }); });
+    WindowObservation tiled_child{ .id = 4, .transient_for = 3 };
+    WindowObservation floating_child{ .id = 5, .transient_for = 3, .geometry = Geometry{ 0, 0, 200, 100 } };
+    state.admit(tiled_child);
+    CHECK(state.require(4).kind() == Client::Kind::Tiled);
+    CHECK(state.require(4).workspace == 2);
+    test::configure(state, [](Config& config) { config.rules.clear(); });
+    state.admit(floating_child);
+    REQUIRE(floating_mode(state.require(5)));
+    CHECK(state.require(5).workspace == 2);
+    // Centered on the parent's presentation: the left tile of the parent workspace.
+    auto parent_area = state.presentation_geometry(state.require(3));
+    auto const& placed = floating_mode(state.require(5))->geometry;
+    CHECK(placed.x + placed.width / 2 == parent_area.x + parent_area.width / 2);
+
+    WindowObservation hinted{ .id = 6,
+                              .states = [] { WindowStates states; states.set(WindowState::Fullscreen); return states; }(),
+                              .initially_iconic = true };
+    state.admit(hinted);
+    CHECK(state.require(6).fullscreen);
+    CHECK(state.require(6).iconic);
+    CHECK(state.fullscreen_claims().back() == 6);
 }

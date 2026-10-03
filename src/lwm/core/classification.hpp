@@ -29,6 +29,8 @@ WindowClassification classify_window_type(WindowType type, bool is_transient);
 LayerHint effective_layer(Client const& client);
 bool skips_taskbar(Client const& client);
 bool skips_pager(Client const& client);
+// The _NET_WM_STATE values LWM publishes for a client.
+WindowStates published_states(Client const& client, bool focused);
 /// Default mode for a normal client; nullopt when the type is not a normal client type.
 std::optional<bool> default_floating(Client const& client);
 

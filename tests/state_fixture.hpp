@@ -60,7 +60,7 @@ inline State state(size_t monitors = 1, size_t workspaces = 3)
 inline void focus(State& state, xcb_window_t id)
 {
     state.focus(id);
-    state.complete_focus();
+    state.settle();
 }
 
 struct ClientSpec

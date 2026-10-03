@@ -1,7 +1,5 @@
-#include "lwm/core/focus.hpp"
 #include "lwm/core/overloaded.hpp"
 #include "lwm/core/log.hpp"
-#include "lwm/core/policy.hpp"
 #include "wm.hpp"
 #include <algorithm>
 
@@ -67,7 +65,7 @@ Result WindowManager::execute(Action const& action, std::string_view source)
             {
                 if (!has_active)
                     return no_active;
-                toggle_float(active);
+                state_.toggle_floating(active);
                 return "";
             },
             [&](FocusCycle const& cycle) -> Result
@@ -90,14 +88,16 @@ Result WindowManager::execute(Action const& action, std::string_view source)
             },
             [&](FocusMonitor const& focus) -> Result
             {
-                focus_adjacent_monitor(focus.direction);
+                if (state_.focus_adjacent_monitor(focus.direction))
+                    warp_to_monitor(state_.monitors()[state_.focused_monitor()]);
                 return "";
             },
             [&](MoveToMonitor const& move) -> Result
             {
                 if (!has_active)
                     return no_active;
-                move_active_to_monitor(move.direction);
+                if (state_.move_to_monitor(move.direction))
+                    warp_to_monitor(state_.monitors()[state_.require(active).monitor]);
                 return "";
             },
             [&](SwitchWorkspace const& target) -> Result
@@ -107,21 +107,8 @@ Result WindowManager::execute(Action const& action, std::string_view source)
                 state_.switch_workspace(monitor, target.workspace);
                 return std::to_string(target.workspace);
             },
-            [&](ToggleWorkspace const&) -> Result
-            {
-                if (focused.previous_workspace != focused.current_workspace)
-                    state_.switch_workspace(monitor, focused.previous_workspace);
-                return std::to_string(state_.monitors()[monitor].current_workspace);
-            },
-            [&](CycleWorkspace const& cycle) -> Result
-            {
-                auto count = static_cast<int>(focused.workspaces.size());
-                auto target = static_cast<size_t>(
-                    ((static_cast<int>(focused.current_workspace) + cycle.step) % count + count) % count
-                );
-                state_.switch_workspace(monitor, target);
-                return std::to_string(target);
-            },
+            [&](ToggleWorkspace const&) -> Result { return std::to_string(state_.toggle_workspace()); },
+            [&](CycleWorkspace const& cycle) -> Result { return std::to_string(state_.cycle_workspace(cycle.step)); },
             [&](MoveToWorkspace const& target) -> Result
             {
                 if (target.workspace >= focused.workspaces.size())
@@ -133,7 +120,7 @@ Result WindowManager::execute(Action const& action, std::string_view source)
             },
             [&](SwapTile const& swap) -> Result
             {
-                swap_active_tile(swap.offset);
+                state_.swap_tile(swap.offset);
                 layout_changed(action);
                 return "";
             },
@@ -147,24 +134,18 @@ Result WindowManager::execute(Action const& action, std::string_view source)
             },
             [&](SetRatio const& ratio) -> Result
             {
-                double min = config().layout.min_ratio;
-                if (!config().layout.accepts_ratio(ratio.value))
-                    return std::unexpected(
-                        "ratio out of range [" + std::to_string(min) + ", " + std::to_string(1.0 - min) + "]"
-                    );
-                state_.ratio(monitor, SplitAddress{ 0 }, ratio.value);
+                if (!state_.set_ratio(ratio.value))
+                {
+                    double min = config().layout.min_ratio;
+                    return std::unexpected("ratio out of range [" + std::to_string(min) + ", " + std::to_string(1.0 - min) + "]");
+                }
                 layout_changed(action, ratio.value);
                 return "ratio set";
             },
             [&](AdjustRatio const& adjust) -> Result
             {
-                auto const& ratios = focused.current().split_ratios;
-                auto it = ratios.find(SplitAddress{ 0 });
-                double current = it == ratios.end() ? config().layout.default_ratio : it->second;
-                double adjusted = config().layout.clamp_ratio(current + adjust.delta);
-                if (adjusted == current)
+                if (!state_.adjust_ratio(adjust.delta))
                     return "ratio unchanged";
-                state_.ratio(monitor, SplitAddress{ 0 }, adjusted);
                 layout_changed(action, std::nullopt, adjust.delta);
                 return "ratio adjusted";
             },
@@ -178,18 +159,22 @@ Result WindowManager::execute(Action const& action, std::string_view source)
             {
                 if (!has_active)
                     return no_active;
-                stash_window(active);
+                state_.stash(active);
                 return "";
             },
             [&](ScratchpadCycle const&) -> Result
             {
-                cycle_scratchpad_pool();
+                state_.cycle_scratchpad_pool();
                 return "";
             },
+            // A pending launch begins only after process creation succeeds.
             [&](ScratchpadToggle const& toggle) -> Result
             {
-                if (auto result = toggle_scratchpad(toggle.name); !result)
-                    return std::unexpected(result.error());
+                auto launch = state_.toggle_scratchpad(toggle.name);
+                if (!launch)
+                    return std::unexpected(launch.error());
+                if (*launch && launch_program((*launch)->spawn, "scratchpad"))
+                    state_.scratchpad_pending(toggle.name, true);
                 return "";
             },
             [&](ScratchpadCancelLaunch const& cancel) -> Result
@@ -222,42 +207,6 @@ void WindowManager::layout_changed(
     queue_event(event::layout_change{ action_name(action), std::move(value), delta });
 }
 
-// Window state
-
-void WindowManager::toggle_float(xcb_window_t window)
-{
-    auto const& client = state_.require(window);
-    if (client.fullscreen || client.iconic || state_.showing_desktop())
-        return;
-    bool floating = client.kind() == Client::Kind::Floating;
-    // Leaving floating also leaves maximize, which only floating presentation honors.
-    if (floating)
-        state_.maximize(window, false, false);
-    state_.floating(window, !floating);
-    state_.focus(window);
-}
-
-// _NET_CURRENT_DESKTOP names a monitor and one of its workspaces.
-void WindowManager::switch_to_desktop(uint32_t desktop)
-{
-    LWM_LOG_DEBUG("_NET_CURRENT_DESKTOP request: desktop={}", desktop);
-    auto placement = ewmh_policy::desktop_placement(desktop, config().workspaces.count, state_.monitors().size());
-    if (!placement)
-        return;
-    auto [monitor, workspace] = *placement;
-    if (monitor == state_.focused_monitor() && workspace == state_.monitors()[monitor].current_workspace)
-        return;
-    state_.focus_monitor(monitor);
-    state_.switch_workspace(monitor, workspace);
-    state_.focus_fallback(monitor);
-}
-
-size_t WindowManager::wrap_monitor(int index) const
-{
-    int size = static_cast<int>(state_.monitors().size());
-    return static_cast<size_t>(((index % size) + size) % size);
-}
-
 void WindowManager::warp_to_monitor(Monitor const& monitor)
 {
     if (!config().focus.warp_cursor_on_monitor_change)
@@ -273,57 +222,6 @@ void WindowManager::warp_to_monitor(Monitor const& monitor)
         static_cast<int16_t>(monitor.geometry.x + monitor.geometry.width / 2),
         static_cast<int16_t>(monitor.geometry.y + monitor.geometry.height / 2)
     );
-}
-
-void WindowManager::focus_adjacent_monitor(int direction)
-{
-    if (state_.monitors().size() <= 1)
-        return;
-    size_t target = wrap_monitor(static_cast<int>(state_.focused_monitor()) + direction);
-    state_.focus_monitor(target);
-    state_.focus_fallback(target);
-    warp_to_monitor(state_.monitors()[target]);
-}
-
-void WindowManager::move_active_to_monitor(int direction)
-{
-    if (state_.monitors().size() <= 1)
-        return;
-    xcb_window_t window = state_.active_window();
-    size_t target = wrap_monitor(static_cast<int>(state_.require(window).monitor) + direction);
-    size_t workspace = state_.monitors()[target].current_workspace;
-    if (!state_.relocate(window, target, workspace, State::RelocationGeometry::Center))
-        return;
-    state_.focus(window);
-    warp_to_monitor(state_.monitors()[target]);
-}
-
-void WindowManager::swap_active_tile(int offset)
-{
-    size_t monitor = state_.focused_monitor();
-    auto const& workspace = state_.monitors()[monitor].current();
-    std::vector<size_t> eligible;
-    auto fullscreen = state_.fullscreen_visibility();
-    for (size_t i = 0; i < workspace.windows.size(); ++i)
-    {
-        auto const& client = state_.require(workspace.windows[i]);
-        if (!client.fullscreen && state_.visible(client, fullscreen))
-            eligible.push_back(i);
-    }
-    auto tile = focus::tile(state_, monitor, fullscreen);
-    auto it = std::ranges::find_if(eligible, [&](auto i) { return workspace.windows[i] == tile; });
-    size_t count = eligible.size();
-    if (it == eligible.end() || count < 2)
-        return;
-    size_t index = static_cast<size_t>(it - eligible.begin());
-    size_t other = static_cast<size_t>((static_cast<int>(index) + offset % static_cast<int>(count) + static_cast<int>(count))
-                                       % static_cast<int>(count));
-    // Every monocle slot shares one rectangle, so swapping would change nothing
-    // visible: focus the adjacent tile instead.
-    if (workspace.layout_strategy == LayoutStrategy::Monocle)
-        state_.focus(workspace.windows[eligible[other]]);
-    else
-        state_.swap_tiles(monitor, eligible[index], eligible[other]);
 }
 
 } // namespace lwm

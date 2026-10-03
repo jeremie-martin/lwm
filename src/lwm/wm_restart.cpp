@@ -29,7 +29,8 @@ void WindowManager::read_handoff()
 
 void WindowManager::prepare_restart()
 {
-    end_drag(false);
+    state_.end_drag(false);
+    release_pointer();
     auto root = conn_.screen()->root;
     auto words = restart::encode(state_.snapshot());
     xcb_change_property(
@@ -49,7 +50,7 @@ void WindowManager::prepare_restart()
     for (auto const& [window, client] : state_.clients())
         if (auto it = outputs_.find(window); it != outputs_.end() && it->second.hidden)
         {
-            int16_t x = presentation_geometry(client).x;
+            int16_t x = state_.presentation_geometry(client).x;
             uint32_t value = static_cast<uint16_t>(x <= OFF_SCREEN_X / 2 ? 0 : x);
             xcb_configure_window(conn_.get(), window, XCB_CONFIG_WINDOW_X, &value);
         }

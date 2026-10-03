@@ -80,6 +80,11 @@ void WindowManager::intern_atoms()
             throw std::runtime_error(std::string("Failed to intern ") + names[i].first);
         *names[i].second = atom->atom;
     }
+    auto* e = ewmh_.get();
+    state_atoms_ = { e->_NET_WM_STATE_FULLSCREEN,    e->_NET_WM_STATE_ABOVE,          e->_NET_WM_STATE_BELOW,
+                     e->_NET_WM_STATE_STICKY,        e->_NET_WM_STATE_MODAL,          e->_NET_WM_STATE_SKIP_TASKBAR,
+                     e->_NET_WM_STATE_SKIP_PAGER,    e->_NET_WM_STATE_MAXIMIZED_HORZ, e->_NET_WM_STATE_MAXIMIZED_VERT,
+                     e->_NET_WM_STATE_HIDDEN,        e->_NET_WM_STATE_DEMANDS_ATTENTION, atoms_.net_wm_state_focused };
 }
 
 void WindowManager::create_wm_window()
@@ -294,11 +299,7 @@ Topology WindowManager::discover_topology()
     return topology;
 }
 
-void WindowManager::refresh_topology()
-{
-    end_drag(false);
-    state_.replace_topology(discover_topology());
-}
+void WindowManager::refresh_topology() { state_.replace_topology(discover_topology()); }
 
 // Event loop
 
@@ -410,7 +411,7 @@ void WindowManager::dispatch_event(
 {
     // Compress queued drag motion up to the first non-motion event.
     auto current = event;
-    if ((event.response_type & ~0x80) == XCB_MOTION_NOTIFY && drag_active())
+    if ((event.response_type & ~0x80) == XCB_MOTION_NOTIFY && state_.drag())
     {
         while (remaining && std::chrono::steady_clock::now() < deadline)
         {
@@ -462,7 +463,6 @@ std::expected<void, std::string> WindowManager::reload_config()
     auto loaded = load_config_result(config_path_);
     if (!loaded)
         return std::unexpected(loaded.error());
-    end_drag(false);
     if (auto installed = state_.configure(std::move(*loaded)); !installed)
         return installed;
     grab_buttons();
@@ -525,130 +525,21 @@ bool WindowManager::launch_program(std::vector<std::string> const& command, std:
 // (for example, to show a save dialog). See X11.md for close behavior.
 void WindowManager::kill_window(xcb_window_t window)
 {
-    if (!supports_protocol(window, atoms_.wm_delete_window))
+    auto protocols = read_protocols(window);
+    if (!std::ranges::contains(protocols, atoms_.wm_delete_window))
     {
         LWM_LOG_DEBUG("Close: window={:#x} has no WM_DELETE_WINDOW; killing client connection", window);
         xcb_kill_client(conn_.get(), window);
         return;
     }
     send_protocol_message(window, atoms_.wm_delete_window, last_event_time_);
-    if (supports_protocol(window, ewmh_.get()->_NET_WM_PING))
+    if (std::ranges::contains(protocols, ewmh_.get()->_NET_WM_PING))
         send_protocol_message(window, ewmh_.get()->_NET_WM_PING, last_event_time_, window);
     LWM_LOG_DEBUG("Close requested: window={:#x} protocol=WM_DELETE_WINDOW", window);
     pending_kills_[window] = std::chrono::steady_clock::now() + KILL_TIMEOUT;
 }
 
-// X reads and protocol messages
-
-std::optional<Geometry> WindowManager::read_window_geometry(xcb_window_t window) const
-{
-    auto geometry = reply(xcb_get_geometry_reply(conn_.get(), xcb_get_geometry(conn_.get(), window), nullptr));
-    if (!geometry)
-        return std::nullopt;
-    return Geometry{ geometry->x, geometry->y, geometry->width, geometry->height };
-}
-
-std::string WindowManager::read_window_name(xcb_window_t window) const
-{
-    if (auto name = xproperty::text_prefix(conn_.get(), window, ewmh_.get()->_NET_WM_NAME, ewmh_.get()->UTF8_STRING, 1024);
-        name && !name->empty())
-        return *name;
-    if (auto name = xproperty::text_prefix(conn_.get(), window, XCB_ATOM_WM_NAME, XCB_ATOM_STRING, 1024);
-        name && !name->empty())
-        return *name;
-    return "Unnamed";
-}
-
-std::pair<std::string, std::string> WindowManager::read_wm_class(xcb_window_t window) const
-{
-    xcb_icccm_get_wm_class_reply_t wm_class;
-    if (!xcb_icccm_get_wm_class_reply(conn_.get(), xcb_icccm_get_wm_class(conn_.get(), window), &wm_class, nullptr))
-        return { "", "" };
-    std::pair<std::string, std::string> result{ wm_class.instance_name ? wm_class.instance_name : "",
-                                                wm_class.class_name ? wm_class.class_name : "" };
-    xcb_icccm_get_wm_class_reply_wipe(&wm_class);
-    return result;
-}
-
-// Preserves 0xFFFFFFFF (sticky); absence or an unreadable property yields nullopt.
-std::optional<uint32_t> WindowManager::read_window_desktop(xcb_window_t window) const
-{
-    uint32_t desktop = 0;
-    if (!xcb_ewmh_get_wm_desktop_reply(ewmh_.get(), xcb_ewmh_get_wm_desktop(ewmh_.get(), window), &desktop, nullptr))
-        return std::nullopt;
-    return desktop;
-}
-
-std::optional<xcb_window_t> WindowManager::read_transient_for(xcb_window_t window) const
-{
-    auto value = xproperty::scalar(conn_.get(), window, XCB_ATOM_WM_TRANSIENT_FOR, XCB_ATOM_WINDOW);
-    return value && *value != XCB_NONE ? value : std::nullopt;
-}
-
-// EWMH user time lives on _NET_WM_USER_TIME_WINDOW when the client names one.
-uint32_t WindowManager::read_user_time(xcb_window_t window, xcb_window_t time_window) const
-{
-    return xproperty::scalar(
-               conn_.get(),
-               time_window != XCB_NONE ? time_window : window,
-               ewmh_.get()->_NET_WM_USER_TIME,
-               XCB_ATOM_CARDINAL
-    )
-        .value_or(0);
-}
-
-xcb_window_t WindowManager::read_user_time_window(xcb_window_t window)
-{
-    auto time_window = xproperty::scalar(conn_.get(), window, ewmh_.get()->_NET_WM_USER_TIME_WINDOW, XCB_ATOM_WINDOW);
-    if (!time_window || *time_window == XCB_NONE)
-        return XCB_NONE;
-    if (*time_window != window)
-    {
-        // Observe user-time updates on the separate window without replacing its mask.
-        auto attributes = reply(
-            xcb_get_window_attributes_reply(conn_.get(), xcb_get_window_attributes(conn_.get(), *time_window), nullptr)
-        );
-        uint32_t mask = XCB_EVENT_MASK_PROPERTY_CHANGE | (attributes ? attributes->your_event_mask : 0);
-        xcb_change_window_attributes(conn_.get(), *time_window, XCB_CW_EVENT_MASK, &mask);
-    }
-    return *time_window;
-}
-
-std::optional<FullscreenMonitors> WindowManager::read_fullscreen_monitors(xcb_window_t window) const
-{
-    xcb_ewmh_get_wm_fullscreen_monitors_reply_t monitors;
-    if (!xcb_ewmh_get_wm_fullscreen_monitors_reply(
-            ewmh_.get(),
-            xcb_ewmh_get_wm_fullscreen_monitors(ewmh_.get(), window),
-            &monitors,
-            nullptr
-        ))
-        return std::nullopt;
-    return FullscreenMonitors{ monitors.top, monitors.bottom, monitors.left, monitors.right };
-}
-
-bool WindowManager::is_override_redirect(xcb_window_t window) const
-{
-    auto attributes =
-        reply(xcb_get_window_attributes_reply(conn_.get(), xcb_get_window_attributes(conn_.get(), window), nullptr));
-    return attributes && attributes->override_redirect;
-}
-
-bool WindowManager::supports_protocol(xcb_window_t window, xcb_atom_t protocol) const
-{
-    xcb_icccm_get_wm_protocols_reply_t protocols;
-    if (!xcb_icccm_get_wm_protocols_reply(
-            conn_.get(),
-            xcb_icccm_get_wm_protocols(conn_.get(), window, ewmh_.get()->WM_PROTOCOLS),
-            &protocols,
-            nullptr
-        ))
-        return false;
-    bool supported = std::ranges::find(protocols.atoms, protocols.atoms + protocols.atoms_len, protocol)
-        != protocols.atoms + protocols.atoms_len;
-    xcb_icccm_get_wm_protocols_reply_wipe(&protocols);
-    return supported;
-}
+// Protocol messages
 
 void WindowManager::send_protocol_message(
     xcb_window_t window,
@@ -668,23 +559,6 @@ void WindowManager::send_protocol_message(
     event.data.data32[2] = d2;
     event.data.data32[3] = d3;
     xcb_send_event(conn_.get(), 0, window, XCB_EVENT_MASK_NO_EVENT, reinterpret_cast<char*>(&event));
-}
-
-// Basic and extended sync properties both start with the basic counter.
-void WindowManager::read_sync_counter(xcb_window_t window)
-{
-    auto& output = outputs_[window];
-    output.sync_counter = 0;
-    output.sync_value = 0;
-    if (!supports_protocol(window, ewmh_.get()->_NET_WM_SYNC_REQUEST))
-        return;
-    auto property = xproperty::read(conn_.get(), window, ewmh_.get()->_NET_WM_SYNC_REQUEST_COUNTER, XCB_ATOM_CARDINAL, 2);
-    auto counters = xproperty::words(property, XCB_ATOM_CARDINAL);
-    if (counters.empty() || counters.front() == XCB_NONE)
-        return;
-    output.sync_counter = counters.front();
-    if (auto counter = reply(xcb_sync_query_counter_reply(conn_.get(), xcb_sync_query_counter(conn_.get(), output.sync_counter), nullptr)))
-        output.sync_value = (static_cast<uint64_t>(counter->counter_value.hi) << 32) | counter->counter_value.lo;
 }
 
 } // namespace lwm

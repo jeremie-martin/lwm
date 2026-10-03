@@ -1,133 +1,33 @@
-#include "lwm/core/policy.hpp"
+#include "state_fixture.hpp"
 #include <catch2/catch_test_macros.hpp>
 
 using namespace lwm;
 
 TEST_CASE("X timestamp ordering handles 32-bit wraparound", "[ewmh][policy][timestamp]")
 {
-    REQUIRE(ewmh_policy::timestamp_is_before(100, 200));
-    REQUIRE_FALSE(ewmh_policy::timestamp_is_before(200, 100));
-    REQUIRE_FALSE(ewmh_policy::timestamp_is_before(200, 200));
+    REQUIRE(timestamp_is_before(100, 200));
+    REQUIRE_FALSE(timestamp_is_before(200, 100));
+    REQUIRE_FALSE(timestamp_is_before(200, 200));
 
     // A small post-wrap timestamp follows a timestamp near UINT32_MAX.
-    REQUIRE_FALSE(ewmh_policy::timestamp_is_before(0x00000020U, 0xFFFFFFF0U));
-    REQUIRE(ewmh_policy::timestamp_is_before(0xFFFFFFF0U, 0x00000020U));
+    REQUIRE_FALSE(timestamp_is_before(0x00000020U, 0xFFFFFFF0U));
+    REQUIRE(timestamp_is_before(0xFFFFFFF0U, 0x00000020U));
 }
 
-// ─────────────────────────────────────────────────────────────────────────────
-// Desktop index encoding tests
-// ─────────────────────────────────────────────────────────────────────────────
-
-TEST_CASE("EWMH desktop index encoding", "[ewmh][policy]")
+TEST_CASE("EWMH desktops are monitor-major placements on existing monitors", "[ewmh][policy]")
 {
-    SECTION("Basic linear encoding")
+    for (size_t count : { 1, 3, 10 })
     {
-        REQUIRE(ewmh_policy::desktop_index(2, 3, 10) == 23u);
-        REQUIRE(ewmh_policy::desktop_index(0, 0, 5) == 0u);
-    }
-
-    SECTION("Many workspaces per monitor (100)")
-    {
-        REQUIRE(ewmh_policy::desktop_index(0, 50, 100) == 50u);
-        REQUIRE(ewmh_policy::desktop_index(1, 0, 100) == 100u);
-        REQUIRE(ewmh_policy::desktop_index(2, 99, 100) == 299u);
-    }
-}
-
-// ─────────────────────────────────────────────────────────────────────────────
-// Desktop index decoding tests
-// ─────────────────────────────────────────────────────────────────────────────
-
-TEST_CASE("EWMH desktop index decoding handles zero workspaces", "[ewmh][policy]")
-{
-    auto indices = ewmh_policy::desktop_to_indices(7, 0);
-    REQUIRE_FALSE(indices);
-}
-
-TEST_CASE("EWMH desktop index decodes to monitor and workspace", "[ewmh][policy]")
-{
-    auto decode_and_verify = [](uint32_t desktop, size_t ws_count, size_t expected_mon, size_t expected_ws)
-    {
-        auto indices = ewmh_policy::desktop_to_indices(desktop, ws_count);
-        REQUIRE(indices);
-        REQUIRE(indices->first == expected_mon);
-        REQUIRE(indices->second == expected_ws);
-    };
-
-    decode_and_verify(0, 10, 0, 0);
-    decode_and_verify(9, 10, 0, 9);
-    decode_and_verify(10, 10, 1, 0);
-    decode_and_verify(15, 10, 1, 5);
-}
-
-// ─────────────────────────────────────────────────────────────────────────────
-// Round-trip tests (encode then decode)
-// ─────────────────────────────────────────────────────────────────────────────
-
-TEST_CASE("EWMH desktop index round-trip encode/decode", "[ewmh][policy]")
-{
-    for (size_t ws_count = 1; ws_count <= 20; ++ws_count)
-    {
+        auto state = test::state(3, count);
         for (size_t monitor = 0; monitor < 3; ++monitor)
-        {
-            for (size_t workspace = 0; workspace < ws_count; ++workspace)
+            for (size_t workspace = 0; workspace < count; ++workspace)
             {
-                uint32_t desktop = ewmh_policy::desktop_index(monitor, workspace, ws_count);
-                auto decoded = ewmh_policy::desktop_to_indices(desktop, ws_count);
-
-                REQUIRE(decoded);
-                REQUIRE(decoded->first == monitor);
-                REQUIRE(decoded->second == workspace);
+                auto desktop = state.desktop_index(monitor, workspace);
+                CHECK(desktop == monitor * count + workspace);
+                CHECK(state.desktop_placement(desktop) == std::pair{ monitor, workspace });
             }
-        }
+        // Desktops beyond the last monitor and the sticky value are not placements.
+        CHECK_FALSE(state.desktop_placement(static_cast<uint32_t>(3 * count)));
+        CHECK_FALSE(state.desktop_placement(0xFFFFFFFF));
     }
-}
-
-// ─────────────────────────────────────────────────────────────────────────────
-// Overflow and boundary tests
-// ─────────────────────────────────────────────────────────────────────────────
-
-TEST_CASE("EWMH desktop index overflow with large values", "[ewmh][policy][edge]")
-{
-    // Test near uint32_t max (~4.3B)
-    // monitor_idx * workspaces_per_monitor should not overflow
-    size_t ws_per_mon = 10000;
-    size_t monitor_idx = 400000;
-    // 400000 * 10000 + 9999 = 4,000,000,000 + 9999 = 4,000,009,999 (under uint32_t max)
-    uint32_t desktop = ewmh_policy::desktop_index(monitor_idx, 9999, ws_per_mon);
-    REQUIRE(desktop == 4000009999u);
-
-    // Overflow case: 429497 * 10000 = 4,294,970,000 > UINT32_MAX
-    // Result wraps around due to unsigned overflow - this is documented behavior
-    size_t overflow_monitor = 429497;
-    uint32_t overflow_desktop = ewmh_policy::desktop_index(overflow_monitor, 9999, ws_per_mon);
-    // After wrap: 4,294,970,000 - 4,294,967,296 = 2,704 + 9999 = 12,703
-    REQUIRE(overflow_desktop < 100000u); // Wrapped to small value
-}
-
-TEST_CASE("EWMH desktop_to_indices handles edge cases", "[ewmh][policy][edge]")
-{
-    // Single workspace per monitor
-    auto decoded1 = ewmh_policy::desktop_to_indices(0, 1);
-    REQUIRE(decoded1);
-    REQUIRE(decoded1->first == 0);
-    REQUIRE(decoded1->second == 0);
-
-    auto decoded2 = ewmh_policy::desktop_to_indices(99999, 1);
-    REQUIRE(decoded2);
-    REQUIRE(decoded2->first == 99999);
-    REQUIRE(decoded2->second == 0);
-
-    // Zero workspaces per monitor
-    auto result = ewmh_policy::desktop_to_indices(100, 0);
-    REQUIRE_FALSE(result);
-
-    // Zero workspace index
-    uint32_t desktop = ewmh_policy::desktop_index(100, 0, 50);
-    REQUIRE(desktop == 5000u);
-
-    auto decoded3 = ewmh_policy::desktop_to_indices(desktop, 50);
-    REQUIRE(decoded3);
-    REQUIRE(decoded3->first == 100);
-    REQUIRE(decoded3->second == 0);
 }
