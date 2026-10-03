@@ -40,9 +40,6 @@ uint32_t parse_event_filter(std::string_view filter)
     return mask;
 }
 
-// X metadata can contain opaque bytes; preserve them as the existing IPC does.
-std::string json_string(std::string_view input) { return rfl::json::write(input, YYJSON_WRITE_ALLOW_INVALID_UNICODE); }
-
 namespace {
 template <typename T> struct Envelope
 {

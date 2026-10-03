@@ -88,8 +88,4 @@ std::span<std::string_view const> event_names();
 uint32_t parse_event_filter(std::string_view filter);
 std::string event_json(Event const& event, std::string_view instance, uint64_t sequence);
 
-/// A quoted JSON string, including opaque X metadata bytes.
-std::string json_string(std::string_view input);
-inline char const* json_bool(bool value) { return value ? "true" : "false"; }
-
 } // namespace lwm

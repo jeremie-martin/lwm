@@ -2,12 +2,125 @@
 #include "lwm/core/log.hpp"
 #include "wm.hpp"
 #include <algorithm>
+#include <rfl/Flatten.hpp>
+#include <rfl/Rename.hpp>
+#include <rfl/json/write.hpp>
 
 namespace lwm {
 
 namespace {
 
 std::string ok(std::string const& value) { return value.empty() ? "ok" : "ok " + value; }
+
+// Query records are the IPC wire schema; field order is the JSON order.
+struct WorkspaceView
+{
+    size_t index;
+    std::string_view name;
+    bool current;
+    size_t window_count;
+    std::string_view layout;
+};
+struct MonitorView
+{
+    size_t index;
+    std::string_view name;
+    size_t current_workspace;
+    std::vector<WorkspaceView> workspaces;
+};
+struct WorkspaceList
+{
+    size_t focused_monitor;
+    std::vector<MonitorView> monitors;
+};
+struct WindowView
+{
+    uint32_t id;
+    size_t monitor, workspace;
+    std::string_view kind;
+    rfl::Rename<"class", std::string_view> wm_class;
+    std::string_view instance, title;
+    bool focused, fullscreen, urgent, sticky, iconic;
+};
+struct WindowList
+{
+    uint32_t focused;
+    std::vector<WindowView> windows;
+};
+struct NamedView
+{
+    std::string_view name;
+    uint32_t window;
+    bool pending;
+};
+struct ScratchpadList
+{
+    std::vector<NamedView> named;
+    std::vector<xcb_window_t> pool;
+};
+struct StateView
+{
+    WorkspaceList workspaces;
+    WindowList windows;
+    ScratchpadList scratchpads;
+};
+struct StateQuery
+{
+    std::string_view instance;
+    uint64_t sequence;
+    rfl::Flatten<StateView const*> state;
+};
+
+// X metadata can contain opaque bytes; preserve them.
+template <typename T> std::string json(T const& value) { return rfl::json::write(value, YYJSON_WRITE_ALLOW_INVALID_UNICODE); }
+
+WorkspaceList workspace_list(State const& state)
+{
+    WorkspaceList list{ state.focused_monitor(), { } };
+    auto const& monitors = state.monitors();
+    for (size_t m = 0; m < monitors.size(); ++m)
+    {
+        auto const& monitor = monitors[m];
+        auto& view = list.monitors.emplace_back(MonitorView{ m, monitor.name, monitor.current_workspace, { } });
+        for (size_t w = 0; w < monitor.workspaces.size(); ++w)
+        {
+            auto const& workspace = monitor.workspaces[w];
+            view.workspaces.push_back({ w,
+                                        state.config().workspaces.names[w],
+                                        w == monitor.current_workspace,
+                                        workspace.windows.size(),
+                                        layout_strategy_str(workspace.layout_strategy) });
+        }
+    }
+    return list;
+}
+
+WindowList window_list(State const& state)
+{
+    WindowList list{ state.active_window(), { } };
+    for (auto const* c : state.clients_by_order())
+        list.windows.push_back({ c->id,
+                                 c->monitor,
+                                 c->workspace,
+                                 client_kind_str(c->kind()),
+                                 c->wm_class,
+                                 c->wm_class_name,
+                                 c->name,
+                                 c->id == state.active_window(),
+                                 c->fullscreen,
+                                 c->urgency.active(),
+                                 c->sticky,
+                                 c->iconic });
+    return list;
+}
+
+ScratchpadList scratchpad_list(State const& state)
+{
+    ScratchpadList list{ { }, state.scratchpad_pool() };
+    for (auto const& slot : state.named_scratchpads())
+        list.named.push_back({ slot.name, slot.claimed_window(), slot.pending_launch() });
+    return list;
+}
 
 } // namespace
 
@@ -26,16 +139,16 @@ std::string WindowManager::handle_request(command::Request const& request)
                     case command::Query::LogStatus:
                         return ok(log::status_json());
                     case command::Query::WorkspaceList:
-                        return ok(workspace_list_json());
+                        return ok(json(workspace_list(state_)));
                     case command::Query::WindowList:
-                        return ok(window_list_json());
+                        return ok(json(window_list(state_)));
                     case command::Query::ScratchpadList:
-                        return ok(scratchpad_list_json());
+                        return ok(json(scratchpad_list(state_)));
                     case command::Query::State:
-                        return ok(
-                            "{\"instance\":\"" + ipc_.instance() + "\",\"sequence\":" + std::to_string(ipc_.sequence())
-                            + "," + state_json().substr(1)
-                        );
+                    {
+                        StateView view{ workspace_list(state_), window_list(state_), scratchpad_list(state_) };
+                        return ok(json(StateQuery{ ipc_.instance(), ipc_.sequence(), &view }));
+                    }
                 }
                 return "error unknown query";
             },
@@ -51,63 +164,11 @@ std::string WindowManager::handle_request(command::Request const& request)
     );
 }
 
-std::string WindowManager::workspace_list_json() const
-{
-    auto const& monitors = state_.monitors();
-    std::string json = "{\"focused_monitor\":" + std::to_string(state_.focused_monitor()) + ",\"monitors\":[";
-    for (size_t m = 0; m < monitors.size(); ++m)
-    {
-        auto const& monitor = monitors[m];
-        json += std::string(m ? "," : "") + "{\"index\":" + std::to_string(m) + ",\"name\":" + json_string(monitor.name)
-            + ",\"current_workspace\":" + std::to_string(monitor.current_workspace) + ",\"workspaces\":[";
-        for (size_t w = 0; w < monitor.workspaces.size(); ++w)
-        {
-            auto const& workspace = monitor.workspaces[w];
-            json += std::string(w ? "," : "") + "{\"index\":" + std::to_string(w) + ",\"name\":"
-                + json_string(config().workspaces.names[w]) + ",\"current\":" + json_bool(w == monitor.current_workspace)
-                + ",\"window_count\":" + std::to_string(workspace.windows.size()) + ",\"layout\":"
-                + json_string(layout_strategy_str(workspace.layout_strategy)) + "}";
-        }
-        json += "]}";
-    }
-    return json + "]}";
-}
-
-std::string WindowManager::window_list_json() const
-{
-    auto clients = state_.clients_by_order();
-    std::string json = "{\"focused\":" + std::to_string(state_.active_window()) + ",\"windows\":[";
-    for (size_t i = 0; i < clients.size(); ++i)
-    {
-        auto const& c = *clients[i];
-        json += std::string(i ? "," : "") + "{\"id\":" + std::to_string(c.id) + ",\"monitor\":" + std::to_string(c.monitor)
-            + ",\"workspace\":" + std::to_string(c.workspace) + ",\"kind\":" + json_string(client_kind_str(c.kind()))
-            + ",\"class\":" + json_string(c.wm_class) + ",\"instance\":" + json_string(c.wm_class_name)
-            + ",\"title\":" + json_string(c.name) + ",\"focused\":" + json_bool(c.id == state_.active_window())
-            + ",\"fullscreen\":" + json_bool(c.fullscreen) + ",\"urgent\":" + json_bool(c.urgency.active())
-            + ",\"sticky\":" + json_bool(c.sticky) + ",\"iconic\":" + json_bool(c.iconic) + "}";
-    }
-    return json + "]}";
-}
-
-std::string WindowManager::scratchpad_list_json() const
-{
-    std::string json = "{\"named\":[";
-    auto const& named = state_.named_scratchpads();
-    for (size_t i = 0; i < named.size(); ++i)
-        json += std::string(i ? "," : "") + "{\"name\":" + json_string(named[i].name)
-            + ",\"window\":" + std::to_string(named[i].claimed_window()) + ",\"pending\":" + json_bool(named[i].pending_launch()) + "}";
-    json += "],\"pool\":[";
-    auto const& pool = state_.scratchpad_pool();
-    for (size_t i = 0; i < pool.size(); ++i) json += std::string(i ? "," : "") + std::to_string(pool[i]);
-    return json + "]}";
-}
 
 // The exposed state; state_change fires exactly when it differs.
 std::string WindowManager::state_json() const
 {
-    return "{\"workspaces\":" + workspace_list_json() + ",\"windows\":" + window_list_json()
-        + ",\"scratchpads\":" + scratchpad_list_json() + "}";
+    return json(StateView{ workspace_list(state_), window_list(state_), scratchpad_list(state_) });
 }
 
 } // namespace lwm

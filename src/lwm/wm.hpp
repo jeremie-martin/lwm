@@ -334,9 +334,6 @@ private:
 
     // wm_ipc.cpp
     std::string handle_request(command::Request const& request);
-    std::string workspace_list_json() const;
-    std::string window_list_json() const;
-    std::string scratchpad_list_json() const;
     std::string state_json() const;
 
     // wm_restart.cpp

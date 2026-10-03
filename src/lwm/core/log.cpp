@@ -1,5 +1,5 @@
 #include "log.hpp"
-#include "events.hpp"
+#include <rfl/json/write.hpp>
 #include <chrono>
 #include <csignal>
 #include <mutex>
@@ -147,16 +147,18 @@ void shutdown()
 }
 std::string status_json()
 {
+    struct Status
+    {
+        std::string_view target, level, instance;
+        bool active;
+        uint64_t backend_notifications;
+        std::string_view last_backend_notification;
+    };
     std::lock_guard lock(notification_mutex);
-    return fmtquill::format(
-        "{{\"target\":\"{}\",\"level\":\"{}\",\"instance\":\"{}\",\"active\":{},"
-        "\"backend_notifications\":{},\"last_backend_notification\":{}}}",
-        options.target == Target::Journal ? "journal" : "stderr",
-        level_name(options.level),
-        instance,
-        logger != nullptr,
-        notifications,
-        json_string(last_notification)
+    return rfl::json::write(
+        Status{ options.target == Target::Journal ? "journal" : "stderr", level_name(options.level), instance,
+                logger != nullptr, notifications, last_notification },
+        YYJSON_WRITE_ALLOW_INVALID_UNICODE
     );
 }
 } // namespace lwm::log
