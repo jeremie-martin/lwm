@@ -5,6 +5,7 @@
 #include <limits>
 #include <map>
 #include <optional>
+#include <span>
 #include <string>
 #include <string_view>
 #include <utility>
@@ -69,6 +70,17 @@ constexpr int16_t geometry_coordinate(int64_t value)
 constexpr uint16_t geometry_extent(int64_t value)
 {
     return static_cast<uint16_t>(std::clamp<int64_t>(value, 1, 65535));
+}
+
+// Containment keeps computed coordinates wide, so distant points never wrap inside.
+constexpr bool contains(Geometry area, int32_t x, int32_t y)
+{
+    return x >= area.x && x < area.x + area.width && y >= area.y && y < area.y + area.height;
+}
+// A rectangle belongs to the area containing its center.
+constexpr bool contains_center(Geometry area, Geometry rectangle)
+{
+    return contains(area, rectangle.x + rectangle.width / 2, rectangle.y + rectangle.height / 2);
 }
 
 // Root-relative dock reservation (_NET_WM_STRUT_PARTIAL or legacy _NET_WM_STRUT).
@@ -505,5 +517,16 @@ struct Monitor : MonitorState
                  geometry_extent(static_cast<int64_t>(height) - std::min<uint64_t>(height, vertical)) };
     }
 };
+
+// The first monitor containing a point, or a rectangle's center.
+inline std::optional<size_t> monitor_at(std::span<Monitor const> monitors, int32_t x, int32_t y)
+{
+    auto it = std::ranges::find_if(monitors, [&](auto const& monitor) { return contains(monitor.geometry, x, y); });
+    return it == monitors.end() ? std::nullopt : std::optional{ static_cast<size_t>(it - monitors.begin()) };
+}
+inline std::optional<size_t> monitor_at(std::span<Monitor const> monitors, Geometry rectangle)
+{
+    return monitor_at(monitors, rectangle.x + rectangle.width / 2, rectangle.y + rectangle.height / 2);
+}
 
 } // namespace lwm

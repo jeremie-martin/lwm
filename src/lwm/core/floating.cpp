@@ -101,39 +101,14 @@ PositionHintResolution resolve_position_hint(
     Geometry hinted_geometry
 )
 {
-    size_t fallback_monitor = assigned_monitor < monitors.size() ? assigned_monitor : 0;
+    size_t fallback = assigned_monitor < monitors.size() ? assigned_monitor : 0;
     if (monitors.empty())
-        return { false, fallback_monitor };
+        return { false, fallback };
     if (constrained_to_assigned_monitor)
-    {
-        auto const& g = hinted_geometry;
-        return { hint_targets_monitor(monitors[fallback_monitor].geometry, g.x, g.y, g.width, g.height),
-                 fallback_monitor };
-    }
-    if (auto monitor = monitor_at_center(monitors, hinted_geometry))
+        return { contains_center(monitors[fallback].geometry, hinted_geometry), fallback };
+    if (auto monitor = monitor_at(monitors, hinted_geometry))
         return { true, *monitor };
-    return { false, fallback_monitor };
-}
-
-std::optional<size_t> monitor_at_center(std::span<Monitor const> monitors, Geometry geometry)
-{
-    for (size_t i = 0; i < monitors.size(); ++i)
-        if (hint_targets_monitor(monitors[i].geometry, geometry.x, geometry.y, geometry.width, geometry.height))
-            return i;
-    return std::nullopt;
-}
-
-bool hint_targets_monitor(Geometry monitor, int16_t x, int16_t y, uint16_t width, uint16_t height)
-{
-    int32_t center_x = static_cast<int32_t>(x) + static_cast<int32_t>(width) / 2;
-    int32_t center_y = static_cast<int32_t>(y) + static_cast<int32_t>(height) / 2;
-
-    int32_t left = monitor.x;
-    int32_t right = static_cast<int32_t>(monitor.x) + static_cast<int32_t>(monitor.width);
-    int32_t top = monitor.y;
-    int32_t bottom = static_cast<int32_t>(monitor.y) + static_cast<int32_t>(monitor.height);
-
-    return center_x >= left && center_x < right && center_y >= top && center_y < bottom;
+    return { false, fallback };
 }
 
 Geometry clamp_to_area(Geometry area, Geometry geometry)

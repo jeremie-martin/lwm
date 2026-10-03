@@ -378,7 +378,7 @@ void State::hover(xcb_window_t window, int16_t x, int16_t y)
             focus(window);
         return;
     }
-    auto monitor = focus::monitor_index_at_point(monitors_, x, y);
+    auto monitor = monitor_at(monitors_, x, y);
     if (!monitor || *monitor == focused_monitor_)
         return;
     LWM_LOG_TRACE("Pointer changed monitor: {} -> {}", focused_monitor_, *monitor);

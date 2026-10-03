@@ -101,15 +101,4 @@ cycle_target(std::span<xcb_window_t const> order, State const& state, size_t mon
     return XCB_NONE;
 }
 
-std::optional<size_t> monitor_index_at_point(std::span<Monitor const> monitors, int32_t x, int32_t y)
-{
-    for (size_t i = 0; i < monitors.size(); ++i)
-    {
-        auto const& monitor = monitors[i];
-        if (x >= monitor.geometry.x && x < monitor.geometry.x + monitor.geometry.width && y >= monitor.geometry.y && y < monitor.geometry.y + monitor.geometry.height)
-            return i;
-    }
-    return std::nullopt;
-}
-
 } // namespace lwm::focus

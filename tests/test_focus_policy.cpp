@@ -119,12 +119,12 @@ TEST_CASE("MRU traversal keeps its order but reads eligibility and lifetime live
 TEST_CASE("Monitor index at point uses half-open monitor bounds", "[focus][monitor]")
 {
     std::vector monitors{ test::monitor("A", -1000), test::monitor("B", 0), test::monitor("C", 1000) };
-    CHECK(focus::monitor_index_at_point(monitors, -500, 10) == 0);
-    CHECK(focus::monitor_index_at_point(monitors, 999, 10) == 1);
-    CHECK(focus::monitor_index_at_point(monitors, 1000, 10) == 2);
-    CHECK_FALSE(focus::monitor_index_at_point(monitors, 2000, 10));
-    CHECK_FALSE(focus::monitor_index_at_point(monitors, 10, 800));
-    CHECK_FALSE(focus::monitor_index_at_point({ }, 0, 0));
+    CHECK(monitor_at(monitors, -500, 10) == 0);
+    CHECK(monitor_at(monitors, 999, 10) == 1);
+    CHECK(monitor_at(monitors, 1000, 10) == 2);
+    CHECK_FALSE(monitor_at(monitors, 2000, 10));
+    CHECK_FALSE(monitor_at(monitors, 10, 800));
+    CHECK_FALSE(monitor_at({ }, 0, 0));
 }
 
 TEST_CASE("Only completed focus contributes to recency", "[focus][state]")

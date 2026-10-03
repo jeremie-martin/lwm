@@ -87,7 +87,7 @@ TEST_CASE("Repeated output refresh does not duplicate membership or discard rati
 TEST_CASE("Monitor lookup keeps computed centers wide until containment", "[monitor][bounds]")
 {
     std::vector<Monitor> monitors{ monitor("left", -30000), monitor("right", 30000) };
-    CHECK_FALSE(focus::monitor_index_at_point(monitors, 35536, 100));
-    CHECK(focus::monitor_index_at_point(monitors, -29500, 100) == 0);
-    CHECK(focus::monitor_index_at_point(monitors, 30500, 100) == 1);
+    CHECK_FALSE(monitor_at(monitors, 35536, 100));
+    CHECK(monitor_at(monitors, -29500, 100) == 0);
+    CHECK(monitor_at(monitors, 30500, 100) == 1);
 }

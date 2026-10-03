@@ -95,7 +95,7 @@ TEST_CASE("Position hint is accepted only when it lands on the target monitor", 
     SECTION("Hint inside the target monitor is honored")
     {
         Geometry monitor{ 0, 0, 1920, 1080 };
-        REQUIRE(floating::hint_targets_monitor(monitor, 800, 400, 300, 200));
+        REQUIRE(contains_center(monitor, Geometry{ 800, 400, 300, 200 }));
     }
 
     SECTION("Hint on monitor 0 while target is the right-hand monitor is rejected")
@@ -104,13 +104,13 @@ TEST_CASE("Position hint is accepted only when it lands on the target monitor", 
         // on the secondary monitor at x=1920 — the hint must be rejected so the
         // dialog falls back to parent-centering.
         Geometry target{ 1920, 0, 1920, 1080 };
-        REQUIRE_FALSE(floating::hint_targets_monitor(target, 10, 10, 300, 200));
+        REQUIRE_FALSE(contains_center(target, Geometry{ 10, 10, 300, 200 }));
     }
 
     SECTION("Hint that targets the right-hand monitor is honored")
     {
         Geometry target{ 1920, 0, 1920, 1080 };
-        REQUIRE(floating::hint_targets_monitor(target, 2400, 500, 300, 200));
+        REQUIRE(contains_center(target, Geometry{ 2400, 500, 300, 200 }));
     }
 }
 
@@ -121,13 +121,13 @@ TEST_CASE("Position hint guard uses the window center point", "[floating]")
     SECTION("Top-left off-monitor but center on it is honored")
     {
         // x=-100, width=400 → center at x=100, inside the monitor.
-        REQUIRE(floating::hint_targets_monitor(monitor, -100, 500, 400, 200));
+        REQUIRE(contains_center(monitor, Geometry{ -100, 500, 400, 200 }));
     }
 
     SECTION("Center just past the right edge is rejected")
     {
         // x=1820, width=400 → center at x=2020, past right edge (1920).
-        REQUIRE_FALSE(floating::hint_targets_monitor(monitor, 1820, 500, 400, 200));
+        REQUIRE_FALSE(contains_center(monitor, Geometry{ 1820, 500, 400, 200 }));
     }
 }
 
@@ -138,12 +138,12 @@ TEST_CASE("Position hint guard respects non-zero monitor origin", "[floating]")
 
     SECTION("Center within the offset monitor is honored")
     {
-        REQUIRE(floating::hint_targets_monitor(monitor, -1000, -600, 300, 200));
+        REQUIRE(contains_center(monitor, Geometry{ -1000, -600, 300, 200 }));
     }
 
     SECTION("Center outside the offset monitor is rejected")
     {
-        REQUIRE_FALSE(floating::hint_targets_monitor(monitor, 100, 100, 300, 200));
+        REQUIRE_FALSE(contains_center(monitor, Geometry{ 100, 100, 300, 200 }));
     }
 }
 

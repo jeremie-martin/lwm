@@ -127,7 +127,7 @@ void State::request_geometry(xcb_window_t id, Geometry rectangle)
     geometry(id, rectangle);
     auto const& client = require(id);
     if (auto const* floating = floating_mode(client))
-        if (auto monitor = floating::monitor_at_center(monitors_, floating->geometry); monitor && *monitor != client.monitor)
+        if (auto monitor = monitor_at(monitors_, floating->geometry); monitor && *monitor != client.monitor)
             relocate(id, *monitor, monitors_[*monitor].current_workspace);
 }
 

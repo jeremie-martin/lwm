@@ -33,7 +33,7 @@ void State::begin_window_drag(xcb_window_t id, int16_t x, int16_t y, uint8_t but
 
 std::optional<State::SplitHit> State::split_at(int16_t x, int16_t y) const
 {
-    auto index = focus::monitor_index_at_point(monitors_, x, y);
+    auto index = monitor_at(monitors_, x, y);
     if (!index)
         return std::nullopt;
     auto const& monitor = monitors_[*index];
@@ -146,7 +146,7 @@ std::optional<double> State::end_drag(bool commit)
     // Layout slots are not membership indices: hidden members have no slot and
     // sticky guests belong to another workspace. A drop on the guest suffix
     // appends to the current workspace.
-    auto target = focus::monitor_index_at_point(monitors_, drag.last_x, drag.last_y).value_or(client->monitor);
+    auto target = monitor_at(monitors_, drag.last_x, drag.last_y).value_or(client->monitor);
     auto const& monitor = monitors_[target];
     auto const& workspace = monitor.current();
     auto participants = tiled_participants(target, fullscreen_visibility());

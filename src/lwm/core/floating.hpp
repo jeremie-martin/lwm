@@ -42,13 +42,6 @@ PositionHintResolution resolve_position_hint(
     Geometry hinted_geometry
 );
 
-// The monitor containing the rectangle's center.
-std::optional<size_t> monitor_at_center(std::span<Monitor const> monitors, Geometry geometry);
-
-// True if a window of (width,height) placed at (x,y) belongs to `monitor` —
-// i.e. its center point lies within the monitor's full geometry rectangle.
-bool hint_targets_monitor(Geometry monitor, int16_t x, int16_t y, uint16_t width, uint16_t height);
-
 Geometry clamp_to_area(Geometry area, Geometry geometry);
 // Keep geometry that overlaps area; center geometry lying entirely outside it,
 // such as an off-screen or other-monitor rectangle that was never laid out here.
