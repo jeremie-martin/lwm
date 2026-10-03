@@ -268,7 +268,8 @@ TEST_CASE(
     uint32_t final_desktop = require_property_cardinal(conn.get(), w1, net_wm_desktop);
     REQUIRE(final_desktop == 0xFFFFFFFF);
 
-    REQUIRE(has_state(conn, w1, net_wm_state_sticky));
+    // _NET_WM_STATE is written after _NET_WM_DESKTOP; wait for it rather than racing it.
+    REQUIRE(wait_for_condition([&] { return has_state(conn, w1, net_wm_state_sticky); }, kTimeout));
 
     destroy_window(conn, w1);
 }
