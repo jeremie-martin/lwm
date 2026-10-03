@@ -69,7 +69,6 @@ void WindowManager::prepare_restart()
     xcb_change_property(conn_.get(), XCB_PROP_MODE_REPLACE, wm_window_, atoms_.lwm_restart_owner, XCB_ATOM_WINDOW, 32, 1, &wm_window_);
     xcb_change_property(conn_.get(), XCB_PROP_MODE_REPLACE, root, atoms_.lwm_restart_owner, XCB_ATOM_WINDOW, 32, 1, &wm_window_);
     xcb_set_close_down_mode(conn_.get(), XCB_CLOSE_DOWN_RETAIN_PERMANENT);
-    ewmh_.destroy_for_restart();
     cleanup_ipc();
 
     // A round trip guarantees the server processed the release before exec.

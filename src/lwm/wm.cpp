@@ -37,8 +37,7 @@ WindowManager::WindowManager(Config config, SignalPipe& signals, std::string con
     create_cursors();
     grab_buttons();
     refresh_topology();
-    ewmh_.init_atoms({ ewmh_.get()->_NET_WM_USER_TIME_WINDOW, atoms_.net_wm_state_focused, atoms_.lwm_window_class });
-    ewmh_.set_wm_name("lwm");
+    ewmh_.advertise(wm_window_, { ewmh_.get()->_NET_WM_USER_TIME_WINDOW, atoms_.net_wm_state_focused, atoms_.lwm_window_class });
     setup_ipc();
     scan_existing_windows(handoff);
     grab_keys();

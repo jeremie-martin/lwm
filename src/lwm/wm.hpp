@@ -109,7 +109,7 @@ private:
     // Process-owned signal handlers and reload pipe survive WM reconstruction.
     SignalPipe& signals_;
     std::string config_path_;
-    xcb_window_t wm_window_ = XCB_NONE;
+    xcb_window_t wm_window_ = XCB_NONE; ///< Owns WM_S0, the EWMH supporting check and the restart marker
     std::optional<restart::Snapshot> handoff_; ///< Predecessor state, consumed during startup adoption
 
     // Obligations of the current operation that are not projections of state.

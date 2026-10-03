@@ -38,52 +38,14 @@ Ewmh::Ewmh(Connection& conn)
     }
 }
 
-Ewmh::~Ewmh()
-{
-    if (supporting_window_ != XCB_NONE)
-    {
-        xcb_destroy_window(conn_.get(), supporting_window_);
-    }
-    xcb_ewmh_connection_wipe(&ewmh_);
-}
-
-void Ewmh::destroy_for_restart()
-{
-    if (supporting_window_ != XCB_NONE)
-    {
-        xcb_destroy_window(conn_.get(), supporting_window_);
-        supporting_window_ = XCB_NONE;
-    }
-}
-
-void Ewmh::create_supporting_window()
-{
-    supporting_window_ = xcb_generate_id(conn_.get());
-    xcb_create_window(
-        conn_.get(),
-        XCB_COPY_FROM_PARENT,
-        supporting_window_,
-        conn_.screen()->root,
-        -1,
-        -1,
-        1,
-        1,
-        0,
-        XCB_WINDOW_CLASS_INPUT_ONLY,
-        XCB_COPY_FROM_PARENT,
-        0,
-        nullptr
-    );
-
-    xcb_ewmh_set_supporting_wm_check(&ewmh_, conn_.screen()->root, supporting_window_);
-    xcb_ewmh_set_supporting_wm_check(&ewmh_, supporting_window_, supporting_window_);
-}
-
+Ewmh::~Ewmh() { xcb_ewmh_connection_wipe(&ewmh_); }
 
 // Keep advertised atoms aligned with the implemented contract in X11.md.
-void Ewmh::init_atoms(std::vector<xcb_atom_t> const& extra_supported)
+void Ewmh::advertise(xcb_window_t check, std::vector<xcb_atom_t> const& extra_supported)
 {
-    create_supporting_window();
+    xcb_ewmh_set_supporting_wm_check(&ewmh_, conn_.screen()->root, check);
+    xcb_ewmh_set_supporting_wm_check(&ewmh_, check, check);
+    xcb_ewmh_set_wm_name(&ewmh_, check, 3, "lwm");
     std::vector<xcb_atom_t> supported = {
         ewmh_._NET_SUPPORTED,
         ewmh_._NET_SUPPORTING_WM_CHECK,
@@ -144,11 +106,6 @@ void Ewmh::init_atoms(std::vector<xcb_atom_t> const& extra_supported)
     for (auto const& type : window_types) supported.push_back(ewmh_.*type.atom);
     supported.insert(supported.end(), extra_supported.begin(), extra_supported.end());
     xcb_ewmh_set_supported(&ewmh_, 0, supported.size(), supported.data());
-}
-
-void Ewmh::set_wm_name(std::string const& name)
-{
-    xcb_ewmh_set_wm_name(&ewmh_, supporting_window_, name.length(), name.c_str());
 }
 
 void Ewmh::update_window_states(
