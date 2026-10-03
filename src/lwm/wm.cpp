@@ -456,11 +456,7 @@ void WindowManager::handle_timeouts()
 // the active configuration and runtime claims untouched.
 std::expected<void, std::string> WindowManager::reload_config()
 {
-    if (config_path_.empty())
-        return std::unexpected("no config path is configured");
-    if (!std::filesystem::exists(config_path_))
-        return std::unexpected("config file does not exist: " + config_path_);
-    auto loaded = load_config_result(config_path_);
+    auto loaded = load_config(config_path_, true);
     if (!loaded)
         return std::unexpected(loaded.error());
     if (auto installed = state_.configure(std::move(*loaded)); !installed)

@@ -121,6 +121,8 @@ struct Config
 using ConfigLoadResult = std::expected<Config, std::string>;
 
 ConfigLoadResult load_config_result(std::string const& path);
+// Startup accepts an absent implicit file as defaults; a required path must name a file.
+ConfigLoadResult load_config(std::string const& path, bool required);
 Config default_config();
 
 } // namespace lwm

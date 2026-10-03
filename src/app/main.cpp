@@ -5,7 +5,6 @@
 #include <cstdlib>
 #include <cstring>
 #include <exception>
-#include <filesystem>
 #include <iostream>
 #include <lwm/config/config.hpp>
 #include <lwm/core/log.hpp>
@@ -17,8 +16,6 @@
 #include <unistd.h>
 #include <vector>
 
-namespace fs = std::filesystem;
-
 std::string default_config_path()
 {
     if (char const* xdg = std::getenv("XDG_CONFIG_HOME"))
@@ -26,48 +23,15 @@ std::string default_config_path()
     return "";
 }
 
-lwm::Config load_config(std::string const& config_path, bool explicit_path)
-{
-    if (config_path.empty())
-    {
-        if (explicit_path)
-            throw std::runtime_error("Explicit config path is empty");
-        LWM_LOG_INFO("No config file selected, using defaults");
-        return lwm::default_config();
-    }
-
-    std::error_code error;
-    bool exists = fs::exists(config_path, error);
-    if (error)
-        throw std::runtime_error("Cannot inspect config file '" + config_path + "': " + error.message());
-    if (!exists)
-    {
-        if (explicit_path)
-            throw std::runtime_error("Config file not found: " + config_path);
-        LWM_LOG_INFO("No config file found, using defaults");
-        return lwm::default_config();
-    }
-
-    LWM_LOG_INFO("Loading config from: {}", config_path);
-    auto loaded = lwm::load_config_result(config_path);
-    if (!loaded)
-        throw std::runtime_error(loaded.error());
-    return std::move(*loaded);
-}
-
 int main(int argc, char* argv[])
 {
     auto parsed = lwm::cli::parse(argc, argv);
-    if (!parsed)
+    if (!parsed || parsed->help)
     {
-        std::cerr << "lwm: " << parsed.error() << '\n';
+        if (!parsed)
+            std::cerr << "lwm: " << parsed.error() << '\n';
         std::cerr << lwm::cli::usage(argc > 0 && argv[0] ? argv[0] : "lwm");
-        return 2;
-    }
-    if (parsed->help)
-    {
-        std::cerr << lwm::cli::usage(argc > 0 && argv[0] ? argv[0] : "lwm");
-        return 0;
+        return parsed ? 0 : 2;
     }
     if (parsed->version)
     {
@@ -75,29 +39,17 @@ int main(int argc, char* argv[])
         return 0;
     }
 
+    // Signals precede logging and outlive it; both survive failed-exec recovery.
     std::optional<lwm::SignalPipe> signals;
     try
     {
         signals.emplace();
+        if (auto log = lwm::log::initialize(parsed->log); !log)
+            throw std::runtime_error(log.error());
     }
     catch (std::exception const& error)
     {
-        std::cerr << "lwm: signal initialization failed: " << error.what() << '\n';
-        return 1;
-    }
-
-    try
-    {
-        auto log_init = lwm::log::initialize(parsed->log);
-        if (!log_init)
-        {
-            std::cerr << "lwm: logging initialization failed: " << log_init.error() << '\n';
-            return 1;
-        }
-    }
-    catch (std::exception const& error)
-    {
-        std::cerr << "lwm: logging initialization failed: " << error.what() << '\n';
+        std::cerr << "lwm: process initialization failed: " << error.what() << '\n';
         return 1;
     }
 
@@ -122,12 +74,15 @@ int main(int argc, char* argv[])
         while (true)
         {
             phase = "Configuration loading";
-            lwm::Config config = load_config(config_path, explicit_config);
+            LWM_LOG_INFO("Loading config: {}", config_path.empty() ? "defaults" : config_path);
+            auto config = lwm::load_config(config_path, explicit_config);
+            if (!config)
+                throw std::runtime_error(config.error());
 
             std::string restart_binary;
             {
                 phase = "WM initialization";
-                lwm::WindowManager wm(std::move(config), *signals, config_path);
+                lwm::WindowManager wm(std::move(*config), *signals, config_path);
                 phase = "WM event loop";
                 auto result = wm.run();
                 if (result == lwm::RunResult::Failed)
