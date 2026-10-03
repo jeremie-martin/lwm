@@ -307,7 +307,7 @@ RunResult WindowManager::run()
     constexpr size_t POLL_IPC = 2;
     std::vector<pollfd> poll_fds;
 
-    while (running_)
+    while (!stop_)
     {
         std::optional<std::chrono::steady_clock::time_point> deadline = ipc_.deadline();
         for (auto const& [window, kill_at] : pending_kills_)
@@ -337,7 +337,7 @@ RunResult WindowManager::run()
             if (poll_fds[POLL_SIGNAL].revents & POLLIN)
             {
                 signals_.drain();
-                report_reload(reload_config(), "sighup");
+                reload_config("sighup");
                 complete_transition();
             }
             ipc_.dispatch(
@@ -393,7 +393,7 @@ RunResult WindowManager::run()
             return RunResult::Failed;
         }
     }
-    return restarting_ ? RunResult::Restart : RunResult::Exit;
+    return *stop_;
 }
 
 void WindowManager::dispatch_event(
@@ -446,26 +446,22 @@ void WindowManager::handle_timeouts()
 // Configuration
 
 // A candidate is validated before anything changes; an invalid file leaves
-// the active configuration and runtime claims untouched.
-std::expected<void, std::string> WindowManager::reload_config()
+// the active configuration and runtime claims untouched. Every outcome is
+// logged and emitted.
+std::expected<void, std::string> WindowManager::reload_config(std::string_view source)
 {
-    auto loaded = load_config(config_path_, true);
-    if (!loaded)
-        return std::unexpected(loaded.error());
-    if (auto installed = state_.configure(std::move(*loaded)); !installed)
-        return installed;
-    grab_buttons();
-    grab_keys();
-    return { };
-}
-
-void WindowManager::report_reload(std::expected<void, std::string> const& result, std::string_view source)
-{
+    auto result =
+        load_config(config_path_, true).and_then([&](Config config) { return state_.configure(std::move(config)); });
     if (result)
+    {
+        grab_buttons();
+        grab_keys();
         LWM_LOG_INFO("Config reloaded successfully ({})", source);
+    }
     else
         LWM_LOG_WARN_LIMIT(std::chrono::seconds(5), "Config reload failed ({}): {}", source, result.error());
     queue_event(event::config_reload{ result.has_value(), source, result ? std::nullopt : std::optional{ result.error() } });
+    return result;
 }
 
 // Processes and window lifetime

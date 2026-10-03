@@ -123,8 +123,7 @@ private:
     std::deque<xcb_generic_event_t> deferred_events_;
     std::unordered_map<xcb_window_t, std::chrono::steady_clock::time_point> pending_kills_;
     bool pointer_grabbed_ = false; ///< Held exactly while State has a drag
-    bool running_ = true;
-    bool restarting_ = false;
+    std::optional<RunResult> stop_; ///< Set when the event loop should end
     std::string restart_binary_;
     uint32_t last_event_time_ = XCB_CURRENT_TIME;
     // Latest timestamp from an actual input event (key/button/motion/crossing).
@@ -157,8 +156,7 @@ private:
     void setup_ipc();
     void cleanup_ipc();
     void dispatch_event(xcb_generic_event_t const& event, size_t& remaining, std::chrono::steady_clock::time_point deadline);
-    std::expected<void, std::string> reload_config();
-    void report_reload(std::expected<void, std::string> const& result, std::string_view source);
+    std::expected<void, std::string> reload_config(std::string_view source);
     bool launch_program(std::vector<std::string> const& command, std::string_view source);
     void kill_window(xcb_window_t window);
     void handle_timeouts();
@@ -211,6 +209,7 @@ private:
     void handle_event(xcb_generic_event_t const& event);
     void handle_map_request(xcb_map_request_event_t const& e);
     void handle_window_removal(xcb_window_t window);
+    std::optional<std::pair<std::string_view, Placement>> describe(xcb_window_t window) const;
     void handle_enter_notify(xcb_enter_notify_event_t const& e);
     void handle_motion_notify(xcb_motion_notify_event_t const& e);
     void handle_button_press(xcb_button_press_event_t const& e);

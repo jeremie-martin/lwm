@@ -139,7 +139,7 @@ void WindowManager::handle_event(xcb_generic_event_t const& event)
             if (reinterpret_cast<xcb_selection_clear_event_t const&>(event).selection == atoms_.wm_s0)
             {
                 LWM_LOG_INFO("Stopping: WM_S0 ownership transferred to another manager");
-                running_ = false;
+                stop_ = RunResult::Exit;
             }
             break;
     }
@@ -164,27 +164,32 @@ void WindowManager::handle_map_request(xcb_map_request_event_t const& e)
     manage(observed, false);
     if (!ipc_.has_subscribers(event_mask<event::window_map>))
         return;
-    if (auto const* client = state_.find(e.window))
-        queue_event(event::window_map{ e.window,
-                                      client->wm_class,
-                                      client_kind_str(client->kind()),
-                                      Placement{ client->monitor, client->workspace } });
-    else if (auto const* fixture = state_.find_fixture(e.window))
-        queue_event(event::window_map{ e.window, "", fixture_role_str(fixture->role), {} });
-    else
-        queue_event(event::window_map{ e.window, "", "popup", {} });
+    auto const* client = state_.find(e.window);
+    auto description = describe(e.window);
+    queue_event(event::window_map{ e.window,
+                                  client ? client->wm_class : "",
+                                  description ? description->first : "popup",
+                                  description ? description->second : Placement{ } });
 }
 
 void WindowManager::handle_window_removal(xcb_window_t window)
 {
     pending_kills_.erase(window);
+    if (auto description = describe(window))
+    {
+        queue_event(event::window_unmap{ window, description->first, description->second });
+        state_.erase(window);
+    }
+}
+
+// The subscription kind and placement of a registered window; popups are not registered.
+std::optional<std::pair<std::string_view, Placement>> WindowManager::describe(xcb_window_t window) const
+{
     if (auto const* client = state_.find(window))
-        queue_event(event::window_unmap{ window, client_kind_str(client->kind()), Placement{ client->monitor, client->workspace } });
-    else if (auto const* fixture = state_.find_fixture(window))
-        queue_event(event::window_unmap{ window, fixture_role_str(fixture->role), {} });
-    else
-        return;
-    state_.erase(window);
+        return std::pair{ std::string_view(client_kind_str(client->kind())), Placement{ client->monitor, client->workspace } };
+    if (auto const* fixture = state_.find_fixture(window))
+        return std::pair{ std::string_view(fixture_role_str(fixture->role)), Placement{ } };
+    return std::nullopt;
 }
 
 // Pointer and keyboard

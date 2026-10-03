@@ -32,9 +32,8 @@ Result WindowManager::execute(Action const& action, std::string_view source)
     auto restart = [&](std::string binary) -> Result
     {
         LWM_LOG_INFO("Restart requested: source={} binary={}", source, binary.empty() ? "current" : binary);
-        restarting_ = true;
         restart_binary_ = std::move(binary);
-        running_ = false;
+        stop_ = RunResult::Restart;
         return "restarting";
     };
     return std::visit(
@@ -42,8 +41,7 @@ Result WindowManager::execute(Action const& action, std::string_view source)
             [&](Kill const&) { return on_active([&] { kill_window(active); }); },
             [&](ReloadConfig const&) -> Result
             {
-                auto result = reload_config();
-                report_reload(result, source);
+                auto result = reload_config(source);
                 if (!result)
                     return std::unexpected(result.error());
                 return "reloaded";
