@@ -229,7 +229,7 @@ std::vector<WindowManager::Observed> WindowManager::observe(std::span<xcb_window
         xcb_ewmh_get_atoms_reply_t states;
         if (xcb_ewmh_get_wm_state_reply(e, cookie.state, &states, nullptr))
         {
-            w.states = window_states({ states.atoms, states.atoms_len });
+            w.states = ewmh_.states({ states.atoms, states.atoms_len });
             xcb_ewmh_get_atoms_reply_wipe(&states);
         }
         auto observed_hints = hints(c, cookie.hints);
@@ -267,15 +267,6 @@ std::vector<WindowManager::Observed> WindowManager::observe(std::span<xcb_window
             }
     }
     return result;
-}
-
-WindowStates WindowManager::window_states(std::span<xcb_atom_t const> atoms) const
-{
-    WindowStates states;
-    for (size_t i = 0; i < state_atoms_.size(); ++i)
-        if (std::ranges::contains(atoms, state_atoms_[i]))
-            states.set(static_cast<WindowState>(i));
-    return states;
 }
 
 // First recognized _NET_WM_WINDOW_TYPE, or Normal.

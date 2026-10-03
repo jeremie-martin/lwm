@@ -495,7 +495,7 @@ void WindowManager::handle_wm_state_change(xcb_client_message_event_t const& e)
     if (e.data.data32[0] > 2)
         return;
     xcb_atom_t const atoms[] = { e.data.data32[1], e.data.data32[2] };
-    state_.request_states(e.window, static_cast<StateChange>(e.data.data32[0]), window_states(atoms));
+    state_.request_states(e.window, static_cast<StateChange>(e.data.data32[0]), ewmh_.states(atoms));
 }
 
 void WindowManager::handle_moveresize_window(xcb_client_message_event_t const& e)

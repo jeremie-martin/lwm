@@ -37,7 +37,7 @@ WindowManager::WindowManager(Config config, SignalPipe& signals, std::string con
     create_cursors();
     grab_buttons();
     refresh_topology();
-    ewmh_.advertise(wm_window_, { ewmh_.get()->_NET_WM_USER_TIME_WINDOW, atoms_.net_wm_state_focused, atoms_.lwm_window_class });
+    ewmh_.advertise(wm_window_, { ewmh_.get()->_NET_WM_USER_TIME_WINDOW, atoms_.lwm_window_class });
     setup_ipc();
     scan_existing_windows(handoff);
     grab_keys();
@@ -63,7 +63,6 @@ void WindowManager::intern_atoms()
         { "WM_DELETE_WINDOW", &atoms_.wm_delete_window },
         { "WM_TAKE_FOCUS", &atoms_.wm_take_focus },
         { "WM_S0", &atoms_.wm_s0 },
-        { "_NET_WM_STATE_FOCUSED", &atoms_.net_wm_state_focused },
         { "_LWM_IPC_SOCKET", &atoms_.lwm_ipc_socket },
         { "_LWM_WINDOW_CLASS", &atoms_.lwm_window_class },
         { "_LWM_RESTART", &atoms_.lwm_restart },
@@ -79,11 +78,6 @@ void WindowManager::intern_atoms()
             throw std::runtime_error(std::string("Failed to intern ") + names[i].first);
         *names[i].second = atom->atom;
     }
-    auto* e = ewmh_.get();
-    state_atoms_ = { e->_NET_WM_STATE_FULLSCREEN,    e->_NET_WM_STATE_ABOVE,          e->_NET_WM_STATE_BELOW,
-                     e->_NET_WM_STATE_STICKY,        e->_NET_WM_STATE_MODAL,          e->_NET_WM_STATE_SKIP_TASKBAR,
-                     e->_NET_WM_STATE_SKIP_PAGER,    e->_NET_WM_STATE_MAXIMIZED_HORZ, e->_NET_WM_STATE_MAXIMIZED_VERT,
-                     e->_NET_WM_STATE_HIDDEN,        e->_NET_WM_STATE_DEMANDS_ATTENTION, atoms_.net_wm_state_focused };
 }
 
 void WindowManager::create_wm_window()

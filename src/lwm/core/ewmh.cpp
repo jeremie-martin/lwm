@@ -32,10 +32,20 @@ Ewmh::Ewmh(Connection& conn)
     : conn_(conn)
 {
     xcb_intern_atom_cookie_t* cookies = xcb_ewmh_init_atoms(conn_.get(), &ewmh_);
-    if (!xcb_ewmh_init_atoms_replies(&ewmh_, cookies, nullptr))
+    auto focused_cookie = xcb_intern_atom(conn_.get(), 0, 21, "_NET_WM_STATE_FOCUSED");
+    bool initialized = xcb_ewmh_init_atoms_replies(&ewmh_, cookies, nullptr);
+    auto* focused = xcb_intern_atom_reply(conn_.get(), focused_cookie, nullptr);
+    if (!initialized || !focused)
     {
+        free(focused);
         throw std::runtime_error("Failed to initialize EWMH atoms");
     }
+    auto& e = ewmh_;
+    state_atoms_ = { e._NET_WM_STATE_FULLSCREEN,     e._NET_WM_STATE_ABOVE,          e._NET_WM_STATE_BELOW,
+                     e._NET_WM_STATE_STICKY,         e._NET_WM_STATE_MODAL,          e._NET_WM_STATE_SKIP_TASKBAR,
+                     e._NET_WM_STATE_SKIP_PAGER,     e._NET_WM_STATE_MAXIMIZED_HORZ, e._NET_WM_STATE_MAXIMIZED_VERT,
+                     e._NET_WM_STATE_HIDDEN,         e._NET_WM_STATE_DEMANDS_ATTENTION, focused->atom };
+    free(focused);
 }
 
 Ewmh::~Ewmh() { xcb_ewmh_connection_wipe(&ewmh_); }
@@ -104,14 +114,20 @@ void Ewmh::advertise(xcb_window_t check, std::vector<xcb_atom_t> const& extra_su
     };
 
     for (auto const& type : window_types) supported.push_back(ewmh_.*type.atom);
+    supported.push_back(state_atoms_[static_cast<size_t>(WindowState::Focused)]);
     supported.insert(supported.end(), extra_supported.begin(), extra_supported.end());
     xcb_ewmh_set_supported(&ewmh_, 0, supported.size(), supported.data());
 }
 
-void Ewmh::update_window_states(
-    std::span<std::pair<xcb_window_t, std::vector<xcb_atom_t>> const> updates,
-    std::span<xcb_atom_t const> owned
-)
+WindowStates Ewmh::states(std::span<xcb_atom_t const> atoms) const
+{
+    WindowStates states;
+    for (size_t i = 0; i < state_atoms_.size(); ++i)
+        states.set(static_cast<WindowState>(i), std::ranges::contains(atoms, state_atoms_[i]));
+    return states;
+}
+
+void Ewmh::update_window_states(std::span<std::pair<xcb_window_t, WindowStates> const> updates, WindowStates owned)
 {
     std::vector<xcb_get_property_cookie_t> cookies;
     cookies.reserve(updates.size());
@@ -127,8 +143,17 @@ void Ewmh::update_window_states(
             xcb_ewmh_get_atoms_reply_wipe(&reply);
         }
         auto previous = atoms;
-        std::erase_if(atoms, [&](xcb_atom_t atom) { return std::ranges::find(owned, atom) != owned.end(); });
-        atoms.insert(atoms.end(), enabled.begin(), enabled.end());
+        std::erase_if(
+            atoms,
+            [&](xcb_atom_t atom)
+            {
+                auto it = std::ranges::find(state_atoms_, atom);
+                return it != state_atoms_.end() && owned.has(static_cast<WindowState>(it - state_atoms_.begin()));
+            }
+        );
+        for (size_t i = 0; i < state_atoms_.size(); ++i)
+            if (enabled.has(static_cast<WindowState>(i)))
+                atoms.push_back(state_atoms_[i]);
         if (atoms == previous)
             continue;
         if (atoms.empty())

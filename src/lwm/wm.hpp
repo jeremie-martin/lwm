@@ -59,7 +59,6 @@ private:
         xcb_atom_t wm_delete_window;
         xcb_atom_t wm_take_focus;
         xcb_atom_t wm_s0;
-        xcb_atom_t net_wm_state_focused;
         xcb_atom_t lwm_ipc_socket;
         xcb_atom_t lwm_window_class;
         xcb_atom_t lwm_restart;
@@ -92,14 +91,12 @@ private:
         uint64_t subscriptions = 0;               ///< Subscriptions seen when the snapshot was taken
     };
 
-    using StateUpdates = std::vector<std::pair<xcb_window_t, std::vector<xcb_atom_t>>>;
+    using StateUpdates = std::vector<std::pair<xcb_window_t, WindowStates>>;
 
     Connection conn_;
     Ewmh ewmh_;
     Atoms atoms_{ };
     State state_;
-    // _NET_WM_STATE atoms indexed by WindowState; other parties' atoms are preserved.
-    std::array<xcb_atom_t, static_cast<size_t>(WindowState::Count)> state_atoms_{ };
     std::unordered_map<xcb_window_t, Output> outputs_;
     // Last written bytes of every published property; nullopt records a deletion.
     // An unknown property is always written, so a fresh WM replaces stale values.
@@ -179,7 +176,6 @@ private:
         uint64_t sync_value = 0;
     };
     std::vector<Observed> observe(std::span<xcb_window_t const> windows, bool adopting);
-    WindowStates window_states(std::span<xcb_atom_t const> atoms) const;
     WindowType window_type(xcb_get_property_cookie_t cookie) const;
     std::vector<xcb_atom_t> read_protocols(xcb_window_t window) const;
     void watch_user_time_window(xcb_window_t window);

@@ -53,7 +53,7 @@ void WindowManager::complete_transition()
     StateUpdates states;
     for (auto const& projected : clients)
         urgency_changed |= publish_properties(*projected.client, outputs_.at(projected.client->id), states);
-    ewmh_.update_window_states(states, state_atoms_);
+    ewmh_.update_window_states(states, WindowStates{ UINT16_MAX }); // LWM owns every value it publishes
     publish_fixtures();
     publish_root(clients, urgency_changed);
     reconcile_stacking(fullscreen, focus_request.has_value());
@@ -246,11 +246,7 @@ bool WindowManager::publish_properties(Client const& client, Output& output, Sta
         publish(id, e->_NET_WM_FULLSCREEN_MONITORS, XCB_ATOM_CARDINAL, 32, std::nullopt);
     if (auto states = published_states(client, id == state_.active_window()); output.states != states)
     {
-        std::vector<xcb_atom_t> atoms;
-        for (size_t i = 0; i < state_atoms_.size(); ++i)
-            if (states.has(static_cast<WindowState>(i)))
-                atoms.push_back(state_atoms_[i]);
-        updates.emplace_back(id, std::move(atoms));
+        updates.emplace_back(id, states);
         output.states = states;
     }
     return urgency_changed;
@@ -418,10 +414,11 @@ void WindowManager::withdraw_removed()
         publish(it->first, atoms_.wm_state, atoms_.wm_state, withdrawn);
         properties_.erase(properties_.lower_bound({ it->first, 0 }), properties_.lower_bound({ it->first + 1, 0 }));
         if (it->second.states)
-            unfocused.emplace_back(it->first, std::vector<xcb_atom_t>{ });
+            unfocused.emplace_back(it->first, WindowStates{ });
         it = outputs_.erase(it);
     }
-    xcb_atom_t const focused[] = { atoms_.net_wm_state_focused };
+    WindowStates focused;
+    focused.set(WindowState::Focused);
     ewmh_.update_window_states(unfocused, focused);
 }
 
