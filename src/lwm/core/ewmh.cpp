@@ -151,40 +151,6 @@ void Ewmh::set_wm_name(std::string const& name)
     xcb_ewmh_set_wm_name(&ewmh_, supporting_window_, name.length(), name.c_str());
 }
 
-void Ewmh::set_desktop_names(std::vector<std::string> const& names)
-{
-    std::string combined;
-    for (auto const& name : names)
-    {
-        combined += name;
-        combined += '\0';
-    }
-    xcb_ewmh_set_desktop_names(&ewmh_, 0, combined.length(), combined.c_str());
-}
-
-void Ewmh::set_workarea(std::vector<Geometry> const& workareas)
-{
-    std::vector<xcb_ewmh_geometry_t> areas;
-    areas.reserve(workareas.size());
-    for (auto const& area : workareas)
-    {
-        areas.push_back({ static_cast<uint32_t>(area.x), static_cast<uint32_t>(area.y), area.width, area.height });
-    }
-
-    if (!areas.empty())
-    {
-        xcb_ewmh_set_workarea(&ewmh_, 0, areas.size(), areas.data());
-    }
-}
-
-void Ewmh::set_desktop_viewport(std::vector<std::pair<uint32_t, uint32_t>> const& viewports)
-{
-    std::vector<xcb_ewmh_coordinates_t> coordinates;
-    for (auto [x, y] : viewports) coordinates.push_back({ x, y });
-    if (!coordinates.empty())
-        xcb_ewmh_set_desktop_viewport(&ewmh_, 0, coordinates.size(), coordinates.data());
-}
-
 void Ewmh::update_window_states(
     std::span<std::pair<xcb_window_t, std::vector<xcb_atom_t>> const> updates,
     std::span<xcb_atom_t const> owned

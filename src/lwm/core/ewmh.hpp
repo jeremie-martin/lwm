@@ -22,9 +22,6 @@ public:
     // Create the supporting window and advertise the supported atoms, including LWM's extensions.
     void init_atoms(std::vector<xcb_atom_t> const& extra_supported);
     void set_wm_name(std::string const& name);
-    void set_desktop_names(std::vector<std::string> const& names);
-    void set_workarea(std::vector<Geometry> const& workareas);
-    void set_desktop_viewport(std::vector<std::pair<uint32_t, uint32_t>> const& viewports);
 
     // Replace the atoms LWM owns in each window's _NET_WM_STATE, preserving
     // atoms owned by other parties. Reads are pipelined across windows.

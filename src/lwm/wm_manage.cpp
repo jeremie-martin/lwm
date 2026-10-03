@@ -71,7 +71,6 @@ void WindowManager::manage(Observed const& observed, bool adopting)
     auto& output = outputs_[window];
     output.mapped = adopting;
     output.urgent = observed.window.urgent;
-    output.fullscreen_monitors.emplace(observed.window.fullscreen_monitors);
     output.sync_counter = observed.sync_counter;
     output.sync_value = observed.sync_value;
     uint32_t mask = kManagedWindowEventMask;

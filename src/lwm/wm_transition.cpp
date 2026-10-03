@@ -189,10 +189,34 @@ void WindowManager::send_configure_notify(xcb_window_t window, Geometry geometry
     xcb_send_event(conn_.get(), 0, window, XCB_EVENT_MASK_STRUCTURE_NOTIFY, reinterpret_cast<char*>(&event));
 }
 
+// Writes a property unless the same bytes were last written there; nullopt deletes it.
+bool WindowManager::publish(
+    xcb_window_t window, xcb_atom_t property, xcb_atom_t type, uint8_t format, std::optional<std::string_view> bytes
+)
+{
+    auto [it, inserted] = properties_.try_emplace({ window, property });
+    if (!inserted && (it->second && bytes ? *it->second == *bytes : !it->second && !bytes))
+        return false;
+    if (bytes)
+        xcb_change_property(
+            conn_.get(), XCB_PROP_MODE_REPLACE, window, property, type, format, bytes->size() * 8 / format, bytes->data()
+        );
+    else
+        xcb_delete_property(conn_.get(), window, property);
+    it->second = bytes;
+    return true;
+}
+
+bool WindowManager::publish(xcb_window_t window, xcb_atom_t property, xcb_atom_t type, std::span<uint32_t const> words)
+{
+    return publish(window, property, type, 32, std::string_view(reinterpret_cast<char const*>(words.data()), words.size_bytes()));
+}
+
 // Per-window properties. Returns whether published urgency changed, which
 // panels observe through a client-list notification.
 bool WindowManager::publish_properties(Client const& client, Output& output, StateUpdates& updates)
 {
+    auto* e = ewmh_.get();
     xcb_window_t id = client.id;
     if (auto color = border_color(client); output.border_color != color)
     {
@@ -202,44 +226,24 @@ bool WindowManager::publish_properties(Client const& client, Output& output, Sta
     bool urgency_changed = output.urgent != client.urgency.active();
     if (urgency_changed)
         publish_urgency(client, output);
-    uint32_t desktop = client.sticky ? 0xFFFFFFFF : state_.desktop_index(client.monitor, client.workspace);
-    if (output.desktop != desktop)
+    uint32_t const desktop[] = { client.sticky ? 0xFFFFFFFF : state_.desktop_index(client.monitor, client.workspace) };
+    publish(id, e->_NET_WM_DESKTOP, XCB_ATOM_CARDINAL, desktop);
+    uint32_t const wm_state[] = { client.iconic ? WM_STATE_ICONIC : WM_STATE_NORMAL, 0 };
+    publish(id, atoms_.wm_state, atoms_.wm_state, wm_state);
+    std::vector<xcb_atom_t> actions = { e->_NET_WM_ACTION_CLOSE,      e->_NET_WM_ACTION_CHANGE_DESKTOP, e->_NET_WM_ACTION_MINIMIZE,
+                                        e->_NET_WM_ACTION_STICK,      e->_NET_WM_ACTION_FULLSCREEN,     e->_NET_WM_ACTION_ABOVE,
+                                        e->_NET_WM_ACTION_BELOW,      e->_NET_WM_ACTION_MAXIMIZE_VERT,  e->_NET_WM_ACTION_MAXIMIZE_HORZ };
+    if (client.kind() == Client::Kind::Floating)
+        actions.insert(actions.end(), { e->_NET_WM_ACTION_MOVE, e->_NET_WM_ACTION_RESIZE });
+    publish(id, e->_NET_WM_ALLOWED_ACTIONS, XCB_ATOM_ATOM, actions);
+    publish(id, atoms_.lwm_window_class, e->UTF8_STRING, 8, client_kind_str(client.kind()));
+    if (auto const& m = client.fullscreen_monitors)
     {
-        xcb_ewmh_set_wm_desktop(ewmh_.get(), id, desktop);
-        output.desktop = desktop;
+        uint32_t const indices[] = { m->top, m->bottom, m->left, m->right };
+        publish(id, e->_NET_WM_FULLSCREEN_MONITORS, XCB_ATOM_CARDINAL, indices);
     }
-    uint32_t wm_state = client.iconic ? WM_STATE_ICONIC : WM_STATE_NORMAL;
-    if (output.wm_state != wm_state)
-    {
-        uint32_t data[] = { wm_state, 0 };
-        xcb_change_property(conn_.get(), XCB_PROP_MODE_REPLACE, id, atoms_.wm_state, atoms_.wm_state, 32, 2, data);
-        output.wm_state = wm_state;
-    }
-    if (char const* kind = client_kind_str(client.kind()); output.window_class != kind)
-    {
-        auto* e = ewmh_.get();
-        std::vector<xcb_atom_t> actions = { e->_NET_WM_ACTION_CLOSE,          e->_NET_WM_ACTION_CHANGE_DESKTOP,
-                                            e->_NET_WM_ACTION_MINIMIZE,       e->_NET_WM_ACTION_STICK,
-                                            e->_NET_WM_ACTION_FULLSCREEN,     e->_NET_WM_ACTION_ABOVE,
-                                            e->_NET_WM_ACTION_BELOW,          e->_NET_WM_ACTION_MAXIMIZE_VERT,
-                                            e->_NET_WM_ACTION_MAXIMIZE_HORZ };
-        if (client.kind() == Client::Kind::Floating)
-        {
-            actions.push_back(e->_NET_WM_ACTION_MOVE);
-            actions.push_back(e->_NET_WM_ACTION_RESIZE);
-        }
-        xcb_ewmh_set_wm_allowed_actions(ewmh_.get(), id, actions.size(), actions.data());
-        publish_window_class(id, kind);
-        output.window_class = kind;
-    }
-    if (output.fullscreen_monitors != client.fullscreen_monitors)
-    {
-        if (auto const& m = client.fullscreen_monitors)
-            xcb_ewmh_set_wm_fullscreen_monitors(ewmh_.get(), id, m->top, m->bottom, m->left, m->right);
-        else if (output.fullscreen_monitors)
-            xcb_delete_property(conn_.get(), id, ewmh_.get()->_NET_WM_FULLSCREEN_MONITORS);
-        output.fullscreen_monitors = client.fullscreen_monitors;
-    }
+    else
+        publish(id, e->_NET_WM_FULLSCREEN_MONITORS, XCB_ATOM_CARDINAL, 32, std::nullopt);
     if (auto states = published_states(client, id == state_.active_window()); output.states != states)
     {
         std::vector<xcb_atom_t> atoms;
@@ -250,20 +254,6 @@ bool WindowManager::publish_properties(Client const& client, Output& output, Sta
         output.states = states;
     }
     return urgency_changed;
-}
-
-void WindowManager::publish_window_class(xcb_window_t window, char const* kind)
-{
-    xcb_change_property(
-        conn_.get(),
-        XCB_PROP_MODE_REPLACE,
-        window,
-        atoms_.lwm_window_class,
-        ewmh_.get()->UTF8_STRING,
-        8,
-        static_cast<uint32_t>(std::strlen(kind)),
-        kind
-    );
 }
 
 // Mirrors urgency into ICCCM WM_HINTS for panels that read it. An LWM-only
@@ -294,19 +284,10 @@ void WindowManager::publish_fixtures()
 {
     for (auto const& [id, fixture] : state_.fixtures())
     {
-        auto& output = outputs_[id];
-        if (output.wm_state != WM_STATE_NORMAL)
-        {
-            uint32_t data[] = { WM_STATE_NORMAL, 0 };
-            xcb_change_property(conn_.get(), XCB_PROP_MODE_REPLACE, id, atoms_.wm_state, atoms_.wm_state, 32, 2, data);
-            output.wm_state = WM_STATE_NORMAL;
-        }
-        if (char const* role = fixture_role_str(fixture.role); output.window_class != role)
-        {
-            publish_window_class(id, role);
-            output.window_class = role;
-        }
-        if (!output.mapped)
+        uint32_t const wm_state[] = { WM_STATE_NORMAL, 0 };
+        publish(id, atoms_.wm_state, atoms_.wm_state, wm_state);
+        publish(id, atoms_.lwm_window_class, ewmh_.get()->UTF8_STRING, 8, fixture_role_str(fixture.role));
+        if (auto& output = outputs_[id]; !output.mapped)
         {
             xcb_map_window(conn_.get(), id);
             output.mapped = true;
@@ -329,49 +310,15 @@ void WindowManager::commit_focus(uint32_t time)
 
 // Root publication
 
-// Monitor-major flat desktops. Workareas and viewports are relative to the
-// origin of the combined monitor bounds.
-WindowManager::DesktopLayout WindowManager::desktop_layout() const
-{
-    auto const& monitors = state_.monitors();
-    int32_t min_x = monitors.front().geometry.x, min_y = monitors.front().geometry.y;
-    int32_t max_x = min_x, max_y = min_y;
-    for (auto const& m : monitors)
-    {
-        min_x = std::min<int32_t>(min_x, m.geometry.x);
-        min_y = std::min<int32_t>(min_y, m.geometry.y);
-        max_x = std::max<int32_t>(max_x, m.geometry.x + m.geometry.width);
-        max_y = std::max<int32_t>(max_y, m.geometry.y + m.geometry.height);
-    }
-    DesktopLayout layout;
-    layout.count = static_cast<uint32_t>(monitors.size() * config().workspaces.count);
-    layout.width = static_cast<uint32_t>(std::max<int32_t>(1, max_x - min_x));
-    layout.height = static_cast<uint32_t>(std::max<int32_t>(1, max_y - min_y));
-    for (auto const& m : monitors)
-    {
-        Geometry area = m.working_area();
-        area.x = static_cast<int16_t>(std::clamp<int32_t>(area.x - min_x, 0, std::numeric_limits<int16_t>::max()));
-        area.y = static_cast<int16_t>(std::clamp<int32_t>(area.y - min_y, 0, std::numeric_limits<int16_t>::max()));
-        std::pair<uint32_t, uint32_t> viewport{ static_cast<uint32_t>(std::max<int32_t>(0, m.geometry.x - min_x)),
-                                                static_cast<uint32_t>(std::max<int32_t>(0, m.geometry.y - min_y)) };
-        for (auto const& name : config().workspaces.names)
-        {
-            layout.names.push_back(name);
-            layout.viewports.push_back(viewport);
-            layout.workareas.push_back(area);
-        }
-    }
-    return layout;
-}
-
 void WindowManager::publish_root(std::vector<State::Projected> const& clients, bool urgency_changed)
 {
+    auto* e = ewmh_.get();
+    xcb_window_t root = conn_.screen()->root;
     // Clients arrive in registration order; fixtures merge into it.
     std::vector<Fixture const*> fixtures;
     for (auto const& [id, fixture] : state_.fixtures()) fixtures.push_back(&fixture);
     std::ranges::sort(fixtures, { }, &Fixture::order);
     std::vector<xcb_window_t> client_list;
-    client_list.reserve(clients.size() + fixtures.size());
     auto fixture = fixtures.begin();
     for (auto const& projected : clients)
     {
@@ -381,36 +328,51 @@ void WindowManager::publish_root(std::vector<State::Projected> const& clients, b
     }
     for (; fixture != fixtures.end(); ++fixture) client_list.push_back((*fixture)->id);
     // Panels use client-list changes to refresh urgency.
-    if (client_list != root_.client_list || urgency_changed)
+    if (urgency_changed)
+        properties_.erase({ root, e->_NET_CLIENT_LIST });
+    publish(root, e->_NET_CLIENT_LIST, XCB_ATOM_WINDOW, client_list);
+
+    // Monitor-major flat desktops. Workareas and viewports are relative to the
+    // origin of the combined monitor bounds.
+    auto const& monitors = state_.monitors();
+    int32_t min_x = INT32_MAX, min_y = INT32_MAX, max_x = INT32_MIN, max_y = INT32_MIN;
+    for (auto const& m : monitors)
     {
-        xcb_ewmh_set_client_list(ewmh_.get(), 0, client_list.size(), client_list.data());
-        root_.client_list = std::move(client_list);
+        min_x = std::min<int32_t>(min_x, m.geometry.x);
+        min_y = std::min<int32_t>(min_y, m.geometry.y);
+        max_x = std::max<int32_t>(max_x, m.geometry.x + m.geometry.width);
+        max_y = std::max<int32_t>(max_y, m.geometry.y + m.geometry.height);
     }
-    if (auto layout = desktop_layout(); root_.desktops != layout)
+    std::string names;
+    std::vector<uint32_t> viewports, workareas;
+    for (auto const& m : monitors)
     {
-        xcb_ewmh_set_number_of_desktops(ewmh_.get(), 0, layout.count);
-        ewmh_.set_desktop_names(layout.names);
-        xcb_ewmh_set_desktop_geometry(ewmh_.get(), 0, layout.width, layout.height);
-        ewmh_.set_desktop_viewport(layout.viewports);
-        ewmh_.set_workarea(layout.workareas);
-        root_.desktops = std::move(layout);
+        Geometry area = m.working_area();
+        for (auto const& name : config().workspaces.names)
+        {
+            names += name + '\0';
+            viewports.insert(viewports.end(), { static_cast<uint32_t>(std::max(0, m.geometry.x - min_x)),
+                                                static_cast<uint32_t>(std::max(0, m.geometry.y - min_y)) });
+            workareas.insert(workareas.end(), { static_cast<uint32_t>(std::clamp(area.x - min_x, 0, INT16_MAX)),
+                                                static_cast<uint32_t>(std::clamp(area.y - min_y, 0, INT16_MAX)),
+                                                area.width,
+                                                area.height });
+        }
     }
-    auto const& focused = state_.monitors()[state_.focused_monitor()];
-    if (auto desktop = state_.desktop_index(state_.focused_monitor(), focused.current_workspace); root_.current_desktop != desktop)
-    {
-        xcb_ewmh_set_current_desktop(ewmh_.get(), 0, desktop);
-        root_.current_desktop = desktop;
-    }
-    if (root_.active != state_.active_window())
-    {
-        xcb_ewmh_set_active_window(ewmh_.get(), 0, state_.active_window());
-        root_.active = state_.active_window();
-    }
-    if (root_.showing_desktop != state_.showing_desktop())
-    {
-        xcb_ewmh_set_showing_desktop(ewmh_.get(), 0, state_.showing_desktop());
-        root_.showing_desktop = state_.showing_desktop();
-    }
+    auto const& focused = monitors[state_.focused_monitor()];
+    uint32_t const count[] = { static_cast<uint32_t>(monitors.size() * config().workspaces.count) };
+    uint32_t const size[] = { static_cast<uint32_t>(std::max(1, max_x - min_x)), static_cast<uint32_t>(std::max(1, max_y - min_y)) };
+    uint32_t const current[] = { state_.desktop_index(state_.focused_monitor(), focused.current_workspace) };
+    uint32_t const active[] = { state_.active_window() };
+    uint32_t const showing[] = { state_.showing_desktop() };
+    publish(root, e->_NET_NUMBER_OF_DESKTOPS, XCB_ATOM_CARDINAL, count);
+    publish(root, e->_NET_DESKTOP_NAMES, e->UTF8_STRING, 8, names);
+    publish(root, e->_NET_DESKTOP_GEOMETRY, XCB_ATOM_CARDINAL, size);
+    publish(root, e->_NET_DESKTOP_VIEWPORT, XCB_ATOM_CARDINAL, viewports);
+    publish(root, e->_NET_WORKAREA, XCB_ATOM_CARDINAL, workareas);
+    publish(root, e->_NET_CURRENT_DESKTOP, XCB_ATOM_CARDINAL, current);
+    publish(root, e->_NET_ACTIVE_WINDOW, XCB_ATOM_WINDOW, active);
+    publish(root, e->_NET_SHOWING_DESKTOP, XCB_ATOM_CARDINAL, showing);
 }
 
 // A changed desired order, a forwarded restack, or an explicit focus request
@@ -419,30 +381,24 @@ void WindowManager::publish_root(std::vector<State::Projected> const& clients, b
 void WindowManager::reconcile_stacking(State::FullscreenVisibility const& fullscreen, bool reassert)
 {
     auto order = stacking::compute_order(state_, fullscreen);
-    if (order == root_.stacking && !restack_requested_ && !reassert)
+    if (!publish(conn_.screen()->root, ewmh_.get()->_NET_CLIENT_LIST_STACKING, XCB_ATOM_WINDOW, order) && !restack_requested_
+        && !reassert)
         return;
-    if (order.size() > 1)
+    if (order.size() < 2)
+        return;
+    auto tree = xcb_query_tree_reply(conn_.get(), xcb_query_tree(conn_.get(), conn_.screen()->root), nullptr);
+    std::vector<stacking::StackMove> moves;
+    if (tree)
+        moves = stacking::plan_moves(
+            { xcb_query_tree_children(tree), static_cast<size_t>(xcb_query_tree_children_length(tree)) }, order
+        );
+    else
+        for (size_t i = 1; i < order.size(); ++i) moves.push_back({ order[i], order[i - 1], XCB_STACK_MODE_ABOVE });
+    free(tree);
+    for (auto const& move : moves)
     {
-        auto tree = xcb_query_tree_reply(conn_.get(), xcb_query_tree(conn_.get(), conn_.screen()->root), nullptr);
-        std::vector<stacking::StackMove> moves;
-        if (tree)
-            moves = stacking::plan_moves(
-                { xcb_query_tree_children(tree), static_cast<size_t>(xcb_query_tree_children_length(tree)) },
-                order
-            );
-        else
-            for (size_t i = 1; i < order.size(); ++i) moves.push_back({ order[i], order[i - 1], XCB_STACK_MODE_ABOVE });
-        free(tree);
-        for (auto const& move : moves)
-        {
-            uint32_t values[] = { move.sibling, move.mode };
-            xcb_configure_window(conn_.get(), move.window, XCB_CONFIG_WINDOW_SIBLING | XCB_CONFIG_WINDOW_STACK_MODE, values);
-        }
-    }
-    if (order != root_.stacking)
-    {
-        xcb_ewmh_set_client_list_stacking(ewmh_.get(), 0, order.size(), order.data());
-        root_.stacking = std::move(order);
+        uint32_t values[] = { move.sibling, move.mode };
+        xcb_configure_window(conn_.get(), move.window, XCB_CONFIG_WINDOW_SIBLING | XCB_CONFIG_WINDOW_STACK_MODE, values);
     }
 }
 
@@ -458,8 +414,9 @@ void WindowManager::withdraw_removed()
             ++it;
             continue;
         }
-        uint32_t withdrawn[] = { WM_STATE_WITHDRAWN, 0 };
-        xcb_change_property(conn_.get(), XCB_PROP_MODE_REPLACE, it->first, atoms_.wm_state, atoms_.wm_state, 32, 2, withdrawn);
+        uint32_t const withdrawn[] = { WM_STATE_WITHDRAWN, 0 };
+        publish(it->first, atoms_.wm_state, atoms_.wm_state, withdrawn);
+        properties_.erase(properties_.lower_bound({ it->first, 0 }), properties_.lower_bound({ it->first + 1, 0 }));
         if (it->second.states)
             unfocused.emplace_back(it->first, std::vector<xcb_atom_t>{ });
         it = outputs_.erase(it);

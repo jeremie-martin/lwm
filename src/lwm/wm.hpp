@@ -66,8 +66,8 @@ private:
         xcb_atom_t lwm_restart_owner;
     };
 
-    // Last published values; forget an externally changed field to reconcile it.
-    // Domain decisions must use State, not this output cache.
+    // Last published window state outside plain properties; forget an externally
+    // changed field to reconcile it. Domain decisions must use State, not caches.
     struct Output
     {
         bool mapped = false;
@@ -75,38 +75,16 @@ private:
         std::optional<Geometry> geometry; ///< Last on-screen rectangle; border width is tracked separately
         uint32_t border_width = 0;
         std::optional<uint32_t> border_color;
-        std::optional<uint32_t> wm_state;
-        std::optional<uint32_t> desktop;
-        std::optional<WindowStates> states; ///< Owned _NET_WM_STATE values
-        char const* window_class = nullptr;
-        std::optional<bool> urgent;
-        std::optional<std::optional<FullscreenMonitors>> fullscreen_monitors;
+        std::optional<WindowStates> states; ///< Owned _NET_WM_STATE values, merged with other parties' atoms
+        std::optional<bool> urgent;         ///< Urgency mirrored into the application's WM_HINTS
         // Protocol bookkeeping, not projections of state.
         bool ignore_urgency_echo = false;
         uint32_t sync_counter = 0;
         uint64_t sync_value = 0;
     };
 
-    struct DesktopLayout
-    {
-        uint32_t count = 0;
-        std::vector<std::string> names;
-        uint32_t width = 0;
-        uint32_t height = 0;
-        std::vector<std::pair<uint32_t, uint32_t>> viewports;
-        std::vector<Geometry> workareas;
-        bool operator==(DesktopLayout const&) const = default;
-    };
-
     struct RootOutput
     {
-        // Unset until first written, so a fresh WM replaces stale lists even when empty.
-        std::optional<std::vector<xcb_window_t>> client_list;
-        std::optional<std::vector<xcb_window_t>> stacking;
-        std::optional<xcb_window_t> active;
-        std::optional<uint32_t> current_desktop;
-        std::optional<bool> showing_desktop;
-        std::optional<DesktopLayout> desktops;
         std::vector<xcb_window_t> fullscreen_owners; ///< Logged ownership per monitor
         std::map<std::string, size_t> workspaces; ///< Current workspace per output name
         std::string snapshot;                     ///< State payload behind the last state_change
@@ -123,6 +101,9 @@ private:
     // _NET_WM_STATE atoms indexed by WindowState; other parties' atoms are preserved.
     std::array<xcb_atom_t, static_cast<size_t>(WindowState::Count)> state_atoms_{ };
     std::unordered_map<xcb_window_t, Output> outputs_;
+    // Last written bytes of every published property; nullopt records a deletion.
+    // An unknown property is always written, so a fresh WM replaces stale values.
+    std::map<std::pair<xcb_window_t, xcb_atom_t>, std::optional<std::string>> properties_;
     RootOutput root_;
     ipc::Server ipc_;
     // Process-owned signal handlers and reload pipe survive WM reconstruction.
@@ -215,6 +196,10 @@ private:
     std::optional<Geometry> read_window_geometry(xcb_window_t window) const;
 
     // wm_manage.cpp: admission adapters
+    bool publish(
+        xcb_window_t window, xcb_atom_t property, xcb_atom_t type, uint8_t format, std::optional<std::string_view> bytes
+    );
+    bool publish(xcb_window_t window, xcb_atom_t property, xcb_atom_t type, std::span<uint32_t const> words);
     void scan_existing_windows(bool handoff);
     void manage(Observed const& observed, bool adopting);
 
@@ -226,11 +211,9 @@ private:
     bool write_geometry(Client const& client, Output& output, Geometry geometry, uint32_t border);
     void send_configure_notify(xcb_window_t window, Geometry geometry, uint32_t border);
     bool publish_properties(Client const& client, Output& output, StateUpdates& updates);
-    void publish_window_class(xcb_window_t window, char const* kind);
     void publish_urgency(Client const& client, Output& output);
     void publish_fixtures();
     void publish_root(std::vector<State::Projected> const& clients, bool urgency_changed);
-    DesktopLayout desktop_layout() const;
     void reconcile_stacking(State::FullscreenVisibility const& fullscreen, bool reassert);
     void withdraw_removed();
     void commit_focus(uint32_t time);

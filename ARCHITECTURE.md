@@ -109,9 +109,12 @@ revision counter only when a value actually changes. User-time bookkeeping is no
 published and does not advance it.
 
 Visibility, fullscreen ownership, effective layer/skip values, published
-`_NET_WM_STATE` values and tiled rectangles are derived. The shell's `Output` and
-`RootOutput` caches record what was last published so completion can skip redundant
-requests; they never drive domain decisions.
+`_NET_WM_STATE` values and tiled rectangles are derived. Completion writes every
+published window and root property through one cache of the bytes last written per
+window and property, so unchanged values cost nothing and a fresh WM rewrites stale
+ones. Per-window `Output` records cover what is not a plain property: geometry and
+mapping, border color, `_NET_WM_STATE` merged with other parties' atoms, and urgency
+mirrored into the application's `WM_HINTS`. Caches never drive domain decisions.
 
 ## Operations and completion
 
