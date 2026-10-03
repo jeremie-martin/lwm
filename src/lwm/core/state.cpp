@@ -339,7 +339,7 @@ bool State::relocate(
 {
     if (monitor >= monitors_.size() || workspace >= monitors_[monitor].workspaces.size())
         return false;
-    auto& client = edit(id);
+    auto& client = clients_.at(id);
     bool tiled = client.kind() == Client::Kind::Tiled;
     size_t source = client.monitor;
     if (source == monitor && client.workspace == workspace)
@@ -350,12 +350,15 @@ bool State::relocate(
         auto from = std::ranges::find(windows, client.id);
         auto target = windows.begin() + static_cast<std::ptrdiff_t>(std::min(*tile_index, windows.size() - 1));
         // Reordering keeps membership and destination preference.
+        if (from != target)
+            mutated();
         if (from < target)
             std::rotate(from, from + 1, target + 1);
         else if (target < from)
             std::rotate(target, from, from + 1);
         return true;
     }
+    mutated();
     if (tiled)
         detach(client);
     else if (source != monitor && geometry != RelocationGeometry::Preserve)
@@ -407,9 +410,10 @@ void State::forget_missing_tile_slot(Client& client) const
 
 void State::set_mode(xcb_window_t id, bool floating)
 {
-    auto& client = edit(id);
+    auto& client = clients_.at(id);
     if (floating == (client.kind() == Client::Kind::Floating))
         return;
+    mutated();
     LWM_LOG_DEBUG("Client kind changed: window={:#x} floating={}", id, floating);
     if (auto* tiled = tiled_mode(client))
     {

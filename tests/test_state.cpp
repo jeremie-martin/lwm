@@ -426,6 +426,13 @@ TEST_CASE("Geometry derivation does not mutate the domain", "[state]")
     revision = state.revision();
     state.user_time(1, 0, XCB_NONE);
     CHECK(state.revision() == revision);
+    // Repeating the current placement or mode is not a mutation.
+    state.floating(1, false);
+    revision = state.revision();
+    state.relocate(1, 0, 0);
+    state.relocate(1, 0, 0, State::RelocationGeometry::Preserve, 0);
+    state.floating(1, false);
+    CHECK(state.revision() == revision);
 }
 
 TEST_CASE("Maximize presentation preserves normal placement", "[state][floating]")
