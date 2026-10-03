@@ -7,16 +7,8 @@ namespace lwm {
 /// Defaults derived from the first recognized `_NET_WM_WINDOW_TYPE` and transient status.
 struct WindowClassification
 {
-    enum class Kind
-    {
-        Tiled,
-        Floating,
-        Dock,
-        Desktop,
-        Popup
-    };
-
-    Kind kind = Kind::Tiled;
+    WindowRole role = WindowRole::Client;
+    bool floating = false; ///< Default mode of a client
     bool skip_taskbar = false;
     bool skip_pager = false;
     bool above = false; // For UTILITY windows

@@ -4,34 +4,34 @@ namespace lwm {
 
 WindowClassification classify_window_type(WindowType type, bool is_transient)
 {
-    using enum WindowClassification::Kind;
+    using enum WindowRole;
     switch (type)
     {
         case WindowType::Desktop:
-            return { Desktop, true, true };
+            return { Desktop, false, true, true };
         case WindowType::Dock:
-            return { Dock, true, true };
+            return { Dock, false, true, true };
         case WindowType::Toolbar:
         case WindowType::Menu:
         case WindowType::Splash:
-            return { Floating, true, true };
+            return { Client, true, true, true };
         case WindowType::Utility:
-            return { Floating, true, true, true };
+            return { Client, true, true, true, true };
         case WindowType::Dialog:
-            return { Floating };
+            return { Client, true };
         case WindowType::DropdownMenu:
         case WindowType::PopupMenu:
         case WindowType::Tooltip:
         case WindowType::Notification:
         case WindowType::Combo:
         case WindowType::Dnd:
-            return { Popup, true, true };
+            return { Popup, false, true, true };
         case WindowType::Normal:
             break;
     }
     if (is_transient)
-        return { Floating, true, true };
-    return { Tiled };
+        return { Client, true, true, true };
+    return { };
 }
 
 namespace {
@@ -81,10 +81,8 @@ WindowStates published_states(Client const& client, bool focused)
 
 std::optional<bool> default_floating(Client const& client)
 {
-    auto kind = defaults(client).kind;
-    if (kind != WindowClassification::Kind::Tiled && kind != WindowClassification::Kind::Floating)
-        return std::nullopt;
-    return kind == WindowClassification::Kind::Floating;
+    auto classification = defaults(client);
+    return classification.role == WindowRole::Client ? std::optional{ classification.floating } : std::nullopt;
 }
 
 } // namespace lwm

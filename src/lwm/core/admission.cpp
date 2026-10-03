@@ -23,17 +23,7 @@ WindowRole State::role(xcb_window_t id, WindowType type, bool transient, restart
         return fixture->role == Fixture::Role::Dock ? WindowRole::Dock : WindowRole::Desktop;
     if (handoff && handoff->find(id))
         return WindowRole::Client;
-    switch (classify_window_type(type, transient).kind)
-    {
-        case WindowClassification::Kind::Dock:
-            return WindowRole::Dock;
-        case WindowClassification::Kind::Desktop:
-            return WindowRole::Desktop;
-        case WindowClassification::Kind::Popup:
-            return WindowRole::Popup;
-        default:
-            return WindowRole::Client;
-    }
+    return classify_window_type(type, transient).role;
 }
 
 // Registers fixtures directly and returns the client candidate, or nothing for
