@@ -18,9 +18,6 @@ namespace {
 
 constexpr auto KILL_TIMEOUT = std::chrono::seconds(5);
 
-template <typename T> using Reply = std::unique_ptr<T, decltype(&free)>;
-template <typename T> Reply<T> reply(T* value) { return { value, &free }; }
-
 } // namespace
 
 WindowManager::WindowManager(Config config, SignalPipe& signals, std::string config_path)
@@ -371,7 +368,7 @@ RunResult WindowManager::run()
             }
             else if (auto* event = xcb_poll_for_event(conn_.get()))
             {
-                Reply<xcb_generic_event_t> owned(event, &free);
+                auto owned = reply(event);
                 --remaining;
                 dispatch_event(*owned, remaining, batch_deadline);
             }

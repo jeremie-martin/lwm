@@ -1,3 +1,4 @@
+#include "lwm/core/xproperty.hpp"
 #include "lwm/core/invariants.hpp"
 #include "lwm/core/classification.hpp"
 #include "lwm/core/log.hpp"
@@ -214,7 +215,7 @@ bool WindowManager::publish_properties(Client const& client, Output& output, Sta
         publish_urgency(client, output);
     uint32_t const desktop[] = { client.sticky ? STICKY_DESKTOP : state_.desktop_index(client.monitor, client.workspace) };
     publish(id, e->_NET_WM_DESKTOP, XCB_ATOM_CARDINAL, desktop);
-    uint32_t const wm_state[] = { client.iconic ? WM_STATE_ICONIC : WM_STATE_NORMAL, 0 };
+    uint32_t const wm_state[] = { client.iconic ? XCB_ICCCM_WM_STATE_ICONIC : XCB_ICCCM_WM_STATE_NORMAL, 0 };
     publish(id, atoms_.wm_state, atoms_.wm_state, wm_state);
     std::vector<xcb_atom_t> actions = { e->_NET_WM_ACTION_CLOSE,      e->_NET_WM_ACTION_CHANGE_DESKTOP, e->_NET_WM_ACTION_MINIMIZE,
                                         e->_NET_WM_ACTION_STICK,      e->_NET_WM_ACTION_FULLSCREEN,     e->_NET_WM_ACTION_ABOVE,
@@ -246,12 +247,12 @@ void WindowManager::publish_urgency(Client const& client, Output& output)
     xcb_icccm_wm_hints_t hints{ };
     bool present =
         xcb_icccm_get_wm_hints_reply(conn_.get(), xcb_icccm_get_wm_hints(conn_.get(), client.id), &hints, nullptr);
-    if ((!present && !urgent) || ((hints.flags & XUrgencyHint) != 0) == urgent)
+    if ((!present && !urgent) || (xcb_icccm_wm_hints_get_urgency(&hints) != 0) == urgent)
         return;
     if (urgent)
-        hints.flags |= XUrgencyHint;
+        xcb_icccm_wm_hints_set_urgency(&hints);
     else
-        hints.flags &= ~XUrgencyHint;
+        hints.flags &= ~XCB_ICCCM_WM_HINT_X_URGENCY;
     xcb_icccm_set_wm_hints(conn_.get(), client.id, &hints);
 }
 
@@ -259,7 +260,7 @@ void WindowManager::publish_fixtures()
 {
     for (auto const& [id, fixture] : state_.fixtures())
     {
-        uint32_t const wm_state[] = { WM_STATE_NORMAL, 0 };
+        uint32_t const wm_state[] = { XCB_ICCCM_WM_STATE_NORMAL, 0 };
         publish(id, atoms_.wm_state, atoms_.wm_state, wm_state);
         publish(id, atoms_.lwm_window_class, ewmh_.get()->UTF8_STRING, 8, fixture_role_str(fixture.role));
         if (auto& output = outputs_[id]; !output.mapped)
@@ -354,15 +355,15 @@ void WindowManager::reconcile_stacking(State::FullscreenVisibility const& fullsc
         return;
     if (order.size() < 2)
         return;
-    auto tree = xcb_query_tree_reply(conn_.get(), xcb_query_tree(conn_.get(), conn_.screen()->root), nullptr);
+    auto tree = reply(xcb_query_tree_reply(conn_.get(), xcb_query_tree(conn_.get(), conn_.screen()->root), nullptr));
     std::vector<stacking::StackMove> moves;
     if (tree)
         moves = stacking::plan_moves(
-            { xcb_query_tree_children(tree), static_cast<size_t>(xcb_query_tree_children_length(tree)) }, order
+            { xcb_query_tree_children(tree.get()), static_cast<size_t>(xcb_query_tree_children_length(tree.get())) },
+            order
         );
     else
         for (size_t i = 1; i < order.size(); ++i) moves.push_back({ order[i], order[i - 1], XCB_STACK_MODE_ABOVE });
-    free(tree);
     for (auto const& move : moves)
     {
         uint32_t values[] = { move.sibling, move.mode };
@@ -382,7 +383,7 @@ void WindowManager::withdraw_removed()
             ++it;
             continue;
         }
-        uint32_t const withdrawn[] = { WM_STATE_WITHDRAWN, 0 };
+        uint32_t const withdrawn[] = { XCB_ICCCM_WM_STATE_WITHDRAWN, 0 };
         publish(it->first, atoms_.wm_state, atoms_.wm_state, withdrawn);
         properties_.erase(properties_.lower_bound({ it->first, 0 }), properties_.lower_bound({ it->first + 1, 0 }));
         if (it->second.states)

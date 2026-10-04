@@ -8,18 +8,30 @@
 #include <vector>
 #include <xcb/xcb.h>
 
+namespace lwm {
+// Owns one reply that XCB allocated with malloc.
+template <typename T> using Reply = std::unique_ptr<T, decltype(&std::free)>;
+template <typename T> Reply<T> reply(T* value) { return { value, &std::free }; }
+} // namespace lwm
+
 namespace lwm::xproperty {
-using Reply = std::unique_ptr<xcb_get_property_reply_t, decltype(&std::free)>;
+using Reply = lwm::Reply<xcb_get_property_reply_t>;
+
+inline xcb_get_property_cookie_t
+request(xcb_connection_t* connection, xcb_window_t window, xcb_atom_t property, xcb_atom_t type, uint32_t limit)
+{
+    return xcb_get_property(connection, false, window, property, type, 0, limit);
+}
 
 inline Reply receive(xcb_connection_t* connection, xcb_get_property_cookie_t cookie)
 {
-    return { xcb_get_property_reply(connection, cookie, nullptr), &std::free };
+    return reply(xcb_get_property_reply(connection, cookie, nullptr));
 }
 
 inline Reply
 read(xcb_connection_t* connection, xcb_window_t window, xcb_atom_t property, xcb_atom_t type, uint32_t limit)
 {
-    return receive(connection, xcb_get_property(connection, false, window, property, type, 0, limit));
+    return receive(connection, request(connection, window, property, type, limit));
 }
 
 // Callers decide the fallback; malformed, missing and incomplete numeric data
@@ -37,14 +49,17 @@ inline std::span<uint32_t const> words(Reply const& reply, xcb_atom_t type)
              static_cast<size_t>(xcb_get_property_value_length(reply.get())) / 4 };
 }
 
+inline std::optional<uint32_t> scalar(xcb_connection_t* connection, xcb_get_property_cookie_t cookie, xcb_atom_t type)
+{
+    auto reply = receive(connection, cookie);
+    auto values = words(reply, type);
+    return values.size() == 1 ? std::optional{ values.front() } : std::nullopt;
+}
+
 inline std::optional<uint32_t>
 scalar(xcb_connection_t* connection, xcb_window_t window, xcb_atom_t property, xcb_atom_t type)
 {
-    auto reply = read(connection, window, property, type, 1);
-    auto values = words(reply, type);
-    if (values.size() != 1)
-        return std::nullopt;
-    return values.front();
+    return scalar(connection, request(connection, window, property, type, 1), type);
 }
 
 inline std::vector<uint32_t> read_words(

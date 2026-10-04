@@ -1,3 +1,4 @@
+#include "lwm/core/xproperty.hpp"
 #include "lwm/core/focus.hpp"
 #include "lwm/core/classification.hpp"
 #include "lwm/core/log.hpp"
@@ -251,7 +252,7 @@ bool WindowManager::grab_pointer(xcb_cursor_t cursor)
         return false;
     // A drag that ended earlier in this operation may still hold the grab.
     release_pointer();
-    auto* reply = xcb_grab_pointer_reply(
+    auto grab = reply(xcb_grab_pointer_reply(
         conn_.get(),
         xcb_grab_pointer(
             conn_.get(),
@@ -265,9 +266,8 @@ bool WindowManager::grab_pointer(xcb_cursor_t cursor)
             XCB_CURRENT_TIME
         ),
         nullptr
-    );
-    pointer_grabbed_ = reply && reply->status == XCB_GRAB_STATUS_SUCCESS;
-    free(reply);
+    ));
+    pointer_grabbed_ = grab && grab->status == XCB_GRAB_STATUS_SUCCESS;
     return pointer_grabbed_;
 }
 
@@ -351,7 +351,7 @@ void WindowManager::handle_client_message(xcb_client_message_event_t const& e)
             e.window,
             FullscreenMonitors{ e.data.data32[0], e.data.data32[1], e.data.data32[2], e.data.data32[3] }
         );
-    else if (e.type == atoms_.wm_change_state && e.data.data32[0] == WM_STATE_ICONIC && client)
+    else if (e.type == atoms_.wm_change_state && e.data.data32[0] == XCB_ICCCM_WM_STATE_ICONIC && client)
         state_.iconic(e.window, true);
     else if (e.type == ewmh->_NET_WM_STATE)
         handle_wm_state_change(e);
@@ -363,7 +363,7 @@ void WindowManager::handle_client_message(xcb_client_message_event_t const& e)
     else if (e.type == ewmh->_NET_ACTIVE_WINDOW)
     {
         LWM_LOG_DEBUG("_NET_ACTIVE_WINDOW request: window={:#x} source={}", e.window, e.data.data32[0]);
-        state_.request_activation(e.window, e.data.data32[0] == 1, e.data.data32[1]);
+        state_.request_activation(e.window, e.data.data32[0] == XCB_EWMH_CLIENT_SOURCE_TYPE_NORMAL, e.data.data32[1]);
     }
     else if (e.type == ewmh->_NET_WM_DESKTOP)
     {
@@ -403,7 +403,7 @@ void WindowManager::handle_restack_message(xcb_client_message_event_t const& e)
 
 void WindowManager::handle_wm_state_change(xcb_client_message_event_t const& e)
 {
-    if (e.data.data32[0] > 2)
+    if (e.data.data32[0] > XCB_EWMH_WM_STATE_TOGGLE)
         return;
     xcb_atom_t const atoms[] = { e.data.data32[1], e.data.data32[2] };
     state_.request_states(e.window, static_cast<StateChange>(e.data.data32[0]), ewmh_.states(atoms));
@@ -413,13 +413,13 @@ void WindowManager::handle_moveresize_window(xcb_client_message_event_t const& e
 {
     uint32_t flags = e.data.data32[0];
     GeometryRequest request;
-    if (flags & (1 << 8))
+    if (flags & XCB_EWMH_MOVERESIZE_WINDOW_X)
         request.x = geometry_coordinate(static_cast<int32_t>(e.data.data32[1]));
-    if (flags & (1 << 9))
+    if (flags & XCB_EWMH_MOVERESIZE_WINDOW_Y)
         request.y = geometry_coordinate(static_cast<int32_t>(e.data.data32[2]));
-    if (flags & (1 << 10))
+    if (flags & XCB_EWMH_MOVERESIZE_WINDOW_WIDTH)
         request.width = geometry_extent(e.data.data32[3]);
-    if (flags & (1 << 11))
+    if (flags & XCB_EWMH_MOVERESIZE_WINDOW_HEIGHT)
         request.height = geometry_extent(e.data.data32[4]);
     state_.moveresize_request(e.window, request);
 }
@@ -427,9 +427,9 @@ void WindowManager::handle_moveresize_window(xcb_client_message_event_t const& e
 void WindowManager::handle_wm_moveresize(xcb_client_message_event_t const& e)
 {
     uint32_t direction = e.data.data32[2];
-    if (direction == 11) // _NET_WM_MOVERESIZE_CANCEL
+    if (direction == XCB_EWMH_WM_MOVERESIZE_CANCEL)
         return state_.cancel_moveresize(e.window);
-    if (direction > 8 || e.data.data32[3] > 255)
+    if (direction > XCB_EWMH_WM_MOVERESIZE_MOVE || e.data.data32[3] > 255)
         return;
     using Edge = floating::ResizeEdge;
     static constexpr Edge edges[] = { Edge::Top | Edge::Left,     Edge::Top,    Edge::Top | Edge::Right,

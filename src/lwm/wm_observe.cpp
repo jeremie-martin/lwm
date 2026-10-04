@@ -11,17 +11,8 @@ namespace lwm {
 
 namespace {
 
-xcb_get_property_cookie_t request(xcb_connection_t* conn, xcb_window_t window, xcb_atom_t property, xcb_atom_t type, uint32_t limit)
-{
-    return xcb_get_property(conn, 0, window, property, type, 0, limit);
-}
-
-std::optional<uint32_t> scalar(xcb_connection_t* conn, xcb_get_property_cookie_t cookie, xcb_atom_t type)
-{
-    auto reply = xproperty::receive(conn, cookie);
-    auto values = xproperty::words(reply, type);
-    return values.size() == 1 ? std::optional{ values.front() } : std::nullopt;
-}
+using xproperty::request;
+using xproperty::scalar;
 
 // Titles are display metadata: a bounded prefix of either encoding.
 std::optional<std::string> text(xcb_connection_t* conn, xcb_get_property_cookie_t cookie, xcb_atom_t type)
@@ -33,6 +24,7 @@ std::optional<std::string> text(xcb_connection_t* conn, xcb_get_property_cookie_
 }
 
 constexpr uint32_t kTitleLimit = 1024;
+constexpr char const* kUntitled = "Unnamed";
 
 struct NameCookies
 {
@@ -43,7 +35,7 @@ std::string name(xcb_connection_t* conn, NameCookies cookies, xcb_atom_t utf8)
 {
     auto net = text(conn, cookies.net, utf8);
     auto legacy = text(conn, cookies.legacy, XCB_ATOM_STRING);
-    return net ? *net : legacy ? *legacy : "Unnamed";
+    return net ? *net : legacy.value_or(kUntitled);
 }
 
 std::pair<std::string, std::string> wm_class(xcb_connection_t* conn, xcb_get_property_cookie_t cookie)
@@ -76,7 +68,7 @@ Hints hints(xcb_connection_t* conn, xcb_get_property_cookie_t cookie)
         return { };
     return { !(reply.flags & XCB_ICCCM_WM_HINT_INPUT) || reply.input,
              (reply.flags & XCB_ICCCM_WM_HINT_STATE) && reply.initial_state == XCB_ICCCM_WM_STATE_ICONIC,
-             (reply.flags & XUrgencyHint) != 0 };
+             xcb_icccm_wm_hints_get_urgency(&reply) != 0 };
 }
 
 // Nonpositive sizes keep the current extent; oversized ones saturate.
@@ -116,6 +108,12 @@ struct StrutCookies
     xcb_get_property_cookie_t partial, legacy;
 };
 
+StrutCookies request_strut(xcb_connection_t* conn, xcb_ewmh_connection_t* ewmh, xcb_window_t window)
+{
+    return { request(conn, window, ewmh->_NET_WM_STRUT_PARTIAL, XCB_ATOM_CARDINAL, 12),
+             request(conn, window, ewmh->_NET_WM_STRUT, XCB_ATOM_CARDINAL, 4) };
+}
+
 DockStrut strut(xcb_connection_t* conn, StrutCookies cookies)
 {
     auto partial_reply = xproperty::receive(conn, cookies.partial);
@@ -134,9 +132,21 @@ DockStrut strut(xcb_connection_t* conn, StrutCookies cookies)
     return { };
 }
 
+std::optional<Geometry> geometry(xcb_connection_t* conn, xcb_get_geometry_cookie_t cookie)
+{
+    auto reply = lwm::reply(xcb_get_geometry_reply(conn, cookie, nullptr));
+    return reply ? std::optional{ Geometry{ reply->x, reply->y, reply->width, reply->height } } : std::nullopt;
+}
+
+xcb_get_property_cookie_t request_user_time(xcb_connection_t* conn, xcb_ewmh_connection_t* ewmh, xcb_window_t window)
+{
+    return request(conn, window, ewmh->_NET_WM_USER_TIME, XCB_ATOM_CARDINAL, 1);
+}
+
 } // namespace
 
-// Two pipelined stages: identity and role first, then only what the role needs.
+// Pipelined stages: identity and role first, then only what the role needs,
+// then the rare reads that depend on those replies.
 std::vector<WindowManager::Observed> WindowManager::observe(std::span<xcb_window_t const> windows, bool adopting)
 {
     auto* c = conn_.get();
@@ -158,12 +168,9 @@ std::vector<WindowManager::Observed> WindowManager::observe(std::span<xcb_window
         auto& observed = result[i];
         auto& w = observed.window;
         w.id = windows[i];
-        if (auto* attributes = xcb_get_window_attributes_reply(c, identities[i].attributes, nullptr))
-        {
+        if (auto attributes = reply(xcb_get_window_attributes_reply(c, identities[i].attributes, nullptr)))
             observed.manageable =
                 !attributes->override_redirect && (!adopting || attributes->map_state == XCB_MAP_STATE_VIEWABLE);
-            free(attributes);
-        }
         w.type = window_type(identities[i].type);
         w.transient_for = window_value(c, identities[i].transient);
         observed.role = State::role(w.id, w.type, w.transient_for != XCB_NONE, handoff_ ? &*handoff_ : nullptr);
@@ -191,8 +198,7 @@ std::vector<WindowManager::Observed> WindowManager::observe(std::span<xcb_window
             xcb_change_window_attributes(c, window, XCB_CW_EVENT_MASK, &mask);
         }
         if (role == WindowRole::Dock)
-            struts[i] = StrutCookies{ request(c, window, e->_NET_WM_STRUT_PARTIAL, XCB_ATOM_CARDINAL, 12),
-                                      request(c, window, e->_NET_WM_STRUT, XCB_ATOM_CARDINAL, 4) };
+            struts[i] = request_strut(c, e, window);
         if (result[i].role == WindowRole::Client)
             properties[i] = Properties{
                 xcb_get_geometry(c, window),
@@ -205,7 +211,7 @@ std::vector<WindowManager::Observed> WindowManager::observe(std::span<xcb_window
                 xcb_icccm_get_wm_normal_hints(c, window),
                 xcb_icccm_get_wm_protocols(c, window, e->WM_PROTOCOLS),
                 request(c, window, e->_NET_WM_USER_TIME_WINDOW, XCB_ATOM_WINDOW, 1),
-                request(c, window, e->_NET_WM_USER_TIME, XCB_ATOM_CARDINAL, 1),
+                request_user_time(c, e, window),
                 xcb_ewmh_get_wm_fullscreen_monitors(e, window),
                 request(c, window, e->_NET_WM_SYNC_REQUEST_COUNTER, XCB_ATOM_CARDINAL, 2),
             };
@@ -219,11 +225,7 @@ std::vector<WindowManager::Observed> WindowManager::observe(std::span<xcb_window
         if (!properties[i])
             continue;
         auto const& cookie = *properties[i];
-        if (auto* geometry = xcb_get_geometry_reply(c, cookie.geometry, nullptr))
-        {
-            w.geometry = Geometry{ geometry->x, geometry->y, geometry->width, geometry->height };
-            free(geometry);
-        }
+        w.geometry = geometry(c, cookie.geometry);
         w.name = name(c, cookie.name, e->UTF8_STRING);
         std::tie(w.wm_class_name, w.wm_class) = wm_class(c, cookie.wm_class);
         uint32_t desktop = 0;
@@ -252,22 +254,45 @@ std::vector<WindowManager::Observed> WindowManager::observe(std::span<xcb_window
         // Basic and extended sync properties both start with the basic counter.
         if (std::ranges::contains(supported, e->_NET_WM_SYNC_REQUEST) && !counters.empty())
             observed.sync_counter = counters.front();
+    }
 
-        // Rare dependent reads: a separate user-time window, a parent LWM does
-        // not manage, and the current value of a sync counter.
+    // Rare dependent reads: a separate user-time window, a parent LWM does not
+    // manage, and the current value of a sync counter.
+    struct Dependent
+    {
+        std::optional<std::pair<xcb_get_window_attributes_cookie_t, xcb_get_property_cookie_t>> time_window;
+        std::optional<xcb_get_geometry_cookie_t> parent;
+        std::optional<xcb_sync_query_counter_cookie_t> counter;
+    };
+    std::vector<Dependent> dependents(windows.size());
+    for (size_t i = 0; i < windows.size(); ++i)
+    {
+        auto const& w = result[i].window;
+        if (!properties[i])
+            continue;
         if (w.user_time_window != XCB_NONE && w.user_time_window != w.id)
-        {
-            watch_user_time_window(w.user_time_window);
-            w.user_time = scalar(c, request(c, w.user_time_window, e->_NET_WM_USER_TIME, XCB_ATOM_CARDINAL, 1), XCB_ATOM_CARDINAL).value_or(0);
-        }
+            dependents[i].time_window = std::pair{ xcb_get_window_attributes(c, w.user_time_window),
+                                                   request_user_time(c, e, w.user_time_window) };
         if (w.transient_for != XCB_NONE && !state_.find(w.transient_for))
-            w.unmanaged_parent = read_window_geometry(w.transient_for);
-        if (observed.sync_counter)
-            if (auto* counter = xcb_sync_query_counter_reply(c, xcb_sync_query_counter(c, observed.sync_counter), nullptr))
-            {
-                observed.sync_value = (static_cast<uint64_t>(counter->counter_value.hi) << 32) | counter->counter_value.lo;
-                free(counter);
-            }
+            dependents[i].parent = xcb_get_geometry(c, w.transient_for);
+        if (result[i].sync_counter)
+            dependents[i].counter = xcb_sync_query_counter(c, result[i].sync_counter);
+    }
+    for (size_t i = 0; i < windows.size(); ++i)
+    {
+        auto& observed = result[i];
+        auto const& dependent = dependents[i];
+        if (auto const& time_window = dependent.time_window)
+        {
+            watch_user_time_window(observed.window.user_time_window, time_window->first);
+            observed.window.user_time = scalar(c, time_window->second, XCB_ATOM_CARDINAL).value_or(0);
+        }
+        if (dependent.parent)
+            observed.window.unmanaged_parent = geometry(c, *dependent.parent);
+        if (dependent.counter)
+            if (auto counter = reply(xcb_sync_query_counter_reply(c, *dependent.counter, nullptr)))
+                observed.sync_value = uint64_t{ static_cast<uint32_t>(counter->counter_value.hi) } << 32
+                    | counter->counter_value.lo;
     }
     return result;
 }
@@ -290,18 +315,14 @@ void WindowManager::handle_property_notify(xcb_property_notify_event_t const& ev
     auto* e = ewmh_.get();
     xcb_window_t window = event.window;
     xcb_atom_t atom = event.atom;
-    auto user_time = [&](xcb_window_t source)
-    { return scalar(c, request(c, source, e->_NET_WM_USER_TIME, XCB_ATOM_CARDINAL, 1), XCB_ATOM_CARDINAL).value_or(0); };
+    auto user_time = [&](xcb_window_t source) { return scalar(c, request_user_time(c, e, source), XCB_ATOM_CARDINAL).value_or(0); };
     // User time may live on a separate, unmanaged window.
     if (atom == e->_NET_WM_USER_TIME)
         return state_.user_time(window, user_time(window));
     if (state_.find_fixture(window))
     {
         if (atom == e->_NET_WM_STRUT || atom == e->_NET_WM_STRUT_PARTIAL)
-            state_.reserve(window,
-                           strut(c,
-                                 { request(c, window, e->_NET_WM_STRUT_PARTIAL, XCB_ATOM_CARDINAL, 12),
-                                   request(c, window, e->_NET_WM_STRUT, XCB_ATOM_CARDINAL, 4) }));
+            state_.reserve(window, strut(c, request_strut(c, e, window)));
         return;
     }
     auto const* client = state_.find(window);
@@ -311,7 +332,7 @@ void WindowManager::handle_property_notify(xcb_property_notify_event_t const& ev
     {
         // Title updates are frequent; the legacy name is read only when needed.
         auto net = text(c, request(c, window, e->_NET_WM_NAME, e->UTF8_STRING, kTitleLimit), e->UTF8_STRING);
-        state_.title(window, net ? *net : text(c, request(c, window, XCB_ATOM_WM_NAME, XCB_ATOM_STRING, kTitleLimit), XCB_ATOM_STRING).value_or("Unnamed"));
+        state_.title(window, net ? *net : text(c, request(c, window, XCB_ATOM_WM_NAME, XCB_ATOM_STRING, kTitleLimit), XCB_ATOM_STRING).value_or(kUntitled));
     }
     else if (atom == XCB_ATOM_WM_CLASS)
     {
@@ -350,7 +371,7 @@ void WindowManager::handle_property_notify(xcb_property_notify_event_t const& ev
     {
         auto time_window = window_value(c, request(c, window, e->_NET_WM_USER_TIME_WINDOW, XCB_ATOM_WINDOW, 1));
         if (time_window != XCB_NONE && time_window != window)
-            watch_user_time_window(time_window);
+            watch_user_time_window(time_window, xcb_get_window_attributes(c, time_window));
         state_.user_time_window(window, time_window, user_time(time_window != XCB_NONE ? time_window : window));
     }
 }
@@ -361,22 +382,16 @@ std::vector<xcb_atom_t> WindowManager::read_protocols(xcb_window_t window) const
 }
 
 // Observe user-time updates on a separate window without replacing its mask.
-void WindowManager::watch_user_time_window(xcb_window_t window)
+void WindowManager::watch_user_time_window(xcb_window_t window, xcb_get_window_attributes_cookie_t cookie)
 {
-    auto* attributes = xcb_get_window_attributes_reply(conn_.get(), xcb_get_window_attributes(conn_.get(), window), nullptr);
+    auto attributes = reply(xcb_get_window_attributes_reply(conn_.get(), cookie, nullptr));
     uint32_t mask = XCB_EVENT_MASK_PROPERTY_CHANGE | (attributes ? attributes->your_event_mask : 0);
-    free(attributes);
     xcb_change_window_attributes(conn_.get(), window, XCB_CW_EVENT_MASK, &mask);
 }
 
 std::optional<Geometry> WindowManager::read_window_geometry(xcb_window_t window) const
 {
-    auto* geometry = xcb_get_geometry_reply(conn_.get(), xcb_get_geometry(conn_.get(), window), nullptr);
-    if (!geometry)
-        return std::nullopt;
-    Geometry result{ geometry->x, geometry->y, geometry->width, geometry->height };
-    free(geometry);
-    return result;
+    return geometry(conn_.get(), xcb_get_geometry(conn_.get(), window));
 }
 
 } // namespace lwm

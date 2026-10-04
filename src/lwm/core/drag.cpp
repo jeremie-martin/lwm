@@ -56,7 +56,7 @@ State::Press State::press(xcb_window_t window, int16_t x, int16_t y, uint8_t but
     if (!hit)
     {
         hover(window, x, y);
-        return { true };
+        return { false };
     }
     auto previous = std::exchange(gap_click_, GapClick{ time, hit->hit.address, hit->monitor });
     auto elapsed = previous ? static_cast<int32_t>(time - previous->time) : 0;

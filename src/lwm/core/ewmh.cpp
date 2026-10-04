@@ -1,3 +1,4 @@
+#include "xproperty.hpp"
 #include "ewmh.hpp"
 #include <algorithm>
 #include <cstring>
@@ -34,18 +35,14 @@ Ewmh::Ewmh(Connection& conn)
     xcb_intern_atom_cookie_t* cookies = xcb_ewmh_init_atoms(conn_.get(), &ewmh_);
     auto focused_cookie = xcb_intern_atom(conn_.get(), 0, 21, "_NET_WM_STATE_FOCUSED");
     bool initialized = xcb_ewmh_init_atoms_replies(&ewmh_, cookies, nullptr);
-    auto* focused = xcb_intern_atom_reply(conn_.get(), focused_cookie, nullptr);
+    auto focused = reply(xcb_intern_atom_reply(conn_.get(), focused_cookie, nullptr));
     if (!initialized || !focused)
-    {
-        free(focused);
         throw std::runtime_error("Failed to initialize EWMH atoms");
-    }
     auto& e = ewmh_;
     state_atoms_ = { e._NET_WM_STATE_FULLSCREEN,     e._NET_WM_STATE_ABOVE,          e._NET_WM_STATE_BELOW,
                      e._NET_WM_STATE_STICKY,         e._NET_WM_STATE_MODAL,          e._NET_WM_STATE_SKIP_TASKBAR,
                      e._NET_WM_STATE_SKIP_PAGER,     e._NET_WM_STATE_MAXIMIZED_HORZ, e._NET_WM_STATE_MAXIMIZED_VERT,
                      e._NET_WM_STATE_HIDDEN,         e._NET_WM_STATE_DEMANDS_ATTENTION, focused->atom };
-    free(focused);
 }
 
 Ewmh::~Ewmh() { xcb_ewmh_connection_wipe(&ewmh_); }

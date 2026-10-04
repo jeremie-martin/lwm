@@ -1,3 +1,4 @@
+#include "xproperty.hpp"
 #include "connection.hpp"
 #include <stdexcept>
 
@@ -32,11 +33,10 @@ void Connection::init_randr()
 {
     // Sending QueryVersion also makes xcb cache the extension's event base.
     auto cookie = xcb_randr_query_version(conn_.get(), XCB_RANDR_MAJOR_VERSION, XCB_RANDR_MINOR_VERSION);
-    auto* version = xcb_randr_query_version_reply(conn_.get(), cookie, nullptr);
+    auto version = reply(xcb_randr_query_version_reply(conn_.get(), cookie, nullptr));
     auto const* extension = xcb_get_extension_data(conn_.get(), &xcb_randr_id);
     randr_available_ = version && extension && extension->present;
     randr_event_base_ = randr_available_ ? extension->first_event : 0;
-    free(version);
 }
 
 }

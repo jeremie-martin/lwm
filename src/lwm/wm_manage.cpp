@@ -1,6 +1,7 @@
 // Admission adapters: observe windows, let State decide their roles, then
 // install the X resources each role needs.
 
+#include "lwm/core/xproperty.hpp"
 #include "wm.hpp"
 #include <algorithm>
 
@@ -9,11 +10,10 @@ namespace lwm {
 void WindowManager::scan_existing_windows(bool handoff)
 {
     std::vector<xcb_window_t> children;
-    if (auto* tree = xcb_query_tree_reply(conn_.get(), xcb_query_tree(conn_.get(), conn_.screen()->root), nullptr))
+    if (auto tree = reply(xcb_query_tree_reply(conn_.get(), xcb_query_tree(conn_.get(), conn_.screen()->root), nullptr)))
     {
-        auto* first = xcb_query_tree_children(tree);
-        children.assign(first, first + xcb_query_tree_children_length(tree));
-        free(tree);
+        auto* first = xcb_query_tree_children(tree.get());
+        children.assign(first, first + xcb_query_tree_children_length(tree.get()));
     }
     // Only viewable, redirected windows are adopted.
     auto observed = observe(children, true);
@@ -23,11 +23,8 @@ void WindowManager::scan_existing_windows(bool handoff)
 
     std::optional<std::pair<int16_t, int16_t>> pointer;
     if (!handoff)
-        if (auto* reply = xcb_query_pointer_reply(conn_.get(), xcb_query_pointer(conn_.get(), conn_.screen()->root), nullptr))
-        {
-            pointer = { reply->root_x, reply->root_y };
-            free(reply);
-        }
+        if (auto query = reply(xcb_query_pointer_reply(conn_.get(), xcb_query_pointer(conn_.get(), conn_.screen()->root), nullptr)))
+            pointer = { query->root_x, query->root_y };
     state_.adopt(windows, handoff_ ? &*handoff_ : nullptr, pointer);
     handoff_.reset();
     for (auto const& window : observed) manage(window, true);

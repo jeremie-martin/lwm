@@ -40,14 +40,6 @@ constexpr int16_t OFF_SCREEN_X = -20000;
 /// _NET_WM_DESKTOP value of a window shown on every desktop.
 constexpr uint32_t STICKY_DESKTOP = 0xFFFFFFFF;
 
-/// ICCCM WM_STATE values
-constexpr uint32_t WM_STATE_WITHDRAWN = 0;
-constexpr uint32_t WM_STATE_NORMAL = 1;
-constexpr uint32_t WM_STATE_ICONIC = 3;
-
-/// ICCCM WM_HINTS urgency flag (not exposed by xcb_icccm as a named constant)
-constexpr uint32_t XUrgencyHint = 256; // 1L << 8
-
 /// X timestamps are 32-bit millisecond counters; ordering treats subtraction
 /// as a signed delta so it survives wraparound.
 inline bool timestamp_is_before(uint32_t timestamp, uint32_t reference)
