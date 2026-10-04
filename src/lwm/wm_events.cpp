@@ -196,7 +196,7 @@ std::optional<std::pair<std::string_view, Placement>> WindowManager::describe(xc
 void WindowManager::handle_enter_notify(xcb_enter_notify_event_t const& e)
 {
     bool window_crossing = e.event != conn_.screen()->root;
-    if (state_.drag() || (window_crossing && (e.mode != XCB_NOTIFY_MODE_NORMAL || e.detail == XCB_NOTIFY_DETAIL_INFERIOR)))
+    if (window_crossing && (e.mode != XCB_NOTIFY_MODE_NORMAL || e.detail == XCB_NOTIFY_DETAIL_INFERIOR))
         return;
     state_.hover(e.event, e.root_x, e.root_y);
 }

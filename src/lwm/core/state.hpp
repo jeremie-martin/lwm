@@ -185,8 +185,8 @@ public:
     void focus_monitor(size_t monitor);
     // Focus the adjacent monitor's fallback; returns whether the monitor changed.
     bool focus_adjacent_monitor(int direction);
-    // Focus follows the pointer into visible clients; elsewhere the pointer
-    // selects the monitor under it and clears focus there.
+    // Outside drags, focus follows the pointer into visible clients; elsewhere
+    // the pointer selects the monitor under it and releases focus there.
     void hover(xcb_window_t window, int16_t x, int16_t y);
     void show_desktop(bool enabled);
     // Settle one operation: end a drag whose context changed, then resolve
@@ -401,6 +401,7 @@ private:
 
     // Scratchpads
     ScratchpadConfig const* match_scratchpad(Client const& client) const;
+    template <typename Show> bool summon(xcb_window_t window, Show show);
     bool claim_pending_scratchpad(xcb_window_t id);
     void show_named_scratchpad(xcb_window_t id, ScratchpadConfig const& config);
     void show_pooled_scratchpad(xcb_window_t id);

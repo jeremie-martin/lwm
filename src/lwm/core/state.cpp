@@ -372,6 +372,8 @@ std::optional<uint32_t> State::complete_focus(uint32_t input_time)
 
 void State::hover(xcb_window_t window, int16_t x, int16_t y)
 {
+    if (drag_)
+        return;
     if (auto const* client = find(window))
     {
         if (window != active_window_ && visible(*client))

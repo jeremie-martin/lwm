@@ -78,25 +78,33 @@ void State::stash(xcb_window_t id)
     iconic(id, true);
 }
 
+// Shows a remote or hidden scratchpad here and focuses a shown inactive one.
+// Returns whether it was already the active client, which callers then hide.
+template <typename Show> bool State::summon(xcb_window_t window, Show show)
+{
+    auto const& client = require(window);
+    if (client.monitor != focused_monitor_ || !visible(client))
+        show();
+    else if (window != active_window_)
+        focus(window);
+    else
+        return true;
+    return false;
+}
+
 // Pool order owns selection, independently of workspace visibility or minimization.
-// Recall/focus the target first; cycling an active target advances the rotation.
+// Cycling an active target hides it and advances the rotation.
 void State::cycle_scratchpad_pool()
 {
     if (scratchpad_pool_.empty())
         return;
     auto window = scratchpad_pool_.back();
-    auto const& client = require(window);
-    if (client.monitor != focused_monitor_ || !visible(client))
-        show_pooled_scratchpad(window);
-    else if (window != active_window_)
-        focus(window);
-    else
-    {
-        iconic(window, true);
-        advance_scratchpad_pool();
-        if (scratchpad_pool_.size() > 1)
-            show_pooled_scratchpad(scratchpad_pool_.back());
-    }
+    if (!summon(window, [&] { show_pooled_scratchpad(window); }))
+        return;
+    iconic(window, true);
+    advance_scratchpad_pool();
+    if (scratchpad_pool_.size() > 1)
+        show_pooled_scratchpad(scratchpad_pool_.back());
 }
 
 // Pooled clients keep their mode and floating offset within the workarea.
@@ -146,13 +154,8 @@ std::expected<ScratchpadConfig const*, std::string> State::toggle_scratchpad(std
     auto window = slot->claimed_window();
     if (window == XCB_NONE)
         return slot->pending_launch() ? nullptr : &config;
-    auto const& client = require(window);
-    if (client.monitor != focused_monitor_ || !visible(client))
-        show_named_scratchpad(window, config);
-    else if (window == active_window_)
+    if (summon(window, [&] { show_named_scratchpad(window, config); }))
         iconic(window, true);
-    else
-        focus(window);
     return nullptr;
 }
 

@@ -57,15 +57,11 @@ std::string status_json();
 #define LWM_LOG_WARN(...) LWM_LOG_CALL(QUILL_LOG_WARNING, __VA_ARGS__)
 #define LWM_LOG_ERROR(...) LWM_LOG_CALL(QUILL_LOG_ERROR, __VA_ARGS__)
 #define LWM_LOG_CRITICAL(...) LWM_LOG_CALL(QUILL_LOG_CRITICAL, __VA_ARGS__)
-#define LWM_LOG_WARN_LIMIT(interval, ...)                               \
-    do                                                                  \
-    {                                                                   \
-        if (auto* lwm_logger = ::lwm::log::active_logger())             \
-            QUILL_LOG_WARNING_LIMIT(interval, lwm_logger, __VA_ARGS__); \
+#define LWM_LOG_LIMIT(macro, interval, ...)                 \
+    do                                                      \
+    {                                                       \
+        if (auto* lwm_logger = ::lwm::log::active_logger()) \
+            macro(interval, lwm_logger, __VA_ARGS__);       \
     } while (false)
-#define LWM_LOG_DEBUG_LIMIT(interval, ...)                            \
-    do                                                                \
-    {                                                                 \
-        if (auto* lwm_logger = ::lwm::log::active_logger())           \
-            QUILL_LOG_DEBUG_LIMIT(interval, lwm_logger, __VA_ARGS__); \
-    } while (false)
+#define LWM_LOG_WARN_LIMIT(interval, ...) LWM_LOG_LIMIT(QUILL_LOG_WARNING_LIMIT, interval, __VA_ARGS__)
+#define LWM_LOG_DEBUG_LIMIT(interval, ...) LWM_LOG_LIMIT(QUILL_LOG_DEBUG_LIMIT, interval, __VA_ARGS__)
