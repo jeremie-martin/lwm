@@ -333,19 +333,16 @@ void WindowManager::handle_property_notify(xcb_property_notify_event_t const& ev
     {
         auto observed = hints(c, xcb_icccm_get_wm_hints(c, window));
         state_.focus_hints(window, observed.accepts_input, client->supports_take_focus);
-        // WM_HINTS is shared with the application. A changed hint invalidates our
-        // publication cache regardless of which urgency sources remain in State.
-        auto& output = outputs_[window];
-        if (output.urgent != observed.urgent)
+        // WM_HINTS is shared with the application: only a value that differs from
+        // our mirror is its request, so our own write's echo changes nothing.
+        // Clearing the hint withdraws only the application's urgency, and the
+        // forgotten mirror lets publication reassert what State still holds.
+        if (auto& output = outputs_[window]; output.urgent != observed.urgent)
         {
+            state_.hint_urgency(window, observed.urgent);
             output.urgent.reset();
             presentation_dirty_ = true;
         }
-        // Clearing or deleting the hint withdraws only the application's request;
-        // publication reasserts any remaining WM-initiated urgency. Our own write
-        // echoes back once and is not an application request.
-        if (!std::exchange(output.ignore_urgency_echo, false) || !observed.urgent)
-            state_.hint_urgency(window, observed.urgent);
     }
     else if (atom == e->WM_PROTOCOLS)
         state_.focus_hints(window, client->accepts_input, std::ranges::contains(read_protocols(window), atoms_.wm_take_focus));

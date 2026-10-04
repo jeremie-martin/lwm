@@ -238,27 +238,20 @@ bool WindowManager::publish_properties(Client const& client, Output& output, Sta
     return urgency_changed;
 }
 
-// Mirrors urgency into ICCCM WM_HINTS for panels that read it. An LWM-only
-// write echoes back as PropertyNotify; the echo must not look app-originated.
+// Mirrors urgency into ICCCM WM_HINTS for panels that read it.
 void WindowManager::publish_urgency(Client const& client, Output& output)
 {
     bool urgent = client.urgency.active();
     output.urgent = urgent;
-    if (!urgent)
-        output.ignore_urgency_echo = false;
-    bool arm_echo = urgent && client.urgency.has(UrgencySource::WmInitiated) && !client.urgency.has(UrgencySource::App);
     xcb_icccm_wm_hints_t hints{ };
     bool present =
         xcb_icccm_get_wm_hints_reply(conn_.get(), xcb_icccm_get_wm_hints(conn_.get(), client.id), &hints, nullptr);
-    if (!present && !urgent)
-        return;
-    if (((hints.flags & XUrgencyHint) != 0) == urgent)
+    if ((!present && !urgent) || ((hints.flags & XUrgencyHint) != 0) == urgent)
         return;
     if (urgent)
         hints.flags |= XUrgencyHint;
     else
         hints.flags &= ~XUrgencyHint;
-    output.ignore_urgency_echo = arm_echo;
     xcb_icccm_set_wm_hints(conn_.get(), client.id, &hints);
 }
 

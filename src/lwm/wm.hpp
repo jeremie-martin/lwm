@@ -76,7 +76,6 @@ private:
         std::optional<WindowStates> states; ///< Owned _NET_WM_STATE values, merged with other parties' atoms
         std::optional<bool> urgent;         ///< Urgency mirrored into the application's WM_HINTS
         // Protocol bookkeeping, not projections of state.
-        bool ignore_urgency_echo = false;
         uint32_t sync_counter = 0;
         uint64_t sync_value = 0;
     };
