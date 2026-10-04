@@ -5,11 +5,9 @@
 
 namespace lwm {
 
-// Current workspace first, then sticky tiles in workspace order. A prospective
-// view reveals one tile in its normal workspace, without fullscreen occlusion.
-std::vector<xcb_window_t> State::workspace_tiles(
-    size_t monitor, size_t workspace, FullscreenVisibility const* fullscreen, xcb_window_t include
-) const
+// Current workspace first, then sticky tiles in workspace order.
+template <typename Eligible>
+std::vector<xcb_window_t> State::workspace_tiles(size_t monitor, size_t workspace, Eligible eligible) const
 {
     auto const& output = monitors_[monitor];
     std::vector<xcb_window_t> windows;
@@ -20,7 +18,7 @@ std::vector<xcb_window_t> State::workspace_tiles(
             auto const& client = require(window);
             if (index != workspace && !client.sticky)
                 continue;
-            if (fullscreen ? !client.fullscreen && visible(client, *fullscreen) : !client.iconic || window == include)
+            if (eligible(client))
                 windows.push_back(window);
         }
     };
@@ -33,7 +31,11 @@ std::vector<xcb_window_t> State::workspace_tiles(
 
 std::vector<xcb_window_t> State::tiled_participants(size_t monitor, FullscreenVisibility const& fullscreen) const
 {
-    return workspace_tiles(monitor, monitors_[monitor].current_workspace, &fullscreen);
+    return workspace_tiles(
+        monitor,
+        monitors_[monitor].current_workspace,
+        [&](Client const& client) { return !client.fullscreen && visible(client, fullscreen); }
+    );
 }
 
 std::vector<State::Projected> State::project(FullscreenVisibility const& fullscreen) const
@@ -88,10 +90,13 @@ Geometry State::normal_geometry(Client const& client) const
     auto windows = tiled_participants(client.monitor, fullscreen_visibility());
     if (std::ranges::find(windows, client.id) == windows.end())
     {
-        // Hidden, minimized and fullscreen tiles still have a well-defined
-        // normal rectangle: the slot they would occupy when revealed normally.
+        // Hidden, minimized and fullscreen tiles still have a well-defined normal
+        // rectangle: the slot they would occupy when revealed in their workspace
+        // without fullscreen occlusion.
         workspace = client.sticky ? workspace : client.workspace;
-        windows = workspace_tiles(client.monitor, workspace, nullptr, client.id);
+        windows = workspace_tiles(
+            client.monitor, workspace, [&](Client const& tile) { return !tile.iconic || tile.id == client.id; }
+        );
     }
     auto position = std::ranges::find(windows, client.id);
     assert(position != windows.end());

@@ -26,8 +26,12 @@ State::Press State::press(xcb_window_t window, int16_t x, int16_t y, uint8_t but
     );
     if (binding != config_.mousebinds.end())
     {
-        auto grip = [&](Edge edges)
-        { return Press{ true, can_drag(window) ? std::optional<Interaction>{ Grip{ window, edges } } : std::nullopt }; };
+        auto grip = [&](Edge edges) -> Press
+        {
+            if (!can_drag(window))
+                return { true };
+            return { true, Grip{ window, edges } };
+        };
         // Tiled and root clicks prefer a split; otherwise resize a floating
         // window or convert a tile once the pointer is held.
         if (binding->action == MouseAction::ResizeFloating && (!client || client->kind() == Client::Kind::Tiled))
@@ -52,7 +56,8 @@ State::Press State::press(xcb_window_t window, int16_t x, int16_t y, uint8_t but
             focus(window);
         return { false };
     }
-    auto hit = window == XCB_NONE && button == 1 && (modifiers & ~XCB_MOD_MASK_CONTROL) == 0 ? split_at(x, y) : std::nullopt;
+    bool gap_click = window == XCB_NONE && button == 1 && (modifiers & ~XCB_MOD_MASK_CONTROL) == 0;
+    auto hit = gap_click ? split_at(x, y) : std::nullopt;
     if (!hit)
     {
         hover(window, x, y);
@@ -135,8 +140,6 @@ void State::drag_to(int16_t x, int16_t y)
         return;
     drag_->last_x = x;
     drag_->last_y = y;
-    int32_t dx = static_cast<int32_t>(x) - drag_->start_x;
-    int32_t dy = static_cast<int32_t>(y) - drag_->start_y;
     if (auto* window = std::get_if<WindowDrag>(&drag_->operation))
     {
         if (window->kind == Client::Kind::Tiled)
@@ -151,7 +154,8 @@ void State::drag_to(int16_t x, int16_t y)
             end_drag(false);
             return;
         }
-        request_geometry(window->window, floating::drag_geometry(window->start_geometry, dx, dy, window->edges));
+        auto rectangle = floating::drag_geometry(window->start_geometry, drag_->dx(), drag_->dy(), window->edges);
+        request_geometry(window->window, rectangle);
         window->monitor = client->monitor;
         window->workspace = client->workspace;
         return;
@@ -160,7 +164,7 @@ void State::drag_to(int16_t x, int16_t y)
     auto const& split = resize.split;
     if (split.available_extent <= 0)
         return;
-    int32_t delta = split.direction == SplitDirection::Horizontal ? dx : dy;
+    int32_t delta = split.direction == SplitDirection::Horizontal ? drag_->dx() : drag_->dy();
     // Validation guarantees the resized workspace is still current.
     ratio(resize.monitor, split.address, config_.layout.clamp_ratio(split.ratio + static_cast<double>(delta) / split.available_extent));
 }
@@ -234,12 +238,7 @@ std::optional<Geometry> State::drag_preview(Client const& client) const
 {
     if (drag_ && client.kind() == Client::Kind::Tiled && !client.fullscreen)
         if (auto const* move = std::get_if<WindowDrag>(&drag_->operation); move && move->window == client.id)
-            return floating::drag_geometry(
-                move->start_geometry,
-                static_cast<int32_t>(drag_->last_x) - drag_->start_x,
-                static_cast<int32_t>(drag_->last_y) - drag_->start_y,
-                move->edges
-            );
+            return floating::drag_geometry(move->start_geometry, drag_->dx(), drag_->dy(), move->edges);
     return std::nullopt;
 }
 

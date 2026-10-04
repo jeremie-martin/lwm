@@ -22,6 +22,11 @@ NamedScratchpad const* State::scratchpad_claim(xcb_window_t id) const
     return it == named_scratchpads_.end() ? nullptr : &*it;
 }
 
+NamedScratchpad* State::slot(std::string_view name)
+{
+    return const_cast<NamedScratchpad*>(std::as_const(*this).named_scratchpad(name));
+}
+
 bool State::pooled(xcb_window_t id) const { return std::ranges::find(scratchpad_pool_, id) != scratchpad_pool_.end(); }
 
 void State::release_scratchpad(xcb_window_t id)
@@ -117,11 +122,11 @@ void State::show_pooled_scratchpad(xcb_window_t id)
 
 void State::scratchpad_pending(std::string_view name, bool pending)
 {
-    auto it = std::ranges::find(named_scratchpads_, name, &NamedScratchpad::name);
-    if (it == named_scratchpads_.end() || it->claimed_window() != XCB_NONE)
+    auto* slot = this->slot(name);
+    if (!slot || slot->claimed_window() != XCB_NONE)
         return;
     mutated();
-    it->window = pending ? std::nullopt : std::optional<xcb_window_t>{ XCB_NONE };
+    slot->window = pending ? std::nullopt : std::optional<xcb_window_t>{ XCB_NONE };
 }
 
 
@@ -162,13 +167,13 @@ std::expected<ScratchpadConfig const*, std::string> State::toggle_scratchpad(std
 // Pending launches show their window; an unrequested live match starts hidden.
 void State::claim_scratchpad(xcb_window_t id, ScratchpadConfig const& config)
 {
-    auto const* slot = named_scratchpad(config.name);
+    auto* slot = this->slot(config.name);
     if (!slot || slot->claimed_window() != XCB_NONE || !find(id))
         return;
     bool requested = slot->pending_launch();
     mutated();
     release_scratchpad(id);
-    std::ranges::find(named_scratchpads_, config.name, &NamedScratchpad::name)->window = id;
+    slot->window = id;
     if (requested)
         show_named_scratchpad(id, config);
     else

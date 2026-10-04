@@ -108,9 +108,11 @@ void State::switch_desktop(uint32_t desktop)
         focus_fallback(monitor);
 }
 
+// WM_HINTS also mirrors the urgency LWM publishes, so only a hint that differs
+// from it is the application's request, and the echo of LWM's own write is not.
 void State::hint_urgency(xcb_window_t id, bool urgent)
 {
-    if (id != active_window_)
+    if (id != active_window_ && urgent != require(id).urgency.active())
         urgency(id, UrgencySource::App, urgent);
 }
 

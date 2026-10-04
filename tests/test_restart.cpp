@@ -239,15 +239,15 @@ TEST_CASE("Restart restores claim history independently of focus and adoption or
     SECTION("hidden and minimized candidates retain their order")
     {
         target.restore_graph(snapshot, observed);
-        CHECK(target.fullscreen_owner(0) == XCB_NONE);
+        CHECK(target.fullscreen_owners().at(0) == XCB_NONE);
         target.switch_workspace(0, 0);
-        CHECK(target.fullscreen_owner(0) == 1);
+        CHECK(target.fullscreen_owners().at(0) == 1);
         target.fullscreen(1, false);
-        CHECK(target.fullscreen_owner(0) == 2);
+        CHECK(target.fullscreen_owners().at(0) == 2);
         target.iconic(3, false);
-        CHECK(target.fullscreen_owner(0) == 3);
+        CHECK(target.fullscreen_owners().at(0) == 3);
         target.request_fullscreen(2);
-        CHECK(target.fullscreen_owner(0) == 2);
+        CHECK(target.fullscreen_owners().at(0) == 2);
     }
     SECTION("missing clients are skipped and new arrivals retain newer claims")
     {
@@ -257,11 +257,11 @@ TEST_CASE("Restart restores claim history independently of focus and adoption or
         add(target, 4);
         target.fullscreen(4, true);
         target.switch_workspace(0, 0);
-        CHECK(target.fullscreen_owner(0) == 4);
+        CHECK(target.fullscreen_owners().at(0) == 4);
         target.fullscreen(4, false);
-        CHECK(target.fullscreen_owner(0) == 2);
+        CHECK(target.fullscreen_owners().at(0) == 2);
         target.fullscreen(2, false);
-        CHECK(target.fullscreen_owner(0) == XCB_NONE);
+        CHECK(target.fullscreen_owners().at(0) == XCB_NONE);
     }
 }
 
@@ -655,12 +655,12 @@ TEST_CASE("Graph restoration separates saved intent from live observations and n
     SECTION("Newcomer requested fullscreen before the saved client")
     {
         target.restore_graph(snapshot, { first, newcomer, saved, pinned });
-        CHECK(target.fullscreen_owner(0) == 2);
+        CHECK(target.fullscreen_owners().at(0) == 2);
     }
     SECTION("Saved client requested fullscreen before the newcomer")
     {
         target.restore_graph(snapshot, { first, saved, newcomer, pinned });
-        CHECK(target.fullscreen_owner(0) == 4);
+        CHECK(target.fullscreen_owners().at(0) == 4);
     }
     auto const& restored = target.require(2);
     CHECK(restored.monitor == 0);

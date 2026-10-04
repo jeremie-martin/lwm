@@ -97,8 +97,7 @@ std::optional<Client> State::classify(WindowObservation const& window, restart::
     client.maximized_vert = states.has(WindowState::MaximizedVert);
     // Adoption preserves the current minimized state instead of the initial hint.
     client.iconic = states.has(WindowState::Hidden) || (!adopting && window.initially_iconic);
-    if (states.has(WindowState::DemandsAttention) || window.urgent)
-        client.urgency.add(UrgencySource::App);
+    client.urgency.set(UrgencySource::App, states.has(WindowState::DemandsAttention) || window.urgent);
     client.accepts_input = window.accepts_input;
     client.supports_take_focus = window.supports_take_focus;
     client.user_time_window = window.user_time_window;

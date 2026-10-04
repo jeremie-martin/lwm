@@ -354,14 +354,12 @@ void WindowManager::handle_property_notify(xcb_property_notify_event_t const& ev
     {
         auto observed = hints(c, xcb_icccm_get_wm_hints(c, window));
         state_.focus_hints(window, observed.accepts_input, client->supports_take_focus);
-        // WM_HINTS is shared with the application: only a value that differs from
-        // our mirror is its request, so our own write's echo changes nothing.
-        // Clearing the hint withdraws only the application's urgency, and the
-        // forgotten mirror lets publication reassert what State still holds.
+        // WM_HINTS is shared with the application. Recording what it now holds
+        // lets publication reassert the urgency State keeps.
+        state_.hint_urgency(window, observed.urgent);
         if (auto& output = outputs_[window]; output.urgent != observed.urgent)
         {
-            state_.hint_urgency(window, observed.urgent);
-            output.urgent.reset();
+            output.urgent = observed.urgent;
             presentation_dirty_ = true;
         }
     }

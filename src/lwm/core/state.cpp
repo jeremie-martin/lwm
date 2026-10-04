@@ -12,6 +12,13 @@ namespace lwm {
 
 namespace {
 
+// An index stepped any distance around a cycle of `size` positions.
+size_t wrap(int64_t index, size_t size)
+{
+    auto count = static_cast<int64_t>(size);
+    return static_cast<size_t>((index % count + count) % count);
+}
+
 // One geometry policy for clients affected by live or restart-time topology changes.
 Geometry fit_floating(Geometry rectangle, Geometry area, bool displaced)
 {
@@ -203,8 +210,6 @@ std::vector<xcb_window_t> State::fullscreen_owners() const
     return owners;
 }
 
-xcb_window_t State::fullscreen_owner(size_t monitor) const { return fullscreen_owners().at(monitor); }
-
 State::FullscreenVisibility State::fullscreen_visibility() const
 {
     FullscreenVisibility result{ fullscreen_owners(), { } };
@@ -388,17 +393,11 @@ void State::hover(xcb_window_t window, int16_t x, int16_t y)
     focus(XCB_NONE);
 }
 
-size_t State::wrap_monitor(int index) const
-{
-    int size = static_cast<int>(monitors_.size());
-    return static_cast<size_t>(((index % size) + size) % size);
-}
-
 bool State::focus_adjacent_monitor(int direction)
 {
     if (monitors_.size() <= 1)
         return false;
-    size_t target = wrap_monitor(static_cast<int>(focused_monitor_) + direction);
+    size_t target = wrap(static_cast<int>(focused_monitor_) + direction, monitors_.size());
     focus_monitor(target);
     focus_fallback(target);
     return true;
@@ -516,11 +515,17 @@ void State::set_mode(xcb_window_t id, bool floating)
     attach(client, index);
 }
 
-void State::floating(xcb_window_t id, bool enabled)
+// Explicit preferences replace classification defaults; an unchanged one is no mutation.
+template <typename T> void State::prefer(xcb_window_t id, std::optional<T> ClientPreferences::* field, T value)
 {
     auto preferences = require(id).preferences;
-    preferences.floating = enabled;
+    preferences.*field = value;
     assign(id, &Client::preferences, preferences);
+}
+
+void State::floating(xcb_window_t id, bool enabled)
+{
+    prefer(id, &ClientPreferences::floating, enabled);
     set_mode(id, enabled);
 }
 
@@ -541,7 +546,7 @@ bool State::move_to_monitor(int direction)
     auto const* client = find(active_window_);
     if (!client || monitors_.size() <= 1)
         return false;
-    size_t target = wrap_monitor(static_cast<int>(client->monitor) + direction);
+    size_t target = wrap(static_cast<int>(client->monitor) + direction, monitors_.size());
     if (!relocate(client->id, target, monitors_[target].current_workspace, RelocationGeometry::Center))
         return false;
     focus(client->id);
@@ -573,11 +578,9 @@ void State::swap_tile(int offset)
             eligible.push_back(i);
     auto tile = focus::tile(*this, focused_monitor_, fullscreen);
     auto it = std::ranges::find_if(eligible, [&](auto i) { return workspace.windows[i] == tile; });
-    int count = static_cast<int>(eligible.size());
-    if (it == eligible.end() || count < 2)
+    if (it == eligible.end() || eligible.size() < 2)
         return;
-    int index = static_cast<int>(it - eligible.begin());
-    size_t other = eligible[static_cast<size_t>((index + offset % count + count) % count)];
+    size_t other = eligible[wrap(static_cast<int>(it - eligible.begin()) + offset, eligible.size())];
     if (workspace.layout_strategy == LayoutStrategy::Monocle)
         focus(workspace.windows[other]);
     else
@@ -647,39 +650,20 @@ void State::maximize(xcb_window_t id, bool horizontal, bool vertical)
 
 void State::modal(xcb_window_t id, bool enabled) { assign(id, &Client::modal, enabled); }
 
-void State::layer(xcb_window_t id, LayerHint hint)
-{
-    auto preferences = require(id).preferences;
-    preferences.layer = hint;
-    assign(id, &Client::preferences, preferences);
-}
+void State::layer(xcb_window_t id, LayerHint hint) { prefer(id, &ClientPreferences::layer, hint); }
 
-void State::skip_taskbar(xcb_window_t id, bool enabled)
-{
-    auto preferences = require(id).preferences;
-    preferences.skip_taskbar = enabled;
-    assign(id, &Client::preferences, preferences);
-}
+void State::skip_taskbar(xcb_window_t id, bool enabled) { prefer(id, &ClientPreferences::skip_taskbar, enabled); }
 
-void State::skip_pager(xcb_window_t id, bool enabled)
-{
-    auto preferences = require(id).preferences;
-    preferences.skip_pager = enabled;
-    assign(id, &Client::preferences, preferences);
-}
+void State::skip_pager(xcb_window_t id, bool enabled) { prefer(id, &ClientPreferences::skip_pager, enabled); }
 
 void State::urgency(xcb_window_t id, UrgencySource source, bool enabled)
 {
     auto urgency = require(id).urgency;
-    if (enabled ? urgency.add(source) : urgency.remove(source))
-        edit(id).urgency = urgency;
+    urgency.set(source, enabled);
+    assign(id, &Client::urgency, urgency);
 }
 
-void State::clear_urgency(xcb_window_t id)
-{
-    if (require(id).urgency.active())
-        edit(id).urgency.clear();
-}
+void State::clear_urgency(xcb_window_t id) { assign(id, &Client::urgency, Urgency{ }); }
 
 void State::fullscreen_monitors(xcb_window_t id, std::optional<FullscreenMonitors> value)
 {
@@ -748,8 +732,7 @@ bool State::switch_workspace(size_t monitor, size_t workspace)
 size_t State::cycle_workspace(int step)
 {
     auto const& monitor = monitors_[focused_monitor_];
-    auto count = static_cast<int>(monitor.workspaces.size());
-    switch_workspace(focused_monitor_, static_cast<size_t>(((static_cast<int>(monitor.current_workspace) + step) % count + count) % count));
+    switch_workspace(focused_monitor_, wrap(static_cast<int>(monitor.current_workspace) + step, monitor.workspaces.size()));
     return monitor.current_workspace;
 }
 

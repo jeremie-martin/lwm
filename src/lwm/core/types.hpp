@@ -81,10 +81,15 @@ constexpr bool contains(Geometry area, int32_t x, int32_t y)
 {
     return x >= area.x && x < area.x + area.width && y >= area.y && y < area.y + area.height;
 }
+constexpr std::pair<int32_t, int32_t> center(Geometry rectangle)
+{
+    return { rectangle.x + rectangle.width / 2, rectangle.y + rectangle.height / 2 };
+}
 // A rectangle belongs to the area containing its center.
 constexpr bool contains_center(Geometry area, Geometry rectangle)
 {
-    return contains(area, rectangle.x + rectangle.width / 2, rectangle.y + rectangle.height / 2);
+    auto [x, y] = center(rectangle);
+    return contains(area, x, y);
 }
 
 // Root-relative dock reservation (_NET_WM_STRUT_PARTIAL or legacy _NET_WM_STRUT).
@@ -156,28 +161,10 @@ struct Urgency
     bool active() const { return sources != 0; }
 
     bool has(UrgencySource source) const { return (sources & static_cast<uint8_t>(source)) != 0; }
-
-    bool add(UrgencySource source)
+    void set(UrgencySource source, bool enabled)
     {
-        uint8_t const bit = static_cast<uint8_t>(source);
-        bool const changed = (sources & bit) == 0;
-        sources |= bit;
-        return changed;
-    }
-
-    bool remove(UrgencySource source)
-    {
-        uint8_t const bit = static_cast<uint8_t>(source);
-        bool const changed = (sources & bit) != 0;
-        sources &= static_cast<uint8_t>(~bit);
-        return changed;
-    }
-
-    bool clear()
-    {
-        bool const changed = sources != 0;
-        sources = 0;
-        return changed;
+        auto bit = static_cast<uint8_t>(source);
+        sources = enabled ? sources | bit : sources & static_cast<uint8_t>(~bit);
     }
 };
 
@@ -546,7 +533,8 @@ inline std::optional<size_t> monitor_at(std::span<Monitor const> monitors, int32
 }
 inline std::optional<size_t> monitor_at(std::span<Monitor const> monitors, Geometry rectangle)
 {
-    return monitor_at(monitors, rectangle.x + rectangle.width / 2, rectangle.y + rectangle.height / 2);
+    auto [x, y] = center(rectangle);
+    return monitor_at(monitors, x, y);
 }
 
 } // namespace lwm

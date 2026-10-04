@@ -18,13 +18,13 @@ TEST_CASE("Urgency tracks app and WM sources independently", "[state][urgency]")
 {
     Urgency urgency;
     REQUIRE_FALSE(urgency.active());
-    REQUIRE(urgency.add(UrgencySource::App));
-    REQUIRE_FALSE(urgency.add(UrgencySource::App));
-    REQUIRE(urgency.add(UrgencySource::WmInitiated));
-    REQUIRE(urgency.remove(UrgencySource::App));
+    urgency.set(UrgencySource::App, true);
+    urgency.set(UrgencySource::WmInitiated, true);
+    urgency.set(UrgencySource::App, false);
     REQUIRE_FALSE(urgency.has(UrgencySource::App));
     REQUIRE(urgency.has(UrgencySource::WmInitiated));
-    REQUIRE(urgency.clear());
+    REQUIRE(urgency.active());
+    urgency.set(UrgencySource::WmInitiated, false);
     REQUIRE_FALSE(urgency.active());
 }
 
@@ -178,7 +178,7 @@ TEST_CASE("The most recent fullscreen claim in view owns its monitor", "[state][
     add_floating(state, 4);
     state.fullscreen(1, true);
     state.fullscreen(2, true);
-    CHECK(state.fullscreen_owner(0) == 2);
+    CHECK(state.fullscreen_owners().at(0) == 2);
     CHECK_FALSE(state.visible(state.require(1)));
     CHECK_FALSE(state.visible(state.require(3)));
     // A direct transient of the owner stays visible.
@@ -186,19 +186,19 @@ TEST_CASE("The most recent fullscreen claim in view owns its monitor", "[state][
     CHECK(state.visible(state.require(4)));
     // Re-entering fullscreen or restoring a minimized fullscreen client reclaims.
     state.request_fullscreen(1);
-    CHECK(state.fullscreen_owner(0) == 1);
+    CHECK(state.fullscreen_owners().at(0) == 1);
     state.iconic(2, true);
     state.iconic(2, false);
-    CHECK(state.fullscreen_owner(0) == 2);
+    CHECK(state.fullscreen_owners().at(0) == 2);
     state.iconic(2, true);
-    CHECK(state.fullscreen_owner(0) == 1);
+    CHECK(state.fullscreen_owners().at(0) == 1);
     state.relocate(1, 0, 1);
-    CHECK(state.fullscreen_owner(0) == XCB_NONE);
+    CHECK(state.fullscreen_owners().at(0) == XCB_NONE);
     state.sticky(1, true);
-    CHECK(state.fullscreen_owner(0) == 1);
+    CHECK(state.fullscreen_owners().at(0) == 1);
     CHECK(state.fullscreen_owners() == std::vector<xcb_window_t>{ 1, XCB_NONE });
     state.show_desktop(true);
-    CHECK(state.fullscreen_owner(0) == XCB_NONE);
+    CHECK(state.fullscreen_owners().at(0) == XCB_NONE);
     // Fullscreen supersedes maximize.
     state.maximize(3, true, true);
     state.fullscreen(3, true);
@@ -341,19 +341,19 @@ TEST_CASE("Fullscreen assignments preserve history while requests renew it", "[s
     state.show_desktop(false);
     state.switch_workspace(0, 0);
     if (state.require(1).iconic)
-        CHECK(state.fullscreen_owner(0) == 2);
+        CHECK(state.fullscreen_owners().at(0) == 2);
     state.iconic(1, false);
-    CHECK(state.fullscreen_owner(0) == 1);
+    CHECK(state.fullscreen_owners().at(0) == 1);
 
     state.fullscreen(1, false);
-    CHECK(state.fullscreen_owner(0) == 2);
+    CHECK(state.fullscreen_owners().at(0) == 2);
     state.settle();
     revision = state.revision();
     state.fullscreen(1, false);
     CHECK(state.revision() == revision);
     CHECK_FALSE(state.settle());
     state.fullscreen(1, true);
-    CHECK(state.fullscreen_owner(0) == 1);
+    CHECK(state.fullscreen_owners().at(0) == 1);
 }
 
 TEST_CASE("Fullscreen admission establishes priority and excludes maximize", "[state][fullscreen]")
@@ -366,7 +366,7 @@ TEST_CASE("Fullscreen admission establishes priority and excludes maximize", "[s
     client.fullscreen = true;
     client.maximized_horz = client.maximized_vert = true;
     state.insert(client);
-    CHECK(state.fullscreen_owner(0) == 2);
+    CHECK(state.fullscreen_owners().at(0) == 2);
     CHECK_FALSE(state.require(2).maximized_horz);
     CHECK_FALSE(state.require(2).maximized_vert);
     // Applying an initial rule does not add a second claim for admission.
@@ -375,7 +375,7 @@ TEST_CASE("Fullscreen admission establishes priority and excludes maximize", "[s
     CHECK(state.revision() == revision);
     state.fullscreen(2, false);
     CHECK(state.fullscreen_claims() == std::vector<xcb_window_t>{ 1 });
-    CHECK(state.fullscreen_owner(0) == 1);
+    CHECK(state.fullscreen_owners().at(0) == 1);
 }
 
 TEST_CASE("Scratchpad names and the pool are the only membership records", "[state][scratchpad]")

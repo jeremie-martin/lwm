@@ -97,11 +97,11 @@ TEST_CASE("Metadata compares rule actions while reload deliberately reapplies th
     state.fullscreen(2, true);
     state.title(1, "second");
     CHECK(floating_mode(state.require(1))->geometry == Geometry{ 10, 20, 300, 150 });
-    CHECK(state.fullscreen_owner(0) == 2);
+    CHECK(state.fullscreen_owners().at(0) == 2);
 
     test::configure(state, [](Config&) { });
     CHECK(floating_mode(state.require(1))->geometry == Geometry{ 70, 80, 204, 104 });
-    CHECK(state.fullscreen_owner(0) == 2);
+    CHECK(state.fullscreen_owners().at(0) == 2);
     state.title(1, "unmatched");
     CHECK_FALSE(state.require(1).rule);
     CHECK(state.require(1).fullscreen);

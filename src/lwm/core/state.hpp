@@ -63,6 +63,8 @@ public:
         int16_t start_x, start_y;
         int16_t last_x, last_y;
         uint8_t button; ///< Zero accepts any release (unspecified EWMH button)
+        int32_t dx() const { return last_x - start_x; }
+        int32_t dy() const { return last_y - start_y; }
     };
     struct SplitHit
     {
@@ -138,7 +140,6 @@ public:
     bool in_view(Client const& client) const;
     std::vector<xcb_window_t> const& fullscreen_claims() const { return fullscreen_claims_; }
     std::vector<xcb_window_t> fullscreen_owners() const;
-    xcb_window_t fullscreen_owner(size_t monitor) const;
     FullscreenVisibility fullscreen_visibility() const;
     bool visible(Client const& client) const;
     // Hot loops share fullscreen owners and descendant membership.
@@ -246,7 +247,8 @@ public:
     void configure_request(xcb_window_t id, GeometryRequest request);
     // A pager's _NET_MOVERESIZE_WINDOW changes the normal floating rectangle.
     void moveresize_request(xcb_window_t id, GeometryRequest request);
-    // WM_HINTS urgency is the application's own request; the active client has none.
+    // A WM_HINTS urgency that differs from the published urgency is the
+    // application's request; the active client has none.
     void hint_urgency(xcb_window_t id, bool urgent);
 
     // Metadata updates resolve classification defaults, parent placement,
@@ -271,7 +273,6 @@ public:
     // The focused monitor's root split, within the configured ratio bounds.
     bool set_ratio(double value);
     bool adjust_ratio(double delta);
-    void erase_ratio(size_t monitor, SplitAddress address);
     void reset_ratios(size_t monitor);
 
     // Scratchpads: the named slots and the pool are the only membership records.
@@ -348,6 +349,7 @@ private:
     Client& edit(xcb_window_t id);
     Workspace& edit_workspace(size_t monitor, size_t workspace);
     // Records a field change; an unchanged value is not a mutation.
+    template <typename T> void prefer(xcb_window_t id, std::optional<T> ClientPreferences::* field, T value);
     template <typename Owner, typename T, typename V> bool assign(xcb_window_t id, T Owner::* field, V&& value)
     {
         auto& client = clients_.at(id);
@@ -378,19 +380,19 @@ private:
     void update_workareas();
     void forget_missing_tile_slot(Client& client) const;
 
+    void erase_ratio(size_t monitor, SplitAddress address);
+
     // Views and geometry
     Layout layout() const { return { config_.appearance.padding, config_.layout }; }
     bool shows(size_t monitor, size_t workspace) const;
     // Eligible tiles of the current workspace, then sticky tiles of others.
     std::vector<xcb_window_t> tiled_participants(size_t monitor, FullscreenVisibility const& fullscreen) const;
-    std::vector<xcb_window_t> workspace_tiles(
-        size_t monitor, size_t workspace, FullscreenVisibility const* fullscreen, xcb_window_t include = XCB_NONE
-    ) const;
+    template <typename Eligible>
+    std::vector<xcb_window_t> workspace_tiles(size_t monitor, size_t workspace, Eligible eligible) const;
     Geometry fullscreen_geometry(Client const& client) const;
     Presentation presentation(Client const& client, Geometry frame) const;
     void request_geometry(xcb_window_t id, Geometry rectangle);
     void set_mode(xcb_window_t id, bool floating);
-    size_t wrap_monitor(int index) const;
 
     // Focus and client state
     void select_focus(xcb_window_t id, uint32_t time = 0, bool record_user_time = true);
@@ -400,6 +402,7 @@ private:
     void pin_desktop(xcb_window_t id, bool pinned);
 
     // Scratchpads
+    NamedScratchpad* slot(std::string_view name);
     ScratchpadConfig const* match_scratchpad(Client const& client) const;
     template <typename Show> bool summon(xcb_window_t window, Show show);
     bool claim_pending_scratchpad(xcb_window_t id);
