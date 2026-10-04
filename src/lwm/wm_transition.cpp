@@ -39,8 +39,8 @@ void WindowManager::complete_transition()
     root_.fullscreen_owners = owners;
     auto clients = state_.project(fullscreen);
     bool moved = publish_clients(clients);
-    // Visible acknowledgements use the projection. Hidden clients still owe a
-    // geometry reply even though they have no display rectangle.
+    // ConfigureRequests that no geometry write acknowledged, including those of
+    // hidden clients, are answered with the presentation they would have.
     for (auto window : configure_replies_)
         if (auto const* client = state_.find(window))
             send_configure_notify(window, state_.presentation(*client));
@@ -100,10 +100,11 @@ bool WindowManager::publish_clients(std::vector<State::Projected> const& clients
     {
         if (!presentation)
             continue;
-        bool changed = write_geometry(client->id, outputs_.at(client->id), *presentation);
-        moved |= changed;
-        if (configure_replies_.erase(client->id) && !changed)
-            send_configure_notify(client->id, *presentation);
+        if (write_geometry(client->id, outputs_.at(client->id), *presentation))
+        {
+            moved = true;
+            configure_replies_.erase(client->id);
+        }
     }
     if (resizing_tiles)
         xcb_ungrab_server(conn_.get());
@@ -217,12 +218,15 @@ bool WindowManager::publish_properties(Client const& client, Output& output, Sta
     publish(id, e->_NET_WM_DESKTOP, XCB_ATOM_CARDINAL, desktop);
     uint32_t const wm_state[] = { client.iconic ? XCB_ICCCM_WM_STATE_ICONIC : XCB_ICCCM_WM_STATE_NORMAL, 0 };
     publish(id, atoms_.wm_state, atoms_.wm_state, wm_state);
-    std::vector<xcb_atom_t> actions = { e->_NET_WM_ACTION_CLOSE,      e->_NET_WM_ACTION_CHANGE_DESKTOP, e->_NET_WM_ACTION_MINIMIZE,
-                                        e->_NET_WM_ACTION_STICK,      e->_NET_WM_ACTION_FULLSCREEN,     e->_NET_WM_ACTION_ABOVE,
-                                        e->_NET_WM_ACTION_BELOW,      e->_NET_WM_ACTION_MAXIMIZE_VERT,  e->_NET_WM_ACTION_MAXIMIZE_HORZ };
-    if (client.kind() == Client::Kind::Floating)
-        actions.insert(actions.end(), { e->_NET_WM_ACTION_MOVE, e->_NET_WM_ACTION_RESIZE });
-    publish(id, e->_NET_WM_ALLOWED_ACTIONS, XCB_ATOM_ATOM, actions);
+    // Floating clients add the trailing move and resize actions.
+    xcb_atom_t const actions[] = { e->_NET_WM_ACTION_CLOSE,         e->_NET_WM_ACTION_CHANGE_DESKTOP,
+                                   e->_NET_WM_ACTION_MINIMIZE,      e->_NET_WM_ACTION_STICK,
+                                   e->_NET_WM_ACTION_FULLSCREEN,    e->_NET_WM_ACTION_ABOVE,
+                                   e->_NET_WM_ACTION_BELOW,         e->_NET_WM_ACTION_MAXIMIZE_VERT,
+                                   e->_NET_WM_ACTION_MAXIMIZE_HORZ, e->_NET_WM_ACTION_MOVE,
+                                   e->_NET_WM_ACTION_RESIZE };
+    auto allowed = std::span(actions).first(client.kind() == Client::Kind::Floating ? 11 : 9);
+    publish(id, e->_NET_WM_ALLOWED_ACTIONS, XCB_ATOM_ATOM, allowed);
     publish(id, atoms_.lwm_window_class, e->UTF8_STRING, 8, client_kind_str(client.kind()));
     if (auto const& m = client.fullscreen_monitors)
     {
@@ -319,7 +323,7 @@ void WindowManager::publish_root(std::vector<State::Projected> const& clients, b
         Geometry area = m.working_area();
         for (auto const& name : config().workspaces.names)
         {
-            names += name + '\0';
+            names.append(name).push_back('\0');
             viewports.insert(viewports.end(), { static_cast<uint32_t>(std::max(0, m.geometry.x - desktop.x)),
                                                 static_cast<uint32_t>(std::max(0, m.geometry.y - desktop.y)) });
             workareas.insert(workareas.end(), { static_cast<uint32_t>(std::clamp(area.x - desktop.x, 0, INT16_MAX)),
@@ -411,8 +415,6 @@ void WindowManager::flush_and_drain_crossing()
 }
 
 // Subscription events
-
-void WindowManager::queue_event(Event event) { events_.push_back(std::move(event)); }
 
 // Workspace switches and focus are derived from what changed since the last
 // operation; other facts were recorded where they happened. state_change

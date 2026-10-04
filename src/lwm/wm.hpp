@@ -194,7 +194,6 @@ private:
     void commit_focus(uint32_t time);
     void flush_and_drain_crossing();
     void emit_events(bool focus_requested);
-    void queue_event(Event event);
 
     // wm_events.cpp: X event handlers
     void handle_event(xcb_generic_event_t const& event);
@@ -218,6 +217,7 @@ private:
     bool grab_pointer(xcb_cursor_t cursor = XCB_NONE);
     void release_pointer();
     void begin_interaction(State::Interaction const& interaction, int16_t x, int16_t y, uint8_t button);
+    xcb_cursor_t split_cursor(State::SplitHit const& split) const;
 
     // wm_actions.cpp: the one executor for key bindings and IPC
     std::expected<std::string, std::string> execute(Action const& action, std::string_view source);

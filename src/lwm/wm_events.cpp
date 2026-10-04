@@ -166,7 +166,7 @@ void WindowManager::handle_map_request(xcb_map_request_event_t const& e)
         return;
     auto const* client = state_.find(e.window);
     auto description = describe(e.window);
-    queue_event(event::window_map{ e.window,
+    events_.push_back(event::window_map{ e.window,
                                   client ? client->wm_class : "",
                                   description ? description->first : "popup",
                                   description ? description->second : Placement{ } });
@@ -177,7 +177,7 @@ void WindowManager::handle_window_removal(xcb_window_t window)
     pending_kills_.erase(window);
     if (auto description = describe(window))
     {
-        queue_event(event::window_unmap{ window, description->first, description->second });
+        events_.push_back(event::window_unmap{ window, description->first, description->second });
         state_.erase(window);
     }
 }
@@ -215,7 +215,7 @@ void WindowManager::handle_motion_notify(xcb_motion_notify_event_t const& e)
     if (!state_.find(under))
     {
         auto hit = state_.split_at(e.root_x, e.root_y);
-        set_root_cursor(!hit ? cursor_default_ : hit->hit.direction == SplitDirection::Horizontal ? cursor_resize_h_ : cursor_resize_v_);
+        set_root_cursor(hit ? split_cursor(*hit) : cursor_default_);
     }
     state_.hover(under, e.root_x, e.root_y);
 }
@@ -243,13 +243,11 @@ void WindowManager::handle_button_release(xcb_button_release_event_t const& e)
         return;
     state_.drag_to(e.root_x, e.root_y);
     if (auto ratio = state_.end_drag(true))
-        queue_event(event::layout_change{ "resize_split", *ratio, std::nullopt });
+        events_.push_back(event::layout_change{ "resize_split", *ratio, std::nullopt });
 }
 
 bool WindowManager::grab_pointer(xcb_cursor_t cursor)
 {
-    if (state_.drag())
-        return false;
     // A drag that ended earlier in this operation may still hold the grab.
     release_pointer();
     auto grab = reply(xcb_grab_pointer_reply(
@@ -285,11 +283,13 @@ void WindowManager::release_pointer()
 void WindowManager::begin_interaction(State::Interaction const& interaction, int16_t x, int16_t y, uint8_t button)
 {
     auto const* split = std::get_if<State::SplitHit>(&interaction);
-    auto cursor = !split ? XCB_NONE
-        : split->hit.direction == SplitDirection::Horizontal ? cursor_resize_h_
-                                                              : cursor_resize_v_;
-    if (grab_pointer(cursor))
+    if (grab_pointer(split ? split_cursor(*split) : XCB_NONE))
         state_.begin_drag(interaction, x, y, button);
+}
+
+xcb_cursor_t WindowManager::split_cursor(State::SplitHit const& split) const
+{
+    return split.hit.direction == SplitDirection::Horizontal ? cursor_resize_h_ : cursor_resize_v_;
 }
 
 // X11 auto-repeat sends KeyRelease/KeyPress pairs with identical timestamps.
@@ -320,7 +320,7 @@ void WindowManager::handle_key_press(xcb_key_press_event_t const& e)
     LWM_LOG_TRACE("Key action: action={} keysym={:#x} modifiers={:#x}", action_name(action), keysym, e.state);
     if (std::holds_alternative<action::ToggleWorkspace>(action) && is_auto_repeat_toggle(keysym, e.time))
         return;
-    queue_event(event::key_action{ action_name(action) });
+    events_.push_back(event::key_action{ action_name(action) });
     if (auto result = execute(action, "keybind"); !result)
         LWM_LOG_DEBUG("Key action {} failed: {}", action_name(action), result.error());
 }

@@ -182,7 +182,7 @@ void WindowManager::layout_changed(
     std::optional<double> delta
 )
 {
-    queue_event(event::layout_change{ action_name(action), std::move(value), delta });
+    events_.push_back(event::layout_change{ action_name(action), std::move(value), delta });
 }
 
 void WindowManager::warp_to_monitor(Monitor const& monitor)

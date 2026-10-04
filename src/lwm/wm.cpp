@@ -399,9 +399,10 @@ void WindowManager::dispatch_event(
     std::chrono::steady_clock::time_point deadline
 )
 {
-    // Compress queued drag motion up to the first non-motion event.
+    // Compress queued motion up to the first non-motion event; only the latest
+    // position matters, and crossings arrive as their own events.
     auto current = event;
-    if ((event.response_type & ~0x80) == XCB_MOTION_NOTIFY && state_.drag())
+    if ((event.response_type & ~0x80) == XCB_MOTION_NOTIFY)
     {
         while (remaining && std::chrono::steady_clock::now() < deadline)
         {
@@ -457,7 +458,7 @@ std::expected<void, std::string> WindowManager::reload_config(std::string_view s
     }
     else
         LWM_LOG_WARN_LIMIT(std::chrono::seconds(5), "Config reload failed ({}): {}", source, result.error());
-    queue_event(event::config_reload{ result.has_value(), source, result ? std::nullopt : std::optional{ result.error() } });
+    events_.push_back(event::config_reload{ result.has_value(), source, result ? std::nullopt : std::optional{ result.error() } });
     return result;
 }
 

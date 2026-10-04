@@ -18,7 +18,8 @@ State::Press State::press(xcb_window_t window, int16_t x, int16_t y, uint8_t but
 {
     using Edge = floating::ResizeEdge;
     auto const* client = find(window);
-    if (client && !visible(*client))
+    // Presses during a drag reach only the WM's grab; hidden clients swallow them.
+    if (drag_ || (client && !visible(*client)))
         return { true };
     modifiers = binding_modifiers(modifiers);
     auto binding = std::ranges::find_if(

@@ -143,7 +143,7 @@ completion; a conflicting urgency hint forces reconciliation. Explicit focus rea
 X focus, focused state and stacking even when the selected window is unchanged.
 
 The event loop polls X, the signal pipe and IPC. X batches stop after 64 events or
-2 ms; drag motion is coalesced up to the next non-motion event. Crossing drains only
+2 ms; pointer motion is coalesced up to the next non-motion event. Crossing drains only
 consume events already queued and defer unrelated ones; handlers never re-enter.
 
 ## Admission and topology
