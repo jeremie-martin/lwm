@@ -98,7 +98,10 @@ add_dependencies(lwm_tests lwm lwmctl lwm_runtime_failure_probe lwm_restart_gate
 include(Catch)
 foreach(target IN ITEMS lwm_tests lwm_logging_tests)
     target_link_libraries(${target} PRIVATE liblwm Catch2::Catch2WithMain PkgConfig::XCB_XTEST nlohmann_json::nlohmann_json)
-    catch_discover_tests(${target} DISCOVERY_MODE PRE_TEST PROPERTIES SKIP_RETURN_CODE 4 TIMEOUT 60)
+    # Catch2 returns the failed-assertion count, so no exit code can mean skipped.
+    catch_discover_tests(
+        ${target} DISCOVERY_MODE PRE_TEST PROPERTIES SKIP_REGULAR_EXPRESSION "test cases: +1 \\| +0 passed \\| +1 skipped" TIMEOUT 60
+    )
 endforeach()
 
 add_test(NAME uninstall_manifest
