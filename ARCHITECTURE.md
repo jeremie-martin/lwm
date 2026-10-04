@@ -113,7 +113,7 @@ Visibility, fullscreen ownership, effective layer/skip values, published
 published window and root property through one cache of the bytes last written per
 window and property, so unchanged values cost nothing and a fresh WM rewrites stale
 ones. Per-window `Output` records cover what is not a plain property: geometry and
-mapping, border color, `_NET_WM_STATE` merged with other parties' atoms, and urgency
+mapping, border, `_NET_WM_STATE` merged with other parties' atoms, and urgency
 mirrored into the application's `WM_HINTS`. Caches never drive domain decisions.
 
 ## Operations and completion
@@ -195,12 +195,17 @@ slot; wholly off-workarea rectangles are centered. Float-to-tile conversion rest
 the tile slot only on its original output name and workspace; losing either
 invalidates the slot permanently.
 
-`project()` returns every client in registration order with an optional rectangle:
-absent means hidden. `normal_geometry()` derives a tiled client's slot even when
-minimized, off-workspace or fullscreen. Fullscreen, maximize and drag previews affect
-presentation, never the saved normal rectangle.
+Every rectangle in the model is a frame: the window plus the border drawn inside it.
+Application and rule geometry gains the client's border on entry; `presentation()`
+removes it again and decides the border width and color, so layout, maximize,
+fullscreen and placement never account for borders separately. `project()` returns
+every client in registration order with an optional presentation: absent means hidden.
+`normal_geometry()` derives a tiled client's slot even when minimized, off-workspace or
+fullscreen. Fullscreen, maximize and drag previews affect presentation, never the saved
+normal rectangle.
 
-Layout arrangement, split hit-testing and drop targeting share one subdivision.
+Layout arrangement, split hit-testing and drop targeting share one subdivision of the
+workarea into frames separated by padding.
 Master-stack is a sequence of cuts: split 0 divides master from stack, later splits
 divide stack slots from the remainder. Monocle has no resize boundaries. Participants
 are eligible tiles of the current workspace, then sticky tiles of others; fullscreen
@@ -295,7 +300,7 @@ encoded with reflect-cpp over yyjson inside a CARDINAL envelope (format word, by
 length, zero padding). Decoding rejects duplicate or extra fields, ambiguous variant
 tags and narrowing, then validates the persistent graph with the same validator Debug
 builds use. Any malformed or incompatible snapshot is rejected whole and windows are
-adopted afresh. The current format is 13; schema changes require a bump and there is
+adopted afresh. The current format is 14; schema changes require a bump and there is
 no migration.
 
 Restoration overlays saved intent on surviving observations, installs the saved

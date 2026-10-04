@@ -6,41 +6,27 @@
 namespace lwm {
 
 namespace {
-Geometry working_area_to_content_rect(Geometry const& area, uint32_t padding, uint32_t border_width)
-{
-    int32_t inset = static_cast<int32_t>(padding + border_width);
-    return { geometry_coordinate(area.x + inset),
-             geometry_coordinate(area.y + inset),
-             static_cast<uint16_t>(std::max<int32_t>(1, area.width - 2 * inset)),
-             static_cast<uint16_t>(std::max<int32_t>(1, area.height - 2 * inset)) };
-}
-
 // Split indices follow successive cuts: master/stack, then each stack slot.
+// Padding surrounds the frames and separates neighbours.
 template <class Slot, class Split>
-void visit_layout(
-    size_t count,
-    Geometry area,
-    LayoutStrategy strategy,
-    SplitRatioMap const& ratios,
-    AppearanceConfig const& appearance,
-    LayoutConfig const& config,
-    Slot slot,
-    Split split
-)
+void visit_layout(size_t count, Geometry area, Workspace const& workspace, Layout const& layout, Slot slot, Split split)
 {
-    area = working_area_to_content_rect(area, appearance.padding, appearance.border_width);
-    int32_t gap = static_cast<int32_t>(appearance.padding + 2 * appearance.border_width);
+    int32_t gap = static_cast<int32_t>(layout.padding);
+    area = { geometry_coordinate(area.x + gap),
+             geometry_coordinate(area.y + gap),
+             geometry_extent(area.width - 2 * int64_t{ gap }),
+             geometry_extent(area.height - 2 * int64_t{ gap }) };
     for (size_t i = 0; i < count; ++i)
     {
-        if (strategy == LayoutStrategy::Monocle || i + 1 == count)
+        if (workspace.layout_strategy == LayoutStrategy::Monocle || i + 1 == count)
         {
             slot(i, area);
             continue;
         }
         bool horizontal = i == 0;
         SplitAddress address{ static_cast<uint32_t>(i) };
-        double ratio = horizontal ? config.default_ratio : 1.0 / static_cast<double>(count - i);
-        if (auto it = ratios.find(address); it != ratios.end())
+        double ratio = horizontal ? layout.config.default_ratio : 1.0 / static_cast<double>(count - i);
+        if (auto it = workspace.split_ratios.find(address); it != workspace.split_ratios.end())
             ratio = it->second;
         int32_t available = std::max<int32_t>(0, (horizontal ? area.width : area.height) - gap);
         int32_t first = static_cast<int32_t>(std::floor(available * ratio));
@@ -71,43 +57,31 @@ void visit_layout(
 
 } // namespace
 
-std::vector<Geometry>
-Layout::arrange(size_t count, Geometry const& area, LayoutStrategy strategy, SplitRatioMap const& ratios) const
+std::vector<Geometry> Layout::arrange(size_t count, Geometry area, Workspace const& workspace) const
 {
     std::vector<Geometry> slots(count);
     visit_layout(
         count,
         area,
-        strategy,
-        ratios,
-        appearance_,
-        config_,
+        workspace,
+        *this,
         [&](size_t i, Geometry geometry) { slots[i] = geometry; },
         [](SplitHitResult const&) {}
     );
     return slots;
 }
 
-size_t Layout::drop_target_index(
-    size_t count,
-    Geometry const& area,
-    LayoutStrategy strategy,
-    SplitRatioMap const& ratios,
-    int16_t x,
-    int16_t y
-) const
+size_t Layout::drop_target_index(size_t count, Geometry area, Workspace const& workspace, int16_t x, int16_t y) const
 {
-    if (count == 0 || strategy == LayoutStrategy::Monocle)
+    if (count == 0 || workspace.layout_strategy == LayoutStrategy::Monocle)
         return 0;
     size_t best = 0;
     int64_t distance = std::numeric_limits<int64_t>::max();
     visit_layout(
         count,
         area,
-        strategy,
-        ratios,
-        appearance_,
-        config_,
+        workspace,
+        *this,
         [&](size_t i, Geometry slot)
         {
             int32_t dx = std::max({ static_cast<int32_t>(slot.x) - x, x - (slot.x + slot.width), 0 });
@@ -124,26 +98,18 @@ size_t Layout::drop_target_index(
     return best;
 }
 
-std::optional<SplitHitResult> Layout::hit_test(
-    size_t count,
-    Geometry const& area,
-    LayoutStrategy strategy,
-    SplitRatioMap const& ratios,
-    int16_t x,
-    int16_t y
-) const
+std::optional<SplitHitResult>
+Layout::hit_test(size_t count, Geometry area, Workspace const& workspace, int16_t x, int16_t y) const
 {
-    if (count < 2 || strategy == LayoutStrategy::Monocle)
+    if (count < 2 || workspace.layout_strategy == LayoutStrategy::Monocle)
         return std::nullopt;
     std::optional<SplitHitResult> best;
     int32_t distance = std::numeric_limits<int32_t>::max();
     visit_layout(
         count,
         area,
-        strategy,
-        ratios,
-        appearance_,
-        config_,
+        workspace,
+        *this,
         [](size_t, Geometry) {},
         [&](SplitHitResult const& split)
         {
@@ -151,7 +117,7 @@ std::optional<SplitHitResult> Layout::hit_test(
             int32_t cross = horizontal ? y : x;
             int32_t d = std::abs((horizontal ? x : y) - split.split_pixel_pos);
             if (cross >= split.cross_min && cross <= split.cross_max
-                && d <= static_cast<int32_t>(config_.resize_grab_threshold) && d < distance)
+                && d <= static_cast<int32_t>(config.resize_grab_threshold) && d < distance)
             {
                 distance = d;
                 best = split;

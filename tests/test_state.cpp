@@ -7,6 +7,13 @@ using namespace lwm;
 using test::add;
 using test::add_floating;
 
+namespace {
+std::optional<Geometry> shown(State::Projected const& projected)
+{
+    return projected.presentation.transform(&State::Presentation::geometry);
+}
+}
+
 TEST_CASE("Urgency tracks app and WM sources independently", "[state][urgency]")
 {
     Urgency urgency;
@@ -465,12 +472,32 @@ TEST_CASE("Tile geometry is a current projection independent of publication", "[
         auto clients = state.project(state.fullscreen_visibility());
         REQUIRE(clients.size() == 3);
         CHECK(clients[1].client->id == 2);
-        CHECK(clients[1].geometry == expected);
-        CHECK_FALSE(clients[2].geometry);
+        CHECK(shown(clients[1]) == std::optional{ expected });
+        CHECK_FALSE(clients[2].presentation);
     }
     CHECK(state.normal_geometry(state.require(2)) == expected);
     state.floating(2, true);
     CHECK(floating_mode(state.require(2))->geometry == expected);
+}
+
+TEST_CASE("Presentation draws borders inside the frames the model places", "[state][geometry]")
+{
+    auto state = test::state(); // 1000x800 monitor, padding 10, border 2
+    add(state, 1);
+    add_floating(state, 2);
+    auto presented = [&](xcb_window_t id)
+    {
+        auto [geometry, border] = state.presentation(state.require(id));
+        return std::pair{ geometry, border };
+    };
+    // Padding surrounds the tile frame on every side.
+    CHECK(presented(1) == std::pair{ Geometry{ 10, 10, 976, 776 }, 2U });
+    state.maximize(2, true, true);
+    CHECK(presented(2) == std::pair{ Geometry{ 0, 0, 996, 796 }, 2U });
+    state.fullscreen(2, true);
+    CHECK(presented(2) == std::pair{ Geometry{ 0, 0, 1000, 800 }, 0U });
+    test::configure(state, [](Config& config) { config.rules.push_back({ .actions = { .borderless = true } }); });
+    CHECK(presented(1) == std::pair{ Geometry{ 10, 10, 980, 780 }, 0U });
 }
 
 TEST_CASE("A projection contains every client once with its final visible rectangle", "[state][geometry][projection]")
@@ -505,16 +532,16 @@ TEST_CASE("A projection contains every client once with its final visible rectan
     REQUIRE(order == std::vector<xcb_window_t>{ 9, 2, 7, 4, 8, 6 });
     if (state.showing_desktop())
     {
-        for (size_t i = 0; i < 5; ++i) CHECK_FALSE(clients[i].geometry);
-        CHECK(clients[5].geometry == Geometry{ 0, 0, 1000, 800 });
+        for (size_t i = 0; i < 5; ++i) CHECK_FALSE(clients[i].presentation);
+        CHECK(shown(clients[5]) == Geometry{ 0, 0, 1000, 800 });
         return;
     }
-    CHECK(clients[0].geometry == Geometry{ 0, 0, static_cast<uint16_t>(fullscreen ? 1000 : 500), 800 });
-    CHECK(clients[1].geometry == Geometry{ 0, 10, 1000, 100 });
-    CHECK_FALSE(clients[2].geometry);
-    CHECK_FALSE(clients[3].geometry);
-    CHECK(clients[4].geometry == Geometry{ 1000, 0, 1000, 800 });
-    CHECK(clients[5].geometry == (fullscreen ? std::nullopt : std::optional{ Geometry{ 500, 0, 500, 800 } }));
+    CHECK(shown(clients[0]) == Geometry{ 0, 0, static_cast<uint16_t>(fullscreen ? 1000 : 500), 800 });
+    CHECK(shown(clients[1]) == Geometry{ 0, 10, 1000, 100 });
+    CHECK_FALSE(clients[2].presentation);
+    CHECK_FALSE(clients[3].presentation);
+    CHECK(shown(clients[4]) == Geometry{ 1000, 0, 1000, 800 });
+    CHECK(shown(clients[5]) == (fullscreen ? std::nullopt : std::optional{ Geometry{ 500, 0, 500, 800 } }));
 }
 
 TEST_CASE("Workareas follow dock reservations and unchanged topology preserves intent", "[state][hotplug][workarea]")
@@ -573,7 +600,7 @@ TEST_CASE("Admission derives roles and placement from observations alone", "[sta
     REQUIRE(floating_mode(state.require(5)));
     CHECK(state.require(5).workspace == 2);
     // Centered on the parent's presentation: the left tile of the parent workspace.
-    auto parent_area = state.presentation_geometry(state.require(3));
+    auto parent_area = state.frame(state.require(3));
     auto const& placed = floating_mode(state.require(5))->geometry;
     CHECK(placed.x + placed.width / 2 == parent_area.x + parent_area.width / 2);
 

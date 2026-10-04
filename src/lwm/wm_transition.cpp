@@ -41,7 +41,7 @@ void WindowManager::complete_transition()
     // geometry reply even though they have no display rectangle.
     for (auto window : configure_replies_)
         if (auto const* client = state_.find(window))
-            send_configure_notify(window, state_.presentation_geometry(*client), border_width(*client));
+            send_configure_notify(window, state_.presentation(*client));
     if (focus_request)
     {
         commit_focus(*focus_request);
@@ -71,20 +71,6 @@ void WindowManager::complete_transition()
     LWM_ASSERT_INVARIANTS(state_);
 }
 
-uint32_t WindowManager::border_width(Client const& client) const
-{
-    return client.fullscreen || client.borderless ? 0U : config().appearance.border_width;
-}
-
-uint32_t WindowManager::border_color(Client const& client) const
-{
-    if (client.id == state_.active_window())
-        return config().appearance.border_color;
-    if (client.urgency.active())
-        return config().appearance.urgent_border_color;
-    return conn_.screen()->black_pixel;
-}
-
 // Client publication
 
 // Hides, shows, configures and maps clients. Returns whether anything moved
@@ -92,10 +78,10 @@ uint32_t WindowManager::border_color(Client const& client) const
 bool WindowManager::publish_clients(std::vector<State::Projected> const& clients)
 {
     bool moved = false;
-    for (auto const& [client, geometry] : clients)
+    for (auto const& [client, presentation] : clients)
     {
         auto& output = outputs_[client->id];
-        if (geometry || output.hidden)
+        if (presentation || output.hidden)
             continue;
         output.hidden = true;
         output.geometry.reset();
@@ -108,14 +94,14 @@ bool WindowManager::publish_clients(std::vector<State::Projected> const& clients
     bool resizing_tiles = drag && std::holds_alternative<State::SplitDrag>(drag->operation);
     if (resizing_tiles)
         xcb_grab_server(conn_.get());
-    for (auto const& [client, geometry] : clients)
+    for (auto const& [client, presentation] : clients)
     {
-        if (!geometry)
+        if (!presentation)
             continue;
-        bool changed = write_geometry(*client, outputs_.at(client->id), *geometry, border_width(*client));
+        bool changed = write_geometry(client->id, outputs_.at(client->id), *presentation);
         moved |= changed;
         if (configure_replies_.erase(client->id) && !changed)
-            send_configure_notify(client->id, *geometry, border_width(*client));
+            send_configure_notify(client->id, *presentation);
     }
     if (resizing_tiles)
         xcb_ungrab_server(conn_.get());
@@ -130,15 +116,14 @@ bool WindowManager::publish_clients(std::vector<State::Projected> const& clients
 
 // Owns WM-driven configure requests, sync notifications and synthetic
 // ConfigureNotify replies. An unchanged rectangle and border are skipped.
-bool WindowManager::write_geometry(Client const& client, Output& output, Geometry geometry, uint32_t border)
+bool WindowManager::write_geometry(xcb_window_t window, Output& output, State::Presentation const& presentation)
 {
-    geometry.width = std::max<uint16_t>(1, geometry.width);
-    geometry.height = std::max<uint16_t>(1, geometry.height);
+    auto [geometry, border] = presentation;
     if (!output.hidden && output.geometry == geometry && output.border_width == border)
         return false;
     LWM_LOG_TRACE(
         "Geometry submitted: window={:#x} x={} y={} width={} height={} border={}",
-        client.id,
+        window,
         geometry.x,
         geometry.y,
         geometry.width,
@@ -152,7 +137,7 @@ bool WindowManager::write_geometry(Client const& client, Output& output, Geometr
     {
         uint64_t value = ++output.sync_value;
         send_protocol_message(
-            client.id,
+            window,
             ewmh_.get()->_NET_WM_SYNC_REQUEST,
             last_event_time_,
             static_cast<uint32_t>(value),
@@ -166,25 +151,26 @@ bool WindowManager::write_geometry(Client const& client, Output& output, Geometr
                           border };
     xcb_configure_window(
         conn_.get(),
-        client.id,
+        window,
         XCB_CONFIG_WINDOW_X | XCB_CONFIG_WINDOW_Y | XCB_CONFIG_WINDOW_WIDTH | XCB_CONFIG_WINDOW_HEIGHT
             | XCB_CONFIG_WINDOW_BORDER_WIDTH,
         values
     );
-    send_configure_notify(client.id, geometry, border);
+    send_configure_notify(window, presentation);
     return true;
 }
 
-void WindowManager::send_configure_notify(xcb_window_t window, Geometry geometry, uint32_t border)
+void WindowManager::send_configure_notify(xcb_window_t window, State::Presentation const& presentation)
 {
+    auto [geometry, border] = presentation;
     xcb_configure_notify_event_t event{ };
     event.response_type = XCB_CONFIGURE_NOTIFY;
     event.event = window;
     event.window = window;
     event.x = geometry.x;
     event.y = geometry.y;
-    event.width = std::max<uint16_t>(1, geometry.width);
-    event.height = std::max<uint16_t>(1, geometry.height);
+    event.width = geometry.width;
+    event.height = geometry.height;
     event.border_width = static_cast<uint16_t>(border);
     xcb_send_event(conn_.get(), 0, window, XCB_EVENT_MASK_STRUCTURE_NOTIFY, reinterpret_cast<char*>(&event));
 }
@@ -218,7 +204,7 @@ bool WindowManager::publish_properties(Client const& client, Output& output, Sta
 {
     auto* e = ewmh_.get();
     xcb_window_t id = client.id;
-    if (auto color = border_color(client); output.border_color != color)
+    if (auto color = state_.border_color(client); output.border_color != color)
     {
         xcb_change_window_attributes(conn_.get(), id, XCB_CW_BORDER_PIXEL, &color);
         output.border_color = color;

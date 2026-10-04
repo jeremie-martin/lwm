@@ -14,7 +14,11 @@
 namespace lwm {
 
 namespace {
-constexpr Geometry kUnknownGeometry{ 0, 0, 300, 200 };
+// The frame around an observed window's current server rectangle.
+Geometry observed_frame(WindowObservation const& window, uint32_t border)
+{
+    return outset(window.geometry.value_or(Geometry{ 0, 0, 300, 200 }), border);
+}
 }
 
 WindowRole State::role(xcb_window_t id, WindowType type, bool transient, restart::Snapshot const* handoff)
@@ -53,8 +57,10 @@ std::optional<Client> State::classify(WindowObservation const& window, restart::
     auto natural = default_floating(client);
     auto const* rule = match_window_rules(config_.rules, client);
     client.rule = rule ? std::optional{ *rule } : std::nullopt;
+    // Mode and border shape the first frame; later rule actions refine its placement.
+    client.borderless = rule && rule->borderless.value_or(false);
     if (rule && rule->floating ? *rule->floating : natural.value_or(false))
-        client.mode = FloatingMode{ window.geometry.value_or(kUnknownGeometry) };
+        client.mode = FloatingMode{ observed_frame(window, border(client)) };
     LWM_LOG_DEBUG(
         "Client observed: window={:#x} transient_for={:#x} natural={} resolved={} rules_matched={}",
         window.id,
@@ -115,7 +121,7 @@ void State::admit(WindowObservation const& window)
     {
         candidate->iconic = true;
         if (!floating_mode(*candidate))
-            candidate->mode = FloatingMode{ window.geometry.value_or(kUnknownGeometry) };
+            candidate->mode = FloatingMode{ observed_frame(window, border(*candidate)) };
     }
     insert(std::move(*candidate));
     place(window.id, window.unmanaged_parent);
@@ -212,10 +218,11 @@ void State::apply_size_hints(xcb_window_t id, bool initial, std::optional<Geomet
     if (!floating)
         return;
     bool anchored = client.transient_for != XCB_NONE;
-    auto geometry = floating->geometry;
     auto const& hints = client.size_hints;
-    geometry.width = std::max<uint16_t>(1, hints.width.value_or(geometry.width));
-    geometry.height = std::max<uint16_t>(1, hints.height.value_or(geometry.height));
+    auto window = inset(floating->geometry, border(client));
+    window.width = hints.width.value_or(window.width);
+    window.height = hints.height.value_or(window.height);
+    auto geometry = outset(window, border(client));
     auto position = hints.user_position ? hints.user_position : anchored ? std::nullopt : hints.program_position;
     auto monitor = client.monitor;
     bool center = initial;
@@ -234,7 +241,7 @@ void State::apply_size_hints(xcb_window_t id, bool initial, std::optional<Geomet
     }
     if (center)
     {
-        auto parent_geometry = parent ? std::optional{ presentation_geometry(*parent) } : unmanaged_parent;
+        auto parent_geometry = parent ? std::optional{ frame(*parent) } : unmanaged_parent;
         geometry = floating::place_floating(
             monitors_[monitor].working_area(), geometry.width, geometry.height, anchored ? parent_geometry : std::nullopt
         );
@@ -271,9 +278,11 @@ void State::apply_rule(xcb_window_t window, RuleActions const& rule)
         relocate(window, target, workspace, RelocationGeometry::Center);
     }
 
+    if (rule.borderless)
+        assign(window, &Client::borderless, *rule.borderless);
     if (auto const* floating = floating_mode(require(window)))
     {
-        auto rectangle = rule.geometry.value_or(floating->geometry);
+        auto rectangle = rule.geometry ? outset(*rule.geometry, border(client)) : floating->geometry;
         if (rule.center)
             rectangle = floating::place_floating(
                 monitors()[client.monitor].working_area(),
@@ -292,8 +301,6 @@ void State::apply_rule(xcb_window_t window, RuleActions const& rule)
         sticky(window, *rule.sticky);
     if (rule.layer)
         layer(window, *rule.layer);
-    if (rule.borderless)
-        assign(window, &Client::borderless, *rule.borderless);
     if (rule.fullscreen)
         fullscreen(window, *rule.fullscreen);
 }
@@ -363,7 +370,7 @@ void State::transient(xcb_window_t id, xcb_window_t parent)
                         monitors_[target->monitor].working_area(),
                         floating->geometry.width,
                         floating->geometry.height,
-                        presentation_geometry(*target)
+                        frame(*target)
                     )
                 );
     }

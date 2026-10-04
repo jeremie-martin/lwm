@@ -83,7 +83,7 @@ TEST_CASE("Metadata compares rule actions while reload deliberately reapplies th
     Config config;
     auto first = rule(std::nullopt, true);
     first.match.title_regex.emplace("first");
-    first.actions.geometry = Geometry{ 70, 80, 200, 100 };
+    first.actions.geometry = Geometry{ 70, 80, 200, 100 }; // A window inside a 2px border
     first.actions.fullscreen = true;
     auto second = first;
     second.match.title_regex.emplace("second");
@@ -92,7 +92,7 @@ TEST_CASE("Metadata compares rule actions while reload deliberately reapplies th
 
     state.title(1, "first");
     REQUIRE(floating_mode(state.require(1)));
-    CHECK(floating_mode(state.require(1))->geometry == Geometry{ 70, 80, 200, 100 });
+    CHECK(floating_mode(state.require(1))->geometry == Geometry{ 70, 80, 204, 104 });
     state.geometry(1, { 10, 20, 300, 150 });
     state.fullscreen(2, true);
     state.title(1, "second");
@@ -100,12 +100,12 @@ TEST_CASE("Metadata compares rule actions while reload deliberately reapplies th
     CHECK(state.fullscreen_owner(0) == 2);
 
     test::configure(state, [](Config&) { });
-    CHECK(floating_mode(state.require(1))->geometry == Geometry{ 70, 80, 200, 100 });
+    CHECK(floating_mode(state.require(1))->geometry == Geometry{ 70, 80, 204, 104 });
     CHECK(state.fullscreen_owner(0) == 2);
     state.title(1, "unmatched");
     CHECK_FALSE(state.require(1).rule);
     CHECK(state.require(1).fullscreen);
-    CHECK(floating_mode(state.require(1))->geometry == Geometry{ 70, 80, 200, 100 });
+    CHECK(floating_mode(state.require(1))->geometry == Geometry{ 70, 80, 204, 104 });
 }
 
 TEST_CASE("Transient metadata places against the parent's resulting presentation", "[state][rules][placement]")
@@ -114,9 +114,9 @@ TEST_CASE("Transient metadata places against the parent's resulting presentation
     test::configure(state, [](Config& config) { config.appearance = { .padding = 0, .border_width = 0 }; });
     test::add(state, 1);
     test::add(state, 2);
-    REQUIRE(state.presentation_geometry(state.require(1)) == Geometry{ 0, 0, 500, 800 });
+    REQUIRE(state.frame(state.require(1)) == Geometry{ 0, 0, 500, 800 });
     state.transient(2, 1);
-    CHECK(state.presentation_geometry(state.require(1)) == Geometry{ 0, 0, 1000, 800 });
+    CHECK(state.frame(state.require(1)) == Geometry{ 0, 0, 1000, 800 });
     REQUIRE(floating_mode(state.require(2)));
     CHECK(floating_mode(state.require(2))->geometry == Geometry{ 250, 0, 500, 800 });
 
@@ -126,7 +126,7 @@ TEST_CASE("Transient metadata places against the parent's resulting presentation
         REQUIRE(state.can_drag(1));
         state.begin_window_drag(1, 500, 400, 1, floating::ResizeEdge::None);
         state.drag_to(400, 500);
-        REQUIRE(state.presentation_geometry(state.require(1)) == Geometry{ -100, 100, 500, 800 });
+        REQUIRE(state.frame(state.require(1)) == Geometry{ -100, 100, 500, 800 });
         state.transient(2, 1);
         CHECK(floating_mode(state.require(2))->geometry == Geometry{ 0, 0, 500, 800 });
     }

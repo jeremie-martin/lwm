@@ -136,16 +136,28 @@ public:
     static bool accepts_focus(Client const& client) { return client.accepts_input || client.supports_take_focus; }
     bool focusable(Client const& client) const;
     bool focusable(Client const& client, FullscreenVisibility const& fullscreen) const;
+    // Geometry: the model places frames; borders are drawn inside them.
+    // A presentation is the X window rectangle and border inside a frame.
+    struct Presentation
+    {
+        Geometry geometry;
+        uint32_t border;
+    };
     // One immutable per-pass view per managed client, in registration order.
-    // A rectangle means visible; absence means hidden.
+    // A presentation means visible; absence means hidden.
     struct Projected
     {
         Client const* client;
-        std::optional<Geometry> geometry;
+        std::optional<Presentation> presentation;
     };
     std::vector<Projected> project(FullscreenVisibility const& fullscreen) const;
-    Geometry presentation_geometry(Client const& client) const;
+    Presentation presentation(Client const& client) const;
+    // The presented frame, and the normal frame that presentation states derive from.
+    Geometry frame(Client const& client) const;
     Geometry normal_geometry(Client const& client) const;
+    // Normal border width; fullscreen presentation has none.
+    uint32_t border(Client const& client) const;
+    uint32_t border_color(Client const& client) const;
 
     // Focus
     xcb_window_t active_window() const { return active_window_; }
@@ -294,7 +306,6 @@ private:
     };
 
     Config config_;
-    Layout layout_;
     Geometry screen_;
     Clients clients_;
     Fixtures fixtures_;
@@ -350,6 +361,7 @@ private:
     void forget_missing_tile_slot(Client& client) const;
 
     // Views and geometry
+    Layout layout() const { return { config_.appearance.padding, config_.layout }; }
     bool shows(size_t monitor, size_t workspace) const;
     // Eligible tiles of the current workspace, then sticky tiles of others.
     std::vector<xcb_window_t> tiled_participants(size_t monitor, FullscreenVisibility const& fullscreen) const;
@@ -357,6 +369,7 @@ private:
         size_t monitor, size_t workspace, FullscreenVisibility const* fullscreen, xcb_window_t include = XCB_NONE
     ) const;
     Geometry fullscreen_geometry(Client const& client) const;
+    Presentation presentation(Client const& client, Geometry frame) const;
     void request_geometry(xcb_window_t id, Geometry rectangle);
     void set_mode(xcb_window_t id, bool floating);
     size_t wrap_monitor(int index) const;

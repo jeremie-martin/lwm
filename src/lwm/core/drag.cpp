@@ -25,7 +25,7 @@ void State::begin_window_drag(xcb_window_t id, int16_t x, int16_t y, uint8_t but
     if (presents_maximized(client))
     {
         // Exiting maximize starts from the displayed rectangle.
-        geometry(id, presentation_geometry(client));
+        geometry(id, frame(client));
         maximize(id, false, false);
     }
     drag_ = Drag{ WindowDrag{ id, client.kind(), client.monitor, client.workspace, normal_geometry(client), edges }, x, y, x, y, button };
@@ -37,18 +37,9 @@ std::optional<State::SplitHit> State::split_at(int16_t x, int16_t y) const
     if (!index)
         return std::nullopt;
     auto const& monitor = monitors_[*index];
-    auto const& workspace = monitor.current();
-    auto hit = layout_.hit_test(
-        tiled_participants(*index, fullscreen_visibility()).size(),
-        monitor.working_area(),
-        workspace.layout_strategy,
-        workspace.split_ratios,
-        x,
-        y
-    );
-    if (!hit)
-        return std::nullopt;
-    return SplitHit{ *hit, *index };
+    auto count = tiled_participants(*index, fullscreen_visibility()).size();
+    auto hit = layout().hit_test(count, monitor.working_area(), monitor.current(), x, y);
+    return hit ? std::optional{ SplitHit{ *hit, *index } } : std::nullopt;
 }
 
 void State::begin_split_drag(SplitHit const& hit, int16_t x, int16_t y, uint8_t button)
@@ -151,9 +142,8 @@ std::optional<double> State::end_drag(bool commit)
     auto const& workspace = monitor.current();
     auto participants = tiled_participants(target, fullscreen_visibility());
     std::erase(participants, client->id);
-    size_t slot = layout_.drop_target_index(
-        participants.size() + 1, monitor.working_area(), workspace.layout_strategy, workspace.split_ratios, drag.last_x, drag.last_y
-    );
+    auto area = monitor.working_area();
+    size_t slot = layout().drop_target_index(participants.size() + 1, area, workspace, drag.last_x, drag.last_y);
     xcb_window_t anchor = slot < participants.size() && require(participants[slot]).workspace == monitor.current_workspace
         ? participants[slot]
         : XCB_NONE;

@@ -254,8 +254,8 @@ action = "window to-workspace 1"
         if (floating)
             REQUIRE(
                 moved
-                == std::array<int, 4>{ static_cast<int>(destination) * 1280 + (1280 - before[2]) / 2,
-                                       (720 - before[3]) / 2,
+                == std::array<int, 4>{ static_cast<int>(destination) * 1280 + (1280 - before[2] - 4) / 2,
+                                       (720 - before[3] - 4) / 2,
                                        before[2],
                                        before[3] }
             );
@@ -592,8 +592,9 @@ TEST_CASE(
     auto rectangle = require_window_geometry(conn, floating);
     if (removed)
     {
-        CHECK(rectangle.x == (1280 - rectangle.width) / 2);
-        CHECK(rectangle.y == 80 + (720 - 80 - rectangle.height) / 2);
+        // The frame, including the default 2px border, is centered.
+        CHECK(rectangle.x == (1280 - rectangle.width - 4) / 2);
+        CHECK(rectangle.y == 80 + (720 - 80 - rectangle.height - 4) / 2);
     }
     else
         CHECK(rectangle.x >= 1280);

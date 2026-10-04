@@ -185,11 +185,9 @@ private:
 
     // wm_transition.cpp: operation completion and publication
     void complete_transition();
-    uint32_t border_width(Client const& client) const;
-    uint32_t border_color(Client const& client) const;
     bool publish_clients(std::vector<State::Projected> const& clients);
-    bool write_geometry(Client const& client, Output& output, Geometry geometry, uint32_t border);
-    void send_configure_notify(xcb_window_t window, Geometry geometry, uint32_t border);
+    bool write_geometry(xcb_window_t window, Output& output, State::Presentation const& presentation);
+    void send_configure_notify(xcb_window_t window, State::Presentation const& presentation);
     bool publish(
         xcb_window_t window, xcb_atom_t property, xcb_atom_t type, uint8_t format, std::optional<std::string_view> bytes
     );

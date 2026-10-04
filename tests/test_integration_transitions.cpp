@@ -372,7 +372,7 @@ TEST_CASE(
     REQUIRE(reply->starts_with("ok"));
     REQUIRE(wait_for_condition(
         [&] { return get_window_geometry(conn, window)
-                == WindowGeometry{ 12, 12, static_cast<uint16_t>(conn.screen()->width_in_pixels - 24),
+                == WindowGeometry{ 10, 10, static_cast<uint16_t>(conn.screen()->width_in_pixels - 24),
                                    static_cast<uint16_t>(conn.screen()->height_in_pixels - 24) }; },
         timeout
     ));
@@ -504,7 +504,7 @@ TEST_CASE(
         [&]
         {
             auto rect = get_window_geometry(conn, window);
-            return rect && rect->width == conn.screen()->width_in_pixels && rect->y == 150 && rect->height == 280;
+            return rect && rect->width == conn.screen()->width_in_pixels - 4 && rect->y == 150 && rect->height == 280;
         },
         timeout
     ));
@@ -562,7 +562,7 @@ TEST_CASE(
     REQUIRE(get_window_geometry(conn, window)); // Roundtrip also collects queued X events.
     auto expected = *rect;
     if (mode == "hidden_tiled")
-        expected = { 12, 12, static_cast<uint16_t>(conn.screen()->width_in_pixels - 24),
+        expected = { 10, 10, static_cast<uint16_t>(conn.screen()->width_in_pixels - 24),
                      static_cast<uint16_t>(conn.screen()->height_in_pixels - 24) };
     else if (mode != "fullscreen")
         expected.width = values[0];
@@ -1486,7 +1486,7 @@ apply = { floating = true, geometry = { x = 100, y = 100, width = 240, height = 
         ipc_ok(*socket, "restart");
         REQUIRE(wait_for_wm_restart(conn, timeout, *instance));
     }
-    REQUIRE(wait_for_window_geometry(conn, window, center ? 520 : 100, center ? 280 : 100, 240, 160));
+    REQUIRE(wait_for_window_geometry(conn, window, center ? 518 : 100, center ? 278 : 100, 240, 160));
 
     // The very first request after each rule application must take effect.
     uint32_t values[] = { 400, 300, 320, 200 };

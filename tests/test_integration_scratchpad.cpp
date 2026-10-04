@@ -97,7 +97,7 @@ TEST_CASE(
     REQUIRE(wait_for_active_window(conn, window, kTimeout));
 
     set_window_title(conn, window, "dropdown");
-    bool shown = wait_for_window_geometry(conn, window, 128, 144, 1024, 432);
+    bool shown = wait_for_window_geometry(conn, window, 128, 144, 1020, 428);
     INFO(test_env->wm.diagnostics());
     INFO(send_ipc_command(*socket_path, "window list").value_or("no window reply"));
     INFO(send_ipc_command(*socket_path, "scratchpad list").value_or("no scratchpad reply"));
@@ -649,7 +649,7 @@ size = { width = 0.8, height = 0.6 }
     CHECK(slot["window"] == window);
     CHECK(slot["pending"] == false);
     REQUIRE(wait_for_active_window(conn, window, kTimeout));
-    REQUIRE(wait_for_window_geometry(conn, window, 128, 144, 1024, 432));
+    REQUIRE(wait_for_window_geometry(conn, window, 128, 144, 1020, 428));
     ipc_ok(*socket, "scratchpad toggle second");
     REQUIRE(wait_for_condition([&] { return is_hidden_offscreen(conn, window); }, kTimeout));
     destroy_window(conn, window);

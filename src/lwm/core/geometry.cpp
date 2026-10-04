@@ -44,24 +44,40 @@ std::vector<State::Projected> State::project(FullscreenVisibility const& fullscr
     for (size_t m = 0; m < monitors_.size(); ++m)
     {
         auto const& monitor = monitors_[m];
-        auto const& workspace = monitor.current();
         auto windows = tiled_participants(m, fullscreen);
-        auto slots = layout_.arrange(windows.size(), monitor.working_area(), workspace.layout_strategy, workspace.split_ratios);
-        for (size_t i = 0; i < windows.size(); ++i) result.push_back({ &require(windows[i]), slots[i] });
+        auto slots = layout().arrange(windows.size(), monitor.working_area(), monitor.current());
+        for (size_t i = 0; i < windows.size(); ++i)
+        {
+            auto const& client = require(windows[i]);
+            result.push_back({ &client, presentation(client, drag_preview(client).value_or(slots[i])) });
+        }
     }
     for (auto const& [id, client] : clients_)
     {
         if (!visible(client, fullscreen))
             result.push_back({ &client, std::nullopt });
         else if (client.fullscreen || floating_mode(client))
-            result.push_back({ &client, presentation_geometry(client) });
+            result.push_back({ &client, presentation(client) });
     }
-    for (auto& projected : result)
-        if (projected.geometry)
-            if (auto preview = drag_preview(*projected.client))
-                projected.geometry = preview;
     std::ranges::sort(result, { }, [](auto const& projected) { return projected.client->order; });
     return result;
+}
+
+State::Presentation State::presentation(Client const& client) const { return presentation(client, frame(client)); }
+
+State::Presentation State::presentation(Client const& client, Geometry frame) const
+{
+    auto border = client.fullscreen ? 0 : this->border(client);
+    return { inset(frame, border), border };
+}
+
+uint32_t State::border(Client const& client) const { return client.borderless ? 0 : config_.appearance.border_width; }
+
+uint32_t State::border_color(Client const& client) const
+{
+    if (client.id == active_window_)
+        return config_.appearance.border_color;
+    return client.urgency.active() ? config_.appearance.urgent_border_color : 0;
 }
 
 Geometry State::normal_geometry(Client const& client) const
@@ -80,8 +96,7 @@ Geometry State::normal_geometry(Client const& client) const
     }
     auto position = std::ranges::find(windows, client.id);
     assert(position != windows.end());
-    auto const& policy = monitor.workspaces[workspace];
-    auto slots = layout_.arrange(windows.size(), monitor.working_area(), policy.layout_strategy, policy.split_ratios);
+    auto slots = layout().arrange(windows.size(), monitor.working_area(), monitor.workspaces[workspace]);
     return slots[static_cast<size_t>(position - windows.begin())];
 }
 
@@ -109,7 +124,7 @@ Geometry State::fullscreen_geometry(Client const& client) const
     return { geometry_coordinate(min_x), geometry_coordinate(min_y), geometry_extent(max_x - min_x), geometry_extent(max_y - min_y) };
 }
 
-Geometry State::presentation_geometry(Client const& client) const
+Geometry State::frame(Client const& client) const
 {
     if (auto preview = drag_preview(client))
         return *preview;

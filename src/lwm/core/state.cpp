@@ -824,7 +824,6 @@ std::expected<void, std::string> State::configure(Config config)
     mutated();
     end_drag(false);
     config_ = std::move(config);
-    layout_ = Layout{ config_.appearance, config_.layout };
     reconcile_scratchpads();
     reapply_rules();
     repair_focus_ = true;

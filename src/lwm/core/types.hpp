@@ -72,6 +72,14 @@ constexpr uint16_t geometry_extent(int64_t value)
     return static_cast<uint16_t>(std::clamp<int64_t>(value, 1, 65535));
 }
 
+// The model places frames: outer rectangles with the border drawn inside. X
+// positions a window by its outer corner and sizes it without the border.
+constexpr Geometry outset(Geometry window, int64_t border)
+{
+    return { window.x, window.y, geometry_extent(window.width + 2 * border), geometry_extent(window.height + 2 * border) };
+}
+constexpr Geometry inset(Geometry frame, int64_t border) { return outset(frame, -border); }
+
 // Containment keeps computed coordinates wide, so distant points never wrap inside.
 constexpr bool contains(Geometry area, int32_t x, int32_t y)
 {

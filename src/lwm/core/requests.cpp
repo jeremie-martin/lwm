@@ -114,30 +114,26 @@ void State::hint_urgency(xcb_window_t id, bool urgent)
         urgency(id, UrgencySource::App, urgent);
 }
 
-namespace {
-Geometry merge(Geometry geometry, GeometryRequest const& request)
-{
-    geometry.x = request.x.value_or(geometry.x);
-    geometry.y = request.y.value_or(geometry.y);
-    geometry.width = request.width.value_or(geometry.width);
-    geometry.height = request.height.value_or(geometry.height);
-    return geometry;
-}
-}
-
+// Requests name the X window rectangle inside the client's normal frame.
 void State::configure_request(xcb_window_t id, GeometryRequest request)
 {
     auto const* client = find(id);
-    auto const* floating = client ? floating_mode(*client) : nullptr;
-    if (floating && !client->fullscreen && (request.x || request.y || request.width || request.height))
-        request_geometry(id, merge(floating->geometry, request));
+    if (client && !client->fullscreen && (request.x || request.y || request.width || request.height))
+        moveresize_request(id, request);
 }
 
 void State::moveresize_request(xcb_window_t id, GeometryRequest request)
 {
     auto const* client = find(id);
-    if (auto const* floating = client ? floating_mode(*client) : nullptr)
-        request_geometry(id, merge(floating->geometry, request));
+    auto const* floating = client ? floating_mode(*client) : nullptr;
+    if (!floating)
+        return;
+    auto window = inset(floating->geometry, border(*client));
+    window.x = request.x.value_or(window.x);
+    window.y = request.y.value_or(window.y);
+    window.width = request.width.value_or(window.width);
+    window.height = request.height.value_or(window.height);
+    request_geometry(id, outset(window, border(*client)));
 }
 
 } // namespace lwm

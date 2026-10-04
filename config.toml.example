@@ -234,7 +234,8 @@ keys = ["1", "2", "3", "4", "5", "6", "7", "8", "9", "0"]
 #
 # Rules affect only tiled/floating clients; they cannot convert desktop, dock,
 # or direct-mapped popup types. geometry and center affect floating clients.
-# Geometry x/y must be within -32768..32767 and width/height within 1..65535.
+# Geometry x/y must be within -32768..32767 and width/height within 1..65535;
+# width and height size the window inside its border.
 # Explicit false state overrides and borderless apply on initial mapping as well
 # as changed metadata matches and config reload. Rules are actions, not persistent
 # constraints: later supported application/user requests can replace them.

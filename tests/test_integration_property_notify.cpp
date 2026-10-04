@@ -693,8 +693,8 @@ TEST_CASE(
     REQUIRE(wait_for_window_geometry(
         conn,
         window,
-        static_cast<int16_t>((conn.screen()->width_in_pixels - 410) / 2),
-        static_cast<int16_t>((conn.screen()->height_in_pixels - 260) / 2),
+        static_cast<int16_t>((conn.screen()->width_in_pixels - 414) / 2), // Centered frame
+        static_cast<int16_t>((conn.screen()->height_in_pixels - 264) / 2),
         410,
         260
     ));
@@ -706,8 +706,8 @@ TEST_CASE(
     REQUIRE(wait_for_window_geometry(
         conn,
         window,
-        static_cast<int16_t>((conn.screen()->width_in_pixels - 410) / 2),
-        static_cast<int16_t>((conn.screen()->height_in_pixels - 260) / 2),
+        static_cast<int16_t>((conn.screen()->width_in_pixels - 414) / 2), // Centered frame
+        static_cast<int16_t>((conn.screen()->height_in_pixels - 264) / 2),
         410,
         260
     ));
@@ -737,15 +737,16 @@ TEST_CASE(
     REQUIRE(fullscreen != XCB_NONE);
 
     xcb_window_t window = create_window(conn, 100, 90, 320, 220);
-    auto require_realized_state_geometry = [&]()
+    // Maximize fills the workarea with the frame; fullscreen has no border.
+    auto require_realized_state_geometry = [&](uint16_t border)
     {
         REQUIRE(wait_for_window_geometry(
             conn,
             window,
             0,
             0,
-            conn.screen()->width_in_pixels,
-            conn.screen()->height_in_pixels
+            conn.screen()->width_in_pixels - 2 * border,
+            conn.screen()->height_in_pixels - 2 * border
         ));
     };
 
@@ -764,10 +765,10 @@ TEST_CASE(
         },
         kTimeout
     ));
-    require_realized_state_geometry();
+    require_realized_state_geometry(2);
 
     set_wm_normal_hints(conn, window, 140, 120, 410, 260);
-    require_realized_state_geometry();
+    require_realized_state_geometry(2);
     REQUIRE(property_has_atom(conn.get(), window, net_wm_state, maximized_horz));
     REQUIRE(property_has_atom(conn.get(), window, net_wm_state, maximized_vert));
 
@@ -778,10 +779,10 @@ TEST_CASE(
     REQUIRE(
         wait_for_condition([&]() { return property_has_atom(conn.get(), window, net_wm_state, fullscreen); }, kTimeout)
     );
-    require_realized_state_geometry();
+    require_realized_state_geometry(0);
 
     set_wm_normal_hints(conn, window, 180, 150, 430, 290);
-    require_realized_state_geometry();
+    require_realized_state_geometry(0);
     REQUIRE(property_has_atom(conn.get(), window, net_wm_state, fullscreen));
 
     send_client_message(conn, window, net_wm_state, 0, fullscreen);
@@ -835,7 +836,7 @@ TEST_CASE(
     map_window(conn, window);
     REQUIRE(wait_for_active_window(conn, window, kTimeout));
 
-    REQUIRE(wait_for_window_geometry(conn, window, 440, 240, 400, 240));
+    REQUIRE(wait_for_window_geometry(conn, window, 438, 238, 400, 240));
 
     destroy_window(conn, window);
 }
@@ -882,7 +883,7 @@ TEST_CASE(
     REQUIRE(wait_for_active_window(conn, window, kTimeout));
 
     set_window_title(conn, window, "micro");
-    REQUIRE(wait_for_window_geometry(conn, window, 440, 240, 400, 240));
+    REQUIRE(wait_for_window_geometry(conn, window, 438, 238, 400, 240));
 
     // A later application request supersedes the rule, even on its first attempt.
     uint32_t values[] = { 60, 60, 220, 160 };
@@ -1077,6 +1078,9 @@ apply = { floating = true, borderless = true }
     destroy_window(conn, window);
 }
 
+// Frames saturate at the X11 extent; the window inside keeps the default border.
+constexpr uint16_t kWidestFramedWindow = 65535 - 2 * 2;
+
 TEST_CASE("Integration: oversized normal hints do not wrap floating dimensions", "[integration][property][bounds]")
 {
     auto env = TestEnvironment::create(R"(
@@ -1094,7 +1098,7 @@ apply = { floating = true }
     REQUIRE(wait_for_active_window(conn, window, kTimeout));
     auto geometry = get_window_geometry(conn, window);
     REQUIRE(geometry);
-    CHECK(geometry->width == 65535);
+    CHECK(geometry->width == kWidestFramedWindow);
     CHECK(geometry->height == 32);
     set_wm_normal_hints(conn, window, 20, 20, 65537, 33);
     REQUIRE(wait_for_condition(
@@ -1107,7 +1111,7 @@ apply = { floating = true }
     ));
     geometry = get_window_geometry(conn, window);
     REQUIRE(geometry);
-    CHECK(geometry->width == 65535);
+    CHECK(geometry->width == kWidestFramedWindow);
     CHECK(geometry->height == 33);
     destroy_window(conn, window);
 }
@@ -1136,8 +1140,8 @@ TEST_CASE("Integration: moveresize messages saturate geometry instead of wrappin
             kTimeout
         ));
     };
-    resize(65536, 41, 65535);
-    resize(UINT32_MAX, 42, 65535);
+    resize(65536, 41, kWidestFramedWindow);
+    resize(UINT32_MAX, 42, kWidestFramedWindow);
     resize(0, 43, 1);
     send_client_message(conn, window, atom, (1u << 8) | (1u << 9), static_cast<uint32_t>(-40000), 40000);
     REQUIRE(wait_for_condition(
@@ -1173,7 +1177,7 @@ TEST_CASE("Integration: pointer resize saturates an oversized floating extent", 
     observe_title_after_events(conn, window);
     auto resized = get_window_geometry(conn, window);
     REQUIRE(resized);
-    CHECK(resized->width == 65535);
+    CHECK(resized->width == kWidestFramedWindow);
     CHECK(resized->height == 50);
     send_client_message(conn, window, atom, 120, 100, 11);
     destroy_window(conn, window);
