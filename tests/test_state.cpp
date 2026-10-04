@@ -613,3 +613,41 @@ TEST_CASE("Admission derives roles and placement from observations alone", "[sta
     CHECK(state.require(6).iconic);
     CHECK(state.fullscreen_claims().back() == 6);
 }
+
+TEST_CASE("Button presses choose bindings before click focus and split gestures", "[state][drag][input]")
+{
+    auto state = test::state(); // Two tiles split at x=500 by default padding
+    add(state, 1);
+    add(state, 2);
+    test::focus(state, 2);
+    uint16_t const super = XCB_MOD_MASK_4;
+    test::configure(state, [&](Config& config) {
+        config.mousebinds = { { super, 1, MouseAction::DragWindow }, { super, 3, MouseAction::ResizeFloating } };
+    });
+    auto split = [](State::Press const& press)
+    { return press.interaction && std::holds_alternative<State::SplitHit>(*press.interaction); };
+
+    // An ordinary click focuses its client and is replayed to it.
+    auto click = state.press(1, 100, 100, 1, 0, 10);
+    CHECK_FALSE(click.consumed);
+    CHECK_FALSE(click.interaction);
+    CHECK(state.active_window() == 1);
+    // Bindings consume the press; a tiled resize binding prefers the split under it.
+    CHECK(split(state.press(1, 500, 400, 3, super, 20)));
+    auto move = state.press(1, 100, 100, 1, super | XCB_MOD_MASK_LOCK, 30);
+    REQUIRE(move.interaction);
+    CHECK(std::get<State::Grip>(*move.interaction).window == 1);
+    // A plain gap click resizes; a quick second click or Ctrl click resets the split.
+    state.ratio(0, SplitAddress{ 0 }, 0.3);
+    REQUIRE(split(state.press(XCB_NONE, 310, 400, 1, 0, 1000)));
+    CHECK(state.monitors()[0].current().split_ratios.contains(SplitAddress{ 0 }));
+    CHECK_FALSE(state.press(XCB_NONE, 310, 400, 1, 0, 1100).interaction);
+    CHECK_FALSE(state.monitors()[0].current().split_ratios.contains(SplitAddress{ 0 }));
+    state.ratio(0, SplitAddress{ 0 }, 0.3);
+    CHECK_FALSE(state.press(XCB_NONE, 310, 400, 1, XCB_MOD_MASK_CONTROL, 5000).interaction);
+    CHECK_FALSE(state.monitors()[0].current().split_ratios.contains(SplitAddress{ 0 }));
+    // Hidden clients swallow clicks without focusing.
+    state.iconic(2, true);
+    CHECK(state.press(2, 700, 100, 1, 0, 6000).consumed);
+    CHECK(state.active_window() == 1);
+}

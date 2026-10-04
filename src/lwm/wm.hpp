@@ -134,10 +134,6 @@ private:
     xcb_cursor_t cursor_resize_h_ = XCB_NONE;
     xcb_cursor_t cursor_resize_v_ = XCB_NONE;
     xcb_cursor_t current_root_cursor_ = XCB_NONE;
-    // Double-click detection for split ratio reset
-    xcb_timestamp_t last_gap_click_time_ = 0;
-    SplitAddress last_gap_click_address_{ };
-    size_t last_gap_click_monitor_ = 0;
 
     // wm.cpp: process, X setup, and X reads
     void intern_atoms();
@@ -220,11 +216,9 @@ private:
     void handle_wm_moveresize(xcb_client_message_event_t const& e);
     void handle_configure_request(xcb_configure_request_event_t const& e);
     void handle_property_notify(xcb_property_notify_event_t const& event);
-    MousebindConfig const* resolve_mouse_binding(uint16_t state, uint8_t button) const;
     bool grab_pointer(xcb_cursor_t cursor = XCB_NONE);
     void release_pointer();
-    void begin_window_drag(xcb_window_t window, int16_t x, int16_t y, uint8_t button, floating::ResizeEdge edges);
-    void begin_split_drag(State::SplitHit const& hit, int16_t x, int16_t y, uint8_t button);
+    void begin_interaction(State::Interaction const& interaction, int16_t x, int16_t y, uint8_t button);
 
     // wm_actions.cpp: the one executor for key bindings and IPC
     std::expected<std::string, std::string> execute(Action const& action, std::string_view source);

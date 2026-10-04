@@ -69,6 +69,18 @@ public:
         SplitHitResult hit;
         size_t monitor;
     };
+    // An interaction to begin once the shell holds the pointer.
+    struct Grip
+    {
+        xcb_window_t window;
+        floating::ResizeEdge edges;
+    };
+    using Interaction = std::variant<Grip, SplitHit>;
+    struct Press
+    {
+        bool consumed; ///< The client does not receive the click
+        std::optional<Interaction> interaction;
+    };
 
     enum class RelocationGeometry
     {
@@ -281,10 +293,14 @@ public:
     // Pointer interactions. Domain changes start only after the shell acquires
     // the grab; a drag ends when its client or split context stops existing.
     std::optional<Drag> const& drag() const { return drag_; }
-    bool can_drag(xcb_window_t id) const;
-    void begin_window_drag(xcb_window_t id, int16_t x, int16_t y, uint8_t button, floating::ResizeEdge edges);
+    // A button press on a window (NONE for bare root): mouse bindings, click to
+    // focus, and gap clicks that resize or (double or Ctrl click) reset a split.
+    Press press(xcb_window_t window, int16_t x, int16_t y, uint8_t button, uint16_t modifiers, uint32_t time);
+    // _NET_WM_MOVERESIZE moves or resizes floating clients; cancel ends the same window's drag.
+    std::optional<Interaction> moveresize(xcb_window_t id, floating::ResizeEdge edges) const;
+    void cancel_moveresize(xcb_window_t id);
+    void begin_drag(Interaction const& interaction, int16_t x, int16_t y, uint8_t button);
     std::optional<SplitHit> split_at(int16_t x, int16_t y) const;
-    void begin_split_drag(SplitHit const& hit, int16_t x, int16_t y, uint8_t button);
     void drag_to(int16_t x, int16_t y);
     // Commit applies a tiled drop. Returns a committed split ratio change.
     std::optional<double> end_drag(bool commit);
@@ -392,6 +408,14 @@ private:
     void reconcile_scratchpads();
 
     // Pointer interactions
+    struct GapClick
+    {
+        uint32_t time;
+        SplitAddress address;
+        size_t monitor;
+    };
+    std::optional<GapClick> gap_click_; ///< The last gap click, for double clicks
+    bool can_drag(xcb_window_t id) const;
     bool drag_valid() const;
     std::optional<Geometry> drag_preview(Client const& client) const;
 };

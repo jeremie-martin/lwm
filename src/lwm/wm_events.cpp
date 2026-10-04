@@ -220,111 +220,20 @@ void WindowManager::handle_motion_notify(xcb_motion_notify_event_t const& e)
     state_.hover(under, e.root_x, e.root_y);
 }
 
-MousebindConfig const* WindowManager::resolve_mouse_binding(uint16_t state, uint8_t button) const
-{
-    auto modifiers = binding_modifiers(state);
-    for (auto const& binding : config().mousebinds)
-        if (binding.button == button && binding.modifier == modifiers)
-            return &binding;
-    return nullptr;
-}
-
+// Managed windows use a passive SYNC grab for click-to-focus, which a consumed
+// press releases and an ordinary click replays. Modifier bindings are
+// interpreted here because ReplayPointer skips ancestor grabs such as the
+// root grabs installed by grab_buttons().
 void WindowManager::handle_button_press(xcb_button_press_event_t const& e)
 {
     xcb_window_t root = conn_.screen()->root;
     bool from_window_grab = e.event != root;
-    xcb_window_t target = !from_window_grab && e.child != XCB_NONE ? e.child : e.event;
-    auto const* client = state_.find(target);
-    // Managed windows use a passive SYNC grab for click-to-focus; release it.
-    auto allow = [&](uint8_t mode)
-    {
-        if (from_window_grab)
-            xcb_allow_events(conn_.get(), mode, e.time);
-    };
-    if (client && !state_.visible(*client))
-    {
-        allow(XCB_ALLOW_ASYNC_POINTER);
-        return;
-    }
-
-    // Modifier bindings are handled here because ReplayPointer skips ancestor
-    // passive grabs such as the root grabs installed by grab_buttons().
-    if (auto const* binding = resolve_mouse_binding(e.state, e.detail))
-    {
-        bool handled = false;
-        switch (binding->action)
-        {
-            case MouseAction::DragWindow:
-                if (client)
-                {
-                    allow(XCB_ALLOW_ASYNC_POINTER);
-                    begin_window_drag(target, e.root_x, e.root_y, e.detail, floating::ResizeEdge::None);
-                    handled = true;
-                }
-                break;
-            case MouseAction::ResizeFloating:
-                // Tiled and root clicks prefer a split; otherwise resize a
-                // floating window or convert a tile after acquiring the pointer.
-                if (!client || client->kind() == Client::Kind::Tiled)
-                    if (auto hit = state_.split_at(e.root_x, e.root_y))
-                    {
-                        allow(XCB_ALLOW_ASYNC_POINTER);
-                        begin_split_drag(*hit, e.root_x, e.root_y, e.detail);
-                        handled = true;
-                        break;
-                    }
-                if (client)
-                {
-                    allow(XCB_ALLOW_ASYNC_POINTER);
-                    using Edge = floating::ResizeEdge;
-                    begin_window_drag(target, e.root_x, e.root_y, e.detail, Edge::Right | Edge::Bottom);
-                    handled = true;
-                }
-                break;
-            case MouseAction::ToggleFloat:
-                if (client)
-                {
-                    allow(XCB_ALLOW_ASYNC_POINTER);
-                    state_.toggle_floating(target);
-                    handled = true;
-                }
-                break;
-        }
-        if (handled)
-            return;
-    }
-
-    // Ordinary clicks focus the client and still reach it.
-    if (client && target != state_.active_window())
-        state_.focus(target);
+    xcb_window_t target = from_window_grab ? e.event : e.child;
+    auto [consumed, interaction] = state_.press(target, e.root_x, e.root_y, e.detail, e.state, e.time);
     if (from_window_grab)
-        allow(XCB_ALLOW_REPLAY_POINTER);
-    if (client || from_window_grab)
-        return;
-
-    // A plain (or Ctrl) left click on an empty gap resizes the split under it;
-    // a double or Ctrl click resets that split.
-    uint16_t modifiers = binding_modifiers(e.state) & ~XCB_MOD_MASK_CONTROL;
-    if (target == root && e.child == XCB_NONE && e.detail == 1 && modifiers == 0)
-        if (auto hit = state_.split_at(e.root_x, e.root_y))
-        {
-            bool ctrl = (e.state & XCB_MOD_MASK_CONTROL) != 0;
-            auto elapsed = static_cast<int32_t>(e.time - last_gap_click_time_);
-            bool double_click = !ctrl && elapsed > 0 && elapsed < 400 && last_gap_click_address_ == hit->hit.address
-                && last_gap_click_monitor_ == hit->monitor;
-            last_gap_click_time_ = e.time;
-            last_gap_click_address_ = hit->hit.address;
-            last_gap_click_monitor_ = hit->monitor;
-            if (double_click || ctrl)
-            {
-                state_.erase_ratio(hit->monitor, hit->hit.address);
-                last_gap_click_time_ = 0;
-                return;
-            }
-            begin_split_drag(*hit, e.root_x, e.root_y, e.detail);
-            return;
-        }
-    state_.hover(XCB_NONE, e.root_x, e.root_y);
+        xcb_allow_events(conn_.get(), consumed ? XCB_ALLOW_ASYNC_POINTER : XCB_ALLOW_REPLAY_POINTER, e.time);
+    if (interaction)
+        begin_interaction(*interaction, e.root_x, e.root_y, e.detail);
 }
 
 void WindowManager::handle_button_release(xcb_button_release_event_t const& e)
@@ -337,8 +246,6 @@ void WindowManager::handle_button_release(xcb_button_release_event_t const& e)
         queue_event(event::layout_change{ "resize_split", *ratio, std::nullopt });
 }
 
-// Domain changes start only after the grab succeeds; completion releases it
-// once State no longer has a drag.
 bool WindowManager::grab_pointer(xcb_cursor_t cursor)
 {
     if (state_.drag())
@@ -374,16 +281,16 @@ void WindowManager::release_pointer()
     drain_requested_ = true;
 }
 
-void WindowManager::begin_window_drag(xcb_window_t window, int16_t x, int16_t y, uint8_t button, floating::ResizeEdge edges)
+// Domain changes start only after the grab succeeds; completion releases it
+// once State no longer has a drag.
+void WindowManager::begin_interaction(State::Interaction const& interaction, int16_t x, int16_t y, uint8_t button)
 {
-    if (state_.can_drag(window) && grab_pointer())
-        state_.begin_window_drag(window, x, y, button, edges);
-}
-
-void WindowManager::begin_split_drag(State::SplitHit const& hit, int16_t x, int16_t y, uint8_t button)
-{
-    if (!state_.drag() && grab_pointer(hit.hit.direction == SplitDirection::Horizontal ? cursor_resize_h_ : cursor_resize_v_))
-        state_.begin_split_drag(hit, x, y, button);
+    auto const* split = std::get_if<State::SplitHit>(&interaction);
+    auto cursor = !split ? XCB_NONE
+        : split->hit.direction == SplitDirection::Horizontal ? cursor_resize_h_
+                                                              : cursor_resize_v_;
+    if (grab_pointer(cursor))
+        state_.begin_drag(interaction, x, y, button);
 }
 
 // X11 auto-repeat sends KeyRelease/KeyPress pairs with identical timestamps.
@@ -522,27 +429,21 @@ void WindowManager::handle_wm_moveresize(xcb_client_message_event_t const& e)
 {
     uint32_t direction = e.data.data32[2];
     if (direction == 11) // _NET_WM_MOVERESIZE_CANCEL
-    {
-        if (auto const& drag = state_.drag())
-            if (auto const* move = std::get_if<State::WindowDrag>(&drag->operation); move && move->window == e.window)
-                state_.end_drag(false);
-        return;
-    }
-    auto const* client = state_.find(e.window);
-    if (!client || client->kind() != Client::Kind::Floating || direction > 8 || e.data.data32[3] > 255)
+        return state_.cancel_moveresize(e.window);
+    if (direction > 8 || e.data.data32[3] > 255)
         return;
     using Edge = floating::ResizeEdge;
     static constexpr Edge edges[] = { Edge::Top | Edge::Left,     Edge::Top,    Edge::Top | Edge::Right,
                                       Edge::Right,                Edge::Bottom | Edge::Right,
                                       Edge::Bottom,               Edge::Bottom | Edge::Left,
                                       Edge::Left,                 Edge::None };
-    begin_window_drag(
-        e.window,
-        geometry_coordinate(static_cast<int32_t>(e.data.data32[0])),
-        geometry_coordinate(static_cast<int32_t>(e.data.data32[1])),
-        static_cast<uint8_t>(e.data.data32[3]),
-        edges[direction]
-    );
+    if (auto interaction = state_.moveresize(e.window, edges[direction]))
+        begin_interaction(
+            *interaction,
+            geometry_coordinate(static_cast<int32_t>(e.data.data32[0])),
+            geometry_coordinate(static_cast<int32_t>(e.data.data32[1])),
+            static_cast<uint8_t>(e.data.data32[3])
+        );
 }
 
 // Configure requests and properties

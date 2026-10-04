@@ -54,6 +54,7 @@ everything the model needs:
 - Property changes arrive as new values (`title`, `window_class`, `window_type`,
   `transient`, `size_hints`, `focus_hints`, `reserve`, `user_time`).
 - Topology arrives as a `Topology`: output names, rectangles and the screen extent.
+- Button presses arrive as the window, position, button, modifiers and time.
 - Bindings and IPC commands share one `Action` type. `execute()` maps each action to
   a named model operation and performs only the effects the model asks for: closing
   a window, launching a process (including a scratchpad launch the model requested),
@@ -251,8 +252,12 @@ siblings.
 
 ## Pointer interactions and scratchpads
 
-A drag is either a window move/resize or a split resize. Domain changes (focus,
-floating conversion, leaving maximize) start only after the shell holds the grab.
+`press()` interprets a button press: mouse bindings, click-to-focus, and gap clicks
+that resize a split or, on a double or Ctrl click, reset it. It reports whether the
+client still receives the click and which interaction to begin; `moveresize()` does the
+same for `_NET_WM_MOVERESIZE`. A drag is either a window move/resize or a split resize.
+Domain changes (focus, floating conversion, leaving maximize) start in `begin_drag()`,
+only after the shell holds the grab.
 Floating drags change normal geometry; a tiled move is a preview until release, when
 the drop slot is translated into a membership index without reordering hidden members
 or sticky guests. A drag ends when its client's eligibility or the captured split

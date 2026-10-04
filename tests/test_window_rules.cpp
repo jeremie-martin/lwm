@@ -123,8 +123,8 @@ TEST_CASE("Transient metadata places against the parent's resulting presentation
     SECTION("A tiled drag preview is the parent's presentation")
     {
         state.transient(2, XCB_NONE);
-        REQUIRE(state.can_drag(1));
-        state.begin_window_drag(1, 500, 400, 1, floating::ResizeEdge::None);
+        state.begin_drag(State::Grip{ 1, floating::ResizeEdge::None }, 500, 400, 1);
+        REQUIRE(state.drag());
         state.drag_to(400, 500);
         REQUIRE(state.frame(state.require(1)) == Geometry{ -100, 100, 500, 800 });
         state.transient(2, 1);
