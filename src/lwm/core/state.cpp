@@ -156,11 +156,8 @@ void State::erase(xcb_window_t id)
     if (client->kind() == Client::Kind::Tiled)
         detach(*client);
     release_scratchpad(id);
-    bool active = active_window_ == id;
     clients_.erase(id);
     std::erase(fullscreen_claims_, id);
-    if (active)
-        focus_fallback(focused_monitor_);
 }
 
 void State::attach(Client const& client, std::optional<size_t> index)
@@ -283,6 +280,7 @@ void State::focus(xcb_window_t id, uint32_t time, bool record_user_time)
             return focus_fallback(client->monitor, false);
     }
     select_focus(id, time, record_user_time);
+    focus_released_ = id == XCB_NONE;
 }
 
 void State::focus_fallback(size_t monitor, bool record_user_time)
@@ -322,6 +320,7 @@ void State::select_focus(xcb_window_t id, uint32_t time, bool record_user_time)
 {
     mutated();
     focus_cycle_.clear();
+    focus_released_ = false;
     focus_request_ = FocusRequest{ time, record_user_time };
     if (active_window_ != id)
         LWM_LOG_DEBUG("Focus changed: window={:#x} -> {:#x}", active_window_, id);
@@ -349,11 +348,12 @@ std::optional<uint32_t> State::settle(uint32_t input_time)
 
 std::optional<uint32_t> State::complete_focus(uint32_t input_time)
 {
-    bool requested = std::exchange(repair_focus_, false);
+    // Repair a selection that lost its client or eligibility, and fill an empty
+    // one unless the user released focus.
     auto const* active = find(active_window_);
-    if (active ? !focusable(*active)
-               : active_window_ != XCB_NONE || (requested && !focus_request_ && !showing_desktop_))
-        focus_fallback(focused_monitor_, false);
+    if (active ? !focusable(*active) : active_window_ != XCB_NONE || !focus_released_)
+        if (auto target = focus::fallback(*this, focused_monitor_); target != active_window_)
+            select_focus(target, 0, false);
     auto request = std::exchange(focus_request_, std::nullopt);
     if (request && find(active_window_))
     {
@@ -410,8 +410,6 @@ void State::show_desktop(bool enabled)
     showing_desktop_ = enabled;
     if (enabled)
         select_focus(XCB_NONE);
-    else
-        focus_fallback(focused_monitor_);
 }
 
 // Placement and mode
@@ -472,13 +470,8 @@ bool State::relocate(
     bool active = active_window_ == id;
     if (tiled && !client.iconic && (active || !shows(monitor, workspace)))
         edit_workspace(monitor, workspace).preferred_tile = id;
-    if (active)
-    {
-        if (in_view(client))
-            focus_monitor(monitor);
-        else
-            focus_fallback(focused_monitor_);
-    }
+    if (active && in_view(client))
+        focus_monitor(monitor);
     return true;
 }
 
@@ -603,8 +596,6 @@ void State::iconic(xcb_window_t id, bool enabled)
     // Restoring a fullscreen client makes it the preferred owner again.
     if (!enabled && c.fullscreen)
         request_fullscreen(id);
-    if (enabled && active_window_ == id)
-        focus_fallback(focused_monitor_);
 }
 
 void State::sticky(xcb_window_t id, bool enabled)
@@ -627,7 +618,6 @@ void State::fullscreen(xcb_window_t id, bool enabled)
     LWM_LOG_DEBUG("Fullscreen changed: window={:#x} enabled={}", id, false);
     c.fullscreen = false;
     std::erase(fullscreen_claims_, id);
-    repair_focus_ = true;
 }
 
 void State::request_fullscreen(xcb_window_t id)
@@ -639,7 +629,6 @@ void State::request_fullscreen(xcb_window_t id)
     c.maximized_horz = c.maximized_vert = false;
     std::erase(fullscreen_claims_, id);
     fullscreen_claims_.push_back(id);
-    repair_focus_ = true;
 }
 
 void State::maximize(xcb_window_t id, bool horizontal, bool vertical)
@@ -701,9 +690,8 @@ void State::pin_desktop(xcb_window_t id, bool pinned) { assign(id, &Client::desk
 
 void State::focus_hints(xcb_window_t id, bool input, bool take_focus)
 {
-    bool changed = assign(id, &Client::accepts_input, input);
-    changed |= assign(id, &Client::supports_take_focus, take_focus);
-    repair_focus_ |= changed;
+    assign(id, &Client::accepts_input, input);
+    assign(id, &Client::supports_take_focus, take_focus);
 }
 
 // Activation-time bookkeeping is not exposed or published, so it is not a revision.
@@ -826,7 +814,6 @@ std::expected<void, std::string> State::configure(Config config)
     config_ = std::move(config);
     reconcile_scratchpads();
     reapply_rules();
-    repair_focus_ = true;
     return { };
 }
 

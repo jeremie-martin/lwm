@@ -181,6 +181,7 @@ void State::adopt(
 
     if (pointer)
         focus_monitor(monitor_at(monitors_, pointer->first, pointer->second).value_or(0));
+    // Startup always commits one explicit focus, even when it is the root.
     auto const* active = handoff ? find(handoff->active) : nullptr;
     if (active && focusable(*active))
         focus(active->id, 0, false);

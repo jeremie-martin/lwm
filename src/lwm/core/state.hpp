@@ -164,7 +164,8 @@ public:
     size_t focused_monitor() const { return focused_monitor_; }
     bool showing_desktop() const { return showing_desktop_; }
     // Activation restores a minimized client and selects its workspace. Unknown or
-    // clients without input or WM_TAKE_FOCUS are refused; NONE clears focus.
+    // clients without input or WM_TAKE_FOCUS are refused; NONE releases focus
+    // until a later choice, which settling does not override.
     void focus(xcb_window_t id, uint32_t time = 0, bool record_user_time = true);
     bool cycle_focus(bool forward);
     void restore(xcb_window_t id, bool activate);
@@ -318,7 +319,7 @@ private:
     bool showing_desktop_ = false;
     std::optional<FocusRequest> focus_request_;
     std::vector<xcb_window_t> focus_cycle_;
-    bool repair_focus_ = false;
+    bool focus_released_ = false; ///< Focus was deliberately cleared, not left without a candidate
     std::optional<Drag> drag_;
     uint64_t next_order_ = 0;
     uint64_t next_recency_ = 1;

@@ -152,8 +152,8 @@ TEST_CASE("Only completed focus contributes to recency", "[focus][state]")
     CHECK(state.active_window() == 1);
     CHECK(state.require(1).mru_order == 2);
     CHECK(state.require(3).mru_order == 0);
-    test::configure(state, [](Config&) { }); // Reload requests a focus repair.
-    state.focus(XCB_NONE);
+    test::configure(state, [](Config&) { });
+    state.focus(XCB_NONE); // A released focus stays empty until a later choice.
     state.settle();
     CHECK(state.active_window() == XCB_NONE);
 }
@@ -185,11 +185,12 @@ TEST_CASE("Activation owns restoration and placement and refuses ineligible clie
         CHECK(state.active_window() == XCB_NONE);
         state.show_desktop(false);
     }
+    state.settle();
     CHECK(state.active_window() == 2);
     CHECK(state.focused_monitor() == 1);
 }
 
-TEST_CASE("Domain operations choose focus without caller cleanup", "[focus][state]")
+TEST_CASE("Settling repairs focus after domain operations without caller cleanup", "[focus][state]")
 {
     auto state = test::state(2);
     add(state, 1);
@@ -199,6 +200,7 @@ TEST_CASE("Domain operations choose focus without caller cleanup", "[focus][stat
     SECTION("Minimize")
     {
         state.iconic(2, true);
+        state.settle();
         CHECK(state.active_window() == 1);
     }
     SECTION("Switch workspace")
@@ -209,6 +211,7 @@ TEST_CASE("Domain operations choose focus without caller cleanup", "[focus][stat
     SECTION("Move to hidden workspace keeps the source monitor focused")
     {
         state.relocate(2, 1, 1);
+        state.settle();
         CHECK(state.active_window() == 1);
         CHECK(state.focused_monitor() == 0);
         state.focus_monitor(1);
@@ -239,6 +242,7 @@ TEST_CASE("Tile destination preference does not manufacture focus history", "[fo
     SECTION("Removing the preferred client clears its preference") { state.erase(2); }
     SECTION("Minimizing the preferred client clears its preference") { state.iconic(2, true); }
     CHECK(state.monitors()[0].current().preferred_tile == XCB_NONE);
+    state.settle();
     CHECK(focus::fallback(state, 0) == state.active_window());
 }
 

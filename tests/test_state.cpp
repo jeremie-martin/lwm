@@ -41,6 +41,7 @@ TEST_CASE("Registration attaches tiles and removal releases every membership", "
     state.claim_scratchpad(3, ScratchpadConfig{ .name = "term" });
     state.pool_scratchpad(2);
     state.erase(3);
+    state.settle();
     CHECK(workspace.windows == std::vector<xcb_window_t>{ 1 });
     CHECK(workspace.preferred_tile == XCB_NONE);
     CHECK(state.active_window() == 1);

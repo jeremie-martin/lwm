@@ -71,9 +71,8 @@ the drag ended by release, cancellation, invalidation, reload or topology change
 ## Model and ownership
 
 `State` owns the installed `Config`. `configure()` validates workspace-count
-compatibility, then installs the configuration, rebuilds the layout, reconciles
-scratchpad slots, reapplies every matching rule and requests focus repair; a rejected
-candidate changes nothing.
+compatibility, then installs the configuration, reconciles scratchpad slots and
+reapplies every matching rule; a rejected candidate changes nothing.
 
 Each monitor has an output name, geometry, derived workarea reservation, and a fixed
 number of workspaces. One workspace is current; the previous index supports toggling.
@@ -233,9 +232,13 @@ maximize. Focus eligibility requires visibility, an input hint or `WM_TAKE_FOCUS
 and no show-desktop mode.
 
 `focus()` deiconifies and selects the placement, then falls back if the target is
-suppressed. Removal, minimization, workspace changes and show-desktop manage focus
-inside `State`; `hover()` implements focus-follows-pointer and pointer monitor
-selection. `settle()` repairs eligibility and records only the final choice. Fallback
+suppressed. Operations that choose a window as policy (workspace and monitor
+navigation) fall back explicitly; nothing else repairs focus as a side effect.
+`settle()` is the one repair: a selection that lost its client or eligibility, or an
+empty selection, takes the focused monitor's fallback, and it records only the final
+choice. Focus cleared on purpose (`focus(XCB_NONE)`, used when the pointer moves to an
+empty part of another monitor) stays empty until a later choice; `hover()` implements
+focus-follows-pointer and pointer monitor selection. Fallback
 prefers the destination tile, then the most recent eligible tile of the current
 workspace, then sticky tiles, then floating clients by recency. Cycling keeps one MRU
 order across consecutive steps and rechecks eligibility at each step.
