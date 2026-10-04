@@ -4,6 +4,7 @@
 #include "lwm/core/stacking.hpp"
 #include "wm.hpp"
 #include <algorithm>
+#include <ranges>
 #include <xcb/xcb_icccm.h>
 
 namespace lwm {
@@ -84,7 +85,7 @@ bool WindowManager::publish_clients(std::vector<State::Projected> const& clients
         if (presentation || output.hidden)
             continue;
         output.hidden = true;
-        output.geometry.reset();
+        output.presentation.reset();
         uint32_t x = static_cast<uint32_t>(OFF_SCREEN_X);
         xcb_configure_window(conn_.get(), client->id, XCB_CONFIG_WINDOW_X, &x);
         moved = true;
@@ -118,9 +119,9 @@ bool WindowManager::publish_clients(std::vector<State::Projected> const& clients
 // ConfigureNotify replies. An unchanged rectangle and border are skipped.
 bool WindowManager::write_geometry(xcb_window_t window, Output& output, State::Presentation const& presentation)
 {
-    auto [geometry, border] = presentation;
-    if (!output.hidden && output.geometry == geometry && output.border_width == border)
+    if (!output.hidden && output.presentation == presentation)
         return false;
+    auto [geometry, border] = presentation;
     LWM_LOG_TRACE(
         "Geometry submitted: window={:#x} x={} y={} width={} height={} border={}",
         window,
@@ -131,8 +132,7 @@ bool WindowManager::write_geometry(xcb_window_t window, Output& output, State::P
         border
     );
     output.hidden = false;
-    output.geometry = geometry;
-    output.border_width = border;
+    output.presentation = presentation;
     if (output.sync_counter)
     {
         uint64_t value = ++output.sync_value;
@@ -212,7 +212,7 @@ bool WindowManager::publish_properties(Client const& client, Output& output, Sta
     bool urgency_changed = output.urgent != client.urgency.active();
     if (urgency_changed)
         publish_urgency(client, output);
-    uint32_t const desktop[] = { client.sticky ? 0xFFFFFFFF : state_.desktop_index(client.monitor, client.workspace) };
+    uint32_t const desktop[] = { client.sticky ? STICKY_DESKTOP : state_.desktop_index(client.monitor, client.workspace) };
     publish(id, e->_NET_WM_DESKTOP, XCB_ATOM_CARDINAL, desktop);
     uint32_t const wm_state[] = { client.iconic ? WM_STATE_ICONIC : WM_STATE_NORMAL, 0 };
     publish(id, atoms_.wm_state, atoms_.wm_state, wm_state);
@@ -310,14 +310,7 @@ void WindowManager::publish_root(std::vector<State::Projected> const& clients, b
     // Monitor-major flat desktops. Workareas and viewports are relative to the
     // origin of the combined monitor bounds.
     auto const& monitors = state_.monitors();
-    int32_t min_x = INT32_MAX, min_y = INT32_MAX, max_x = INT32_MIN, max_y = INT32_MIN;
-    for (auto const& m : monitors)
-    {
-        min_x = std::min<int32_t>(min_x, m.geometry.x);
-        min_y = std::min<int32_t>(min_y, m.geometry.y);
-        max_x = std::max<int32_t>(max_x, m.geometry.x + m.geometry.width);
-        max_y = std::max<int32_t>(max_y, m.geometry.y + m.geometry.height);
-    }
+    auto desktop = *bounds(monitors | std::views::transform(&Monitor::geometry));
     std::string names;
     std::vector<uint32_t> viewports, workareas;
     for (auto const& m : monitors)
@@ -326,17 +319,17 @@ void WindowManager::publish_root(std::vector<State::Projected> const& clients, b
         for (auto const& name : config().workspaces.names)
         {
             names += name + '\0';
-            viewports.insert(viewports.end(), { static_cast<uint32_t>(std::max(0, m.geometry.x - min_x)),
-                                                static_cast<uint32_t>(std::max(0, m.geometry.y - min_y)) });
-            workareas.insert(workareas.end(), { static_cast<uint32_t>(std::clamp(area.x - min_x, 0, INT16_MAX)),
-                                                static_cast<uint32_t>(std::clamp(area.y - min_y, 0, INT16_MAX)),
+            viewports.insert(viewports.end(), { static_cast<uint32_t>(std::max(0, m.geometry.x - desktop.x)),
+                                                static_cast<uint32_t>(std::max(0, m.geometry.y - desktop.y)) });
+            workareas.insert(workareas.end(), { static_cast<uint32_t>(std::clamp(area.x - desktop.x, 0, INT16_MAX)),
+                                                static_cast<uint32_t>(std::clamp(area.y - desktop.y, 0, INT16_MAX)),
                                                 area.width,
                                                 area.height });
         }
     }
     auto const& focused = monitors[state_.focused_monitor()];
     uint32_t const count[] = { static_cast<uint32_t>(monitors.size() * config().workspaces.count) };
-    uint32_t const size[] = { static_cast<uint32_t>(std::max(1, max_x - min_x)), static_cast<uint32_t>(std::max(1, max_y - min_y)) };
+    uint32_t const size[] = { desktop.width, desktop.height };
     uint32_t const current[] = { state_.desktop_index(state_.focused_monitor(), focused.current_workspace) };
     uint32_t const active[] = { state_.active_window() };
     uint32_t const showing[] = { state_.showing_desktop() };

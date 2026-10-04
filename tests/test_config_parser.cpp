@@ -31,7 +31,8 @@ public:
         path_ = buffer.data();
         try
         {
-            std::unique_ptr<FILE, decltype(&fclose)> file(fdopen(fd.fd, "w"), &fclose);
+            auto close = [](FILE* stream) { std::fclose(stream); };
+            std::unique_ptr<FILE, decltype(close)> file(fdopen(fd.fd, "w"));
             REQUIRE(file);
             fd.fd = -1; // fdopen transfers ownership to FILE.
             REQUIRE(std::fwrite(contents.data(), 1, contents.size(), file.get()) == contents.size());
@@ -62,7 +63,7 @@ private:
 ConfigLoadResult load_from_string(std::string const& contents)
 {
     TempConfigFile file(contents);
-    return load_config_result(file.path());
+    return load_config(file.path(), true);
 }
 
 template <typename T> T const* action_as(Action const& action) { return std::get_if<T>(&action); }

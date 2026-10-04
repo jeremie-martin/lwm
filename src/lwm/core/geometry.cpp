@@ -2,7 +2,6 @@
 #include "floating.hpp"
 #include <algorithm>
 #include <cassert>
-#include <limits>
 
 namespace lwm {
 
@@ -100,28 +99,15 @@ Geometry State::normal_geometry(Client const& client) const
     return slots[static_cast<size_t>(position - windows.begin())];
 }
 
+// _NET_WM_FULLSCREEN_MONITORS spans the bounds of its existing edge monitors.
 Geometry State::fullscreen_geometry(Client const& client) const
 {
-    auto const& monitors = monitors_;
-    Geometry area = monitors[client.monitor].geometry;
-    if (!client.fullscreen_monitors)
-        return area;
-    auto const& spec = *client.fullscreen_monitors;
-    int32_t min_x = std::numeric_limits<int32_t>::max(), min_y = min_x;
-    int32_t max_x = std::numeric_limits<int32_t>::min(), max_y = max_x;
-    for (auto index : { spec.top, spec.bottom, spec.left, spec.right })
-    {
-        if (index >= monitors.size())
-            continue;
-        auto const& m = monitors[index];
-        min_x = std::min<int32_t>(min_x, m.geometry.x);
-        min_y = std::min<int32_t>(min_y, m.geometry.y);
-        max_x = std::max<int32_t>(max_x, m.geometry.x + m.geometry.width);
-        max_y = std::max<int32_t>(max_y, m.geometry.y + m.geometry.height);
-    }
-    if (min_x > max_x)
-        return area;
-    return { geometry_coordinate(min_x), geometry_coordinate(min_y), geometry_extent(max_x - min_x), geometry_extent(max_y - min_y) };
+    std::vector<Geometry> edges;
+    if (auto const& spec = client.fullscreen_monitors)
+        for (auto index : { spec->top, spec->bottom, spec->left, spec->right })
+            if (index < monitors_.size())
+                edges.push_back(monitors_[index].geometry);
+    return bounds(edges).value_or(monitors_[client.monitor].geometry);
 }
 
 Geometry State::frame(Client const& client) const

@@ -154,6 +154,7 @@ public:
     {
         Geometry geometry;
         uint32_t border;
+        bool operator==(Presentation const&) const = default;
     };
     // One immutable per-pass view per managed client, in registration order.
     // A presentation means visible; absence means hidden.

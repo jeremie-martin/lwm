@@ -5,6 +5,7 @@
 #include <limits>
 #include <map>
 #include <optional>
+#include <ranges>
 #include <span>
 #include <string>
 #include <string_view>
@@ -35,6 +36,9 @@ enum class WindowType
 
 /// X coordinate used when hiding a window off-screen.
 constexpr int16_t OFF_SCREEN_X = -20000;
+
+/// _NET_WM_DESKTOP value of a window shown on every desktop.
+constexpr uint32_t STICKY_DESKTOP = 0xFFFFFFFF;
 
 /// ICCCM WM_STATE values
 constexpr uint32_t WM_STATE_WITHDRAWN = 0;
@@ -262,7 +266,7 @@ struct WindowObservation
     WindowType type = WindowType::Normal;
     xcb_window_t transient_for = XCB_NONE;
     std::optional<Geometry> unmanaged_parent; ///< Server rectangle of a parent LWM does not manage
-    std::optional<uint32_t> desktop;          ///< _NET_WM_DESKTOP, including 0xFFFFFFFF
+    std::optional<uint32_t> desktop;          ///< _NET_WM_DESKTOP, including STICKY_DESKTOP
     WindowStates states;                      ///< _NET_WM_STATE
     bool accepts_input = true;                ///< WM_HINTS input (ICCCM default: true)
     bool initially_iconic = false;            ///< WM_HINTS initial_state
@@ -525,6 +529,22 @@ struct Monitor : MonitorState
                  geometry_extent(static_cast<int64_t>(height) - std::min<uint64_t>(height, vertical)) };
     }
 };
+
+// The smallest rectangle containing every rectangle in a range, if any.
+template <std::ranges::forward_range Rectangles> std::optional<Geometry> bounds(Rectangles&& rectangles)
+{
+    if (std::ranges::empty(rectangles))
+        return std::nullopt;
+    int32_t left = INT32_MAX, top = INT32_MAX, right = INT32_MIN, bottom = INT32_MIN;
+    for (Geometry const& rectangle : rectangles)
+    {
+        left = std::min<int32_t>(left, rectangle.x);
+        top = std::min<int32_t>(top, rectangle.y);
+        right = std::max<int32_t>(right, rectangle.x + rectangle.width);
+        bottom = std::max<int32_t>(bottom, rectangle.y + rectangle.height);
+    }
+    return Geometry{ geometry_coordinate(left), geometry_coordinate(top), geometry_extent(right - left), geometry_extent(bottom - top) };
+}
 
 // The first monitor containing a point, or a rectangle's center.
 inline std::optional<size_t> monitor_at(std::span<Monitor const> monitors, int32_t x, int32_t y)

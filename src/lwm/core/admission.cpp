@@ -73,7 +73,7 @@ std::optional<Client> State::classify(WindowObservation const& window, restart::
     client.workspace = monitors_[client.monitor].current_workspace;
     if (window.desktop)
     {
-        if (*window.desktop == 0xFFFFFFFF)
+        if (*window.desktop == STICKY_DESKTOP)
             client.sticky = true;
         else if (auto placement = desktop_placement(*window.desktop))
         {

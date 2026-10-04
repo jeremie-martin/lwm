@@ -463,29 +463,7 @@ Config default_values()
     return config;
 }
 
-} // namespace
-
-Config default_config()
-{
-    auto config = default_values();
-    add_default_keybinds(config, default_commands());
-    return config;
-}
-
-ConfigLoadResult load_config(std::string const& path, bool required)
-{
-    std::error_code error;
-    bool exists = !path.empty() && std::filesystem::exists(path, error);
-    if (error)
-        return std::unexpected("Cannot inspect config file '" + path + "': " + error.message());
-    if (exists)
-        return load_config_result(path);
-    if (!required)
-        return default_config();
-    return std::unexpected(path.empty() ? "no config path is configured" : "config file does not exist: " + path);
-}
-
-ConfigLoadResult load_config_result(std::string const& path)
+ConfigLoadResult read_config(std::string const& path)
 {
     try
     {
@@ -627,6 +605,28 @@ ConfigLoadResult load_config_result(std::string const& path)
     {
         return std::unexpected("Config error in '" + path + "': " + error.what());
     }
+}
+
+} // namespace
+
+Config default_config()
+{
+    auto config = default_values();
+    add_default_keybinds(config, default_commands());
+    return config;
+}
+
+ConfigLoadResult load_config(std::string const& path, bool required)
+{
+    std::error_code error;
+    bool exists = !path.empty() && std::filesystem::exists(path, error);
+    if (error)
+        return std::unexpected("Cannot inspect config file '" + path + "': " + error.message());
+    if (exists)
+        return read_config(path);
+    if (!required)
+        return default_config();
+    return std::unexpected(path.empty() ? "no config path is configured" : "config file does not exist: " + path);
 }
 
 } // namespace lwm

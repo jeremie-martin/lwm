@@ -84,7 +84,7 @@ void State::request_desktop(xcb_window_t id, uint32_t desktop)
 {
     if (!find(id))
         return;
-    if (desktop == 0xFFFFFFFF)
+    if (desktop == STICKY_DESKTOP)
         return sticky(id, true);
     if (auto placement = desktop_placement(desktop))
     {

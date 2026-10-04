@@ -70,8 +70,7 @@ private:
     {
         bool mapped = false;
         bool hidden = false;
-        std::optional<Geometry> geometry; ///< Last on-screen rectangle; border width is tracked separately
-        uint32_t border_width = 0;
+        std::optional<State::Presentation> presentation; ///< Last on-screen rectangle and border
         std::optional<uint32_t> border_color;
         std::optional<WindowStates> states; ///< Owned _NET_WM_STATE values, merged with other parties' atoms
         std::optional<bool> urgent;         ///< Urgency mirrored into the application's WM_HINTS

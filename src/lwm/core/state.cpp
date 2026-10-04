@@ -722,7 +722,7 @@ uint32_t State::desktop_index(size_t monitor, size_t workspace) const
 std::optional<std::pair<size_t, size_t>> State::desktop_placement(uint32_t desktop) const
 {
     size_t count = config_.workspaces.count;
-    if (desktop == 0xFFFFFFFF || desktop / count >= monitors_.size())
+    if (desktop == STICKY_DESKTOP || desktop / count >= monitors_.size())
         return std::nullopt;
     return std::pair<size_t, size_t>{ desktop / count, desktop % count };
 }

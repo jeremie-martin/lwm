@@ -92,10 +92,9 @@ void WindowManager::handle_event(xcb_generic_event_t const& event)
             // external change: forget the written geometry so the next publication
             // rewrites it, without forcing one now.
             auto const& e = reinterpret_cast<xcb_configure_notify_event_t const&>(event);
-            if (auto it = outputs_.find(e.window); it != outputs_.end() && it->second.geometry
-                && (*it->second.geometry != Geometry{ e.x, e.y, e.width, e.height }
-                    || it->second.border_width != e.border_width))
-                it->second.geometry.reset();
+            State::Presentation observed{ { e.x, e.y, e.width, e.height }, e.border_width };
+            if (auto it = outputs_.find(e.window); it != outputs_.end() && it->second.presentation != observed)
+                it->second.presentation.reset();
             break;
         }
         case XCB_MAP_REQUEST:
