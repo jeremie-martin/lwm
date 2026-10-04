@@ -25,11 +25,10 @@ namespace lwm {
 // reject the whole ChangeWindowAttributes request. Use passive client grabs for
 // clicks; ReplayPointer skips ancestor grabs, so root grabs alone are insufficient.
 // PointerMotion is shared and lets focus-following recover when an application
-// selected motion events before another window took focus.
+// selected motion events before another window took focus. Docks use the same
+// mask: crossing selects the pointer's monitor and properties carry struts.
 constexpr uint32_t kManagedWindowEventMask =
     XCB_EVENT_MASK_ENTER_WINDOW | XCB_EVENT_MASK_PROPERTY_CHANGE | XCB_EVENT_MASK_POINTER_MOTION;
-// Docks select crossing for pointer monitor selection and properties for struts.
-constexpr uint32_t kDockEventMask = kManagedWindowEventMask;
 
 enum class RunResult
 {

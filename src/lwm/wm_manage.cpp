@@ -35,15 +35,13 @@ void WindowManager::scan_existing_windows(bool handoff)
         for (auto const& command : config().autostart) launch_program(command, "autostart");
 }
 
-// X resources follow the role State chose. Adopted windows are already mapped;
-// live popups are mapped directly and otherwise left alone.
+// X resources follow the role State chose; observation already selected its
+// events. Adopted windows are already mapped; live popups are mapped directly.
 void WindowManager::manage(Observed const& observed, bool adopting)
 {
     auto window = observed.window.id;
     if (auto const* fixture = state_.find_fixture(window))
     {
-        uint32_t mask = fixture->role == Fixture::Role::Dock ? kDockEventMask : XCB_EVENT_MASK_PROPERTY_CHANGE;
-        xcb_change_window_attributes(conn_.get(), window, XCB_CW_EVENT_MASK, &mask);
         if (fixture->role == Fixture::Role::Desktop)
         {
             // Desktops start below every sibling, not just below managed clients.
@@ -65,8 +63,6 @@ void WindowManager::manage(Observed const& observed, bool adopting)
     output.urgent = observed.window.urgent;
     output.sync_counter = observed.sync_counter;
     output.sync_value = observed.sync_value;
-    uint32_t mask = kManagedWindowEventMask;
-    xcb_change_window_attributes(conn_.get(), window, XCB_CW_EVENT_MASK, &mask);
     xcb_grab_button(
         conn_.get(),
         0,

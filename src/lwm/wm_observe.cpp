@@ -183,13 +183,16 @@ std::vector<WindowManager::Observed> WindowManager::observe(std::span<xcb_window
         auto window = windows[i];
         if (!result[i].manageable)
             continue;
-        // Subscribe before reading, so a later reservation change cannot be missed.
-        if (result[i].role == WindowRole::Dock)
+        // Subscribe before reading, so a later property change cannot be missed.
+        auto role = result[i].role;
+        if (role != WindowRole::Popup)
         {
-            xcb_change_window_attributes(c, window, XCB_CW_EVENT_MASK, &kDockEventMask);
+            uint32_t mask = role == WindowRole::Desktop ? XCB_EVENT_MASK_PROPERTY_CHANGE : kManagedWindowEventMask;
+            xcb_change_window_attributes(c, window, XCB_CW_EVENT_MASK, &mask);
+        }
+        if (role == WindowRole::Dock)
             struts[i] = StrutCookies{ request(c, window, e->_NET_WM_STRUT_PARTIAL, XCB_ATOM_CARDINAL, 12),
                                       request(c, window, e->_NET_WM_STRUT, XCB_ATOM_CARDINAL, 4) };
-        }
         if (result[i].role == WindowRole::Client)
             properties[i] = Properties{
                 xcb_get_geometry(c, window),

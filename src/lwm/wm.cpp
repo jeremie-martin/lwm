@@ -337,7 +337,7 @@ RunResult WindowManager::run()
             if (poll_fds[POLL_SIGNAL].revents & POLLIN)
             {
                 signals_.drain();
-                reload_config("sighup");
+                (void)reload_config("sighup"); // Logged and emitted; only IPC replies with it
                 complete_transition();
             }
             ipc_.dispatch(
