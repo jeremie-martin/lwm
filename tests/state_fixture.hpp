@@ -63,6 +63,34 @@ inline void focus(State& state, xcb_window_t id)
     state.settle();
 }
 
+// Application observations for restart tests carry no private WM intent.
+inline WindowObservation observe(Client const& client, std::optional<uint32_t> desktop = std::nullopt)
+{
+    WindowObservation window{
+        .id = client.id,
+        .name = client.name,
+        .wm_class = client.wm_class,
+        .wm_class_name = client.wm_class_name,
+        .type = client.ewmh_type,
+        .transient_for = client.transient_for,
+        .desktop = desktop,
+        .accepts_input = client.accepts_input,
+        .urgent = client.urgency.has(UrgencySource::App),
+        .supports_take_focus = client.supports_take_focus,
+        .user_time = client.user_time,
+        .user_time_window = client.user_time_window,
+        .fullscreen_monitors = client.fullscreen_monitors,
+        .size_hints = client.size_hints,
+    };
+    window.states.set(WindowState::Fullscreen, client.fullscreen);
+    window.states.set(WindowState::Hidden, client.iconic);
+    window.states.set(WindowState::Sticky, client.sticky);
+    window.states.set(WindowState::MaximizedHorz, client.maximized_horz);
+    window.states.set(WindowState::MaximizedVert, client.maximized_vert);
+    window.states.set(WindowState::Modal, client.modal);
+    return window;
+}
+
 struct ClientSpec
 {
     size_t monitor = 0;

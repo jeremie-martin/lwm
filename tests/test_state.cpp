@@ -1,5 +1,6 @@
 #include "lwm/core/floating.hpp"
 #include "lwm/core/state.hpp"
+#include "lwm/core/invariants.hpp"
 #include "state_fixture.hpp"
 #include <catch2/catch_test_macros.hpp>
 
@@ -650,4 +651,118 @@ TEST_CASE("Button presses choose bindings before click focus and split gestures"
     state.iconic(2, true);
     CHECK(state.press(2, 700, 100, 1, 0, 6000).consumed);
     CHECK(state.active_window() == 1);
+}
+
+TEST_CASE("Adoption resolves the complete transient scene before centering", "[state][admission][placement][restart]")
+{
+    for (bool handoff : { false, true })
+        for (bool reversed : { false, true })
+            for (bool pinned : { false, true })
+            {
+                CAPTURE(handoff, reversed, pinned);
+                auto state = test::state(2);
+                test::configure(state, [](Config& config) {
+                    config.rules = {
+                        { .match = { .class_regex = std::regex("root") }, .actions = { .workspace = 2, .monitor = size_t{1} } },
+                        { .match = { .class_regex = std::regex("tile") }, .actions = { .floating = false } },
+                    };
+                });
+                auto saved = state.snapshot();
+                std::vector<WindowObservation> scene{
+                    { .id = 1, .wm_class = pinned ? "pinned" : "root", .desktop = pinned ? std::optional<uint32_t>{5} : std::nullopt },
+                    { .id = 2, .transient_for = 1, .geometry = Geometry{ 0, 0, 200, 100 } },
+                    { .id = 3, .wm_class = "tile", .transient_for = 2 },
+                    { .id = 4, .desktop = 5 },
+                    { .id = 5, .transient_for = 3, .geometry = Geometry{ 0, 0, 80, 60 } },
+                };
+                if (reversed)
+                    std::ranges::reverse(scene);
+                state.adopt(scene, handoff ? &saved : nullptr, std::nullopt);
+                state.settle();
+                for (auto id : { 1, 2, 3, 4, 5 })
+                {
+                    CHECK(state.require(id).monitor == 1);
+                    CHECK(state.require(id).workspace == 2);
+                }
+                REQUIRE(state.monitors()[1].workspaces[2].windows.size() == 3);
+                CHECK(center(state.frame(state.require(2))) == center(state.frame(state.require(1))));
+                CHECK(center(state.frame(state.require(5))) == center(state.frame(state.require(3))));
+                CHECK_FALSE(invariants::validate(state));
+            }
+}
+
+TEST_CASE("Adoption bounds malformed transient chains without losing membership", "[state][admission][placement]")
+{
+    for (xcb_window_t parent : { xcb_window_t{XCB_NONE}, xcb_window_t{99}, xcb_window_t{1}, xcb_window_t{2} })
+    {
+        CAPTURE(parent);
+        auto state = test::state();
+        state.adopt({ { .id = 1, .transient_for = parent }, { .id = 2, .transient_for = 1 } }, nullptr, std::nullopt);
+        state.settle();
+        CHECK(state.clients().size() == 2);
+        CHECK_FALSE(invariants::validate(state));
+        CHECK(state.project(state.fullscreen_visibility()).size() == 2);
+    }
+}
+
+TEST_CASE("Adopted newcomers anchor to saved intent without replaying the parent's rule", "[state][admission][restart][placement]")
+{
+    for (bool floating : { false, true })
+    {
+        CAPTURE(floating);
+        auto source = test::state();
+        test::add(source, 1, { .workspace = 1, .floating = floating, .geometry = { 100, 100, 300, 200 } });
+        auto saved = source.snapshot();
+        auto state = test::state();
+        test::configure(state, [](Config& config) {
+            config.rules = { { .match = { .class_regex = std::regex("parent") },
+                               .actions = { .workspace = 2, .geometry = Geometry{ 1, 2, 400, 300 } } } };
+        });
+        state.adopt({ { .id = 2, .transient_for = 1, .geometry = Geometry{ 0, 0, 100, 60 } },
+                      { .id = 1, .wm_class = "parent" } }, &saved, std::nullopt);
+        state.settle();
+        CHECK(state.require(1).workspace == 1);
+        CHECK(state.require(2).workspace == 1);
+        CHECK(state.require(1).mode == source.require(1).mode);
+        CHECK(center(state.frame(state.require(2))) == center(state.frame(state.require(1))));
+        CHECK_FALSE(invariants::validate(state));
+    }
+}
+
+TEST_CASE("Initial geometry rules override hints after monitor relocation in both admission paths", "[state][admission][rules][placement]")
+{
+    for (bool batch : { false, true })
+        for (int geometry_rule : { 0, 1, 2 })
+        {
+            CAPTURE(batch, geometry_rule);
+            auto state = test::state(2);
+            test::configure(state, [&](Config& config) {
+                config.appearance.border_width = 0;
+                RuleActions actions{ .workspace = 2, .monitor = size_t{1} };
+                if (geometry_rule)
+                    actions.geometry = Geometry{ 1100, 200, 210, 140 };
+                actions.center = geometry_rule == 2;
+                config.rules = { { .match = { .class_regex = std::regex("child") }, .actions = actions } };
+            });
+            WindowObservation parent{ .id = 1 };
+            WindowObservation child{ .id = 2, .wm_class = "child", .transient_for = 1,
+                                     .geometry = Geometry{ 0, 0, 200, 100 },
+                                     .size_hints = { .user_position = std::pair<int16_t, int16_t>{ 120, 130 },
+                                                     .width = 170, .height = 110 } };
+            if (batch)
+                state.adopt({ child, parent }, nullptr, std::nullopt);
+            else
+            {
+                state.admit(parent);
+                state.admit(child);
+            }
+            CHECK(state.require(2).monitor == 1);
+            CHECK(state.require(2).workspace == 2);
+            REQUIRE(floating_mode(state.require(2)));
+            Geometry expected = geometry_rule == 0 ? Geometry{ 1415, 345, 170, 110 }
+                : geometry_rule == 1 ? Geometry{ 1100, 200, 210, 140 } : Geometry{ 1395, 330, 210, 140 };
+            CHECK(floating_mode(state.require(2))->geometry == expected);
+            state.settle();
+            CHECK_FALSE(invariants::validate(state));
+        }
 }

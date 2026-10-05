@@ -157,16 +157,21 @@ candidates with the admitted rule, initial mode, desktop hint and initial state.
   and eligible, then claim a matching named scratchpad. An unrequested scratchpad
   match starts hidden and floating, so it neither tiles nor takes focus first.
 - `adopt()` handles startup: register the whole scene (so every dock reservation
-  shapes the workareas), restore a valid predecessor graph, place tiled newcomers,
-  then floating newcomers with parents before children (each visited once, even with
-  malformed cycles), select the pointer's monitor on a cold start, choose focus, and
-  let pending launches claim remaining clients after a handoff.
+  shapes the workareas), restore a valid predecessor graph, resolve newcomer
+  placement and rule effects in parent order, then resolve floating frames against
+  the completed tiled scene. Both passes visit each newcomer at most once, even with malformed
+  cycles. This is the sole startup/restart entry point; graph restoration is private.
+  After rules, it reconstructs fullscreen history once: surviving handoff claims,
+  then new claims in observation order. It selects the pointer's monitor on a cold start, chooses focus, and
+  lets pending launches claim remaining clients after a handoff.
 
 Placement shares one implementation for initial placement and later size-hint
 updates. A transient with a managed parent joins the parent's workspace in either
 mode, as a later `WM_TRANSIENT_FOR` change would. Floating initial placement centers
 on the parent or workarea unless an accepted position hint places it; later size-only
-updates keep the chosen origin. Rules then apply.
+updates keep the chosen origin. Rules override hint placement. During batch adoption,
+centering is an unresolved frame size and parent anchor until every client's placement
+and rule effects are established; it is never stored in the live client or snapshot.
 
 Metadata updates resolve classification defaults, parent placement, changed rule
 actions and pending scratchpad claims. A rule applies on metadata only when its
@@ -177,9 +182,11 @@ Topology notifications are coalesced. `replace_topology()` rebinds workspace gra
 output name: survivors keep complete graphs, removed outputs' clients move to output 0
 after surviving tiles, and returning outputs start fresh. A changed topology fits
 floating rectangles (clamping survivors, centering displaced clients) and clears
-index-based fullscreen-monitor hints; a refresh reporting the same outputs changes
-nothing. Focus is repaired only if it became ineligible. Restart rebinding uses the
-same code.
+index-based fullscreen-monitor hints. Identical outputs and workspace counts preserve
+revision, drags and focus traversal. A root-extent-only change recomputes dock workareas;
+settlement cancels only interactions whose captured context became invalid. Restart
+rebinding uses the same code, including workspace-count folding. Focus is repaired only
+if it became ineligible.
 
 ## Placement and geometry
 

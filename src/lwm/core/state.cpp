@@ -850,14 +850,22 @@ void State::update_workareas()
 void State::rebind(std::vector<Monitor> monitors)
 {
     assert(!monitors.empty());
-    mutated();
-    end_drag(false);
-    focus_cycle_.clear();
     bool topology_changed = monitors_.size() != monitors.size()
         || !std::ranges::equal(monitors_,
                                monitors,
                                [](auto const& a, auto const& b)
                                { return a.name == b.name && a.geometry == b.geometry; });
+    if (!topology_changed && std::ranges::equal(monitors_, monitors, [](auto const& a, auto const& b)
+        { return a.workspaces.size() == b.workspaces.size(); }))
+    {
+        // The root extent can change without changing the outputs. Its only
+        // domain consequence is the dock projection; settle validates drags.
+        update_workareas();
+        return;
+    }
+    mutated();
+    end_drag(false);
+    focus_cycle_.clear();
     if (topology_changed)
     {
         LWM_LOG_INFO("Monitor topology changed: count={} -> {}", monitors_.size(), monitors.size());

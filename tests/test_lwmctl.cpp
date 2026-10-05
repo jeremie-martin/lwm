@@ -20,7 +20,9 @@ struct ReplyServer
         std::string const& reply,
         int before_ms = 0,
         int after_line_ms = 0,
-        int backlog_delay_ms = 0
+        int backlog_delay_ms = 0,
+        int byte_delay_ms = 0,
+        size_t paced_from = 0
     )
     {
         char pattern[] = "/tmp/lwmctl-test-XXXXXX";
@@ -89,10 +91,13 @@ struct ReplyServer
                 _exit(3);
             std::this_thread::sleep_for(std::chrono::milliseconds(before_ms));
             // Single-byte writes exercise framing independently of packet boundaries.
-            for (char byte : reply)
+            for (size_t i = 0; i < reply.size(); ++i)
             {
+                char byte = reply[i];
+                if (byte_delay_ms && i >= paced_from)
+                    std::this_thread::sleep_for(std::chrono::milliseconds(byte_delay_ms));
                 if (send(fd, &byte, 1, MSG_NOSIGNAL) != 1)
-                    _exit(4);
+                    _exit(byte_delay_ms && errno == EPIPE ? 0 : 4);
                 if (byte == '\n' && after_line_ms)
                 {
                     std::this_thread::sleep_for(std::chrono::milliseconds(after_line_ms));
@@ -205,6 +210,34 @@ TEST_CASE("lwmctl bounds handshakes but permits idle subscriptions", "[ipc][lwmc
         CHECK(result->stdout_text == "{\"event\":\"future\"}\n");
         server.finish();
     }
+}
+
+TEST_CASE("lwmctl deadlines bound complete lines despite continuing byte delivery", "[ipc][lwmctl]")
+{
+    std::string request = "ping", reply = "ok pong\n";
+    size_t paced_from = 0;
+    SECTION("ordinary reply") { }
+    SECTION("subscription acknowledgement")
+    {
+        request = "subscribe";
+        reply = "ok subscribed\n";
+    }
+    SECTION("subscription event after an idle wait")
+    {
+        request = "subscribe";
+        reply = "ok subscribed\n{\"event\":\"focus_change\"}\n";
+        paced_from = std::string_view("ok subscribed\n").size();
+    }
+    ReplyServer server(request + "\n", reply, 0, paced_from ? 300 : 0, 0, 50, paced_from);
+    auto started = std::chrono::steady_clock::now();
+    auto result = run_command(lwmctl_executable_path(), { "--socket", server.path, "--timeout", "150", request });
+    REQUIRE(result);
+    CHECK(result->exit_code == 1);
+    CHECK(result->stderr_text.find("timed out") != std::string::npos);
+    CHECK(result->stdout_text.empty());
+    // Leave scheduling headroom while rejecting a timeout renewed for every byte.
+    CHECK(std::chrono::steady_clock::now() - started < std::chrono::seconds(1));
+    server.finish();
 }
 
 TEST_CASE("lwmctl offers local help and preserves option-like names after double dash", "[ipc][lwmctl]")

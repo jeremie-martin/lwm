@@ -90,46 +90,66 @@ std::string resolve_socket_path(std::optional<std::string> const& cli_socket)
     return lwm::ipc::default_socket_path().string();
 }
 
-// One owner for the connection, timeouts, buffering and complete-line framing.
-// Blocking calls with kernel timeouts bound every handshake step; a Unix
-// connect also waits for listener capacity within the send timeout.
+// One owner for the connection, operation deadlines and complete-line framing.
+// Kernel timeouts use the remaining allowance, so partial I/O never renews it.
 class Socket
 {
 public:
-    Socket(std::string const& path, std::chrono::milliseconds timeout)
-        : timeout_{ static_cast<time_t>(timeout.count() / 1000), static_cast<suseconds_t>(timeout.count() % 1000 * 1000) }
+    explicit Socket(std::chrono::milliseconds timeout) : timeout_(timeout)
     {
-        if (path.empty() || path.size() >= sizeof(sockaddr_un::sun_path) || path.find('\0') != path.npos)
-            throw std::runtime_error("invalid socket path");
         fd_ = socket(AF_UNIX, SOCK_STREAM | SOCK_CLOEXEC, 0);
         if (fd_ < 0)
             fail("create socket");
-        limit(SO_SNDTIMEO, true);
-        sockaddr_un address{};
-        address.sun_family = AF_UNIX;
-        std::memcpy(address.sun_path, path.c_str(), path.size() + 1);
-        if (::connect(fd_, reinterpret_cast<sockaddr*>(&address), sizeof(address)) < 0)
-            fail("connect to " + path);
     }
     ~Socket() { close(fd_); }
     Socket(Socket const&) = delete;
     Socket& operator=(Socket const&) = delete;
 
+    void connect(std::string const& path)
+    {
+        if (path.empty() || path.size() >= sizeof(sockaddr_un::sun_path) || path.find('\0') != path.npos)
+            throw std::runtime_error("invalid socket path");
+        sockaddr_un address{};
+        address.sun_family = AF_UNIX;
+        std::memcpy(address.sun_path, path.c_str(), path.size() + 1);
+        auto deadline = Clock::now() + timeout_;
+        do
+        {
+            limit(SO_SNDTIMEO, deadline);
+            if (::connect(fd_, reinterpret_cast<sockaddr*>(&address), sizeof(address)) == 0 || errno == EISCONN)
+            {
+                remaining_timeout(deadline);
+                return;
+            }
+        } while (errno == EINTR);
+        fail("connect to " + path);
+    }
+
     void send(std::string request)
     {
         request += '\n';
+        auto deadline = Clock::now() + timeout_;
         for (std::string_view remaining = request; !remaining.empty();)
         {
+            limit(SO_SNDTIMEO, deadline);
             auto count = ::send(fd_, remaining.data(), remaining.size(), MSG_NOSIGNAL);
             if (count < 0)
+            {
+                if (errno == EINTR)
+                    continue;
                 fail("send request");
+            }
+            if (!count)
+                throw std::runtime_error("connection closed during request");
             remaining.remove_prefix(static_cast<size_t>(count));
         }
+        remaining_timeout(deadline);
     }
 
     // An idle subscription waits indefinitely for the next line to begin.
     std::optional<std::string> line(size_t limit, bool idle = false)
     {
+        std::optional<Clock::time_point> deadline;
         for (;;)
         {
             auto end = buffer_.find('\n');
@@ -137,34 +157,59 @@ public:
                 throw std::runtime_error("response line too large");
             if (end != buffer_.npos)
             {
+                remaining_timeout(deadline);
                 auto result = buffer_.substr(0, end);
                 buffer_.erase(0, end + 1);
                 return result;
             }
-            this->limit(SO_RCVTIMEO, !idle || !buffer_.empty());
+            if (!deadline && (!idle || !buffer_.empty()))
+                deadline = (buffer_.empty() ? Clock::now() : received_at_) + timeout_;
+            this->limit(SO_RCVTIMEO, deadline);
             std::array<char, 8192> bytes;
             auto count = recv(fd_, bytes.data(), bytes.size(), 0);
             if (count < 0)
+            {
+                if (errno == EINTR)
+                    continue;
                 fail("read response");
+            }
             if (!count)
             {
                 if (!buffer_.empty())
                     throw std::runtime_error("incomplete response line");
                 return {};
             }
+            received_at_ = Clock::now();
+            if (!deadline)
+                deadline = received_at_ + timeout_;
             buffer_.append(bytes.data(), static_cast<size_t>(count));
         }
     }
 
 private:
     int fd_ = -1;
-    timeval timeout_;
+    using Clock = std::chrono::steady_clock;
+    std::chrono::milliseconds timeout_;
     std::string buffer_;
+    Clock::time_point received_at_; // A buffered next line began in the last read.
 
-    void limit(int option, bool bounded)
+    static timeval remaining_timeout(std::optional<Clock::time_point> deadline)
     {
-        timeval unbounded{};
-        setsockopt(fd_, SOL_SOCKET, option, bounded ? &timeout_ : &unbounded, sizeof(timeval));
+        timeval value{}; // Zero disables the kernel timeout for idle subscriptions.
+        if (deadline)
+        {
+            auto remaining = std::chrono::ceil<std::chrono::microseconds>(*deadline - Clock::now()).count();
+            if (remaining <= 0)
+                throw std::runtime_error("socket operation timed out");
+            value = { static_cast<time_t>(remaining / 1000000), static_cast<suseconds_t>(remaining % 1000000) };
+        }
+        return value;
+    }
+    void limit(int option, std::optional<Clock::time_point> deadline)
+    {
+        auto value = remaining_timeout(deadline);
+        if (setsockopt(fd_, SOL_SOCKET, option, &value, sizeof(value)) < 0)
+            fail("set socket timeout");
     }
     [[noreturn]] static void fail(std::string const& operation)
     {
@@ -176,7 +221,8 @@ private:
 
 int run(std::string const& path, std::string const& request, bool subscribe, std::chrono::milliseconds timeout)
 {
-    Socket socket(path, timeout);
+    Socket socket(timeout);
+    socket.connect(path);
     socket.send(request);
     auto response = socket.line(lwm::ipc::max_reply_bytes);
     if (!response)

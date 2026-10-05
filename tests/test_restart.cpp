@@ -187,7 +187,11 @@ TEST_CASE("State snapshots restore workspaces, order, recency and scratchpads", 
     auto target = test::state(2);
     test::configure(target, [](Config& config) { config.scratchpads = { { .name = "term" } }; });
     // Observation order differs from saved membership and registration order.
-    target.restore_graph(*snapshot, { source.require(3), source.require(2), source.require(1), source.require(4) });
+    target.adopt(
+        { test::observe(source.require(3)), test::observe(source.require(2)),
+          test::observe(source.require(1)), test::observe(source.require(4)) },
+        &*snapshot
+    );
     auto const& saved = *snapshot->find(4);
 
     auto const& workspace = target.monitors()[0].workspaces[0];
@@ -235,10 +239,12 @@ TEST_CASE("Restart restores claim history independently of focus and adoption or
     CHECK(snapshot.fullscreen_claims == std::vector<xcb_window_t>{ 2, 3, 1 });
 
     auto target = test::state();
-    std::vector<Client> observed{ source.require(3), source.require(1), source.require(2) };
+    std::vector<WindowObservation> observed{
+        test::observe(source.require(3)), test::observe(source.require(1)), test::observe(source.require(2))
+    };
     SECTION("hidden and minimized candidates retain their order")
     {
-        target.restore_graph(snapshot, observed);
+        target.adopt(observed, &snapshot);
         CHECK(target.fullscreen_owners().at(0) == XCB_NONE);
         target.switch_workspace(0, 0);
         CHECK(target.fullscreen_owners().at(0) == 1);
@@ -252,8 +258,8 @@ TEST_CASE("Restart restores claim history independently of focus and adoption or
     SECTION("missing clients are skipped and new arrivals retain newer claims")
     {
         std::erase_if(observed, [](auto const& client) { return client.id == 1; });
-        observed.front().fullscreen = false; // The application withdrew this saved claim.
-        target.restore_graph(snapshot, observed);
+        observed.front().states.set(WindowState::Fullscreen, false); // The application withdrew this saved claim.
+        target.adopt(observed, &snapshot);
         add(target, 4);
         target.fullscreen(4, true);
         target.switch_workspace(0, 0);
@@ -323,20 +329,20 @@ TEST_CASE("Restart rebinding matches live output reconciliation", "[restart][sta
             config.workspaces.count = count;
             config.layout.strategy = LayoutStrategy::Monocle;
         });
-        state.insert_fixture(99, Fixture::Role::Dock, DockStrut{ .top = { 40 } });
         test::outputs(state, discovered);
     };
     // The live workspace count is fixed, so live reconciliation uses the saved count.
+    source.insert_fixture(99, Fixture::Role::Dock, DockStrut{ .top = { 40 } });
     prepare(source, 3);
 
     State restored;
     prepare(restored, workspaces);
     // Observation order deliberately differs from saved tile order. Private
     // placement is restored even though these observations carry new indices.
-    std::vector<Client> observed;
+    std::vector<WindowObservation> observed{ { .id = 99, .type = WindowType::Dock, .strut = { .top = { 40 } } } };
     for (auto it = snapshot->clients.rbegin(); it != snapshot->clients.rend(); ++it)
-        observed.push_back(source.require(it->id));
-    restored.restore_graph(*snapshot, std::move(observed));
+        observed.push_back(test::observe(source.require(it->id)));
+    restored.adopt(observed, &*snapshot);
     CHECK(restored.focused_monitor() == source.focused_monitor());
     for (auto const& monitor : restored.monitors())
         CHECK(monitor.strut.top == 40);
@@ -412,7 +418,7 @@ TEST_CASE("Unchanged restart topology preserves intentional floating geometry an
     source.fullscreen_monitors(1, FullscreenMonitors{});
     auto snapshot = source.snapshot();
     auto restored = test::state();
-    restored.restore_graph(snapshot, { source.require(1) });
+    restored.adopt({ test::observe(source.require(1)) }, &snapshot);
     CHECK(restored.snapshot().clients == snapshot.clients);
 }
 
@@ -428,10 +434,10 @@ TEST_CASE("Restart preserves pending requests only for surviving scratchpad name
     REQUIRE(snapshot);
     auto restored = test::state();
     test::configure(restored, [](Config& config) { config.scratchpads = { { .name = "pending" }, { .name = "claimed" }, { .name = "empty" }, { .name = "new" } }; });
-    std::vector<Client> observed;
-    SECTION("Claimed client survives") { observed.push_back(source.require(1)); }
+    std::vector<WindowObservation> observed;
+    SECTION("Claimed client survives") { observed.push_back(test::observe(source.require(1))); }
     SECTION("Claimed client disappeared") { }
-    restored.restore_graph(*snapshot, std::move(observed));
+    restored.adopt(observed, &*snapshot);
     CHECK(restored.named_scratchpad("pending")->pending_launch());
     CHECK_FALSE(restored.named_scratchpad("removed"));
     CHECK_FALSE(restored.named_scratchpad("empty")->pending_launch());
@@ -488,14 +494,8 @@ TEST_CASE("Admission preserves shared registration ranks independently of scan o
 
     auto target = test::state();
     // Fixture observations precede client restoration; newcomer 5 arrives first.
-    target.insert_fixture(5, Fixture::Role::Dock);
-    target.insert_fixture(4, Fixture::Role::Desktop);
-    target.insert_fixture(2, Fixture::Role::Dock);
-    Client newcomer;
-    newcomer.id = 6;
-    Client survivor;
-    survivor.id = 3;
-    target.restore_graph(*snapshot, { newcomer, survivor });
+    target.adopt({ { .id = 5, .type = WindowType::Dock }, { .id = 4, .type = WindowType::Desktop },
+                   { .id = 2, .type = WindowType::Dock }, { .id = 6 }, { .id = 3 } }, &*snapshot);
     CHECK(target.require(3).order == 2);
     CHECK(target.find_fixture(2)->order == 1);
     CHECK(target.find_fixture(4)->order == 3);
@@ -634,32 +634,32 @@ TEST_CASE("Graph restoration separates saved intent from live observations and n
     auto snapshot = source.snapshot();
 
     // Fresh property reads carry no saved placement or private preferences.
-    Client first, saved, newcomer, pinned;
+    WindowObservation first, saved, newcomer, pinned;
     first.id = 1;
-    first.fullscreen = true;
+    first.states.set(WindowState::Fullscreen);
     saved.id = 2;
     saved.name = "new title";
     saved.transient_for = 1;
     saved.accepts_input = false;
     saved.supports_take_focus = true;
-    saved.fullscreen = saved.maximized_horz = true;
+    saved.states.set(WindowState::Fullscreen);
+    saved.states.set(WindowState::MaximizedHorz);
     newcomer.id = 4;
-    newcomer.fullscreen = true;
+    newcomer.states.set(WindowState::Fullscreen);
     pinned.id = 5;
-    pinned.desktop_pinned = true;
-    pinned.monitor = pinned.workspace = 0;
+    pinned.desktop = 0;
     auto target = test::state(2);
     // Reverse the outputs. A concrete desktop hint uses discovered indices;
     // saved placement instead follows output identity, and defaults follow focus.
     test::outputs(target, { test::output("M1"), test::output("M0", 1000) });
     SECTION("Newcomer requested fullscreen before the saved client")
     {
-        target.restore_graph(snapshot, { first, newcomer, saved, pinned });
+        target.adopt({ first, newcomer, saved, pinned }, &snapshot);
         CHECK(target.fullscreen_owners().at(0) == 2);
     }
     SECTION("Saved client requested fullscreen before the newcomer")
     {
-        target.restore_graph(snapshot, { first, saved, newcomer, pinned });
+        target.adopt({ first, saved, newcomer, pinned }, &snapshot);
         CHECK(target.fullscreen_owners().at(0) == 4);
     }
     auto const& restored = target.require(2);
@@ -726,16 +726,16 @@ TEST_CASE("Valid ownership survives changed observations and filters vanished cl
     REQUIRE(graph);
     auto target = test::state();
     test::configure(target, scratchpads);
-    std::vector<Client> observed;
+    std::vector<WindowObservation> observed;
     for (auto id : { 1, 3, 4 })
     {
-        Client client;
-        client.id = id;
-        client.ewmh_type = id == 4 ? WindowType::Normal : WindowType::Utility;
-        client.mode = id == 4 ? ClientMode{ TiledMode{} } : ClientMode{ FloatingMode{ Geometry{ 1, 2, 30, 40 } } };
-        observed.push_back(client);
+        observed.push_back({
+            .id = static_cast<xcb_window_t>(id),
+            .type = id == 4 ? WindowType::Normal : WindowType::Utility,
+            .geometry = Geometry{ 1, 2, 30, 40 },
+        });
     }
-    target.restore_graph(*graph, observed);
+    target.adopt(observed, &*graph);
     CHECK(target.require(1).kind() == Client::Kind::Tiled);
     CHECK(target.require(3).kind() == Client::Kind::Tiled);
     CHECK(target.require(4).kind() == Client::Kind::Floating);
@@ -754,5 +754,17 @@ TEST_CASE("Valid ownership survives changed observations and filters vanished cl
     target.window_type(3, WindowType::Dialog);
     CHECK(target.require(1).kind() == Client::Kind::Tiled);
     CHECK(target.require(3).kind() == Client::Kind::Tiled);
+    CHECK_FALSE(invariants::validate(target));
+}
+
+TEST_CASE("Restoration invalidates orphaned tile return slots even with identical outputs", "[restart][state][tile-slot]")
+{
+    auto source = test::state();
+    add_floating(source, 1);
+    auto snapshot = source.snapshot();
+    std::get<FloatingMode>(snapshot.clients.front().mode).tile_slot = TileSlot{ 0, "vanished", 0 };
+    auto target = test::state();
+    target.adopt({ test::observe(source.require(1)) }, &snapshot);
+    CHECK_FALSE(floating_mode(target.require(1))->tile_slot);
     CHECK_FALSE(invariants::validate(target));
 }

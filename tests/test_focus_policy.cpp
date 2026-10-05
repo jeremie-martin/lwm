@@ -257,9 +257,9 @@ TEST_CASE("Focus history survives restart without a capacity or synthetic entrie
     auto snapshot = restart::decode(restart::encode(source.snapshot()));
     REQUIRE(snapshot);
     auto restored = test::state();
-    std::vector<Client> observed;
-    for (xcb_window_t id = 20; id > 0; --id) observed.push_back(source.require(id));
-    restored.restore_graph(*snapshot, std::move(observed));
+    std::vector<WindowObservation> observed;
+    for (xcb_window_t id = 20; id > 0; --id) observed.push_back(test::observe(source.require(id)));
+    restored.adopt(observed, &*snapshot);
     CHECK(focus::recent_order(restored) == focus::recent_order(source));
     for (auto* state : { &source, &restored })
     {

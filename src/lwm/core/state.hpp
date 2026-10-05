@@ -110,7 +110,7 @@ public:
     void adopt(
         std::vector<WindowObservation> const& windows,
         restart::Snapshot const* handoff,
-        std::optional<std::pair<int16_t, int16_t>> pointer
+        std::optional<std::pair<int16_t, int16_t>> pointer = std::nullopt
     );
     // The candidate's placement must be valid; tiled clients join their workspace.
     void insert(Client client);
@@ -309,9 +309,6 @@ public:
 
     // Exec handoff
     restart::Snapshot snapshot() const;
-    // Install a validated saved graph over freshly observed application state,
-    // rebind it to discovered outputs, then admit newcomers in observation order.
-    void restore_graph(restart::Snapshot const& snapshot, std::vector<Client> observed);
 
     // Publication reads a frozen model; Debug builds reject mutation meanwhile.
     void freeze() { frozen_ = true; }
@@ -365,13 +362,25 @@ private:
 
     // Admission, rules and metadata
     std::optional<Client> classify(WindowObservation const& window, restart::Snapshot const* handoff, bool adopting);
-    void place(xcb_window_t id, std::optional<Geometry> unmanaged_parent);
-    void apply_size_hints(xcb_window_t id, bool initial, std::optional<Geometry> unmanaged_parent);
+    // An initial frame is either positioned or awaits the completed parent's presentation.
+    struct CenteredSize
+    {
+        uint16_t width, height;
+        xcb_window_t parent = XCB_NONE;
+    };
+    using PlacementGeometry = std::variant<Geometry, CenteredSize>;
+    std::optional<PlacementGeometry> prepare_placement(xcb_window_t id);
+    std::optional<PlacementGeometry> size_hint_geometry(xcb_window_t id, bool initial);
+    Geometry resolve_geometry(xcb_window_t id, PlacementGeometry const& placement, std::optional<Geometry> unmanaged_parent) const;
+    void finish_placement(xcb_window_t id, PlacementGeometry const& placement, std::optional<Geometry> unmanaged_parent);
+    void apply_rule_state(xcb_window_t id, RuleActions const& rule);
+    PlacementGeometry rule_geometry(xcb_window_t id, RuleActions const& rule, PlacementGeometry placement) const;
     void apply_default_mode(xcb_window_t id);
     void apply_rule(xcb_window_t id, RuleActions const& rule);
     void apply_initial_rule(xcb_window_t id);
     bool match_rule(xcb_window_t id);
     void reapply_rules();
+    void restore_graph(restart::Snapshot const& snapshot, std::span<Client> observed);
     void reconcile_metadata(xcb_window_t id);
 
     // Configuration and topology

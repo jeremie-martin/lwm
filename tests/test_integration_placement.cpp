@@ -696,3 +696,87 @@ apply = { fullscreen = true }
     CHECK(wait_for_active_window(conn, second, timeout));
     for (auto window : { first, second }) destroy_window(conn, window);
 }
+
+TEST_CASE("Integration: adoption resolves mixed transient chains before publishing placement",
+          "[integration][placement][adoption][restart]")
+{
+    bool handoff = GENERATE(false, true);
+    CAPTURE(handoff);
+    auto& server = X11TestEnvironment::instance();
+    if (!server.available())
+    {
+        REQUIRE(std::getenv("LWM_TEST_REQUIRE_X11") == nullptr);
+        SKIP("X11 unavailable");
+    }
+    X11Connection conn;
+    REQUIRE(conn.ok());
+    park_pointer(conn);
+    constexpr auto configuration = R"(
+[appearance]
+padding = 0
+border_width = 0
+[workspaces]
+count = 2
+[[rules]]
+match = { class = "StartupParent" }
+apply = { workspace = 1 }
+[[rules]]
+match = { class = "StartupTile" }
+apply = { floating = false }
+)";
+    std::unique_ptr<LwmProcess> wm;
+    std::unique_ptr<PausedRestart> paused;
+    std::optional<std::string> previous;
+    if (handoff)
+    {
+        wm = std::make_unique<LwmProcess>(server.display(), configuration);
+        REQUIRE(wait_for_wm_ready(conn, timeout));
+        auto socket = wait_for_ipc_socket_path(conn);
+        REQUIRE(socket);
+        previous = wm_instance(conn);
+        REQUIRE(previous);
+        paused = std::make_unique<PausedRestart>(*wm, *socket);
+    }
+    // Creation order makes both descendants precede their parent in QueryTree.
+    auto floating = create_window(conn, 0, 0, 180, 100);
+    auto tile = create_window(conn, 0, 0, 200, 150);
+    auto parent = create_window(conn, 0, 0, 200, 150);
+    auto peer = create_window(conn, 0, 0, 200, 150);
+    set_transient_for(conn, floating, parent);
+    set_transient_for(conn, tile, floating);
+    set_window_wm_class(conn, parent, "parent", "StartupParent");
+    set_window_wm_class(conn, tile, "tile", "StartupTile");
+    auto desktop = intern_atom(conn.get(), "_NET_WM_DESKTOP");
+    uint32_t workspace = 1;
+    xcb_change_property(conn.get(), XCB_PROP_MODE_REPLACE, peer, desktop, XCB_ATOM_CARDINAL, 32, 1, &workspace);
+    for (auto window : { floating, tile, parent, peer }) map_window(conn, window);
+    REQUIRE(get_window_geometry(conn, peer)); // Complete the pre-adoption scene.
+    if (handoff)
+    {
+        paused->resume();
+        REQUIRE(wait_for_wm_restart(conn, timeout, *previous));
+    }
+    else
+    {
+        wm = std::make_unique<LwmProcess>(server.display(), configuration);
+        REQUIRE(wait_for_wm_ready(conn, timeout));
+    }
+    auto socket = wait_for_ipc_socket_path(conn);
+    REQUIRE(socket);
+    for (auto window : { floating, tile, parent, peer })
+        REQUIRE(wait_for_condition([&] { return get_window_property_cardinal(conn.get(), window, desktop) == 1; }, timeout));
+    ipc_ok(*socket, "workspace switch 1");
+    auto windows = ipc_json(*socket, "window list").at("windows");
+    REQUIRE(windows.size() == 4);
+    REQUIRE(wait_for_condition([&]
+    {
+        auto outer = get_window_geometry(conn, parent);
+        auto inner = get_window_geometry(conn, floating);
+        return outer && inner && outer->x + outer->width / 2 == inner->x + inner->width / 2
+            && outer->y + outer->height / 2 == inner->y + inner->height / 2;
+    }, timeout));
+    auto counts = ipc_json(*socket, "workspace list").at("monitors").at(0).at("workspaces");
+    CHECK(counts.at(0).at("window_count") == 0);
+    CHECK(counts.at(1).at("window_count") == 3);
+    for (auto window : { floating, tile, parent, peer }) destroy_window(conn, window);
+}

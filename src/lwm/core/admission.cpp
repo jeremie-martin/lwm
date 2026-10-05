@@ -123,7 +123,8 @@ void State::admit(WindowObservation const& window)
             candidate->mode = FloatingMode{ observed_frame(window, border(*candidate)) };
     }
     insert(std::move(*candidate));
-    place(window.id, window.unmanaged_parent);
+    if (auto placement = prepare_placement(window.id))
+        finish_placement(window.id, *placement, window.unmanaged_parent);
     if (auto const& admitted = require(window.id); admitted.monitor == focused_monitor_ && focusable(admitted))
         focus(window.id);
     if (scratchpad)
@@ -131,52 +132,65 @@ void State::admit(WindowObservation const& window)
 }
 
 // Startup registers the complete scene before any placement, so every dock
-// reservation shapes the workareas. Tiled placement precedes floating placement,
-// and floating parents are placed before their children, visiting each window
-// once even with malformed transient cycles.
+// reservation shapes the workareas. Placement and rule effects establish the
+// tiled scene before floating geometry is resolved in parent order. Each pass
+// visits a newcomer at most once, even with malformed transient cycles.
 void State::adopt(
     std::vector<WindowObservation> const& windows,
     restart::Snapshot const* handoff,
     std::optional<std::pair<int16_t, int16_t>> pointer
 )
 {
+    assert(clients_.empty() && fixtures_.empty());
     std::vector<Client> candidates;
-    std::unordered_map<xcb_window_t, std::optional<Geometry>> parents;
+    std::unordered_map<xcb_window_t, WindowObservation const*> pending;
     for (auto const& window : windows)
         if (auto candidate = classify(window, handoff, true))
         {
-            parents[window.id] = window.unmanaged_parent;
             candidates.push_back(std::move(*candidate));
+            if (!handoff || !handoff->find(window.id))
+                pending.emplace(window.id, &window);
         }
     // Saved clients keep their restored placement; only newcomers are placed.
-    auto newcomer = [&](xcb_window_t id) { return !handoff || !handoff->find(id); };
     if (handoff)
-        restore_graph(*handoff, std::move(candidates));
-    else
-        for (auto& candidate : candidates)
+        restore_graph(*handoff, candidates);
+    for (auto& candidate : candidates)
+        if (pending.contains(candidate.id))
         {
-            auto id = candidate.id;
+            if (!candidate.desktop_pinned)
+            {
+                candidate.monitor = focused_monitor_;
+                candidate.workspace = monitors_[focused_monitor_].current_workspace;
+            }
             insert(std::move(candidate));
-            if (!floating_mode(require(id)))
-                place(id, parents[id]);
         }
-    auto order = clients_by_order();
-    if (handoff)
-        for (auto const* client : order)
-            if (!floating_mode(*client) && newcomer(client->id))
-                place(client->id, parents[client->id]);
-    std::unordered_set<xcb_window_t> pending;
-    for (auto const* client : order)
-        if (floating_mode(*client) && newcomer(client->id))
-            pending.insert(client->id);
-    for (auto const* client : order)
+
+    // Resolve every newcomer's placement and rule effects before deriving any
+    // parent rectangle. Parents precede children in both passes; the complete
+    // tiled scene therefore shapes even mixed-mode transient chains.
+    std::vector<std::pair<WindowObservation const*, PlacementGeometry>> placements;
+    for (auto const& window : windows)
     {
-        std::vector<xcb_window_t> chain;
-        for (auto next = client->id; pending.erase(next); next = require(next).transient_for)
-            chain.push_back(next);
+        std::vector<WindowObservation const*> chain;
+        for (auto next = window.id; auto node = pending.extract(next); next = node.mapped()->transient_for)
+            chain.push_back(node.mapped());
         for (auto it = chain.rbegin(); it != chain.rend(); ++it)
-            place(*it, parents[*it]);
+            if (auto placement = prepare_placement((*it)->id))
+                placements.emplace_back(*it, *placement);
     }
+    // Claims are reconstructed once, after rules, in observation order rather
+    // than dependency order. Surviving handoff history precedes new claims.
+    fullscreen_claims_.clear();
+    if (handoff)
+        for (auto id : handoff->fullscreen_claims)
+            if (auto const* client = find(id); client && client->fullscreen)
+                fullscreen_claims_.push_back(id);
+    for (auto const& window : windows)
+        if (auto const* client = find(window.id); client && client->fullscreen
+            && !std::ranges::contains(fullscreen_claims_, window.id))
+            fullscreen_claims_.push_back(window.id);
+    for (auto const& [window, placement] : placements)
+        finish_placement(window->id, placement, window->unmanaged_parent);
 
     if (pointer)
         focus_monitor(monitor_at(monitors_, pointer->first, pointer->second).value_or(0));
@@ -192,64 +206,90 @@ void State::adopt(
             claim_pending_scratchpad(client->id);
 }
 
-// Initial placement and later size-hint updates share one geometry policy.
-void State::place(xcb_window_t id, std::optional<Geometry> unmanaged_parent)
+// Live admission and batch adoption share preparation and geometry resolution.
+std::optional<State::PlacementGeometry> State::prepare_placement(xcb_window_t id)
 {
-    apply_size_hints(id, true, unmanaged_parent);
-    apply_initial_rule(id);
+    if (auto const* parent = find(require(id).transient_for))
+        relocate(id, parent->monitor, parent->workspace);
+    auto placement = size_hint_geometry(id, true);
+    if (auto const& rule = require(id).rule)
+    {
+        auto monitor = require(id).monitor;
+        apply_rule_state(id, *rule);
+        if (placement && floating_mode(require(id)))
+        {
+            // Rule relocation centers on the destination workarea, overriding
+            // the hinted origin or parent anchor only when the monitor changes.
+            if (monitor != require(id).monitor)
+                *placement = std::visit([](auto const& frame) -> PlacementGeometry
+                { return CenteredSize{ frame.width, frame.height }; }, *placement);
+            *placement = rule_geometry(id, *rule, std::move(*placement));
+        }
+    }
+    return placement;
 }
 
 void State::size_hints(xcb_window_t id, SizeHints hints, std::optional<Geometry> unmanaged_parent)
 {
     clients_.at(id).size_hints = hints;
-    apply_size_hints(id, false, unmanaged_parent);
+    if (auto placement = size_hint_geometry(id, false))
+        request_geometry(id, resolve_geometry(id, *placement, unmanaged_parent));
 }
 
-// Initial placement joins a managed parent's workspace and centers without an
-// accepted position hint. Later updates keep the chosen origin for size-only
-// changes. Position hints of transients count only when the user supplied them.
-void State::apply_size_hints(xcb_window_t id, bool initial, std::optional<Geometry> unmanaged_parent)
+// Initial hints choose a monitor and an origin or anchor. Later size-only
+// updates keep the origin. Transients accept only user-supplied positions.
+std::optional<State::PlacementGeometry> State::size_hint_geometry(xcb_window_t id, bool initial)
 {
     auto const& client = require(id);
-    auto const* parent = find(client.transient_for);
-    if (initial && parent)
-        relocate(id, parent->monitor, parent->workspace);
     auto const* floating = floating_mode(client);
     if (!floating)
-        return;
+        return std::nullopt;
     bool anchored = client.transient_for != XCB_NONE;
     auto const& hints = client.size_hints;
     auto window = inset(floating->geometry, border(client));
     window.width = hints.width.value_or(window.width);
     window.height = hints.height.value_or(window.height);
-    auto geometry = outset(window, border(client));
+    auto rectangle = outset(window, border(client));
     auto position = hints.user_position ? hints.user_position : anchored ? std::nullopt : hints.program_position;
-    auto monitor = client.monitor;
     bool center = initial;
     if (position)
     {
-        Geometry hinted{ position->first, position->second, geometry.width, geometry.height };
-        auto target = floating::resolve_position_hint(monitors_, monitor, anchored || client.desktop_pinned, hinted);
-        monitor = target.monitor;
+        Geometry hinted{ position->first, position->second, rectangle.width, rectangle.height };
+        auto target = floating::resolve_position_hint(monitors_, client.monitor, anchored || client.desktop_pinned, hinted);
         center = !target.accepted;
         if (target.accepted)
         {
-            geometry = hinted;
-            if (initial && monitor != client.monitor)
-                relocate(id, monitor, monitors_[monitor].current_workspace);
+            rectangle = hinted;
+            if (initial && target.monitor != client.monitor)
+                relocate(id, target.monitor, monitors_[target.monitor].current_workspace);
         }
     }
     if (center)
-    {
-        auto parent_geometry = parent ? std::optional{ frame(*parent) } : unmanaged_parent;
-        geometry = floating::place_floating(
-            monitors_[monitor].working_area(), geometry.width, geometry.height, anchored ? parent_geometry : std::nullopt
-        );
-    }
-    if (initial)
-        this->geometry(id, geometry);
-    else
-        request_geometry(id, geometry);
+        return CenteredSize{ rectangle.width, rectangle.height, client.transient_for };
+    return rectangle;
+}
+
+Geometry State::resolve_geometry(
+    xcb_window_t id, PlacementGeometry const& placement, std::optional<Geometry> unmanaged_parent
+) const
+{
+    if (auto const* rectangle = std::get_if<Geometry>(&placement))
+        return *rectangle;
+    auto const& size = std::get<CenteredSize>(placement);
+    auto const* parent = find(size.parent);
+    return floating::place_floating(
+        monitors_[require(id).monitor].working_area(), size.width, size.height,
+        parent ? std::optional{ frame(*parent) } : size.parent != XCB_NONE ? unmanaged_parent : std::nullopt
+    );
+}
+
+void State::finish_placement(xcb_window_t id, PlacementGeometry const& placement, std::optional<Geometry> unmanaged_parent)
+{
+    auto rectangle = resolve_geometry(id, placement, unmanaged_parent);
+    if (floating_mode(require(id)))
+        geometry(id, rectangle);
+    else // A scratchpad rule can tile its initially floating candidate.
+        edit(id).mode = TiledMode{ rectangle };
 }
 
 // Type and transient updates change classification defaults. The default mode
@@ -263,7 +303,7 @@ void State::apply_default_mode(xcb_window_t id)
 }
 
 
-void State::apply_rule(xcb_window_t window, RuleActions const& rule)
+void State::apply_rule_state(xcb_window_t window, RuleActions const& rule)
 {
     LWM_LOG_DEBUG("Applying matched rule: window={:#x}", window);
     if (rule.floating)
@@ -280,19 +320,6 @@ void State::apply_rule(xcb_window_t window, RuleActions const& rule)
 
     if (rule.borderless)
         assign(window, &Client::borderless, *rule.borderless);
-    if (auto const* floating = floating_mode(require(window)))
-    {
-        auto rectangle = rule.geometry ? outset(*rule.geometry, border(client)) : floating->geometry;
-        if (rule.center)
-            rectangle = floating::place_floating(
-                monitors()[client.monitor].working_area(),
-                rectangle.width,
-                rectangle.height,
-                std::nullopt
-            );
-        geometry(window, rectangle);
-    }
-
     if (rule.skip_taskbar)
         skip_taskbar(window, *rule.skip_taskbar);
     if (rule.skip_pager)
@@ -303,6 +330,23 @@ void State::apply_rule(xcb_window_t window, RuleActions const& rule)
         layer(window, *rule.layer);
     if (rule.fullscreen)
         fullscreen(window, *rule.fullscreen);
+}
+
+State::PlacementGeometry State::rule_geometry(xcb_window_t id, RuleActions const& rule, PlacementGeometry placement) const
+{
+    if (rule.geometry)
+        placement = outset(*rule.geometry, border(require(id)));
+    if (rule.center)
+        placement = std::visit([](auto const& frame) -> PlacementGeometry
+        { return CenteredSize{ frame.width, frame.height }; }, placement);
+    return placement;
+}
+
+void State::apply_rule(xcb_window_t id, RuleActions const& rule)
+{
+    apply_rule_state(id, rule);
+    if (auto const* floating = floating_mode(require(id)))
+        geometry(id, resolve_geometry(id, rule_geometry(id, rule, floating->geometry), std::nullopt));
 }
 
 // Metadata reconciles changed rule actions; losing a match leaves prior actions.
@@ -379,7 +423,7 @@ void State::transient(xcb_window_t id, xcb_window_t parent)
 
 // Exec handoff
 
-void State::restore_graph(restart::Snapshot const& snapshot, std::vector<Client> observed)
+void State::restore_graph(restart::Snapshot const& snapshot, std::span<Client> observed)
 {
     assert(clients_.empty());
     mutated();
@@ -406,14 +450,12 @@ void State::restore_graph(restart::Snapshot const& snapshot, std::vector<Client>
         if (!saved)
             continue;
         static_cast<ClientIntent&>(client) = *saved;
+        forget_missing_tile_slot(client);
         if (client.fullscreen)
             client.maximized_horz = client.maximized_vert = false;
         next_recency_ = std::max(next_recency_, client.mru_order + 1);
         clients_.emplace(client.id, std::move(client));
     }
-    for (auto id : snapshot.fullscreen_claims)
-        if (auto const* client = find(id); client && client->fullscreen)
-            fullscreen_claims_.push_back(id);
     rebind(std::move(discovered));
     // Filter only after merging: surviving workspace preferences have precedence
     // over incoming ones, even when their former target disappeared during exec.
@@ -425,25 +467,6 @@ void State::restore_graph(restart::Snapshot const& snapshot, std::vector<Client>
             if (!preferred || preferred->iconic)
                 workspace.preferred_tile = XCB_NONE;
         }
-    // Newcomers choose the restored current workspace. New fullscreen requests
-    // follow saved claims in scan order, including those from saved clients.
-    for (auto& observation : observed)
-    {
-        if (auto const* client = find(observation.id))
-        {
-            if (client->fullscreen && !std::ranges::contains(fullscreen_claims_, client->id))
-                request_fullscreen(client->id);
-        }
-        else
-        {
-            if (!observation.desktop_pinned)
-            {
-                observation.monitor = focused_monitor_;
-                observation.workspace = monitors_[focused_monitor_].current_workspace;
-            }
-            insert(std::move(observation));
-        }
-    }
     for (auto& slot : named_scratchpads_)
     {
         auto saved = std::ranges::find(snapshot.named_scratchpads, slot.name, &NamedScratchpad::name);
