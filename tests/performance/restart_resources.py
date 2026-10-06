@@ -86,11 +86,11 @@ def measure(binary):
             stderr=log,
         )
         cleanup.callback(stop, wm)
-        wait(lambda: ipc(display_name, "ping") == b"pong", wm, logfile)
+        wait(lambda: bool(ipc(display_name, "version")), wm, logfile)
 
         def changed(old):
             try:
-                return wm_owner(display_name) not in (0, old) and ipc(display_name, "ping") == b"pong"
+                return wm_owner(display_name) not in (0, old) and bool(ipc(display_name, "version"))
             except (ConnectionResetError, BrokenPipeError):
                 return False
 

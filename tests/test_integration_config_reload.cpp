@@ -96,7 +96,7 @@ std::optional<std::pair<int16_t, int16_t>> window_center(X11Connection& conn, xc
 } // namespace
 
 TEST_CASE(
-    "Integration: reload-config updates desktop names and keeps failed reload atomic",
+    "Integration: config reload updates desktop names and keeps failed reload atomic",
     "[integration][ipc][reload]"
 )
 {
@@ -107,13 +107,13 @@ TEST_CASE(
     REQUIRE(wait_for_desktop_names(env->conn, { "dev", "web" }));
 
     REQUIRE(env->wm.write_config(make_config({ "code", "chat" })));
-    auto reload_ok = run_lwmctl(env->wm, { "reload-config" });
+    auto reload_ok = run_lwmctl(env->wm, { "config", "reload" });
     REQUIRE(reload_ok.has_value());
     REQUIRE(reload_ok->exit_code == 0);
     REQUIRE(wait_for_desktop_names(env->conn, { "code", "chat" }));
 }
 
-TEST_CASE("Integration: reload-config changes the workspace count and folds removed workspaces", "[integration][ipc][reload]")
+TEST_CASE("Integration: config reload changes the workspace count and folds removed workspaces", "[integration][ipc][reload]")
 {
     auto env = TestEnvironment::create(make_config({ "one", "two", "three" }));
     if (!env)
@@ -129,13 +129,13 @@ TEST_CASE("Integration: reload-config changes the workspace count and folds remo
     REQUIRE(wait_for_property_cardinal(conn.get(), window, desktop, 2, kTimeout));
 
     REQUIRE(env->wm.write_config(make_config({ "one", "two" })));
-    REQUIRE(send_ipc_command("reload-config") == "ok");
+    REQUIRE(send_ipc_command("config reload") == "ok");
     REQUIRE(wait_for_property_cardinal(conn.get(), conn.root(), desktops, 2, kTimeout));
     REQUIRE(wait_for_desktop_names(conn, { "one", "two" }));
     CHECK(wait_for_property_cardinal(conn.get(), window, desktop, 1, kTimeout));
 
     REQUIRE(env->wm.write_config(make_config({ "one", "two", "three", "four" })));
-    REQUIRE(send_ipc_command("reload-config") == "ok");
+    REQUIRE(send_ipc_command("config reload") == "ok");
     REQUIRE(wait_for_property_cardinal(conn.get(), conn.root(), desktops, 4, kTimeout));
     CHECK(require_property_cardinal(conn.get(), window, desktop) == 1);
     REQUIRE(send_ipc_command("workspace switch 3") == "ok");
@@ -143,7 +143,7 @@ TEST_CASE("Integration: reload-config changes the workspace count and folds remo
 }
 
 TEST_CASE(
-    "Integration: reload-config reapplies geometry rules to visible floating windows",
+    "Integration: config reload reapplies geometry rules to visible floating windows",
     "[integration][ipc][reload][rules]"
 )
 {
@@ -162,12 +162,12 @@ TEST_CASE(
 
     std::string rules = R"(
 [[rules]]
-match = { type = "Dialog" }
+match = { type = "dialog" }
 apply = { geometry = { x = 300, y = 200, width = 240, height = 160 } }
 )";
     REQUIRE(env->wm.write_config(make_config({ "left", "right" }, rules)));
 
-    auto reload_result = run_lwmctl(env->wm, { "reload-config" });
+    auto reload_result = run_lwmctl(env->wm, { "config", "reload" });
     REQUIRE(reload_result.has_value());
     REQUIRE(reload_result->exit_code == 0);
     REQUIRE(wait_for_window_geometry(env->conn, floating, 300, 200, 240, 160));
@@ -176,7 +176,7 @@ apply = { geometry = { x = 300, y = 200, width = 240, height = 160 } }
 }
 
 TEST_CASE(
-    "Integration: reload-config reapplies workspace rules to existing windows",
+    "Integration: config reload reapplies workspace rules to existing windows",
     "[integration][ipc][reload][rules][workspace]"
 )
 {
@@ -207,7 +207,7 @@ apply = { workspace = 1 }
 )";
     REQUIRE(env->wm.write_config(make_config({ "left", "right" }, rules)));
 
-    auto reload_result = run_lwmctl(env->wm, { "reload-config" });
+    auto reload_result = run_lwmctl(env->wm, { "config", "reload" });
     REQUIRE(reload_result.has_value());
     REQUIRE(reload_result->exit_code == 0);
     REQUIRE(wait_for_property_cardinal(env->conn.get(), window, net_wm_desktop, 1, kTimeout));
@@ -220,7 +220,7 @@ apply = { workspace = 1 }
 }
 
 TEST_CASE(
-    "Integration: reload-config keeps fallback focus when removing a hidden scratchpad",
+    "Integration: config reload keeps fallback focus when removing a hidden scratchpad",
     "[integration][ipc][reload][scratchpad][focus]"
 )
 {
@@ -275,7 +275,7 @@ size = { width = 0.8, height = 0.6 }
     REQUIRE(wait_for_active_window(env->conn, fallback, kTimeout));
 
     REQUIRE(env->wm.write_config(make_config({ "one", "two" })));
-    auto reload_result = run_lwmctl(env->wm, { "reload-config" });
+    auto reload_result = run_lwmctl(env->wm, { "config", "reload" });
     REQUIRE(reload_result.has_value());
     REQUIRE(reload_result->exit_code == 0);
     REQUIRE(wait_for_condition([&]() { return !is_hidden_offscreen(env->conn, scratchpad_window); }, kTimeout));
@@ -291,7 +291,7 @@ TEST_CASE("Integration: a reload binding can replace itself and publish new bind
 [workspaces]
 names = ["before", "two"]
 [binds]
-"F5" = "reload-config"
+"F5" = "config reload"
 "F6" = "workspace switch 1"
 )");
     REQUIRE(env);
@@ -320,7 +320,7 @@ names = ["invalid", "two"]
 match = { title = "[invalid" }
 apply = { floating = true }
 )"));
-    auto result = run_lwmctl(env->wm, { "reload-config" });
+    auto result = run_lwmctl(env->wm, { "config", "reload" });
     REQUIRE(result);
     REQUIRE(result->exit_code != 0);
     REQUIRE(wait_for_desktop_names(conn, { "after", "two" }));
@@ -369,13 +369,13 @@ match = { class = "Pending" }
     auto before = snapshot();
     REQUIRE(before["named"][0]["pending"] == true);
     REQUIRE(env->wm.write_config(config(true, "[invalid")));
-    auto rejected = run_lwmctl(env->wm, { "reload-config" });
+    auto rejected = run_lwmctl(env->wm, { "config", "reload" });
     REQUIRE(rejected);
     REQUIRE(rejected->exit_code != 0);
     CHECK(snapshot() == before);
 
     REQUIRE(env->wm.write_config(config(true, "Replacement")));
-    REQUIRE(send_ipc_command("reload-config") == "ok");
+    REQUIRE(send_ipc_command("config reload") == "ok");
     CHECK(snapshot() == before);
     REQUIRE(send_ipc_command("scratchpad toggle claimed") == "ok");
     REQUIRE(wait_for_active_window(conn, window, kTimeout));
@@ -383,7 +383,7 @@ match = { class = "Pending" }
     auto hidden = intern_atom(conn.get(), "_NET_WM_STATE_HIDDEN");
     REQUIRE(wait_for_condition([&] { return has_state(conn, window, hidden); }, kTimeout));
     REQUIRE(env->wm.write_config(config(false, "")));
-    REQUIRE(send_ipc_command("reload-config") == "ok");
+    REQUIRE(send_ipc_command("config reload") == "ok");
     auto remaining = snapshot();
     REQUIRE(remaining["named"].size() == 1);
     CHECK(remaining["named"][0]["pending"] == true);
@@ -407,14 +407,14 @@ TEST_CASE("Integration: launch bindings preserve argv and follow reload", "[inte
             + binds + tail;
     };
     REQUIRE(env->wm.write_config(config("first")));
-    REQUIRE(send_ipc_command("reload-config") == "ok");
+    REQUIRE(send_ipc_command("config reload") == "ok");
     REQUIRE(send_key(env->conn, XK_F6));
     REQUIRE(wait_for_condition([&] { return read_text_file(literal_path) == "<><$HOME; untouched><two words>"; }, kTimeout));
     REQUIRE(send_key(env->conn, XK_F7));
     REQUIRE(wait_for_condition([&] { return read_text_file(shell_path) == "first"; }, kTimeout));
 
     REQUIRE(env->wm.write_config(config("second")));
-    REQUIRE(send_ipc_command("reload-config") == "ok");
+    REQUIRE(send_ipc_command("config reload") == "ok");
     REQUIRE(send_key(env->conn, XK_F7));
     REQUIRE(wait_for_condition([&] { return read_text_file(shell_path) == "second"; }, kTimeout));
 
@@ -427,7 +427,7 @@ TEST_CASE("Integration: launch bindings preserve argv and follow reload", "[inte
     {
         CAPTURE(binds, tail);
         REQUIRE(env->wm.write_config(config("rejected", binds, tail)));
-        auto rejected = send_ipc_command("reload-config");
+        auto rejected = send_ipc_command("config reload");
         REQUIRE(rejected);
         REQUIRE(rejected->starts_with("error "));
         REQUIRE(std::filesystem::remove(shell_path));
@@ -467,7 +467,7 @@ names = ["1", "2"]
     xcb_change_keyboard_mapping(conn.get(), 1, *spare, per, bound.data());
     xcb_flush(conn.get());
     // The reply follows the WM's handling of the earlier MappingNotify and its grabs.
-    REQUIRE(send_ipc_command("ping") == "ok pong");
+    REQUIRE(send_ipc_command("version").value_or("").starts_with("ok "));
     REQUIRE(send_key(conn, XK_F35));
     REQUIRE(wait_for_property_cardinal(conn.get(), conn.root(), intern_atom(conn.get(), "_NET_CURRENT_DESKTOP"), 1, kTimeout));
 }
@@ -481,5 +481,5 @@ TEST_CASE("Integration: an invalid file at startup falls back to the default con
     CHECK(wait_for_condition(
         [&] { return env->wm.diagnostics().find("using the default configuration") != std::string::npos; }, kTimeout
     ));
-    CHECK(send_ipc_command("ping") == "ok pong");
+    CHECK(send_ipc_command("version").value_or("").starts_with("ok "));
 }

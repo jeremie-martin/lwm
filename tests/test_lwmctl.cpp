@@ -88,7 +88,7 @@ TEST_CASE("lwmctl prints query values, stays silent for actions and reports erro
     int expected_exit = 1;
     std::string output;
     SECTION("empty") { }
-    SECTION("unknown envelope") { reply = "pong"; }
+    SECTION("unknown envelope") { reply = "1.0"; }
     SECTION("error") { reply = "error busy"; }
     SECTION("success without value")
     {
@@ -97,12 +97,12 @@ TEST_CASE("lwmctl prints query values, stays silent for actions and reports erro
     }
     SECTION("success with value")
     {
-        reply = "ok pong";
+        reply = "ok 1.0";
         expected_exit = 0;
-        output = "pong\n";
+        output = "1.0\n";
     }
     FakeWm wm(reply);
-    auto result = run_command(lwmctl_executable_path(), { "ping" });
+    auto result = run_command(lwmctl_executable_path(), { "version" });
     REQUIRE(result);
     CHECK(result->exit_code == expected_exit);
     CHECK(result->stdout_text == output);
@@ -110,7 +110,7 @@ TEST_CASE("lwmctl prints query values, stays silent for actions and reports erro
         CHECK_FALSE(result->stderr_text.empty());
     if (reply == "error busy")
         CHECK(result->stderr_text == "lwmctl: busy\n");
-    CHECK(wm.received() == std::vector<std::string>{ "ping" });
+    CHECK(wm.received() == std::vector<std::string>{ "version" });
 }
 
 TEST_CASE("lwmctl distinguishes a missing, silent and exiting WM", "[ipc][lwmctl]")
@@ -119,7 +119,7 @@ TEST_CASE("lwmctl distinguishes a missing, silent and exiting WM", "[ipc][lwmctl
         SKIP("X11 unavailable");
     SECTION("no WM owns the screen")
     {
-        auto result = run_command(lwmctl_executable_path(), { "ping" });
+        auto result = run_command(lwmctl_executable_path(), { "version" });
         REQUIRE(result);
         CHECK(result->exit_code == 1);
         CHECK(result->stderr_text == "lwmctl: lwm is not running\n");
@@ -127,7 +127,7 @@ TEST_CASE("lwmctl distinguishes a missing, silent and exiting WM", "[ipc][lwmctl
     SECTION("another WM owns the screen")
     {
         FakeWm wm("ok", FakeWm::Answer::Foreign);
-        auto result = run_command(lwmctl_executable_path(), { "ping" });
+        auto result = run_command(lwmctl_executable_path(), { "version" });
         REQUIRE(result);
         CHECK(result->exit_code == 1);
         CHECK(result->stderr_text == "lwmctl: lwm is not running\n");
@@ -137,7 +137,7 @@ TEST_CASE("lwmctl distinguishes a missing, silent and exiting WM", "[ipc][lwmctl
     {
         FakeWm wm("", FakeWm::Answer::Silence);
         auto started = std::chrono::steady_clock::now();
-        auto result = run_command(lwmctl_executable_path(), { "--timeout", "100", "ping" });
+        auto result = run_command(lwmctl_executable_path(), { "--timeout", "100", "version" });
         REQUIRE(result);
         CHECK(result->exit_code == 1);
         CHECK(result->stderr_text.find("timed out") != std::string::npos);
@@ -148,7 +148,7 @@ TEST_CASE("lwmctl distinguishes a missing, silent and exiting WM", "[ipc][lwmctl
     {
         FakeWm wm("", FakeWm::Answer::Exit);
         auto started = std::chrono::steady_clock::now();
-        auto result = run_command(lwmctl_executable_path(), { "--timeout", "5000", "ping" });
+        auto result = run_command(lwmctl_executable_path(), { "--timeout", "5000", "version" });
         REQUIRE(result);
         CHECK(result->exit_code == 1);
         CHECK(result->stderr_text == "lwmctl: lwm exited before replying\n");
@@ -173,13 +173,3 @@ TEST_CASE("lwmctl offers local help and preserves option-like names after double
     CHECK(wm.received() == std::vector<std::string>{ "scratchpad toggle --help" });
 }
 
-TEST_CASE("lwmctl rejects notification metadata before connecting", "[ipc][lwmctl]")
-{
-    for (auto const& arg : { "app-name=Ghostty", "desktop-entry=Ghostty", "window=123 app-name=Ghostty" })
-    {
-        auto result = run_command(LWMCTL_BINARY_PATH, { "notify-attention", arg }, { { "DISPLAY", ":nonexistent" } });
-        REQUIRE(result);
-        REQUIRE(result->exit_code == 1);
-        REQUIRE(result->stderr_text.find("usage: notify-attention window=<xid>") != std::string::npos);
-    }
-}

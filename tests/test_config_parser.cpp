@@ -394,7 +394,7 @@ keys = ["F1", "F2"])");
     {
         CAPTURE(modifiers);
         CHECK_FALSE(
-            load_from_string("[mousebinds]\n\"" + modifiers + "+1\" = \"drag_window\"\n")
+            load_from_string("[mousebinds]\n\"" + modifiers + "+1\" = \"move\"\n")
         );
     }
     auto duplicate = load_from_string(R"(
@@ -410,7 +410,7 @@ TEST_CASE("Parsed matchers preserve full matching and reject invalid rules and s
 {
     auto loaded = load_from_string(R"(
 [[rules]]
-match = { class = "Firefox|Chromium", instance = "Navigator", title = ".*Video.*", type = "Dialog" }
+match = { class = "Firefox|Chromium", instance = "Navigator", title = ".*Video.*", type = "dialog" }
 apply = { floating = true }
 )");
     REQUIRE(loaded);
@@ -541,10 +541,10 @@ TEST_CASE("Configuration rejects malformed nested values at their owning field",
              { "[appearance]\npadding = 1.5", "padding" },
              { "[appearance]\nborder_color = -1", "border_color" },
              { "[appearance]\nborder_color = 4294967296", "border_color" },
-             { "[mousebinds]\n'super+256' = 'drag_window'", "button number" },
-             { "[mousebinds]\n'super' = 'drag_window'", "button number" },
+             { "[mousebinds]\n'super+256' = 'move'", "button number" },
+             { "[mousebinds]\n'super' = 'move'", "button number" },
              { "[mousebinds]\n'super+1' = 'drag'", "mousebinds" },
-             { "[mousebinds]\n'super+1' = 'drag_window'\n'super+01' = 'toggle_float'", "duplicates" },
+             { "[mousebinds]\n'super+1' = 'move'\n'super+01' = 'window float'", "duplicates" },
              { "[binds]\n'F1' = 1", "binds" },
              { "[binds]\n'F1' = false", "binds" },
              { "[binds]\n'F1' = 'workspace switch 1.0'", "workspace index" },
@@ -602,8 +602,8 @@ size = { width = 1, height = 1 }
 
 TEST_CASE("Bindings use the shared command grammar and reject non-actions", "[config][command][keybind]")
 {
-    for (std::string text : { "window fullscreen", "workspace switch 2", "monitor focus left",
-                             "focus window=0x123", "notify-attention window=0x123", "ratio adjust +0.25",
+    for (std::string text : { "window fullscreen", "workspace switch 2", "monitor focus prev",
+                             "window focus 0x123", "window attention 0x123", "ratio adjust +0.25",
                              "exec /tmp/a wm", "scratchpad toggle a name with spaces" })
     {
         CAPTURE(text);
@@ -615,7 +615,7 @@ TEST_CASE("Bindings use the shared command grammar and reject non-actions", "[co
         REQUIRE(parsed);
         CHECK(loaded->keybinds.at({ 0, XK_F1 }) == std::get<Action>(*parsed));
     }
-    for (std::string text : { "ping", "state", "window list", "version", "watch",
+    for (std::string text : { "state", "window list", "version", "watch",
                              "workspace switch 10", "window to-workspace 10", "monitor focus up",
                              "scratchpad toggle missing", "scratchpad cancel-launch missing", "ratio set 0.99" })
     {
@@ -704,16 +704,12 @@ TEST_CASE("Launch commands must be nonempty argv lists at every use site", "[con
     }
     CHECK(load_from_string("[binds]\n'F1' = ['true']\n"));
 }
-TEST_CASE("Rule window types decode from the runtime enum", "[config][rules]")
+TEST_CASE("Rule window types name the types that become clients", "[config][rules]")
 {
     for (auto const& [name, type] : {
-             std::pair{ "Desktop", WindowType::Desktop }, std::pair{ "Dock", WindowType::Dock },
-             std::pair{ "Toolbar", WindowType::Toolbar }, std::pair{ "Menu", WindowType::Menu },
-             std::pair{ "Utility", WindowType::Utility }, std::pair{ "Splash", WindowType::Splash },
-             std::pair{ "Dialog", WindowType::Dialog }, std::pair{ "DropdownMenu", WindowType::DropdownMenu },
-             std::pair{ "PopupMenu", WindowType::PopupMenu }, std::pair{ "Tooltip", WindowType::Tooltip },
-             std::pair{ "Notification", WindowType::Notification }, std::pair{ "Combo", WindowType::Combo },
-             std::pair{ "Dnd", WindowType::Dnd }, std::pair{ "Normal", WindowType::Normal }
+             std::pair{ "normal", WindowType::Normal }, std::pair{ "dialog", WindowType::Dialog },
+             std::pair{ "utility", WindowType::Utility }, std::pair{ "toolbar", WindowType::Toolbar },
+             std::pair{ "menu", WindowType::Menu }, std::pair{ "splash", WindowType::Splash }
          })
     {
         CAPTURE(name);
@@ -723,7 +719,7 @@ TEST_CASE("Rule window types decode from the runtime enum", "[config][rules]")
         REQUIRE(config);
         CHECK(config->rules.front().type == type);
     }
-    for (std::string invalid : { "'dialog'", "'DIALOG'", "'popup_menu'", "0", "true" })
+    for (std::string invalid : { "'Dialog'", "'DIALOG'", "'dock'", "'desktop'", "'popup_menu'", "0", "true" })
     {
         CAPTURE(invalid);
         CHECK_FALSE(load_from_string("[[rules]]\nmatch = {type = " + invalid + "}\napply = {floating = true}\n"));

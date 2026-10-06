@@ -103,8 +103,7 @@ TEST_CASE("Integration: IPC window actions execute the key-binding operations", 
 
     auto before = window_entry(a);
     ipc_ok("window swap next");
-    auto workspaces = ipc_json("workspace list");
-    CHECK(workspaces.at("monitors")[0].at("workspaces")[0].at("window_count") == 2);
+    CHECK(tiled_count(0) == 2);
 
     ipc_ok("window to-workspace 2");
     CHECK(window_entry(b).at("workspace") == 2);
@@ -117,8 +116,8 @@ TEST_CASE("Integration: IPC window actions execute the key-binding operations", 
     REQUIRE(wait_for_active_window(conn, a, kTimeout));
 
     // A single monitor has no neighbor; these are successful no-ops.
-    ipc_ok("monitor focus right");
-    ipc_ok("window to-monitor left");
+    ipc_ok("monitor focus next");
+    ipc_ok("window to-monitor prev");
     CHECK(window_entry(a).at("monitor") == 0);
     CHECK(before.at("id") == a);
 

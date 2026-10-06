@@ -16,7 +16,7 @@ case "${WINDOWID:-}" in
 esac
 
 if command -v lwmctl >/dev/null 2>&1; then
-    lwmctl notify-attention "window=$WINDOWID" >/dev/null 2>&1 || true
+    lwmctl window attention "$WINDOWID" >/dev/null 2>&1 || true
 fi
 
 exit 0

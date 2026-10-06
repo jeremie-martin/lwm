@@ -16,7 +16,7 @@ inline std::string ipc_ok(std::string const& command)
 // Hides a window the only way LWM hides one: focusing it and stashing it.
 inline void stash(xcb_window_t window)
 {
-    ipc_ok("focus window=" + std::to_string(window));
+    ipc_ok("window focus " + std::to_string(window));
     ipc_ok("scratchpad stash");
 }
 
@@ -26,6 +26,15 @@ inline nlohmann::json ipc_json(std::string const& command)
     auto reply = ipc_ok(command);
     REQUIRE(reply.starts_with("ok "));
     return nlohmann::json::parse(reply.substr(3));
+}
+
+// Tiled members of one workspace, as `window list` reports them.
+inline int tiled_count(size_t workspace, size_t monitor = 0)
+{
+    auto windows = ipc_json("window list").at("windows");
+    return static_cast<int>(std::ranges::count_if(windows, [&](auto const& window) {
+        return window.at("kind") == "tiled" && window.at("monitor") == monitor && window.at("workspace") == workspace;
+    }));
 }
 
 // A WM lifetime is identified by its WM_S0 owner window once it has published

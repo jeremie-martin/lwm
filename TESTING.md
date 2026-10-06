@@ -46,7 +46,7 @@ There is no GitHub Actions pipeline; validation runs locally.
 ## Integration harness
 
 The harness starts a private Xvfb and the binaries from the selected CMake build.
-Readiness requires a live supporting window that owns `WM_S0` and answers a ping.
+Readiness requires a live supporting window that owns `WM_S0` and answers `version`.
 Startup failures fail with captured stderr. Direct runs may skip if Xvfb is missing;
 `LWM_TEST_REQUIRE_X11=1` makes that fatal. Unsupported server capabilities may still
 skip. `LWM_TEST_ALLOW_EXISTING_DISPLAY=1` permits fallback to `DISPLAY`; use it only

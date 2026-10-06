@@ -138,7 +138,7 @@ std::string type_rule_workspace_config()
 names = ["one", "two"]
 
 [[rules]]
-match = { type = "Utility" }
+match = { type = "utility" }
 apply = { workspace = 1 }
 )";
 }
@@ -1034,7 +1034,7 @@ apply = { floating = true, borderless = true, layer = "below", sticky = true, sk
     auto taskbar = intern_atom(conn.get(), "_NET_WM_STATE_SKIP_TASKBAR");
     REQUIRE(property_has_atom(conn.get(), window, state, taskbar));
     REQUIRE(test_env->wm.write_config("[[rules]]\napply = { skip_taskbar = false }\n"));
-    auto reload = run_lwmctl(test_env->wm, { "reload-config" });
+    auto reload = run_lwmctl(test_env->wm, { "config", "reload" });
     REQUIRE(reload.has_value());
     REQUIRE(reload->exit_code == 0);
     REQUIRE_FALSE(property_has_atom(conn.get(), window, state, taskbar));

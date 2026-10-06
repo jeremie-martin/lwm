@@ -687,7 +687,8 @@ TEST_CASE("Button presses choose bindings before click focus and split gestures"
     test::focus(state, 2);
     uint16_t const super = XCB_MOD_MASK_4;
     test::configure(state, [&](Config& config) {
-        config.mousebinds = { { super, 1, MouseAction::DragWindow }, { super, 3, MouseAction::ResizeFloating } };
+        config.mousebinds = { { super, 1, MouseGrip::Move }, { super, 3, MouseGrip::Resize },
+                              { super, 2, Action{ action::ToggleFloat{ } } } };
     });
     auto split = [](State::Press const& press)
     { return press.interaction && std::holds_alternative<State::SplitHit>(*press.interaction); };
@@ -711,6 +712,12 @@ TEST_CASE("Button presses choose bindings before click focus and split gestures"
     state.ratio(0, SplitAddress{ 0 }, 0.3);
     CHECK_FALSE(state.press(XCB_NONE, 310, 400, 1, XCB_MOD_MASK_CONTROL, 5000).interaction);
     CHECK_FALSE(state.monitors()[0].current().split_ratios.contains(SplitAddress{ 0 }));
+    // A command binding focuses the clicked client, then returns its action.
+    auto command = state.press(2, 700, 100, 2, super, 5500);
+    CHECK(command.consumed);
+    CHECK(command.action == Action{ action::ToggleFloat{ } });
+    CHECK(state.active_window() == 2);
+    state.focus(1);
     // Hidden clients swallow clicks without focusing.
     state.iconic(2, true);
     CHECK(state.press(2, 700, 100, 1, 0, 6000).consumed);

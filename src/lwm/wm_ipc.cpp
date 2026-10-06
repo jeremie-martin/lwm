@@ -18,7 +18,6 @@ struct WorkspaceView
     size_t index;
     std::string_view name;
     bool current;
-    size_t window_count;
     std::string_view layout;
     double ratio; ///< Root split ratio
 };
@@ -83,7 +82,6 @@ WorkspaceList workspace_list(State const& state)
             view.workspaces.push_back({ w,
                                         state.config().workspaces[w],
                                         w == monitor.current_workspace,
-                                        workspace.windows.size(),
                                         layout_strategy_str(workspace.layout_strategy),
                                         root == workspace.split_ratios.end() ? state.config().layout.default_ratio : root->second });
         }
@@ -156,8 +154,6 @@ std::string WindowManager::handle_request(std::string_view text)
             {
                 switch (query)
                 {
-                    case command::Query::Ping:
-                        return ok("pong");
                     case command::Query::Version:
                         return ok(LWM_VERSION);
                     case command::Query::WorkspaceList:

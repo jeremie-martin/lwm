@@ -24,13 +24,6 @@ std::expected<LayoutStrategy, std::string> layout(std::string_view value, Comman
     return std::unexpected("unknown layout: " + std::string(value));
 }
 
-std::expected<int, std::string> direction(std::string_view value, CommandSpec const& spec)
-{
-    if (value == "left") return -1;
-    if (value == "right") return 1;
-    return usage(spec);
-}
-
 std::expected<double, std::string> number(std::string_view value, CommandSpec const& spec)
 {
     auto digits = value;
@@ -45,14 +38,10 @@ std::expected<double, std::string> number(std::string_view value, CommandSpec co
     return result;
 }
 
+// Window IDs are decimal or 0x-prefixed hexadecimal, as xwininfo and xdotool print them.
 template <bool Window> std::expected<uint32_t, std::string> integer(std::string_view value, CommandSpec const& spec)
 {
     if (value.empty() || value.find_first_of(spaces) != value.npos) return usage(spec);
-    if constexpr (Window)
-    {
-        if (!value.starts_with("window=")) return usage(spec);
-        value.remove_prefix(7);
-    }
     auto digits = value;
     int base = 10;
     if (Window && (digits.starts_with("0x") || digits.starts_with("0X")))
@@ -94,26 +83,26 @@ constexpr CommandSpec fixed(std::string_view name, std::string_view help, std::s
 
 // Spawn is the only action without an IPC spelling: IPC callers can start processes themselves.
 constexpr CommandSpec specs[] = {
-    fixed<Query, Query::Ping>("ping", "ping", "check whether the WM is running"),
-    fixed<Query, Query::Version>("version", "version", "show WM version"),
+    fixed<Query, Query::Version>("version", "version", "show the WM version"),
     fixed<Query, Query::State>("state", "state", "print one consistent state snapshot"),
-    fixed<ReloadConfig>("reload-config", "reload-config", "reload configuration"),
+    fixed<ReloadConfig>("config reload", "config reload", "reload the configuration file"),
     fixed<Restart>("restart", "restart", "restart the WM"),
     takes<Restart, text>("exec", "exec PATH", "restart with another binary"),
     takes<SetLayout, layout>("layout set", "layout set NAME", "select master-stack or monocle"),
     takes<SetRatio, number>("ratio set", "ratio set VALUE", "set the root split ratio"),
     fixed<ResetRatios>("ratio reset", "ratio reset", "reset workspace split ratios"),
     takes<AdjustRatio, number>("ratio adjust", "ratio adjust DELTA", "adjust the root split ratio"),
-    takes<NotifyAttention, integer<true>>("notify-attention", "notify-attention window=<xid>", "mark an exact window urgent"),
     takes<SwitchWorkspace, integer<false>>("workspace switch", "workspace switch N", "switch workspace (zero-based)"),
     fixed<CycleWorkspace, 1>("workspace next", "workspace next", "switch to the next workspace"),
     fixed<CycleWorkspace, -1>("workspace prev", "workspace prev", "switch to the previous workspace"),
     fixed<ToggleWorkspace>("workspace toggle", "workspace toggle", "switch back to the previous workspace"),
     fixed<Query, Query::WorkspaceList>("workspace list", "workspace list", "print workspaces as JSON"),
-    takes<FocusMonitor, direction>("monitor focus", "monitor focus left|right", "focus the adjacent monitor"),
-    fixed<FocusCycle, true>("focus next", "focus next", "focus the next MRU window"),
-    fixed<FocusCycle, false>("focus prev", "focus prev", "focus the previous MRU window"),
-    takes<FocusWindow, integer<true>>("focus", "focus window=<xid>", "focus an exact window"),
+    fixed<FocusMonitor, 1>("monitor focus next", "monitor focus next", "focus the next monitor"),
+    fixed<FocusMonitor, -1>("monitor focus prev", "monitor focus prev", "focus the previous monitor"),
+    fixed<FocusCycle, true>("window focus next", "window focus next", "focus the next most recent window"),
+    fixed<FocusCycle, false>("window focus prev", "window focus prev", "focus the previous most recent window"),
+    takes<FocusWindow, integer<true>>("window focus", "window focus ID", "focus an exact window"),
+    takes<NotifyAttention, integer<true>>("window attention", "window attention ID", "mark an exact window urgent"),
     fixed<Query, Query::WindowList>("window list", "window list", "print normal clients as JSON"),
     fixed<Kill>("window close", "window close", "close the active window"),
     fixed<ToggleFullscreen>("window fullscreen", "window fullscreen", "toggle fullscreen on the active window"),
@@ -121,7 +110,8 @@ constexpr CommandSpec specs[] = {
     fixed<SwapTile, 1>("window swap next", "window swap next", "swap the active tile with the next one"),
     fixed<SwapTile, -1>("window swap prev", "window swap prev", "swap the active tile with the previous one"),
     takes<MoveToWorkspace, integer<false>>("window to-workspace", "window to-workspace N", "move the active window to workspace N"),
-    takes<MoveToMonitor, direction>("window to-monitor", "window to-monitor left|right", "move the active window to the adjacent monitor"),
+    fixed<MoveToMonitor, 1>("window to-monitor next", "window to-monitor next", "move the active window to the next monitor"),
+    fixed<MoveToMonitor, -1>("window to-monitor prev", "window to-monitor prev", "move the active window to the previous monitor"),
     fixed<ScratchpadStash>("scratchpad stash", "scratchpad stash", "stash the active window"),
     fixed<ScratchpadCycle>("scratchpad cycle", "scratchpad cycle", "cycle the scratchpad pool"),
     takes<ScratchpadToggle, text>("scratchpad toggle", "scratchpad toggle NAME", "toggle a named scratchpad"),

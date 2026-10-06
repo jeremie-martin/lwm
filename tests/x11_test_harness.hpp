@@ -994,7 +994,7 @@ inline bool wait_for_wm_ready(X11Connection& conn, std::chrono::milliseconds tim
                 return false;
             auto atom = intern_atom(conn.get(), "_NET_SUPPORTING_WM_CHECK");
             return get_window_property_window(conn.get(), *current, atom) == current
-                && send_ipc_command("ping", timeout) == "ok pong";
+                && send_ipc_command("version", timeout).value_or("").starts_with("ok ");
         },
         timeout
     );

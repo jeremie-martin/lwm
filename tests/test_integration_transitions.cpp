@@ -193,7 +193,7 @@ TEST_CASE(
     set_window_type(conn, unrelated, intern_atom(conn.get(), "_NET_WM_WINDOW_TYPE_DIALOG"));
     map_window(conn, unrelated);
     REQUIRE(wait_for_active_window(conn, unrelated, timeout));
-    ipc_ok("focus window=" + std::to_string(owner));
+    ipc_ok("window focus " + std::to_string(owner));
     ipc_ok("window fullscreen");
     auto dialog = create_window(conn, 60, 70, 320, 240);
     set_transient_for(conn, dialog, owner);
@@ -210,7 +210,7 @@ TEST_CASE(
     REQUIRE(is_stacked_above(conn, dialog, owner));
 
     auto activate = intern_atom(conn.get(), "_NET_ACTIVE_WINDOW");
-    ipc_ok("focus window=" + std::to_string(owner));
+    ipc_ok("window focus " + std::to_string(owner));
     send_client_message(conn, child, activate, 2);
     REQUIRE(wait_for_active_window(conn, child, timeout));
     REQUIRE(wait_for_x_input_focus(conn, child, timeout));
@@ -285,7 +285,7 @@ apply = { fullscreen = true }
     };
     auto first = create_family();
     auto second = create_family();
-    ipc_ok("ping");
+    ipc_ok("version");
     auto expect_families = [&](Family const& shown, Family const& hidden)
     {
         for (auto window : { shown.root, shown.dialog, shown.child })
@@ -304,7 +304,7 @@ apply = { fullscreen = true }
     send_client_message(conn, first.root, state, 1, fullscreen);
     observe_title_after_events(conn, first.child);
     expect_families(first, second);
-    ipc_ok("reload-config");
+    ipc_ok("config reload");
     expect_families(first, second);
     REQUIRE(has_state(conn, first.root, fullscreen));
     REQUIRE(has_state(conn, second.root, fullscreen));
@@ -430,7 +430,7 @@ apply = { floating = true, workspace = 0, sticky = true, fullscreen = false, geo
             ));
             REQUIRE(wait_for_active_window(conn, background, timeout));
         }
-        auto reply = send_ipc_command("focus window=" + std::to_string(window));
+        auto reply = send_ipc_command("window focus " + std::to_string(window));
         REQUIRE(reply);
         REQUIRE(reply->starts_with("ok"));
         REQUIRE(wait_for_active_window(conn, window, timeout));
@@ -599,7 +599,7 @@ TEST_CASE("Integration: focusing a window on another workspace settles focus and
     REQUIRE(wait_for_active_window(conn, second, timeout));
     Watcher watcher;
     REQUIRE(watcher.line());
-    auto focused = send_ipc_command("focus window=" + std::to_string(first));
+    auto focused = send_ipc_command("window focus " + std::to_string(first));
     REQUIRE(focused);
     REQUIRE(focused->starts_with("ok"));
     // One operation publishes one settled state: the switch and focus together.
@@ -767,7 +767,7 @@ TEST_CASE(
     };
     REQUIRE(wait_for_condition([&] { return clients().at("windows").size() == 1; }, timeout));
     CHECK(clients().at("windows").at(0).at("iconic") == true);
-    auto focused = send_ipc_command("focus window=" + std::to_string(first));
+    auto focused = send_ipc_command("window focus " + std::to_string(first));
     REQUIRE(focused);
     REQUIRE(focused->starts_with("ok"));
     REQUIRE(wait_for_active_window(conn, first, timeout));
@@ -848,11 +848,11 @@ TEST_CASE(
 padding = 0
 border_width = 0
 [[rules]]
-match = { type = "Dialog" }
+match = { type = "dialog" }
 apply = { geometry = { } }
 )");
     REQUIRE(wait_for_wm_ready(conn, timeout));
-    REQUIRE(send_ipc_command("ping"));
+    REQUIRE(send_ipc_command("version"));
     auto screen_height = conn.screen()->height_in_pixels;
     auto first_rect = get_window_geometry(conn, first);
     auto second_rect = get_window_geometry(conn, second);
@@ -966,7 +966,7 @@ apply = { floating = true, layer = "below", geometry = { x = 60, y = 70, width =
     CHECK(property_has_atom(conn.get(), window, state, below));
     CHECK(get_window_geometry(conn, window) == WindowGeometry{ 360, 270, 300, 200 });
     // Reload explicitly reapplies even unchanged placement actions.
-    REQUIRE(send_ipc_command("reload-config") == "ok");
+    REQUIRE(send_ipc_command("config reload") == "ok");
     CHECK(get_window_geometry(conn, window) == WindowGeometry{ 60, 70, 300, 200 });
     destroy_window(conn, window);
 }
@@ -1245,7 +1245,7 @@ apply = { fullscreen = false }
             ipc_ok("restart");
             REQUIRE(wait_for_wm_restart(conn, timeout, *instance));
         }
-        ipc_ok("reload-config");
+        ipc_ok("config reload");
     }
     if (hidden)
         ipc_ok("workspace switch 0");
@@ -1351,7 +1351,7 @@ apply = { floating = true, geometry = { )";
     if (std::string_view(trigger) == "metadata")
         set_window_wm_class(conn, window, "geometry", "GeometryRule");
     else if (std::string_view(trigger) == "reload")
-        ipc_ok("reload-config");
+        ipc_ok("config reload");
     else if (std::string_view(trigger) == "restart")
     {
         auto instance = wm_instance(conn);

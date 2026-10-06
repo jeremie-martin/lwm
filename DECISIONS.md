@@ -130,6 +130,16 @@ fields, and `center` separately discarded the position. Now x and y are relative
 the target monitor's workarea and given together, omitting them centres the window,
 and omitted sizes keep the window's own. `center` is gone: `geometry = { }` centres.
 
+## One command vocabulary (2026-10-06)
+
+Commands name their object first and step with `next`/`prev` everywhere:
+`window focus next|prev|ID`, `window attention ID`, `monitor focus next|prev`,
+`window to-monitor next|prev`, `config reload`; window IDs lost the `window=` prefix.
+Mouse bindings take `move`, `resize`, or anything a key binding takes, so
+`toggle_float` became `"window float"`. Rule types are the lowercase names of the six
+types that become clients. `ping` is gone (`version` answers as well) and so is
+`workspace list.window_count`, which counted only tiles; `window list` has the windows.
+
 ## Keep scalar defaults in `Config` initializers (2026-10-06)
 
 The example file restated every default and a test kept the two in agreement. Making

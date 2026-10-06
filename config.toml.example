@@ -8,7 +8,7 @@
 # Ratios and size fractions accept either integer or floating-point numbers.
 # README.md explains file selection.
 #
-# Reload with `lwmctl reload-config` or a "reload-config" binding. Invalid
+# Reload with `lwmctl config reload` or a "config reload" binding. Invalid
 # input leaves the active configuration unchanged; at startup it is logged and the
 # defaults are used. Reload updates appearance, bindings, workspaces, focus/layout
 # parameters, scratchpads, and matched rules. Windows on removed workspaces move to
@@ -52,11 +52,13 @@
 # Mouse bindings: "modifiers+button" = action.
 # Modifiers: shift, ctrl/control, alt, super, in any order; none means a bare
 # button. Buttons are 1..255 (X11: 1 = left, 2 = middle, 3 = right).
-# Actions: "drag_window", "resize_floating", "toggle_float".
+# "move" drags the window under the pointer and "resize" resizes it, or the
+# split under it. Any other action is what a key binding takes; it runs after
+# the window under the pointer is focused.
 [mousebinds]
-"super+1" = "drag_window"
-"super+3" = "resize_floating"
-"super+2" = "toggle_float"
+"super+1" = "move"
+"super+3" = "resize"
+"super+2" = "window float"
 
 # Key bindings: "modifiers+key" = action. Keys use X11 keysym names; a
 # modifier/keysym pair may be bound once, whatever the modifier order.
@@ -73,19 +75,19 @@
 "super+Return" = ["/usr/local/bin/st"]
 "super+d" = ["dmenu_run"]
 "super+q" = "window close"
-"super+Left" = "monitor focus left"
-"super+Right" = "monitor focus right"
-"super+shift+Left" = "window to-monitor left"
-"super+shift+Right" = "window to-monitor right"
+"super+Left" = "monitor focus prev"
+"super+Right" = "monitor focus next"
+"super+shift+Left" = "window to-monitor prev"
+"super+shift+Right" = "window to-monitor next"
 "super+f" = "window fullscreen"
 "super+shift+f" = "window float"
-"super+j" = "focus next"
-"super+k" = "focus prev"
+"super+j" = "window focus next"
+"super+k" = "window focus prev"
 "super+h" = "ratio adjust -0.05"
 "super+l" = "ratio adjust 0.05"
 "super+shift+j" = "window swap next"
 "super+shift+k" = "window swap prev"
-"super+shift+r" = "reload-config"
+"super+shift+r" = "config reload"
 
 # Workspace keys: key N of a group switches to (switch modifiers) or moves the
 # active window to (move modifiers) workspace N. Each group lists exactly one key
@@ -111,10 +113,8 @@ keys = ["1", "2", "3", "4", "5", "6", "7", "8", "9", "0"]
 #
 # match keys:
 #   class, instance, title  => regex
-#   type                    => WindowType enum name (case-sensitive)
+#   type                    => normal, dialog, utility, toolbar, menu, or splash
 #   transient               => true/false
-# type: Normal, Desktop, Dock, Toolbar, Menu, Utility, Splash, Dialog,
-#       DropdownMenu, PopupMenu, Tooltip, Notification, Combo, or Dnd
 #
 # apply must contain at least one action. Keys:
 #   floating, fullscreen, sticky, skip_taskbar, skip_pager
@@ -147,7 +147,7 @@ keys = ["1", "2", "3", "4", "5", "6", "7", "8", "9", "0"]
 
 # Example: float and centre dialog windows at 800x600
 # [[rules]]
-# match = { type = "Dialog" }
+# match = { type = "dialog" }
 # apply = { floating = true, geometry = { width = 800, height = 600 } }
 
 # Example: pin Slack to a monitor/workspace

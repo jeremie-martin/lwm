@@ -36,5 +36,5 @@ DATA
     REQUIRE(result);
     INFO(result->stderr_text);
     CHECK(result->exit_code == 0);
-    CHECK(read_text_file(directory / "trace") == "notify-attention window=123\nnotify-attention window=0x2a\n");
+    CHECK(read_text_file(directory / "trace") == "window attention 123\nwindow attention 0x2a\n");
 }

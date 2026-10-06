@@ -442,7 +442,7 @@ TEST_CASE(
     destroy_window(conn, tiled);
 }
 
-TEST_CASE("Integration: Super+Button2 on a managed window still reaches toggle_float", "[integration][focus][mouse]")
+TEST_CASE("Integration: a Super+Button2 command binding focuses and floats the clicked window", "[integration][focus][mouse]")
 {
     auto test_env = TestEnvironment::create();
     if (!test_env)
@@ -786,7 +786,7 @@ TEST_CASE("Integration: lwmctl focus reports redirected focus as failure", "[int
     REQUIRE(wait_for_property_cardinal(conn.get(), target, net_wm_desktop, 1, kTimeout));
     REQUIRE(wait_for_active_window(conn, owner, kTimeout));
 
-    auto result = run_lwmctl(test_env->wm, { "focus", "window=" + std::to_string(target) });
+    auto result = run_lwmctl(test_env->wm, { "window", "focus", std::to_string(target) });
     REQUIRE(result);
 
     REQUIRE(result->exit_code != 0);
@@ -1474,7 +1474,7 @@ TEST_CASE("Integration: unchanged stacking policy repairs an external server res
         },
         kTimeout
     ));
-    auto result = run_lwmctl(env->wm, { "focus", "window=" + std::to_string(windows.back()) });
+    auto result = run_lwmctl(env->wm, { "window", "focus", std::to_string(windows.back()) });
     REQUIRE(result);
     REQUIRE(result->exit_code == 0);
     REQUIRE(wait_for_condition([&] { return actual_order() == windows; }, kTimeout));
@@ -1502,7 +1502,7 @@ TEST_CASE(
     set_initial_window_state(conn, b, { unknown, focused });
     for (auto target : { a, b })
     {
-        auto result = run_lwmctl(env->wm, { "focus", "window=" + std::to_string(target) });
+        auto result = run_lwmctl(env->wm, { "window", "focus", std::to_string(target) });
         REQUIRE(result);
         REQUIRE(result->exit_code == 0);
         CHECK(has_state(conn, target, focused));
@@ -1514,7 +1514,7 @@ TEST_CASE(
     xcb_set_input_focus(conn.get(), XCB_INPUT_FOCUS_POINTER_ROOT, conn.root(), XCB_CURRENT_TIME);
     xcb_flush(conn.get());
     REQUIRE(wait_for_x_input_focus(conn, conn.root(), kTimeout));
-    auto result = run_lwmctl(env->wm, { "focus", "window=" + std::to_string(b) });
+    auto result = run_lwmctl(env->wm, { "window", "focus", std::to_string(b) });
     REQUIRE(result);
     REQUIRE(result->exit_code == 0);
     REQUIRE(wait_for_x_input_focus(conn, b, kTimeout));
@@ -1547,7 +1547,7 @@ TEST_CASE(
     }
     auto command = [&](std::string argument, xcb_window_t expected)
     {
-        auto result = run_lwmctl(env->wm, { "focus", argument });
+        auto result = run_lwmctl(env->wm, { "window", "focus", argument });
         REQUIRE(result);
         REQUIRE(result->exit_code == 0);
         REQUIRE(result->stdout_text.empty());
@@ -1555,11 +1555,11 @@ TEST_CASE(
         REQUIRE(wait_for_x_input_focus(conn, expected, kTimeout));
     };
     // Establish recency independently of mapping/layout order: 0, 2, 1, 3.
-    for (int i : { 3, 1, 2, 0 }) command("window=" + std::to_string(windows[i]), windows[i]);
+    for (int i : { 3, 1, 2, 0 }) command(std::to_string(windows[i]), windows[i]);
     for (int i : { 2, 1, 3, 0, 2 }) command("next", windows[i]);
     for (int i : { 0, 3, 1, 2 }) command("prev", windows[i]);
     // Explicit same-window activation also starts a fresh MRU traversal.
-    command("window=" + std::to_string(windows[2]), windows[2]);
+    command(std::to_string(windows[2]), windows[2]);
     command("next", windows[1]);
     command("next", windows[3]);
     // Destruction of an inactive member must not leave a stale target.
@@ -1584,8 +1584,8 @@ TEST_CASE(
 [workspaces]
 names = ["1", "2"]
 [binds]
-"F5" = "focus next"
-"F6" = "focus prev"
+"F5" = "window focus next"
+"F6" = "window focus prev"
 )");
     if (!env)
         SKIP("X11 unavailable");
@@ -1692,7 +1692,7 @@ TEST_CASE(
     require_order({ a, c, b });
     for (int i = 0; i < 3; ++i)
     {
-        auto reply = run_lwmctl(env->wm, { "focus", "window=" + std::to_string(c) });
+        auto reply = run_lwmctl(env->wm, { "window", "focus", std::to_string(c) });
         REQUIRE(reply);
         REQUIRE(reply->exit_code == 0);
         require_order({ a, c, b });
@@ -1704,7 +1704,7 @@ TEST_CASE(
     set_transient_for(conn, c, b);
     for (auto target : { a, c })
     {
-        auto reply = run_lwmctl(env->wm, { "focus", "window=" + std::to_string(target) });
+        auto reply = run_lwmctl(env->wm, { "window", "focus", std::to_string(target) });
         REQUIRE(reply);
         REQUIRE(reply->exit_code == 0);
         require_order(target == a ? std::vector<xcb_window_t>{ b, c, a } : std::vector<xcb_window_t>{ b, a, c });

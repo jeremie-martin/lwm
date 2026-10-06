@@ -27,6 +27,12 @@ State::Press State::press(xcb_window_t window, int16_t x, int16_t y, uint8_t but
     );
     if (binding != config_.mousebinds.end())
     {
+        if (auto const* action = std::get_if<Action>(&binding->action))
+        {
+            if (client && window != active_window_)
+                focus(window);
+            return { true, std::nullopt, *action };
+        }
         auto grip = [&](Edge edges) -> Press
         {
             if (!can_drag(window))
@@ -35,20 +41,12 @@ State::Press State::press(xcb_window_t window, int16_t x, int16_t y, uint8_t but
         };
         // Tiled and root clicks prefer a split; otherwise resize a floating
         // window or convert a tile once the pointer is held.
-        if (binding->action == MouseAction::ResizeFloating && (!client || client->tiled()))
+        bool resize = std::get<MouseGrip>(binding->action) == MouseGrip::Resize;
+        if (resize && (!client || client->tiled()))
             if (auto hit = split_at(x, y))
                 return { true, *hit };
         if (client)
-            switch (binding->action)
-            {
-                case MouseAction::DragWindow:
-                    return grip(Edge::None);
-                case MouseAction::ResizeFloating:
-                    return grip(Edge::Right | Edge::Bottom);
-                case MouseAction::ToggleFloat:
-                    toggle_floating(window);
-                    return { true };
-            }
+            return grip(resize ? Edge::Right | Edge::Bottom : Edge::None);
     }
     // Ordinary clicks focus the client and still reach it.
     if (client)

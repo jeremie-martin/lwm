@@ -93,7 +93,8 @@ bound. Key bindings map a combo to the command text `lwmctl` takes, as in
 `[[workspace_keys]]` group binds one keyboard layout's keys to switch and move. Rule
 placement uses `workspace` and `monitor`, each accepting an index or
 a name; rule layers use `layer = "normal"`, `"above"`, or `"below"`; rule window types
-use their enum names with exact casing, e.g. `Dialog` and `PopupMenu`. Invalid
+are the lowercase names of types that become clients, e.g. `dialog`. Mouse bindings
+take `move`, `resize`, or what a key binding takes. Invalid
 reloads keep the active configuration.
 
 Each monitor has its own workspaces. Commands target the focused monitor and use
@@ -106,7 +107,7 @@ lwmctl layout set monocle
 lwmctl ratio adjust -0.05
 lwmctl window float
 lwmctl window to-workspace 3
-lwmctl reload-config
+lwmctl config reload
 lwmctl state
 lwmctl watch
 ```

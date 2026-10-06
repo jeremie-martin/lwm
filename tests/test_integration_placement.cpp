@@ -40,7 +40,7 @@ TEST_CASE(
         REQUIRE(wait_for_active_window(conn, w, timeout));
     }
     auto a = windows[0], b = windows[1], c = windows[2], d = windows[3];
-    for (auto w : { b, a, d }) ipc_ok("focus window=" + std::to_string(w));
+    for (auto w : { b, a, d }) ipc_ok("window focus " + std::to_string(w));
     // The same subsequent operations must choose the same focus after exec.
     if (GENERATE(false, true))
     {
@@ -58,12 +58,7 @@ TEST_CASE(
     // a is more recent but iconic; c is last in layout order. History chooses b.
     REQUIRE(wait_for_active_window(conn, b, timeout));
     REQUIRE(require_property_cardinal(conn.get(), d, desktop) == 1);
-    auto counts = [&]
-    {
-        auto workspaces = ipc_json("workspace list").at("monitors").at(0).at("workspaces");
-        return std::pair{ workspaces.at(0).at("window_count").get<int>(),
-                          workspaces.at(1).at("window_count").get<int>() };
-    };
+    auto counts = [&] { return std::pair{ tiled_count(0), tiled_count(1) }; };
     REQUIRE(counts() == std::pair{ 3, 1 });
     send_client_message(conn, d, desktop, 99);
     send_client_message(conn, d, desktop, 1);
@@ -113,7 +108,7 @@ TEST_CASE(
     auto a = windows[0], b = windows[1], c = windows[2];
     std::vector<WindowGeometry> initial;
     for (auto w : windows) initial.push_back(require_window_geometry(conn, w));
-    ipc_ok("focus window=" + std::to_string(b));
+    ipc_ok("window focus " + std::to_string(b));
     auto toggle = [&]
     {
         REQUIRE(send_key(conn, XK_F6));
@@ -165,9 +160,8 @@ TEST_CASE(
     ipc_ok("workspace switch 1");
     ipc_ok("scratchpad cycle");
     REQUIRE(wait_for_active_window(conn, w, timeout));
-    auto workspaces = ipc_json("workspace list").at("monitors").at(0).at("workspaces");
-    REQUIRE(workspaces.at(0).at("window_count") == 0);
-    REQUIRE(workspaces.at(1).at("window_count") == 0);
+    REQUIRE(tiled_count(0) == 0);
+    REQUIRE(tiled_count(1) == 0);
     REQUIRE(get_window_property_string(conn.get(), w, classification) == "floating");
     REQUIRE(require_window_geometry(conn, w) == saved);
     REQUIRE(require_property_cardinal(conn.get(), w, intern_atom(conn.get(), "_NET_WM_DESKTOP")) == 1);
@@ -190,7 +184,7 @@ TEST_CASE("Integration: restart preserves a floating tile's return position", "[
         REQUIRE(wait_for_active_window(conn, window, timeout));
         windows.push_back(window);
     }
-    ipc_ok("focus window=" + std::to_string(windows[1]));
+    ipc_ok("window focus " + std::to_string(windows[1]));
     std::vector<WindowGeometry> before;
     for (auto window : windows) before.push_back(require_window_geometry(conn, window));
     ipc_ok("window float");
@@ -201,7 +195,7 @@ TEST_CASE("Integration: restart preserves a floating tile's return position", "[
         ipc_ok("restart");
         REQUIRE(wait_for_wm_restart(conn, timeout, *previous));
     }
-    ipc_ok("focus window=" + std::to_string(windows[1]));
+    ipc_ok("window focus " + std::to_string(windows[1]));
     ipc_ok("window float");
     for (size_t i = 0; i < windows.size(); ++i)
         CHECK(require_window_geometry(conn, windows[i]) == before[i]);
@@ -242,7 +236,7 @@ TEST_CASE(
     create("_NET_WM_WINDOW_TYPE_DESKTOP");
     auto third = create(nullptr);
     create("_NET_WM_WINDOW_TYPE_DIALOG");
-    ipc_ok("focus window=" + std::to_string(first));
+    ipc_ok("window focus " + std::to_string(first));
     auto stacking = list(stack_atom);
     REQUIRE(stacking != expected);
     std::vector<WindowGeometry> tiles;
@@ -423,12 +417,12 @@ match = { class = "NamedOwner" }
         REQUIRE(wait_for_condition([&] { return ipc_json("window list")["windows"].size() == windows.size(); }, timeout));
     }
     auto tile = windows[0], remote = windows[1], pooled = windows[2], named = windows[3];
-    ipc_ok("focus window=" + std::to_string(remote));
+    ipc_ok("window focus " + std::to_string(remote));
     ipc_ok("window to-workspace 1");
-    ipc_ok("focus window=" + std::to_string(pooled));
+    ipc_ok("window focus " + std::to_string(pooled));
     ipc_ok("window float");
     ipc_ok("scratchpad stash");
-    ipc_ok("focus window=" + std::to_string(tile));
+    ipc_ok("window focus " + std::to_string(tile));
     ipc_ok("window fullscreen");
     // A client that advertises dock struts still has no dock ownership.
     auto strut_atom = intern_atom(conn.get(), "_NET_WM_STRUT");
@@ -744,9 +738,8 @@ apply = { floating = false }
         return outer && inner && outer->x + outer->width / 2 == inner->x + inner->width / 2
             && outer->y + outer->height / 2 == inner->y + inner->height / 2;
     }, timeout));
-    auto counts = ipc_json("workspace list").at("monitors").at(0).at("workspaces");
-    CHECK(counts.at(0).at("window_count") == 0);
-    CHECK(counts.at(1).at("window_count") == 3);
+    CHECK(tiled_count(0) == 0);
+    CHECK(tiled_count(1) == 3);
     for (auto window : { floating, tile, parent, peer }) destroy_window(conn, window);
 }
 
@@ -769,7 +762,7 @@ TEST_CASE("Integration: border reloads and partial geometry requests preserve fr
     REQUIRE(initial.width == 3);
     REQUIRE(initial.height == 3);
     REQUIRE(wm.write_config(config(65535)));
-    ipc_ok("reload-config");
+    ipc_ok("config reload");
     REQUIRE(wait_for_window_geometry(conn, window, initial.x, initial.y, 1, 1));
     CHECK(get_window_border_width(conn, window) == 1);
     uint32_t x = initial.x + 1;
@@ -778,7 +771,7 @@ TEST_CASE("Integration: border reloads and partial geometry requests preserve fr
     CHECK(require_window_geometry(conn, window) == WindowGeometry{ static_cast<int16_t>(x), initial.y, 1, 1 });
     CHECK(get_window_border_width(conn, window) == 1);
     REQUIRE(wm.write_config(config(2)));
-    ipc_ok("reload-config");
+    ipc_ok("config reload");
     uint32_t width = 9;
     xcb_configure_window(conn.get(), window, XCB_CONFIG_WINDOW_WIDTH, &width);
     observe_title_after_events(conn, window);

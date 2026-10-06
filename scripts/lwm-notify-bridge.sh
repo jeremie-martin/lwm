@@ -18,5 +18,5 @@ while IFS= read -r line; do
     ') || continue
     [ "$window" != 0 ] || continue
     # Serialize this producer; errors remain visible to its service/terminal.
-    lwmctl notify-attention "window=$window" >/dev/null || true
+    lwmctl window attention "$window" >/dev/null || true
 done

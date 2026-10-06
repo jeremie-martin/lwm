@@ -196,7 +196,7 @@ def measure(binary, library, scenario, operations):
         X.XWarpPointer(display, 0, root, 0, 0, 0, 0, 1599, 999)
         X.XSync(display, 0)
         config = ('[workspaces]\nnames = ["1", "2"]\n[appearance]\npadding = 10\nborder_width = 1\n'
-                  '[mousebinds]\n"super+1" = "drag_window"\n"super+3" = "resize_floating"\n')
+                  '[mousebinds]\n"super+1" = "move"\n"super+3" = "resize"\n')
         if scenario in ("sticky", "sticky_fullscreen"):
             for digits, enabled in [("02468", "true"), ("13579", "false")]:
                 actions = f"sticky = {enabled}"
@@ -226,9 +226,9 @@ def measure(binary, library, scenario, operations):
         wm = subprocess.Popen([str(binary), "--config", str(config_path), "--log-target", "stderr", "--log-level", "error"],
                               env=environment, stdout=log, stderr=log)
         cleanup.callback(stop, wm)
-        wait(lambda: ipc(display_name, "ping") == b"pong", wm, log_path)
+        wait(lambda: bool(ipc(display_name, "version")), wm, log_path)
         if scenario == "dock_startup":
-            # The successful ping follows startup completion, including adoption.
+            # The successful query follows startup completion, including adoption.
             counts = struct.unpack("=6Q", counts_path.read_bytes())
             return dict(scenario=scenario, operations=operations,
                         counts=dict(zip(("get_property", "geometry_configure", "visibility_barrier", "query_tree", "flush", "get_geometry"), counts)))
@@ -245,7 +245,7 @@ def measure(binary, library, scenario, operations):
         X.XSync(display, 0)
         wait(lambda: len(json.loads(ipc(display_name, "window list"))["windows"]) == client_count, wm, log_path)
         target = windows[0]
-        ipc(display_name, f"focus window={target}")
+        ipc(display_name, f"window focus {target}")
         name_atom, utf8 = atom("_NET_WM_NAME"), atom("UTF8_STRING")
         dragging = "drag" in scenario
         relocating = "relocation" in scenario
@@ -302,9 +302,9 @@ def measure(binary, library, scenario, operations):
         if scenario == "tiled_ratio" and position(display, windows[1]) == ratio_position:
             raise AssertionError("Ratio workload did not change layout")
         if relocating:
-            workspaces = json.loads(ipc(display_name, "workspace list"))["monitors"][0]["workspaces"]
+            clients = json.loads(ipc(display_name, "window list"))["windows"]
             expected = [client_count - operations % 2, operations % 2] if scenario.startswith("tiled_") else [0, 0]
-            if [workspace["window_count"] for workspace in workspaces] != expected:
+            if [sum(c["kind"] == "tiled" and c["workspace"] == w for c in clients) for w in (0, 1)] != expected:
                 raise AssertionError("Relocation lost or duplicated tiled membership")
         if dragging:
             expected = tuple(value + operations for value in start_position)

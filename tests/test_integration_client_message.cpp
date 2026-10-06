@@ -152,7 +152,7 @@ TEST_CASE("Integration: client message to invalid window ID is ignored", "[integ
     send_net_wm_desktop(conn, 0xDEADBEEF, 1);
     observe_title_after_events(conn, w1);
 
-    auto ping = run_lwmctl(wm, { "ping" });
+    auto ping = run_lwmctl(wm, { "version" });
     REQUIRE(ping.has_value());
     REQUIRE(ping->exit_code == 0);
 
@@ -179,7 +179,7 @@ TEST_CASE("Integration: close requests for LWM's own windows are ignored", "[int
     send_client_message(conn, *supporting, intern_atom(conn.get(), "_NET_CLOSE_WINDOW"), XCB_CURRENT_TIME, 2);
     observe_title_after_events(conn, w1);
 
-    auto ping = run_lwmctl(wm, { "ping" });
+    auto ping = run_lwmctl(wm, { "version" });
     REQUIRE(ping.has_value());
     REQUIRE(ping->exit_code == 0);
     REQUIRE(supporting_wm_window(conn) == supporting);

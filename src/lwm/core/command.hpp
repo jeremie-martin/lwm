@@ -13,7 +13,6 @@ namespace lwm::command {
 // Read-only requests answered from the current state.
 enum class Query
 {
-    Ping,
     Version,
     WorkspaceList,
     WindowList,

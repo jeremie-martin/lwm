@@ -97,7 +97,7 @@ apply = { floating = true, monitor = "DUMMY1" }
     map_window(conn, b);
     REQUIRE(wait_for_active_window(conn, b, timeout));
     command("ratio set 0.7");
-    command("focus window=" + std::to_string(a));
+    command("window focus " + std::to_string(a));
     auto original_width = width(conn, a);
     REQUIRE(original_width > 700);
     command("workspace switch 1");
@@ -138,7 +138,7 @@ apply = { floating = true, monitor = "DUMMY1" }
     REQUIRE(wait_for_condition([&] { return monitor_for(a) == 1 && monitor_for(floating) == 0; }, timeout));
     CHECK(width(conn, a) == original_width);
     check_external_geometry();
-    command("focus window=" + std::to_string(a));
+    command("window focus " + std::to_string(a));
     auto state = intern_atom(conn.get(), "_NET_WM_STATE");
     auto fullscreen = intern_atom(conn.get(), "_NET_WM_STATE_FULLSCREEN");
     xcb_client_message_event_t event{};
@@ -191,7 +191,7 @@ names = ["1", "2"]
 [focus]
 warp_cursor_on_monitor_change = false
 [binds]
-"F9" = "window to-monitor right"
+"F9" = "window to-monitor next"
 "F10" = "window to-workspace 1"
 )");
     REQUIRE(env);
@@ -254,7 +254,7 @@ warp_cursor_on_monitor_change = false
             );
         auto workspace = location()["workspace"].get<size_t>();
         command("workspace switch 0");
-        command("focus window=" + std::to_string(window));
+        command("window focus " + std::to_string(window));
         // Both destinations start on workspace 0; moving away clears active focus.
         REQUIRE(workspace == 0);
         REQUIRE(send_key(conn, XK_F10));
@@ -424,7 +424,7 @@ TEST_CASE(
         windows.push_back(window);
     }
     auto a = windows[0], b = windows[1], c = windows[2];
-    ipc_ok("focus window=" + std::to_string(b));
+    ipc_ok("window focus " + std::to_string(b));
     ipc_ok("window float");
     bool removed = false;
     SECTION("Reordered outputs retain the workspace slot")
@@ -445,7 +445,7 @@ TEST_CASE(
     REQUIRE(previous);
     ipc_ok("restart");
     REQUIRE(wait_for_wm_restart(conn, timeout, *previous));
-    ipc_ok("focus window=" + std::to_string(b));
+    ipc_ok("window focus " + std::to_string(b));
     ipc_ok("window float");
     auto ga = require_window_geometry(conn, a);
     auto gb = require_window_geometry(conn, b);
@@ -490,7 +490,7 @@ TEST_CASE(
         return window;
     };
     auto a = tile(1), b = tile(1), c = tile(3), d = tile(3);
-    ipc_ok("focus window=" + std::to_string(c));
+    ipc_ok("window focus " + std::to_string(c));
     ipc_ok("ratio set 0.7");
     auto floating = create_window(conn, 40, 40, 250, 180);
     set_window_type(conn, floating, intern_atom(conn.get(), "_NET_WM_WINDOW_TYPE_DIALOG"));
@@ -508,7 +508,7 @@ TEST_CASE(
     send_client_message(conn, floating, hint, 0, 1, 0, 1);
     observe_title_after_events(conn, floating);
     REQUIRE(read_property32(conn.get(), floating, hint, XCB_ATOM_CARDINAL) == std::vector<uint32_t>{ 0, 1, 0, 1 });
-    ipc_ok("focus window=" + std::to_string(b));
+    ipc_ok("window focus " + std::to_string(b));
     ipc_ok("window swap prev"); // Saved order is b, a, unlike adoption order.
     ipc_ok("ratio set 0.3");
     ipc_ok("layout set monocle");
@@ -657,7 +657,7 @@ match = { class = "RecallNamed" }
     std::string recall = named ? "scratchpad toggle recall" : "scratchpad cycle";
     ipc_ok(recall);
     REQUIRE(wait_for_active_window(conn, window, timeout));
-    ipc_ok("monitor focus right");
+    ipc_ok("monitor focus next");
     ipc_ok("workspace switch 1");
     REQUIRE_FALSE(is_hidden_offscreen(conn, window));
     ipc_ok(recall);

@@ -61,7 +61,7 @@ def measure(binary, level, blocked=False, affinity=None, switches=400, target_na
         deadline = time.monotonic() + 5
         while True:
             try:
-                request(display, "ping")
+                request(display, "version")
                 break
             except OSError:
                 if wm.poll() is not None or time.monotonic() >= deadline:
@@ -99,10 +99,10 @@ def measure(binary, level, blocked=False, affinity=None, switches=400, target_na
             os.set_blocking(writer, True)
             # An INFO reload outcome guarantees a write after the pipe is full; the
             # asynchronous logger must not delay its reply.
-            request(display, "reload-config", .3)
+            request(display, "config reload", .3)
             time.sleep(.2)
             samples = []
-            for command in ["workspace switch 1", "ping", "restart"]:
+            for command in ["workspace switch 1", "version", "restart"]:
                 start = time.monotonic()
                 if command == "restart":
                     restart_started = start
@@ -116,7 +116,7 @@ def measure(binary, level, blocked=False, affinity=None, switches=400, target_na
             deadline = time.monotonic() + .3
             while time.monotonic() < deadline:
                 try:
-                    if harness.wm_owner(display) not in (0, before) and request(display, "ping", max(.001, deadline - time.monotonic())) == b"pong":
+                    if harness.wm_owner(display) not in (0, before) and bool(request(display, "version", max(.001, deadline - time.monotonic()))):
                         row["restart_completed_while_blocked"] = True
                         row["restart_completion_ms"] = (time.monotonic() - restart_started) * 1000
                         break
@@ -133,7 +133,7 @@ def measure(binary, level, blocked=False, affinity=None, switches=400, target_na
                 except BlockingIOError:
                     pass
                 try:
-                    if harness.wm_owner(display) not in (0, before) and request(display, "ping", .02) == b"pong":
+                    if harness.wm_owner(display) not in (0, before) and bool(request(display, "version", .02)):
                         row["restart_after_reader_resumes_ms"] = (time.monotonic() - resumed) * 1000
                         break
                 except (OSError, RuntimeError):

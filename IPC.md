@@ -56,17 +56,20 @@ launch processes from argv lists; IPC callers can launch processes themselves. C
 `error no active window` when none is selected. Relative monitor/workspace commands
 target the focused monitor; indices are zero-based.
 
-Consecutive `focus next` / `focus prev` commands retain their starting recent-use
+Commands name their object first: `window`, `workspace`, `monitor`, `layout`,
+`ratio`, `scratchpad`, `config`. `next` and `prev` step through monitors, workspaces,
+tiles and recently used windows alike. Window IDs are decimal or `0x` hexadecimal.
+
+Consecutive `window focus next` / `window focus prev` commands retain their starting recent-use
 order, including sticky windows, and skip ineligible clients. Activation, a changed
 monitor/workspace or active window, or a new registration starts a fresh traversal.
 Cycling fails when no window is eligible.
 
 | Command | Result |
 | --- | --- |
-| `ping` | `pong` |
 | `state` | consistent combined state snapshot as JSON |
-| `version` | LWM version |
-| `reload-config` | reload the configured file |
+| `version` | LWM version; also tells scripts that LWM is running |
+| `config reload` | reload the configured file |
 | `restart` | exec-restart the current binary |
 | `exec PATH` | restart with another binary |
 | `layout set master-stack` | set the current workspace layout |
@@ -74,20 +77,20 @@ Cycling fails when no window is eligible.
 | `ratio set VALUE` | set the current workspace's root split ratio |
 | `ratio reset` | clear all split ratios on the current workspace |
 | `ratio adjust DELTA` | adjust the current workspace's root split ratio |
-| `notify-attention window=<xid>` | mark a managed window urgent unless it is active |
 | `workspace switch N` | switch to zero-based workspace `N` |
 | `workspace next` / `workspace prev` | switch with wraparound |
 | `workspace toggle` | switch back to the previous workspace |
 | `workspace list` | workspace state as JSON |
-| `monitor focus left` / `monitor focus right` | focus the adjacent monitor |
-| `focus window=<xid>` | focus a window, switching workspace if needed |
-| `focus next` / `focus prev` | cycle eligible windows in recent-use order |
+| `monitor focus next` / `monitor focus prev` | focus the adjacent monitor |
+| `window focus ID` | focus a window, switching workspace if needed |
+| `window focus next` / `window focus prev` | cycle eligible windows in recent-use order |
+| `window attention ID` | mark a managed window urgent unless it is active |
 | `window list` | tiled and floating client state as JSON |
 | `window close` | ask the active window to close; closing it again while it is still open kills its client |
 | `window fullscreen` / `window float` | toggle fullscreen or floating on the active window |
 | `window swap next` / `window swap prev` | swap the active tile with its neighbor |
 | `window to-workspace N` | move the active window to workspace `N` of its monitor |
-| `window to-monitor left` / `window to-monitor right` | move the active window to the adjacent monitor |
+| `window to-monitor next` / `window to-monitor prev` | move the active window to the adjacent monitor |
 | `scratchpad stash` | move the active window to the generic pool |
 | `scratchpad cycle` | cycle the generic pool |
 | `scratchpad toggle NAME` | show, hide, or launch a named scratchpad |
@@ -119,7 +122,6 @@ window can still be claimed. Both named scratchpad commands reject unknown names
       "index": 0,
       "name": "1",
       "current": true,
-      "window_count": 2,
       "layout": "master-stack",
       "ratio": 0.5
     }]
@@ -149,8 +151,8 @@ window can still be claimed. Both named scratchpad commands reject unknown names
 }
 ```
 
-`workspace list.window_count` counts tiled workspace membership; floating clients appear
-only in `window list`. `ratio` is the workspace's root split ratio.
+`ratio` is the workspace's root split ratio; `window list` gives each workspace's
+windows.
 
 `scratchpad list` returns:
 

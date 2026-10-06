@@ -82,6 +82,7 @@ public:
     {
         bool consumed; ///< The client does not receive the click
         std::optional<Interaction> interaction;
+        std::optional<Action> action; ///< A binding's action, run after this press
     };
 
     enum class RelocationGeometry

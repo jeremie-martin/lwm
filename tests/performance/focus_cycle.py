@@ -44,7 +44,7 @@ def measure(binary, count, operations, direction, transients):
         wm = subprocess.Popen([str(binary), "--config", str(config), "--log-target", "stderr", "--log-level", "error"],
                               env=environment, stdout=log, stderr=log)
         cleanup.callback(stop, wm)
-        wait(lambda: ipc(display_name, "ping") == b"pong", wm, log_path)
+        wait(lambda: bool(ipc(display_name, "version")), wm, log_path)
         atom = lambda name: X.XInternAtom(display, name.encode(), 0)
         windows = []
         for _ in range(count):
@@ -68,7 +68,7 @@ def measure(binary, count, operations, direction, transients):
                              for w in json.loads(ipc(display_name, "window list"))["windows"]), wm, log_path)
         windows = set(windows)
         def step():
-            ipc(display_name, "focus " + direction)
+            ipc(display_name, "window focus " + direction)
             target = json.loads(ipc(display_name, "window list"))["focused"]
             if target not in windows:
                 raise AssertionError("Focus returned a non-client")

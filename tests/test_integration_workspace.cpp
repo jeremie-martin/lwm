@@ -116,7 +116,6 @@ bool workspace_list_has_documented_shape(JsonValue const& value)
                     { "index", JsonValue::value_t::number_unsigned },
                     { "name", JsonValue::value_t::string },
                     { "current", JsonValue::value_t::boolean },
-                    { "window_count", JsonValue::value_t::number_unsigned },
                     { "layout", JsonValue::value_t::string },
                 }
             ))
@@ -737,7 +736,7 @@ names = ["1", "2"]
     REQUIRE(set_layout.has_value());
     REQUIRE(set_layout->exit_code == 0);
 
-    auto focus = run_lwmctl(test_env->wm, { "focus", "window=" + std::to_string(w1) });
+    auto focus = run_lwmctl(test_env->wm, { "window", "focus", std::to_string(w1) });
     REQUIRE(focus.has_value());
     REQUIRE(focus->exit_code == 0);
     REQUIRE(wait_for_active_window(conn, w1, kTimeout));
@@ -780,7 +779,7 @@ TEST_CASE("Integration: workspace, fullscreen, scratchpad and restart transition
     for (int iteration = 0; iteration < 3; ++iteration)
     {
         CAPTURE(iteration);
-        command("focus window=" + std::to_string(b));
+        command("window focus " + std::to_string(b));
         send_client_message(conn, b, state, 1, fullscreen);
         REQUIRE(wait_for_condition([&] { return visible(b) && !visible(a); }, kTimeout));
         // Moving the owner away restores the old workspace; activating it again
@@ -788,7 +787,7 @@ TEST_CASE("Integration: workspace, fullscreen, scratchpad and restart transition
         send_client_message(conn, b, desktop, 1);
         REQUIRE(wait_for_condition([&] { return visible(a) && !visible(b); }, kTimeout));
         REQUIRE(wait_for_active_window(conn, a, kTimeout));
-        command("focus window=" + std::to_string(b));
+        command("window focus " + std::to_string(b));
         REQUIRE(wait_for_active_window(conn, b, kTimeout));
         REQUIRE(wait_for_condition([&] { return visible(b) && !visible(a); }, kTimeout));
         send_client_message(conn, b, state, 0, fullscreen);
@@ -840,7 +839,7 @@ TEST_CASE("Integration: invalid ratio commands cannot poison layout state", "[in
             REQUIRE(response);
             CHECK(response->starts_with("error "));
         }
-    CHECK(send_ipc_command("ping") == "ok pong");
+    CHECK(send_ipc_command("version").value_or("").starts_with("ok "));
     CHECK(get_window_geometry(conn, window) == geometry);
     destroy_window(conn, window);
 }

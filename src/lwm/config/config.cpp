@@ -74,7 +74,8 @@ struct RuleMatch
 {
     rfl::Rename<"class", Text> class_name;
     Text instance, title;
-    std::optional<WindowType> type;
+    // Only these types become clients; docks, desktops and popups are never ruled.
+    std::optional<rfl::Literal<"normal", "dialog", "utility", "toolbar", "menu", "splash">> type;
     Flag transient;
 };
 struct Size
@@ -115,7 +116,6 @@ struct WorkspaceKeys
     Text move;
     std::vector<std::string> keys;
 };
-using MouseAction = rfl::Literal<"drag_window", "resize_floating", "toggle_float">;
 struct Config
 {
     std::optional<Appearance> appearance;
@@ -125,7 +125,7 @@ struct Config
     std::optional<std::vector<Scratchpad>> scratchpads;
     std::optional<std::map<std::string, BindAction>> binds;
     std::optional<std::vector<WorkspaceKeys>> workspace_keys;
-    std::optional<std::map<std::string, MouseAction>> mousebinds;
+    std::optional<std::map<std::string, BindAction>> mousebinds;
     std::optional<std::vector<Rule>> rules;
 };
 
@@ -311,7 +311,9 @@ void parse_rule(schema::Rule const& input, std::string const& context, Config& c
     if (input.match)
     {
         rule.match = parse_matchers(*input.match, context + ".match");
-        rule.type = input.match->type;
+        if (auto const& type = input.match->type)
+            rule.type = std::array{ WindowType::Normal, WindowType::Dialog, WindowType::Utility,
+                                    WindowType::Toolbar, WindowType::Menu, WindowType::Splash }[type->value()];
         rule.transient = input.match->transient;
     }
     auto const& in = input.apply;
@@ -448,8 +450,11 @@ ConfigLoadResult parse_config(std::string_view text, std::string const& source)
                     throw std::runtime_error(context + " must end with a button number 1..255");
                 if (std::ranges::any_of(config.mousebinds, [&](auto const& bind) { return bind.modifier == modifier && bind.button == value; }))
                     throw std::runtime_error(context + " duplicates an existing binding");
+                auto const* text = std::get_if<std::string>(&action);
                 config.mousebinds.push_back({ modifier, static_cast<uint8_t>(value),
-                                              std::array{ MouseAction::DragWindow, MouseAction::ResizeFloating, MouseAction::ToggleFloat }[action.value()] });
+                                              text && *text == "move"     ? MouseGrip::Move
+                                              : text && *text == "resize" ? MouseGrip::Resize
+                                                                          : std::variant<MouseGrip, Action>{ parse_binding(action, context, config) } });
             }
         for_each(
             input.rules,

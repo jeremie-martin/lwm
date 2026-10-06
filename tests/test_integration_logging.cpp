@@ -37,10 +37,10 @@ TEST_CASE("Integration: failed exec is reported at critical level and recovers",
     );
     REQUIRE(reported);
 
-    auto ping = run_lwmctl(wm, { "ping" });
+    auto ping = run_lwmctl(wm, { "version" });
     REQUIRE(ping.has_value());
     REQUIRE(ping->exit_code == 0);
-    REQUIRE(ping->stdout_text.find("pong") != std::string::npos);
+    REQUIRE(!ping->stdout_text.empty());
 }
 
 TEST_CASE("Integration: standard logging survives failed exec and real restart", "[integration][logging][restart]")
@@ -81,7 +81,7 @@ TEST_CASE("Integration: standard logging survives failed exec and real restart",
     REQUIRE(ready(2));
     command({ "restart" });
     REQUIRE(ready(3));
-    REQUIRE(command({ "ping" }).find("pong") != std::string::npos);
+    REQUIRE(!command({ "version" }).empty());
     REQUIRE(wm.running());
     // ICCCM manager-selection takeover is LWM's orderly shutdown path.
     auto replacement = create_window(connection, 0, 0, 1, 1);
@@ -141,13 +141,13 @@ TEST_CASE(
     };
     auto before = wm_owner(connection);
     for (int i = 0; i < 200; ++i) command({ "workspace", "switch", std::to_string(i % 2) });
-    REQUIRE(command({ "ping" }).find("pong") != std::string::npos);
+    REQUIRE(!command({ "version" }).empty());
     command({ "exec", "/definitely/missing/lwm-binary" });
     REQUIRE(wait_for_condition(
         [&]
         {
             auto owner = wm_owner(connection);
-            return owner != XCB_NONE && owner != before && run_lwmctl(wm, { "ping" })->exit_code == 0;
+            return owner != XCB_NONE && owner != before && run_lwmctl(wm, { "version" })->exit_code == 0;
         },
         std::chrono::seconds(2)
     ));
@@ -157,11 +157,11 @@ TEST_CASE(
         [&]
         {
             auto owner = wm_owner(connection);
-            return owner != XCB_NONE && owner != before && run_lwmctl(wm, { "ping" })->exit_code == 0;
+            return owner != XCB_NONE && owner != before && run_lwmctl(wm, { "version" })->exit_code == 0;
         },
         std::chrono::seconds(2)
     ));
-    REQUIRE(command({ "ping" }).find("pong") != std::string::npos);
+    REQUIRE(!command({ "version" }).empty());
     // Only normal shutdown drains the logger. Resume the reader for that step.
     std::jthread reader(
         [&](std::stop_token stop)
@@ -208,7 +208,7 @@ F7 = ["/definitely/missing/lwm-application", "private-argument"]
     );
     REQUIRE(diagnostics.find("stage=spawn code=" + std::to_string(ENOENT)) != std::string::npos);
     REQUIRE(diagnostics.find("private-argument") == std::string::npos);
-    auto ping = run_lwmctl(wm, { "ping" });
+    auto ping = run_lwmctl(wm, { "version" });
     REQUIRE(ping);
     REQUIRE(ping->exit_code == 0);
 }
@@ -245,7 +245,7 @@ TEST_CASE("Integration: asynchronous X failures retain protocol context", "[inte
     auto diagnostics = wm.diagnostics();
     REQUIRE(diagnostics.find("resource=0x") != std::string::npos);
     REQUIRE(diagnostics.find("sequence=") != std::string::npos);
-    auto ping = run_lwmctl(wm, { "ping" });
+    auto ping = run_lwmctl(wm, { "version" });
     REQUIRE(ping);
     REQUIRE(ping->exit_code == 0);
 }

@@ -258,7 +258,7 @@ TEST_CASE("Integration: scratchpad cycle keeps pooled windows in rotation", "[in
 
 TEST_CASE("Integration: tiled scratchpad pool preserves prior floating geometry", "[integration][scratchpad][floating]")
 {
-    auto test_env = TestEnvironment::create(scratchpad_match_config() + "[mousebinds]\n\"super+2\" = \"toggle_float\"\n");
+    auto test_env = TestEnvironment::create(scratchpad_match_config() + "[mousebinds]\n\"super+2\" = \"window float\"\n");
     if (!test_env)
         SKIP("Test environment not available");
 

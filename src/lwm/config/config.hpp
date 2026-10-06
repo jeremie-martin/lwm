@@ -53,17 +53,18 @@ struct KeyBinding
     auto operator<=>(KeyBinding const&) const = default;
 };
 
-enum class MouseAction
+// Mouse bindings grip the window under the pointer, or run an action after
+// focusing that window.
+enum class MouseGrip
 {
-    DragWindow,
-    ResizeFloating,
-    ToggleFloat
+    Move,
+    Resize
 };
 struct MousebindConfig
 {
     uint16_t modifier = 0;
     uint8_t button = 0;
-    MouseAction action = MouseAction::DragWindow;
+    std::variant<MouseGrip, Action> action = MouseGrip::Move;
 };
 
 struct AppearanceConfig

@@ -162,7 +162,7 @@ TEST_CASE("Integration: invalidating a dragged window releases the pointer", "[i
 
 TEST_CASE("Integration: tiled drops translate visible slots past iconic members", "[integration][drag]")
 {
-    auto env = TestEnvironment::create("[appearance]\npadding = 10\nborder_width = 1\n[mousebinds]\n\"super+1\" = \"drag_window\"\n\"super+3\" = \"resize_floating\"\n");
+    auto env = TestEnvironment::create("[appearance]\npadding = 10\nborder_width = 1\n[mousebinds]\n\"super+1\" = \"move\"\n\"super+3\" = \"resize\"\n");
     REQUIRE(env);
     auto& conn = env->conn;
     std::vector<xcb_window_t> windows;
@@ -216,7 +216,7 @@ TEST_CASE("Integration: tiled drops translate visible slots past iconic members"
 
 TEST_CASE("Integration: cancelling a tiled preview restores layout without reordering", "[integration][drag]")
 {
-    auto env = TestEnvironment::create("[workspaces]\nnames = [\"1\", \"2\"]\n[mousebinds]\n\"super+1\" = \"drag_window\"\n\"super+3\" = \"resize_floating\"\n");
+    auto env = TestEnvironment::create("[workspaces]\nnames = [\"1\", \"2\"]\n[mousebinds]\n\"super+1\" = \"move\"\n\"super+3\" = \"resize\"\n");
     REQUIRE(env);
     auto& conn = env->conn;
     auto window = create_window(conn, 10, 10, 200, 200);
@@ -235,7 +235,7 @@ TEST_CASE("Integration: cancelling a tiled preview restores layout without reord
     }
     SECTION("configuration reload")
     {
-        REQUIRE(send_ipc_command("reload-config") == "ok");
+        REQUIRE(send_ipc_command("config reload") == "ok");
     }
     observe_title_after_events(conn, window);
     CHECK(require_window_geometry(conn, window) == start);
@@ -244,7 +244,7 @@ TEST_CASE("Integration: cancelling a tiled preview restores layout without reord
 
 TEST_CASE("Integration: split resize ends when its participants change", "[integration][drag]")
 {
-    auto env = TestEnvironment::create("[appearance]\npadding = 10\nborder_width = 1\n[mousebinds]\n\"super+1\" = \"drag_window\"\n\"super+3\" = \"resize_floating\"\n");
+    auto env = TestEnvironment::create("[appearance]\npadding = 10\nborder_width = 1\n[mousebinds]\n\"super+1\" = \"move\"\n\"super+3\" = \"resize\"\n");
     REQUIRE(env);
     auto& conn = env->conn;
     auto first = create_window(conn, 10, 10, 200, 200), second = create_window(conn, 10, 10, 200, 200);
@@ -273,7 +273,7 @@ TEST_CASE("Integration: real button grabs drive floating resize and tiled conver
 {
     auto env = TestEnvironment::create(R"(
 [mousebinds]
-"3" = "resize_floating")");
+"3" = "resize")");
     REQUIRE(env);
     auto& conn = env->conn;
     xcb_window_t window = XCB_NONE;
@@ -377,7 +377,7 @@ TEST_CASE("Integration: retained maximize flags do not cancel a tiled move", "[i
 
 TEST_CASE("Integration: a desktop window under the pointer does not hide split borders", "[integration][drag]")
 {
-    auto env = TestEnvironment::create("[workspaces]\nnames = [\"1\", \"2\"]\n[appearance]\npadding = 10\nborder_width = 1\n[mousebinds]\n\"super+1\" = \"drag_window\"\n\"super+3\" = \"resize_floating\"\n");
+    auto env = TestEnvironment::create("[workspaces]\nnames = [\"1\", \"2\"]\n[appearance]\npadding = 10\nborder_width = 1\n[mousebinds]\n\"super+1\" = \"move\"\n\"super+3\" = \"resize\"\n");
     REQUIRE(env);
     auto& conn = env->conn;
     auto desktop = create_window(conn, 0, 0, 4000, 4000);
