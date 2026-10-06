@@ -197,7 +197,7 @@ std::optional<TileSlot> State::detach(Client const& client)
 
 bool State::shows(size_t monitor, size_t workspace) const
 {
-    return !showing_desktop_ && workspace == monitors_[monitor].current_workspace;
+    return workspace == monitors_[monitor].current_workspace;
 }
 
 bool State::in_view(Client const& client) const
@@ -209,10 +209,9 @@ bool State::in_view(Client const& client) const
 std::vector<xcb_window_t> State::fullscreen_owners() const
 {
     std::vector<xcb_window_t> owners(monitors_.size(), XCB_NONE);
-    if (!showing_desktop_)
-        for (auto id : fullscreen_claims_)
-            if (auto const& client = require(id); in_view(client))
-                owners[client.monitor] = id;
+    for (auto id : fullscreen_claims_)
+        if (auto const& client = require(id); in_view(client))
+            owners[client.monitor] = id;
     return owners;
 }
 
@@ -271,7 +270,7 @@ bool State::focusable(Client const& client) const
 
 bool State::focusable(Client const& client, FullscreenVisibility const& fullscreen) const
 {
-    return accepts_focus(client) && !showing_desktop_ && visible(client, fullscreen);
+    return accepts_focus(client) && visible(client, fullscreen);
 }
 
 // Focus
@@ -281,7 +280,7 @@ void State::focus(xcb_window_t id, uint32_t time, bool record_user_time)
     if (id != XCB_NONE)
     {
         auto const* client = find(id);
-        if (showing_desktop_ || !client || !accepts_focus(*client))
+        if (!client || !accepts_focus(*client))
             return;
         iconic(id, false);
         focus_monitor(client->monitor);
@@ -299,13 +298,14 @@ void State::focus_fallback(size_t monitor, bool record_user_time)
     select_focus(focus::fallback(*this, monitor), 0, record_user_time);
 }
 
-void State::restore(xcb_window_t id, bool activate)
+// Shows a hidden client and focuses it when it is in view on the focused monitor.
+void State::restore(xcb_window_t id)
 {
     auto const* client = find(id);
     if (!client)
         return;
     iconic(id, false);
-    if ((activate || client->fullscreen) && client->monitor == focused_monitor_ && in_view(*client))
+    if (client->monitor == focused_monitor_ && in_view(*client))
         focus(id);
 }
 
@@ -407,16 +407,6 @@ bool State::focus_adjacent_monitor(int direction)
     focus_monitor(target);
     focus_fallback(target);
     return true;
-}
-
-void State::show_desktop(bool enabled)
-{
-    if (showing_desktop_ == enabled)
-        return;
-    mutated();
-    showing_desktop_ = enabled;
-    if (enabled)
-        select_focus(XCB_NONE);
 }
 
 // Placement and mode
@@ -538,7 +528,7 @@ void State::floating(xcb_window_t id, bool enabled)
 void State::toggle_floating(xcb_window_t id)
 {
     auto const& client = require(id);
-    if (client.fullscreen || client.iconic || showing_desktop_)
+    if (client.fullscreen || client.iconic)
         return;
     bool floating = !client.tiled();
     if (floating)
@@ -916,7 +906,6 @@ restart::Snapshot State::snapshot() const
     std::ranges::sort(snapshot.fixtures, {}, &Fixture::order);
     snapshot.focused_monitor = focused_monitor_;
     snapshot.active = active_window_;
-    snapshot.showing_desktop = showing_desktop_;
     for (auto const& monitor : monitors_) snapshot.monitors.push_back(monitor);
     for (auto const* client : clients_by_order()) snapshot.clients.push_back(*client);
     for (auto const& slot : named_scratchpads_)

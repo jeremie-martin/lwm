@@ -8,7 +8,7 @@
 # Ratios and size fractions accept either integer or floating-point numbers.
 # README.md explains file selection.
 #
-# Reload with `lwmctl reload-config`, a "reload-config" binding, or SIGHUP. Invalid
+# Reload with `lwmctl reload-config` or a "reload-config" binding. Invalid
 # input leaves the active configuration unchanged; at startup it is logged and the
 # defaults are used. Reload updates appearance, bindings, names, focus/layout
 # parameters, scratchpads, and matched rules. It does not change the number of

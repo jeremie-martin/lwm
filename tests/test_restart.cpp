@@ -36,7 +36,6 @@ restart::Snapshot sample()
     restart::Snapshot snapshot;
     snapshot.focused_monitor = 1;
     snapshot.active = 0x200;
-    snapshot.showing_desktop = true;
     snapshot.monitors = { test::monitor("M0", 0, 2), test::monitor("M1", 1000, 1) };
     snapshot.monitors[0].current_workspace = 1;
     snapshot.monitors[0].workspaces[0] = {
@@ -211,7 +210,7 @@ TEST_CASE("Restart wire schema directly represents domain values", "[restart][co
 {
     // Independent literal input: no production encoder constructs this fixture.
     auto document = nlohmann::json::parse(R"({
-        "focused_monitor": 0, "active": 0, "showing_desktop": false,
+        "focused_monitor": 0, "active": 0,
         "monitors": [{"name": "M", "geometry": {"x": 0, "y": 0, "width": 100, "height": 80},
             "current_workspace": 0, "previous_workspace": 0, "workspaces": [{"layout_strategy": "MasterStack", "split_ratios": [],
             "windows": [7], "preferred_tile": 0}]}],

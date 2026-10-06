@@ -57,9 +57,6 @@ TEST_CASE("Hidden clients precede visible clients and do not constrain visible t
     SECTION("Off workspace") { scene.state.relocate(2, 0, 1); }
     SECTION("Iconic") { scene.state.iconic(2, true); }
     REQUIRE(scene.order() == std::vector<xcb_window_t>{ 2, 1, 3 });
-    scene.state.sticky(1, true);
-    scene.state.show_desktop(true);
-    REQUIRE(scene.order().back() == 1);
 }
 
 TEST_CASE(

@@ -18,7 +18,7 @@ timeout, rather than restoring the fire-and-forget form.
 subscribe-then-query recovery recipe. `lwmctl watch` streams the complete state instead,
 published as `_LWM_STATE` through the same property cache as EWMH state, so it adds
 no change detection of its own. Actions reply silently; their outcome is the state.
-Lost: occurrences with no state equivalent (`key_action`, SIGHUP or binding reload
+Lost: occurrences with no state equivalent (`key_action`, binding reload
 outcomes, map/unmap of popups and fixtures, same-window focus). Revisit only for a
 concrete consumer; publish such a fact as state rather than restoring an event stream.
 
@@ -71,6 +71,51 @@ separate count and its reconciliation. `[[workspace_keys]]` groups carry both sw
 and move modifiers; mouse bindings are a table, and duplicates are rejected. `[autostart]`
 was removed: the session script (`~/.xinitrc` or the display manager's) already owns
 process lifetimes, readiness and cleanup, and LWM-run autostart duplicated it.
+
+## Close politely, and close twice to kill (2026-10-06)
+
+Closing sends `WM_DELETE_WINDOW`; only a client that also answers `_NET_WM_PING` and
+then fails to answer within 5 seconds is killed, and closing a still-open window again
+kills it. A fixed kill timer for every client destroyed windows that were merely showing
+a confirmation dialog. A client without `WM_DELETE_WINDOW` is killed at once.
+
+## Repeat every binding alike (2026-10-06)
+
+Toggle actions were protected from key auto-repeat by tracking releases. No binding is
+special: holding a key repeats whatever it is bound to, which the user controls with
+the X keyboard repeat settings.
+
+## Drop show desktop (2026-10-06)
+
+`_NET_SHOWING_DESKTOP` was a global mode that every visibility, focus, drag and
+admission decision had to consult. A tiling WM's empty workspace already shows the
+desktop. Revisit only for a concrete workflow, as a per-workspace action rather than
+a mode.
+
+## Ignore application minimize requests (2026-10-06)
+
+A tiling layout has no place for iconified windows and LWM has no taskbar to restore
+them from, so a client that minimized itself simply disappeared. `WM_CHANGE_STATE`,
+`_NET_WM_STATE_HIDDEN` requests and iconic `WM_HINTS.initial_state` are ignored and
+`_NET_WM_ACTION_MINIMIZE` is not advertised; LWM hides windows only through scratchpads.
+
+## Drop SIGHUP reload (2026-10-06)
+
+`lwmctl reload-config` and bindings already reload; the signal added a self-pipe, a
+second event source in the loop and a third reload origin. The X connection is now
+the only event source.
+
+## Drop `log status` (2026-10-06)
+
+The query counted Quill backend notifications for a CLI nobody read, at the cost of
+a shared counter, a mutex and a logging instance identity. Backend errors are now
+dropped, since reporting them could block on the stalled destination; revisit with a
+monitoring consumer.
+
+## Require RandR (2026-10-06)
+
+Every X server LWM targets has RandR; the fallback to a single root-sized monitor was an
+untested second topology path. Startup now fails with a clear error without it.
 
 ## Keep WM_HINTS urgency mirroring (2026-10-06)
 
@@ -137,6 +182,6 @@ The same question applied to the remaining subsystems:
 - **Scratchpads as tagged windows.** Named slots, the pool, pending launches and
   claims form a separate membership system beside rules. A rule-assigned tag and one
   generic toggle-by-tag command might cover both kinds. Less certain than the above.
-- **Logging.** Asynchronous Quill logging and the `log status` query exist so that a
-  slow log reader cannot stall the WM. Probably essential, but unquestioned.
+- **Logging.** Asynchronous Quill logging exists so that a slow log reader cannot
+  stall the WM. Probably essential, but unquestioned.
 

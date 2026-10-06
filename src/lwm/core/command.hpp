@@ -15,7 +15,6 @@ enum class Query
 {
     Ping,
     Version,
-    LogStatus,
     WorkspaceList,
     WindowList,
     ScratchpadList,

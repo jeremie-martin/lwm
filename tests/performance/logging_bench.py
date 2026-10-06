@@ -170,7 +170,6 @@ def measure(binary, level, blocked=False, affinity=None, switches=400, target_na
         elapsed_start = time.monotonic()
         time.sleep(2)
         row["idle_cpu_percent_one_core"] = 100 * (cpu() - cpu_start) / (time.monotonic() - elapsed_start)
-        row["logging"] = json.loads(request(display, "log status"))
         return row
 
 

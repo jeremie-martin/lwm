@@ -94,7 +94,6 @@ void Ewmh::advertise(xcb_window_t check, std::vector<xcb_atom_t> const& extra_su
         ewmh_._NET_WM_ACTION_CHANGE_DESKTOP,
         ewmh_._NET_WM_ACTION_ABOVE,
         ewmh_._NET_WM_ACTION_BELOW,
-        ewmh_._NET_WM_ACTION_MINIMIZE,
 
         ewmh_._NET_WM_ACTION_STICK,
         ewmh_._NET_WM_ACTION_MAXIMIZE_VERT,
@@ -103,7 +102,6 @@ void Ewmh::advertise(xcb_window_t check, std::vector<xcb_atom_t> const& extra_su
         ewmh_._NET_WM_ACTION_RESIZE,
         ewmh_._NET_MOVERESIZE_WINDOW,
         ewmh_._NET_WM_MOVERESIZE,
-        ewmh_._NET_SHOWING_DESKTOP,
         ewmh_._NET_RESTACK_WINDOW,
         ewmh_._NET_WM_USER_TIME,
     };

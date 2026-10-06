@@ -4,7 +4,6 @@
 #include "lwm/core/connection.hpp"
 #include "lwm/core/ewmh.hpp"
 #include "lwm/core/command.hpp"
-#include "lwm/core/signals.hpp"
 #include "lwm/core/state.hpp"
 #include <array>
 #include <chrono>
@@ -40,7 +39,7 @@ enum class RunResult
 class WindowManager
 {
 public:
-    WindowManager(Config config, SignalPipe& signals, std::string config_path);
+    WindowManager(Config config, std::string config_path);
 
     RunResult run();
     std::string const& restart_binary() const { return restart_binary_; }
@@ -51,7 +50,6 @@ private:
     struct Atoms
     {
         xcb_atom_t wm_state;
-        xcb_atom_t wm_change_state;
         xcb_atom_t wm_delete_window;
         xcb_atom_t wm_take_focus;
         xcb_atom_t wm_s0;
@@ -86,8 +84,6 @@ private:
     // An unknown property is always written, so a fresh WM replaces stale values.
     std::map<std::pair<xcb_window_t, xcb_atom_t>, std::optional<std::string>> properties_;
     std::vector<xcb_window_t> fullscreen_owners_; ///< Logged ownership per monitor
-    // Process-owned signal handlers and reload pipe survive WM reconstruction.
-    SignalPipe& signals_;
     std::string config_path_;
     xcb_window_t wm_window_ = XCB_NONE; ///< Owns WM_S0, the EWMH supporting check, IPC and the restart marker
     std::optional<restart::Snapshot> handoff_; ///< Predecessor state, consumed during startup adoption

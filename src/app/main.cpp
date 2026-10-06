@@ -1,6 +1,7 @@
 #include "cli.hpp"
 
 #include <cerrno>
+#include <csignal>
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
@@ -13,6 +14,7 @@
 #include <stdexcept>
 #include <string>
 #include <string_view>
+#include <sys/wait.h>
 #include <unistd.h>
 #include <vector>
 
@@ -48,17 +50,21 @@ int main(int argc, char* argv[])
         return config ? 0 : 1;
     }
 
-    // Signals precede logging and outlive it; both survive failed-exec recovery.
-    std::optional<lwm::SignalPipe> signals;
-    try
+    // The kernel reaps launched processes; exec clears the flag, so neither launched
+    // programs nor a restarted WM inherit it. Children that exited before this, such as
+    // during an exec restart, are reaped now.
+    struct sigaction reap{ };
+    reap.sa_handler = SIG_DFL;
+    reap.sa_flags = SA_NOCLDWAIT;
+    sigemptyset(&reap.sa_mask);
+    sigaction(SIGCHLD, &reap, nullptr);
+    while (waitpid(-1, nullptr, WNOHANG) > 0)
+    { }
+
+    // Logging survives failed-exec recovery.
+    if (auto log = lwm::log::initialize(parsed->log); !log)
     {
-        signals.emplace();
-        if (auto log = lwm::log::initialize(parsed->log); !log)
-            throw std::runtime_error(log.error());
-    }
-    catch (std::exception const& error)
-    {
-        std::cerr << "lwm: process initialization failed: " << error.what() << '\n';
+        std::cerr << "lwm: process initialization failed: " << log.error() << '\n';
         return 1;
     }
 
@@ -96,7 +102,7 @@ int main(int argc, char* argv[])
             std::string restart_binary;
             {
                 phase = "WM initialization";
-                lwm::WindowManager wm(std::move(*config), *signals, config_path);
+                lwm::WindowManager wm(std::move(*config), config_path);
                 phase = "WM event loop";
                 auto result = wm.run();
                 if (result == lwm::RunResult::Failed)

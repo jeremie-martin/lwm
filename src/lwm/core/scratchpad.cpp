@@ -97,7 +97,7 @@ template <typename Show> bool State::summon(xcb_window_t window, Show show)
     return false;
 }
 
-// Pool order owns selection, independently of workspace visibility or minimization.
+// Pool order owns selection, independently of workspace visibility or hiding.
 // Cycling an active target hides it and advances the rotation.
 void State::cycle_scratchpad_pool()
 {
@@ -117,7 +117,7 @@ void State::show_pooled_scratchpad(xcb_window_t id)
 {
     LWM_LOG_DEBUG("Showing pool scratchpad window {:#x}", id);
     relocate(id, focused_monitor_, monitors_[focused_monitor_].current_workspace, RelocationGeometry::Translate);
-    restore(id, true);
+    restore(id);
 }
 
 void State::scratchpad_pending(std::string_view name, bool pending)
@@ -202,7 +202,7 @@ void State::show_named_scratchpad(xcb_window_t window, ScratchpadConfig const& c
     auto height = geometry_extent(static_cast<int64_t>(area.height * config.height));
     geometry(window, floating::place_floating(area, width, height, std::nullopt));
     relocate(window, monitor, workspace);
-    restore(window, true);
+    restore(window);
 }
 
 } // namespace lwm

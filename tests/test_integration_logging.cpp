@@ -62,30 +62,25 @@ TEST_CASE("Integration: standard logging survives failed exec and real restart",
         return reply->stdout_text;
     };
     for (int i = 0; i < 30; ++i) command({ "workspace", "switch", std::to_string(i % 2) });
-    auto first = nlohmann::json::parse(command({ "log", "status" }));
-    REQUIRE(first["active"] == true);
+    // Every WM lifetime reports readiness through the surviving or restarted logger.
+    auto ready = [&](size_t expected)
+    {
+        return wait_for_condition(
+            [&]
+            {
+                auto log = wm.diagnostics();
+                size_t count = 0;
+                for (auto at = log.find("WM ready:"); at != std::string::npos; at = log.find("WM ready:", at + 1)) ++count;
+                return count == expected;
+            },
+            std::chrono::seconds(2)
+        );
+    };
+    REQUIRE(ready(1));
     command({ "exec", "/definitely/missing/lwm-binary" });
-    REQUIRE(wait_for_condition(
-        [&]
-        {
-            auto reply = run_lwmctl(wm, { "log", "status" });
-            return reply && reply->exit_code == 0 && nlohmann::json::parse(reply->stdout_text)["active"] == true;
-        },
-        std::chrono::seconds(1)
-    ));
-    auto recovered = nlohmann::json::parse(command({ "log", "status" }));
-    REQUIRE(recovered["instance"] == first["instance"]);
-    REQUIRE(recovered["backend_notifications"] == 0);
+    REQUIRE(ready(2));
     command({ "restart" });
-    REQUIRE(wait_for_condition(
-        [&]
-        {
-            auto reply = run_lwmctl(wm, { "log", "status" });
-            return reply && reply->exit_code == 0
-                && nlohmann::json::parse(reply->stdout_text)["instance"] != first["instance"];
-        },
-        std::chrono::seconds(1)
-    ));
+    REQUIRE(ready(3));
     REQUIRE(command({ "ping" }).find("pong") != std::string::npos);
     REQUIRE(wm.running());
     // ICCCM manager-selection takeover is LWM's orderly shutdown path.
@@ -147,7 +142,6 @@ TEST_CASE(
     auto before = wm_owner(connection);
     for (int i = 0; i < 200; ++i) command({ "workspace", "switch", std::to_string(i % 2) });
     REQUIRE(command({ "ping" }).find("pong") != std::string::npos);
-    auto logging_instance = nlohmann::json::parse(command({ "log", "status" }))["instance"];
     command({ "exec", "/definitely/missing/lwm-binary" });
     REQUIRE(wait_for_condition(
         [&]
@@ -157,7 +151,6 @@ TEST_CASE(
         },
         std::chrono::seconds(2)
     ));
-    REQUIRE(nlohmann::json::parse(command({ "log", "status" }))["instance"] == logging_instance);
     before = wm_owner(connection);
     command({ "restart" });
     REQUIRE(wait_for_condition(

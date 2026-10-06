@@ -215,12 +215,11 @@ bool WindowManager::publish_properties(Client const& client, Output& output, Sta
     publish(id, atoms_.wm_state, atoms_.wm_state, wm_state);
     // Floating clients add the trailing move and resize actions.
     xcb_atom_t const actions[] = { e->_NET_WM_ACTION_CLOSE,         e->_NET_WM_ACTION_CHANGE_DESKTOP,
-                                   e->_NET_WM_ACTION_MINIMIZE,      e->_NET_WM_ACTION_STICK,
-                                   e->_NET_WM_ACTION_FULLSCREEN,    e->_NET_WM_ACTION_ABOVE,
-                                   e->_NET_WM_ACTION_BELOW,         e->_NET_WM_ACTION_MAXIMIZE_VERT,
-                                   e->_NET_WM_ACTION_MAXIMIZE_HORZ, e->_NET_WM_ACTION_MOVE,
-                                   e->_NET_WM_ACTION_RESIZE };
-    auto allowed = std::span(actions).first(!client.tiled() ? 11 : 9);
+                                   e->_NET_WM_ACTION_STICK,         e->_NET_WM_ACTION_FULLSCREEN,
+                                   e->_NET_WM_ACTION_ABOVE,         e->_NET_WM_ACTION_BELOW,
+                                   e->_NET_WM_ACTION_MAXIMIZE_VERT, e->_NET_WM_ACTION_MAXIMIZE_HORZ,
+                                   e->_NET_WM_ACTION_MOVE,          e->_NET_WM_ACTION_RESIZE };
+    auto allowed = std::span(actions).first(!client.tiled() ? 10 : 8);
     publish(id, e->_NET_WM_ALLOWED_ACTIONS, XCB_ATOM_ATOM, allowed);
     publish(id, atoms_.lwm_window_class, e->UTF8_STRING, 8, client_kind_str(client));
     if (auto const& m = client.fullscreen_monitors)
@@ -332,7 +331,6 @@ void WindowManager::publish_root(std::vector<State::Projected> const& clients, b
     uint32_t const size[] = { desktop.width, desktop.height };
     uint32_t const current[] = { state_.desktop_index(state_.focused_monitor(), focused.current_workspace) };
     uint32_t const active[] = { state_.active_window() };
-    uint32_t const showing[] = { state_.showing_desktop() };
     publish(root, e->_NET_NUMBER_OF_DESKTOPS, XCB_ATOM_CARDINAL, count);
     publish(root, e->_NET_DESKTOP_NAMES, e->UTF8_STRING, 8, names);
     publish(root, e->_NET_DESKTOP_GEOMETRY, XCB_ATOM_CARDINAL, size);
@@ -340,7 +338,6 @@ void WindowManager::publish_root(std::vector<State::Projected> const& clients, b
     publish(root, e->_NET_WORKAREA, XCB_ATOM_CARDINAL, workareas);
     publish(root, e->_NET_CURRENT_DESKTOP, XCB_ATOM_CARDINAL, current);
     publish(root, e->_NET_ACTIVE_WINDOW, XCB_ATOM_WINDOW, active);
-    publish(root, e->_NET_SHOWING_DESKTOP, XCB_ATOM_CARDINAL, showing);
     // Drags change geometry, which the exposed state omits, every motion; the
     // completion that ends a drag publishes its monitor or ratio outcome.
     if (!state_.drag())

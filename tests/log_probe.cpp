@@ -191,5 +191,4 @@ int main(int argc, char** argv)
         if (!checked)
             return 10;
     }
-    std::cout << lwm::log::status_json() << '\n';
 }

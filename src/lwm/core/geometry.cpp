@@ -105,7 +105,7 @@ Geometry State::normal_geometry(Client const& client) const
     auto windows = tiled_participants(client.monitor, fullscreen_visibility());
     if (std::ranges::find(windows, client.id) == windows.end())
     {
-        // Hidden, minimized and fullscreen tiles still have a well-defined normal
+        // Off-workspace, iconic and fullscreen tiles still have a well-defined normal
         // rectangle: the slot they would occupy when revealed in their workspace
         // without fullscreen occlusion.
         workspace = client.sticky ? workspace : client.workspace;

@@ -31,7 +31,7 @@ Paths are relative to `src/`.
 | Pure derivations used by the model | `classification.*`, `focus.*`, `stacking.*`, `window_rules.*`, `workarea.*` |
 | Command grammar and actions | `action.hpp`, `command.*` |
 | X connection, EWMH resources, property reads | `connection.*`, `ewmh.*`, `xproperty.hpp` |
-| Signals, logging, snapshot codec, invariants | `signals.*`, `log.*`, `restart.*`, `invariants.hpp` |
+| Logging, snapshot codec, invariants | `log.*`, `restart.*`, `invariants.hpp` |
 | Event loop, setup, topology discovery, reload, processes | `lwm/wm.cpp` |
 | Window observation (pipelined X reads) | `lwm/wm_observe.cpp` |
 | Admission adapters: scan and X resources per role | `lwm/wm_manage.cpp` |
@@ -120,7 +120,7 @@ mirrored into the application's `WM_HINTS`. Caches never drive domain decisions.
 
 ## Operations and completion
 
-An operation is one dispatched X event (including an IPC request), signal reload,
+An operation is one dispatched X event (including an IPC request),
 timeout or topology pass, or the startup scan. Handlers call `State` and retain only
 obligations the model cannot express: ConfigureRequest replies, forwarded restacks,
 crossing-event drains after a pointer release, and outputs forgotten after an
@@ -217,7 +217,7 @@ extents and use the configured border within X11's maximum frame size.
 The model decides the border width and color, so layout, maximize,
 fullscreen and placement never account for borders separately. `project()` returns
 every client in registration order with an optional presentation: absent means hidden.
-`normal_geometry()` derives a tiled client's slot even when minimized, off-workspace or
+`normal_geometry()` derives a tiled client's slot even when hidden, off-workspace or
 fullscreen. Fullscreen, maximize and drag previews affect presentation, never the saved
 normal rectangle.
 
@@ -234,19 +234,17 @@ still receives its acknowledgement.
 ## Visibility, focus and stacking
 
 A client is in view when it is not iconic and is sticky or on its monitor's current
-workspace; showing the desktop leaves only sticky clients in view. Outside show-desktop
-mode, the newest fullscreen claim in view owns its monitor and suppresses other normal
+workspace. The newest fullscreen claim in view owns its monitor and suppresses other normal
 clients except its managed transient descendants. `FullscreenVisibility` computes
 owners and exemptions once per pass, bounding cyclic parent hints.
 
-Keep three concepts distinct: `iconic` is explicit minimization, visibility is
+Keep three concepts distinct: `iconic` is an explicit hide by LWM, visibility is
 derived, and `Output::hidden` means LWM moved the window off-screen. Normal clients
 are mapped once; workspace hiding does not unmap them.
 
 `fullscreen()` is idempotent and used by rules; `request_fullscreen()` renews the
 claim and is used by interactions and restoration. Entering fullscreen clears
-maximize. Focus eligibility requires visibility, an input hint or `WM_TAKE_FOCUS`,
-and no show-desktop mode.
+maximize. Focus eligibility requires visibility and an input hint or `WM_TAKE_FOCUS`.
 
 `focus()` deiconifies and selects the placement, then falls back if the target is
 suppressed. Operations that choose a window as policy (workspace and monitor
@@ -320,10 +318,9 @@ guarantees.
 
 ## Restart and process lifetime
 
-`SignalPipe` owns SIGHUP through a close-on-exec self-pipe and lets the kernel reap
-children (`SA_NOCLDWAIT`, which exec clears for launched programs). Main
-creates it before logging and destroys it after logging shutdown; a failed exec
-reconstructs the WM with both process-level owners.
+Main lets the kernel reap children (`SA_NOCLDWAIT`, which exec clears for launched
+programs) and owns logging across WM lifetimes; a failed exec reconstructs the WM under
+the same logger. The X connection is the only event source.
 
 Restart retains the predecessor's X resources so closing its connection cannot reset
 an otherwise empty server. `_LWM_RESTART_OWNER` marks the retained window; the

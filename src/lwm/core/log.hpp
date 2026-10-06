@@ -36,7 +36,6 @@ std::expected<Target, std::string> parse_target(std::string_view);
 std::string level_name(quill::LogLevel);
 std::expected<void, std::string> initialize(LogOptions options = { });
 void shutdown();
-std::string status_json();
 } // namespace lwm::log
 
 // The null guard covers startup, shutdown and failed initialization. Quill owns

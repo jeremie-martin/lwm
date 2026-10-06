@@ -127,7 +127,6 @@ Logs go to the system journal at INFO and above:
 
 ```sh
 journalctl -b _UID="$(id -u)" SYSLOG_IDENTIFIER=lwm
-lwmctl log status
 ```
 
 For terminal diagnostics:

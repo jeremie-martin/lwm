@@ -49,7 +49,7 @@ TEST_CASE(
         ipc_ok("restart");
         REQUIRE(wait_for_wm_restart(conn, timeout, *previous));
     }
-    send_client_message(conn, a, intern_atom(conn.get(), "WM_CHANGE_STATE"), XCB_ICCCM_WM_STATE_ICONIC);
+    stash(a);
     observe_title_after_events(conn, d);
     auto desktop = intern_atom(conn.get(), "_NET_WM_DESKTOP");
     SECTION("Key binding") { REQUIRE(send_key(conn, XK_F5)); }
@@ -83,7 +83,7 @@ TEST_CASE(
     REQUIRE(wait_for_active_window(conn, d, timeout));
     destroy_window(conn, d);
     REQUIRE(wait_for_active_window(conn, b, timeout));
-    send_client_message(conn, b, intern_atom(conn.get(), "WM_CHANGE_STATE"), XCB_ICCCM_WM_STATE_ICONIC);
+    stash(b);
     observe_title_after_events(conn, b);
     REQUIRE(wait_for_active_window(conn, XCB_NONE, timeout));
     REQUIRE(counts() == std::pair{ 2, 0 });

@@ -219,9 +219,9 @@ TEST_CASE(
     REQUIRE(wait_for_active_window(conn, child, timeout));
     REQUIRE(is_hidden_offscreen(conn, unrelated));
 
-    // Ancestry exempts suppression; it does not prevent minimization. An
+    // Ancestry exempts suppression; it does not prevent stashing. An
     // explicit activation must also recognize the ancestry before restoring.
-    send_client_message(conn, child, intern_atom(conn.get(), "WM_CHANGE_STATE"), XCB_ICCCM_WM_STATE_ICONIC);
+    ipc_ok("scratchpad stash");
     observe_title_after_events(conn, child);
     REQUIRE(is_hidden_offscreen(conn, child));
     send_client_message(conn, child, activate, 2);
@@ -746,7 +746,7 @@ TEST_CASE("Integration: state requests leave dock and desktop windows alone", "[
 }
 
 TEST_CASE(
-    "Integration: restart adoption preserves deiconified non-active clients",
+    "Integration: restart adoption preserves restored non-active clients",
     "[integration][transition][adoption][restart]"
 )
 {
@@ -755,11 +755,9 @@ TEST_CASE(
         SKIP("X11 unavailable");
     auto& conn = env->conn;
     auto first = create_window(conn, 10, 10, 200, 200);
-    xcb_icccm_wm_hints_t hints{ };
-    hints.flags = XCB_ICCCM_WM_HINT_STATE;
-    hints.initial_state = XCB_ICCCM_WM_STATE_ICONIC;
-    xcb_icccm_set_wm_hints(conn.get(), first, &hints);
     map_window(conn, first);
+    REQUIRE(wait_for_active_window(conn, first, timeout));
+    ipc_ok("scratchpad stash");
     auto clients = [&]
     {
         auto reply = send_ipc_command("window list");
@@ -1204,7 +1202,6 @@ apply = { fullscreen = false }
     auto& conn = env->conn;
     auto state = intern_atom(conn.get(), "_NET_WM_STATE");
     auto fullscreen = intern_atom(conn.get(), "_NET_WM_STATE_FULLSCREEN");
-    auto minimized = intern_atom(conn.get(), "_NET_WM_STATE_HIDDEN");
     auto first = create_window(conn, 10, 10, 320, 240);
     auto second = create_window(conn, 20, 20, 320, 240);
     for (auto window : { first, second })
@@ -1263,15 +1260,6 @@ apply = { fullscreen = false }
     set_window_wm_class(conn, second, "test", "FullscreenOriginal");
     observe_title_after_events(conn, first);
     expect_owner(second, first);
-
-    // Restoring a minimized fullscreen client is an interaction, too.
-    send_client_message(conn, first, state, 1, minimized);
-    observe_title_after_events(conn, first);
-    REQUIRE(has_state(conn, first, minimized));
-    send_client_message(conn, first, state, 0, minimized);
-    observe_title_after_events(conn, first);
-    expect_owner(first, second);
-    CHECK_FALSE(has_state(conn, first, minimized));
     destroy_window(conn, first);
     destroy_window(conn, second);
 }

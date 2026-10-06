@@ -42,10 +42,6 @@ CommandResult probe(std::vector<std::string> args, std::string const& socket = "
     REQUIRE(result->exit_code == 0);
     return *result;
 }
-json status(CommandResult const& result)
-{
-    return json::parse(result.stdout_text.substr(result.stdout_text.find('{')));
-}
 struct Collector
 {
     fs::path directory = make_temp_directory();
@@ -85,7 +81,6 @@ TEST_CASE("Standard journal sink preserves levels and source metadata", "[loggin
     REQUIRE(records[0].at("CODE_FUNC") == "main");
     REQUIRE(records[0].at("SYSLOG_IDENTIFIER") == "lwm");
     REQUIRE(result.stdout_text.starts_with("evaluated=0"));
-    REQUIRE(status(result)["backend_notifications"] == 0);
 }
 TEST_CASE("Trace and off gates retain disabled argument semantics", "[logging]")
 {
@@ -95,7 +90,6 @@ TEST_CASE("Trace and off gates retain disabled argument semantics", "[logging]")
     auto off = probe({ "--off" });
     REQUIRE(off.stdout_text.starts_with("evaluated=0"));
     REQUIRE(off.stderr_text.empty());
-    REQUIRE(status(off)["active"] == false);
 }
 TEST_CASE("Standard sinks copy arguments and escape control bytes", "[logging]")
 {
@@ -120,9 +114,8 @@ TEST_CASE("Console color respects startup options", "[logging]")
 }
 TEST_CASE("Absent journal is best effort and does not prevent shutdown", "[logging]")
 {
-    auto result = probe({ "--journal" });
-    // libsystemd deliberately treats ENOENT as success; do not invent a delivery counter.
-    REQUIRE(status(result)["backend_notifications"] == 0);
+    // libsystemd deliberately treats ENOENT as success.
+    probe({ "--journal" });
 }
 TEST_CASE("Shutdown drains records and disables subsequent argument evaluation", "[logging]")
 {
@@ -135,8 +128,6 @@ TEST_CASE("Backend formatting errors and oversized records do not prevent subseq
     for (auto mode : { "backend-error", "oversized" })
     {
         auto result = probe({ mode });
-        REQUIRE(status(result)["backend_notifications"].get<int>() > 0);
-        REQUIRE_FALSE(status(result)["last_backend_notification"].get<std::string>().empty());
         REQUIRE(result.stderr_text.find("after ") != std::string::npos);
     }
 }
@@ -445,16 +436,13 @@ TEST_CASE("Standard sinks isolate submission from backpressure and drain when th
             }
         );
         REQUIRE(result.exit_code == 0);
-        REQUIRE(status(result)["backend_notifications"].get<int>() > 0);
-        REQUIRE(status(result)["last_backend_notification"].get<std::string>().find("ropped") != std::string::npos);
     }
 }
-TEST_CASE("A closed console pipe is reported without terminating the WM", "[logging]")
+TEST_CASE("A closed console pipe does not terminate the WM", "[logging]")
 {
     ChildProbe child("levels", "closed");
     auto result = child.finish();
     REQUIRE(result.exit_code == 0);
-    REQUIRE(status(result)["backend_notifications"].get<int>() > 0);
 }
 TEST_CASE("Ordinary stderr file redirection works", "[logging]")
 {
@@ -462,7 +450,6 @@ TEST_CASE("Ordinary stderr file redirection works", "[logging]")
     auto result = child.finish();
     REQUIRE(result.exit_code == 0);
     REQUIRE(result.stderr_text.find("CRITICAL") != std::string::npos);
-    REQUIRE(status(result)["backend_notifications"] == 0);
 }
 
 TEST_CASE("The standard journal transport does not leak its socket through exec", "[logging]")

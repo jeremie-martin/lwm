@@ -56,7 +56,6 @@ xcb_window_t window_value(xcb_connection_t* conn, xcb_get_property_cookie_t cook
 struct Hints
 {
     bool accepts_input = true; // Missing hints mean input is accepted
-    bool initially_iconic = false;
     bool urgent = false;
 };
 
@@ -65,9 +64,7 @@ Hints hints(xcb_connection_t* conn, xcb_get_property_cookie_t cookie)
     xcb_icccm_wm_hints_t reply{ };
     if (!xcb_icccm_get_wm_hints_reply(conn, cookie, &reply, nullptr))
         return { };
-    return { !(reply.flags & XCB_ICCCM_WM_HINT_INPUT) || reply.input,
-             (reply.flags & XCB_ICCCM_WM_HINT_STATE) && reply.initial_state == XCB_ICCCM_WM_STATE_ICONIC,
-             xcb_icccm_wm_hints_get_urgency(&reply) != 0 };
+    return { !(reply.flags & XCB_ICCCM_WM_HINT_INPUT) || reply.input, xcb_icccm_wm_hints_get_urgency(&reply) != 0 };
 }
 
 // Nonpositive sizes keep the current extent; oversized ones saturate.
@@ -236,7 +233,6 @@ std::vector<WindowObservation> WindowManager::observe(std::span<xcb_window_t con
         }
         auto observed_hints = hints(c, cookie.hints);
         w.accepts_input = observed_hints.accepts_input;
-        w.initially_iconic = observed_hints.initially_iconic;
         w.urgent = observed_hints.urgent;
         w.size_hints = size_hints(c, cookie.normal_hints);
         w.supports_take_focus = std::ranges::contains(protocols(c, cookie.protocols), atoms_.wm_take_focus);

@@ -160,8 +160,6 @@ std::string WindowManager::handle_request(std::string_view text)
                         return ok("pong");
                     case command::Query::Version:
                         return ok(LWM_VERSION);
-                    case command::Query::LogStatus:
-                        return ok(log::status_json());
                     case command::Query::WorkspaceList:
                         return ok(json(workspace_list(state_)));
                     case command::Query::WindowList:

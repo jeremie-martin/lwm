@@ -19,9 +19,8 @@ constexpr auto KILL_TIMEOUT = std::chrono::seconds(5);
 
 } // namespace
 
-WindowManager::WindowManager(Config config, SignalPipe& signals, std::string config_path)
+WindowManager::WindowManager(Config config, std::string config_path)
     : ewmh_(conn_)
-    , signals_(signals)
     , config_path_(std::move(config_path))
 {
     (void)state_.configure(std::move(config));
@@ -52,7 +51,6 @@ void WindowManager::intern_atoms()
 {
     std::pair<char const*, xcb_atom_t*> const names[] = {
         { "WM_STATE", &atoms_.wm_state },
-        { "WM_CHANGE_STATE", &atoms_.wm_change_state },
         { "WM_DELETE_WINDOW", &atoms_.wm_delete_window },
         { "WM_TAKE_FOCUS", &atoms_.wm_take_focus },
         { "WM_S0", &atoms_.wm_s0 },
@@ -132,12 +130,11 @@ void WindowManager::setup_root()
         free(err);
         throw std::runtime_error("Another window manager is already running");
     }
-    if (conn_.has_randr())
-        xcb_randr_select_input(
-            conn_.get(),
-            conn_.screen()->root,
-            XCB_RANDR_NOTIFY_MASK_SCREEN_CHANGE | XCB_RANDR_NOTIFY_MASK_CRTC_CHANGE | XCB_RANDR_NOTIFY_MASK_OUTPUT_CHANGE
-        );
+    xcb_randr_select_input(
+        conn_.get(),
+        conn_.screen()->root,
+        XCB_RANDR_NOTIFY_MASK_SCREEN_CHANGE | XCB_RANDR_NOTIFY_MASK_CRTC_CHANGE | XCB_RANDR_NOTIFY_MASK_OUTPUT_CHANGE
+    );
 }
 
 void WindowManager::claim_wm_ownership()
@@ -222,47 +219,44 @@ Topology WindowManager::discover_topology()
     auto root = read_window_geometry(conn_.screen()->root);
     topology.screen = { 0, 0, root ? root->width : conn_.screen()->width_in_pixels, root ? root->height : conn_.screen()->height_in_pixels };
     auto& outputs = topology.outputs;
-    if (conn_.has_randr())
+    auto resources = reply(xcb_randr_get_screen_resources_current_reply(
+        conn_.get(),
+        xcb_randr_get_screen_resources_current(conn_.get(), conn_.screen()->root),
+        nullptr
+    ));
+    if (!resources)
+        LWM_LOG_WARN_LIMIT(std::chrono::seconds(5), "randr: screen resources unavailable; using one monitor");
+    int count = resources ? xcb_randr_get_screen_resources_current_outputs_length(resources.get()) : 0;
+    auto* ids = resources ? xcb_randr_get_screen_resources_current_outputs(resources.get()) : nullptr;
+    for (int i = 0; i < count; ++i)
     {
-        auto resources = reply(xcb_randr_get_screen_resources_current_reply(
+        auto output = reply(xcb_randr_get_output_info_reply(
             conn_.get(),
-            xcb_randr_get_screen_resources_current(conn_.get(), conn_.screen()->root),
+            xcb_randr_get_output_info(conn_.get(), ids[i], resources->config_timestamp),
             nullptr
         ));
-        if (!resources)
-            LWM_LOG_WARN_LIMIT(std::chrono::seconds(5), "randr: screen resources unavailable; using one monitor");
-        int count = resources ? xcb_randr_get_screen_resources_current_outputs_length(resources.get()) : 0;
-        auto* ids = resources ? xcb_randr_get_screen_resources_current_outputs(resources.get()) : nullptr;
-        for (int i = 0; i < count; ++i)
+        if (!output)
         {
-            auto output = reply(xcb_randr_get_output_info_reply(
-                conn_.get(),
-                xcb_randr_get_output_info(conn_.get(), ids[i], resources->config_timestamp),
-                nullptr
-            ));
-            if (!output)
-            {
-                LWM_LOG_WARN_LIMIT(std::chrono::seconds(5), "randr: output {:#x} unavailable, skipping", ids[i]);
-                continue;
-            }
-            if (output->connection != XCB_RANDR_CONNECTION_CONNECTED || output->crtc == XCB_NONE)
-                continue;
-            std::string name(
-                reinterpret_cast<char*>(xcb_randr_get_output_info_name(output.get())),
-                xcb_randr_get_output_info_name_length(output.get())
-            );
-            auto crtc = reply(xcb_randr_get_crtc_info_reply(
-                conn_.get(),
-                xcb_randr_get_crtc_info(conn_.get(), output->crtc, resources->config_timestamp),
-                nullptr
-            ));
-            if (!crtc || crtc->width == 0 || crtc->height == 0)
-            {
-                LWM_LOG_WARN_LIMIT(std::chrono::seconds(5), "randr: output {} has no usable CRTC, skipping", name);
-                continue;
-            }
-            outputs.push_back({ std::move(name), { crtc->x, crtc->y, crtc->width, crtc->height } });
+            LWM_LOG_WARN_LIMIT(std::chrono::seconds(5), "randr: output {:#x} unavailable, skipping", ids[i]);
+            continue;
         }
+        if (output->connection != XCB_RANDR_CONNECTION_CONNECTED || output->crtc == XCB_NONE)
+            continue;
+        std::string name(
+            reinterpret_cast<char*>(xcb_randr_get_output_info_name(output.get())),
+            xcb_randr_get_output_info_name_length(output.get())
+        );
+        auto crtc = reply(xcb_randr_get_crtc_info_reply(
+            conn_.get(),
+            xcb_randr_get_crtc_info(conn_.get(), output->crtc, resources->config_timestamp),
+            nullptr
+        ));
+        if (!crtc || crtc->width == 0 || crtc->height == 0)
+        {
+            LWM_LOG_WARN_LIMIT(std::chrono::seconds(5), "randr: output {} has no usable CRTC, skipping", name);
+            continue;
+        }
+        outputs.push_back({ std::move(name), { crtc->x, crtc->y, crtc->width, crtc->height } });
     }
     if (outputs.empty())
         outputs.push_back({ "default", topology.screen });
@@ -299,16 +293,10 @@ RunResult WindowManager::run()
         if (!deferred_events_.empty())
             timeout_ms = 0;
 
-        pollfd fds[] = { { .fd = xfd, .events = POLLIN, .revents = 0 },
-                         { .fd = signals_.fd(), .events = POLLIN, .revents = 0 } };
-        if (poll(fds, std::size(fds), timeout_ms) > 0 && (fds[1].revents & POLLIN))
-        {
-            signals_.drain();
-            (void)reload_config("sighup"); // Logged; only IPC replies with it
-            complete_transition();
-        }
+        pollfd fd{ .fd = xfd, .events = POLLIN, .revents = 0 };
+        poll(&fd, 1, timeout_ms);
 
-        // Bounded batches keep signals and deadlines responsive under X load.
+        // Bounded batches keep deadlines responsive under X load.
         size_t remaining = 64;
         auto batch_deadline = std::chrono::steady_clock::now() + std::chrono::milliseconds(2);
         while (remaining && std::chrono::steady_clock::now() < batch_deadline)

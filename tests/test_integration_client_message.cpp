@@ -538,18 +538,17 @@ TEST_CASE(
     REQUIRE(hidden != XCB_NONE);
     REQUIRE(demands_attention != XCB_NONE);
 
+    xcb_window_t suppressed = create_window(conn, 80, 80, 320, 180);
+    map_window(conn, suppressed);
+    REQUIRE(wait_for_active_window(conn, suppressed, kTimeout));
+    ipc_ok("scratchpad stash");
+    REQUIRE(wait_for_condition([&]() { return has_state(conn, suppressed, hidden); }, kTimeout));
+
     xcb_window_t owner = create_window(conn, 10, 10, 640, 360);
     map_window(conn, owner);
     REQUIRE(wait_for_active_window(conn, owner, kTimeout));
     send_client_message(conn, owner, net_wm_state, 1, fullscreen, 0, 0, 0);
     REQUIRE(wait_for_condition([&]() { return has_state(conn, owner, fullscreen); }, kTimeout));
-
-    xcb_window_t suppressed = create_window(conn, 80, 80, 320, 180);
-    map_window(conn, suppressed);
-    REQUIRE(wait_for_active_window(conn, owner, kTimeout));
-
-    send_client_message(conn, suppressed, net_wm_state, 1, hidden, 0, 0, 0);
-    REQUIRE(wait_for_condition([&]() { return has_state(conn, suppressed, hidden); }, kTimeout));
 
     send_client_message(conn, suppressed, net_active_window, 1, 0xFFFFFF80u, 0, 0, 0);
 

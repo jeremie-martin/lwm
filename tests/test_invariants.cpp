@@ -148,8 +148,8 @@ TEST_CASE("Generated State operation sequences preserve model invariants", "[inv
                 break;
             }
             case 14:
-                state.show_desktop(pick(2) == 0);
-                trace.push_back("desktop");
+                state.stash(window);
+                trace.push_back("stash");
                 break;
             case 15:
                 state.window_type(window, pick(2) ? WindowType::Dialog : WindowType::Normal);

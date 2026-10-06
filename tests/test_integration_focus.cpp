@@ -931,7 +931,7 @@ TEST_CASE("Integration: sticky window on another workspace can take focus when m
     destroy_window(conn, w1);
 }
 
-TEST_CASE("Integration: iconifying a visible sticky window restores focus fallback", "[integration][focus][sticky]")
+TEST_CASE("Integration: stashing a visible sticky window restores focus fallback", "[integration][focus][sticky]")
 {
     auto test_env = TestEnvironment::create();
     if (!test_env)
@@ -965,7 +965,7 @@ TEST_CASE("Integration: iconifying a visible sticky window restores focus fallba
     send_client_message(conn, sticky, intern_atom(conn.get(), "_NET_ACTIVE_WINDOW"), 2, XCB_CURRENT_TIME, 0, 0, 0);
     REQUIRE(wait_for_active_window(conn, sticky, kTimeout));
 
-    send_client_message(conn, sticky, net_wm_state, 1, net_wm_state_hidden, 0, 0, 0);
+    ipc_ok("scratchpad stash");
 
     REQUIRE(wait_for_condition([&]() { return has_state(conn, sticky, net_wm_state_hidden); }, kTimeout));
     REQUIRE(wait_for_active_window(conn, fallback, kTimeout));
@@ -1214,23 +1214,16 @@ TEST_CASE(
     destroy_window(conn, w1);
 }
 
-TEST_CASE(
-    "Integration: iconify and deiconify re-arbitrate fullscreen owner",
-    "[integration][focus][fullscreen][iconify]"
-)
+TEST_CASE("Integration: application minimize requests are ignored", "[integration][focus][fullscreen][iconify]")
 {
     auto test_env = TestEnvironment::create();
     if (!test_env)
         SKIP("Test environment not available");
 
     auto& conn = test_env->conn;
-
     xcb_atom_t net_wm_state = intern_atom(conn.get(), "_NET_WM_STATE");
     xcb_atom_t net_wm_state_fullscreen = intern_atom(conn.get(), "_NET_WM_STATE_FULLSCREEN");
     xcb_atom_t net_wm_state_hidden = intern_atom(conn.get(), "_NET_WM_STATE_HIDDEN");
-    REQUIRE(net_wm_state != XCB_NONE);
-    REQUIRE(net_wm_state_fullscreen != XCB_NONE);
-    REQUIRE(net_wm_state_hidden != XCB_NONE);
 
     xcb_window_t w1 = create_window(conn, 10, 10, 640, 360);
     map_window(conn, w1);
@@ -1238,111 +1231,14 @@ TEST_CASE(
     send_client_message(conn, w1, net_wm_state, 1, net_wm_state_fullscreen, 0, 0, 0);
     REQUIRE(wait_for_condition([&]() { return has_state(conn, w1, net_wm_state_fullscreen); }, kTimeout));
 
-    xcb_window_t w2 = create_window(conn, 80, 80, 320, 180);
-    map_window(conn, w2);
-    REQUIRE(wait_for_active_window(conn, w1, kTimeout));
-
+    // Neither _NET_WM_STATE_HIDDEN nor ICCCM WM_CHANGE_STATE hides a window.
     send_client_message(conn, w1, net_wm_state, 1, net_wm_state_hidden, 0, 0, 0);
-    REQUIRE(wait_for_condition([&]() { return has_state(conn, w1, net_wm_state_hidden); }, kTimeout));
-    REQUIRE(wait_for_active_window(conn, w2, kTimeout));
-
-    send_client_message(conn, w1, net_wm_state, 0, net_wm_state_hidden, 0, 0, 0);
-    REQUIRE(wait_for_condition([&]() { return !has_state(conn, w1, net_wm_state_hidden); }, kTimeout));
-    REQUIRE(wait_for_active_window(conn, w1, kTimeout));
-    REQUIRE(wait_for_condition([&]() { return has_state(conn, w1, net_wm_state_fullscreen); }, kTimeout));
-
-    destroy_window(conn, w2);
+    send_client_message(conn, w1, intern_atom(conn.get(), "WM_CHANGE_STATE"), XCB_ICCCM_WM_STATE_ICONIC);
+    observe_title_after_events(conn, w1);
+    CHECK_FALSE(has_state(conn, w1, net_wm_state_hidden));
+    CHECK_FALSE(is_hidden_offscreen(conn, w1));
+    CHECK(wait_for_active_window(conn, w1, kTimeout));
     destroy_window(conn, w1);
-}
-
-TEST_CASE(
-    "Integration: exiting showing desktop restores fullscreen owner and suppression",
-    "[integration][focus][fullscreen][showdesktop]"
-)
-{
-    auto test_env = TestEnvironment::create();
-    if (!test_env)
-        SKIP("Test environment not available");
-
-    auto& conn = test_env->conn;
-
-    xcb_atom_t net_wm_state = intern_atom(conn.get(), "_NET_WM_STATE");
-    xcb_atom_t net_wm_state_fullscreen = intern_atom(conn.get(), "_NET_WM_STATE_FULLSCREEN");
-    xcb_atom_t net_showing_desktop = intern_atom(conn.get(), "_NET_SHOWING_DESKTOP");
-    REQUIRE(net_wm_state != XCB_NONE);
-    REQUIRE(net_wm_state_fullscreen != XCB_NONE);
-    REQUIRE(net_showing_desktop != XCB_NONE);
-
-    xcb_window_t w1 = create_window(conn, 10, 10, 640, 360);
-    map_window(conn, w1);
-    REQUIRE(wait_for_active_window(conn, w1, kTimeout));
-    send_client_message(conn, w1, net_wm_state, 1, net_wm_state_fullscreen, 0, 0, 0);
-    REQUIRE(wait_for_condition([&]() { return has_state(conn, w1, net_wm_state_fullscreen); }, kTimeout));
-
-    xcb_window_t w2 = create_window(conn, 80, 80, 320, 180);
-    map_window(conn, w2);
-    REQUIRE(wait_for_active_window(conn, w1, kTimeout));
-    REQUIRE(wait_for_condition([&]() { return is_hidden_offscreen(conn, w2); }, kTimeout));
-
-    send_client_message(conn, conn.root(), net_showing_desktop, 1);
-    REQUIRE(wait_for_property_cardinal(conn.get(), conn.root(), net_showing_desktop, 1, kTimeout));
-    REQUIRE(wait_for_condition([&] { return is_hidden_offscreen(conn, w1); }, kTimeout));
-    send_client_message(conn, conn.root(), net_showing_desktop, 0);
-    REQUIRE(wait_for_property_cardinal(conn.get(), conn.root(), net_showing_desktop, 0, kTimeout));
-
-    REQUIRE(wait_for_active_window(conn, w1, kTimeout));
-    REQUIRE(wait_for_condition(
-        [&]()
-        {
-            return has_state(conn, w1, net_wm_state_fullscreen) && !is_hidden_offscreen(conn, w1)
-                && is_hidden_offscreen(conn, w2);
-        },
-        kTimeout
-    ));
-
-    destroy_window(conn, w2);
-    destroy_window(conn, w1);
-}
-
-TEST_CASE(
-    "Integration: entering showing desktop arranges sticky tiled windows unsuppressed by fullscreen",
-    "[integration][focus][fullscreen][showdesktop][sticky]"
-)
-{
-    auto test_env = TestEnvironment::create();
-    if (!test_env)
-        SKIP("Test environment not available");
-
-    auto& conn = test_env->conn;
-
-    xcb_atom_t net_wm_state = intern_atom(conn.get(), "_NET_WM_STATE");
-    xcb_atom_t net_wm_state_fullscreen = intern_atom(conn.get(), "_NET_WM_STATE_FULLSCREEN");
-    xcb_atom_t net_wm_state_sticky = intern_atom(conn.get(), "_NET_WM_STATE_STICKY");
-    xcb_atom_t net_showing_desktop = intern_atom(conn.get(), "_NET_SHOWING_DESKTOP");
-    REQUIRE(net_wm_state != XCB_NONE);
-    REQUIRE(net_wm_state_fullscreen != XCB_NONE);
-    REQUIRE(net_wm_state_sticky != XCB_NONE);
-    REQUIRE(net_showing_desktop != XCB_NONE);
-
-    xcb_window_t owner = create_window(conn, 10, 10, 640, 360);
-    map_window(conn, owner);
-    REQUIRE(wait_for_active_window(conn, owner, kTimeout));
-    send_client_message(conn, owner, net_wm_state, 1, net_wm_state_fullscreen, 0, 0, 0);
-    REQUIRE(wait_for_condition([&]() { return has_state(conn, owner, net_wm_state_fullscreen); }, kTimeout));
-
-    xcb_window_t sticky = create_window(conn, 80, 80, 320, 180);
-    map_window(conn, sticky);
-    send_client_message(conn, sticky, net_wm_state, 1, net_wm_state_sticky, 0, 0, 0);
-    REQUIRE(wait_for_condition([&]() { return has_state(conn, sticky, net_wm_state_sticky); }, kTimeout));
-    REQUIRE(wait_for_active_window(conn, owner, kTimeout));
-    REQUIRE(wait_for_condition([&]() { return is_hidden_offscreen(conn, sticky); }, kTimeout));
-
-    send_client_message(conn, conn.root(), net_showing_desktop, 1);
-
-    REQUIRE(wait_for_condition([&]() { return !is_hidden_offscreen(conn, sticky); }, kTimeout));
-
-    destroy_window(conn, sticky);
-    destroy_window(conn, owner);
 }
 
 TEST_CASE(
@@ -1416,7 +1312,7 @@ TEST_CASE(
     destroy_window(conn, w1);
 }
 
-TEST_CASE("Integration: clear_focus clears _NET_WM_STATE_FOCUSED from previous window", "[integration][focus][ewmh]")
+TEST_CASE("Integration: a focus change clears _NET_WM_STATE_FOCUSED from the previous window", "[integration][focus][ewmh]")
 {
     auto test_env = TestEnvironment::create();
     if (!test_env)
@@ -1426,31 +1322,13 @@ TEST_CASE("Integration: clear_focus clears _NET_WM_STATE_FOCUSED from previous w
 
     xcb_atom_t net_wm_state = intern_atom(conn.get(), "_NET_WM_STATE");
     xcb_atom_t net_wm_state_focused = intern_atom(conn.get(), "_NET_WM_STATE_FOCUSED");
-    xcb_atom_t net_showing_desktop = intern_atom(conn.get(), "_NET_SHOWING_DESKTOP");
-    xcb_atom_t net_active_window = intern_atom(conn.get(), "_NET_ACTIVE_WINDOW");
     REQUIRE(net_wm_state != XCB_NONE);
     REQUIRE(net_wm_state_focused != XCB_NONE);
-    REQUIRE(net_showing_desktop != XCB_NONE);
-    REQUIRE(net_active_window != XCB_NONE);
 
     xcb_window_t w1 = create_window(conn, 20, 20, 320, 200);
     map_window(conn, w1);
     REQUIRE(wait_for_active_window(conn, w1, kTimeout));
     REQUIRE(wait_for_condition([&]() { return has_state(conn, w1, net_wm_state_focused); }, kTimeout));
-
-    // Trigger clear_focus() via showing desktop mode.
-    send_client_message(conn, conn.root(), net_showing_desktop, 1);
-    REQUIRE(wait_for_condition(
-        [&]()
-        {
-            auto value = get_window_property_window(conn.get(), conn.root(), net_active_window);
-            return value && *value == XCB_NONE;
-        },
-        kTimeout
-    ));
-
-    // Exit showing desktop and focus another window.
-    send_client_message(conn, conn.root(), net_showing_desktop, 0);
 
     xcb_window_t w2 = create_window(conn, 80, 80, 320, 200);
     map_window(conn, w2);
@@ -1755,12 +1633,6 @@ names = ["1", "2"]
     xcb_icccm_set_wm_hints(conn.get(), sticky, &hints);
     observe_title_after_events(conn, b);
     key(XK_F6, sticky);
-    send_client_message(conn, conn.root(), intern_atom(conn.get(), "_NET_SHOWING_DESKTOP"), 1);
-    observe_title_after_events(conn, b);
-    auto result = run_lwmctl(env->wm, { "focus", "next" });
-    REQUIRE(result);
-    REQUIRE(result->exit_code != 0);
-    REQUIRE(wait_for_x_input_focus(conn, conn.root(), kTimeout));
     for (auto window : { sticky, a, b }) destroy_window(conn, window);
 }
 

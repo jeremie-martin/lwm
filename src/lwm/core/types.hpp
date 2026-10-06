@@ -248,7 +248,6 @@ struct WindowObservation
     std::optional<uint32_t> desktop;          ///< _NET_WM_DESKTOP, including STICKY_DESKTOP
     WindowStates states;                      ///< _NET_WM_STATE
     bool accepts_input = true;                ///< WM_HINTS input (ICCCM default: true)
-    bool initially_iconic = false;            ///< WM_HINTS initial_state
     bool urgent = false;                      ///< WM_HINTS urgency
     bool supports_take_focus = false;
     uint32_t user_time = 0;
@@ -348,7 +347,7 @@ struct Client : ClientIntent
     xcb_window_t transient_for = XCB_NONE;
 
     bool fullscreen = false;     ///< _NET_WM_STATE_FULLSCREEN
-    bool iconic = false;         ///< _NET_WM_STATE_HIDDEN (minimized)
+    bool iconic = false;         ///< hidden by LWM (_NET_WM_STATE_HIDDEN)
     bool sticky = false;         ///< _NET_WM_STATE_STICKY
     bool maximized_horz = false; ///< Retained for any mode; only floating presentation honors it
     bool maximized_vert = false;

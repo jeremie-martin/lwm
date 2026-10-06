@@ -616,7 +616,7 @@ TEST_CASE(
 }
 
 TEST_CASE(
-    "Integration: WM_HINTS rewrite does not restore a user-iconified window",
+    "Integration: WM_HINTS rewrite does not restore a stashed window",
     "[integration][property][wm_hints][wm_state]"
 )
 {
@@ -626,11 +626,9 @@ TEST_CASE(
 
     auto& conn = test_env->conn;
     xcb_atom_t wm_state = intern_atom(conn.get(), "WM_STATE");
-    xcb_atom_t wm_change_state = intern_atom(conn.get(), "WM_CHANGE_STATE");
     xcb_atom_t net_wm_state = intern_atom(conn.get(), "_NET_WM_STATE");
     xcb_atom_t net_wm_state_hidden = intern_atom(conn.get(), "_NET_WM_STATE_HIDDEN");
     REQUIRE(wm_state != XCB_NONE);
-    REQUIRE(wm_change_state != XCB_NONE);
     REQUIRE(net_wm_state != XCB_NONE);
     REQUIRE(net_wm_state_hidden != XCB_NONE);
 
@@ -639,7 +637,7 @@ TEST_CASE(
     REQUIRE(wait_for_active_window(conn, window, kTimeout));
     REQUIRE(get_wm_state(conn, window, wm_state) == XCB_ICCCM_WM_STATE_NORMAL);
 
-    send_client_message(conn, window, wm_change_state, XCB_ICCCM_WM_STATE_ICONIC);
+    ipc_ok("scratchpad stash");
     REQUIRE(wait_for_condition(
         [&]()
         {

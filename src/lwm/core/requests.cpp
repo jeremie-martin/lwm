@@ -42,13 +42,6 @@ void State::request_states(xcb_window_t id, StateChange change, WindowStates req
         modal(id, enable(client->modal));
     if (requested.has(WindowState::DemandsAttention))
         urgency(id, UrgencySource::App, enable(client->urgency.has(UrgencySource::App)));
-    if (requested.has(WindowState::Hidden))
-    {
-        if (enable(client->iconic))
-            iconic(id, true);
-        else
-            restore(id, false);
-    }
     if (requested.has(WindowState::MaximizedHorz) || requested.has(WindowState::MaximizedVert))
         maximize(id, horizontal, vertical);
     if (fullscreen && requested.has(WindowState::Fullscreen))

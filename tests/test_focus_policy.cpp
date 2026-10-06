@@ -52,11 +52,6 @@ TEST_CASE("Automatic focus excludes clients that cannot hold focus", "[focus][po
         REQUIRE(focus::fallback(state, 1) == 1);
     }
     SECTION("Hidden workspace") { state.relocate(1, 0, 1); }
-    SECTION("Showing desktop includes sticky clients")
-    {
-        state.sticky(1, true);
-        state.show_desktop(true);
-    }
     SECTION("Neither input protocol") { state.focus_hints(1, false, false); }
     SECTION("Fullscreen suppression")
     {
@@ -111,8 +106,6 @@ TEST_CASE("MRU traversal keeps its order but reads eligibility and lifetime live
     REQUIRE(focus::cycle_target(order, state, 0, 4, true) == 2);
     REQUIRE(focus::cycle_target(order, state, 0, 999, true) == 4);
     REQUIRE(focus::cycle_target(order, state, 0, 999, false) == 1);
-    state.show_desktop(true);
-    REQUIRE(focus::cycle_target(order, state, 0, 4, true) == XCB_NONE);
     REQUIRE(focus::cycle_target({ }, state, 0, 4, false) == XCB_NONE);
 }
 
@@ -177,13 +170,6 @@ TEST_CASE("Activation owns restoration and placement and refuses ineligible clie
     {
         state.focus_hints(1, false, false);
         state.focus(1);
-    }
-    SECTION("Desktop is shown")
-    {
-        state.show_desktop(true);
-        state.focus(1);
-        CHECK(state.active_window() == XCB_NONE);
-        state.show_desktop(false);
     }
     state.settle();
     CHECK(state.active_window() == 2);

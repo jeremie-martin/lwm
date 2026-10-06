@@ -96,7 +96,6 @@ constexpr CommandSpec fixed(std::string_view name, std::string_view help, std::s
 constexpr CommandSpec specs[] = {
     fixed<Query::Ping>("ping", "ping", "check whether the WM is running"),
     fixed<Query::Version>("version", "version", "show WM version"),
-    fixed<Query::LogStatus>("log status", "log status", "show logging configuration and backend notifications as JSON"),
     fixed<Query::State>("state", "state", "print one consistent state snapshot"),
     fixed<ReloadConfig{ }>("reload-config", "reload-config", "reload configuration"),
     fixed<Restart{ }>("restart", "restart", "restart the WM"),

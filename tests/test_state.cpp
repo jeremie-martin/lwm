@@ -165,9 +165,6 @@ TEST_CASE("Visibility is derived from workspace, iconic, sticky and show-desktop
     CHECK_FALSE(state.visible(client));
     state.sticky(1, true);
     CHECK(state.visible(client));
-    // Sticky clients stay visible while the desktop is shown; others hide.
-    state.show_desktop(true);
-    CHECK(state.visible(client));
     state.sticky(1, false);
     CHECK_FALSE(state.in_view(client));
 }
@@ -198,8 +195,6 @@ TEST_CASE("The most recent fullscreen claim in view owns its monitor", "[state][
     state.sticky(1, true);
     CHECK(state.fullscreen_owners().at(0) == 1);
     CHECK(state.fullscreen_owners() == std::vector<xcb_window_t>{ 1, XCB_NONE });
-    state.show_desktop(true);
-    CHECK(state.fullscreen_owners().at(0) == XCB_NONE);
     // Fullscreen supersedes maximize.
     state.maximize(3, true, true);
     state.fullscreen(3, true);
@@ -322,7 +317,6 @@ TEST_CASE("Fullscreen assignments preserve history while requests renew it", "[s
     SECTION("Visible") { }
     SECTION("Off workspace") { state.switch_workspace(0, 1); }
     SECTION("Minimized") { state.iconic(1, true); }
-    SECTION("Showing desktop") { state.show_desktop(true); }
     auto claims = state.fullscreen_claims();
     state.settle();
     auto revision = state.revision();
@@ -338,8 +332,7 @@ TEST_CASE("Fullscreen assignments preserve history while requests renew it", "[s
     state.settle();
     CHECK(state.active_window() == (state.focusable(state.require(1)) ? 1
                                   : state.focusable(state.require(2)) ? 2 : XCB_NONE));
-    // A request changes priority, not placement, minimization or show-desktop.
-    state.show_desktop(false);
+    // A request changes priority, not placement or minimization.
     state.switch_workspace(0, 0);
     if (state.require(1).iconic)
         CHECK(state.fullscreen_owners().at(0) == 2);
@@ -578,19 +571,12 @@ TEST_CASE("A projection contains every client once with its final visible rectan
         state.transient(2, 9);
         state.geometry(2, { 10, 10, 200, 100 });
     }
-    SECTION("Showing desktop") { state.show_desktop(true); }
     state.freeze();
     auto clients = state.project(state.fullscreen_visibility());
     state.thaw();
     std::vector<xcb_window_t> order;
     for (auto const& projected : clients) order.push_back(projected.client->id);
     REQUIRE(order == std::vector<xcb_window_t>{ 9, 2, 7, 4, 8, 6 });
-    if (state.showing_desktop())
-    {
-        for (size_t i = 0; i < 5; ++i) CHECK_FALSE(clients[i].presentation);
-        CHECK(shown(clients[5]) == Geometry{ 0, 0, 1000, 800 });
-        return;
-    }
     CHECK(shown(clients[0]) == Geometry{ 0, 0, static_cast<uint16_t>(fullscreen ? 1000 : 500), 800 });
     CHECK(shown(clients[1]) == Geometry{ 0, 10, 1000, 100 });
     CHECK_FALSE(clients[2].presentation);
@@ -659,12 +645,16 @@ TEST_CASE("Admission derives roles and placement from observations alone", "[sta
     auto const& placed = floating_mode(state.require(5))->geometry;
     CHECK(placed.x + placed.width / 2 == parent_area.x + parent_area.width / 2);
 
-    WindowObservation hinted{ .id = 6,
-                              .states = [] { WindowStates states; states.set(WindowState::Fullscreen); return states; }(),
-                              .initially_iconic = true };
+    // Applications cannot start minimized: only LWM hides windows.
+    WindowObservation hinted{ .id = 6, .states = [] {
+        WindowStates states;
+        states.set(WindowState::Fullscreen);
+        states.set(WindowState::Hidden);
+        return states;
+    }() };
     state.admit(hinted);
     CHECK(state.require(6).fullscreen);
-    CHECK(state.require(6).iconic);
+    CHECK_FALSE(state.require(6).iconic);
     CHECK(state.fullscreen_claims().back() == 6);
 }
 

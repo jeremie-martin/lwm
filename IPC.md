@@ -59,14 +59,13 @@ target the focused monitor; indices are zero-based.
 Consecutive `focus next` / `focus prev` commands retain their starting recent-use
 order, including sticky windows, and skip ineligible clients. Activation, a changed
 monitor/workspace or active window, or a new registration starts a fresh traversal.
-Cycling fails when no window is eligible, including while showing the desktop.
+Cycling fails when no window is eligible.
 
 | Command | Result |
 | --- | --- |
 | `ping` | `pong` |
 | `state` | consistent combined state snapshot as JSON |
 | `version` | LWM version |
-| `log status` | logging configuration and backend notifications as JSON |
 | `reload-config` | reload the configured file |
 | `restart` | exec-restart the current binary |
 | `exec PATH` | restart with another binary |
@@ -104,27 +103,6 @@ retryable. Successful exec does not guarantee a matching window: `scratchpad can
 clears a pending launch so the user can retry. It is a no-op for an empty or already
 claimed slot and rejects unknown names. It does not terminate a process; a late matching
 window can still be claimed. Both named scratchpad commands reject unknown names.
-
-## Logging status
-
-`lwmctl log status` is read-only. It returns:
-
-```json
-{"target":"journal","level":"info","instance":"1336-43855073878725","active":true,"backend_notifications":0,"last_backend_notification":""}
-```
-
-`active` means a logger is enabled, not that output has been delivered. It is false at
-level `off` and after shutdown. Initialization failures are reported by the CLI before
-the WM starts.
-
-`backend_notifications` counts Quill notifications, including overflow summaries,
-formatting errors, and reported sink errors. `last_backend_notification` retains the
-first 1 KiB of the latest notification. Notifications are asynchronous and are not an exact count of dropped messages:
-overflow is summarized, a stalled worker cannot report until it resumes, and libsystemd
-accepts an absent journal silently. Successful sends do not confirm durable storage.
-
-The count and logging `instance` survive failed exec and reset on successful exec; the
-logger outlives the WM reconstructed after a failed exec.
 
 ## JSON results
 

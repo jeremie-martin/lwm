@@ -145,7 +145,6 @@ TEST_CASE("Integration: invalidating a dragged window releases the pointer", "[i
     observe_title_after_events(conn, marker);
     REQUIRE(grab(conn) == XCB_GRAB_STATUS_ALREADY_GRABBED);
     SECTION("destroy") { destroy_window(conn, window); }
-    SECTION("iconify") { send_client_message(conn, window, intern_atom(conn.get(), "WM_CHANGE_STATE"), 3); }
     SECTION("fullscreen")
     {
         send_client_message(
@@ -183,7 +182,7 @@ TEST_CASE("Integration: tiled drops translate visible slots past iconic members"
         }
     );
     auto hidden = windows[1];
-    send_client_message(conn, hidden, intern_atom(conn.get(), "WM_CHANGE_STATE"), 3);
+    stash(hidden);
     observe_title_after_events(conn, windows[0]);
     SECTION("with a sticky guest from another workspace")
     {
@@ -261,7 +260,7 @@ TEST_CASE("Integration: split resize ends when its participants change", "[integ
     send_pointer_event(conn, XCB_BUTTON_PRESS, x, y);
     observe_title_after_events(conn, first);
     REQUIRE(grab(conn) == XCB_GRAB_STATUS_ALREADY_GRABBED);
-    send_client_message(conn, second, intern_atom(conn.get(), "WM_CHANGE_STATE"), 3);
+    send_client_message(conn, second, intern_atom(conn.get(), "_NET_WM_DESKTOP"), 1);
     observe_title_after_events(conn, first);
     expect_released(conn);
     auto settled = require_window_geometry(conn, first);

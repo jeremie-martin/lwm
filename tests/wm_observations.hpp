@@ -13,6 +13,13 @@ inline std::string ipc_ok(std::string const& command)
     return *reply;
 }
 
+// Hides a window the only way LWM hides one: focusing it and stashing it.
+inline void stash(xcb_window_t window)
+{
+    ipc_ok("focus window=" + std::to_string(window));
+    ipc_ok("scratchpad stash");
+}
+
 // Sends a query that must succeed and returns its JSON value.
 inline nlohmann::json ipc_json(std::string const& command)
 {

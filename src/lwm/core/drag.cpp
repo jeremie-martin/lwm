@@ -11,7 +11,7 @@ namespace lwm {
 bool State::can_drag(xcb_window_t id) const
 {
     auto const* client = find(id);
-    return !drag_ && client && visible(*client) && !client->fullscreen && !showing_desktop_;
+    return !drag_ && client && visible(*client) && !client->fullscreen;
 }
 
 State::Press State::press(xcb_window_t window, int16_t x, int16_t y, uint8_t button, uint16_t modifiers, uint32_t time)
@@ -176,8 +176,7 @@ bool State::drag_valid() const
     {
         auto const* client = find(window->window);
         return client && client->tiled() == window->tiled && visible(*client) && !client->fullscreen
-            && !presents_maximized(*client) && client->monitor == window->monitor && client->workspace == window->workspace
-            && !showing_desktop_;
+            && !presents_maximized(*client) && client->monitor == window->monitor && client->workspace == window->workspace;
     }
     auto const& split = std::get<SplitDrag>(drag_->operation);
     if (split.monitor >= monitors_.size())

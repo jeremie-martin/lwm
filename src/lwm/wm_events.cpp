@@ -69,20 +69,17 @@ void WindowManager::handle_event(xcb_generic_event_t const& event)
         if (type != XCB_PROPERTY_NOTIFY)
             last_input_time_ = time;
     }
-    if (conn_.has_randr())
+    if (type == conn_.randr_event_base() + XCB_RANDR_SCREEN_CHANGE_NOTIFY)
     {
-        if (type == conn_.randr_event_base() + XCB_RANDR_SCREEN_CHANGE_NOTIFY)
-        {
+        monitors_dirty_ = true;
+        return;
+    }
+    if (type == conn_.randr_event_base() + XCB_RANDR_NOTIFY)
+    {
+        auto const& notify = reinterpret_cast<xcb_randr_notify_event_t const&>(event);
+        if (notify.subCode == XCB_RANDR_NOTIFY_CRTC_CHANGE || notify.subCode == XCB_RANDR_NOTIFY_OUTPUT_CHANGE)
             monitors_dirty_ = true;
-            return;
-        }
-        if (type == conn_.randr_event_base() + XCB_RANDR_NOTIFY)
-        {
-            auto const& notify = reinterpret_cast<xcb_randr_notify_event_t const&>(event);
-            if (notify.subCode == XCB_RANDR_NOTIFY_CRTC_CHANGE || notify.subCode == XCB_RANDR_NOTIFY_OUTPUT_CHANGE)
-                monitors_dirty_ = true;
-            return;
-        }
+        return;
     }
 
     switch (type)
@@ -157,7 +154,7 @@ void WindowManager::handle_map_request(xcb_map_request_event_t const& e)
 {
     if (state_.find(e.window))
     {
-        state_.restore(e.window, true);
+        state_.restore(e.window);
         return;
     }
     if (state_.find_fixture(e.window))
@@ -314,8 +311,6 @@ void WindowManager::handle_client_message(xcb_client_message_event_t const& e)
             e.window,
             FullscreenMonitors{ e.data.data32[0], e.data.data32[1], e.data.data32[2], e.data.data32[3] }
         );
-    else if (e.type == atoms_.wm_change_state && e.data.data32[0] == XCB_ICCCM_WM_STATE_ICONIC && client)
-        state_.iconic(e.window, true);
     else if (e.type == ewmh->_NET_WM_STATE)
         handle_wm_state_change(e);
     else if (e.type == ewmh->_NET_CURRENT_DESKTOP)
@@ -339,8 +334,6 @@ void WindowManager::handle_client_message(xcb_client_message_event_t const& e)
         handle_moveresize_window(e);
     else if (e.type == ewmh->_NET_WM_MOVERESIZE)
         handle_wm_moveresize(e);
-    else if (e.type == ewmh->_NET_SHOWING_DESKTOP)
-        state_.show_desktop(e.data.data32[0] != 0);
     else if (e.type == ewmh->_NET_RESTACK_WINDOW)
         handle_restack_message(e);
 }

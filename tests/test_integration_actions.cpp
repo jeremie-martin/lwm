@@ -145,7 +145,7 @@ TEST_CASE("Integration: window close reaches clients without the delete protocol
     CHECK(*reply == "error no active window");
 }
 
-TEST_CASE("Integration: closing asks first, and closing again kills", "[integration][ipc][actions][close]")
+TEST_CASE("Integration: closing asks first and closing again kills", "[integration][ipc][actions][close]")
 {
     auto env = TestEnvironment::create();
     if (!env)

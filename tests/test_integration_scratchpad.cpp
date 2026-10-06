@@ -666,12 +666,12 @@ TEST_CASE(
 }
 
 TEST_CASE(
-    "Integration: pool selection survives workspace hiding minimization and focus changes",
+    "Integration: pool selection survives workspace hiding and focus changes",
     "[integration][scratchpad][pool-rotation]"
 )
 {
     bool floating = GENERATE(false, true);
-    auto hidden_by = GENERATE("workspace", "minimize");
+    auto hidden_by = GENERATE("workspace", "cycle");
     CAPTURE(floating, hidden_by);
     auto env = TestEnvironment::create("[workspaces]\nnames = [\"1\", \"2\"]\n");
     REQUIRE(env);
@@ -689,7 +689,7 @@ TEST_CASE(
     if (std::string_view(hidden_by) == "workspace")
         ipc_ok("workspace switch 1");
     else
-        send_client_message(conn, window, intern_atom(conn.get(), "WM_CHANGE_STATE"), 3);
+        ipc_ok("scratchpad cycle");
     REQUIRE(wait_for_condition([&] { return is_hidden_offscreen(conn, window); }, kTimeout));
     ipc_ok("scratchpad cycle");
     REQUIRE(wait_for_active_window(conn, window, kTimeout));

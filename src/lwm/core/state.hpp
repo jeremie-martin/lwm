@@ -174,20 +174,18 @@ public:
     // Focus
     xcb_window_t active_window() const { return active_window_; }
     size_t focused_monitor() const { return focused_monitor_; }
-    bool showing_desktop() const { return showing_desktop_; }
-    // Activation restores a minimized client and selects its workspace. Unknown or
+    // Activation restores a hidden client and selects its workspace. Unknown or
     // clients without input or WM_TAKE_FOCUS are refused; NONE releases focus
     // until a later choice, which settling does not override.
     void focus(xcb_window_t id, uint32_t time = 0, bool record_user_time = true);
     bool cycle_focus(bool forward);
-    void restore(xcb_window_t id, bool activate);
+    void restore(xcb_window_t id);
     void focus_monitor(size_t monitor);
     // Focus the adjacent monitor's fallback; returns whether the monitor changed.
     bool focus_adjacent_monitor(int direction);
     // Outside drags, focus follows the pointer into visible clients; elsewhere
     // the pointer selects the monitor under it and releases focus there.
     void hover(xcb_window_t window, int16_t x, int16_t y);
-    void show_desktop(bool enabled);
     // Settle one operation: end a drag whose context changed, then resolve
     // eligibility, recency and user time for the final focus. input_time is the
     // latest observed input timestamp. Returns the explicit focus request's time.
@@ -206,7 +204,7 @@ public:
     // Move the active client to the adjacent monitor's current workspace.
     bool move_to_monitor(int direction);
     void floating(xcb_window_t id, bool enabled);
-    // The user's float toggle focuses the client; it leaves fullscreen, minimized
+    // The user's float toggle focuses the client; it leaves fullscreen, hidden
     // and show-desktop presentation alone. Leaving floating also leaves maximize.
     void toggle_floating(xcb_window_t id);
     void geometry(xcb_window_t id, Geometry rectangle);
@@ -284,7 +282,7 @@ public:
     std::expected<ScratchpadConfig const*, std::string> toggle_scratchpad(std::string_view name);
     void scratchpad_pending(std::string_view name, bool pending);
     void pool_scratchpad(xcb_window_t id);
-    // Hide the client in the pool. Claims, fullscreen, minimized and dragged
+    // Hide the client in the pool. Claims, fullscreen, hidden and dragged
     // clients are left alone.
     void stash(xcb_window_t id);
     // Recall or focus the pool target; an active local target rotates the pool.
@@ -329,7 +327,6 @@ private:
     std::vector<xcb_window_t> fullscreen_claims_;
     xcb_window_t active_window_ = XCB_NONE;
     size_t focused_monitor_ = 0;
-    bool showing_desktop_ = false;
     std::optional<FocusRequest> focus_request_;
     std::vector<xcb_window_t> focus_cycle_;
     bool focus_released_ = false; ///< Focus was deliberately cleared, not left without a candidate

@@ -1,8 +1,6 @@
 #include "log.hpp"
-#include <rfl/json/write.hpp>
 #include <chrono>
 #include <csignal>
-#include <mutex>
 #include <quill/Backend.h>
 #include <quill/sinks/ConsoleSink.h>
 #include <quill/sinks/SystemdSink.h>
@@ -11,12 +9,6 @@
 namespace lwm::log {
 namespace {
 Logger* logger = nullptr;
-LogOptions options;
-std::string instance;
-// Only exceptional backend notifications and explicit status queries take this lock.
-std::mutex notification_mutex;
-uint64_t notifications = 0;
-std::string last_notification;
 }
 Logger* active_logger() noexcept { return logger; }
 std::expected<quill::LogLevel, std::string> parse_level(std::string_view value)
@@ -69,12 +61,8 @@ std::expected<Target, std::string> parse_target(std::string_view value)
 std::expected<void, std::string> initialize(LogOptions config)
 {
     shutdown();
-    options = config;
     try
     {
-        if (instance.empty())
-            instance = std::to_string(getpid()) + "-"
-                + std::to_string(std::chrono::steady_clock::now().time_since_epoch().count());
         if (config.level == quill::LogLevel::None)
             return { };
 
@@ -108,13 +96,9 @@ std::expected<void, std::string> initialize(LogOptions config)
                 configured = true;
             }
         };
-        backend.error_notifier = [](std::string const& message)
-        {
-            // Never report backend errors through another potentially blocked sink.
-            std::lock_guard lock(notification_mutex);
-            ++notifications;
-            last_notification = message.substr(0, 1024);
-        };
+        // Backend errors and overflow summaries are dropped: reporting them could
+        // block on the stalled destination they describe.
+        backend.error_notifier = [](std::string const&) { };
         quill::Backend::start(backend);
         Frontend::preallocate();
         logger = Frontend::create_or_get_logger(
@@ -139,21 +123,5 @@ void shutdown()
     // Standard sinks may wait for the destination. The WM thread stops submitting
     // before joining the worker; normal event handling never flushes or waits.
     quill::Backend::stop();
-}
-std::string status_json()
-{
-    struct Status
-    {
-        std::string_view target, level, instance;
-        bool active;
-        uint64_t backend_notifications;
-        std::string_view last_backend_notification;
-    };
-    std::lock_guard lock(notification_mutex);
-    return rfl::json::write(
-        Status{ options.target == Target::Journal ? "journal" : "stderr", level_name(options.level), instance,
-                logger != nullptr, notifications, last_notification },
-        YYJSON_WRITE_ALLOW_INVALID_UNICODE
-    );
 }
 } // namespace lwm::log
