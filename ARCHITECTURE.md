@@ -339,7 +339,7 @@ encoded with reflect-cpp over yyjson as `UTF8_STRING` JSON whose `format` field 
 the schema. Decoding rejects duplicate or extra fields, ambiguous variant tags and
 narrowing, then validates the persistent graph with the same validator Debug builds
 use. Any malformed or incompatible snapshot is rejected whole and windows are adopted
-afresh. Schema changes bump `restart::format`; there is no migration.
+afresh, as they are when a snapshot too large for one X request is not saved. Schema changes bump `restart::format`; there is no migration.
 
 Restoration overlays saved intent on surviving observations, installs the saved
 graph, rebinds it to discovered outputs through the live topology code (folding fewer

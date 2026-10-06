@@ -16,7 +16,8 @@ IPC runs over the X display named by `DISPLAY`; there is no separate socket. Any
 that can open the display can command LWM, which matches what such a client can
 already do through EWMH and XTEST.
 
-The running LWM owns the ICCCM `WM_S0` selection. A command is UTF-8 text in the
+The running LWM owns the ICCCM `WM_S0` selection with a window whose `_NET_WM_NAME` is
+`lwm`, set before it claims the screen. A command is UTF-8 text in the
 `_LWM_COMMAND` property of a window the caller owns, announced to the selection owner
 window by a `_LWM_COMMAND` ClientMessage (format 32, `data.l[0]` = that window, sent
 with an empty event mask). LWM reads and deletes the property, executes the command,
