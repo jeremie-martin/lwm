@@ -88,7 +88,7 @@ action = "toggle_float"
 # key: one combo string, e.g. "super+Return", "super+shift+Left", "Print"
 # Each [[binds]] entry has one action: WM command text or a process command table.
 # Actions use the same command text as lwmctl, without the executable name.
-# Queries and watch cannot be bound; invalid commands fail configuration loading.
+# Queries cannot be bound; invalid commands fail configuration loading.
 # Keys use X11 keysym names. Duplicate modifier/keysym pairs are rejected,
 # including aliases and reordered modifiers.
 # Defining any [[binds]] starts from an empty key-binding set; list every

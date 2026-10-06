@@ -132,13 +132,16 @@ void WindowManager::handle_command(xcb_window_t requester)
     ));
     if (!request || request->type == XCB_NONE)
         return; // Not a request: the property is missing or the window is gone.
-    auto response = request->type != utf8 || request->format != 8 ? "error request must be UTF-8 text"
+    bool stopping = stop_.has_value();
+    std::string response = request->type != utf8 || request->format != 8 ? "error request must be UTF-8 text"
         : request->bytes_after                                    ? "error request too large"
         : handle_request({ static_cast<char const*>(xcb_get_property_value(request.get())),
                            static_cast<size_t>(xcb_get_property_value_length(request.get())) });
     complete_transition();
+    if (!conn_.fits_property(response.size()))
+        response = "error response too large";
     xcb_change_property(c, XCB_PROP_MODE_REPLACE, requester, atoms_.lwm_reply, utf8, 8, response.size(), response.data());
-    if (stop_ == RunResult::Restart)
+    if (!stopping && stop_ == RunResult::Restart)
         restart_requester_ = requester;
 }
 

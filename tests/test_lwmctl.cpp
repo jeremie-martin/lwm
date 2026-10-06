@@ -7,14 +7,16 @@ using namespace lwm::test;
 
 namespace {
 // Owns WM_S0 on a display without a WM and answers each command with a scripted
-// reply, exercising the real CLI's protocol independently of LWM.
+// reply, exercising the real CLI's protocol independently of LWM. A foreign WM
+// publishes no state.
 struct FakeWm
 {
     enum class Answer
     {
         Reply,
         Silence,
-        Exit
+        Exit,
+        Foreign
     };
 
     X11Connection conn;
@@ -34,6 +36,9 @@ struct FakeWm
         auto response = intern_atom(conn.get(), "_LWM_REPLY");
         auto utf8 = intern_atom(conn.get(), "UTF8_STRING");
         REQUIRE(wm_owner(conn) == window);
+        if (answer != Answer::Foreign)
+            xcb_change_property(conn.get(), XCB_PROP_MODE_REPLACE, window, intern_atom(conn.get(), "_LWM_STATE"), utf8, 8, 2, "{}");
+        xcb_flush(conn.get());
         thread = std::jthread(
             [=, this](std::stop_token stop)
             {
@@ -118,6 +123,15 @@ TEST_CASE("lwmctl distinguishes a missing, silent and exiting WM", "[ipc][lwmctl
         REQUIRE(result);
         CHECK(result->exit_code == 1);
         CHECK(result->stderr_text == "lwmctl: lwm is not running\n");
+    }
+    SECTION("another WM owns the screen")
+    {
+        FakeWm wm("ok", FakeWm::Answer::Foreign);
+        auto result = run_command(lwmctl_executable_path(), { "ping" });
+        REQUIRE(result);
+        CHECK(result->exit_code == 1);
+        CHECK(result->stderr_text == "lwmctl: lwm is not running\n");
+        CHECK(wm.received().empty());
     }
     SECTION("a silent WM times out with an unknown outcome")
     {

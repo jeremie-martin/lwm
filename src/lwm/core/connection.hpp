@@ -27,6 +27,8 @@ public:
     uint8_t randr_event_base() const { return randr_event_base_; }
 
     void flush() { xcb_flush(conn_.get()); }
+    // A request beyond the server's maximum length would close the connection.
+    bool fits_property(size_t bytes) const { return bytes / 4 + 7 <= xcb_get_maximum_request_length(conn_.get()); }
     // Flush and wait until the server has processed every earlier request.
     void sync()
     {

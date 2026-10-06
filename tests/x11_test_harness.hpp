@@ -968,7 +968,12 @@ send_ipc_command(std::string const& command, std::chrono::milliseconds timeout =
                 auto const* property = reinterpret_cast<xcb_property_notify_event_t const*>(event);
                 if ((event->response_type & ~0x80) == XCB_PROPERTY_NOTIFY && property->atom == reply
                     && property->state == XCB_PROPERTY_NEW_VALUE)
-                    response = get_window_property_string(conn.get(), requester, reply).value_or("");
+                {
+                    // Query replies can exceed the bounded read of other test helpers.
+                    auto* value = xcb_get_property_reply(conn.get(), xcb_get_property(conn.get(), 0, requester, reply, utf8, 0, UINT32_MAX / 4), nullptr);
+                    response = value ? std::string(static_cast<char const*>(xcb_get_property_value(value)), xcb_get_property_value_length(value)) : "";
+                    free(value);
+                }
                 free(event);
             }
             return response.has_value();

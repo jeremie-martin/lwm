@@ -163,3 +163,28 @@ TEST_CASE("Integration: watch follows an exec restart", "[integration][watch][re
     ));
     destroy_window(conn, window);
 }
+
+TEST_CASE("Integration: a state too large for one X request is withheld rather than fatal", "[integration][watch]")
+{
+    auto env = TestEnvironment::create();
+    if (!env)
+        SKIP("X11 unavailable");
+    auto& conn = env->conn;
+    // Control bytes expand sixfold as JSON escapes: maximal titles and classes add
+    // about 70 KB of state per window, enough to exceed the server's request limit.
+    std::string text(4096, '\x01');
+    auto count = xcb_get_maximum_request_length(conn.get()) * 4 / 70000 + 20;
+    std::vector<xcb_window_t> windows;
+    for (size_t i = 0; i < count; ++i)
+    {
+        windows.push_back(create_window(conn, 10, 10, 50, 50));
+        set_window_title(conn, windows.back(), text);
+        set_window_wm_class(conn, windows.back(), text, text);
+        map_window(conn, windows.back());
+    }
+    REQUIRE(wait_for_active_window(conn, windows.back(), std::chrono::seconds(10)));
+    CHECK(send_ipc_command("state", std::chrono::seconds(10)) == "error response too large");
+    CHECK(send_ipc_command("ping") == "ok pong");
+    CHECK(env->wm.running());
+    for (auto window : windows) destroy_window(conn, window);
+}

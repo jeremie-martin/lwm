@@ -105,6 +105,7 @@ TEST_CASE("Startup failure exits without disturbing the running WM", "[integrati
     auto env = TestEnvironment::create();
     REQUIRE(env);
     auto instance = wm_instance(env->conn);
+    REQUIRE(instance);
     LwmProcess duplicate(X11TestEnvironment::instance().display());
     auto status = duplicate.wait_for_exit(std::chrono::seconds(2));
     REQUIRE(status);

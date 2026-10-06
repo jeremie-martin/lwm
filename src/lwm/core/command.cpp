@@ -158,7 +158,7 @@ std::span<CommandSpec const> command_specs() { return specs; }
 
 std::expected<Request, std::string> parse_command(std::string_view text)
 {
-    if (text.size() + 1 >= max_request_bytes)
+    if (text.size() >= max_request_bytes)
         return std::unexpected("request too large");
     text = trim(text);
     if (text.find_first_of(std::string_view("\n\r\0", 3)) != text.npos)

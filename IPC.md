@@ -31,11 +31,12 @@ The reply follows the operation's effects on LWM's own connection, so the X serv
 applied them before the caller can observe the reply. Commands execute in the order
 LWM receives their messages, interleaved with other X events. Requests must be shorter
 than 4096 bytes; anything else gets `error request too large` or `error request must be
-UTF-8 text`.
+UTF-8 text`. A reply or state too large for one X request is refused (`error response
+too large`) or left unpublished, with a warning in the log.
 
 `lwmctl` performs this exchange from a private window. Actions reply `ok` and print
 nothing; queries reply `ok VALUE` and print `VALUE`. Errors print to stderr with exit
-status 1: `lwm is not running` when no WM owns the screen, `lwm exited before replying`
+status 1: `lwm is not running` when no WM, or a WM other than LWM, owns the screen, `lwm exited before replying`
 when the owner window disappears while waiting, and a timeout after `--timeout MS`
 (1–600000, default 2000). A timeout or exit leaves the outcome unknown, because LWM
 may have executed the command; do not retry toggles blindly.
@@ -49,7 +50,8 @@ resemble options, and shell-quote names or paths containing spaces.
 
 Queries read current state. Mutating commands are also accepted verbatim in a
 binding's `action` string, for example `action = "window fullscreen"`; both use one
-parser and executor. Queries and `watch` cannot be bound. Bindings use a
+parser and executor. Queries cannot be bound. `lwmctl watch` is not a command sent
+to LWM; it reads the published state directly (see [Watching state](#watching-state)). Bindings use a
 structured `action` table to launch processes; IPC callers can launch processes
 themselves. Commands concerning the active window return
 `error no active window` when none is selected. Relative monitor/workspace commands
@@ -64,7 +66,6 @@ Cycling fails when no window is eligible, including while showing the desktop.
 | --- | --- |
 | `ping` | `pong` |
 | `state` | consistent combined state snapshot as JSON |
-| `watch` | the state snapshot now and after every change, one JSON line each |
 | `version` | LWM version |
 | `log status` | logging configuration and backend notifications as JSON |
 | `reload-config` | reload the configured file |
@@ -208,7 +209,9 @@ so it cannot miss a change, and it prints only a value that differs from the pre
 line. Changes within one operation appear as one state; consecutive changes may
 coalesce into the latest state, so a watcher sees current state, not a history.
 Read-only commands and no-op actions print nothing. The state covers only the fields
-above, not window geometry: a pointer drag publishes its outcome when it ends.
+above, not window geometry. Publication pauses while a pointer drag is active, so
+`watch` shows the drag's outcome and any change made meanwhile when it ends; `state`
+always answers with the current state.
 
 The property dies with the WM's X connection. `watch` follows exec restart and failed-exec
 recovery to the successor, which announces itself with the ICCCM `MANAGER` message, and

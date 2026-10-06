@@ -173,6 +173,13 @@ bool WindowManager::publish(
     auto [it, inserted] = properties_.try_emplace({ window, property });
     if (!inserted && (it->second && bytes ? *it->second == *bytes : !it->second && !bytes))
         return false;
+    if (bytes && !conn_.fits_property(bytes->size()))
+    {
+        LWM_LOG_WARN_LIMIT(std::chrono::seconds(5), "Property too large to publish: window={:#x} bytes={}", window, bytes->size());
+        if (inserted)
+            properties_.erase(it);
+        return false;
+    }
     if (bytes)
         xcb_change_property(
             conn_.get(), XCB_PROP_MODE_REPLACE, window, property, type, format, bytes->size() * 8 / format, bytes->data()

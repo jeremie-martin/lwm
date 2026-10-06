@@ -60,6 +60,15 @@ public:
         auto reply = lwm::reply(xcb_get_selection_owner_reply(conn(), xcb_get_selection_owner(conn(), selection), nullptr));
         return reply ? reply->owner : XCB_NONE;
     }
+    // The screen's WM, if it is LWM: another WM's owner window carries no state.
+    xcb_window_t lwm_owner() const
+    {
+        auto window = owner();
+        auto state = lwm::reply(xcb_get_property_reply(
+            conn(), xcb_get_property(conn(), 0, window, this->state, XCB_GET_PROPERTY_TYPE_ANY, 0, 0), nullptr
+        ));
+        return state && state->type != XCB_NONE ? window : XCB_NONE;
+    }
     // Selects events on a window; false if it no longer exists.
     bool select(xcb_window_t window, uint32_t events) const
     {
@@ -79,7 +88,7 @@ public:
     }
 
     // Declared after the connection, which initializes first.
-    xcb_atom_t const selection = atom("WM_S0"), utf8 = atom("UTF8_STRING");
+    xcb_atom_t const selection = atom("WM_S0"), utf8 = atom("UTF8_STRING"), state = atom("_LWM_STATE");
 };
 
 // Sends one command from a private requester window and waits for its reply.
@@ -89,7 +98,7 @@ int run(std::string const& request, std::chrono::milliseconds timeout)
     Display x;
     auto* conn = x.conn();
     xcb_atom_t command = x.atom("_LWM_COMMAND"), reply = x.atom("_LWM_REPLY");
-    auto wm = x.owner();
+    auto wm = x.lwm_owner();
     if (wm == XCB_NONE || !x.select(wm, XCB_EVENT_MASK_STRUCTURE_NOTIFY))
         throw std::runtime_error("lwm is not running");
     xcb_window_t requester = xcb_generate_id(conn);
@@ -142,9 +151,9 @@ int run(std::string const& request, std::chrono::milliseconds timeout)
 int watch()
 {
     Display x;
-    xcb_atom_t manager = x.atom("MANAGER"), state = x.atom("_LWM_STATE");
+    xcb_atom_t manager = x.atom("MANAGER");
     x.select(x.root(), XCB_EVENT_MASK_STRUCTURE_NOTIFY);
-    auto wm = x.owner();
+    auto wm = x.lwm_owner();
     if (wm == XCB_NONE)
         throw std::runtime_error("lwm is not running");
     std::string printed;
@@ -153,7 +162,7 @@ int watch()
         // Select before reading, so no change can fall between them.
         if (attach && wm != XCB_NONE && !x.select(wm, XCB_EVENT_MASK_PROPERTY_CHANGE | XCB_EVENT_MASK_STRUCTURE_NOTIFY))
             wm = XCB_NONE;
-        if (auto text = wm != XCB_NONE ? x.text(wm, state) : std::nullopt; text && !text->empty() && *text != printed)
+        if (auto text = wm != XCB_NONE ? x.text(wm, x.state) : std::nullopt; text && !text->empty() && *text != printed)
         {
             printed = std::move(*text);
             std::cout << printed << '\n' << std::flush;

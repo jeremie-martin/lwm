@@ -27,9 +27,12 @@ inline nlohmann::json ipc_json(std::string const& command)
 inline std::optional<std::string> wm_instance(X11Connection& conn)
 {
     auto owner = wm_owner(conn);
-    if (owner == XCB_NONE || !get_window_property_string(conn.get(), owner, intern_atom(conn.get(), "_LWM_STATE")))
-        return std::nullopt;
-    return std::to_string(owner);
+    auto* state = xcb_get_property_reply(
+        conn.get(), xcb_get_property(conn.get(), 0, owner, intern_atom(conn.get(), "_LWM_STATE"), XCB_GET_PROPERTY_TYPE_ANY, 0, 0), nullptr
+    );
+    bool published = state && state->type != XCB_NONE;
+    free(state);
+    return owner != XCB_NONE && published ? std::optional{ std::to_string(owner) } : std::nullopt;
 }
 
 inline bool wait_for_wm_restart(X11Connection& conn, std::chrono::milliseconds timeout, std::string const& previous)

@@ -308,8 +308,8 @@ an otherwise empty server cannot reset during the handoff.
 IPC query results are typed view records serialized by reflect-cpp. Completion
 publishes the same state view as `_LWM_STATE` on the `WM_S0` owner window through the
 property cache, so watchers see one settled state per changed operation. It skips that
-derivation while a drag is active: the state omits geometry, and the completion that
-ends the drag publishes its outcome. [IPC.md](IPC.md#watching-state) owns the
+derivation while a drag is active, whose motions change only geometry the state omits;
+the completion that ends the drag publishes everything that changed meanwhile. [IPC.md](IPC.md#watching-state) owns the
 guarantees.
 
 ## Restart and process lifetime
