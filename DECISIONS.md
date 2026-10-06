@@ -35,6 +35,23 @@ socket for commands plus a snapshot stream (about 300 lines more, same user
 surface). A restart waits up to 250 ms for its requester to disconnect, or an
 otherwise empty server could reset during the handoff.
 
+## Keep the exec-restart snapshot (2026-10-06)
+
+Storing each client's private intent as a property on its window, with workspace
+state on the root, would make every start a cold adoption and survive crashes. Four
+independent reviews with code access found that it relocates the state rather than
+removing mechanism: most validation is relational (unique ranks, tiled membership
+agreeing with placement, disjoint scratchpad ownership), so splitting the record
+replaces whole-record rejection with repair rules for contradictory records written
+by a non-transactional completion. Restoration, topology rebinding and the
+retained-predecessor handoff remain either way; estimates ranged from -100 lines (only
+with lenient decoding and restores that may blend two operations) to +250. It would
+add crash loops (today the snapshot is deleted as it is read), stale state after
+another WM, and self-declared fixtures. Its main benefit, crash survival, is void
+where LWM is the session process, as on both maintainer hosts. Revisit only if
+something respawns LWM inside a surviving X server, and then first publish the
+existing snapshot continuously through the property cache, which costs about no lines.
+
 ## Keep WM_HINTS urgency mirroring (2026-10-06)
 
 Writing urgency into the application-owned `WM_HINTS`, detecting its echo and
@@ -97,18 +114,6 @@ that follow their effects. The process that got there:
 
 The same question applied to the remaining subsystems:
 
-- **Restart handoff as per-window intent.** Exec restart serializes a versioned JSON
-  snapshot to the root window, validated on decode and replayed by `restore_graph`
-  beside cold adoption. Keeping each client's private intent (mode, floating
-  rectangle, tile slot, scratchpad claim, preferences, recency) as a property on its
-  window, published through the property cache like `_LWM_WINDOW_CLASS`, would make
-  every start a cold adoption that reads it back. It could delete the snapshot codec,
-  format versioning and the second restore path, and would preserve state across
-  crashes, `kill -9` and incompatible upgrades, which today lose it. Open questions:
-  workspace-level state (tiled order, ratios, layouts, current and previous
-  workspace, pool order, fullscreen claim order) needs a home, perhaps root
-  properties; and intent stored on client windows can be read or altered by other
-  clients.
 - **Configuration as a script of `lwmctl` commands** (the herbstluftwm model).
   `lwmctl bind`, `lwmctl rule` and `lwmctl set` applied by a shell script, with
   reload re-running it, could remove most of the TOML schema, its resolution layer
