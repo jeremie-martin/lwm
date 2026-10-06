@@ -1,4 +1,4 @@
-#include "ipc_subscription.hpp"
+#include "state_watch.hpp"
 #include <catch2/catch_test_macros.hpp>
 
 using namespace lwm::test;

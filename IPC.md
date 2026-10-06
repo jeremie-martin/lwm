@@ -23,7 +23,7 @@ with `_`. The socket is mode `0600`.
 3. the root-window `_LWM_IPC_SOCKET` property
 4. the default path above
 
-LWM services up to 32 ordinary connections and eight subscriptions concurrently.
+LWM services up to 32 connections concurrently.
 Commands still execute sequentially on the WM event loop; a partial request or slow
 reply does not occupy another client's slot. Excess connections are rejected, with
 `error busy` when the rejection reply can be delivered. Requests and replies each have a
@@ -32,13 +32,12 @@ newline; replies are limited to 8 MiB. Writes resume when the socket is writable
 at most 64 KiB written per connection per dispatch. A timed-out exchange is
 disconnected.
 
-`lwmctl --timeout MS` bounds connection, request transmission, response, and
-subscription acknowledgement waits (1–600000 ms, default 2000 ms). Connection waits
-for listener capacity within one deadline. Each bounded operation keeps one deadline
-across partial reads, writes and interrupted system calls; progress does not renew it.
-Idle subscriptions do not time out; once an event starts arriving, its complete line
-must arrive within the timeout. Explicit socket selection takes precedence even if the path is unavailable. Discovery properties must be
-complete text without embedded NULs.
+`lwmctl --timeout MS` bounds connection, request transmission and response waits
+(1–600000 ms, default 2000 ms). Connection waits for listener capacity within one
+deadline. Each bounded operation keeps one deadline across partial reads, writes and
+interrupted system calls; progress does not renew it. Explicit socket selection takes
+precedence even if the path is unavailable. Discovery properties must be complete text
+without embedded NULs.
 
 ## Framing
 
@@ -50,12 +49,10 @@ line:
 - `error MESSAGE`
 
 A write-side EOF also terminates a nonempty request. The connection closes after the
-complete reply is sent. `lwmctl` removes the `ok` envelope, prints `VALUE` to stdout,
-and prints an error message to stderr with a nonzero exit status. Empty, truncated, or
-unrecognized replies are errors. A subscription begins only after the exact `ok
-subscribed` acknowledgement. Interrupted reads and writes retry. Truncated subscription
-events are rejected without printing partial contents. Ordinary command output failures
-return nonzero; a closed stdout pipe ends a subscription normally.
+complete reply is sent. Actions reply `ok` and print nothing; queries reply
+`ok VALUE`. `lwmctl` removes the `ok` envelope, prints `VALUE` to stdout, and prints an
+error message to stderr with a nonzero exit status. Empty, truncated, or unrecognized
+replies are errors. Interrupted reads and writes retry. Output failures return nonzero.
 
 `lwmctl --help` and command-specific help (for example `lwmctl workspace --help`) print
 to stdout without connecting; an unknown help group returns status 1. Other usage and
@@ -68,7 +65,7 @@ cannot be represented by this line protocol.
 
 Queries read current state. Mutating commands are also accepted verbatim in a
 binding's `action` string, for example `action = "window fullscreen"`; both use one
-parser and executor. Queries and subscriptions cannot be bound. Bindings use a
+parser and executor. Queries and `watch` cannot be bound. Bindings use a
 structured `action` table to launch processes; IPC callers can launch processes
 themselves. Commands concerning the active window return
 `error no active window` when none is selected. Relative monitor/workspace commands
@@ -83,6 +80,7 @@ Cycling fails when no window is eligible, including while showing the desktop.
 | --- | --- |
 | `ping` | `pong` |
 | `state` | consistent combined state snapshot as JSON |
+| `watch` | the state snapshot now and after every change, one JSON line each |
 | `version` | LWM version |
 | `log status` | logging configuration and backend notifications as JSON |
 | `reload-config` | reload the configured file |
@@ -93,7 +91,7 @@ Cycling fails when no window is eligible, including while showing the desktop.
 | `ratio set VALUE` | set the current workspace's root split ratio |
 | `ratio reset` | clear all split ratios on the current workspace |
 | `ratio adjust DELTA` | adjust the current workspace's root split ratio |
-| `notify-attention window=<xid>` | mark a non-active tiled/floating window urgent |
+| `notify-attention window=<xid>` | mark a managed window urgent unless it is active |
 | `workspace switch N` | switch to zero-based workspace `N` |
 | `workspace next` / `workspace prev` | switch with wraparound |
 | `workspace toggle` | switch back to the previous workspace |
@@ -115,7 +113,7 @@ Cycling fails when no window is eligible, including while showing the desktop.
 
 Ratio values must be finite numbers with no trailing characters. `ratio set` rejects
 values outside `[min_ratio, 1 - min_ratio]` from the active configuration; `ratio
-adjust` clamps to that range and replies `ratio unchanged` at a bound.
+adjust` clamps to that range.
 
 For named scratchpads, a definite exec failure is logged and leaves the slot
 retryable. Successful exec does not guarantee a matching window: `scratchpad cancel-launch NAME`
@@ -125,7 +123,7 @@ window can still be claimed. Both named scratchpad commands reject unknown names
 
 ## Logging status
 
-`lwmctl log status` is read-only and does not emit `state_change`. It returns:
+`lwmctl log status` is read-only. It returns:
 
 ```json
 {"target":"journal","level":"info","instance":"1336-43855073878725","active":true,"backend_notifications":0,"last_backend_notification":""}
@@ -141,10 +139,8 @@ first 1 KiB of the latest notification. Notifications are asynchronous and are n
 overflow is summarized, a stalled worker cannot report until it resumes, and libsystemd
 accepts an absent journal silently. Successful sends do not confirm durable storage.
 
-The count and logging `instance` survive failed exec and reset on successful exec. This
-logger lifetime differs from the WM `instance` used by state snapshots and
-subscriptions: reconstructing the WM after failed exec creates a new WM instance while
-retaining the logger.
+The count and logging `instance` survive failed exec and reset on successful exec; the
+logger outlives the WM reconstructed after a failed exec.
 
 ## JSON results
 
@@ -162,7 +158,8 @@ retaining the logger.
       "name": "1",
       "current": true,
       "window_count": 2,
-      "layout": "master-stack"
+      "layout": "master-stack",
+      "ratio": 0.5
     }]
   }]
 }
@@ -191,7 +188,7 @@ retaining the logger.
 ```
 
 `workspace list.window_count` counts tiled workspace membership; floating clients appear
-only in `window list`.
+only in `window list`. `ratio` is the workspace's root split ratio.
 
 `scratchpad list` returns:
 
@@ -209,78 +206,27 @@ ordered by recall rotation, with its current target last; see
 All window values are X11 window IDs. Monitor and workspace indices are zero-based
 runtime indices; none of these identifiers are persistent.
 
-## Subscriptions
+## Watching state
 
-`subscribe [FILTER]` is the one long-lived request. After `ok subscribed`, LWM sends one
-JSON object per line. An omitted filter selects all events. Otherwise, use a
-comma-separated list; unknown names are ignored and a filter containing no recognized
-name is rejected.
+`state` returns one snapshot containing `workspaces`, `windows`, and `scratchpads`, with
+exactly the shapes of the corresponding list commands above.
 
-| Event | Fields after `event` |
-| --- | --- |
-| `window_map` | `window`, `class`, `kind`; `monitor` and `workspace` for tiled and floating clients |
-| `window_unmap` | `window`, `kind`; `monitor` and `workspace` for tiled and floating clients |
-| `focus_change` | `window`, `class`, `title` |
-| `workspace_switch` | `monitor`, `from`, `to` |
-| `layout_change` | `action`; `value` or `delta` where applicable |
-| `config_reload` | `success`, `source`; `error` on failure |
-| `key_action` | `action` |
-| `state_change` | no additional fields; refresh a state snapshot |
+`lwmctl watch` prints the same snapshot as one JSON line, then a new line whenever it
+changes, and runs until interrupted. It is the interface for panels and scripts:
 
-`kind` is `tiled`, `floating`, `dock`, `desktop`, or `popup` (direct-mapped, `window_map`
-only). Docks and desktops have no workspace. `config_reload.source` is `ipc`, `sighup`,
-or `keybind`. LWM does not emit a `focus_change` event when focus is cleared.
+```sh
+lwmctl watch | jq --unbuffered -r '.windows.focused'
+```
 
-`key_action.action` is the executed operation's semantic label;
-monitor actions include their direction (`focus_monitor_left`, `move_to_monitor_right`).
-`layout_change.action` names the layout action (`set_layout` with a string `value`,
-`set_ratio` with a numeric `value`, `adjust_ratio` with a `delta`, `reset_ratios`,
-`swap_next`, `swap_prev`), whether triggered by a binding or IPC, or `resize_split` with
-the new ratio as `value` when a pointer drag of a split ends.
+LWM publishes the snapshot as the UTF-8 `_LWM_STATE` property of its `WM_S0` owner
+window after each operation completes. `watch` selects property changes before reading,
+so it cannot miss a change, and it prints only a value that differs from the previous
+line. Changes within one operation appear as one state; consecutive changes may
+coalesce into the latest state, so a watcher sees current state, not a history.
+Read-only commands and no-op actions print nothing. The state covers only the fields
+above, not window geometry: a pointer drag publishes its outcome when it ends.
 
-Events are sent after the triggering operation has completed its geometry, focus,
-property, and stacking updates. Within an operation, events are ordered as workspace
-changes, final focus, map/unmap, then action or reload outcomes, followed by
-`state_change` when subscribed. Multiple workspace changes on one monitor coalesce to
-its initial and final workspace; intermediate focus choices are omitted. Explicit
-same-window focus still emits `focus_change`. This ordering does not combine separate X
-events or separate IPC commands.
-
-Every event also has an `instance` string identifying this WM lifetime and a
-monotonically increasing `sequence` number within it. Filtering may leave gaps; a gap is
-not evidence of loss. Restart and reconstruction after failed exec both start a new WM
-instance.
-
-Subscription delivery is ordered and non-blocking. Each subscriber has at most 1 MiB of
-queued output and must make write progress within 500 ms while output is pending.
-Partial writes resume; queue overflow, delivery timeout, or a socket error disconnects
-the subscriber instead of silently dropping events. An event larger than the queue limit
-also disconnects it. Registration precedes acknowledgement, and subsequent events queue
-behind `ok subscribed`.
-
-There is no replay. Consumers must treat EOF or an error as a reason to reconnect and
-resynchronize, and ignore unknown JSON fields and event names.
-
-## State consumers and recovery
-
-`state` returns one snapshot containing `instance`, `sequence`, `workspaces`, `windows`,
-and `scratchpads`. The last three values have exactly the shapes of the corresponding
-list commands above. The sequence is the last published event at the time of the
-snapshot; producing a snapshot does not publish an event.
-
-For a panel or other state consumer:
-
-1. Open `subscribe state_change` and wait for `ok subscribed`.
-2. Query `state` on a separate connection and install that snapshot.
-3. Ignore queued events from that instance whose sequence is at or before the
-   snapshot's sequence. A later `state_change` means to query a fresh snapshot;
-   several pending notifications can share one refresh.
-4. On EOF, errors, or a different instance, discard the old stream and repeat.
-
-`state_change` is an invalidation notification after completion, not a patch. It is
-sent when the exposed list state (workspaces, windows, and scratchpads) differs from the
-state behind the previous notification, including metadata, urgency, placement, and
-scratchpad changes. Read-only commands and no-op actions do not emit it. Individual
-focus/map/workspace events remain available for consumers that need those occurrences
-instead of a current-state view. Notifications cover only the fields exposed by the list
-API, not every X property or application state.
+The property dies with the WM's X connection. `watch` follows exec restart and failed-exec
+recovery to the successor, which announces itself with the ICCCM `MANAGER` message, and
+waits while no WM owns the screen. It fails only if no WM runs when it starts or the X
+connection closes. A closed stdout pipe ends it normally.

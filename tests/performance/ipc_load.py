@@ -158,23 +158,6 @@ def measure(binary, stalled, requests, x_flood=False):
             context = multiprocessing.get_context("spawn")
             ready, finished = context.Event(), context.Event()
             producer = context.Process(target=flood, args=(display, ready, finished))
-            # Establish real subscriptions before starting contention. One stays
-            # unread; the other proves SIGHUP is serviced during the same flood.
-            subscriber = cleanup.enter_context(socket.socket(socket.AF_UNIX))
-            subscriber.setsockopt(socket.SOL_SOCKET, socket.SO_RCVBUF, 1024)
-            reload_peer = cleanup.enter_context(socket.socket(socket.AF_UNIX))
-            for peer, command in (
-                (subscriber, b"subscribe state_change\n"),
-                (reload_peer, b"subscribe config_reload\n"),
-            ):
-                peer.settimeout(3)
-                peer.connect(str(path))
-                peer.sendall(command)
-                acknowledgement = b""
-                while not acknowledgement.endswith(b"\n"):
-                    acknowledgement += peer.recv(1024)
-                if acknowledgement != b"ok subscribed\n":
-                    raise RuntimeError("Subscription failed: " + repr(acknowledgement))
             producer.start()
 
             def finish():
@@ -192,23 +175,6 @@ def measure(binary, stalled, requests, x_flood=False):
         started = time.monotonic()
         with concurrent.futures.ThreadPoolExecutor(max_workers=16) as workers:
             results = list(workers.map(lambda _: request(path), range(requests)))
-        reload_seen = None
-        if x_flood:
-            try:
-                message = b""
-                while b"\n" not in message:
-                    chunk = reload_peer.recv(4096)
-                    if not chunk:
-                        break
-                    message += chunk
-                event = json.loads(message.split(b"\n", 1)[0])
-                reload_seen = (
-                    event.get("event") == "config_reload"
-                    and event.get("success") is True
-                    and event.get("source") == "sighup"
-                )
-            except (OSError, ValueError):
-                reload_seen = False
         elapsed = time.monotonic() - started
         cpu_after, rss = process_metrics(wm.pid)
         successes = [latency for response, latency in results if response == "ok pong"]
@@ -218,7 +184,6 @@ def measure(binary, stalled, requests, x_flood=False):
                 errors[response] = errors.get(response, 0) + 1
         return {
             "x_flood": x_flood,
-            "reload_seen": reload_seen,
             "producer_alive_at_completion": producer.is_alive() if producer else None,
             "wall_seconds": elapsed,
             "wm_cpu_seconds": cpu_after - cpu_before,
@@ -247,10 +212,7 @@ def main():
             args.binary.resolve(strict=True), stalled, args.requests, args.x_flood
         )
         print(json.dumps(result), flush=True)
-        if args.check and (
-            result["successes"] != result["requests"]
-            or (args.x_flood and not result["reload_seen"])
-        ):
+        if args.check and result["successes"] != result["requests"]:
             raise AssertionError("Independent callers failed: " + json.dumps(result))
 
 

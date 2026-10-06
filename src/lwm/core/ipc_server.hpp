@@ -1,6 +1,5 @@
 #pragma once
 
-#include "events.hpp"
 #include "command.hpp"
 #include "ipc.hpp"
 #include <chrono>
@@ -29,14 +28,10 @@ public:
     void start(std::string path);
     void stop();
     std::string const& path() const { return path_; }
-    bool has_subscribers(uint32_t mask) const;
     std::optional<Clock::time_point> deadline() const;
     void append_poll_fds(std::vector<pollfd>& fds) const;
     void dispatch(std::span<pollfd const> fds, Handler const& handler);
     void expire();
-    void emit(Event const& event);
-    uint64_t sequence() const { return sequence_; }
-    std::string const& instance() const { return instance_; }
 
 private:
     struct Client
@@ -46,15 +41,12 @@ private:
         std::string input;
         std::string output;
         size_t sent = 0;
-        uint32_t mask = 0;
-        // A client sends one request; only a subscriber outlives its reply.
-        bool reading() const { return !mask && output.empty(); }
+        // A client sends one request and closes after its reply.
+        bool reading() const { return output.empty(); }
     };
     std::string path_;
     int listener_ = -1;
     std::vector<Client> clients_;
-    uint64_t sequence_ = 0;
-    std::string instance_;
 
     void accept_clients();
     void read_request(Client& client, Handler const& handler);

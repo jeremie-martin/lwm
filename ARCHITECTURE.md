@@ -137,7 +137,7 @@ an external write.
    focus; publish client, fixture and root properties and stacking; withdraw removed
    windows.
 5. Drain stale crossing events after visible movement (outside drags) or a pointer
-   release, flush X, emit events, thaw, and check Debug invariants.
+   release, flush X, thaw, and check Debug invariants.
 
 This orders effects; it is not an atomic X transaction. Publication must not mutate
 the frozen model. A ConfigureNotify mismatch forgets cached geometry without forcing
@@ -290,20 +290,20 @@ order. A toggle can ask the shell to launch; the slot becomes pending only after
 creation succeeds. Claims and pending launches survive reload and restart while their
 names survive.
 
-## Configuration and events
+## Configuration and IPC
 
 A private reflect-cpp schema validates TOML over toml++; the loader resolves names,
 bounds, command references and compiled regexes into plain runtime values. Bindings'
-`action` strings and IPC requests share one command parser; bindings reject queries
-and subscriptions. Execution copies a binding's action because reload can replace the
+`action` strings and IPC requests share one command parser; bindings reject queries.
+Actions succeed silently; their outcome is the published state. Execution copies a binding's action because reload can replace the
 configuration that owns it. Startup options own logging policy; reload does not.
 
-Event records are the subscription wire schema; their C++ type names are the public
-event names. IPC query results are typed view records serialized by the same writer.
-Completion emits workspace switches and the final focus change first, then queued
-map/unmap facts, then action and reload outcomes, then `state_change` when the exposed
-state differs from the last emitted snapshot.
-[IPC.md](IPC.md#subscriptions) owns ordering and synchronization guarantees.
+IPC query results are typed view records serialized by reflect-cpp. Completion
+publishes the same state view as `_LWM_STATE` on the `WM_S0` owner window through the
+property cache, so watchers see one settled state per changed operation. It skips that
+derivation while a drag is active: the state omits geometry, and the completion that
+ends the drag publishes its outcome. [IPC.md](IPC.md#watching-state) owns the
+guarantees.
 
 ## Restart and process lifetime
 

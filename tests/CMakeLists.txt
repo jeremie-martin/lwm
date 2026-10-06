@@ -57,7 +57,6 @@ add_dependencies(lwm_restart_gate lwm)
 
 add_executable(lwm_tests
   test_config_parser.cpp
-  test_events_policy.cpp
   test_invariants.cpp
   test_state.cpp
   test_ewmh_classification.cpp
@@ -70,7 +69,7 @@ add_executable(lwm_tests
   test_integration_lwm_window_class.cpp
   test_integration_notify_attention.cpp
   test_integration_property_notify.cpp
-  test_integration_subscribe.cpp
+  test_integration_watch.cpp
   test_integration_scratchpad.cpp
   test_integration_wm_state.cpp
   test_integration_workspace.cpp

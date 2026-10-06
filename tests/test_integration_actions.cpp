@@ -1,4 +1,4 @@
-#include "ipc_subscription.hpp"
+#include "x11_test_harness.hpp"
 #include "wm_observations.hpp"
 #include <catch2/generators/catch_generators.hpp>
 
@@ -116,7 +116,7 @@ TEST_CASE("Integration: IPC window actions execute the key-binding operations", 
     // Toggling returns to the previous workspace, where the moved window is focused.
     ipc_ok(*path, "workspace switch 2");
     REQUIRE(wait_for_active_window(conn, b, kTimeout));
-    CHECK(ipc_ok(*path, "workspace toggle") == "ok 0");
+    CHECK(ipc_ok(*path, "workspace toggle") == "ok");
     REQUIRE(wait_for_active_window(conn, a, kTimeout));
 
     // A single monitor has no neighbor; these are successful no-ops.
@@ -148,79 +148,6 @@ TEST_CASE("Integration: window close reaches clients without the delete protocol
     auto reply = send_ipc_command(*path, "window close");
     REQUIRE(reply);
     CHECK(*reply == "error no active window");
-}
-
-TEST_CASE("Integration: layout changes report the action that caused them", "[integration][ipc][subscribe]")
-{
-    auto env = TestEnvironment::create("[layout]\nmin_ratio = 0.1\n[appearance]\npadding = 10\nborder_width = 1\n");
-    if (!env)
-        SKIP("X11 unavailable");
-    auto& conn = env->conn;
-    auto path = wait_for_ipc_socket_path(conn);
-    REQUIRE(path);
-    auto first = create_window(conn, 10, 10, 200, 200);
-    auto second = create_window(conn, 10, 10, 200, 200);
-    map_window(conn, first);
-    REQUIRE(wait_for_active_window(conn, first, kTimeout));
-    map_window(conn, second);
-    REQUIRE(wait_for_active_window(conn, second, kTimeout));
-    Subscriber subscriber(*path, "layout_change");
-
-    ipc_ok(*path, "ratio adjust 0.05");
-    auto adjusted = subscriber.event();
-    CHECK(adjusted.at("action") == "adjust_ratio");
-    CHECK(adjusted.at("delta") == 0.05);
-    ipc_ok(*path, "layout set monocle");
-    auto layout = subscriber.event();
-    CHECK(layout.at("action") == "set_layout");
-    CHECK(layout.at("value") == "monocle");
-    ipc_ok(*path, "layout set master-stack");
-    subscriber.event();
-
-    // A pointer drag of the split reports its final ratio when released.
-    auto left = get_window_geometry(conn, first);
-    auto right = get_window_geometry(conn, second);
-    REQUIRE(left);
-    REQUIRE(right);
-    if (left->x > right->x)
-        std::swap(left, right);
-    int16_t x = static_cast<int16_t>((left->x + left->width + right->x) / 2);
-    int16_t y = static_cast<int16_t>(left->y + left->height / 2);
-    send_pointer_event(conn, XCB_BUTTON_PRESS, x, y);
-    send_pointer_event(conn, XCB_MOTION_NOTIFY, static_cast<int16_t>(x + 60), y);
-    send_pointer_event(conn, XCB_BUTTON_RELEASE, static_cast<int16_t>(x + 60), y);
-    auto resized = subscriber.event();
-    CHECK(resized.at("action") == "resize_split");
-    CHECK(resized.at("value").get<double>() > 0.55);
-    destroy_window(conn, second);
-    destroy_window(conn, first);
-}
-
-TEST_CASE("Integration: state_change fires only when the exposed state changes", "[integration][ipc][subscribe]")
-{
-    auto env = TestEnvironment::create("[workspaces]\ncount = 2\n");
-    if (!env)
-        SKIP("X11 unavailable");
-    auto& conn = env->conn;
-    auto path = wait_for_ipc_socket_path(conn);
-    REQUIRE(path);
-    auto window = create_window(conn, 10, 10, 200, 150);
-    map_window(conn, window);
-    REQUIRE(wait_for_active_window(conn, window, kTimeout));
-    Subscriber subscriber(*path, "state_change");
-    // Queries and no-op actions leave the exposed state unchanged.
-    ipc_ok(*path, "window list");
-    ipc_ok(*path, "workspace switch 0");
-    ipc_ok(*path, "ratio reset");
-    CHECK_FALSE(subscriber.reader.read(subscriber.fd, std::chrono::milliseconds(50)));
-    ipc_ok(*path, "workspace switch 1");
-    CHECK(subscriber.event().at("event") == "state_change");
-    ipc_ok(*path, "workspace switch 1");
-    CHECK_FALSE(subscriber.reader.read(subscriber.fd, std::chrono::milliseconds(50)));
-    ipc_ok(*path, "workspace switch 0");
-    CHECK(subscriber.event().at("event") == "state_change");
-    CHECK_FALSE(subscriber.reader.read(subscriber.fd, std::chrono::milliseconds(50)));
-    destroy_window(conn, window);
 }
 
 TEST_CASE("Integration: pooled tiles stay tiled and consistent while hidden", "[integration][scratchpad]")
@@ -264,25 +191,3 @@ TEST_CASE("Integration: pooled tiles stay tiled and consistent while hidden", "[
     destroy_window(conn, keep);
 }
 
-TEST_CASE("Integration: dock and desktop events carry no workspace", "[integration][subscribe]")
-{
-    auto env = TestEnvironment::create();
-    if (!env)
-        SKIP("X11 unavailable");
-    auto& conn = env->conn;
-    auto path = wait_for_ipc_socket_path(conn);
-    REQUIRE(path);
-    Subscriber subscriber(*path, "window_map,window_unmap");
-    auto dock = create_window(conn, 0, 0, 800, 20);
-    REQUIRE(set_window_type(conn, dock, intern_atom(conn.get(), "_NET_WM_WINDOW_TYPE_DOCK")));
-    map_window(conn, dock);
-    auto mapped = subscriber.event();
-    CHECK(mapped.at("event") == "window_map");
-    CHECK(mapped.at("kind") == "dock");
-    CHECK_FALSE(mapped.contains("workspace"));
-    destroy_window(conn, dock);
-    auto unmapped = subscriber.event();
-    CHECK(unmapped.at("event") == "window_unmap");
-    CHECK(unmapped.at("kind") == "dock");
-    CHECK_FALSE(unmapped.contains("monitor"));
-}

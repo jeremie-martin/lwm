@@ -1,4 +1,3 @@
-#include "lwm/core/events.hpp"
 #include "lwm/core/ipc.hpp"
 #include "lwm/core/command.hpp"
 #include "lwm/core/xproperty.hpp"
@@ -29,14 +28,12 @@ bool print_usage(std::ostream& out, std::string_view group = {})
             out << "  " << spec.usage << "\n      " << spec.description << '\n';
             found = true;
         }
-    if (group.empty() || group == "subscribe")
+    if (group.empty() || group == "watch")
     {
-        out << "\nSubscription filters:";
-        for (auto name : lwm::event_names()) out << ' ' << name;
-        out << '\n';
+        out << "  watch\n      print the state as JSON now and after every change\n";
+        found = true;
     }
-    out << "\nTimeout defaults to 2000 ms; idle subscriptions do not time out.\n"
-           "Use -- before arguments that resemble options.\n";
+    out << "\nTimeout defaults to 2000 ms. Use -- before arguments that resemble options.\n";
     return found;
 }
 
@@ -219,7 +216,72 @@ private:
     }
 };
 
-int run(std::string const& path, std::string const& request, bool subscribe, std::chrono::milliseconds timeout)
+// Prints the WM's published state now and after every change, one JSON line
+// each. The state lives on the WM_S0 owner window, so it dies with the WM; a
+// restart announces its successor with a MANAGER message on the root.
+int watch()
+{
+    std::unique_ptr<xcb_connection_t, decltype(&xcb_disconnect)> connection(xcb_connect(nullptr, nullptr), xcb_disconnect);
+    auto* conn = connection.get();
+    if (xcb_connection_has_error(conn))
+        throw std::runtime_error("cannot connect to the X display");
+    auto root = xcb_setup_roots_iterator(xcb_get_setup(conn)).data->root;
+    auto atom = [&](char const* name)
+    {
+        auto reply = lwm::reply(xcb_intern_atom_reply(conn, xcb_intern_atom(conn, 0, std::strlen(name), name), nullptr));
+        return reply ? reply->atom : XCB_NONE;
+    };
+    xcb_atom_t selection = atom("WM_S0"), manager = atom("MANAGER"), state = atom("_LWM_STATE"), utf8 = atom("UTF8_STRING");
+    uint32_t root_events = XCB_EVENT_MASK_STRUCTURE_NOTIFY;
+    xcb_change_window_attributes(conn, root, XCB_CW_EVENT_MASK, &root_events);
+    auto owner = [&]
+    {
+        auto reply = lwm::reply(xcb_get_selection_owner_reply(conn, xcb_get_selection_owner(conn, selection), nullptr));
+        return reply ? reply->owner : XCB_NONE;
+    };
+    xcb_window_t wm = owner();
+    if (wm == XCB_NONE)
+        throw std::runtime_error("lwm is not running");
+    std::string printed;
+    auto print = [&]
+    {
+        auto reply = lwm::xproperty::read(conn, wm, state, utf8, UINT32_MAX / 4);
+        if (!lwm::xproperty::complete(reply, utf8, 8))
+            return;
+        std::string text(static_cast<char const*>(xcb_get_property_value(reply.get())), xcb_get_property_value_length(reply.get()));
+        if (text.empty() || text == printed)
+            return;
+        printed = std::move(text);
+        std::cout << printed << '\n' << std::flush;
+    };
+    for (bool attach = true;; )
+    {
+        // Select before reading, so no change can fall between them.
+        uint32_t events = XCB_EVENT_MASK_PROPERTY_CHANGE | XCB_EVENT_MASK_STRUCTURE_NOTIFY;
+        if (attach && wm != XCB_NONE)
+            if (auto* error = xcb_request_check(conn, xcb_change_window_attributes_checked(conn, wm, XCB_CW_EVENT_MASK, &events)))
+            {
+                free(error);
+                wm = XCB_NONE;
+            }
+        if (wm != XCB_NONE)
+            print();
+        if (!std::cout)
+            return 0; // A closed pipe ends watching normally.
+        auto event = lwm::reply(xcb_wait_for_event(conn));
+        if (!event)
+            throw std::runtime_error("X connection closed");
+        uint8_t type = event->response_type & ~0x80;
+        auto const& destroyed = reinterpret_cast<xcb_destroy_notify_event_t const&>(*event);
+        auto const& message = reinterpret_cast<xcb_client_message_event_t const&>(*event);
+        attach = (type == XCB_DESTROY_NOTIFY && destroyed.window == wm)
+            || (type == XCB_CLIENT_MESSAGE && message.type == manager && message.data.data32[1] == selection);
+        if (attach)
+            wm = owner();
+    }
+}
+
+int run(std::string const& path, std::string const& request, std::chrono::milliseconds timeout)
 {
     Socket socket(timeout);
     socket.connect(path);
@@ -229,18 +291,6 @@ int run(std::string const& path, std::string const& request, bool subscribe, std
         throw std::runtime_error("connection closed before response");
     if (*response == "error" || response->starts_with("error "))
         throw std::runtime_error(response->size() > 6 ? response->substr(6) : "command failed");
-    if (subscribe)
-    {
-        if (*response != "ok subscribed")
-            throw std::runtime_error("invalid subscription response");
-        while (auto event = socket.line(lwm::ipc::max_event_bytes, true))
-        {
-            std::cout << *event << '\n' << std::flush;
-            if (!std::cout)
-                return 0; // A closed pipe ends a subscription normally.
-        }
-        return 0;
-    }
     if (*response != "ok" && !response->starts_with("ok "))
         throw std::runtime_error("invalid response");
     if (socket.line(lwm::ipc::max_reply_bytes))
@@ -310,10 +360,12 @@ int main(int argc, char* argv[])
             print_usage(std::cerr);
             return 1;
         }
+        if (arguments == std::vector<std::string>{ "watch" })
+            return watch();
         auto request = lwm::command::encode_command(arguments);
         if (!request)
             throw std::runtime_error(request.error());
-        return run(resolve_socket_path(socket), *request, arguments.front() == "subscribe", timeout);
+        return run(resolve_socket_path(socket), *request, timeout);
     }
     catch (std::exception const& error)
     {

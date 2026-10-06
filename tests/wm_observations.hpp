@@ -21,18 +21,15 @@ inline nlohmann::json ipc_json(std::string const& socket, std::string const& com
     return nlohmann::json::parse(reply.substr(3));
 }
 
-// X resource IDs can be reused immediately after disconnect. IPC's instance
-// identifies a WM lifetime even when its supporting-window ID is reused.
+// A WM lifetime is identified by its WM_S0 owner window once it has published
+// state. A successor connects while its predecessor's resources still exist,
+// so its window ID always differs.
 inline std::optional<std::string> wm_instance(X11Connection& conn)
 {
-    auto atom = intern_atom(conn.get(), "_LWM_IPC_SOCKET");
-    auto path = get_window_property_string(conn.get(), conn.root(), atom);
-    if (!path || path->empty())
+    auto owner = wm_owner(conn);
+    if (owner == XCB_NONE || !get_window_property_string(conn.get(), owner, intern_atom(conn.get(), "_LWM_STATE")))
         return std::nullopt;
-    auto reply = send_ipc_command(*path, "state");
-    if (!reply || !reply->starts_with("ok "))
-        return std::nullopt;
-    return nlohmann::json::parse(reply->substr(3)).at("instance").get<std::string>();
+    return std::to_string(owner);
 }
 
 inline bool wait_for_wm_restart(X11Connection& conn, std::chrono::milliseconds timeout, std::string const& previous)

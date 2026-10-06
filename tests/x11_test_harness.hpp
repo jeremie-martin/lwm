@@ -458,6 +458,16 @@ inline std::optional<xcb_window_t> supporting_wm_window(X11Connection& conn)
     return get_window_property_window(conn.get(), conn.root(), atom);
 }
 
+// The running WM's WM_S0 owner window, which carries its published state.
+inline xcb_window_t wm_owner(X11Connection& conn)
+{
+    auto selection = intern_atom(conn.get(), "WM_S0");
+    auto* reply = xcb_get_selection_owner_reply(conn.get(), xcb_get_selection_owner(conn.get(), selection), nullptr);
+    xcb_window_t owner = reply ? reply->owner : XCB_NONE;
+    free(reply);
+    return owner;
+}
+
 inline xcb_window_t create_window(X11Connection& conn, int16_t x, int16_t y, uint16_t width, uint16_t height)
 {
     xcb_window_t window = xcb_generate_id(conn.get());

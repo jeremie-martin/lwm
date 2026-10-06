@@ -88,7 +88,7 @@ action = "toggle_float"
 # key: one combo string, e.g. "super+Return", "super+shift+Left", "Print"
 # Each [[binds]] entry has one action: WM command text or a process command table.
 # Actions use the same command text as lwmctl, without the executable name.
-# Queries and subscriptions cannot be bound; invalid commands fail configuration loading.
+# Queries and watch cannot be bound; invalid commands fail configuration loading.
 # Keys use X11 keysym names. Duplicate modifier/keysym pairs are rejected,
 # including aliases and reordered modifiers.
 # Defining any [[binds]] starts from an empty key-binding set; list every
@@ -169,7 +169,6 @@ action = "reload-config"
 # An action table uses the structured command syntax above. Its shell/argv/ref
 # forms are resolved while loading; runtime launch always receives an argv vector.
 # Old per-action fields such as toggle_fullscreen = true are rejected.
-# key_action events report semantic labels (see IPC.md), not source command text.
 
 # Generated workspace binding groups. If [[binds]] is absent, the first group
 # for a mode/modifier pair replaces that built-in group. If [[binds]] is

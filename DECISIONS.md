@@ -12,12 +12,22 @@ events in `transition_counts.py`). Revisit if resizing heavy applications visibl
 implement drag-only sync that awaits the counter through an XSync alarm, with a
 timeout, rather than restoring the fire-and-forget form.
 
+## Replace event subscriptions with a watched state (2026-10-06)
+
+`subscribe` streamed eight event types with filters, sequence numbers and a
+subscribe-then-query recovery recipe. `lwmctl watch` streams the complete state instead,
+published as `_LWM_STATE` through the same property cache as EWMH state, so it adds
+no change detection of its own. Actions reply silently; their outcome is the state.
+Lost: occurrences with no state equivalent (`key_action`, SIGHUP or binding reload
+outcomes, map/unmap of popups and fixtures, same-window focus). Revisit only for a
+concrete consumer; publish such a fact as state rather than restoring an event stream.
+
 ## Keep WM_HINTS urgency mirroring (2026-10-06)
 
 Writing urgency into the application-owned `WM_HINTS`, detecting its echo and
 rewriting `_NET_CLIENT_LIST` exist so that polybar's `xworkspaces` urgent label works.
 The cleaner design publishes urgency only through `_NET_WM_STATE_DEMANDS_ATTENTION`
-and IPC, with the bar fed by `lwmctl subscribe`. Revisit when the bar no longer
+and IPC, with the bar fed by `lwmctl watch`. Revisit when the bar no longer
 depends on `WM_HINTS`.
 
 ## Keep remembered maximize on tiled clients (2026-10-06)

@@ -137,7 +137,8 @@ TEST_CASE("Identical topology preserves interaction context and revision", "[hot
         state.settle();
         REQUIRE(state.drag());
         state.drag_to(600, 400);
-        CHECK(state.end_drag(true));
+        state.end_drag(true);
+        CHECK(state.monitors()[0].current().split_ratios.at(hit->hit.address) > 0.5);
     }
 }
 

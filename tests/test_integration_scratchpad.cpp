@@ -205,7 +205,7 @@ TEST_CASE("Integration: floating scratchpad preserves kind and geometry across r
 
     auto previous = wm_instance(conn);
     REQUIRE(previous);
-    REQUIRE(send_ipc_command(*socket_path, "restart") == "ok restarting");
+    REQUIRE(send_ipc_command(*socket_path, "restart") == "ok");
     REQUIRE(wait_for_wm_restart(conn, std::chrono::seconds(5), *previous));
     REQUIRE(wait_for_active_window(conn, sp, kTimeout));
     REQUIRE(get_window_geometry(conn, sp) == geom_before);

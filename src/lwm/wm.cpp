@@ -62,6 +62,7 @@ void WindowManager::intern_atoms()
         { "WM_S0", &atoms_.wm_s0 },
         { "_LWM_IPC_SOCKET", &atoms_.lwm_ipc_socket },
         { "_LWM_WINDOW_CLASS", &atoms_.lwm_window_class },
+        { "_LWM_STATE", &atoms_.lwm_state },
         { "_LWM_RESTART", &atoms_.lwm_restart },
         { "_LWM_RESTART_OWNER", &atoms_.lwm_restart_owner },
     };
@@ -334,7 +335,7 @@ RunResult WindowManager::run()
             if (poll_fds[POLL_SIGNAL].revents & POLLIN)
             {
                 signals_.drain();
-                (void)reload_config("sighup"); // Logged and emitted; only IPC replies with it
+                (void)reload_config("sighup"); // Logged; only IPC replies with it
                 complete_transition();
             }
             ipc_.dispatch(
@@ -438,8 +439,7 @@ void WindowManager::handle_timeouts()
 // Configuration
 
 // A candidate is validated before anything changes; an invalid file leaves
-// the active configuration and runtime claims untouched. Every outcome is
-// logged and emitted.
+// the active configuration and runtime claims untouched. Every outcome is logged.
 std::expected<void, std::string> WindowManager::reload_config(std::string_view source)
 {
     auto result =
@@ -452,7 +452,6 @@ std::expected<void, std::string> WindowManager::reload_config(std::string_view s
     }
     else
         LWM_LOG_WARN_LIMIT(std::chrono::seconds(5), "Config reload failed ({}): {}", source, result.error());
-    events_.push_back(event::config_reload{ result.has_value(), source, result ? std::nullopt : std::optional{ result.error() } });
     return result;
 }
 

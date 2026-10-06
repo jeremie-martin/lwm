@@ -470,7 +470,7 @@ match = { class = "Pending" }
     CHECK(snapshot() == before);
 
     REQUIRE(env->wm.write_config(config(true, "Replacement")));
-    REQUIRE(send_ipc_command(*socket, "reload-config") == "ok reloaded");
+    REQUIRE(send_ipc_command(*socket, "reload-config") == "ok");
     CHECK(snapshot() == before);
     REQUIRE(send_ipc_command(*socket, "scratchpad toggle claimed") == "ok");
     REQUIRE(wait_for_active_window(conn, window, kTimeout));
@@ -478,7 +478,7 @@ match = { class = "Pending" }
     auto hidden = intern_atom(conn.get(), "_NET_WM_STATE_HIDDEN");
     REQUIRE(wait_for_condition([&] { return has_state(conn, window, hidden); }, kTimeout));
     REQUIRE(env->wm.write_config(config(false, "")));
-    REQUIRE(send_ipc_command(*socket, "reload-config") == "ok reloaded");
+    REQUIRE(send_ipc_command(*socket, "reload-config") == "ok");
     auto remaining = snapshot();
     REQUIRE(remaining["named"].size() == 1);
     CHECK(remaining["named"][0]["pending"] == true);
@@ -505,14 +505,14 @@ TEST_CASE("Integration: resolved launch bindings preserve argv and replace refer
             "[[binds]]\nkey = 'F7'\naction = {ref = 'script'}\n";
     };
     REQUIRE(env->wm.write_config(config("first")));
-    REQUIRE(send_ipc_command(*socket, "reload-config") == "ok reloaded");
+    REQUIRE(send_ipc_command(*socket, "reload-config") == "ok");
     REQUIRE(send_key(env->conn, XK_F6));
     REQUIRE(wait_for_condition([&] { return read_text_file(literal_path) == "<><$HOME; untouched><two words>"; }, kTimeout));
     REQUIRE(send_key(env->conn, XK_F7));
     REQUIRE(wait_for_condition([&] { return read_text_file(shell_path) == "first"; }, kTimeout));
 
     REQUIRE(env->wm.write_config(config("second")));
-    REQUIRE(send_ipc_command(*socket, "reload-config") == "ok reloaded");
+    REQUIRE(send_ipc_command(*socket, "reload-config") == "ok");
     REQUIRE(send_key(env->conn, XK_F7));
     REQUIRE(wait_for_condition([&] { return read_text_file(shell_path) == "second"; }, kTimeout));
 

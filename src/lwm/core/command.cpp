@@ -1,9 +1,7 @@
 #include "command.hpp"
-#include "events.hpp"
 #include <algorithm>
 #include <charconv>
 #include <cmath>
-#include <type_traits>
 #include <utility>
 
 namespace lwm::command {
@@ -31,13 +29,6 @@ std::expected<int, std::string> direction(std::string_view value, CommandSpec co
     if (value == "left") return -1;
     if (value == "right") return 1;
     return usage(spec);
-}
-
-std::expected<uint32_t, std::string> filter(std::string_view value, CommandSpec const&)
-{
-    auto mask = parse_event_filter(value);
-    if (!mask) return std::unexpected("no recognized event types in filter");
-    return mask;
 }
 
 std::expected<double, std::string> number(std::string_view value, CommandSpec const& spec)
@@ -83,7 +74,7 @@ template <bool Window> std::expected<uint32_t, std::string> integer(std::string_
 template <typename T, auto Parse>
 constexpr CommandSpec takes(std::string_view name, std::string_view help, std::string_view description)
 {
-    return { name, std::is_same_v<T, Subscribe> ? std::nullopt : std::optional<size_t>{1}, help, description,
+    return { name, 1, help, description,
              [](std::string_view value, CommandSpec const& spec) -> std::expected<Request, std::string>
              {
                  return Parse(value, spec).transform([](auto parsed) { return Request{ T{ std::move(parsed) } }; });
@@ -107,7 +98,6 @@ constexpr CommandSpec specs[] = {
     fixed<Query::Version>("version", "version", "show WM version"),
     fixed<Query::LogStatus>("log status", "log status", "show logging configuration and backend notifications as JSON"),
     fixed<Query::State>("state", "state", "print one consistent state snapshot"),
-    takes<Subscribe, filter>("subscribe", "subscribe [FILTER]", "stream filtered JSON events"),
     fixed<ReloadConfig{ }>("reload-config", "reload-config", "reload configuration"),
     fixed<Restart{ }>("restart", "restart", "restart the WM"),
     takes<Exec, text>("exec", "exec PATH", "restart with another binary"),
@@ -189,7 +179,7 @@ std::expected<std::string, std::string> encode_command(std::span<std::string con
         if (argument.find_first_of(std::string_view("\n\r\0", 3)) != argument.npos)
             return std::unexpected("argument contains a line break or NUL");
         if (!text.empty())
-            text += arguments.front() == "subscribe" && text != "subscribe" ? ',' : ' ';
+            text += ' ';
         text += argument;
     }
     auto parsed = parse_command(text);
@@ -197,7 +187,7 @@ std::expected<std::string, std::string> encode_command(std::span<std::string con
         return std::unexpected(parsed.error());
     auto const& spec = *find_spec(trim(text));
     size_t words = 1 + std::count(spec.name.begin(), spec.name.end(), ' ');
-    if (spec.arguments && arguments.size() != words + *spec.arguments)
+    if (arguments.size() != words + spec.arguments)
         return std::unexpected("usage: " + std::string(spec.usage));
     return text;
 }

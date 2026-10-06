@@ -14,7 +14,7 @@ namespace lwm {
 // Compare complete projections with prior output, so mutations need no change lists.
 void WindowManager::complete_transition()
 {
-    bool obligations = !configure_replies_.empty() || !events_.empty() || restack_requested_
+    bool obligations = !configure_replies_.empty() || restack_requested_
         || drain_requested_ || presentation_dirty_;
     if (!obligations && state_.revision() == published_revision_)
         return;
@@ -29,14 +29,14 @@ void WindowManager::complete_transition()
 
     // Publication reads a frozen model.
     state_.freeze();
-    for (size_t m = 0; m < std::max(owners.size(), root_.fullscreen_owners.size()); ++m)
+    for (size_t m = 0; m < std::max(owners.size(), fullscreen_owners_.size()); ++m)
     {
-        auto before = m < root_.fullscreen_owners.size() ? root_.fullscreen_owners[m] : XCB_NONE;
+        auto before = m < fullscreen_owners_.size() ? fullscreen_owners_[m] : XCB_NONE;
         auto after = m < owners.size() ? owners[m] : XCB_NONE;
         if (before != after)
             LWM_LOG_DEBUG("Fullscreen owner changed: monitor={} window={:#x} -> {:#x}", m, before, after);
     }
-    root_.fullscreen_owners = owners;
+    fullscreen_owners_ = owners;
     auto clients = state_.project(fullscreen);
     bool moved = publish_clients(clients);
     // ConfigureRequests that no geometry write acknowledged, including those of
@@ -63,7 +63,6 @@ void WindowManager::complete_transition()
     if (drain_requested_ || (moved && !state_.drag()))
         flush_and_drain_crossing();
     conn_.flush();
-    emit_events(focus_request.has_value());
     state_.thaw();
 
     configure_replies_.clear();
@@ -335,6 +334,10 @@ void WindowManager::publish_root(std::vector<State::Projected> const& clients, b
     publish(root, e->_NET_CURRENT_DESKTOP, XCB_ATOM_CARDINAL, current);
     publish(root, e->_NET_ACTIVE_WINDOW, XCB_ATOM_WINDOW, active);
     publish(root, e->_NET_SHOWING_DESKTOP, XCB_ATOM_CARDINAL, showing);
+    // Drags change geometry, which the exposed state omits, every motion; the
+    // completion that ends a drag publishes its monitor or ratio outcome.
+    if (!state_.drag())
+        publish(wm_window_, atoms_.lwm_state, e->UTF8_STRING, 8, state_json());
 }
 
 // A changed desired order, a forwarded restack, or an explicit focus request
@@ -400,43 +403,6 @@ void WindowManager::flush_and_drain_crossing()
         if (type != XCB_ENTER_NOTIFY && type != XCB_LEAVE_NOTIFY && type != XCB_MOTION_NOTIFY)
             deferred_events_.push_back(*event);
         free(event);
-    }
-}
-
-// Subscription events
-
-// Workspace switches and focus are derived from what changed since the last
-// operation; other facts were recorded where they happened. state_change
-// fires when the exposed state snapshot actually differs.
-void WindowManager::emit_events(bool focus_requested)
-{
-    auto const& monitors = state_.monitors();
-    std::map<std::string, size_t> workspaces;
-    for (size_t m = 0; m < monitors.size(); ++m)
-    {
-        auto current = monitors[m].current_workspace;
-        if (auto it = root_.workspaces.find(monitors[m].name); it != root_.workspaces.end() && it->second != current)
-            ipc_.emit(event::workspace_switch{ m, it->second, current });
-        workspaces.emplace(monitors[m].name, current);
-    }
-    root_.workspaces = std::move(workspaces);
-    if (auto const* active = state_.find(state_.active_window()); active && focus_requested)
-        ipc_.emit(event::focus_change{ active->id, active->wm_class, active->name });
-    // Map/unmap facts precede outcomes; each group retains occurrence order.
-    for (bool mappings : { true, false })
-        for (auto const& event : events_)
-            if ((std::holds_alternative<event::window_map>(event) || std::holds_alternative<event::window_unmap>(event)) == mappings)
-                ipc_.emit(event);
-    events_.clear();
-    // Only a new revision can change the exposed state.
-    if (ipc_.has_subscribers(event_mask<event::state_change>) && state_.revision() != root_.snapshot_revision)
-    {
-        root_.snapshot_revision = state_.revision();
-        if (auto snapshot = state_json(); snapshot != root_.snapshot)
-        {
-            root_.snapshot = std::move(snapshot);
-            ipc_.emit(event::state_change{});
-        }
     }
 }
 

@@ -28,7 +28,7 @@ TEST_CASE("Integration: failed exec is reported at critical level and recovers",
     auto restart = run_lwmctl(wm, { "exec", "/definitely/missing/lwm-binary" });
     REQUIRE(restart.has_value());
     REQUIRE(restart->exit_code == 0);
-    REQUIRE(restart->stdout_text.find("restarting") != std::string::npos);
+    REQUIRE(restart->stdout_text.empty());
 
     bool reported = wait_for_condition(
         [&wm]() { return wm.diagnostics().find("exec '/definitely/missing/lwm-binary' failed") != std::string::npos; },
@@ -143,7 +143,7 @@ TEST_CASE(
         REQUIRE(std::chrono::steady_clock::now() - started < std::chrono::seconds(1));
         return result->stdout_text;
     };
-    auto before = nlohmann::json::parse(command({ "state" }))["instance"];
+    auto before = wm_owner(connection);
     for (int i = 0; i < 200; ++i) command({ "workspace", "switch", std::to_string(i % 2) });
     REQUIRE(command({ "ping" }).find("pong") != std::string::npos);
     auto logging_instance = nlohmann::json::parse(command({ "log", "status" }))["instance"];
@@ -151,19 +151,19 @@ TEST_CASE(
     REQUIRE(wait_for_condition(
         [&]
         {
-            auto result = run_lwmctl(wm, { "state" });
-            return result && result->exit_code == 0 && nlohmann::json::parse(result->stdout_text)["instance"] != before;
+            auto owner = wm_owner(connection);
+            return owner != XCB_NONE && owner != before && run_lwmctl(wm, { "ping" })->exit_code == 0;
         },
         std::chrono::seconds(2)
     ));
     REQUIRE(nlohmann::json::parse(command({ "log", "status" }))["instance"] == logging_instance);
-    before = nlohmann::json::parse(command({ "state" }))["instance"];
+    before = wm_owner(connection);
     command({ "restart" });
     REQUIRE(wait_for_condition(
         [&]
         {
-            auto result = run_lwmctl(wm, { "state" });
-            return result && result->exit_code == 0 && nlohmann::json::parse(result->stdout_text)["instance"] != before;
+            auto owner = wm_owner(connection);
+            return owner != XCB_NONE && owner != before && run_lwmctl(wm, { "ping" })->exit_code == 0;
         },
         std::chrono::seconds(2)
     ));

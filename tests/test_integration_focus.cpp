@@ -1673,7 +1673,7 @@ TEST_CASE(
         auto result = run_lwmctl(env->wm, { "focus", argument });
         REQUIRE(result);
         REQUIRE(result->exit_code == 0);
-        REQUIRE(result->stdout_text == std::to_string(expected) + "\n");
+        REQUIRE(result->stdout_text.empty());
         REQUIRE(wait_for_active_window(conn, expected, kTimeout));
         REQUIRE(wait_for_x_input_focus(conn, expected, kTimeout));
     };

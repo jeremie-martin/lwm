@@ -188,26 +188,16 @@ bool State::drag_valid() const
         && tiled_participants(split.monitor, fullscreen_visibility()) == split.participants;
 }
 
-std::optional<double> State::end_drag(bool commit)
+void State::end_drag(bool commit)
 {
     if (!drag_)
-        return std::nullopt;
+        return;
     mutated();
     auto drag = *std::exchange(drag_, std::nullopt);
-    if (auto const* resize = std::get_if<SplitDrag>(&drag.operation))
-    {
-        if (!commit || resize->monitor >= monitors_.size())
-            return std::nullopt;
-        auto const& ratios = monitors_[resize->monitor].workspaces[resize->workspace].split_ratios;
-        auto it = ratios.find(resize->split.address);
-        if (it != ratios.end() && it->second != resize->split.ratio)
-            return it->second;
-        return std::nullopt;
-    }
-    auto const& move = std::get<WindowDrag>(drag.operation);
-    auto const* client = find(move.window);
-    if (!commit || !move.tiled || !client || !client->tiled())
-        return std::nullopt;
+    auto const* move = std::get_if<WindowDrag>(&drag.operation);
+    auto const* client = move ? find(move->window) : nullptr;
+    if (!commit || !move || !move->tiled || !client || !client->tiled())
+        return;
     // Layout slots are not membership indices: hidden members have no slot and
     // sticky guests belong to another workspace. A drop on the guest suffix
     // appends to the current workspace.
@@ -231,7 +221,6 @@ std::optional<double> State::end_drag(bool commit)
     }
     if (relocate(client->id, target, monitor.current_workspace, RelocationGeometry::Preserve, index))
         focus(client->id);
-    return std::nullopt;
 }
 
 // A tiled move previews its rectangle without changing membership.

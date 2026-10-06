@@ -162,34 +162,12 @@ void WindowManager::handle_map_request(xcb_map_request_event_t const& e)
         return;
     state_.admit(observed.front());
     manage(observed.front(), false);
-    if (!ipc_.has_subscribers(event_mask<event::window_map>))
-        return;
-    auto const* client = state_.find(e.window);
-    auto description = describe(e.window);
-    events_.push_back(event::window_map{ e.window,
-                                  client ? client->wm_class : "",
-                                  description ? description->first : "popup",
-                                  description ? description->second : Placement{ } });
 }
 
 void WindowManager::handle_window_removal(xcb_window_t window)
 {
     pending_kills_.erase(window);
-    if (auto description = describe(window))
-    {
-        events_.push_back(event::window_unmap{ window, description->first, description->second });
-        state_.erase(window);
-    }
-}
-
-// The subscription kind and placement of a registered window; popups are not registered.
-std::optional<std::pair<std::string_view, Placement>> WindowManager::describe(xcb_window_t window) const
-{
-    if (auto const* client = state_.find(window))
-        return std::pair{ std::string_view(client_kind_str(*client)), Placement{ client->monitor, client->workspace } };
-    if (auto const* fixture = state_.find_fixture(window))
-        return std::pair{ std::string_view(fixture_role_str(fixture->role)), Placement{ } };
-    return std::nullopt;
+    state_.erase(window);
 }
 
 // Pointer and keyboard
@@ -242,8 +220,7 @@ void WindowManager::handle_button_release(xcb_button_release_event_t const& e)
     if (!drag || (drag->button && drag->button != e.detail))
         return;
     state_.drag_to(e.root_x, e.root_y);
-    if (auto ratio = state_.end_drag(true))
-        events_.push_back(event::layout_change{ "resize_split", *ratio, std::nullopt });
+    state_.end_drag(true);
 }
 
 bool WindowManager::grab_pointer(xcb_cursor_t cursor)
@@ -317,12 +294,11 @@ void WindowManager::handle_key_press(xcb_key_press_event_t const& e)
     }
     // Executing may reload and replace the configuration that owns the binding.
     Action action = binding->second;
-    LWM_LOG_TRACE("Key action: action={} keysym={:#x} modifiers={:#x}", action_name(action), keysym, e.state);
+    LWM_LOG_TRACE("Key action: keysym={:#x} modifiers={:#x}", keysym, e.state);
     if (std::holds_alternative<action::ToggleWorkspace>(action) && is_auto_repeat_toggle(keysym, e.time))
         return;
-    events_.push_back(event::key_action{ action_name(action) });
     if (auto result = execute(action, "keybind"); !result)
-        LWM_LOG_DEBUG("Key action {} failed: {}", action_name(action), result.error());
+        LWM_LOG_DEBUG("Key action failed: keysym={:#x} error={}", keysym, result.error());
 }
 
 void WindowManager::handle_key_release(xcb_key_release_event_t const& e)

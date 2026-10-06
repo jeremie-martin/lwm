@@ -2,7 +2,6 @@
 
 #include "lwm/config/config.hpp"
 #include "lwm/core/connection.hpp"
-#include "lwm/core/events.hpp"
 #include "lwm/core/ewmh.hpp"
 #include "lwm/core/ipc_server.hpp"
 #include "lwm/core/signals.hpp"
@@ -59,6 +58,7 @@ private:
         xcb_atom_t wm_s0;
         xcb_atom_t lwm_ipc_socket;
         xcb_atom_t lwm_window_class;
+        xcb_atom_t lwm_state;
         xcb_atom_t lwm_restart;
         xcb_atom_t lwm_restart_owner;
     };
@@ -75,14 +75,6 @@ private:
         std::optional<bool> urgent;         ///< Urgency mirrored into the application's WM_HINTS
     };
 
-    struct RootOutput
-    {
-        std::vector<xcb_window_t> fullscreen_owners; ///< Logged ownership per monitor
-        std::map<std::string, size_t> workspaces; ///< Current workspace per output name
-        std::string snapshot;                     ///< State payload behind the last state_change
-        uint64_t snapshot_revision = UINT64_MAX;  ///< Revision the snapshot was taken at
-    };
-
     using StateUpdates = std::vector<std::pair<xcb_window_t, WindowStates>>;
 
     Connection conn_;
@@ -93,7 +85,7 @@ private:
     // Last written bytes of every published property; nullopt records a deletion.
     // An unknown property is always written, so a fresh WM replaces stale values.
     std::map<std::pair<xcb_window_t, xcb_atom_t>, std::optional<std::string>> properties_;
-    RootOutput root_;
+    std::vector<xcb_window_t> fullscreen_owners_; ///< Logged ownership per monitor
     ipc::Server ipc_;
     // Process-owned signal handlers and reload pipe survive WM reconstruction.
     SignalPipe& signals_;
@@ -103,7 +95,6 @@ private:
 
     // Obligations of the current operation that are not projections of state.
     std::set<xcb_window_t> configure_replies_;
-    std::vector<Event> events_;
     bool restack_requested_ = false;
     bool drain_requested_ = false;
     bool monitors_dirty_ = false;
@@ -181,13 +172,11 @@ private:
     void withdraw_removed();
     void commit_focus(uint32_t time);
     void flush_and_drain_crossing();
-    void emit_events(bool focus_requested);
 
     // wm_events.cpp: X event handlers
     void handle_event(xcb_generic_event_t const& event);
     void handle_map_request(xcb_map_request_event_t const& e);
     void handle_window_removal(xcb_window_t window);
-    std::optional<std::pair<std::string_view, Placement>> describe(xcb_window_t window) const;
     void handle_enter_notify(xcb_enter_notify_event_t const& e);
     void handle_motion_notify(xcb_motion_notify_event_t const& e);
     void handle_button_press(xcb_button_press_event_t const& e);
@@ -208,13 +197,8 @@ private:
     xcb_cursor_t split_cursor(State::SplitHit const& split) const;
 
     // wm_actions.cpp: the one executor for key bindings and IPC
-    std::expected<std::string, std::string> execute(Action const& action, std::string_view source);
+    std::expected<void, std::string> execute(Action const& action, std::string_view source);
     void warp_to_monitor(Monitor const& monitor);
-    void layout_changed(
-        Action const& action,
-        std::optional<event::LayoutValue> value = {},
-        std::optional<double> delta = {}
-    );
 
     // wm_ipc.cpp
     std::string handle_request(command::Request const& request);

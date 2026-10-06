@@ -162,73 +162,20 @@ TEST_CASE("lwmctl requires a complete recognized command reply", "[ipc][lwmctl]"
     server.finish();
 }
 
-TEST_CASE("lwmctl validates subscription acknowledgement before streaming", "[ipc][lwmctl]")
+TEST_CASE("lwmctl bounds a silent peer", "[ipc][lwmctl]")
 {
-    std::string reply;
-    int expected_exit = 1;
-    std::string output;
-    SECTION("empty") { }
-    SECTION("truncated acknowledgement") { reply = "ok subscribed"; }
-    SECTION("unknown acknowledgement") { reply = "anything\n"; }
-    SECTION("ordinary success is not subscription confirmation") { reply = "ok\n"; }
-    SECTION("server error") { reply = "error busy\n"; }
-    SECTION("truncated event") { reply = "ok subscribed\n{\"event\":\"focus_change\""; }
-    SECTION("acknowledgement and event")
-    {
-        reply = "ok subscribed\n{\"event\":\"focus_change\"}\n";
-        expected_exit = 0;
-        output = "{\"event\":\"focus_change\"}\n";
-    }
-    ReplyServer server("subscribe focus_change\n", reply);
-    auto result = run_command(lwmctl_executable_path(), { "--socket", server.path, "subscribe", "focus_change" });
+    ReplyServer server("ping\n", "", 200);
+    auto result = run_command(lwmctl_executable_path(), { "--socket", server.path, "--timeout", "50", "ping" });
     REQUIRE(result);
-    CHECK(result->exit_code == expected_exit);
-    CHECK(result->stdout_text == output);
-    if (expected_exit)
-        CHECK_FALSE(result->stderr_text.empty());
+    CHECK(result->exit_code == 1);
+    CHECK(result->stderr_text.find("timed out") != std::string::npos);
     server.finish();
-}
-
-TEST_CASE("lwmctl bounds handshakes but permits idle subscriptions", "[ipc][lwmctl]")
-{
-    SECTION("silent peer times out")
-    {
-        ReplyServer server("ping\n", "", 200);
-        auto result = run_command(lwmctl_executable_path(), { "--socket", server.path, "--timeout", "50", "ping" });
-        REQUIRE(result);
-        CHECK(result->exit_code == 1);
-        CHECK(result->stderr_text.find("timed out") != std::string::npos);
-        server.finish();
-    }
-    SECTION("idle stream does not inherit the handshake deadline")
-    {
-        ReplyServer server("subscribe\n", "ok subscribed\n{\"event\":\"future\"}\n", 0, 200);
-        auto result =
-            run_command(lwmctl_executable_path(), { "--socket", server.path, "--timeout", "50", "subscribe" });
-        REQUIRE(result);
-        CHECK(result->exit_code == 0);
-        CHECK(result->stdout_text == "{\"event\":\"future\"}\n");
-        server.finish();
-    }
 }
 
 TEST_CASE("lwmctl deadlines bound complete lines despite continuing byte delivery", "[ipc][lwmctl]")
 {
     std::string request = "ping", reply = "ok pong\n";
-    size_t paced_from = 0;
-    SECTION("ordinary reply") { }
-    SECTION("subscription acknowledgement")
-    {
-        request = "subscribe";
-        reply = "ok subscribed\n";
-    }
-    SECTION("subscription event after an idle wait")
-    {
-        request = "subscribe";
-        reply = "ok subscribed\n{\"event\":\"focus_change\"}\n";
-        paced_from = std::string_view("ok subscribed\n").size();
-    }
-    ReplyServer server(request + "\n", reply, 0, paced_from ? 300 : 0, 0, 50, paced_from);
+    ReplyServer server(request + "\n", reply, 0, 0, 0, 50);
     auto started = std::chrono::steady_clock::now();
     auto result = run_command(lwmctl_executable_path(), { "--socket", server.path, "--timeout", "150", request });
     REQUIRE(result);

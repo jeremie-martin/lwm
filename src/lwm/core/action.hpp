@@ -9,7 +9,7 @@
 namespace lwm {
 
 // Operations shared by bindings and IPC, with one executor. Each input surface
-// exposes its own subset; action_name() supplies key_action event names.
+// exposes its own subset.
 namespace action {
 struct Kill
 {
@@ -158,8 +158,5 @@ using Action = std::variant<
     action::ScratchpadToggle,
     action::ScratchpadCancelLaunch,
     action::NotifyAttention>;
-
-/// Semantic label for key_action and layout_change events; not command syntax.
-std::string_view action_name(Action const& action);
 
 } // namespace lwm

@@ -2,7 +2,6 @@
 #include "lwm/core/log.hpp"
 #include "wm.hpp"
 #include <algorithm>
-#include <rfl/Flatten.hpp>
 #include <rfl/Rename.hpp>
 #include <rfl/json/write.hpp>
 
@@ -10,7 +9,7 @@ namespace lwm {
 
 namespace {
 
-std::string ok(std::string const& value) { return value.empty() ? "ok" : "ok " + value; }
+std::string ok(std::string const& value) { return "ok " + value; }
 
 // Query records are the IPC wire schema; field order is the JSON order.
 struct WorkspaceView
@@ -20,6 +19,7 @@ struct WorkspaceView
     bool current;
     size_t window_count;
     std::string_view layout;
+    double ratio; ///< Root split ratio
 };
 struct MonitorView
 {
@@ -64,13 +64,6 @@ struct StateView
     WindowList windows;
     ScratchpadList scratchpads;
 };
-struct StateQuery
-{
-    std::string_view instance;
-    uint64_t sequence;
-    rfl::Flatten<StateView const*> state;
-};
-
 // X metadata can contain opaque bytes; preserve them.
 template <typename T> std::string json(T const& value) { return rfl::json::write(value, YYJSON_WRITE_ALLOW_INVALID_UNICODE); }
 
@@ -85,11 +78,13 @@ WorkspaceList workspace_list(State const& state)
         for (size_t w = 0; w < monitor.workspaces.size(); ++w)
         {
             auto const& workspace = monitor.workspaces[w];
+            auto root = workspace.split_ratios.find(SplitAddress{ 0 });
             view.workspaces.push_back({ w,
                                         state.config().workspaces.names[w],
                                         w == monitor.current_workspace,
                                         workspace.windows.size(),
-                                        layout_strategy_str(workspace.layout_strategy) });
+                                        layout_strategy_str(workspace.layout_strategy),
+                                        root == workspace.split_ratios.end() ? state.config().layout.default_ratio : root->second });
         }
     }
     return list;
@@ -145,25 +140,14 @@ std::string WindowManager::handle_request(command::Request const& request)
                     case command::Query::ScratchpadList:
                         return ok(json(scratchpad_list(state_)));
                     case command::Query::State:
-                    {
-                        StateView view{ workspace_list(state_), window_list(state_), scratchpad_list(state_) };
-                        return ok(json(StateQuery{ ipc_.instance(), ipc_.sequence(), &view }));
-                    }
+                        return ok(state_json());
                 }
                 return "error unknown query";
-            },
-            // A new subscriber compares later changes with the state it could query
-            // now; the server acknowledges the subscription itself.
-            [&](command::Subscribe const&) -> std::string
-            {
-                root_.snapshot = state_json();
-                root_.snapshot_revision = state_.revision();
-                return "";
             },
             [&](Action const& action) -> std::string
             {
                 auto result = execute(action, "ipc");
-                return result ? ok(*result) : "error " + result.error();
+                return result ? "ok" : "error " + result.error();
             },
         },
         request
@@ -171,7 +155,7 @@ std::string WindowManager::handle_request(command::Request const& request)
 }
 
 
-// The exposed state; state_change fires exactly when it differs.
+// The exposed state, also published as _LWM_STATE for watchers.
 std::string WindowManager::state_json() const
 {
     return json(StateView{ workspace_list(state_), window_list(state_), scratchpad_list(state_) });

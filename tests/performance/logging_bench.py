@@ -103,7 +103,7 @@ def measure(binary, level, blocked=False, affinity=None, switches=400, target_na
             time.sleep(.005)
         row = {"binary": str(binary), "level": level, "blocked": blocked, "target": "stderr" if blocked else target_name, "affinity": affinity, "sha256": hashlib.sha256(binary.read_bytes()).hexdigest()}
         if blocked:
-            before = json.loads(request(path, "state"))["instance"]
+            before = harness.wm_owner(display)
             os.set_blocking(writer, False)
             try:
                 while True:
@@ -132,7 +132,7 @@ def measure(binary, level, blocked=False, affinity=None, switches=400, target_na
             deadline = time.monotonic() + .3
             while time.monotonic() < deadline:
                 try:
-                    if json.loads(request(path, "state", max(.001, deadline - time.monotonic())))["instance"] != before:
+                    if harness.wm_owner(display) not in (0, before) and request(path, "ping", max(.001, deadline - time.monotonic())) == b"pong":
                         row["restart_completed_while_blocked"] = True
                         row["restart_completion_ms"] = (time.monotonic() - restart_started) * 1000
                         break
@@ -149,7 +149,7 @@ def measure(binary, level, blocked=False, affinity=None, switches=400, target_na
                 except BlockingIOError:
                     pass
                 try:
-                    if json.loads(request(path, "state", .02))["instance"] != before:
+                    if harness.wm_owner(display) not in (0, before) and request(path, "ping", .02) == b"pong":
                         row["restart_after_reader_resumes_ms"] = (time.monotonic() - resumed) * 1000
                         break
                 except (OSError, RuntimeError):

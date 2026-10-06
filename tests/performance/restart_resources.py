@@ -7,9 +7,10 @@ import json
 import select
 import subprocess
 import tempfile
+import time
 from pathlib import Path
 from contextlib import ExitStack
-from transition_counts import X, DISPLAY, WINDOW, INT, stop, ipc, wait
+from transition_counts import X, DISPLAY, WINDOW, INT, stop, ipc, wait, wm_owner
 
 R = c.CDLL("libXRes.so.1")
 
@@ -91,23 +92,27 @@ def measure(binary):
 
         def changed(old):
             try:
-                return json.loads(ipc(path, "state"))["instance"] != old
+                return wm_owner(display_name) not in (0, old) and ipc(path, "ping") == b"pong"
             except (ConnectionResetError, BrokenPipeError):
                 return False
 
         before = clients()
         for index in range(20):
-            old = json.loads(ipc(path, "state"))["instance"]
+            old = wm_owner(display_name)
             ipc(path, "restart" if index % 2 else "exec /definitely/missing/lwm-binary")
             wait(lambda: changed(old), wm, logfile)
         # With no application/observer connection, the server may reset unless
         # the handoff preserves it. IPC uses no X connection of its own.
         ipc(path, "workspace switch 1")
         snapshot = json.loads(ipc(path, "state"))
+        owner = wm_owner(display_name)
         X.XCloseDisplay(display)
         display = None
         ipc(path, "restart")
-        wait(lambda: changed(snapshot["instance"]), wm, logfile)
+        # An observer connecting during the handoff could itself end the last
+        # session and reset the server; probe only once the successor is up.
+        time.sleep(1)
+        wait(lambda: changed(owner), wm, logfile)
         if json.loads(ipc(path, "state"))["workspaces"] != snapshot["workspaces"]:
             raise AssertionError("Empty-display restart lost workspace state")
         display = X.XOpenDisplay(display_name.encode())

@@ -3,7 +3,6 @@
 #include "lwm/core/action.hpp"
 #include <cstdint>
 #include <expected>
-#include <optional>
 #include <span>
 #include <string>
 #include <string_view>
@@ -23,19 +22,13 @@ enum class Query
     State,
 };
 
-struct Subscribe
-{
-    uint32_t mask = 0;
-    bool operator==(Subscribe const&) const = default;
-};
-
 // Mutating commands are ordinary WM actions, executed like key bindings.
-using Request = std::variant<Query, Subscribe, Action>;
+using Request = std::variant<Query, Action>;
 
 struct CommandSpec
 {
     std::string_view name;
-    std::optional<size_t> arguments; ///< Fixed CLI argument count, or an arbitrary subscription filter list
+    size_t arguments; ///< CLI arguments after the name
     std::string_view usage;
     std::string_view description;
     std::expected<Request, std::string> (*parse)(std::string_view, CommandSpec const&);

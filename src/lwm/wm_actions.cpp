@@ -5,54 +5,42 @@
 
 namespace lwm {
 
-namespace {
+using Result = std::expected<void, std::string>;
 
-using Result = std::expected<std::string, std::string>;
-
-} // namespace
-
-// The one executor for key bindings and IPC. Replies are the IPC result text;
-// key bindings ignore them.
+// The one executor for key bindings and IPC. Success is silent; IPC callers
+// read outcomes from the published state.
 Result WindowManager::execute(Action const& action, std::string_view source)
 {
     using namespace lwm::action;
     xcb_window_t active = state_.active_window();
     size_t monitor = state_.focused_monitor();
     auto const& focused = state_.monitors()[monitor];
-    bool has_active = state_.find(active) != nullptr;
-    auto const no_active = std::unexpected(std::string("no active window"));
-    // Operations on the active client reply with empty success text.
+    auto fail = [](std::string message) -> Result { return std::unexpected(std::move(message)); };
     auto on_active = [&](auto operation) -> Result
     {
-        if (!has_active)
-            return no_active;
+        if (!state_.find(active))
+            return fail("no active window");
         operation();
-        return "";
+        return { };
     };
     auto restart = [&](std::string binary) -> Result
     {
         LWM_LOG_INFO("Restart requested: source={} binary={}", source, binary.empty() ? "current" : binary);
         restart_binary_ = std::move(binary);
         stop_ = RunResult::Restart;
-        return "restarting";
+        return { };
     };
     return std::visit(
         Overloaded{
             [&](Kill const&) { return on_active([&] { kill_window(active); }); },
-            [&](ReloadConfig const&) -> Result
-            {
-                auto result = reload_config(source);
-                if (!result)
-                    return std::unexpected(result.error());
-                return "reloaded";
-            },
+            [&](ReloadConfig const&) { return reload_config(source); },
             [&](Restart const&) { return restart({ }); },
             [&](Exec const& exec) { return restart(exec.binary); },
             [&](Spawn const& spawn) -> Result
             {
                 if (!launch_program(spawn.argv, source))
-                    return std::unexpected("launch failed");
-                return "";
+                    return fail("launch failed");
+                return { };
             },
             [&](ToggleFullscreen const&)
             { return on_active([&] { state_.fullscreen(active, !state_.require(active).fullscreen); }); },
@@ -60,26 +48,26 @@ Result WindowManager::execute(Action const& action, std::string_view source)
             [&](FocusCycle const& cycle) -> Result
             {
                 if (!state_.cycle_focus(cycle.forward))
-                    return std::unexpected("no focus candidates");
-                return std::to_string(state_.active_window());
+                    return fail("no focus candidates");
+                return { };
             },
             [&](FocusWindow const& focus) -> Result
             {
                 auto const* client = state_.find(focus.window);
                 if (!client)
-                    return std::unexpected("unknown window");
+                    return fail("unknown window");
                 if (!State::accepts_focus(*client))
-                    return std::unexpected("window not focusable");
+                    return fail("window not focusable");
                 state_.focus(focus.window);
                 if (state_.active_window() != focus.window)
-                    return std::unexpected("focus request refused");
-                return std::to_string(focus.window);
+                    return fail("focus request refused");
+                return { };
             },
             [&](FocusMonitor const& focus) -> Result
             {
                 if (state_.focus_adjacent_monitor(focus.direction))
                     warp_to_monitor(state_.monitors()[state_.focused_monitor()]);
-                return "";
+                return { };
             },
             [&](MoveToMonitor const& move)
             {
@@ -91,98 +79,90 @@ Result WindowManager::execute(Action const& action, std::string_view source)
             [&](SwitchWorkspace const& target) -> Result
             {
                 if (target.workspace >= focused.workspaces.size())
-                    return std::unexpected("workspace out of range");
+                    return fail("workspace out of range");
                 state_.switch_workspace(monitor, target.workspace);
-                return std::to_string(target.workspace);
+                return { };
             },
-            [&](ToggleWorkspace const&) -> Result { return std::to_string(state_.toggle_workspace()); },
-            [&](CycleWorkspace const& cycle) -> Result { return std::to_string(state_.cycle_workspace(cycle.step)); },
+            [&](ToggleWorkspace const&) -> Result
+            {
+                state_.toggle_workspace();
+                return { };
+            },
+            [&](CycleWorkspace const& cycle) -> Result
+            {
+                state_.cycle_workspace(cycle.step);
+                return { };
+            },
             [&](MoveToWorkspace const& target) -> Result
             {
                 if (target.workspace >= focused.workspaces.size())
-                    return std::unexpected("workspace out of range");
+                    return fail("workspace out of range");
                 return on_active([&] { state_.relocate(active, state_.require(active).monitor, target.workspace); });
             },
             [&](SwapTile const& swap) -> Result
             {
                 state_.swap_tile(swap.offset);
-                layout_changed(action);
-                return "";
+                return { };
             },
             [&](SetLayout const& layout) -> Result
             {
-                std::string name = layout_strategy_str(layout.strategy);
                 state_.layout(monitor, layout.strategy);
-                layout_changed(action, name);
-                return "layout set to " + name;
+                return { };
             },
             [&](SetRatio const& ratio) -> Result
             {
                 if (!state_.set_ratio(ratio.value))
                 {
                     double min = config().layout.min_ratio;
-                    return std::unexpected("ratio out of range [" + std::to_string(min) + ", " + std::to_string(1.0 - min) + "]");
+                    return fail("ratio out of range [" + std::to_string(min) + ", " + std::to_string(1.0 - min) + "]");
                 }
-                layout_changed(action, ratio.value);
-                return "ratio set";
+                return { };
             },
             [&](AdjustRatio const& adjust) -> Result
             {
-                if (!state_.adjust_ratio(adjust.delta))
-                    return "ratio unchanged";
-                layout_changed(action, std::nullopt, adjust.delta);
-                return "ratio adjusted";
+                state_.adjust_ratio(adjust.delta);
+                return { };
             },
             [&](ResetRatios const&) -> Result
             {
                 state_.reset_ratios(monitor);
-                layout_changed(action);
-                return "ratios reset";
+                return { };
             },
             [&](ScratchpadStash const&) { return on_active([&] { state_.stash(active); }); },
             [&](ScratchpadCycle const&) -> Result
             {
                 state_.cycle_scratchpad_pool();
-                return "";
+                return { };
             },
             // A pending launch begins only after process creation succeeds.
             [&](ScratchpadToggle const& toggle) -> Result
             {
                 auto launch = state_.toggle_scratchpad(toggle.name);
                 if (!launch)
-                    return std::unexpected(launch.error());
+                    return fail(launch.error());
                 if (*launch && launch_program((*launch)->spawn, "scratchpad"))
                     state_.scratchpad_pending(toggle.name, true);
-                return "";
+                return { };
             },
             [&](ScratchpadCancelLaunch const& cancel) -> Result
             {
                 if (!state_.named_scratchpad(cancel.name))
-                    return std::unexpected("unknown scratchpad: " + cancel.name);
+                    return fail("unknown scratchpad: " + cancel.name);
                 state_.scratchpad_pending(cancel.name, false);
-                return "";
+                return { };
             },
+            // The active window already has the user's attention.
             [&](NotifyAttention const& attention) -> Result
             {
                 if (!state_.find(attention.window))
-                    return "no-match";
-                if (attention.window == active)
-                    return "skipped-active";
-                state_.urgency(attention.window, UrgencySource::WmInitiated, true);
-                return std::to_string(attention.window);
+                    return fail("unknown window");
+                if (attention.window != active)
+                    state_.urgency(attention.window, UrgencySource::WmInitiated, true);
+                return { };
             },
         },
         action
     );
-}
-
-void WindowManager::layout_changed(
-    Action const& action,
-    std::optional<event::LayoutValue> value,
-    std::optional<double> delta
-)
-{
-    events_.push_back(event::layout_change{ action_name(action), std::move(value), delta });
 }
 
 void WindowManager::warp_to_monitor(Monitor const& monitor)

@@ -1,4 +1,3 @@
-#include "lwm/core/events.hpp"
 #include "lwm/core/command.hpp"
 #include <catch2/catch_test_macros.hpp>
 #include <vector>
@@ -29,12 +28,6 @@ TEST_CASE("IPC grammar preserves public command spellings and typed requests", "
     check({ "ratio", "adjust", "+0.25" }, "ratio adjust +0.25", Action{ action::AdjustRatio{ 0.25 } });
     check({ "workspace", "switch", "2" }, "workspace switch 2", Action{ action::SwitchWorkspace{ 2 } });
     check({ "focus", "window=0x123" }, "focus window=0x123", Action{ action::FocusWindow{ 291 } });
-    check(
-        { "subscribe", "focus_change", "state_change" },
-        "subscribe focus_change,state_change",
-        Subscribe{ event_mask<event::focus_change> | event_mask<event::state_change> }
-    );
-    check({ "subscribe" }, "subscribe", Subscribe{ all_events });
 }
 
 TEST_CASE("IPC exposes every key-binding action except process launch", "[ipc][command]")
@@ -57,8 +50,6 @@ TEST_CASE("IPC exposes every key-binding action except process launch", "[ipc][c
     CHECK(request("workspace next") == Request{ Action{ action::CycleWorkspace{ 1 } } });
     CHECK(request("ratio reset") == Request{ Action{ action::ResetRatios{ } } });
     CHECK(request("reload-config") == Request{ Action{ action::ReloadConfig{ } } });
-    CHECK(action_name(action::FocusMonitor{ -1 }) == "focus_monitor_left");
-    CHECK(action_name(action::AdjustRatio{ 0.05 }) == "adjust_ratio");
 }
 
 TEST_CASE("IPC grammar rejects invalid arguments before execution", "[ipc][command]")
@@ -76,7 +67,6 @@ TEST_CASE("IPC grammar rejects invalid arguments before execution", "[ipc][comma
                                       "monitor focus up",
                                       "window to-monitor",
                                       "scratchpad toggle",
-                                      "subscribe unknown",
                                       "exec /bin/lwm\nping" })
     {
         CAPTURE(command);
@@ -96,7 +86,6 @@ TEST_CASE("Command diagnostics and CLI arity preserve the public grammar", "[ipc
              { "layout set", "usage: layout set NAME" },
              { "layout set other", "unknown layout: other" },
              { "monitor focus up", "usage: monitor focus left|right" },
-             { "subscribe unknown", "no recognized event types in filter" },
              { "ratio set +", "usage: ratio set VALUE" },
              { "ratio set nan", "invalid ratio value: nan" },
              { "ratio adjust inf", "invalid delta value: inf" },
@@ -112,8 +101,7 @@ TEST_CASE("Command diagnostics and CLI arity preserve the public grammar", "[ipc
         REQUIRE_FALSE(parsed);
         CHECK(parsed.error() == message);
     }
-    // Text is one CLI argument even when its wire value contains spaces;
-    // subscriptions alone accept an arbitrary list of CLI filter arguments.
+    // Text is one CLI argument even when its wire value contains spaces.
     CHECK(encode_command(std::vector<std::string>{ "exec", "a path with spaces" }) == "exec a path with spaces");
     auto invalid_argv = [](std::vector<std::string> const& argv, std::string const& message)
     {
@@ -124,8 +112,6 @@ TEST_CASE("Command diagnostics and CLI arity preserve the public grammar", "[ipc
     invalid_argv({ "exec", "a", "path" }, "usage: exec PATH");
     invalid_argv({ "ping", "" }, "usage: ping");
     invalid_argv({ "workspace", "switch", "2", "" }, "usage: workspace switch N");
-    CHECK(encode_command(std::vector<std::string>{ "subscribe", "focus_change", "state_change", "window_map" })
-          == "subscribe focus_change,state_change,window_map");
     CHECK(*parse_command("workspace switch 4294967295")
           == Request{ Action{ action::SwitchWorkspace{ 4294967295U } } });
     CHECK(*parse_command("focus window=0xffffffff") == Request{ Action{ action::FocusWindow{ 4294967295U } } });

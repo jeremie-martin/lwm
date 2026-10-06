@@ -29,6 +29,7 @@ for name, result, arguments in [
     ("XGetGeometry", INT, [DISPLAY, WINDOW, c.POINTER(WINDOW), c.POINTER(INT), c.POINTER(INT),
                            c.POINTER(c.c_uint), c.POINTER(c.c_uint), c.POINTER(c.c_uint), c.POINTER(c.c_uint)]),
     ("XWarpPointer", INT, [DISPLAY, WINDOW, WINDOW, INT, INT, c.c_uint, c.c_uint, INT, INT]),
+    ("XGetSelectionOwner", WINDOW, [DISPLAY, WINDOW]),
 ]:
     function = getattr(X, name)
     function.restype = result
@@ -87,6 +88,17 @@ def ipc(path, command):
     if data != b"ok\n" and not data.startswith(b"ok "):
         raise RuntimeError((command, bytes(data)))
     return bytes(data[2:]).strip()
+
+
+def wm_owner(display_name):
+    """The WM_S0 owner window, which identifies one WM lifetime; 0 while none runs."""
+    display = X.XOpenDisplay(display_name.encode())
+    if not display:
+        return 0
+    try:
+        return X.XGetSelectionOwner(display, X.XInternAtom(display, b"WM_S0", 0))
+    finally:
+        X.XCloseDisplay(display)
 
 
 def wait(predicate, wm, log):

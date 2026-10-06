@@ -46,31 +46,55 @@ private:
     std::string pending_;
 };
 
-// A real server acknowledgement establishes readiness, without timing assumptions.
-struct Subscriber
+// The real `lwmctl watch` on the test display. Its first line is the state at
+// attachment; each later line is a changed state.
+struct Watcher
 {
-    TestFd connection{ socket(AF_UNIX, SOCK_STREAM | SOCK_CLOEXEC | SOCK_NONBLOCK, 0) };
-    int fd = connection.fd;
+    TestFd output;
     LineReader reader;
+    pid_t pid = -1;
 
-    Subscriber(std::string const& path, std::string_view filter)
+    Watcher()
     {
-        REQUIRE(fd >= 0);
-        sockaddr_un address{ };
-        address.sun_family = AF_UNIX;
-        REQUIRE(path.size() < sizeof(address.sun_path));
-        std::memcpy(address.sun_path, path.c_str(), path.size() + 1);
-        REQUIRE(connect(fd, reinterpret_cast<sockaddr*>(&address), sizeof(address)) == 0);
-        std::string request = "subscribe " + std::string(filter) + "\n";
-        REQUIRE(send(fd, request.data(), request.size(), MSG_NOSIGNAL) == request.size());
-        REQUIRE(line() == "ok subscribed");
+        int pipe[2];
+        REQUIRE(pipe2(pipe, O_CLOEXEC) == 0);
+        output.fd = pipe[0];
+        TestFd writer{ pipe[1] };
+        auto executable = lwmctl_executable_path();
+        pid = fork();
+        REQUIRE(pid >= 0);
+        if (pid == 0)
+        {
+            if (dup2(writer.fd, STDOUT_FILENO) < 0)
+                _exit(126);
+            execl(executable.c_str(), executable.c_str(), "watch", nullptr);
+            _exit(127);
+        }
     }
-    std::string line() { return reader.read(fd, std::chrono::seconds(2)).value_or(""); }
-    nlohmann::json event()
+    Watcher(Watcher const&) = delete;
+    Watcher& operator=(Watcher const&) = delete;
+    ~Watcher()
+    {
+        if (pid > 0)
+        {
+            kill(pid, SIGKILL);
+            while (waitpid(pid, nullptr, 0) < 0 && errno == EINTR)
+            { }
+        }
+    }
+
+    std::optional<std::string> line(std::chrono::milliseconds timeout = std::chrono::seconds(2))
+    {
+        return reader.read(output.fd, timeout);
+    }
+    nlohmann::json state()
     {
         auto text = line();
-        REQUIRE_FALSE(text.empty());
-        return nlohmann::json::parse(text);
+        REQUIRE(text);
+        return nlohmann::json::parse(*text);
     }
+    // No further state is printed within a short settling period.
+    bool quiet() { return !line(std::chrono::milliseconds(50)); }
 };
+
 } // namespace lwm::test

@@ -29,7 +29,7 @@ Focused runs:
 
 ```sh
 LWM_TEST_REQUIRE_X11=1 build/debug/tests/lwm_tests '[integration][focus]'
-LWM_TEST_REQUIRE_X11=1 build/debug/tests/lwm_tests '[integration][subscribe]'
+LWM_TEST_REQUIRE_X11=1 build/debug/tests/lwm_tests '[integration][watch]'
 build/debug/tests/lwm_logging_tests
 ```
 
@@ -61,11 +61,11 @@ marker on the same connection and observes it through IPC. First establish windo
 management, and use titles that cannot trigger rules. This orders earlier events
 on that connection only. Do not repeat actions inside polling predicates.
 
-`Subscriber` in `tests/ipc_subscription.hpp` waits for the subscription
-acknowledgement and retains partial lines.
+`Watcher` in `tests/state_watch.hpp` runs the real `lwmctl watch` and retains partial
+lines; its first line is the state at attachment.
 
-Use `wm_instance()` and `wait_for_wm_restart()` to distinguish WM lifetimes; X IDs
-can be reused. `PausedRestart` in `tests/restart_handoff.hpp` allows topology or
+Use `wm_instance()` and `wait_for_wm_restart()` to distinguish WM lifetimes by their
+`WM_S0` owner window. `PausedRestart` in `tests/restart_handoff.hpp` allows topology or
 window changes during handoff. Corrupt a current-format snapshot for malformed-adoption tests, with an intact
 control; an obsolete version does not test current decoding. Codec round trips
 and malformed-input tests complement actual adoption/exec tests. Tag composed
@@ -78,9 +78,7 @@ The fixture also covers separate user-time windows and both live and cold admiss
 
 Use `TestFd` and the bounded process/socket helpers for cleanup on assertion
 failure. `LwmProcess::wait_for_exit()` tests normal shutdown; `stop()` may force
-termination. Use the CLI only when its process or output behavior is the contract;
-its hidden subscription acknowledgement means readiness must be established by a
-real event. Tests use private log destinations, never the host journal. Direct
+termination. Use the CLI only when its process or output behavior is the contract. Tests use private log destinations, never the host journal. Direct
 Catch runs lack CTest's outer timeout, so fixture waits must remain bounded.
 
 ### Displays and generated sequences
@@ -130,7 +128,7 @@ python3 tests/performance/logging_bench.py --binary build/release/src/app/lwm
 - `focus_cycle.py` measures completed IPC focus calls and distinct targets. Keep
   direction and client count fixed; `--transients chain|cycle` adds ancestry work.
 - `ipc_load.py` checks concurrent callers with incomplete requests, continuous X
-  traffic, a slow subscriber, and signal reload. Omit `--x-flood` for the simpler
+  traffic, and signal reload. Omit `--x-flood` for the simpler
   caller/backpressure case.
 - `restart_resources.py` uses libXRes to check that repeated restart and failed-exec
   recovery release predecessor X clients, including an empty-display restart.

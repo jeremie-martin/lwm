@@ -263,14 +263,14 @@ public:
 
     // Workspaces
     bool switch_workspace(size_t monitor, size_t workspace);
-    // Focused-monitor workspace navigation; each returns the resulting workspace.
-    size_t cycle_workspace(int step);
-    size_t toggle_workspace();
+    // Focused-monitor workspace navigation.
+    void cycle_workspace(int step);
+    void toggle_workspace();
     void layout(size_t monitor, LayoutStrategy strategy);
     void ratio(size_t monitor, SplitAddress address, double value);
     // The focused monitor's root split, within the configured ratio bounds.
     bool set_ratio(double value);
-    bool adjust_ratio(double delta);
+    void adjust_ratio(double delta);
     void reset_ratios(size_t monitor);
 
     // Scratchpads: the named slots and the pool are the only membership records.
@@ -302,8 +302,8 @@ public:
     void begin_drag(Interaction const& interaction, int16_t x, int16_t y, uint8_t button);
     std::optional<SplitHit> split_at(int16_t x, int16_t y) const;
     void drag_to(int16_t x, int16_t y);
-    // Commit applies a tiled drop. Returns a committed split ratio change.
-    std::optional<double> end_drag(bool commit);
+    // Commit applies a tiled drop; a split drag's ratio is already applied.
+    void end_drag(bool commit);
 
     // Exec handoff
     restart::Snapshot snapshot() const;

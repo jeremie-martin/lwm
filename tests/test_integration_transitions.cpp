@@ -1,4 +1,4 @@
-#include "ipc_subscription.hpp"
+#include "state_watch.hpp"
 #include "wm_observations.hpp"
 #include <catch2/catch_test_macros.hpp>
 #include <catch2/generators/catch_generators.hpp>
@@ -594,10 +594,7 @@ TEST_CASE(
     destroy_window(conn, window);
 }
 
-TEST_CASE(
-    "Integration: subscriptions publish settled focus and lifecycle order",
-    "[integration][transition][subscribe]"
-)
+TEST_CASE("Integration: focusing a window on another workspace settles focus and visibility", "[integration][transition]")
 {
     auto env = TestEnvironment::create("[workspaces]\ncount = 2\n");
     if (!env)
@@ -605,38 +602,24 @@ TEST_CASE(
     auto& conn = env->conn;
     auto path = wait_for_ipc_socket_path(conn);
     REQUIRE(path);
-    Subscriber subscriber(
-        *path,
-        "workspace_switch,focus_change,window_map,window_unmap,layout_change,config_reload,key_action"
-    );
-    auto event = [&]
-    {
-        auto line = subscriber.line();
-        REQUIRE_FALSE(line.empty());
-        return nlohmann::json::parse(line);
-    };
     auto first = create_window(conn, 10, 10, 200, 200);
     map_window(conn, first);
-    CHECK(event().at("event") == "focus_change");
-    CHECK(event().at("event") == "window_map");
+    REQUIRE(wait_for_active_window(conn, first, timeout));
     auto switched = send_ipc_command(*path, "workspace switch 1");
     REQUIRE(switched);
     REQUIRE(switched->starts_with("ok"));
-    CHECK(event().at("event") == "workspace_switch");
     auto second = create_window(conn, 10, 10, 200, 200);
     map_window(conn, second);
-    CHECK(event().at("event") == "focus_change");
-    CHECK(event().at("event") == "window_map");
+    REQUIRE(wait_for_active_window(conn, second, timeout));
+    Watcher watcher;
+    REQUIRE(watcher.line());
     auto focused = send_ipc_command(*path, "focus window=" + std::to_string(first));
     REQUIRE(focused);
     REQUIRE(focused->starts_with("ok"));
-    auto workspace = event();
-    CHECK(workspace.at("event") == "workspace_switch");
-    CHECK(workspace.at("from") == 1);
-    CHECK(workspace.at("to") == 0);
-    auto focus = event();
-    CHECK(focus.at("event") == "focus_change");
-    CHECK(focus.at("window") == first);
+    // One operation publishes one settled state: the switch and focus together.
+    auto state = watcher.state();
+    CHECK(state.at("workspaces").at("monitors").at(0).at("current_workspace") == 0);
+    CHECK(state.at("windows").at("focused") == first);
     REQUIRE(wait_for_active_window(conn, first, timeout));
     auto first_geometry = get_window_geometry(conn, first);
     auto second_geometry = get_window_geometry(conn, second);
@@ -647,7 +630,7 @@ TEST_CASE(
     auto reply = send_ipc_command(*path, "window list");
     REQUIRE(reply);
     CHECK(nlohmann::json::parse(reply->substr(3)).at("focused") == first);
-    CHECK_FALSE(subscriber.reader.read(subscriber.fd, std::chrono::milliseconds(30)));
+    CHECK(watcher.quiet());
     destroy_window(conn, second);
     destroy_window(conn, first);
 }
@@ -950,72 +933,6 @@ apply = { center = true }
     destroy_window(conn, second);
 }
 
-TEST_CASE(
-    "Integration: subscriptions and state snapshots have a recoverable ordering boundary",
-    "[integration][ipc][subscribe][restart]"
-)
-{
-    auto env = TestEnvironment::create();
-    if (!env)
-        SKIP("X11 unavailable");
-    auto& conn = env->conn;
-    auto path = wait_for_ipc_socket_path(conn);
-    REQUIRE(path);
-    Subscriber subscriber(*path, "state_change,window_map");
-    auto state = [&]
-    {
-        auto reply = send_ipc_command(*path, "state");
-        REQUIRE(reply);
-        REQUIRE(reply->starts_with("ok "));
-        return nlohmann::json::parse(reply->substr(3));
-    };
-    auto window = create_window(conn, 30, 40, 200, 150);
-    map_window(conn, window);
-    REQUIRE(wait_for_active_window(conn, window, timeout));
-    auto snapshot = state();
-    CHECK(snapshot.at("windows").at("focused") == window);
-    CHECK(snapshot.at("windows").at("windows").size() == 1);
-    CHECK(snapshot.at("workspaces").contains("monitors"));
-    CHECK(snapshot.at("scratchpads").contains("named"));
-    uint64_t previous = 0;
-    for (int i = 0; i < 2; ++i)
-    {
-        auto line = subscriber.line();
-        REQUIRE_FALSE(line.empty());
-        auto event = nlohmann::json::parse(line);
-        CHECK(event.at("instance") == snapshot.at("instance"));
-        auto sequence = event.at("sequence").get<uint64_t>();
-        CHECK(sequence > previous);
-        CHECK(sequence <= snapshot.at("sequence").get<uint64_t>());
-        previous = sequence;
-    }
-    // A metadata-only update must invalidate snapshots even when no rule matches.
-    title(conn, window, "snapshot-new-title");
-    auto line = subscriber.line();
-    REQUIRE_FALSE(line.empty());
-    auto changed = nlohmann::json::parse(line);
-    CHECK(changed.at("event") == "state_change");
-    CHECK(changed.at("sequence").get<uint64_t>() > snapshot.at("sequence").get<uint64_t>());
-    auto current = state();
-    CHECK(current.at("windows").at("windows").at(0).at("title") == "snapshot-new-title");
-    CHECK(current.at("sequence") == changed.at("sequence"));
-    auto logging = send_ipc_command(*path, "log status");
-    REQUIRE(logging);
-    REQUIRE(logging->starts_with("ok "));
-    CHECK(nlohmann::json::parse(logging->substr(3)).at("active") == true);
-    CHECK(state().at("sequence") == current.at("sequence"));
-    // Include already buffered records when checking for a feedback loop.
-    CHECK_FALSE(subscriber.reader.read(subscriber.fd, std::chrono::milliseconds(30)));
-    auto previous_wm = wm_instance(conn);
-    REQUIRE(previous_wm);
-    REQUIRE(send_ipc_command(*path, "restart"));
-    REQUIRE(wait_for_wm_restart(conn, timeout, *previous_wm));
-    REQUIRE(wait_for_condition([&] { return send_ipc_command(*path, "ping") == "ok pong"; }, timeout));
-    Subscriber reconnected(*path, "state_change");
-    CHECK(state().at("instance") != snapshot.at("instance"));
-    destroy_window(conn, window);
-}
-
 TEST_CASE("Integration: application state requests do not replay rule placement", "[integration][transition][rules]")
 {
     auto env = TestEnvironment::create(R"(
@@ -1071,7 +988,7 @@ apply = { floating = true, layer = "below", geometry = { x = 60, y = 70, width =
     // Reload explicitly reapplies even unchanged placement actions.
     auto socket = wait_for_ipc_socket_path(conn);
     REQUIRE(socket);
-    REQUIRE(send_ipc_command(*socket, "reload-config")->starts_with("ok "));
+    REQUIRE(send_ipc_command(*socket, "reload-config") == "ok");
     CHECK(get_window_geometry(conn, window) == WindowGeometry{ 60, 70, 300, 200 });
     destroy_window(conn, window);
 }
@@ -1103,7 +1020,7 @@ TEST_CASE(
     REQUIRE(socket);
     auto instance = wm_instance(conn);
     REQUIRE(instance);
-    REQUIRE(send_ipc_command(*socket, "restart")->starts_with("ok "));
+    REQUIRE(send_ipc_command(*socket, "restart") == "ok");
     REQUIRE(wait_for_wm_restart(conn, timeout, *instance));
     send_client_message(conn, window, state, 0, modal, 0, 0, 0);
     set_window_type(conn, window, intern_atom(conn.get(), "_NET_WM_WINDOW_TYPE_NORMAL"));
@@ -1199,9 +1116,7 @@ TEST_CASE(
             REQUIRE(socket);
             auto instance = wm_instance(conn);
             REQUIRE(instance);
-            auto reply = send_ipc_command(*socket, "restart");
-            REQUIRE(reply);
-            REQUIRE(reply->starts_with("ok "));
+            REQUIRE(send_ipc_command(*socket, "restart") == "ok");
             REQUIRE(wait_for_wm_restart(conn, timeout, *instance));
         }
         else

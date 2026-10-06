@@ -107,7 +107,7 @@ TEST_CASE("Integration: notify-attention window=<active> is skipped", "[integrat
     auto result = run_lwmctl(wm, { "notify-attention", window_arg });
     REQUIRE(result.has_value());
     REQUIRE(result->exit_code == 0);
-    REQUIRE(result->stdout_text.find("skipped-active") != std::string::npos);
+    REQUIRE(result->stdout_text.empty());
     REQUIRE_FALSE(property_has_atom(conn.get(), w1, net_wm_state, net_wm_state_demands_attention));
 
     destroy_window(conn, w1);
@@ -160,7 +160,7 @@ TEST_CASE("Integration: notify-attention clears on focus", "[integration][notify
     destroy_window(conn, w1);
 }
 
-TEST_CASE("Integration: notify-attention returns no-match for unmanaged window ID", "[integration][notify_attention]")
+TEST_CASE("Integration: notify-attention rejects an unmanaged window ID", "[integration][notify_attention]")
 {
     auto test_env = TestEnvironment::create();
     if (!test_env)
@@ -184,8 +184,8 @@ TEST_CASE("Integration: notify-attention returns no-match for unmanaged window I
 
     auto result = run_lwmctl(wm, { "notify-attention", "window=0" });
     REQUIRE(result.has_value());
-    REQUIRE(result->exit_code == 0);
-    REQUIRE(result->stdout_text.find("no-match") != std::string::npos);
+    REQUIRE(result->exit_code == 1);
+    REQUIRE(result->stderr_text.find("unknown window") != std::string::npos);
     REQUIRE_FALSE(property_has_atom(conn.get(), w1, net_wm_state, net_wm_state_demands_attention));
     REQUIRE_FALSE(has_wm_hints_urgency(conn.get(), w1));
 

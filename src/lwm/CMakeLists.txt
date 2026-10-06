@@ -1,7 +1,5 @@
 add_library(liblwm STATIC
-    core/action.cpp
     core/connection.cpp
-    core/events.cpp
     core/signals.cpp
     core/workarea.cpp
     core/log.cpp

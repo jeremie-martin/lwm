@@ -735,19 +735,13 @@ bool State::switch_workspace(size_t monitor, size_t workspace)
     return true;
 }
 
-size_t State::cycle_workspace(int step)
+void State::cycle_workspace(int step)
 {
     auto const& monitor = monitors_[focused_monitor_];
     switch_workspace(focused_monitor_, wrap(static_cast<int>(monitor.current_workspace) + step, monitor.workspaces.size()));
-    return monitor.current_workspace;
 }
 
-size_t State::toggle_workspace()
-{
-    auto const& monitor = monitors_[focused_monitor_];
-    switch_workspace(focused_monitor_, monitor.previous_workspace);
-    return monitor.current_workspace;
-}
+void State::toggle_workspace() { switch_workspace(focused_monitor_, monitors_[focused_monitor_].previous_workspace); }
 
 void State::layout(size_t monitor, LayoutStrategy strategy)
 {
@@ -770,16 +764,13 @@ bool State::set_ratio(double value)
     return true;
 }
 
-bool State::adjust_ratio(double delta)
+void State::adjust_ratio(double delta)
 {
     auto const& ratios = monitors_[focused_monitor_].current().split_ratios;
     auto it = ratios.find(SplitAddress{ 0 });
     double current = it == ratios.end() ? config_.layout.default_ratio : it->second;
-    double adjusted = config_.layout.clamp_ratio(current + delta);
-    if (adjusted == current)
-        return false;
-    ratio(focused_monitor_, SplitAddress{ 0 }, adjusted);
-    return true;
+    if (double adjusted = config_.layout.clamp_ratio(current + delta); adjusted != current)
+        ratio(focused_monitor_, SplitAddress{ 0 }, adjusted);
 }
 
 void State::erase_ratio(size_t monitor, SplitAddress address)

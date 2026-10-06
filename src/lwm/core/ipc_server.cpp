@@ -13,7 +13,6 @@ namespace lwm::ipc {
 namespace {
 constexpr auto timeout = std::chrono::milliseconds(500);
 constexpr size_t max_clients = 32;
-constexpr size_t max_subscribers = 8;
 
 void close_fd(int& fd)
 {
@@ -26,12 +25,10 @@ void close_fd(int& fd)
 void Server::start(std::string path)
 {
     stop();
-    sequence_ = 0;
-    instance_ = std::to_string(getpid()) + "-" + std::to_string(Clock::now().time_since_epoch().count());
     if (path.size() >= sizeof(sockaddr_un::sun_path))
         throw std::runtime_error("IPC socket path is too long: " + path);
     std::filesystem::create_directories(std::filesystem::path(path).parent_path());
-    clients_.reserve(max_clients + max_subscribers);
+    clients_.reserve(max_clients);
     int fd = socket(AF_UNIX, SOCK_STREAM | SOCK_CLOEXEC | SOCK_NONBLOCK, 0);
     if (fd < 0)
         throw std::runtime_error("Failed to create IPC socket");
@@ -124,9 +121,7 @@ void Server::accept_clients()
         int fd = accept4(listener_, nullptr, nullptr, SOCK_CLOEXEC | SOCK_NONBLOCK);
         if (fd < 0)
             return;
-        auto ordinary =
-            std::count_if(clients_.begin(), clients_.end(), [](auto const& c) { return c.fd >= 0 && !c.mask; });
-        if (ordinary >= max_clients || clients_.size() >= max_clients + max_subscribers)
+        if (clients_.size() >= max_clients)
         {
             constexpr std::string_view busy = "error busy\n";
             send(fd, busy.data(), busy.size(), MSG_NOSIGNAL | MSG_DONTWAIT);
@@ -184,23 +179,7 @@ void Server::execute(Client& client, Handler const& handler)
         respond(client, "error " + request.error());
         return;
     }
-    if (auto const* subscribe = std::get_if<command::Subscribe>(&*request))
-    {
-        auto subscribers =
-            std::count_if(clients_.begin(), clients_.end(), [](auto const& c) { return c.fd >= 0 && c.mask; });
-        if (subscribers >= max_subscribers)
-            respond(client, "error max subscribers reached");
-        else
-        {
-            // Register before acknowledgement, so subsequent events queue behind
-            // it; the handler takes the baseline later changes compare with.
-            client.mask = subscribe->mask;
-            handler(*request);
-            respond(client, "ok subscribed");
-        }
-    }
-    else
-        respond(client, handler(*request));
+    respond(client, handler(*request));
 }
 
 void Server::respond(Client& client, std::string response)
@@ -225,50 +204,8 @@ void Server::write_response(Client& client)
         return;
     }
     client.sent += static_cast<size_t>(sent);
-    if (client.mask && sent > 0)
-        client.deadline = Clock::now() + timeout;
     if (client.sent == client.output.size())
-    {
-        if (!client.mask)
-            close_fd(client.fd);
-        else
-        {
-            client.output.clear();
-            client.sent = 0;
-            client.deadline.reset();
-        }
-    }
-}
-
-bool Server::has_subscribers(uint32_t mask) const
-{
-    return std::ranges::any_of(clients_, [mask](auto const& c) { return c.fd >= 0 && (c.mask & mask); });
-}
-
-void Server::emit(Event const& event)
-{
-    uint32_t mask = uint32_t{ 1 } << event.index();
-    if (!has_subscribers(mask))
-        return;
-    auto line = event_json(event, instance_, ++sequence_) + "\n";
-    for (auto& client : clients_)
-    {
-        if (client.fd < 0 || !(client.mask & mask))
-            continue;
-        if (client.output.size() - client.sent + line.size() > max_event_bytes)
-        {
-            close_fd(client.fd);
-            continue;
-        }
-        if (client.output.empty())
-            client.deadline = Clock::now() + timeout;
-        if (client.sent)
-        {
-            client.output.erase(0, client.sent);
-            client.sent = 0;
-        }
-        client.output += line;
-    }
+        close_fd(client.fd);
 }
 
 } // namespace lwm::ipc
