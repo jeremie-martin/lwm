@@ -227,6 +227,9 @@ TEST_CASE("Restart restores claim history independently of focus and adoption or
         std::erase_if(observed, [](auto const& client) { return client.id == 1; });
         observed.front().states.set(WindowState::Fullscreen, false); // The application withdrew this saved claim.
         target.adopt(observed, &snapshot);
+        // The application's current state wins over its saved claim.
+        CHECK_FALSE(target.require(3).fullscreen());
+        CHECK(target.require(2).fullscreen());
         add(target, 4);
         target.fullscreen(4, true);
         target.switch_workspace(0, 0);

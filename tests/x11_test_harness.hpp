@@ -934,9 +934,14 @@ inline std::string make_temp_dir()
 }
 
 // Sends one command as lwmctl does, from a requester window on a private
-// connection, and returns the raw reply; nullopt without a reply in time.
-inline std::optional<std::string>
-send_ipc_command(std::string const& command, std::chrono::milliseconds timeout = std::chrono::seconds(2))
+// connection, and returns the raw reply; nullopt without a reply in time. Tests of
+// malformed requests choose another property type or format.
+inline std::optional<std::string> send_ipc_command(
+    std::string const& command,
+    std::chrono::milliseconds timeout = std::chrono::seconds(2),
+    char const* type = "UTF8_STRING",
+    uint8_t format = 8
+)
 {
     X11Connection conn;
     if (!conn.ok())
@@ -950,7 +955,8 @@ send_ipc_command(std::string const& command, std::chrono::milliseconds timeout =
     xcb_window_t requester = xcb_generate_id(conn.get());
     uint32_t events = XCB_EVENT_MASK_PROPERTY_CHANGE;
     xcb_create_window(conn.get(), 0, requester, conn.root(), -1, -1, 1, 1, 0, XCB_WINDOW_CLASS_INPUT_ONLY, XCB_COPY_FROM_PARENT, XCB_CW_EVENT_MASK, &events);
-    xcb_change_property(conn.get(), XCB_PROP_MODE_REPLACE, requester, request, utf8, 8, command.size(), command.data());
+    xcb_change_property(conn.get(), XCB_PROP_MODE_REPLACE, requester, request, intern_atom(conn.get(), type), format,
+                        command.size() / (format / 8), command.data());
     xcb_client_message_event_t message{ };
     message.response_type = XCB_CLIENT_MESSAGE;
     message.format = 32;

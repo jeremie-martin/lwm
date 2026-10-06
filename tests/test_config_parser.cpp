@@ -110,7 +110,7 @@ apply = { floating = true, geometry = { } }
     REQUIRE(cfg.rules.size() == 1);
 }
 
-TEST_CASE("Config parser recognizes swap_next and swap_prev actions", "[config][keybind]")
+TEST_CASE("Config parser recognizes window swap next and prev", "[config][keybind]")
 {
     auto loaded = load_from_string(R"(
 [binds]
@@ -181,6 +181,38 @@ TEST_CASE("The built-in defaults are the example file", "[config]")
     CHECK(action_as<action::Spawn>(defaults.keybinds.at({ XCB_MOD_MASK_4, XK_Return })));
     CHECK(defaults.keybinds.at({ XCB_MOD_MASK_4, XK_1 }) == Action{ action::SwitchWorkspace{ 0 } });
     CHECK(defaults.keybinds.at({ XCB_MOD_MASK_4 | XCB_MOD_MASK_SHIFT, XK_ampersand }) == Action{ action::MoveToWorkspace{ 0 } });
+}
+
+TEST_CASE("Mouse bindings take grips or anything a key binding takes", "[config][mouse]")
+{
+    auto loaded = load_from_string(R"(
+[workspaces]
+names = ["a", "b"]
+[mousebinds]
+"super+1" = "move"
+"super+3" = "resize"
+"super+4" = "workspace switch 1"
+"super+5" = "config reload"
+"super+8" = ["xterm", "-e", "top"]
+)");
+    REQUIRE(loaded);
+    auto bound = [&](uint8_t button) {
+        auto it = std::ranges::find(loaded->mousebinds, button, &MousebindConfig::button);
+        REQUIRE(it != loaded->mousebinds.end());
+        CHECK(it->modifier == XCB_MOD_MASK_4);
+        return it->action;
+    };
+    CHECK(bound(1) == std::variant<MouseGrip, Action>{ MouseGrip::Move });
+    CHECK(bound(3) == std::variant<MouseGrip, Action>{ MouseGrip::Resize });
+    CHECK(bound(4) == std::variant<MouseGrip, Action>{ Action{ action::SwitchWorkspace{ 1 } } });
+    CHECK(bound(5) == std::variant<MouseGrip, Action>{ Action{ action::ReloadConfig{ } } });
+    CHECK(bound(8) == std::variant<MouseGrip, Action>{ Action{ action::Spawn{ { "xterm", "-e", "top" } } } });
+    // Mouse commands are validated like key bindings: queries and out-of-range values fail.
+    for (std::string text : { "window list", "workspace switch 2", "drag" })
+    {
+        CAPTURE(text);
+        CHECK_FALSE(load_from_string("[workspaces]\nnames = ['a', 'b']\n[mousebinds]\n'super+1' = '" + text + "'\n"));
+    }
 }
 
 TEST_CASE("Workspace key groups switch, move, or both", "[config][keybind]")
@@ -325,15 +357,20 @@ apply = { monitor = 0, monitor_name = "HDMI-1" }
 
 TEST_CASE("Config parser rejects rule geometry outside X11 ranges", "[config][rules]")
 {
+    // Positions come in pairs, so each out-of-range coordinate has a valid partner.
     for (auto field : { "x", "y", "width", "height" })
     {
-        bool position = std::string_view(field) == "x" || std::string_view(field) == "y";
+        std::string_view name = field;
+        bool position = name == "x" || name == "y";
+        auto partner = name == "x" ? ", y = 0" : name == "y" ? ", x = 0" : "";
         for (auto value : { position ? "-32769" : "0", position ? "32768" : "65536", "4294967296" })
         {
             INFO(field << " = " << value);
-            auto loaded =
-                load_from_string(std::string("[[rules]]\napply.geometry = { ") + field + " = " + value + " }");
+            auto loaded = load_from_string(
+                std::string("[[rules]]\napply.geometry = { ") + field + " = " + value + partner + " }"
+            );
             REQUIRE_FALSE(loaded.has_value());
+            CHECK(loaded.error().find(field) != std::string::npos);
         }
     }
     for (auto geometry :

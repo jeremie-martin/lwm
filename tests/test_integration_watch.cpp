@@ -1,5 +1,6 @@
 #include "state_watch.hpp"
 #include "wm_observations.hpp"
+#include "lwm/core/xproperty.hpp"
 #include <X11/Xlib.h>
 #include <xcb/xtest.h>
 
@@ -102,6 +103,44 @@ TEST_CASE("Integration: watch reports layout changes from bindings, IPC and spli
     ipc_ok("layout set monocle");
     CHECK(workspace().at("layout") == "monocle");
     CHECK(watcher.quiet());
+    destroy_window(conn, second);
+    destroy_window(conn, first);
+}
+
+TEST_CASE("Integration: state publication pauses during a drag and resumes at release", "[integration][watch][drag]")
+{
+    auto env = TestEnvironment::create();
+    if (!env)
+        SKIP("X11 unavailable");
+    auto& conn = env->conn;
+    auto first = create_window(conn, 10, 10, 200, 150);
+    auto second = create_window(conn, 10, 10, 200, 150);
+    for (auto window : { first, second })
+    {
+        map_window(conn, window);
+        REQUIRE(wait_for_active_window(conn, window, kTimeout));
+    }
+    auto published = [&]
+    {
+        return lwm::xproperty::text(conn.get(), wm_owner(conn), intern_atom(conn.get(), "_LWM_STATE"),
+                                    intern_atom(conn.get(), "UTF8_STRING")).value_or("");
+    };
+    auto left = require_window_geometry(conn, first), right = require_window_geometry(conn, second);
+    if (left.x > right.x)
+        std::swap(left, right);
+    int16_t x = static_cast<int16_t>((left.x + left.width + right.x) / 2);
+    int16_t y = static_cast<int16_t>(left.y + left.height / 2);
+    send_pointer_event(conn, XCB_BUTTON_PRESS, x, y);
+    send_pointer_event(conn, XCB_MOTION_NOTIFY, static_cast<int16_t>(x + 30), y);
+    // The WM has handled the rename (the marker on the other window follows it), but
+    // the published state waits for the drag to end.
+    set_window_title(conn, first, "renamed-during-drag");
+    observe_title_after_events(conn, second);
+    auto windows = ipc_json("window list").at("windows");
+    CHECK(std::ranges::any_of(windows, [](auto const& w) { return w.at("title") == "renamed-during-drag"; }));
+    CHECK(published().find("renamed-during-drag") == std::string::npos);
+    send_pointer_event(conn, XCB_BUTTON_RELEASE, static_cast<int16_t>(x + 30), y);
+    CHECK(wait_for_condition([&] { return published().find("renamed-during-drag") != std::string::npos; }, kTimeout));
     destroy_window(conn, second);
     destroy_window(conn, first);
 }

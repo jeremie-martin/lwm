@@ -3,6 +3,7 @@
 #include <X11/keysym.h>
 #include <algorithm>
 #include <catch2/catch_test_macros.hpp>
+#include <catch2/generators/catch_generators.hpp>
 #include <chrono>
 #include <optional>
 #include <xcb/randr.h>
@@ -442,8 +443,10 @@ TEST_CASE(
     destroy_window(conn, tiled);
 }
 
-TEST_CASE("Integration: a Super+Button2 command binding focuses and floats the clicked window", "[integration][focus][mouse]")
+TEST_CASE("Integration: a mouse command acts on the clicked window, never another", "[integration][focus][mouse]")
 {
+    bool focusable = GENERATE(true, false);
+    CAPTURE(focusable);
     auto test_env = TestEnvironment::create();
     if (!test_env)
         SKIP("Test environment not available");
@@ -453,29 +456,42 @@ TEST_CASE("Integration: a Super+Button2 command binding focuses and floats the c
     if (!extension_available(conn, &xcb_test_id))
         SKIP("XTEST extension not available");
 
-    xcb_atom_t net_wm_allowed_actions = intern_atom(conn.get(), "_NET_WM_ALLOWED_ACTIONS");
-    xcb_atom_t net_wm_action_move = intern_atom(conn.get(), "_NET_WM_ACTION_MOVE");
-    REQUIRE(net_wm_allowed_actions != XCB_NONE);
-    REQUIRE(net_wm_action_move != XCB_NONE);
+    auto kind = intern_atom(conn.get(), "_LWM_WINDOW_CLASS");
+    xcb_window_t clicked = create_window(conn, 10, 10, 320, 220);
+    if (!focusable)
+    {
+        xcb_icccm_wm_hints_t hints{ };
+        hints.flags = XCB_ICCCM_WM_HINT_INPUT;
+        hints.input = 0;
+        xcb_icccm_set_wm_hints(conn.get(), clicked, &hints);
+    }
+    map_window(conn, clicked);
+    REQUIRE(wait_for_condition([&] { return get_window_property_string(conn.get(), clicked, kind) == "tiled"; }, kTimeout));
+    xcb_window_t other = create_window(conn, 10, 10, 320, 220);
+    map_window(conn, other);
+    REQUIRE(wait_for_active_window(conn, other, kTimeout));
 
-    xcb_window_t window = create_window(conn, 10, 10, 320, 220);
-    map_window(conn, window);
-    REQUIRE(wait_for_active_window(conn, window, kTimeout));
-    REQUIRE_FALSE(property_has_atom(conn.get(), window, net_wm_allowed_actions, net_wm_action_move));
-
-    auto geometry = get_window_geometry(conn, window);
-    REQUIRE(geometry.has_value());
-
-    int16_t center_x = static_cast<int16_t>(geometry->x + geometry->width / 2);
-    int16_t center_y = static_cast<int16_t>(geometry->y + geometry->height / 2);
+    // The default Super+Button2 binding is the command "window float".
+    auto geometry = require_window_geometry(conn, clicked);
+    int16_t center_x = static_cast<int16_t>(geometry.x + geometry.width / 2);
+    int16_t center_y = static_cast<int16_t>(geometry.y + geometry.height / 2);
     REQUIRE(send_mouse_chord(conn, XStringToKeysym("Super_L"), XCB_BUTTON_INDEX_2, center_x, center_y));
+    observe_title_after_events(conn, other);
 
-    REQUIRE(wait_for_condition(
-        [&]() { return property_has_atom(conn.get(), window, net_wm_allowed_actions, net_wm_action_move); },
-        kTimeout
-    ));
-
-    destroy_window(conn, window);
+    if (focusable)
+    {
+        REQUIRE(wait_for_active_window(conn, clicked, kTimeout));
+        CHECK(wait_for_condition([&] { return get_window_property_string(conn.get(), clicked, kind) == "floating"; }, kTimeout));
+    }
+    else
+    {
+        // A window that refuses focus runs nothing, and the command cannot reach another window.
+        CHECK(get_window_property_string(conn.get(), clicked, kind) == "tiled");
+        CHECK(wait_for_active_window(conn, other, kTimeout));
+    }
+    CHECK(get_window_property_string(conn.get(), other, kind) == "tiled");
+    destroy_window(conn, other);
+    destroy_window(conn, clicked);
 }
 
 TEST_CASE(
@@ -1214,28 +1230,58 @@ TEST_CASE(
     destroy_window(conn, w1);
 }
 
-TEST_CASE("Integration: application minimize requests are ignored", "[integration][focus][fullscreen][iconify]")
+TEST_CASE("Integration: applications cannot minimize themselves", "[integration][focus][fullscreen][iconify]")
 {
+    bool fullscreen = GENERATE(false, true);
+    CAPTURE(fullscreen);
     auto test_env = TestEnvironment::create();
     if (!test_env)
         SKIP("Test environment not available");
 
     auto& conn = test_env->conn;
-    xcb_atom_t net_wm_state = intern_atom(conn.get(), "_NET_WM_STATE");
-    xcb_atom_t net_wm_state_fullscreen = intern_atom(conn.get(), "_NET_WM_STATE_FULLSCREEN");
-    xcb_atom_t net_wm_state_hidden = intern_atom(conn.get(), "_NET_WM_STATE_HIDDEN");
+    auto atom = [&](char const* name) { return intern_atom(conn.get(), name); };
+    xcb_atom_t net_wm_state = atom("_NET_WM_STATE");
+    xcb_atom_t hidden = atom("_NET_WM_STATE_HIDDEN");
+    xcb_atom_t wm_state = atom("WM_STATE");
 
+    // LWM neither offers minimizing nor the features it removed, and advertises every state it keeps.
+    for (auto name : { "_NET_WM_ACTION_MINIMIZE", "_NET_SHOWING_DESKTOP", "_NET_WM_PING" })
+    {
+        CAPTURE(name);
+        CHECK_FALSE(property_has_atom(conn.get(), conn.root(), atom("_NET_SUPPORTED"), atom(name)));
+    }
+    for (auto name : { "_NET_WM_STATE_FULLSCREEN", "_NET_WM_STATE_ABOVE", "_NET_WM_STATE_BELOW",
+                       "_NET_WM_STATE_STICKY", "_NET_WM_STATE_MODAL", "_NET_WM_STATE_SKIP_TASKBAR",
+                       "_NET_WM_STATE_SKIP_PAGER", "_NET_WM_STATE_MAXIMIZED_HORZ", "_NET_WM_STATE_MAXIMIZED_VERT",
+                       "_NET_WM_STATE_HIDDEN", "_NET_WM_STATE_DEMANDS_ATTENTION", "_NET_WM_STATE_FOCUSED" })
+    {
+        CAPTURE(name);
+        CHECK(property_has_atom(conn.get(), conn.root(), atom("_NET_SUPPORTED"), atom(name)));
+    }
+
+    // An iconic initial state is ignored at map.
     xcb_window_t w1 = create_window(conn, 10, 10, 640, 360);
+    xcb_icccm_wm_hints_t hints{ };
+    hints.flags = XCB_ICCCM_WM_HINT_STATE;
+    hints.initial_state = XCB_ICCCM_WM_STATE_ICONIC;
+    xcb_icccm_set_wm_hints(conn.get(), w1, &hints);
     map_window(conn, w1);
     REQUIRE(wait_for_active_window(conn, w1, kTimeout));
-    send_client_message(conn, w1, net_wm_state, 1, net_wm_state_fullscreen, 0, 0, 0);
-    REQUIRE(wait_for_condition([&]() { return has_state(conn, w1, net_wm_state_fullscreen); }, kTimeout));
+    CHECK(get_wm_state(conn, w1, wm_state) == XCB_ICCCM_WM_STATE_NORMAL);
+    CHECK_FALSE(has_state(conn, w1, hidden));
+    CHECK_FALSE(property_has_atom(conn.get(), w1, atom("_NET_WM_ALLOWED_ACTIONS"), atom("_NET_WM_ACTION_MINIMIZE")));
+    if (fullscreen)
+    {
+        send_client_message(conn, w1, net_wm_state, 1, atom("_NET_WM_STATE_FULLSCREEN"));
+        REQUIRE(wait_for_condition([&]() { return has_state(conn, w1, atom("_NET_WM_STATE_FULLSCREEN")); }, kTimeout));
+    }
 
     // Neither _NET_WM_STATE_HIDDEN nor ICCCM WM_CHANGE_STATE hides a window.
-    send_client_message(conn, w1, net_wm_state, 1, net_wm_state_hidden, 0, 0, 0);
-    send_client_message(conn, w1, intern_atom(conn.get(), "WM_CHANGE_STATE"), XCB_ICCCM_WM_STATE_ICONIC);
+    send_client_message(conn, w1, net_wm_state, 1, hidden);
+    send_client_message(conn, w1, atom("WM_CHANGE_STATE"), XCB_ICCCM_WM_STATE_ICONIC);
     observe_title_after_events(conn, w1);
-    CHECK_FALSE(has_state(conn, w1, net_wm_state_hidden));
+    CHECK(get_wm_state(conn, w1, wm_state) == XCB_ICCCM_WM_STATE_NORMAL);
+    CHECK_FALSE(has_state(conn, w1, hidden));
     CHECK_FALSE(is_hidden_offscreen(conn, w1));
     CHECK(wait_for_active_window(conn, w1, kTimeout));
     destroy_window(conn, w1);

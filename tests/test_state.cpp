@@ -821,6 +821,26 @@ TEST_CASE("Rule sizes use the same frame sizing as application requests", "[stat
     CHECK(frame.height == 5);
 }
 
+TEST_CASE("Rule positions are relative to the dock-reduced workarea", "[state][rules][geometry][workarea]")
+{
+    auto state = test::state(2);
+    state.insert_fixture(9, Fixture::Role::Dock, DockStrut{ .top = { 40 } });
+    test::configure(state, [](Config& config) {
+        config.appearance.border_width = 0;
+        config.rules = { { .match = { .title_regex = std::regex("placed") },
+                           .actions = { .monitor = size_t{ 1 },
+                                        .geometry = RuleGeometry{ .position = std::pair<int16_t, int16_t>{ 100, 200 },
+                                                                  .width = 300, .height = 150 } } } };
+    });
+    add(state, 1, { .floating = true });
+    state.title(1, "placed");
+    CHECK(floating_mode(state.require(1))->geometry == Geometry{ 1100, 240, 300, 150 });
+    // Reload reapplies the rule against the current workarea.
+    state.reserve(9, DockStrut{ .top = { 60 } });
+    test::configure(state, [](Config&) { });
+    CHECK(floating_mode(state.require(1))->geometry == Geometry{ 1100, 260, 300, 150 });
+}
+
 TEST_CASE("Reload with fewer workspaces folds clients, claims and focus into the last one", "[state][reload][fullscreen]")
 {
     auto state = test::state(1, 3);
@@ -830,8 +850,9 @@ TEST_CASE("Reload with fewer workspaces folds clients, claims and focus into the
     add(state, 4, { .workspace = 2 });
     state.fullscreen(2, true);
     state.fullscreen(4, true);
-    state.switch_workspace(0, 2);
-    test::focus(state, 3);
+    state.switch_workspace(0, 1);
+    test::focus(state, 2);
+    REQUIRE(state.active_window() == 2);
     test::configure(state, [](Config& config) { config.workspaces = test::names(1); });
     state.settle();
     REQUIRE(state.monitors()[0].workspaces.size() == 1);

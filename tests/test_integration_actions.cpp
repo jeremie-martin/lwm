@@ -1,5 +1,6 @@
 #include "x11_test_harness.hpp"
 #include "wm_observations.hpp"
+#include <thread>
 #include <catch2/generators/catch_generators.hpp>
 
 using namespace lwm::test;
@@ -100,9 +101,12 @@ TEST_CASE("Integration: IPC window actions execute the key-binding operations", 
     CHECK(has_state(conn, b, intern_atom(conn.get(), "_NET_WM_STATE_FULLSCREEN")));
     ipc_ok("window fullscreen");
 
-    auto before = window_entry(a);
+    // Swapping exchanges the two tiles' slots.
+    auto left = require_window_geometry(conn, a), right = require_window_geometry(conn, b);
     ipc_ok("window swap next");
-    CHECK(tiled_count(0) == 2);
+    CHECK(require_window_geometry(conn, a) == right);
+    CHECK(require_window_geometry(conn, b) == left);
+    ipc_ok("window swap next");
 
     ipc_ok("window to-workspace 2");
     CHECK(window_entry(b).at("workspace") == 2);
@@ -118,7 +122,6 @@ TEST_CASE("Integration: IPC window actions execute the key-binding operations", 
     ipc_ok("monitor focus next");
     ipc_ok("window to-monitor prev");
     CHECK(window_entry(a).at("monitor") == 0);
-    CHECK(before.at("id") == a);
 
     destroy_window(conn, b);
     destroy_window(conn, a);
@@ -145,20 +148,35 @@ TEST_CASE("Integration: window close reaches clients without the delete protocol
 
 TEST_CASE("Integration: closing asks first and closing again kills", "[integration][ipc][actions][close]")
 {
+    bool ewmh = GENERATE(false, true);
+    CAPTURE(ewmh);
     auto env = TestEnvironment::create();
     if (!env)
         SKIP("X11 unavailable");
     auto& conn = env->conn;
+    // The client advertises ping but never answers, and owns a second window.
     X11Connection victim_connection;
     REQUIRE(victim_connection.ok());
     auto* c = victim_connection.get();
     auto protocols = intern_atom(c, "WM_PROTOCOLS");
     auto delete_window = intern_atom(c, "WM_DELETE_WINDOW");
+    xcb_atom_t supported[] = { delete_window, intern_atom(c, "_NET_WM_PING") };
     auto victim = create_window(victim_connection, 10, 10, 200, 150);
-    xcb_change_property(c, XCB_PROP_MODE_REPLACE, victim, protocols, XCB_ATOM_ATOM, 32, 1, &delete_window);
-    map_window(victim_connection, victim);
-    REQUIRE(wait_for_active_window(conn, victim, kTimeout));
-    ipc_ok("window close");
+    auto sibling = create_window(victim_connection, 30, 30, 200, 150);
+    for (auto window : { sibling, victim })
+    {
+        xcb_change_property(c, XCB_PROP_MODE_REPLACE, window, protocols, XCB_ATOM_ATOM, 32, 2, supported);
+        map_window(victim_connection, window);
+        REQUIRE(wait_for_active_window(conn, window, kTimeout));
+    }
+    auto close = [&]
+    {
+        if (ewmh)
+            send_client_message(conn, victim, intern_atom(conn.get(), "_NET_CLOSE_WINDOW"), XCB_CURRENT_TIME, 2);
+        else
+            ipc_ok("window close");
+    };
+    close();
     REQUIRE(wait_for_condition(
         [&]
         {
@@ -167,18 +185,40 @@ TEST_CASE("Integration: closing asks first and closing again kills", "[integrati
             {
                 auto const& m = reinterpret_cast<xcb_client_message_event_t const&>(*event);
                 asked |= (event->response_type & ~0x80) == XCB_CLIENT_MESSAGE && m.type == protocols
-                    && m.data.data32[0] == delete_window;
+                    && m.window == victim && m.data.data32[0] == delete_window;
                 free(event);
             }
             return asked;
         },
         kTimeout
     ));
-    // A client that does not close, perhaps showing a save dialog, stays until closed again.
+    // A client that has not closed, perhaps showing a save dialog, is never killed on
+    // LWM's own initiative, even well past any timeout.
+    std::this_thread::sleep_for(std::chrono::milliseconds(5500));
     observe_title_after_events(conn, victim);
     CHECK_FALSE(window_entry(victim).is_null());
-    ipc_ok("window close");
-    REQUIRE(wait_for_condition([&] { return window_entry(victim).is_null(); }, kTimeout));
+    CHECK_FALSE(window_entry(sibling).is_null());
+    // Closing it again kills the client connection with every window it owns.
+    close();
+    REQUIRE(wait_for_condition([&] { return window_entry(victim).is_null() && window_entry(sibling).is_null(); }, kTimeout));
+    auto* reply = xcb_get_input_focus_reply(c, xcb_get_input_focus(c), nullptr);
+    CHECK(reply == nullptr);
+    free(reply);
+    CHECK(xcb_connection_has_error(c) != 0);
+}
+
+TEST_CASE("Integration: IPC rejects malformed and oversized requests and stays responsive", "[integration][ipc]")
+{
+    auto env = TestEnvironment::create();
+    if (!env)
+        SKIP("X11 unavailable");
+    auto padded = [](size_t size) { return "version" + std::string(size - 7, ' '); };
+    CHECK(send_ipc_command(padded(4095)).value_or("").starts_with("ok "));
+    CHECK(send_ipc_command(padded(4096)) == "error request too large");
+    CHECK(send_ipc_command(padded(4097)) == "error request too large");
+    CHECK(send_ipc_command("version", std::chrono::seconds(2), "STRING") == "error request must be UTF-8 text");
+    CHECK(send_ipc_command("versions", std::chrono::seconds(2), "UTF8_STRING", 32) == "error request must be UTF-8 text");
+    CHECK(send_ipc_command("version").value_or("").starts_with("ok "));
 }
 
 TEST_CASE("Integration: pooled tiles stay tiled and consistent while hidden", "[integration][scratchpad]")
