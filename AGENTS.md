@@ -19,5 +19,7 @@ Configuration and parsing conventions can be challenged when they cause
 disproportionate complexity; describe any user-facing change in X11.md or IPC.md.
 
 [ARCHITECTURE.md](ARCHITECTURE.md) describes the current design only; keep it that way.
+[DECISIONS.md](DECISIONS.md) records removed features and rejected proposals with their
+reasons; check it before proposing one again, and add an entry for each new such decision.
 [TESTING.md](TESTING.md) documents isolated displays, synchronization, restart fixtures
 and performance probes. Never run WM tests against a live desktop.

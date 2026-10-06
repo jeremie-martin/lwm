@@ -1,0 +1,53 @@
+# Decisions
+
+Settled design and product choices, with the reason and what would reopen them. Record
+removed features and rejected proposals here; [ARCHITECTURE.md](ARCHITECTURE.md)
+describes only the current design. Keep each entry to a few lines.
+
+## Drop `_NET_WM_SYNC_REQUEST` (2026-10-06)
+
+LWM sent sync requests but never waited for the counter, so clients repainted exactly
+as without them. Motion coalescing already limits drag configures (5 per 200 motion
+events in `transition_counts.py`). Revisit if resizing heavy applications visibly lags:
+implement drag-only sync that awaits the counter through an XSync alarm, with a
+timeout, rather than restoring the fire-and-forget form.
+
+## Keep WM_HINTS urgency mirroring (2026-10-06)
+
+Writing urgency into the application-owned `WM_HINTS`, detecting its echo and
+rewriting `_NET_CLIENT_LIST` exist so that polybar's `xworkspaces` urgent label works.
+The cleaner design publishes urgency only through `_NET_WM_STATE_DEMANDS_ATTENTION`
+and IPC, with the bar fed by `lwmctl subscribe`. Revisit when the bar no longer
+depends on `WM_HINTS`.
+
+## Keep remembered maximize on tiled clients (2026-10-06)
+
+Tiled clients retain and publish maximize flags that only floating presentation
+honors. The window is told it is maximized when it is not; the alternative is to stop
+advertising and publishing maximize while tiled. Undecided; revisit with a concrete
+application that misbehaves.
+
+## Keep minimal-move restacking (2026-10-06)
+
+Restacking everything on each change is simpler but exceeds the X request budgets
+enforced by `transition_counts.py`.
+
+## Keep these behaviours (2026-10-06)
+
+Removing each would save 25–40 lines, but it would remove behaviour users rely on:
+
+- the `workspace list`, `window list` and `scratchpad list` queries alongside `state`
+- unmodified gap-click split resizing, with double-click and Ctrl-click reset
+- `_NET_WM_FULLSCREEN_MONITORS`
+
+## Rejected simplifications (2026-10-06)
+
+- A shared properties base for `WindowObservation` and `Client` breaks
+  designated-initializer construction in tests.
+- Modeling `WindowRole` as `Fixture::Role` weakens the type.
+- Dropping `drag_to`'s client re-check lets completion skip settling.
+- Dropping `RootOutput::fullscreen_owners` loses the owner-change log line that
+  integration tests assert.
+- Removing the defaulted `operator==` on actions removes syntax, not knowledge.
+- Giving runtime `Config` reflect-cpp types would remove the duplicated input schema
+  but leak the parsing library past the input boundary.
