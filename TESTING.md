@@ -46,7 +46,7 @@ There is no GitHub Actions pipeline; validation runs locally.
 ## Integration harness
 
 The harness starts a private Xvfb and the binaries from the selected CMake build.
-Readiness requires a live supporting window and a successful ping to its socket.
+Readiness requires a live supporting window that owns `WM_S0` and answers a ping.
 Startup failures fail with captured stderr. Direct runs may skip if Xvfb is missing;
 `LWM_TEST_REQUIRE_X11=1` makes that fatal. Unsupported server capabilities may still
 skip. `LWM_TEST_ALLOW_EXISTING_DISPLAY=1` permits fallback to `DISPLAY`; use it only
@@ -60,6 +60,10 @@ assertions, `observe_title_after_events()` in `tests/wm_observations.hpp` places
 marker on the same connection and observes it through IPC. First establish window
 management, and use titles that cannot trigger rules. This orders earlier events
 on that connection only. Do not repeat actions inside polling predicates.
+
+`send_ipc_command()` speaks the IPC protocol from a private X connection, as `lwmctl`
+does. Its reply follows the command's effects on the server, but not events the test
+sent on its own connection.
 
 `Watcher` in `tests/state_watch.hpp` runs the real `lwmctl watch` and retains partial
 lines; its first line is the state at attachment.
@@ -76,9 +80,10 @@ It writes through a separate X connection after the first read but before its re
 is delivered, testing admission subscription order without sleeps or production hooks.
 The fixture also covers separate user-time windows and both live and cold admission.
 
-Use `TestFd` and the bounded process/socket helpers for cleanup on assertion
+Use `TestFd` and the bounded process helpers for cleanup on assertion
 failure. `LwmProcess::wait_for_exit()` tests normal shutdown; `stop()` may force
-termination. Use the CLI only when its process or output behavior is the contract. Tests use private log destinations, never the host journal. Direct
+termination. Use the CLI only when its process or output behavior is the contract.
+Tests use private log destinations, never the host journal. Direct
 Catch runs lack CTest's outer timeout, so fixture waits must remain bounded.
 
 ### Displays and generated sequences
@@ -117,19 +122,17 @@ and libX11; the request tracer also needs `cc` and XCB headers. Each script's
 ```sh
 python3 tests/performance/transition_counts.py build/release/src/app/lwm --check
 python3 tests/performance/focus_cycle.py build/release/src/app/lwm
-python3 tests/performance/ipc_load.py build/release/src/app/lwm --x-flood --check
 python3 tests/performance/restart_resources.py build/release/src/app/lwm --check
 python3 tests/performance/logging_bench.py --binary build/release/src/app/lwm
 ```
 
 - `transition_counts.py` enforces X-request budgets for metadata, rules, placement,
-  layout, workspaces, docks, and drag batching. Budgets live in the script. Synthetic
+  layout, workspaces, docks, and drag batching. Budgets live in the script. The script
+  settles on the published `_LWM_STATE`, which costs the WM nothing, so each IPC
+  command it counts costs exactly the read of its request. Synthetic
   motion controls batching; XTEST integration tests cover real grabs.
 - `focus_cycle.py` measures completed IPC focus calls and distinct targets. Keep
   direction and client count fixed; `--transients chain|cycle` adds ancestry work.
-- `ipc_load.py` checks concurrent callers with incomplete requests, continuous X
-  traffic, and signal reload. Omit `--x-flood` for the simpler
-  caller/backpressure case.
 - `restart_resources.py` uses libXRes to check that repeated restart and failed-exec
   recovery release predecessor X clients, including an empty-display restart.
 - `logging_bench.py` measures workspace transitions, idle cost, blocked output, and

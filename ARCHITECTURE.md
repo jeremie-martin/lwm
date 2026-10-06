@@ -29,7 +29,7 @@ Paths are relative to `src/`.
 | Pointer interactions | `lwm/core/drag.cpp` |
 | Named scratchpads and the pool | `lwm/core/scratchpad.cpp` |
 | Pure derivations used by the model | `classification.*`, `focus.*`, `stacking.*`, `window_rules.*`, `workarea.*` |
-| Command grammar, actions, IPC transport, event records | `action.*`, `command.*`, `ipc*`, `events.*` |
+| Command grammar and actions | `action.hpp`, `command.*` |
 | X connection, EWMH resources, property reads | `connection.*`, `ewmh.*`, `xproperty.hpp` |
 | Signals, logging, snapshot codec, invariants | `signals.*`, `log.*`, `restart.*`, `invariants.hpp` |
 | Event loop, setup, topology discovery, reload, processes | `lwm/wm.cpp` |
@@ -38,7 +38,7 @@ Paths are relative to `src/`.
 | X event translation | `lwm/wm_events.cpp` |
 | Action execution: dispatch, effects, replies | `lwm/wm_actions.cpp` |
 | Completion and publication | `lwm/wm_transition.cpp` |
-| IPC queries, exec handoff | `lwm/wm_ipc.cpp`, `wm_restart.cpp` |
+| IPC requests over X and state views, exec handoff | `lwm/wm_ipc.cpp`, `wm_restart.cpp` |
 
 ## The boundary
 
@@ -120,11 +120,11 @@ mirrored into the application's `WM_HINTS`. Caches never drive domain decisions.
 
 ## Operations and completion
 
-An operation is one dispatched X event, IPC request, signal reload, timeout or
-topology pass, or the startup scan. Handlers call `State` and retain only obligations
-the model cannot express: ConfigureRequest replies, queued event facts, forwarded
-restacks, crossing-event drains after a pointer release, and outputs forgotten after
-an external write.
+An operation is one dispatched X event (including an IPC request), signal reload,
+timeout or topology pass, or the startup scan. Handlers call `State` and retain only
+obligations the model cannot express: ConfigureRequest replies, forwarded restacks,
+crossing-event drains after a pointer release, and outputs forgotten after an
+external write.
 
 `complete_transition()` orders completion:
 
@@ -144,7 +144,7 @@ the frozen model. A ConfigureNotify mismatch forgets cached geometry without for
 completion; a conflicting urgency hint forces reconciliation. Explicit focus reasserts
 X focus, focused state and stacking even when the selected window is unchanged.
 
-The event loop polls X, the signal pipe and IPC. X batches stop after 64 events or
+The event loop polls X and the signal pipe. X batches stop after 64 events or
 2 ms; pointer motion is coalesced up to the next non-motion event. Crossing drains only
 consume events already queued and defer unrelated ones; handlers never re-enter.
 
@@ -295,8 +295,15 @@ names survive.
 A private reflect-cpp schema validates TOML over toml++; the loader resolves names,
 bounds, command references and compiled regexes into plain runtime values. Bindings'
 `action` strings and IPC requests share one command parser; bindings reject queries.
-Actions succeed silently; their outcome is the published state. Execution copies a binding's action because reload can replace the
-configuration that owns it. Startup options own logging policy; reload does not.
+Actions succeed silently; their outcome is the published state. Execution copies a
+binding's action because reload can replace the configuration that owns it. Startup options own logging policy; reload does not.
+
+IPC needs no transport of its own: a request is a `_LWM_COMMAND` ClientMessage naming
+the caller's window, handled like any other X event. The handler reads and deletes
+the request property, executes it, completes the operation and only then writes the
+reply on the same connection, so the reply follows every effect. The WM keeps no
+per-caller state; a restart waits briefly for its requester to disconnect, so that
+an otherwise empty server cannot reset during the handoff.
 
 IPC query results are typed view records serialized by reflect-cpp. Completion
 publishes the same state view as `_LWM_STATE` on the `WM_S0` owner window through the

@@ -314,7 +314,9 @@ void WindowManager::handle_client_message(xcb_client_message_event_t const& e)
 {
     auto* ewmh = ewmh_.get();
     auto const* client = state_.find(e.window);
-    if (e.type == ewmh->WM_PROTOCOLS && e.data.data32[0] == ewmh->_NET_WM_PING)
+    if (e.type == atoms_.lwm_command && e.window == wm_window_)
+        handle_command(e.data.data32[0]);
+    else if (e.type == ewmh->WM_PROTOCOLS && e.data.data32[0] == ewmh->_NET_WM_PING)
     {
         xcb_window_t window = e.data.data32[2] != XCB_NONE ? e.data.data32[2] : e.window;
         pending_kills_.erase(window);

@@ -22,6 +22,19 @@ Lost: occurrences with no state equivalent (`key_action`, SIGHUP or binding relo
 outcomes, map/unmap of popups and fixtures, same-window focus). Revisit only for a
 concrete consumer; publish such a fact as state rather than restoring an event stream.
 
+## Carry IPC over X instead of a Unix socket (2026-10-06)
+
+Commands travel as a property on the caller's window announced by a ClientMessage
+to the `WM_S0` owner, and the reply is a property written after completion, as in
+herbstluftwm. This deletes the non-blocking socket server (deadlines, connection
+caps, partial writes, backpressure), socket discovery (`--socket`, `LWM_SOCKET`,
+`_LWM_IPC_SOCKET`) and lwmctl's socket client; the X server already provides
+buffering, ordering and client lifetimes, and the reply now follows every effect.
+Lost: IPC without X access to the display. Considered and rejected: keeping the
+socket for commands plus a snapshot stream (about 300 lines more, same user
+surface). A restart waits up to 250 ms for its requester to disconnect, or an
+otherwise empty server could reset during the handoff.
+
 ## Keep WM_HINTS urgency mirroring (2026-10-06)
 
 Writing urgency into the application-owned `WM_HINTS`, detecting its echo and

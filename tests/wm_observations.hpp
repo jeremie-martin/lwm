@@ -4,9 +4,9 @@
 
 namespace lwm::test {
 // Sends an IPC command that must succeed and returns its complete reply.
-inline std::string ipc_ok(std::string const& socket, std::string const& command)
+inline std::string ipc_ok(std::string const& command)
 {
-    auto reply = send_ipc_command(socket, command);
+    auto reply = send_ipc_command(command);
     REQUIRE(reply);
     INFO(command << " -> " << *reply);
     REQUIRE(reply->starts_with("ok"));
@@ -14,9 +14,9 @@ inline std::string ipc_ok(std::string const& socket, std::string const& command)
 }
 
 // Sends a query that must succeed and returns its JSON value.
-inline nlohmann::json ipc_json(std::string const& socket, std::string const& command)
+inline nlohmann::json ipc_json(std::string const& command)
 {
-    auto reply = ipc_ok(socket, command);
+    auto reply = ipc_ok(command);
     REQUIRE(reply.starts_with("ok "));
     return nlohmann::json::parse(reply.substr(3));
 }
@@ -55,12 +55,10 @@ inline void observe_title_after_events(X11Connection& conn, xcb_window_t window)
     auto utf8 = intern_atom(conn.get(), "UTF8_STRING");
     xcb_change_property(conn.get(), XCB_PROP_MODE_REPLACE, window, name, utf8, 8, title.size(), title.data());
     xcb_flush(conn.get());
-    auto socket = wait_for_ipc_socket_path(conn);
-    REQUIRE(socket);
     REQUIRE(wait_for_condition(
         [&]
         {
-            auto reply = send_ipc_command(*socket, "window list");
+            auto reply = send_ipc_command("window list");
             if (!reply)
                 return false;
             REQUIRE(reply->starts_with("ok "));

@@ -146,18 +146,16 @@ TEST_CASE(
     if (!env)
         SKIP("Test environment not available");
 
-    auto socket_path = wait_for_ipc_socket_path(env->conn);
-    REQUIRE(socket_path.has_value());
     REQUIRE(wait_for_desktop_names(env->conn, { "dev", "web" }));
 
     REQUIRE(env->wm.write_config(make_config("code", "chat")));
-    auto reload_ok = run_lwmctl(env->wm, { "reload-config" }, *socket_path);
+    auto reload_ok = run_lwmctl(env->wm, { "reload-config" });
     REQUIRE(reload_ok.has_value());
     REQUIRE(reload_ok->exit_code == 0);
     REQUIRE(wait_for_desktop_names(env->conn, { "code", "chat" }));
 
     REQUIRE(env->wm.write_config("[workspaces]\ncount = 2\nnames = [\"broken\"\n"));
-    auto reload_bad = run_lwmctl(env->wm, { "reload-config" }, *socket_path);
+    auto reload_bad = run_lwmctl(env->wm, { "reload-config" });
     REQUIRE(reload_bad.has_value());
     REQUIRE(reload_bad->exit_code != 0);
     REQUIRE(wait_for_desktop_names(env->conn, { "code", "chat" }));
@@ -169,15 +167,13 @@ TEST_CASE("Integration: reload-config rejects workspace-count changes", "[integr
     if (!env)
         SKIP("Test environment not available");
 
-    auto socket_path = wait_for_ipc_socket_path(env->conn);
-    REQUIRE(socket_path.has_value());
 
     xcb_atom_t desktops_atom = intern_atom(env->conn.get(), "_NET_NUMBER_OF_DESKTOPS");
     REQUIRE(desktops_atom != XCB_NONE);
     REQUIRE(wait_for_property_cardinal(env->conn.get(), env->conn.root(), desktops_atom, 2, kTimeout));
 
     REQUIRE(env->wm.write_config(make_config("one", "two", 3)));
-    auto reload_result = run_lwmctl(env->wm, { "reload-config" }, *socket_path);
+    auto reload_result = run_lwmctl(env->wm, { "reload-config" });
     REQUIRE(reload_result.has_value());
     REQUIRE(reload_result->exit_code != 0);
 
@@ -197,8 +193,6 @@ TEST_CASE("Integration: reload-config does not rerun autostart", "[integration][
     if (!env)
         SKIP("Test environment not available");
 
-    auto socket_path = wait_for_ipc_socket_path(env->conn);
-    REQUIRE(socket_path.has_value());
 
     REQUIRE(wait_for_condition(
         [&marker_path]() { return std::filesystem::exists(marker_path) && line_count(marker_path) == 1; },
@@ -207,7 +201,7 @@ TEST_CASE("Integration: reload-config does not rerun autostart", "[integration][
     REQUIRE(wait_for_condition([&] { return !process_running_with_argument(marker_path.string()); }, kTimeout));
 
     REQUIRE(env->wm.write_config(make_config("gamma", "delta", 2, autostart_cmd)));
-    auto reload_result = run_lwmctl(env->wm, { "reload-config" }, *socket_path);
+    auto reload_result = run_lwmctl(env->wm, { "reload-config" });
     REQUIRE(reload_result.has_value());
     REQUIRE(reload_result->exit_code == 0);
     REQUIRE(wait_for_desktop_names(env->conn, { "gamma", "delta" }));
@@ -230,8 +224,6 @@ TEST_CASE(
     if (!env)
         SKIP("Test environment not available");
 
-    auto socket_path = wait_for_ipc_socket_path(env->conn);
-    REQUIRE(socket_path.has_value());
 
     xcb_atom_t dialog_type = intern_atom(env->conn.get(), "_NET_WM_WINDOW_TYPE_DIALOG");
     REQUIRE(dialog_type != XCB_NONE);
@@ -248,7 +240,7 @@ apply = { geometry = { x = 300, y = 200, width = 240, height = 160 } }
 )";
     REQUIRE(env->wm.write_config(make_config("left", "right", 2, {}, rules)));
 
-    auto reload_result = run_lwmctl(env->wm, { "reload-config" }, *socket_path);
+    auto reload_result = run_lwmctl(env->wm, { "reload-config" });
     REQUIRE(reload_result.has_value());
     REQUIRE(reload_result->exit_code == 0);
     REQUIRE(wait_for_window_geometry(env->conn, floating, 300, 200, 240, 160));
@@ -265,8 +257,6 @@ TEST_CASE(
     if (!env)
         SKIP("Test environment not available");
 
-    auto socket_path = wait_for_ipc_socket_path(env->conn);
-    REQUIRE(socket_path.has_value());
 
     xcb_atom_t net_current_desktop = intern_atom(env->conn.get(), "_NET_CURRENT_DESKTOP");
     xcb_atom_t net_wm_desktop = intern_atom(env->conn.get(), "_NET_WM_DESKTOP");
@@ -290,7 +280,7 @@ apply = { workspace = 1 }
 )";
     REQUIRE(env->wm.write_config(make_config("left", "right", 2, {}, rules)));
 
-    auto reload_result = run_lwmctl(env->wm, { "reload-config" }, *socket_path);
+    auto reload_result = run_lwmctl(env->wm, { "reload-config" });
     REQUIRE(reload_result.has_value());
     REQUIRE(reload_result->exit_code == 0);
     REQUIRE(wait_for_property_cardinal(env->conn.get(), window, net_wm_desktop, 1, kTimeout));
@@ -318,15 +308,13 @@ size = { width = 0.8, height = 0.6 }
     if (!env)
         SKIP("Test environment not available");
 
-    auto socket_path = wait_for_ipc_socket_path(env->conn);
-    REQUIRE(socket_path.has_value());
 
     xcb_window_t fallback = create_window(env->conn, 10, 10, 400, 300);
     set_window_wm_class(env->conn, fallback, "fallback-instance", "FallbackClass");
     map_window(env->conn, fallback);
     REQUIRE(wait_for_active_window(env->conn, fallback, kTimeout));
 
-    auto show_result = send_ipc_command(*socket_path, "scratchpad toggle scratchpad");
+    auto show_result = send_ipc_command("scratchpad toggle scratchpad");
     REQUIRE(show_result.has_value());
     REQUIRE(*show_result == "ok");
 
@@ -339,7 +327,7 @@ size = { width = 0.8, height = 0.6 }
     auto saved_center = window_center(env->conn, scratchpad_window);
     REQUIRE(saved_center.has_value());
 
-    auto hide_result = send_ipc_command(*socket_path, "scratchpad toggle scratchpad");
+    auto hide_result = send_ipc_command("scratchpad toggle scratchpad");
     REQUIRE(hide_result.has_value());
     REQUIRE(*hide_result == "ok");
     REQUIRE(wait_for_condition([&]() { return is_hidden_offscreen(env->conn, scratchpad_window); }, kTimeout));
@@ -360,7 +348,7 @@ size = { width = 0.8, height = 0.6 }
     REQUIRE(wait_for_active_window(env->conn, fallback, kTimeout));
 
     REQUIRE(env->wm.write_config(make_config("one", "two")));
-    auto reload_result = run_lwmctl(env->wm, { "reload-config" }, *socket_path);
+    auto reload_result = run_lwmctl(env->wm, { "reload-config" });
     REQUIRE(reload_result.has_value());
     REQUIRE(reload_result->exit_code == 0);
     REQUIRE(wait_for_condition([&]() { return !is_hidden_offscreen(env->conn, scratchpad_window); }, kTimeout));
@@ -447,16 +435,14 @@ match = { class = "Pending" }
     auto env = TestEnvironment::create(config(true, "Original"));
     REQUIRE(env);
     auto& conn = env->conn;
-    auto socket = wait_for_ipc_socket_path(conn);
-    REQUIRE(socket);
     auto snapshot = [&]
     {
-        auto reply = send_ipc_command(*socket, "scratchpad list");
+        auto reply = send_ipc_command("scratchpad list");
         REQUIRE(reply);
         REQUIRE(reply->starts_with("ok "));
         return nlohmann::json::parse(reply->substr(3));
     };
-    REQUIRE(send_ipc_command(*socket, "scratchpad toggle pending") == "ok");
+    REQUIRE(send_ipc_command("scratchpad toggle pending") == "ok");
     auto window = create_window(conn, 10, 10, 200, 150);
     set_window_wm_class(conn, window, "instance", "Original");
     map_window(conn, window);
@@ -470,15 +456,15 @@ match = { class = "Pending" }
     CHECK(snapshot() == before);
 
     REQUIRE(env->wm.write_config(config(true, "Replacement")));
-    REQUIRE(send_ipc_command(*socket, "reload-config") == "ok");
+    REQUIRE(send_ipc_command("reload-config") == "ok");
     CHECK(snapshot() == before);
-    REQUIRE(send_ipc_command(*socket, "scratchpad toggle claimed") == "ok");
+    REQUIRE(send_ipc_command("scratchpad toggle claimed") == "ok");
     REQUIRE(wait_for_active_window(conn, window, kTimeout));
-    REQUIRE(send_ipc_command(*socket, "scratchpad toggle claimed") == "ok");
+    REQUIRE(send_ipc_command("scratchpad toggle claimed") == "ok");
     auto hidden = intern_atom(conn.get(), "_NET_WM_STATE_HIDDEN");
     REQUIRE(wait_for_condition([&] { return has_state(conn, window, hidden); }, kTimeout));
     REQUIRE(env->wm.write_config(config(false, "")));
-    REQUIRE(send_ipc_command(*socket, "reload-config") == "ok");
+    REQUIRE(send_ipc_command("reload-config") == "ok");
     auto remaining = snapshot();
     REQUIRE(remaining["named"].size() == 1);
     CHECK(remaining["named"][0]["pending"] == true);
@@ -491,8 +477,6 @@ TEST_CASE("Integration: resolved launch bindings preserve argv and replace refer
     auto env = TestEnvironment::create();
     if (!env)
         SKIP("X11 unavailable");
-    auto socket = wait_for_ipc_socket_path(env->conn);
-    REQUIRE(socket);
     auto literal_path = std::filesystem::path(env->wm.runtime_dir()) / "literal output";
     auto shell_path = std::filesystem::path(env->wm.runtime_dir()) / "shell output";
     auto config = [&](std::string const& marker)
@@ -505,14 +489,14 @@ TEST_CASE("Integration: resolved launch bindings preserve argv and replace refer
             "[[binds]]\nkey = 'F7'\naction = {ref = 'script'}\n";
     };
     REQUIRE(env->wm.write_config(config("first")));
-    REQUIRE(send_ipc_command(*socket, "reload-config") == "ok");
+    REQUIRE(send_ipc_command("reload-config") == "ok");
     REQUIRE(send_key(env->conn, XK_F6));
     REQUIRE(wait_for_condition([&] { return read_text_file(literal_path) == "<><$HOME; untouched><two words>"; }, kTimeout));
     REQUIRE(send_key(env->conn, XK_F7));
     REQUIRE(wait_for_condition([&] { return read_text_file(shell_path) == "first"; }, kTimeout));
 
     REQUIRE(env->wm.write_config(config("second")));
-    REQUIRE(send_ipc_command(*socket, "reload-config") == "ok");
+    REQUIRE(send_ipc_command("reload-config") == "ok");
     REQUIRE(send_key(env->conn, XK_F7));
     REQUIRE(wait_for_condition([&] { return read_text_file(shell_path) == "second"; }, kTimeout));
 
@@ -525,7 +509,7 @@ TEST_CASE("Integration: resolved launch bindings preserve argv and replace refer
     {
         CAPTURE(invalid);
         REQUIRE(env->wm.write_config(config("rejected") + invalid));
-        auto rejected = send_ipc_command(*socket, "reload-config");
+        auto rejected = send_ipc_command("reload-config");
         REQUIRE(rejected);
         REQUIRE(rejected->starts_with("error "));
         REQUIRE(std::filesystem::remove(shell_path));

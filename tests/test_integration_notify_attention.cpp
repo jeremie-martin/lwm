@@ -215,10 +215,8 @@ TEST_CASE("Integration: notify-attention rejects extra tokens after window=<xid>
     map_window(conn, w2);
     REQUIRE(wait_for_active_window(conn, w2, kTimeout));
 
-    auto socket = wait_for_ipc_socket_path(conn);
-    REQUIRE(socket);
     std::string arg = "window=" + std::to_string(w1) + " app-name=Ghostty";
-    auto result = send_ipc_command(*socket, "notify-attention " + arg);
+    auto result = send_ipc_command("notify-attention " + arg);
     REQUIRE(result);
     REQUIRE(result->starts_with("error "));
     REQUIRE_FALSE(property_has_atom(conn.get(), w1, net_wm_state, net_wm_state_demands_attention));

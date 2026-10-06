@@ -4,6 +4,7 @@
 #include "lwm/core/log.hpp"
 #include "lwm/core/xproperty.hpp"
 #include "wm.hpp"
+#include <poll.h>
 
 namespace lwm {
 
@@ -69,7 +70,24 @@ void WindowManager::prepare_restart()
     xcb_change_property(conn_.get(), XCB_PROP_MODE_REPLACE, wm_window_, atoms_.lwm_restart_owner, XCB_ATOM_WINDOW, 32, 1, &wm_window_);
     xcb_change_property(conn_.get(), XCB_PROP_MODE_REPLACE, root, atoms_.lwm_restart_owner, XCB_ATOM_WINDOW, 32, 1, &wm_window_);
     xcb_set_close_down_mode(conn_.get(), XCB_CLOSE_DOWN_RETAIN_PERMANENT);
-    cleanup_ipc();
+
+    // An IPC caller disconnecting after the exec could be the last client of an
+    // otherwise empty server, which then resets. Let it leave first, briefly.
+    uint32_t structure = XCB_EVENT_MASK_STRUCTURE_NOTIFY;
+    auto* gone = restart_requester_ == XCB_NONE ? nullptr : xcb_request_check(conn_.get(),
+        xcb_change_window_attributes_checked(conn_.get(), restart_requester_, XCB_CW_EVENT_MASK, &structure));
+    bool waiting = restart_requester_ != XCB_NONE && !gone;
+    free(gone);
+    for (auto deadline = std::chrono::steady_clock::now() + std::chrono::milliseconds(250);
+         waiting && std::chrono::steady_clock::now() < deadline;)
+        if (auto event = reply(xcb_poll_for_event(conn_.get())))
+            waiting = (event->response_type & ~0x80) != XCB_DESTROY_NOTIFY
+                || reinterpret_cast<xcb_destroy_notify_event_t const&>(*event).window != restart_requester_;
+        else
+        {
+            pollfd descriptor{ xcb_get_file_descriptor(conn_.get()), POLLIN, 0 };
+            poll(&descriptor, 1, 10);
+        }
 
     // A round trip guarantees the server processed the release before exec.
     conn_.sync();

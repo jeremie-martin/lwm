@@ -84,9 +84,7 @@ TEST_CASE(
         SKIP("Test environment not available");
 
     auto& conn = test_env->conn;
-    auto socket_path = wait_for_ipc_socket_path(conn);
-    REQUIRE(socket_path.has_value());
-    auto toggle_result = send_ipc_command(*socket_path, "scratchpad toggle terminal");
+    auto toggle_result = send_ipc_command("scratchpad toggle terminal");
     REQUIRE(toggle_result.has_value());
     REQUIRE(*toggle_result == "ok");
 
@@ -99,8 +97,8 @@ TEST_CASE(
     set_window_title(conn, window, "dropdown");
     bool shown = wait_for_window_geometry(conn, window, 128, 144, 1020, 428);
     INFO(test_env->wm.diagnostics());
-    INFO(send_ipc_command(*socket_path, "window list").value_or("no window reply"));
-    INFO(send_ipc_command(*socket_path, "scratchpad list").value_or("no scratchpad reply"));
+    INFO(send_ipc_command("window list").value_or("no window reply"));
+    INFO(send_ipc_command("scratchpad list").value_or("no scratchpad reply"));
     REQUIRE(shown);
 
     destroy_window(conn, window);
@@ -116,8 +114,6 @@ TEST_CASE(
         SKIP("Test environment not available");
 
     auto& conn = test_env->conn;
-    auto socket_path = wait_for_ipc_socket_path(conn);
-    REQUIRE(socket_path.has_value());
 
     // Create a tiled window as background
     xcb_window_t tiled = create_window(conn, 10, 10, 400, 300);
@@ -126,7 +122,7 @@ TEST_CASE(
     REQUIRE(wait_for_active_window(conn, tiled, kTimeout));
 
     // Trigger scratchpad toggle → pending launch
-    auto toggle_result = send_ipc_command(*socket_path, "scratchpad toggle terminal");
+    auto toggle_result = send_ipc_command("scratchpad toggle terminal");
     REQUIRE(toggle_result.has_value());
     REQUIRE(*toggle_result == "ok");
 
@@ -178,8 +174,6 @@ TEST_CASE("Integration: floating scratchpad preserves kind and geometry across r
         SKIP("Test environment not available");
 
     auto& conn = test_env->conn;
-    auto socket_path = wait_for_ipc_socket_path(conn);
-    REQUIRE(socket_path.has_value());
 
     // Create a tiled window so the scratchpad has something to be compared against
     xcb_window_t tiled = create_window(conn, 10, 10, 400, 300);
@@ -188,7 +182,7 @@ TEST_CASE("Integration: floating scratchpad preserves kind and geometry across r
     REQUIRE(wait_for_active_window(conn, tiled, kTimeout));
 
     // Launch scratchpad
-    auto toggle_result = send_ipc_command(*socket_path, "scratchpad toggle terminal");
+    auto toggle_result = send_ipc_command("scratchpad toggle terminal");
     REQUIRE(toggle_result.has_value());
     REQUIRE(*toggle_result == "ok");
 
@@ -205,7 +199,7 @@ TEST_CASE("Integration: floating scratchpad preserves kind and geometry across r
 
     auto previous = wm_instance(conn);
     REQUIRE(previous);
-    REQUIRE(send_ipc_command(*socket_path, "restart") == "ok");
+    REQUIRE(send_ipc_command("restart") == "ok");
     REQUIRE(wait_for_wm_restart(conn, std::chrono::seconds(5), *previous));
     REQUIRE(wait_for_active_window(conn, sp, kTimeout));
     REQUIRE(get_window_geometry(conn, sp) == geom_before);
@@ -223,8 +217,6 @@ TEST_CASE("Integration: scratchpad cycle keeps pooled windows in rotation", "[in
         SKIP("Test environment not available");
 
     auto& conn = test_env->conn;
-    auto socket_path = wait_for_ipc_socket_path(conn);
-    REQUIRE(socket_path.has_value());
 
     xcb_window_t first = create_window(conn, 10, 10, 300, 220);
     set_window_wm_class(conn, first, "pool-first", "PoolWindow");
@@ -236,32 +228,32 @@ TEST_CASE("Integration: scratchpad cycle keeps pooled windows in rotation", "[in
     map_window(conn, second);
     REQUIRE(wait_for_active_window(conn, second, kTimeout));
 
-    auto stash_second = send_ipc_command(*socket_path, "scratchpad stash");
+    auto stash_second = send_ipc_command("scratchpad stash");
     REQUIRE(stash_second.has_value());
     REQUIRE(*stash_second == "ok");
     REQUIRE(wait_for_condition([&]() { return is_hidden_offscreen(conn, second); }, kTimeout));
     REQUIRE(wait_for_active_window(conn, first, kTimeout));
 
-    auto stash_first = send_ipc_command(*socket_path, "scratchpad stash");
+    auto stash_first = send_ipc_command("scratchpad stash");
     REQUIRE(stash_first.has_value());
     REQUIRE(*stash_first == "ok");
     REQUIRE(wait_for_condition([&]() { return is_hidden_offscreen(conn, first); }, kTimeout));
 
-    auto first_cycle = send_ipc_command(*socket_path, "scratchpad cycle");
+    auto first_cycle = send_ipc_command("scratchpad cycle");
     REQUIRE(first_cycle.has_value());
     REQUIRE(*first_cycle == "ok");
     REQUIRE(wait_for_active_window(conn, first, kTimeout));
     REQUIRE(wait_for_condition([&]() { return !is_hidden_offscreen(conn, first); }, kTimeout));
     REQUIRE(wait_for_condition([&]() { return is_hidden_offscreen(conn, second); }, kTimeout));
 
-    auto second_cycle = send_ipc_command(*socket_path, "scratchpad cycle");
+    auto second_cycle = send_ipc_command("scratchpad cycle");
     REQUIRE(second_cycle.has_value());
     REQUIRE(*second_cycle == "ok");
     REQUIRE(wait_for_active_window(conn, second, kTimeout));
     REQUIRE(wait_for_condition([&]() { return is_hidden_offscreen(conn, first); }, kTimeout));
     REQUIRE(wait_for_condition([&]() { return !is_hidden_offscreen(conn, second); }, kTimeout));
 
-    auto third_cycle = send_ipc_command(*socket_path, "scratchpad cycle");
+    auto third_cycle = send_ipc_command("scratchpad cycle");
     REQUIRE(third_cycle.has_value());
     REQUIRE(*third_cycle == "ok");
     REQUIRE(wait_for_active_window(conn, first, kTimeout));
@@ -282,8 +274,6 @@ TEST_CASE("Integration: tiled scratchpad pool preserves prior floating geometry"
     if (!extension_available(conn, &xcb_test_id))
         SKIP("XTEST extension not available");
 
-    auto socket_path = wait_for_ipc_socket_path(conn);
-    REQUIRE(socket_path.has_value());
 
     xcb_atom_t net_moveresize_window = intern_atom(conn.get(), "_NET_MOVERESIZE_WINDOW");
     REQUIRE(net_moveresize_window != XCB_NONE);
@@ -330,12 +320,12 @@ TEST_CASE("Integration: tiled scratchpad pool preserves prior floating geometry"
         kTimeout
     ));
 
-    auto stash = send_ipc_command(*socket_path, "scratchpad stash");
+    auto stash = send_ipc_command("scratchpad stash");
     REQUIRE(stash.has_value());
     REQUIRE(*stash == "ok");
     REQUIRE(wait_for_condition([&]() { return is_hidden_offscreen(conn, window); }, kTimeout));
 
-    auto show = send_ipc_command(*socket_path, "scratchpad cycle");
+    auto show = send_ipc_command("scratchpad cycle");
     REQUIRE(show.has_value());
     REQUIRE(*show == "ok");
     REQUIRE(wait_for_active_window(conn, window, kTimeout));
@@ -370,20 +360,18 @@ TEST_CASE("Integration: visible scratchpad pool window keeps cycling after resta
         SKIP("Test environment not available");
 
     auto& conn = test_env->conn;
-    auto socket_path = wait_for_ipc_socket_path(conn);
-    REQUIRE(socket_path.has_value());
 
     xcb_window_t pooled = create_window(conn, 10, 10, 300, 220);
     set_window_wm_class(conn, pooled, "pool-visible", "PoolWindow");
     map_window(conn, pooled);
     REQUIRE(wait_for_active_window(conn, pooled, kTimeout));
 
-    auto stash = send_ipc_command(*socket_path, "scratchpad stash");
+    auto stash = send_ipc_command("scratchpad stash");
     REQUIRE(stash.has_value());
     REQUIRE(*stash == "ok");
     REQUIRE(wait_for_condition([&]() { return is_hidden_offscreen(conn, pooled); }, kTimeout));
 
-    auto show = send_ipc_command(*socket_path, "scratchpad cycle");
+    auto show = send_ipc_command("scratchpad cycle");
     REQUIRE(show.has_value());
     REQUIRE(*show == "ok");
     REQUIRE(wait_for_active_window(conn, pooled, kTimeout));
@@ -391,15 +379,13 @@ TEST_CASE("Integration: visible scratchpad pool window keeps cycling after resta
 
     auto previous_wm = wm_instance(conn);
     REQUIRE(previous_wm.has_value());
-    auto restart_result = send_ipc_command(*socket_path, "restart");
+    auto restart_result = send_ipc_command("restart");
     (void)restart_result;
     REQUIRE(wait_for_wm_restart(conn, std::chrono::seconds(5), *previous_wm));
     REQUIRE(wait_for_active_window(conn, pooled, kTimeout));
     REQUIRE(wait_for_condition([&]() { return !is_hidden_offscreen(conn, pooled); }, kTimeout));
 
-    auto restarted_socket_path = wait_for_ipc_socket_path(conn);
-    REQUIRE(restarted_socket_path.has_value());
-    auto hide = send_ipc_command(*restarted_socket_path, "scratchpad cycle");
+    auto hide = send_ipc_command("scratchpad cycle");
     REQUIRE(hide.has_value());
     REQUIRE(*hide == "ok");
     REQUIRE(wait_for_condition([&]() { return is_hidden_offscreen(conn, pooled); }, kTimeout));
@@ -414,15 +400,13 @@ TEST_CASE("Integration: hidden scratchpad stays hidden across restart", "[integr
         SKIP("Test environment not available");
 
     auto& conn = test_env->conn;
-    auto socket_path = wait_for_ipc_socket_path(conn);
-    REQUIRE(socket_path.has_value());
 
     xcb_window_t tiled = create_window(conn, 10, 10, 400, 300);
     set_window_wm_class(conn, tiled, "tiled-inst", "TiledClass");
     map_window(conn, tiled);
     REQUIRE(wait_for_active_window(conn, tiled, kTimeout));
 
-    auto first_toggle = send_ipc_command(*socket_path, "scratchpad toggle terminal");
+    auto first_toggle = send_ipc_command("scratchpad toggle terminal");
     REQUIRE(first_toggle.has_value());
     REQUIRE(*first_toggle == "ok");
 
@@ -432,7 +416,7 @@ TEST_CASE("Integration: hidden scratchpad stays hidden across restart", "[integr
     REQUIRE(wait_for_active_window(conn, sp, kTimeout));
     REQUIRE(wait_for_condition([&]() { return !is_hidden_offscreen(conn, sp); }, kTimeout));
 
-    auto second_toggle = send_ipc_command(*socket_path, "scratchpad toggle terminal");
+    auto second_toggle = send_ipc_command("scratchpad toggle terminal");
     REQUIRE(second_toggle.has_value());
     REQUIRE(*second_toggle == "ok");
     REQUIRE(wait_for_condition([&]() { return is_hidden_offscreen(conn, sp); }, kTimeout));
@@ -440,7 +424,7 @@ TEST_CASE("Integration: hidden scratchpad stays hidden across restart", "[integr
 
     auto previous_wm = wm_instance(conn);
     REQUIRE(previous_wm.has_value());
-    auto restart_result = send_ipc_command(*socket_path, "restart");
+    auto restart_result = send_ipc_command("restart");
     (void)restart_result;
     REQUIRE(wait_for_wm_restart(conn, std::chrono::seconds(5), *previous_wm));
     REQUIRE(wait_for_condition([&]() { return is_hidden_offscreen(conn, sp); }, kTimeout));
@@ -460,12 +444,10 @@ match = { class = "LaunchTest" }
 )");
     if (!env)
         SKIP("X11 unavailable");
-    auto socket = wait_for_ipc_socket_path(env->conn);
-    REQUIRE(socket);
     for (int i = 0; i < 2; ++i)
     {
-        REQUIRE(send_ipc_command(*socket, "scratchpad toggle broken") == "ok");
-        auto state = send_ipc_command(*socket, "scratchpad list");
+        REQUIRE(send_ipc_command("scratchpad toggle broken") == "ok");
+        auto state = send_ipc_command("scratchpad list");
         REQUIRE(state);
         CHECK(state->find("\"pending\":false") != std::string::npos);
     }
@@ -484,12 +466,10 @@ match = { class = "LaunchTest" }
 )");
     if (!env)
         SKIP("X11 unavailable");
-    auto socket = wait_for_ipc_socket_path(env->conn);
-    REQUIRE(socket);
-    REQUIRE(send_ipc_command(*socket, "scratchpad toggle late") == "ok");
+    REQUIRE(send_ipc_command("scratchpad toggle late") == "ok");
     auto launches = std::filesystem::path(env->wm.runtime_dir()) / "launches";
     REQUIRE(wait_for_condition([&] { return read_text_file(launches) == "launch\n"; }, kTimeout));
-    REQUIRE(send_ipc_command(*socket, "scratchpad toggle late") == "ok");
+    REQUIRE(send_ipc_command("scratchpad toggle late") == "ok");
     // The acknowledged toggle has returned from spawning. Wait for any child
     // to finish before counting invocations, so scheduling cannot hide a duplicate.
     auto children = std::filesystem::path("/proc") / std::to_string(env->wm.pid()) / "task"
@@ -497,13 +477,13 @@ match = { class = "LaunchTest" }
     REQUIRE(std::filesystem::exists(children));
     REQUIRE(wait_for_condition([&] { return read_text_file(children).empty(); }, kTimeout));
     REQUIRE(read_text_file(launches) == "launch\n");
-    auto state = send_ipc_command(*socket, "scratchpad list");
+    auto state = send_ipc_command("scratchpad list");
     REQUIRE(state);
     CHECK(state->find("\"pending\":true") != std::string::npos);
-    auto result = run_command(LWMCTL_BINARY_PATH, { "--socket", *socket, "scratchpad", "cancel-launch", "late" });
+    auto result = run_lwmctl(env->wm, { "scratchpad", "cancel-launch", "late" });
     REQUIRE(result);
     REQUIRE(result->exit_code == 0);
-    state = send_ipc_command(*socket, "scratchpad list");
+    state = send_ipc_command("scratchpad list");
     REQUIRE(state);
     CHECK(state->find("\"pending\":false") != std::string::npos);
     auto window = create_window(env->conn, 10, 10, 240, 160);
@@ -512,12 +492,12 @@ match = { class = "LaunchTest" }
     REQUIRE(wait_for_condition(
         [&]
         {
-            auto response = send_ipc_command(*socket, "scratchpad list");
+            auto response = send_ipc_command("scratchpad list");
             return response && response->find("\"window\":" + std::to_string(window)) != std::string::npos;
         },
         kTimeout
     ));
-    REQUIRE(send_ipc_command(*socket, "scratchpad toggle late") == "ok");
+    REQUIRE(send_ipc_command("scratchpad toggle late") == "ok");
     REQUIRE(wait_for_condition([&] { return !is_hidden_offscreen(env->conn, window); }, kTimeout));
     destroy_window(env->conn, window);
 }
@@ -550,20 +530,16 @@ match = { class = "LaunchTest", title = "ready" }
 )");
     REQUIRE(env);
     auto& conn = env->conn;
-    auto socket = wait_for_ipc_socket_path(conn);
-    REQUIRE(socket);
-    ipc_ok(*socket, "scratchpad toggle late");
+    ipc_ok("scratchpad toggle late");
     auto launches = std::filesystem::path(env->wm.runtime_dir()) / "launches";
     REQUIRE(wait_for_condition([&] { return read_text_file(launches) == "launch\n"; }, kTimeout));
     auto previous = wm_instance(conn);
     REQUIRE(previous);
-    ipc_ok(*socket, failed_exec ? "exec /definitely/missing/lwm" : "restart");
+    ipc_ok(failed_exec ? "exec /definitely/missing/lwm" : "restart");
     REQUIRE(wait_for_wm_restart(conn, std::chrono::seconds(5), *previous));
-    socket = wait_for_ipc_socket_path(conn);
-    REQUIRE(socket);
-    auto scratchpads = [&] { return ipc_json(*socket, "scratchpad list"); };
+    auto scratchpads = [&] { return ipc_json("scratchpad list"); };
     REQUIRE(scratchpads()["named"][0]["pending"] == true);
-    ipc_ok(*socket, "scratchpad toggle late");
+    ipc_ok("scratchpad toggle late");
     auto children = std::filesystem::path("/proc") / std::to_string(env->wm.pid()) / "task"
         / std::to_string(env->wm.pid()) / "children";
     REQUIRE(wait_for_condition([&] { return read_text_file(children).empty(); }, kTimeout));
@@ -574,7 +550,7 @@ match = { class = "LaunchTest", title = "ready" }
     bool late_metadata = std::string_view(arrival) == "metadata";
     if (cancelled)
     {
-        ipc_ok(*socket, "scratchpad cancel-launch late");
+        ipc_ok("scratchpad cancel-launch late");
         REQUIRE(scratchpads()["named"][0]["pending"] == false);
     }
     auto window = create_window(conn, 10, 10, 240, 160);
@@ -621,17 +597,15 @@ size = { width = 0.8, height = 0.6 }
     auto env = TestEnvironment::create(config);
     REQUIRE(env);
     auto& conn = env->conn;
-    auto socket = wait_for_ipc_socket_path(conn);
-    REQUIRE(socket);
     auto claimed = create_window(conn, 20, 20, 240, 160);
     set_window_wm_class(conn, claimed, "scratchpad-instance", "ScratchpadClass");
     set_window_title(conn, claimed, "dropdown");
     map_window(conn, claimed);
     REQUIRE(wait_for_condition([&] { return is_hidden_offscreen(conn, claimed); }, kTimeout));
-    ipc_ok(*socket, "scratchpad toggle second");
+    ipc_ok("scratchpad toggle second");
     auto previous = wm_instance(conn);
     REQUIRE(previous);
-    PausedRestart restart(env->wm, *socket);
+    PausedRestart restart(env->wm);
     auto window = create_window(conn, 10, 10, 240, 160);
     set_window_wm_class(conn, window, "scratchpad-instance", "ScratchpadClass");
     set_window_title(conn, window, "dropdown");
@@ -639,9 +613,7 @@ size = { width = 0.8, height = 0.6 }
     REQUIRE(get_window_geometry(conn, window)); // Server processed the map before adoption.
     restart.resume();
     REQUIRE(wait_for_wm_restart(conn, std::chrono::seconds(5), *previous));
-    socket = wait_for_ipc_socket_path(conn);
-    REQUIRE(socket);
-    auto slots = ipc_json(*socket, "scratchpad list")["named"];
+    auto slots = ipc_json("scratchpad list")["named"];
     REQUIRE(slots.size() == 2);
     CHECK(slots[0]["window"] == claimed);
     CHECK(is_hidden_offscreen(conn, claimed));
@@ -650,7 +622,7 @@ size = { width = 0.8, height = 0.6 }
     CHECK(slot["pending"] == false);
     REQUIRE(wait_for_active_window(conn, window, kTimeout));
     REQUIRE(wait_for_window_geometry(conn, window, 128, 144, 1020, 428));
-    ipc_ok(*socket, "scratchpad toggle second");
+    ipc_ok("scratchpad toggle second");
     REQUIRE(wait_for_condition([&] { return is_hidden_offscreen(conn, window); }, kTimeout));
     destroy_window(conn, window);
     destroy_window(conn, claimed);
@@ -664,8 +636,6 @@ TEST_CASE(
     auto env = TestEnvironment::create(scratchpad_match_config());
     REQUIRE(env);
     auto& conn = env->conn;
-    auto socket = wait_for_ipc_socket_path(conn);
-    REQUIRE(socket);
     std::vector<xcb_window_t> windows;
     for (int i = 0; i < 3; ++i)
     {
@@ -674,12 +644,12 @@ TEST_CASE(
         map_window(conn, window);
         REQUIRE(wait_for_active_window(conn, window, kTimeout));
         if (i == 1)
-            ipc_ok(*socket, "window float");
-        ipc_ok(*socket, "scratchpad stash");
+            ipc_ok("window float");
+        ipc_ok("scratchpad stash");
     }
     auto cycle_to = [&](size_t index)
     {
-        ipc_ok(*socket, "scratchpad cycle");
+        ipc_ok("scratchpad cycle");
         REQUIRE(wait_for_active_window(conn, windows[index], kTimeout));
         for (size_t i = 0; i < windows.size(); ++i) REQUIRE(is_hidden_offscreen(conn, windows[i]) == (i != index));
     };
@@ -688,13 +658,13 @@ TEST_CASE(
 
     auto instance = wm_instance(conn);
     REQUIRE(instance);
-    ipc_ok(*socket, "restart");
+    ipc_ok("restart");
     REQUIRE(wait_for_wm_restart(conn, kTimeout, *instance));
     for (auto index : { 0, 2, 1, 0, 2 }) cycle_to(index);
 
     // Removing the selected entry leaves the next surviving member recallable.
     destroy_window(conn, windows[2]);
-    REQUIRE(wait_for_condition([&] { return ipc_json(*socket, "scratchpad list").at("pool").size() == 2; }, kTimeout));
+    REQUIRE(wait_for_condition([&] { return ipc_json("scratchpad list").at("pool").size() == 2; }, kTimeout));
     windows.pop_back();
     for (auto index : { 1, 0, 1 }) cycle_to(index);
     for (auto window : windows) destroy_window(conn, window);
@@ -711,24 +681,22 @@ TEST_CASE(
     auto env = TestEnvironment::create("[workspaces]\ncount = 2\nnames = [\"1\", \"2\"]\n");
     REQUIRE(env);
     auto& conn = env->conn;
-    auto socket = wait_for_ipc_socket_path(conn);
-    REQUIRE(socket);
-    ipc_ok(*socket, "scratchpad cycle"); // Empty pool is a no-op.
+    ipc_ok("scratchpad cycle"); // Empty pool is a no-op.
     auto window = create_window(conn, 10, 10, 240, 160);
     map_window(conn, window);
     REQUIRE(wait_for_active_window(conn, window, kTimeout));
     if (floating)
-        ipc_ok(*socket, "window float");
-    ipc_ok(*socket, "scratchpad stash");
-    ipc_ok(*socket, "scratchpad cycle");
+        ipc_ok("window float");
+    ipc_ok("scratchpad stash");
+    ipc_ok("scratchpad cycle");
     REQUIRE(wait_for_active_window(conn, window, kTimeout));
 
     if (std::string_view(hidden_by) == "workspace")
-        ipc_ok(*socket, "workspace switch 1");
+        ipc_ok("workspace switch 1");
     else
         send_client_message(conn, window, intern_atom(conn.get(), "WM_CHANGE_STATE"), 3);
     REQUIRE(wait_for_condition([&] { return is_hidden_offscreen(conn, window); }, kTimeout));
-    ipc_ok(*socket, "scratchpad cycle");
+    ipc_ok("scratchpad cycle");
     REQUIRE(wait_for_active_window(conn, window, kTimeout));
     REQUIRE_FALSE(is_hidden_offscreen(conn, window));
     auto desktop = intern_atom(conn.get(), "_NET_WM_DESKTOP");
@@ -744,11 +712,11 @@ TEST_CASE(
     auto other = create_window(conn, 10, 10, 200, 100);
     map_window(conn, other);
     REQUIRE(wait_for_active_window(conn, other, kTimeout));
-    ipc_ok(*socket, "scratchpad cycle");
+    ipc_ok("scratchpad cycle");
     REQUIRE(wait_for_active_window(conn, window, kTimeout));
-    ipc_ok(*socket, "scratchpad cycle");
+    ipc_ok("scratchpad cycle");
     REQUIRE(wait_for_condition([&] { return is_hidden_offscreen(conn, window); }, kTimeout));
-    ipc_ok(*socket, "scratchpad cycle");
+    ipc_ok("scratchpad cycle");
     REQUIRE(wait_for_active_window(conn, window, kTimeout));
     destroy_window(conn, window);
     destroy_window(conn, other);

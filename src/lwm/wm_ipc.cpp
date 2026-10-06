@@ -1,5 +1,6 @@
 #include "lwm/core/overloaded.hpp"
 #include "lwm/core/log.hpp"
+#include "lwm/core/xproperty.hpp"
 #include "wm.hpp"
 #include <algorithm>
 #include <rfl/Rename.hpp>
@@ -119,8 +120,33 @@ ScratchpadList scratchpad_list(State const& state)
 
 } // namespace
 
-std::string WindowManager::handle_request(command::Request const& request)
+// A requester window carries one command in _LWM_COMMAND. Read-and-delete keeps
+// the WM stateless per caller; the reply follows completion on this connection,
+// so the X server applies every effect before the caller can observe the reply.
+void WindowManager::handle_command(xcb_window_t requester)
 {
+    auto* c = conn_.get();
+    auto utf8 = ewmh_.get()->UTF8_STRING;
+    auto request = reply(xcb_get_property_reply(
+        c, xcb_get_property(c, 1, requester, atoms_.lwm_command, utf8, 0, command::max_request_bytes / 4), nullptr
+    ));
+    if (!request || request->type == XCB_NONE)
+        return; // Not a request: the property is missing or the window is gone.
+    auto response = request->type != utf8 || request->format != 8 ? "error request must be UTF-8 text"
+        : request->bytes_after                                    ? "error request too large"
+        : handle_request({ static_cast<char const*>(xcb_get_property_value(request.get())),
+                           static_cast<size_t>(xcb_get_property_value_length(request.get())) });
+    complete_transition();
+    xcb_change_property(c, XCB_PROP_MODE_REPLACE, requester, atoms_.lwm_reply, utf8, 8, response.size(), response.data());
+    if (stop_ == RunResult::Restart)
+        restart_requester_ = requester;
+}
+
+std::string WindowManager::handle_request(std::string_view text)
+{
+    auto request = command::parse_command(text);
+    if (!request)
+        return "error " + request.error();
     return std::visit(
         Overloaded{
             [&](command::Query query) -> std::string
@@ -150,7 +176,7 @@ std::string WindowManager::handle_request(command::Request const& request)
                 return result ? "ok" : "error " + result.error();
             },
         },
-        request
+        *request
     );
 }
 

@@ -40,13 +40,11 @@ def measure(binary, count, operations, direction, transients):
         X.XWarpPointer(display, 0, root, 0, 0, 0, 0, 1599, 999)
         config = directory / "config.toml"
         config.write_text("[appearance]\npadding = 10\n")
-        environment = dict(os.environ, DISPLAY=display_name, XDG_RUNTIME_DIR=temporary)
-        environment.pop("LWM_SOCKET", None)
+        environment = dict(os.environ, DISPLAY=display_name)
         wm = subprocess.Popen([str(binary), "--config", str(config), "--log-target", "stderr", "--log-level", "error"],
                               env=environment, stdout=log, stderr=log)
         cleanup.callback(stop, wm)
-        path = directory / "lwm" / ("ipc-" + display_name.replace(":", "_") + ".sock")
-        wait(lambda: ipc(path, "ping") == b"pong", wm, log_path)
+        wait(lambda: ipc(display_name, "ping") == b"pong", wm, log_path)
         atom = lambda name: X.XInternAtom(display, name.encode(), 0)
         windows = []
         for _ in range(count):
@@ -56,7 +54,7 @@ def measure(binary, count, operations, direction, transients):
             X.XMapWindow(display, window)
             windows.append(window)
         X.XSync(display, 0)
-        wait(lambda: len(json.loads(ipc(path, "window list"))["windows"]) == count, wm, log_path)
+        wait(lambda: len(json.loads(ipc(display_name, "window list"))["windows"]) == count, wm, log_path)
         if transients != "none":
             for index, window in enumerate(windows):
                 parent = windows[(index + 1) % count] if index + 1 < count or transients == "cycle" else 0
@@ -67,10 +65,11 @@ def measure(binary, count, operations, direction, transients):
                               8, 0, marker, len(marker.value))
             X.XSync(display, 0)
             wait(lambda: any(w["id"] == windows[-1] and w["title"] == marker.value.decode()
-                             for w in json.loads(ipc(path, "window list"))["windows"]), wm, log_path)
+                             for w in json.loads(ipc(display_name, "window list"))["windows"]), wm, log_path)
         windows = set(windows)
         def step():
-            target = int(ipc(path, "focus " + direction))
+            ipc(display_name, "focus " + direction)
+            target = json.loads(ipc(display_name, "window list"))["focused"]
             if target not in windows:
                 raise AssertionError("Focus returned a non-client")
             return target

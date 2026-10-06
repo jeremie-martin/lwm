@@ -18,8 +18,6 @@ TEST_CASE("Integration: watch prints the attached state, then only changed state
     if (!env)
         SKIP("X11 unavailable");
     auto& conn = env->conn;
-    auto path = wait_for_ipc_socket_path(conn);
-    REQUIRE(path);
     auto window = create_window(conn, 10, 10, 200, 150);
     set_window_wm_class(conn, window, "escaped-instance", "escaped-class");
     std::string title = "quote \" and slash \\ line\n tab\t";
@@ -28,7 +26,7 @@ TEST_CASE("Integration: watch prints the attached state, then only changed state
     REQUIRE(wait_for_active_window(conn, window, kTimeout));
     Watcher watcher;
     auto attached = watcher.state();
-    CHECK(attached == nlohmann::json::parse(ipc_ok(*path, "state").substr(3)));
+    CHECK(attached == nlohmann::json::parse(ipc_ok("state").substr(3)));
     CHECK(attached.at("windows").at("focused") == window);
     CHECK(only_window(attached).at("class") == "escaped-class");
     CHECK(only_window(attached).at("title") == title);
@@ -36,15 +34,15 @@ TEST_CASE("Integration: watch prints the attached state, then only changed state
     CHECK(attached.at("scratchpads").contains("named"));
 
     // Queries and no-op actions leave the exposed state unchanged.
-    ipc_ok(*path, "window list");
-    ipc_ok(*path, "workspace switch 0");
-    ipc_ok(*path, "ratio reset");
+    ipc_ok("window list");
+    ipc_ok("workspace switch 0");
+    ipc_ok("ratio reset");
     CHECK(watcher.quiet());
-    ipc_ok(*path, "workspace switch 1");
+    ipc_ok("workspace switch 1");
     CHECK(watcher.state().at("workspaces").at("monitors").at(0).at("current_workspace") == 1);
-    ipc_ok(*path, "workspace switch 1");
+    ipc_ok("workspace switch 1");
     CHECK(watcher.quiet());
-    ipc_ok(*path, "workspace switch 0");
+    ipc_ok("workspace switch 0");
     CHECK(watcher.state().at("workspaces").at("monitors").at(0).at("current_workspace") == 0);
 
     // Metadata alone changes the state, even when no rule matches.
@@ -63,8 +61,6 @@ TEST_CASE("Integration: watch reports layout changes from bindings, IPC and spli
     if (!env)
         SKIP("X11 unavailable");
     auto& conn = env->conn;
-    auto path = wait_for_ipc_socket_path(conn);
-    REQUIRE(path);
     auto first = create_window(conn, 10, 10, 200, 200);
     auto second = create_window(conn, 10, 10, 200, 200);
     map_window(conn, first);
@@ -89,7 +85,7 @@ TEST_CASE("Integration: watch reports layout changes from bindings, IPC and spli
     send_pointer_event(conn, XCB_MOTION_NOTIFY, static_cast<int16_t>(x + 60), y);
     send_pointer_event(conn, XCB_BUTTON_RELEASE, static_cast<int16_t>(x + 60), y);
     CHECK(workspace().at("ratio").get<double>() > 0.52);
-    ipc_ok(*path, "ratio reset");
+    ipc_ok("ratio reset");
     CHECK(near(workspace().at("ratio"), 0.5));
 
     if (extension_available(conn, &xcb_test_id))
@@ -98,12 +94,12 @@ TEST_CASE("Integration: watch reports layout changes from bindings, IPC and spli
         CHECK(near(workspace().at("ratio"), 0.55));
     }
     else
-        ipc_ok(*path, "ratio adjust 0.05");
-    ipc_ok(*path, "ratio adjust 0.05");
+        ipc_ok("ratio adjust 0.05");
+    ipc_ok("ratio adjust 0.05");
     CHECK(near(workspace().at("ratio"), 0.6));
-    ipc_ok(*path, "ratio set 0.6123456789");
+    ipc_ok("ratio set 0.6123456789");
     CHECK(workspace().at("ratio") == 0.6123456789);
-    ipc_ok(*path, "layout set monocle");
+    ipc_ok("layout set monocle");
     CHECK(workspace().at("layout") == "monocle");
     CHECK(watcher.quiet());
     destroy_window(conn, second);
@@ -143,8 +139,6 @@ TEST_CASE("Integration: watch follows an exec restart", "[integration][watch][re
     if (!env)
         SKIP("X11 unavailable");
     auto& conn = env->conn;
-    auto path = wait_for_ipc_socket_path(conn);
-    REQUIRE(path);
     auto window = create_window(conn, 30, 40, 200, 150);
     map_window(conn, window);
     REQUIRE(wait_for_active_window(conn, window, kTimeout));
@@ -152,7 +146,7 @@ TEST_CASE("Integration: watch follows an exec restart", "[integration][watch][re
     CHECK(watcher.state().at("windows").at("focused") == window);
     auto previous = wm_instance(conn);
     REQUIRE(previous);
-    ipc_ok(*path, "restart");
+    ipc_ok("restart");
     REQUIRE(wait_for_wm_restart(conn, kTimeout, *previous));
     // The successor's state is identical, so a later change proves reattachment.
     set_window_title(conn, window, "after-restart");

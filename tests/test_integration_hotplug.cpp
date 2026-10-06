@@ -30,9 +30,9 @@ struct RestoreOutputs
         );
     }
 };
-nlohmann::json query(std::string const& socket, std::string const& command)
+nlohmann::json query(std::string const& command)
 {
-    auto reply = send_ipc_command(socket, command);
+    auto reply = send_ipc_command(command);
     if (!reply || !reply->starts_with("ok "))
         return {};
     return nlohmann::json::parse(reply->substr(3));
@@ -64,11 +64,9 @@ apply = { floating = true, monitor = "DUMMY1" }
     REQUIRE(env->x11_env.owns_display());
     RestoreOutputs restore;
     auto& conn = env->conn;
-    auto socket = wait_for_ipc_socket_path(conn);
-    REQUIRE(socket);
     auto command = [&](std::string text)
     {
-        auto result = send_ipc_command(*socket, text);
+        auto result = send_ipc_command(text);
         REQUIRE(result);
         REQUIRE(result->starts_with("ok"));
     };
@@ -108,14 +106,14 @@ apply = { floating = true, monitor = "DUMMY1" }
     randr({ "--addmode", "DUMMY1", "1280x720" });
     randr({ "--output", "DUMMY1", "--mode", "1280x720", "--right-of", "DUMMY0" });
     bool two_outputs =
-        wait_for_condition([&] { return query(*socket, "workspace list")["monitors"].size() == 2; }, timeout);
-    INFO(query(*socket, "workspace list").dump());
+        wait_for_condition([&] { return query("workspace list")["monitors"].size() == 2; }, timeout);
+    INFO(query("workspace list").dump());
     INFO(env->wm.diagnostics());
     auto outputs = run_command("/usr/bin/xrandr", { "--query" });
     INFO((outputs ? outputs->stdout_text : "xrandr failed"));
     REQUIRE(two_outputs);
     check_external_geometry();
-    auto workspaces = query(*socket, "workspace list");
+    auto workspaces = query("workspace list");
     CHECK(workspaces["monitors"][0]["current_workspace"] == 1);
     CHECK(workspaces["monitors"][0]["workspaces"][1]["layout"] == "monocle");
     command("workspace switch 0");
@@ -128,7 +126,7 @@ apply = { floating = true, monitor = "DUMMY1" }
     map_window(conn, floating);
     auto monitor_for = [&](xcb_window_t id) -> int
     {
-        auto windows = query(*socket, "window list");
+        auto windows = query("window list");
         if (windows.contains("windows"))
             for (auto const& window : windows["windows"])
                 if (window["id"] == id)
@@ -161,14 +159,14 @@ apply = { floating = true, monitor = "DUMMY1" }
     REQUIRE(wait_for_condition([&] { return width(conn, a) == 1280; }, timeout));
     randr({ "--output", "DUMMY0", "--off" });
     REQUIRE(wait_for_condition(
-        [&] { return query(*socket, "workspace list")["monitors"].size() == 1 && monitor_for(a) == 0; },
+        [&] { return query("workspace list")["monitors"].size() == 1 && monitor_for(a) == 0; },
         timeout
     ));
     REQUIRE(wait_for_active_window(conn, a, timeout));
     CHECK(width(conn, a) == 1280);
     check_external_geometry();
     randr({ "--output", "DUMMY0", "--mode", "1280x720", "--right-of", "DUMMY1" });
-    REQUIRE(wait_for_condition([&] { return query(*socket, "workspace list")["monitors"].size() == 2; }, timeout));
+    REQUIRE(wait_for_condition([&] { return query("workspace list")["monitors"].size() == 2; }, timeout));
     CHECK(monitor_for(a) == 0); // Returning outputs do not reclaim relocated clients.
     CHECK(monitor_for(floating) == 0);
     check_external_geometry();
@@ -202,20 +200,18 @@ action = "window to-workspace 1"
     REQUIRE(env);
     RestoreOutputs restore;
     auto& conn = env->conn;
-    auto socket = wait_for_ipc_socket_path(conn);
-    REQUIRE(socket);
     randr({ "--addmode", "DUMMY1", "1280x720" });
     randr({ "--output", "DUMMY1", "--mode", "1280x720", "--right-of", "DUMMY0" });
     auto two_outputs =
-        wait_for_condition([&] { return query(*socket, "workspace list")["monitors"].size() == 2; }, timeout);
-    INFO(query(*socket, "workspace list").dump());
+        wait_for_condition([&] { return query("workspace list")["monitors"].size() == 2; }, timeout);
+    INFO(query("workspace list").dump());
     INFO(env->wm.diagnostics());
     auto outputs = run_command("/usr/bin/xrandr", { "--query" });
     INFO((outputs ? outputs->stdout_text : "xrandr failed"));
     REQUIRE(two_outputs);
     auto command = [&](std::string text)
     {
-        auto reply = send_ipc_command(*socket, text);
+        auto reply = send_ipc_command(text);
         REQUIRE(reply);
         REQUIRE(reply->starts_with("ok"));
     };
@@ -237,7 +233,7 @@ action = "window to-workspace 1"
         REQUIRE(wait_for_active_window(conn, window, timeout));
         auto location = [&]() -> nlohmann::json
         {
-            auto snapshot = query(*socket, "window list");
+            auto snapshot = query("window list");
             for (auto const& client : snapshot["windows"])
                 if (client["id"] == window)
                     return client;
@@ -249,7 +245,7 @@ action = "window to-workspace 1"
         REQUIRE(send_key(conn, XK_F9));
         REQUIRE(wait_for_condition([&] { return location()["monitor"] == destination; }, timeout));
         REQUIRE(wait_for_active_window(conn, window, timeout));
-        CHECK(query(*socket, "workspace list")["focused_monitor"] == destination);
+        CHECK(query("workspace list")["focused_monitor"] == destination);
         auto moved = rectangle(window);
         if (floating)
             REQUIRE(
@@ -266,7 +262,7 @@ action = "window to-workspace 1"
         REQUIRE(workspace == 0);
         REQUIRE(send_key(conn, XK_F10));
         REQUIRE(wait_for_condition([&] { return location()["workspace"] == 1; }, timeout));
-        REQUIRE(wait_for_condition([&] { return query(*socket, "window list")["focused"] != window; }, timeout));
+        REQUIRE(wait_for_condition([&] { return query("window list")["focused"] != window; }, timeout));
         command("workspace switch 1");
         REQUIRE(wait_for_active_window(conn, window, timeout));
         REQUIRE(rectangle(window) == moved);
@@ -290,9 +286,7 @@ TEST_CASE(
     randr({ "--addmode", "DUMMY1", "1280x720" });
     randr({ "--output", "DUMMY1", "--mode", "1280x720", "--pos", "1280x0" });
     auto& conn = env->conn;
-    auto socket = wait_for_ipc_socket_path(conn);
-    REQUIRE(socket);
-    REQUIRE(wait_for_condition([&] { return query(*socket, "workspace list")["monitors"].size() == 2; }, timeout));
+    REQUIRE(wait_for_condition([&] { return query("workspace list")["monitors"].size() == 2; }, timeout));
     auto workarea = intern_atom(conn.get(), "_NET_WORKAREA");
     auto partial = intern_atom(conn.get(), "_NET_WM_STRUT_PARTIAL");
     auto legacy = intern_atom(conn.get(), "_NET_WM_STRUT");
@@ -349,18 +343,16 @@ TEST_CASE(
     REQUIRE(env);
     RestoreOutputs restore;
     auto& conn = env->conn;
-    auto socket = wait_for_ipc_socket_path(conn);
-    REQUIRE(socket);
     randr({ "--addmode", "DUMMY1", "1280x720" });
     randr({ "--output", "DUMMY1", "--mode", "1280x720", "--right-of", "DUMMY0" });
-    REQUIRE(wait_for_condition([&] { return query(*socket, "workspace list")["monitors"].size() == 2; }, timeout));
+    REQUIRE(wait_for_condition([&] { return query("workspace list")["monitors"].size() == 2; }, timeout));
     auto window = create_window(conn, 10, 10, 200, 150);
     set_window_type(conn, window, intern_atom(conn.get(), "_NET_WM_WINDOW_TYPE_DIALOG"));
     map_window(conn, window);
     REQUIRE(wait_for_active_window(conn, window, timeout));
     auto monitor = [&]
     {
-        auto snapshot = query(*socket, "window list");
+        auto snapshot = query("window list");
         for (auto const& client : snapshot["windows"])
             if (client["id"] == window)
                 return client["monitor"].get<int>();
@@ -397,7 +389,7 @@ TEST_CASE(
     REQUIRE(grab_status() == XCB_GRAB_STATUS_ALREADY_GRABBED);
     randr({ "--output", "DUMMY1", "--off" });
     REQUIRE(wait_for_condition(
-        [&] { return query(*socket, "workspace list")["monitors"].size() == 1 && monitor() == 0; },
+        [&] { return query("workspace list")["monitors"].size() == 1 && monitor() == 0; },
         timeout
     ));
     REQUIRE(grab_status() == XCB_GRAB_STATUS_SUCCESS);
@@ -417,11 +409,9 @@ TEST_CASE(
     REQUIRE(env);
     RestoreOutputs restore;
     auto& conn = env->conn;
-    auto socket = wait_for_ipc_socket_path(conn);
-    REQUIRE(socket);
     randr({ "--addmode", "DUMMY1", "1280x720" });
     randr({ "--output", "DUMMY1", "--mode", "1280x720", "--right-of", "DUMMY0" });
-    REQUIRE(wait_for_condition([&] { return query(*socket, "workspace list")["monitors"].size() == 2; }, timeout));
+    REQUIRE(wait_for_condition([&] { return query("workspace list")["monitors"].size() == 2; }, timeout));
     // Explicit desktop requests make placement independent of pointer position.
     std::vector<xcb_window_t> windows;
     for (int i = 0; i < 3; ++i)
@@ -437,31 +427,29 @@ TEST_CASE(
         windows.push_back(window);
     }
     auto a = windows[0], b = windows[1], c = windows[2];
-    ipc_ok(*socket, "focus window=" + std::to_string(b));
-    ipc_ok(*socket, "window float");
+    ipc_ok("focus window=" + std::to_string(b));
+    ipc_ok("window float");
     bool removed = false;
     SECTION("Reordered outputs retain the workspace slot")
     {
         randr({ "--output", "DUMMY1", "--pos", "0x0", "--output", "DUMMY0", "--pos", "1280x0" });
         REQUIRE(wait_for_condition(
-            [&] { return query(*socket, "workspace list")["monitors"][0]["name"] == "DUMMY1"; }, timeout
+            [&] { return query("workspace list")["monitors"][0]["name"] == "DUMMY1"; }, timeout
         ));
     }
     SECTION("Removed outputs cannot lend their slot to the survivor")
     {
         removed = true;
         randr({ "--output", "DUMMY0", "--off" });
-        REQUIRE(wait_for_condition([&] { return query(*socket, "workspace list")["monitors"].size() == 1; }, timeout));
+        REQUIRE(wait_for_condition([&] { return query("workspace list")["monitors"].size() == 1; }, timeout));
     }
     // Also carry the resulting slot decision through a real exec handoff.
     auto previous = wm_instance(conn);
     REQUIRE(previous);
-    ipc_ok(*socket, "restart");
+    ipc_ok("restart");
     REQUIRE(wait_for_wm_restart(conn, timeout, *previous));
-    socket = wait_for_ipc_socket_path(conn);
-    REQUIRE(socket);
-    ipc_ok(*socket, "focus window=" + std::to_string(b));
-    ipc_ok(*socket, "window float");
+    ipc_ok("focus window=" + std::to_string(b));
+    ipc_ok("window float");
     auto ga = require_window_geometry(conn, a);
     auto gb = require_window_geometry(conn, b);
     auto gc = require_window_geometry(conn, c);
@@ -486,11 +474,9 @@ TEST_CASE(
     REQUIRE(env);
     RestoreOutputs restore;
     auto& conn = env->conn;
-    auto socket = wait_for_ipc_socket_path(conn);
-    REQUIRE(socket);
     randr({ "--addmode", "DUMMY1", "1280x720" });
     randr({ "--output", "DUMMY1", "--mode", "1280x720", "--right-of", "DUMMY0" });
-    REQUIRE(wait_for_condition([&] { return query(*socket, "workspace list")["monitors"].size() == 2; }, timeout));
+    REQUIRE(wait_for_condition([&] { return query("workspace list")["monitors"].size() == 2; }, timeout));
     auto tile = [&](uint32_t desktop)
     {
         auto window = create_window(conn, 20, 20, 200, 150);
@@ -507,8 +493,8 @@ TEST_CASE(
         return window;
     };
     auto a = tile(1), b = tile(1), c = tile(3), d = tile(3);
-    ipc_ok(*socket, "focus window=" + std::to_string(c));
-    ipc_ok(*socket, "ratio set 0.7");
+    ipc_ok("focus window=" + std::to_string(c));
+    ipc_ok("ratio set 0.7");
     auto floating = create_window(conn, 40, 40, 250, 180);
     set_window_type(conn, floating, intern_atom(conn.get(), "_NET_WM_WINDOW_TYPE_DIALOG"));
     set_window_desktop(conn, floating, 1);
@@ -525,13 +511,13 @@ TEST_CASE(
     send_client_message(conn, floating, hint, 0, 1, 0, 1);
     observe_title_after_events(conn, floating);
     REQUIRE(read_property32(conn.get(), floating, hint, XCB_ATOM_CARDINAL) == std::vector<uint32_t>{ 0, 1, 0, 1 });
-    ipc_ok(*socket, "focus window=" + std::to_string(b));
-    ipc_ok(*socket, "window swap prev"); // Saved order is b, a, unlike adoption order.
-    ipc_ok(*socket, "ratio set 0.3");
-    ipc_ok(*socket, "layout set monocle");
+    ipc_ok("focus window=" + std::to_string(b));
+    ipc_ok("window swap prev"); // Saved order is b, a, unlike adoption order.
+    ipc_ok("ratio set 0.3");
+    ipc_ok("layout set monocle");
     auto previous = wm_instance(conn);
     REQUIRE(previous);
-    PausedRestart restart(env->wm, *socket);
+    PausedRestart restart(env->wm);
     if (removed)
         randr({ "--output", "DUMMY0", "--off", "--output", "DUMMY1", "--pos", "0x0" });
     else
@@ -557,9 +543,7 @@ TEST_CASE(
     REQUIRE(get_window_geometry(conn, newcomer));
     restart.resume();
     REQUIRE(wait_for_wm_restart(conn, std::chrono::seconds(5), *previous));
-    socket = wait_for_ipc_socket_path(conn);
-    REQUIRE(socket);
-    auto workspaces = query(*socket, "workspace list");
+    auto workspaces = query("workspace list");
     size_t target = removed ? 0 : 1;
     REQUIRE(workspaces["monitors"].size() == (removed ? 1 : 2));
     CHECK(workspaces["focused_monitor"] == target);
@@ -574,7 +558,7 @@ TEST_CASE(
     }
     auto monitor_for = [&](xcb_window_t id)
     {
-        auto windows = query(*socket, "window list");
+        auto windows = query("window list");
         for (auto const& window : windows["windows"])
             if (window["id"] == id)
             {
@@ -601,7 +585,7 @@ TEST_CASE(
 
     // Subsequent commands must target the restored output and use its saved
     // ratios/order, with displaced tiles appended after surviving members.
-    ipc_ok(*socket, "layout set master-stack");
+    ipc_ok("layout set master-stack");
     auto master = require_window_geometry(conn, removed ? c : b);
     CHECK((master.width > 700) == removed); // Survivor's 0.7 versus source's 0.3.
     auto ga = require_window_geometry(conn, a), gb = require_window_geometry(conn, b);
@@ -616,17 +600,17 @@ TEST_CASE(
     else
         CHECK(gb.x < ga.x);
     CHECK(ga.y < gn.y);
-    ipc_ok(*socket, "workspace switch 0");
+    ipc_ok("workspace switch 0");
     REQUIRE(wait_for_condition([&] { return is_hidden_offscreen(conn, b); }, timeout));
-    ipc_ok(*socket, "workspace toggle");
+    ipc_ok("workspace toggle");
     REQUIRE(wait_for_active_window(conn, b, timeout));
     if (removed)
     {
         randr({ "--output", "DUMMY0", "--mode", "1280x720", "--right-of", "DUMMY1" });
-        REQUIRE(wait_for_condition([&] { return query(*socket, "workspace list")["monitors"].size() == 2; }, timeout));
+        REQUIRE(wait_for_condition([&] { return query("workspace list")["monitors"].size() == 2; }, timeout));
         CHECK(monitor_for(a) == 0);
         CHECK(monitor_for(floating) == 0);
-        CHECK(query(*socket, "workspace list")["monitors"][1]["current_workspace"] == 0);
+        CHECK(query("workspace list")["monitors"][1]["current_workspace"] == 0);
     }
     for (auto window : { a, b, c, d, floating, newcomer, dock }) destroy_window(conn, window);
 }
@@ -656,9 +640,7 @@ match = { class = "RecallNamed" }
     randr({ "--addmode", "DUMMY1", "1280x720" });
     randr({ "--output", "DUMMY1", "--mode", "1280x720", "--pos", "1280x0" });
     auto& conn = env->conn;
-    auto socket = wait_for_ipc_socket_path(conn);
-    REQUIRE(socket);
-    REQUIRE(wait_for_condition([&] { return query(*socket, "workspace list")["monitors"].size() == 2; }, timeout));
+    REQUIRE(wait_for_condition([&] { return query("workspace list")["monitors"].size() == 2; }, timeout));
     auto desktop = intern_atom(conn.get(), "_NET_CURRENT_DESKTOP");
     send_client_message(conn, conn.root(), desktop, 0);
     REQUIRE(wait_for_property_cardinal(conn.get(), conn.root(), desktop, 0, timeout));
@@ -672,17 +654,17 @@ match = { class = "RecallNamed" }
     {
         REQUIRE(wait_for_active_window(conn, window, timeout));
         if (std::string_view(kind) == "floating pool")
-            ipc_ok(*socket, "window float");
-        ipc_ok(*socket, "scratchpad stash");
+            ipc_ok("window float");
+        ipc_ok("scratchpad stash");
     }
     std::string recall = named ? "scratchpad toggle recall" : "scratchpad cycle";
-    ipc_ok(*socket, recall);
+    ipc_ok(recall);
     REQUIRE(wait_for_active_window(conn, window, timeout));
-    ipc_ok(*socket, "monitor focus right");
-    ipc_ok(*socket, "workspace switch 1");
+    ipc_ok("monitor focus right");
+    ipc_ok("workspace switch 1");
     REQUIRE_FALSE(is_hidden_offscreen(conn, window));
-    ipc_ok(*socket, recall);
-    INFO(ipc_ok(*socket, "state"));
+    ipc_ok(recall);
+    INFO(ipc_ok("state"));
     REQUIRE(wait_for_active_window(conn, window, timeout));
     REQUIRE(wait_for_property_cardinal(conn.get(), window, intern_atom(conn.get(), "_NET_WM_DESKTOP"), 3, timeout));
     auto geometry = get_window_geometry(conn, window);

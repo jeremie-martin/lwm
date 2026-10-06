@@ -3,7 +3,7 @@
 #include "lwm/config/config.hpp"
 #include "lwm/core/connection.hpp"
 #include "lwm/core/ewmh.hpp"
-#include "lwm/core/ipc_server.hpp"
+#include "lwm/core/command.hpp"
 #include "lwm/core/signals.hpp"
 #include "lwm/core/state.hpp"
 #include <array>
@@ -41,7 +41,6 @@ class WindowManager
 {
 public:
     WindowManager(Config config, SignalPipe& signals, std::string config_path);
-    ~WindowManager();
 
     RunResult run();
     std::string const& restart_binary() const { return restart_binary_; }
@@ -56,7 +55,8 @@ private:
         xcb_atom_t wm_delete_window;
         xcb_atom_t wm_take_focus;
         xcb_atom_t wm_s0;
-        xcb_atom_t lwm_ipc_socket;
+        xcb_atom_t lwm_command;
+        xcb_atom_t lwm_reply;
         xcb_atom_t lwm_window_class;
         xcb_atom_t lwm_state;
         xcb_atom_t lwm_restart;
@@ -86,11 +86,10 @@ private:
     // An unknown property is always written, so a fresh WM replaces stale values.
     std::map<std::pair<xcb_window_t, xcb_atom_t>, std::optional<std::string>> properties_;
     std::vector<xcb_window_t> fullscreen_owners_; ///< Logged ownership per monitor
-    ipc::Server ipc_;
     // Process-owned signal handlers and reload pipe survive WM reconstruction.
     SignalPipe& signals_;
     std::string config_path_;
-    xcb_window_t wm_window_ = XCB_NONE; ///< Owns WM_S0, the EWMH supporting check and the restart marker
+    xcb_window_t wm_window_ = XCB_NONE; ///< Owns WM_S0, the EWMH supporting check, IPC and the restart marker
     std::optional<restart::Snapshot> handoff_; ///< Predecessor state, consumed during startup adoption
 
     // Obligations of the current operation that are not projections of state.
@@ -107,6 +106,7 @@ private:
     std::unordered_map<xcb_window_t, std::chrono::steady_clock::time_point> pending_kills_;
     bool pointer_grabbed_ = false; ///< Held exactly while State has a drag
     std::optional<RunResult> stop_; ///< Set when the event loop should end
+    xcb_window_t restart_requester_ = XCB_NONE; ///< IPC caller of a restart, awaited before exec
     std::string restart_binary_;
     uint32_t last_event_time_ = XCB_CURRENT_TIME;
     // Latest timestamp from an actual input event (key/button/motion/crossing).
@@ -132,8 +132,6 @@ private:
     Config const& config() const { return state_.config(); }
     Topology discover_topology();
     void refresh_topology();
-    void setup_ipc();
-    void cleanup_ipc();
     void dispatch_event(xcb_generic_event_t const& event, size_t& remaining, std::chrono::steady_clock::time_point deadline);
     std::expected<void, std::string> reload_config(std::string_view source);
     bool launch_program(std::vector<std::string> const& command, std::string_view source);
@@ -201,7 +199,8 @@ private:
     void warp_to_monitor(Monitor const& monitor);
 
     // wm_ipc.cpp
-    std::string handle_request(command::Request const& request);
+    void handle_command(xcb_window_t requester);
+    std::string handle_request(std::string_view text);
     std::string state_json() const;
 
     // wm_restart.cpp

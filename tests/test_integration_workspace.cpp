@@ -27,9 +27,9 @@ using JsonValue = nlohmann::json;
 
 std::optional<JsonValue> parse_ok_json(std::string const& reply)
 {
-    if (!reply.starts_with("ok ") || reply.size() < 5 || reply.back() != '\n')
+    if (!reply.starts_with("ok ") || reply.size() < 4)
         return std::nullopt;
-    auto value = JsonValue::parse(std::string_view(reply).substr(3, reply.size() - 4), nullptr, false);
+    auto value = JsonValue::parse(std::string_view(reply).substr(3), nullptr, false);
     return value.is_discarded() ? std::nullopt : std::optional{ std::move(value) };
 }
 
@@ -590,9 +590,6 @@ TEST_CASE("Integration: monocle layout assigns identical geometries", "[integrat
         SKIP("Test environment not available");
 
     auto& conn = test_env->conn;
-    auto socket_path = wait_for_ipc_socket_path(conn);
-    REQUIRE(socket_path.has_value());
-
     xcb_window_t w1 = create_window(conn, 10, 10, 200, 150);
     map_window(conn, w1);
     REQUIRE(wait_for_active_window(conn, w1, kTimeout));
@@ -614,7 +611,7 @@ TEST_CASE("Integration: monocle layout assigns identical geometries", "[integrat
     bool all_equal_master_stack = (*g1 == *g2) && (*g2 == *g3);
     REQUIRE_FALSE(all_equal_master_stack);
 
-    auto result = run_lwmctl(test_env->wm, { "layout", "set", "monocle" }, *socket_path);
+    auto result = run_lwmctl(test_env->wm, { "layout", "set", "monocle" });
     REQUIRE(result.has_value());
     REQUIRE(result->exit_code == 0);
 
@@ -630,7 +627,7 @@ TEST_CASE("Integration: monocle layout assigns identical geometries", "[integrat
     );
     REQUIRE(ok);
 
-    auto restore = run_lwmctl(test_env->wm, { "layout", "set", "master-stack" }, *socket_path);
+    auto restore = run_lwmctl(test_env->wm, { "layout", "set", "master-stack" });
     REQUIRE(restore.has_value());
     REQUIRE(restore->exit_code == 0);
 
@@ -657,30 +654,27 @@ match = { class = "ScratchpadClass" }
         SKIP("Test environment not available");
 
     auto& conn = test_env->conn;
-    auto socket_path = wait_for_ipc_socket_path(conn);
-    REQUIRE(socket_path.has_value());
-
     xcb_window_t window = create_window(conn, 10, 10, 200, 150);
     map_window(conn, window);
     REQUIRE(wait_for_active_window(conn, window, kTimeout));
 
-    auto stash = send_raw_ipc(*socket_path, "scratchpad stash");
+    auto stash = send_ipc_command("scratchpad stash");
     REQUIRE(stash.has_value());
     REQUIRE(stash->starts_with("ok"));
 
-    auto workspaces = send_raw_ipc(*socket_path, "workspace list");
+    auto workspaces = send_ipc_command("workspace list");
     REQUIRE(workspaces.has_value());
     auto workspace_json = parse_ok_json(*workspaces);
     REQUIRE(workspace_json.has_value());
     REQUIRE(workspace_list_has_documented_shape(*workspace_json));
 
-    auto windows = send_raw_ipc(*socket_path, "window list");
+    auto windows = send_ipc_command("window list");
     REQUIRE(windows.has_value());
     auto window_json = parse_ok_json(*windows);
     REQUIRE(window_json.has_value());
     REQUIRE(window_list_has_documented_shape(*window_json));
 
-    auto scratchpads = send_raw_ipc(*socket_path, "scratchpad list");
+    auto scratchpads = send_ipc_command("scratchpad list");
     REQUIRE(scratchpads.has_value());
     auto scratchpad_json = parse_ok_json(*scratchpads);
     REQUIRE(scratchpad_json.has_value());
@@ -725,9 +719,6 @@ action = "window swap next"
         SKIP("Test environment not available");
 
     auto& conn = test_env->conn;
-    auto socket_path = wait_for_ipc_socket_path(conn);
-    REQUIRE(socket_path.has_value());
-
     xcb_window_t w1 = create_window(conn, 10, 10, 200, 150);
     map_window(conn, w1);
     REQUIRE(wait_for_active_window(conn, w1, kTimeout));
@@ -745,11 +736,11 @@ action = "window swap next"
     map_window(conn, floating);
     REQUIRE(wait_for_active_window(conn, floating, kTimeout));
 
-    auto set_layout = run_lwmctl(test_env->wm, { "layout", "set", "monocle" }, *socket_path);
+    auto set_layout = run_lwmctl(test_env->wm, { "layout", "set", "monocle" });
     REQUIRE(set_layout.has_value());
     REQUIRE(set_layout->exit_code == 0);
 
-    auto focus = run_lwmctl(test_env->wm, { "focus", "window=" + std::to_string(w1) }, *socket_path);
+    auto focus = run_lwmctl(test_env->wm, { "focus", "window=" + std::to_string(w1) });
     REQUIRE(focus.has_value());
     REQUIRE(focus->exit_code == 0);
     REQUIRE(wait_for_active_window(conn, w1, kTimeout));
@@ -769,11 +760,9 @@ TEST_CASE("Integration: workspace, fullscreen, scratchpad and restart transition
     if (!env)
         SKIP("Xvfb not available");
     auto& conn = env->conn;
-    auto socket = wait_for_ipc_socket_path(conn);
-    REQUIRE(socket);
     auto command = [&](std::string const& text)
     {
-        auto response = send_ipc_command(*socket, text);
+        auto response = send_ipc_command(text);
         REQUIRE(response);
         REQUIRE(response->starts_with("ok"));
     };
@@ -841,8 +830,6 @@ TEST_CASE("Integration: invalid ratio commands cannot poison layout state", "[in
     if (!env)
         SKIP("Xvfb not available");
     auto& conn = env->conn;
-    auto socket = wait_for_ipc_socket_path(conn);
-    REQUIRE(socket);
     auto window = create_window(conn, 20, 20, 200, 200);
     map_window(conn, window);
     REQUIRE(wait_for_active_window(conn, window, kTimeout));
@@ -852,11 +839,11 @@ TEST_CASE("Integration: invalid ratio commands cannot poison layout state", "[in
         for (std::string value : { "nan", "inf", "-inf", "0.5junk", "1e9999" })
         {
             CAPTURE(action, value);
-            auto response = send_ipc_command(*socket, "ratio " + action + " " + value);
+            auto response = send_ipc_command("ratio " + action + " " + value);
             REQUIRE(response);
             CHECK(response->starts_with("error "));
         }
-    CHECK(send_ipc_command(*socket, "ping") == "ok pong");
+    CHECK(send_ipc_command("ping") == "ok pong");
     CHECK(get_window_geometry(conn, window) == geometry);
     destroy_window(conn, window);
 }
@@ -867,9 +854,7 @@ TEST_CASE("Integration: restart consumes its handoff and rejects damaged snapsho
     if (!env)
         SKIP("X11 unavailable");
     auto& conn = env->conn;
-    auto socket = wait_for_ipc_socket_path(conn);
-    REQUIRE(socket);
-    ipc_ok(*socket, "workspace switch 1");
+    ipc_ok("workspace switch 1");
     auto first = create_window(conn, 10, 10, 200, 150);
     auto second = create_window(conn, 40, 40, 200, 150);
     for (auto window : { first, second })
@@ -877,11 +862,11 @@ TEST_CASE("Integration: restart consumes its handoff and rejects damaged snapsho
         map_window(conn, window);
         REQUIRE(wait_for_active_window(conn, window, kTimeout));
     }
-    ipc_ok(*socket, "layout set monocle");
+    ipc_ok("layout set monocle");
     REQUIRE(require_window_geometry(conn, first) == require_window_geometry(conn, second));
     auto instance = wm_instance(conn);
     REQUIRE(instance);
-    PausedRestart restart(env->wm, *socket);
+    PausedRestart restart(env->wm);
     auto property = intern_atom(conn.get(), "_LWM_RESTART");
     auto snapshot = read_property32(conn.get(), conn.root(), property, XCB_ATOM_CARDINAL);
     REQUIRE(snapshot);
@@ -917,14 +902,14 @@ TEST_CASE("Integration: restart consumes its handoff and rejects damaged snapsho
     restart.resume();
     REQUIRE(wait_for_wm_restart(conn, kTimeout, *instance));
     CHECK_FALSE(read_property32(conn.get(), conn.root(), property, XCB_ATOM_CARDINAL));
-    auto workspaces = ipc_json(*socket, "workspace list");
+    auto workspaces = ipc_json("workspace list");
     CHECK(
         workspaces.at("monitors").at(0).at("workspaces").at(1).at("layout")
         == (intact ? "monocle" : "master-stack")
     );
     // A rejected handoff still adopts both clients on their EWMH desktop and
     // arranges them afresh; it must neither lose them nor apply partial state.
-    ipc_ok(*socket, "workspace switch 1");
+    ipc_ok("workspace switch 1");
     auto desktop = intern_atom(conn.get(), "_NET_WM_DESKTOP");
     for (auto window : { first, second })
     {
@@ -943,9 +928,7 @@ TEST_CASE("Integration: restart places unrecorded windows on the restored worksp
     if (!env)
         SKIP("Test environment not available");
     auto& conn = env->conn;
-    auto path = wait_for_ipc_socket_path(conn);
-    REQUIRE(path);
-    REQUIRE(send_ipc_command(*path, "workspace switch 2")->starts_with("ok"));
+    REQUIRE(send_ipc_command("workspace switch 2")->starts_with("ok"));
     // A viewable window the old WM never managed, like one mapped during the exec gap.
     auto window = create_window(conn, 10, 10, 200, 150);
     uint32_t override_redirect = 1;
@@ -956,12 +939,12 @@ TEST_CASE("Integration: restart places unrecorded windows on the restored worksp
     xcb_flush(conn.get());
     auto previous = wm_instance(conn);
     REQUIRE(previous);
-    REQUIRE(send_ipc_command(*path, "restart"));
+    REQUIRE(send_ipc_command("restart"));
     REQUIRE(wait_for_wm_restart(conn, std::chrono::seconds(5), *previous));
     REQUIRE(wait_for_condition(
         [&]
         {
-            auto reply = send_ipc_command(*path, "window list");
+            auto reply = send_ipc_command("window list");
             return reply && reply->find("\"id\":" + std::to_string(window) + ",\"monitor\":0,\"workspace\":2")
                 != std::string::npos;
         },
@@ -988,15 +971,13 @@ action = "restart"
     if (!env)
         SKIP("X11 unavailable");
     auto& conn = env->conn;
-    auto socket = wait_for_ipc_socket_path(conn);
-    REQUIRE(socket);
     bool populated = false;
     SECTION("Empty workspaces") { }
     SECTION("Workspaces with clients") { populated = true; }
     std::vector<xcb_window_t> windows;
     for (size_t workspace : { 1, 2 })
     {
-        ipc_ok(*socket, "workspace switch " + std::to_string(workspace));
+        ipc_ok("workspace switch " + std::to_string(workspace));
         if (populated)
         {
             auto window = create_window(conn, 20, 20, 200, 150);
@@ -1005,7 +986,7 @@ action = "restart"
             REQUIRE(wait_for_active_window(conn, window, kTimeout));
         }
     }
-    auto current = [&] { return ipc_json(*socket, "workspace list").at("monitors").at(0).at("current_workspace"); };
+    auto current = [&] { return ipc_json("workspace list").at("monitors").at(0).at("current_workspace"); };
     for (int iteration = 0; iteration < 2; ++iteration)
     {
         CAPTURE(iteration, populated);
@@ -1020,7 +1001,7 @@ action = "restart"
         REQUIRE(wait_for_condition([&] { return current() == 1; }, kTimeout));
         if (populated)
             CHECK(wait_for_active_window(conn, windows[0], kTimeout));
-        ipc_ok(*socket, "workspace toggle");
+        ipc_ok("workspace toggle");
         CHECK(current() == 2);
     }
     for (auto window : windows) destroy_window(conn, window);

@@ -76,7 +76,6 @@ add_executable(lwm_tests
   test_integration_placement.cpp
   test_floating_policy.cpp
   test_lwmctl.cpp
-  test_ipc_server.cpp
   test_ipc_command.cpp
   test_notify_bridge.cpp
   test_harness.cpp

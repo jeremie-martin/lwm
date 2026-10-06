@@ -236,9 +236,7 @@ TEST_CASE("Integration: cancelling a tiled preview restores layout without reord
     }
     SECTION("configuration reload")
     {
-        auto path = wait_for_ipc_socket_path(conn);
-        REQUIRE(path);
-        REQUIRE(send_ipc_command(*path, "reload-config") == "ok");
+        REQUIRE(send_ipc_command("reload-config") == "ok");
     }
     observe_title_after_events(conn, window);
     CHECK(require_window_geometry(conn, window) == start);

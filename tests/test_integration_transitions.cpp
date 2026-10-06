@@ -47,8 +47,6 @@ apply = { floating = false }
     if (!env)
         SKIP("X11 unavailable");
     auto& conn = env->conn;
-    auto socket = wait_for_ipc_socket_path(conn);
-    REQUIRE(socket);
     auto instance = wm_instance(conn);
     auto peer = create_window(conn, 20, 30, 400, 300);
     map_window(conn, peer);
@@ -90,7 +88,7 @@ apply = { floating = false }
     }
     else if (std::string_view(presentation) == "hidden")
     {
-        REQUIRE(send_ipc_command(*socket, "workspace switch 1")->starts_with("ok"));
+        REQUIRE(send_ipc_command("workspace switch 1")->starts_with("ok"));
         REQUIRE(wait_for_condition(
             [&]
             {
@@ -111,7 +109,7 @@ apply = { floating = false }
     // Metadata changes keep fullscreen intent; the rule explicitly clears it.
     send_client_message(conn, window, state, 0, fullscreen);
     send_client_message(conn, window, state, 0, horizontal, vertical);
-    REQUIRE(send_ipc_command(*socket, "workspace switch 0")->starts_with("ok"));
+    REQUIRE(send_ipc_command("workspace switch 0")->starts_with("ok"));
     REQUIRE(wait_for_condition([&] { return get_window_geometry(conn, window) == normal; }, timeout));
     REQUIRE(get_window_geometry(conn, peer) != peer_tiled);
     WindowGeometry moved{ 55, 66, 311, 217 };
@@ -188,8 +186,6 @@ TEST_CASE(
     // Keep pointer focus from affecting explicit activation assertions.
     xcb_warp_pointer(conn.get(), XCB_NONE, conn.root(), 0, 0, 0, 0, 0, 0);
     xcb_flush(conn.get());
-    auto socket = wait_for_ipc_socket_path(conn);
-    REQUIRE(socket);
     auto owner = create_window(conn, 20, 30, 400, 300);
     map_window(conn, owner);
     REQUIRE(wait_for_active_window(conn, owner, timeout));
@@ -197,8 +193,8 @@ TEST_CASE(
     set_window_type(conn, unrelated, intern_atom(conn.get(), "_NET_WM_WINDOW_TYPE_DIALOG"));
     map_window(conn, unrelated);
     REQUIRE(wait_for_active_window(conn, unrelated, timeout));
-    ipc_ok(*socket, "focus window=" + std::to_string(owner));
-    ipc_ok(*socket, "window fullscreen");
+    ipc_ok("focus window=" + std::to_string(owner));
+    ipc_ok("window fullscreen");
     auto dialog = create_window(conn, 60, 70, 320, 240);
     set_transient_for(conn, dialog, owner);
     map_window(conn, dialog);
@@ -214,7 +210,7 @@ TEST_CASE(
     REQUIRE(is_stacked_above(conn, dialog, owner));
 
     auto activate = intern_atom(conn.get(), "_NET_ACTIVE_WINDOW");
-    ipc_ok(*socket, "focus window=" + std::to_string(owner));
+    ipc_ok("focus window=" + std::to_string(owner));
     send_client_message(conn, child, activate, 2);
     REQUIRE(wait_for_active_window(conn, child, timeout));
     REQUIRE(wait_for_x_input_focus(conn, child, timeout));
@@ -268,8 +264,6 @@ apply = { fullscreen = true }
     auto& conn = env->conn;
     xcb_warp_pointer(conn.get(), XCB_NONE, conn.root(), 0, 0, 0, 0, 0, 0);
     xcb_flush(conn.get());
-    auto socket = wait_for_ipc_socket_path(conn);
-    REQUIRE(socket);
     struct Family
     {
         xcb_window_t root, dialog, child;
@@ -291,7 +285,7 @@ apply = { fullscreen = true }
     };
     auto first = create_family();
     auto second = create_family();
-    ipc_ok(*socket, "ping");
+    ipc_ok("ping");
     auto expect_families = [&](Family const& shown, Family const& hidden)
     {
         for (auto window : { shown.root, shown.dialog, shown.child })
@@ -310,7 +304,7 @@ apply = { fullscreen = true }
     send_client_message(conn, first.root, state, 1, fullscreen);
     observe_title_after_events(conn, first.child);
     expect_families(first, second);
-    ipc_ok(*socket, "reload-config");
+    ipc_ok("reload-config");
     expect_families(first, second);
     REQUIRE(has_state(conn, first.root, fullscreen));
     REQUIRE(has_state(conn, second.root, fullscreen));
@@ -341,8 +335,6 @@ TEST_CASE(
     if (!env)
         SKIP("X11 unavailable");
     auto& conn = env->conn;
-    auto socket = wait_for_ipc_socket_path(conn);
-    REQUIRE(socket);
     auto window = create_window(conn, 60, 70, 320, 240);
     auto desktop = intern_atom(conn.get(), "_NET_WM_DESKTOP");
     uint32_t workspace = 1;
@@ -367,7 +359,7 @@ TEST_CASE(
     }
     SECTION("Window becomes transient") { xcb_icccm_set_wm_transient_for(conn.get(), window, conn.root()); }
     observe_title_after_events(conn, window);
-    auto reply = send_ipc_command(*socket, "workspace switch 1");
+    auto reply = send_ipc_command("workspace switch 1");
     REQUIRE(reply);
     REQUIRE(reply->starts_with("ok"));
     REQUIRE(wait_for_condition(
@@ -397,8 +389,6 @@ apply = { floating = true, workspace = 0, sticky = true, fullscreen = false, geo
     if (!env)
         SKIP("X11 unavailable");
     auto& conn = env->conn;
-    auto socket = wait_for_ipc_socket_path(conn);
-    REQUIRE(socket);
     auto background = create_window(conn, 10, 10, 200, 200);
     map_window(conn, background);
     REQUIRE(wait_for_active_window(conn, background, timeout));
@@ -416,7 +406,7 @@ apply = { floating = true, workspace = 0, sticky = true, fullscreen = false, geo
             REQUIRE(wait_for_condition(
                 [&]
                 {
-                    auto reply = send_ipc_command(*socket, "window list");
+                    auto reply = send_ipc_command("window list");
                     if (!reply || !reply->starts_with("ok "))
                         return false;
                     auto data = nlohmann::json::parse(reply->substr(3));
@@ -440,7 +430,7 @@ apply = { floating = true, workspace = 0, sticky = true, fullscreen = false, geo
             ));
             REQUIRE(wait_for_active_window(conn, background, timeout));
         }
-        auto reply = send_ipc_command(*socket, "focus window=" + std::to_string(window));
+        auto reply = send_ipc_command("focus window=" + std::to_string(window));
         REQUIRE(reply);
         REQUIRE(reply->starts_with("ok"));
         REQUIRE(wait_for_active_window(conn, window, timeout));
@@ -534,8 +524,6 @@ TEST_CASE(
     xcb_change_window_attributes(conn.get(), window, XCB_CW_EVENT_MASK, &mask);
     map_window(conn, window);
     REQUIRE(wait_for_active_window(conn, window, timeout));
-    auto socket = wait_for_ipc_socket_path(conn);
-    REQUIRE(socket);
     if (mode == "fullscreen")
     {
         auto fullscreen = intern_atom(conn.get(), "_NET_WM_STATE_FULLSCREEN");
@@ -547,7 +535,7 @@ TEST_CASE(
     bool hidden = mode == "hidden" || mode == "hidden_tiled";
     if (hidden)
     {
-        auto reply = send_ipc_command(*socket, "workspace switch 1");
+        auto reply = send_ipc_command("workspace switch 1");
         REQUIRE(reply);
         REQUIRE(reply->starts_with("ok"));
         if (mode == "hidden_tiled")
@@ -586,7 +574,7 @@ TEST_CASE(
     REQUIRE(acknowledgements == 1);
     if (hidden)
     {
-        auto reply = send_ipc_command(*socket, "workspace switch 0");
+        auto reply = send_ipc_command("workspace switch 0");
         REQUIRE(reply);
         REQUIRE(reply->starts_with("ok"));
     }
@@ -600,12 +588,10 @@ TEST_CASE("Integration: focusing a window on another workspace settles focus and
     if (!env)
         SKIP("X11 unavailable");
     auto& conn = env->conn;
-    auto path = wait_for_ipc_socket_path(conn);
-    REQUIRE(path);
     auto first = create_window(conn, 10, 10, 200, 200);
     map_window(conn, first);
     REQUIRE(wait_for_active_window(conn, first, timeout));
-    auto switched = send_ipc_command(*path, "workspace switch 1");
+    auto switched = send_ipc_command("workspace switch 1");
     REQUIRE(switched);
     REQUIRE(switched->starts_with("ok"));
     auto second = create_window(conn, 10, 10, 200, 200);
@@ -613,7 +599,7 @@ TEST_CASE("Integration: focusing a window on another workspace settles focus and
     REQUIRE(wait_for_active_window(conn, second, timeout));
     Watcher watcher;
     REQUIRE(watcher.line());
-    auto focused = send_ipc_command(*path, "focus window=" + std::to_string(first));
+    auto focused = send_ipc_command("focus window=" + std::to_string(first));
     REQUIRE(focused);
     REQUIRE(focused->starts_with("ok"));
     // One operation publishes one settled state: the switch and focus together.
@@ -627,7 +613,7 @@ TEST_CASE("Integration: focusing a window on another workspace settles focus and
     REQUIRE(second_geometry);
     CHECK(first_geometry->x >= 0);
     CHECK(second_geometry->x < -10000);
-    auto reply = send_ipc_command(*path, "window list");
+    auto reply = send_ipc_command("window list");
     REQUIRE(reply);
     CHECK(nlohmann::json::parse(reply->substr(3)).at("focused") == first);
     CHECK(watcher.quiet());
@@ -768,8 +754,6 @@ TEST_CASE(
     if (!env)
         SKIP("X11 unavailable");
     auto& conn = env->conn;
-    auto path = wait_for_ipc_socket_path(conn);
-    REQUIRE(path);
     auto first = create_window(conn, 10, 10, 200, 200);
     xcb_icccm_wm_hints_t hints{ };
     hints.flags = XCB_ICCCM_WM_HINT_STATE;
@@ -778,14 +762,14 @@ TEST_CASE(
     map_window(conn, first);
     auto clients = [&]
     {
-        auto reply = send_ipc_command(*path, "window list");
+        auto reply = send_ipc_command("window list");
         REQUIRE(reply);
         REQUIRE(reply->starts_with("ok "));
         return nlohmann::json::parse(reply->substr(3));
     };
     REQUIRE(wait_for_condition([&] { return clients().at("windows").size() == 1; }, timeout));
     CHECK(clients().at("windows").at(0).at("iconic") == true);
-    auto focused = send_ipc_command(*path, "focus window=" + std::to_string(first));
+    auto focused = send_ipc_command("focus window=" + std::to_string(first));
     REQUIRE(focused);
     REQUIRE(focused->starts_with("ok"));
     REQUIRE(wait_for_active_window(conn, first, timeout));
@@ -794,7 +778,7 @@ TEST_CASE(
     REQUIRE(wait_for_active_window(conn, second, timeout));
     auto previous = wm_instance(conn);
     REQUIRE(previous);
-    auto restarted = send_ipc_command(*path, "restart");
+    auto restarted = send_ipc_command("restart");
     REQUIRE(restarted);
     REQUIRE(restarted->starts_with("ok"));
     REQUIRE(wait_for_wm_restart(conn, timeout, *previous));
@@ -870,9 +854,7 @@ match = { type = "Dialog" }
 apply = { center = true }
 )");
     REQUIRE(wait_for_wm_ready(conn, timeout));
-    auto path = wait_for_ipc_socket_path(conn);
-    REQUIRE(path);
-    REQUIRE(send_ipc_command(*path, "ping"));
+    REQUIRE(send_ipc_command("ping"));
     auto screen_height = conn.screen()->height_in_pixels;
     auto first_rect = get_window_geometry(conn, first);
     auto second_rect = get_window_geometry(conn, second);
@@ -986,9 +968,7 @@ apply = { floating = true, layer = "below", geometry = { x = 60, y = 70, width =
     CHECK(property_has_atom(conn.get(), window, state, below));
     CHECK(get_window_geometry(conn, window) == WindowGeometry{ 360, 270, 300, 200 });
     // Reload explicitly reapplies even unchanged placement actions.
-    auto socket = wait_for_ipc_socket_path(conn);
-    REQUIRE(socket);
-    REQUIRE(send_ipc_command(*socket, "reload-config") == "ok");
+    REQUIRE(send_ipc_command("reload-config") == "ok");
     CHECK(get_window_geometry(conn, window) == WindowGeometry{ 60, 70, 300, 200 });
     destroy_window(conn, window);
 }
@@ -1016,11 +996,9 @@ TEST_CASE(
     observe_title_after_events(conn, window);
     CHECK_FALSE(property_has_atom(conn.get(), window, state, taskbar));
     CHECK(property_has_atom(conn.get(), window, state, above));
-    auto socket = wait_for_ipc_socket_path(conn);
-    REQUIRE(socket);
     auto instance = wm_instance(conn);
     REQUIRE(instance);
-    REQUIRE(send_ipc_command(*socket, "restart") == "ok");
+    REQUIRE(send_ipc_command("restart") == "ok");
     REQUIRE(wait_for_wm_restart(conn, timeout, *instance));
     send_client_message(conn, window, state, 0, modal, 0, 0, 0);
     set_window_type(conn, window, intern_atom(conn.get(), "_NET_WM_WINDOW_TYPE_NORMAL"));
@@ -1112,11 +1090,9 @@ TEST_CASE(
         }
         else if (op == 7)
         {
-            auto socket = wait_for_ipc_socket_path(conn);
-            REQUIRE(socket);
             auto instance = wm_instance(conn);
             REQUIRE(instance);
-            REQUIRE(send_ipc_command(*socket, "restart") == "ok");
+            REQUIRE(send_ipc_command("restart") == "ok");
             REQUIRE(wait_for_wm_restart(conn, timeout, *instance));
         }
         else
@@ -1226,8 +1202,6 @@ apply = { fullscreen = false }
 )");
     REQUIRE(env);
     auto& conn = env->conn;
-    auto socket = wait_for_ipc_socket_path(conn);
-    REQUIRE(socket);
     auto state = intern_atom(conn.get(), "_NET_WM_STATE");
     auto fullscreen = intern_atom(conn.get(), "_NET_WM_STATE_FULLSCREEN");
     auto minimized = intern_atom(conn.get(), "_NET_WM_STATE_HIDDEN");
@@ -1256,7 +1230,7 @@ apply = { fullscreen = false }
     observe_title_after_events(conn, first);
     expect_owner(first, second);
     if (hidden)
-        ipc_ok(*socket, "workspace switch 1");
+        ipc_ok("workspace switch 1");
 
     if (std::string_view(replay) == "metadata")
     {
@@ -1271,13 +1245,13 @@ apply = { fullscreen = false }
         {
             auto instance = wm_instance(conn);
             REQUIRE(instance);
-            ipc_ok(*socket, "restart");
+            ipc_ok("restart");
             REQUIRE(wait_for_wm_restart(conn, timeout, *instance));
         }
-        ipc_ok(*socket, "reload-config");
+        ipc_ok("reload-config");
     }
     if (hidden)
-        ipc_ok(*socket, "workspace switch 0");
+        ipc_ok("workspace switch 0");
     expect_owner(first, second);
     CHECK(has_state(conn, second, fullscreen));
 
@@ -1313,8 +1287,6 @@ TEST_CASE(
     auto env = TestEnvironment::create("[workspaces]\ncount=2\n");
     REQUIRE(env);
     auto& conn = env->conn;
-    auto socket = wait_for_ipc_socket_path(conn);
-    REQUIRE(socket);
     auto first = create_window(conn, 10, 10, 320, 240);
     auto second = create_window(conn, 20, 20, 320, 240);
     map_window(conn, first);
@@ -1342,12 +1314,12 @@ TEST_CASE(
     };
     expect_owner(first, second);
     if (hidden)
-        ipc_ok(*socket, "workspace switch 1");
+        ipc_ok("workspace switch 1");
     auto instance = wm_instance(conn);
     REQUIRE(instance);
-    ipc_ok(*socket, failed_exec ? "exec /definitely/missing/lwm-restart" : "restart");
+    ipc_ok(failed_exec ? "exec /definitely/missing/lwm-restart" : "restart");
     REQUIRE(wait_for_wm_restart(conn, timeout, *instance));
-    ipc_ok(*socket, "workspace switch 0");
+    ipc_ok("workspace switch 0");
     expect_owner(first, second);
     // New claims must outrank every restored claim, then withdrawing one must
     // reveal the remaining candidate rather than relying on a saved winner.
@@ -1379,8 +1351,6 @@ apply = { floating = true, geometry = { x = 100, y = 100, width = 240, height = 
     auto env = TestEnvironment::create(config);
     REQUIRE(env);
     auto& conn = env->conn;
-    auto socket = wait_for_ipc_socket_path(conn);
-    REQUIRE(socket);
     auto window = create_window(conn, 20, 20, 180, 120);
     set_window_wm_class(
         conn,
@@ -1393,12 +1363,12 @@ apply = { floating = true, geometry = { x = 100, y = 100, width = 240, height = 
     if (std::string_view(trigger) == "metadata")
         set_window_wm_class(conn, window, "geometry", "GeometryRule");
     else if (std::string_view(trigger) == "reload")
-        ipc_ok(*socket, "reload-config");
+        ipc_ok("reload-config");
     else if (std::string_view(trigger) == "restart")
     {
         auto instance = wm_instance(conn);
         REQUIRE(instance);
-        ipc_ok(*socket, "restart");
+        ipc_ok("restart");
         REQUIRE(wait_for_wm_restart(conn, timeout, *instance));
     }
     REQUIRE(wait_for_window_geometry(conn, window, center ? 518 : 100, center ? 278 : 100, 240, 160));

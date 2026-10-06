@@ -1,6 +1,5 @@
 #include "wm.hpp"
 #include "lwm/core/invariants.hpp"
-#include "lwm/core/ipc.hpp"
 #include "lwm/core/log.hpp"
 #include "lwm/core/xproperty.hpp"
 #include <algorithm>
@@ -35,7 +34,6 @@ WindowManager::WindowManager(Config config, SignalPipe& signals, std::string con
     grab_buttons();
     refresh_topology();
     ewmh_.advertise(wm_window_, { ewmh_.get()->_NET_WM_USER_TIME_WINDOW, atoms_.lwm_window_class });
-    setup_ipc();
     scan_existing_windows(handoff);
     grab_keys();
     complete_transition();
@@ -48,8 +46,6 @@ WindowManager::WindowManager(Config config, SignalPipe& signals, std::string con
     );
 }
 
-WindowManager::~WindowManager() { cleanup_ipc(); }
-
 // X setup
 
 void WindowManager::intern_atoms()
@@ -60,7 +56,8 @@ void WindowManager::intern_atoms()
         { "WM_DELETE_WINDOW", &atoms_.wm_delete_window },
         { "WM_TAKE_FOCUS", &atoms_.wm_take_focus },
         { "WM_S0", &atoms_.wm_s0 },
-        { "_LWM_IPC_SOCKET", &atoms_.lwm_ipc_socket },
+        { "_LWM_COMMAND", &atoms_.lwm_command },
+        { "_LWM_REPLY", &atoms_.lwm_reply },
         { "_LWM_WINDOW_CLASS", &atoms_.lwm_window_class },
         { "_LWM_STATE", &atoms_.lwm_state },
         { "_LWM_RESTART", &atoms_.lwm_restart },
@@ -217,26 +214,6 @@ void WindowManager::grab_keys()
     }
 }
 
-void WindowManager::setup_ipc()
-{
-    ipc_.start(ipc::default_socket_path().string());
-    auto const& path = ipc_.path();
-    xcb_change_property(
-        conn_.get(), XCB_PROP_MODE_REPLACE, conn_.screen()->root, atoms_.lwm_ipc_socket, ewmh_.get()->UTF8_STRING, 8, path.size(), path.data()
-    );
-    conn_.flush();
-}
-
-void WindowManager::cleanup_ipc()
-{
-    ipc_.stop();
-    if (conn_.get() && !xcb_connection_has_error(conn_.get()))
-    {
-        xcb_delete_property(conn_.get(), conn_.screen()->root, atoms_.lwm_ipc_socket);
-        conn_.flush();
-    }
-}
-
 // Topology
 
 Topology WindowManager::discover_topology()
@@ -301,13 +278,9 @@ RunResult WindowManager::run()
 {
     LWM_ASSERT_INVARIANTS(state_);
     int xfd = xcb_get_file_descriptor(conn_.get());
-    constexpr size_t POLL_SIGNAL = 1;
-    constexpr size_t POLL_IPC = 2;
-    std::vector<pollfd> poll_fds;
-
     while (!stop_)
     {
-        std::optional<std::chrono::steady_clock::time_point> deadline = ipc_.deadline();
+        std::optional<std::chrono::steady_clock::time_point> deadline;
         for (auto const& [window, kill_at] : pending_kills_)
             if (!deadline || kill_at < *deadline)
                 deadline = kill_at;
@@ -326,30 +299,16 @@ RunResult WindowManager::run()
         if (!deferred_events_.empty())
             timeout_ms = 0;
 
-        poll_fds.clear();
-        poll_fds.push_back({ .fd = xfd, .events = POLLIN, .revents = 0 });
-        poll_fds.push_back({ .fd = signals_.fd(), .events = POLLIN, .revents = 0 });
-        ipc_.append_poll_fds(poll_fds);
-        if (poll(poll_fds.data(), static_cast<nfds_t>(poll_fds.size()), timeout_ms) > 0)
+        pollfd fds[] = { { .fd = xfd, .events = POLLIN, .revents = 0 },
+                         { .fd = signals_.fd(), .events = POLLIN, .revents = 0 } };
+        if (poll(fds, std::size(fds), timeout_ms) > 0 && (fds[1].revents & POLLIN))
         {
-            if (poll_fds[POLL_SIGNAL].revents & POLLIN)
-            {
-                signals_.drain();
-                (void)reload_config("sighup"); // Logged; only IPC replies with it
-                complete_transition();
-            }
-            ipc_.dispatch(
-                std::span(poll_fds).subspan(POLL_IPC),
-                [this](command::Request const& request)
-                {
-                    auto response = handle_request(request);
-                    complete_transition();
-                    return response;
-                }
-            );
+            signals_.drain();
+            (void)reload_config("sighup"); // Logged; only IPC replies with it
+            complete_transition();
         }
 
-        // Bounded batches keep IPC, signals and deadlines responsive under X load.
+        // Bounded batches keep signals and deadlines responsive under X load.
         size_t remaining = 64;
         auto batch_deadline = std::chrono::steady_clock::now() + std::chrono::milliseconds(2);
         while (remaining && std::chrono::steady_clock::now() < batch_deadline)
@@ -371,7 +330,6 @@ RunResult WindowManager::run()
                 break;
         }
 
-        ipc_.expire();
         handle_timeouts();
         if (std::exchange(monitors_dirty_, false))
             refresh_topology();

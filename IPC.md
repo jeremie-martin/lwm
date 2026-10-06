@@ -1,65 +1,49 @@
 # IPC
 
-This is the Unix-socket contract for integrations with LWM. For interactive use,
+This is the contract for scripts and panels that drive LWM. For interactive use,
 `lwmctl --help` and command-specific help list commands without connecting.
 [README.md](README.md) covers installation and startup.
 
-## Discovery and transport
-
-The default socket is:
-
-```text
-$XDG_RUNTIME_DIR/lwm/ipc-<display>.sock
+```sh
+lwmctl window fullscreen                         # actions are silent on success
+lwmctl state | jq .windows.focused               # queries print one value
+lwmctl watch | jq --unbuffered -r '.windows.focused'   # the state now and on change
 ```
 
-When `XDG_RUNTIME_DIR` is unset, LWM uses `/tmp/lwm-<uid>/ipc-<display>.sock`.
-Characters outside ASCII letters, digits, `.`, `_`, and `-` in `DISPLAY` are replaced
-with `_`. The socket is mode `0600`.
+## Transport
 
-`lwmctl` resolves a socket in this order:
+IPC runs over the X display named by `DISPLAY`; there is no separate socket. Anything
+that can open the display can command LWM, which matches what such a client can
+already do through EWMH and XTEST.
 
-1. `--socket PATH`
-2. `LWM_SOCKET`
-3. the root-window `_LWM_IPC_SOCKET` property
-4. the default path above
-
-LWM services up to 32 connections concurrently.
-Commands still execute sequentially on the WM event loop; a partial request or slow
-reply does not occupy another client's slot. Excess connections are rejected, with
-`error busy` when the rejection reply can be delivered. Requests and replies each have a
-500 ms deadline. A command line must contain fewer than 4096 bytes including its
-newline; replies are limited to 8 MiB. Writes resume when the socket is writable, with
-at most 64 KiB written per connection per dispatch. A timed-out exchange is
-disconnected.
-
-`lwmctl --timeout MS` bounds connection, request transmission and response waits
-(1–600000 ms, default 2000 ms). Connection waits for listener capacity within one
-deadline. Each bounded operation keeps one deadline across partial reads, writes and
-interrupted system calls; progress does not renew it. Explicit socket selection takes
-precedence even if the path is unavailable. Discovery properties must be complete text
-without embedded NULs.
-
-## Framing
-
-Send one text command followed by `\n`. LWM reads only the first line and returns one
-line:
+The running LWM owns the ICCCM `WM_S0` selection. A command is UTF-8 text in the
+`_LWM_COMMAND` property of a window the caller owns, announced to the selection owner
+window by a `_LWM_COMMAND` ClientMessage (format 32, `data.l[0]` = that window, sent
+with an empty event mask). LWM reads and deletes the property, executes the command,
+completes the operation, and then writes one UTF-8 reply into `_LWM_REPLY` on the same
+window:
 
 - `ok`
 - `ok VALUE`
 - `error MESSAGE`
 
-A write-side EOF also terminates a nonempty request. The connection closes after the
-complete reply is sent. Actions reply `ok` and print nothing; queries reply
-`ok VALUE`. `lwmctl` removes the `ok` envelope, prints `VALUE` to stdout, and prints an
-error message to stderr with a nonzero exit status. Empty, truncated, or unrecognized
-replies are errors. Interrupted reads and writes retry. Output failures return nonzero.
+The reply follows the operation's effects on LWM's own connection, so the X server has
+applied them before the caller can observe the reply. Commands execute in the order
+LWM receives their messages, interleaved with other X events. Requests must be shorter
+than 4096 bytes; anything else gets `error request too large` or `error request must be
+UTF-8 text`.
+
+`lwmctl` performs this exchange from a private window. Actions reply `ok` and print
+nothing; queries reply `ok VALUE` and print `VALUE`. Errors print to stderr with exit
+status 1: `lwm is not running` when no WM owns the screen, `lwm exited before replying`
+when the owner window disappears while waiting, and a timeout after `--timeout MS`
+(1–600000, default 2000). A timeout or exit leaves the outcome unknown, because LWM
+may have executed the command; do not retry toggles blindly.
 
 `lwmctl --help` and command-specific help (for example `lwmctl workspace --help`) print
-to stdout without connecting; an unknown help group returns status 1. Other usage and
-runtime errors print to stderr and return 1; successful commands return 0. Use `--`
-before arguments that resemble options, and
-shell-quote names or paths containing spaces. Arguments containing line breaks or NULs
-cannot be represented by this line protocol.
+to stdout without connecting; an unknown help group returns status 1. Usage errors
+print to stderr and return 1 without connecting. Use `--` before arguments that
+resemble options, and shell-quote names or paths containing spaces.
 
 ## Commands
 

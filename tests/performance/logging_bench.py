@@ -12,7 +12,6 @@ import os
 from pathlib import Path
 import random
 import select
-import socket
 import statistics
 import subprocess
 import tempfile
@@ -21,19 +20,8 @@ import time
 import transition_counts as harness
 
 
-def request(path, command, timeout=1):
-    with socket.socket(socket.AF_UNIX) as peer:
-        peer.settimeout(timeout)
-        peer.connect(str(path))
-        peer.sendall(command.encode() + b"\n")
-        reply = b""
-        while chunk := peer.recv(65536):
-            reply += chunk
-        if reply == b"ok\n":
-            return b""
-        if not reply.startswith(b"ok "):
-            raise RuntimeError(reply)
-        return reply[3:].strip()
+def request(display, command, timeout=1):
+    return harness.ipc(display, command, timeout)
 
 
 def measure(binary, level, blocked=False, affinity=None, switches=400, target_name="stderr"):
@@ -55,8 +43,7 @@ def measure(binary, level, blocked=False, affinity=None, switches=400, target_na
             os.close(read_fd)
         config = directory / "config.toml"
         config.write_text("[workspaces]\ncount=2\n")
-        environment = dict(os.environ, DISPLAY=display, XDG_RUNTIME_DIR=temporary)
-        environment.pop("LWM_SOCKET", None)
+        environment = dict(os.environ, DISPLAY=display)
         if blocked:
             reader, writer = os.pipe()
             cleanup.callback(os.close, reader)
@@ -71,11 +58,10 @@ def measure(binary, level, blocked=False, affinity=None, switches=400, target_na
         cleanup.callback(harness.stop, wm)
         if affinity:
             os.sched_setaffinity(wm.pid, {affinity[0]})
-        path = directory / "lwm" / ("ipc-" + display.replace(":", "_") + ".sock")
         deadline = time.monotonic() + 5
         while True:
             try:
-                request(path, "ping")
+                request(display, "ping")
                 break
             except OSError:
                 if wm.poll() is not None or time.monotonic() >= deadline:
@@ -97,7 +83,7 @@ def measure(binary, level, blocked=False, affinity=None, switches=400, target_na
             x.XMapWindow(connection, window)
         x.XSync(connection, 0)
         deadline = time.monotonic() + 5
-        while len(json.loads(request(path, "window list"))["windows"]) != (1 if blocked else 40):
+        while len(json.loads(request(display, "window list"))["windows"]) != (1 if blocked else 40):
             if time.monotonic() >= deadline:
                 raise TimeoutError("window management")
             time.sleep(.005)
@@ -113,7 +99,7 @@ def measure(binary, level, blocked=False, affinity=None, switches=400, target_na
             os.set_blocking(writer, True)
             # An INFO reload outcome guarantees a write after the pipe is full.
             try:
-                request(path, "reload-config", .3)
+                request(display, "reload-config", .3)
             except TimeoutError:
                 pass  # A historical synchronous logger can stall here too.
             time.sleep(.2)
@@ -123,7 +109,7 @@ def measure(binary, level, blocked=False, affinity=None, switches=400, target_na
                 if command == "restart":
                     restart_started = start
                 try:
-                    request(path, command, .3)
+                    request(display, command, .3)
                     samples.append({"command": command, "timeout": False, "ms": (time.monotonic() - start) * 1000})
                 except TimeoutError:
                     samples.append({"command": command, "timeout": True})
@@ -132,7 +118,7 @@ def measure(binary, level, blocked=False, affinity=None, switches=400, target_na
             deadline = time.monotonic() + .3
             while time.monotonic() < deadline:
                 try:
-                    if harness.wm_owner(display) not in (0, before) and request(path, "ping", max(.001, deadline - time.monotonic())) == b"pong":
+                    if harness.wm_owner(display) not in (0, before) and request(display, "ping", max(.001, deadline - time.monotonic())) == b"pong":
                         row["restart_completed_while_blocked"] = True
                         row["restart_completion_ms"] = (time.monotonic() - restart_started) * 1000
                         break
@@ -149,7 +135,7 @@ def measure(binary, level, blocked=False, affinity=None, switches=400, target_na
                 except BlockingIOError:
                     pass
                 try:
-                    if harness.wm_owner(display) not in (0, before) and request(path, "ping", .02) == b"pong":
+                    if harness.wm_owner(display) not in (0, before) and request(display, "ping", .02) == b"pong":
                         row["restart_after_reader_resumes_ms"] = (time.monotonic() - resumed) * 1000
                         break
                 except (OSError, RuntimeError):
@@ -170,13 +156,13 @@ def measure(binary, level, blocked=False, affinity=None, switches=400, target_na
             return sum(int(v) for v in Path(f"/proc/{wm.pid}/stat").read_text().split()[13:15]) / os.sysconf("SC_CLK_TCK")
 
         for i in range(20):
-            request(path, f"workspace switch {i % 2}")
+            request(display, f"workspace switch {i % 2}")
         cpu_start = cpu()
         elapsed_start = time.monotonic()
         latencies = []
         for i in range(switches):
             start = time.perf_counter_ns()
-            request(path, f"workspace switch {i % 2}")
+            request(display, f"workspace switch {i % 2}")
             latencies.append((time.perf_counter_ns() - start) / 1000)
         row.update(clients=40, switches=switches, wall_ms=(time.monotonic() - elapsed_start) * 1000,
                    wm_cpu_ms=(cpu() - cpu_start) * 1000, p50_us=statistics.median(latencies),
@@ -186,7 +172,7 @@ def measure(binary, level, blocked=False, affinity=None, switches=400, target_na
         elapsed_start = time.monotonic()
         time.sleep(2)
         row["idle_cpu_percent_one_core"] = 100 * (cpu() - cpu_start) / (time.monotonic() - elapsed_start)
-        row["logging"] = json.loads(request(path, "log status"))
+        row["logging"] = json.loads(request(display, "log status"))
         return row
 
 

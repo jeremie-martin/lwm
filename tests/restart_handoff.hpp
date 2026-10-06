@@ -9,10 +9,10 @@ namespace lwm::test {
 class PausedRestart
 {
 public:
-    PausedRestart(LwmProcess const& wm, std::string const& socket)
+    explicit PausedRestart(LwmProcess const& wm)
         : pid_(wm.pid())
     {
-        ipc_ok(socket, "exec " LWM_RESTART_GATE_PATH);
+        ipc_ok("exec " LWM_RESTART_GATE_PATH);
         REQUIRE(wait_for_condition(
             [&]
             {

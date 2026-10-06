@@ -1,190 +1,145 @@
-#include "test_resources.hpp"
 #include "x11_test_harness.hpp"
 #include <catch2/catch_test_macros.hpp>
-#include <sys/socket.h>
-#include <sys/un.h>
+#include <mutex>
 #include <thread>
 
 using namespace lwm::test;
 
 namespace {
-// A bounded, independent wire peer exercises the real CLI without a WM or X server.
-struct ReplyServer
+// Owns WM_S0 on a display without a WM and answers each command with a scripted
+// reply, exercising the real CLI's protocol independently of LWM.
+struct FakeWm
 {
-    std::string directory;
-    std::string path;
-    pid_t child = -1;
+    enum class Answer
+    {
+        Reply,
+        Silence,
+        Exit
+    };
 
-    ReplyServer(
-        std::string const& expected,
-        std::string const& reply,
-        int before_ms = 0,
-        int after_line_ms = 0,
-        int backlog_delay_ms = 0,
-        int byte_delay_ms = 0,
-        size_t paced_from = 0
-    )
+    X11Connection conn;
+    xcb_window_t window = XCB_NONE;
+    std::mutex mutex;
+    std::vector<std::string> requests;
+    std::jthread thread;
+
+    explicit FakeWm(std::string reply, Answer answer = Answer::Reply)
     {
-        char pattern[] = "/tmp/lwmctl-test-XXXXXX";
-        auto* created = mkdtemp(pattern);
-        REQUIRE(created);
-        directory = created;
-        path = directory + "/ipc.sock";
-        TestFd listener_owner{ socket(AF_UNIX, SOCK_STREAM | SOCK_CLOEXEC, 0) };
-        int listener = listener_owner.fd;
-        REQUIRE(listener >= 0);
-        sockaddr_un address{};
-        address.sun_family = AF_UNIX;
-        std::strcpy(address.sun_path, path.c_str());
-        REQUIRE(bind(listener, reinterpret_cast<sockaddr*>(&address), sizeof(address)) == 0);
-        REQUIRE(listen(listener, 1) == 0);
-        std::vector<TestFd> queued;
-        if (backlog_delay_ms)
-        {
-            // Linux permits backlog + 1 queued connections. Verify saturation before launching the CLI.
-            for (int i = 0; i < 3; ++i)
+        REQUIRE(conn.ok());
+        REQUIRE(wm_owner(conn) == XCB_NONE);
+        window = xcb_generate_id(conn.get());
+        xcb_create_window(conn.get(), 0, window, conn.root(), -1, -1, 1, 1, 0, XCB_WINDOW_CLASS_INPUT_ONLY, XCB_COPY_FROM_PARENT, 0, nullptr);
+        xcb_set_selection_owner(conn.get(), window, intern_atom(conn.get(), "WM_S0"), XCB_CURRENT_TIME);
+        auto command = intern_atom(conn.get(), "_LWM_COMMAND");
+        auto response = intern_atom(conn.get(), "_LWM_REPLY");
+        auto utf8 = intern_atom(conn.get(), "UTF8_STRING");
+        REQUIRE(wm_owner(conn) == window);
+        thread = std::jthread(
+            [=, this](std::stop_token stop)
             {
-                TestFd owner{ socket(AF_UNIX, SOCK_STREAM | SOCK_NONBLOCK | SOCK_CLOEXEC, 0) };
-                int fd = owner.fd;
-                REQUIRE(fd >= 0);
-                int result = connect(fd, reinterpret_cast<sockaddr*>(&address), sizeof(address));
-                if (i < 2)
+                while (!stop.stop_requested())
                 {
-                    REQUIRE(result == 0);
-                    queued.push_back(std::move(owner));
-                }
-                else
-                {
-                    CHECK(result == -1);
-                    CHECK(errno == EAGAIN);
-                }
-            }
-        }
-        child = fork();
-        if (child == 0)
-        {
-            alarm(5);
-            if (backlog_delay_ms)
-            {
-                std::this_thread::sleep_for(std::chrono::milliseconds(backlog_delay_ms));
-                for (auto& queued_fd : queued)
-                {
-                    queued_fd.reset();
-                    int accepted = accept(listener, nullptr, nullptr);
-                    if (accepted < 0)
-                        _exit(5);
-                    close(accepted);
+                    auto* event = xcb_poll_for_event(conn.get());
+                    if (!event)
+                    {
+                        std::this_thread::sleep_for(std::chrono::milliseconds(1));
+                        continue;
+                    }
+                    auto const& message = reinterpret_cast<xcb_client_message_event_t const&>(*event);
+                    if ((event->response_type & ~0x80) == XCB_CLIENT_MESSAGE && message.type == command)
+                    {
+                        auto requester = message.data.data32[0];
+                        {
+                            std::lock_guard lock(mutex);
+                            requests.push_back(get_window_property_string(conn.get(), requester, command).value_or(""));
+                        }
+                        if (answer == Answer::Reply)
+                            xcb_change_property(conn.get(), XCB_PROP_MODE_REPLACE, requester, response, utf8, 8, reply.size(), reply.data());
+                        if (answer == Answer::Exit)
+                            xcb_destroy_window(conn.get(), window);
+                        xcb_flush(conn.get());
+                    }
+                    free(event);
                 }
             }
-            int fd = accept(listener, nullptr, nullptr);
-            if (fd < 0)
-                _exit(2);
-            std::string request;
-            char ch;
-            while (recv(fd, &ch, 1, 0) == 1 && request.size() < 4096)
-            {
-                request.push_back(ch);
-                if (ch == '\n')
-                    break;
-            }
-            if (request != expected)
-                _exit(3);
-            std::this_thread::sleep_for(std::chrono::milliseconds(before_ms));
-            // Single-byte writes exercise framing independently of packet boundaries.
-            for (size_t i = 0; i < reply.size(); ++i)
-            {
-                char byte = reply[i];
-                if (byte_delay_ms && i >= paced_from)
-                    std::this_thread::sleep_for(std::chrono::milliseconds(byte_delay_ms));
-                if (send(fd, &byte, 1, MSG_NOSIGNAL) != 1)
-                    _exit(byte_delay_ms && errno == EPIPE ? 0 : 4);
-                if (byte == '\n' && after_line_ms)
-                {
-                    std::this_thread::sleep_for(std::chrono::milliseconds(after_line_ms));
-                    after_line_ms = 0;
-                }
-            }
-            close(fd);
-            _exit(0);
-        }
-        queued.clear();
-        listener_owner.reset();
-        REQUIRE(child > 0);
+        );
     }
-    ~ReplyServer()
+
+    std::vector<std::string> received()
     {
-        if (child > 0)
-        {
-            kill(child, SIGKILL);
-            waitpid(child, nullptr, 0);
-        }
-        std::filesystem::remove_all(directory);
-    }
-    void finish()
-    {
-        int status = 0;
-        REQUIRE(waitpid(child, &status, 0) == child);
-        child = -1;
-        REQUIRE(WIFEXITED(status));
-        REQUIRE(WEXITSTATUS(status) == 0);
+        std::lock_guard lock(mutex);
+        return requests;
     }
 };
+
+bool display_available() { return X11TestEnvironment::instance().available(); }
 }
 
-TEST_CASE("lwmctl requires a complete recognized command reply", "[ipc][lwmctl]")
+TEST_CASE("lwmctl prints query values, stays silent for actions and reports errors", "[ipc][lwmctl]")
 {
+    if (!display_available())
+        SKIP("X11 unavailable");
     std::string reply;
     int expected_exit = 1;
     std::string output;
     SECTION("empty") { }
-    SECTION("truncated success") { reply = "ok pong"; }
-    SECTION("unknown envelope") { reply = "pong\n"; }
-    SECTION("multiple replies") { reply = "ok\nok\n"; }
-    SECTION("server error") { reply = "error busy\n"; }
+    SECTION("unknown envelope") { reply = "pong"; }
+    SECTION("error") { reply = "error busy"; }
     SECTION("success without value")
     {
-        reply = "ok\n";
+        reply = "ok";
         expected_exit = 0;
     }
     SECTION("success with value")
     {
-        reply = "ok pong\n";
+        reply = "ok pong";
         expected_exit = 0;
         output = "pong\n";
     }
-    ReplyServer server("ping\n", reply);
-    auto result = run_command(lwmctl_executable_path(), { "--socket", server.path, "ping" });
+    FakeWm wm(reply);
+    auto result = run_command(lwmctl_executable_path(), { "ping" });
     REQUIRE(result);
     CHECK(result->exit_code == expected_exit);
     CHECK(result->stdout_text == output);
     if (expected_exit)
         CHECK_FALSE(result->stderr_text.empty());
-    server.finish();
+    if (reply == "error busy")
+        CHECK(result->stderr_text == "lwmctl: busy\n");
+    CHECK(wm.received() == std::vector<std::string>{ "ping" });
 }
 
-TEST_CASE("lwmctl bounds a silent peer", "[ipc][lwmctl]")
+TEST_CASE("lwmctl distinguishes a missing, silent and exiting WM", "[ipc][lwmctl]")
 {
-    ReplyServer server("ping\n", "", 200);
-    auto result = run_command(lwmctl_executable_path(), { "--socket", server.path, "--timeout", "50", "ping" });
-    REQUIRE(result);
-    CHECK(result->exit_code == 1);
-    CHECK(result->stderr_text.find("timed out") != std::string::npos);
-    server.finish();
-}
-
-TEST_CASE("lwmctl deadlines bound complete lines despite continuing byte delivery", "[ipc][lwmctl]")
-{
-    std::string request = "ping", reply = "ok pong\n";
-    ReplyServer server(request + "\n", reply, 0, 0, 0, 50);
-    auto started = std::chrono::steady_clock::now();
-    auto result = run_command(lwmctl_executable_path(), { "--socket", server.path, "--timeout", "150", request });
-    REQUIRE(result);
-    CHECK(result->exit_code == 1);
-    CHECK(result->stderr_text.find("timed out") != std::string::npos);
-    CHECK(result->stdout_text.empty());
-    // Leave scheduling headroom while rejecting a timeout renewed for every byte.
-    CHECK(std::chrono::steady_clock::now() - started < std::chrono::seconds(1));
-    server.finish();
+    if (!display_available())
+        SKIP("X11 unavailable");
+    SECTION("no WM owns the screen")
+    {
+        auto result = run_command(lwmctl_executable_path(), { "ping" });
+        REQUIRE(result);
+        CHECK(result->exit_code == 1);
+        CHECK(result->stderr_text == "lwmctl: lwm is not running\n");
+    }
+    SECTION("a silent WM times out with an unknown outcome")
+    {
+        FakeWm wm("", FakeWm::Answer::Silence);
+        auto started = std::chrono::steady_clock::now();
+        auto result = run_command(lwmctl_executable_path(), { "--timeout", "100", "ping" });
+        REQUIRE(result);
+        CHECK(result->exit_code == 1);
+        CHECK(result->stderr_text.find("timed out") != std::string::npos);
+        CHECK(result->stderr_text.find("may have run") != std::string::npos);
+        CHECK(std::chrono::steady_clock::now() - started < std::chrono::seconds(1));
+    }
+    SECTION("a WM that exits before replying is reported at once")
+    {
+        FakeWm wm("", FakeWm::Answer::Exit);
+        auto started = std::chrono::steady_clock::now();
+        auto result = run_command(lwmctl_executable_path(), { "--timeout", "5000", "ping" });
+        REQUIRE(result);
+        CHECK(result->exit_code == 1);
+        CHECK(result->stderr_text == "lwmctl: lwm exited before replying\n");
+        CHECK(std::chrono::steady_clock::now() - started < std::chrono::seconds(2));
+    }
 }
 
 TEST_CASE("lwmctl offers local help and preserves option-like names after double dash", "[ipc][lwmctl]")
@@ -195,47 +150,20 @@ TEST_CASE("lwmctl offers local help and preserves option-like names after double
     CHECK(help->stderr_text.empty());
     CHECK(help->stdout_text.find("workspace switch N") != std::string::npos);
     CHECK(help->stdout_text.find("scratchpad stash") == std::string::npos);
-    ReplyServer server("scratchpad toggle --help\n", "ok\n");
-    auto result =
-        run_command(lwmctl_executable_path(), { "--socket", server.path, "--", "scratchpad", "toggle", "--help" });
+    if (!display_available())
+        SKIP("X11 unavailable");
+    FakeWm wm("ok");
+    auto result = run_command(lwmctl_executable_path(), { "--", "scratchpad", "toggle", "--help" });
     REQUIRE(result);
     CHECK(result->exit_code == 0);
-    server.finish();
-}
-
-TEST_CASE("lwmctl waits for Unix listener capacity within its connection deadline", "[ipc][lwmctl]")
-{
-    SECTION("capacity becomes available")
-    {
-        ReplyServer server("ping\n", "ok pong\n", 0, 0, 200);
-        auto result = run_command(lwmctl_executable_path(), { "--socket", server.path, "--timeout", "1000", "ping" });
-        REQUIRE(result);
-        CHECK(result->exit_code == 0);
-        CHECK(result->stdout_text == "pong\n");
-        CHECK(result->stderr_text.empty());
-        server.finish();
-    }
-    SECTION("capacity remains unavailable through the deadline")
-    {
-        ReplyServer server("ping\n", "ok pong\n", 0, 0, 2000);
-        auto start = std::chrono::steady_clock::now();
-        auto result = run_command(lwmctl_executable_path(), { "--socket", server.path, "--timeout", "100", "ping" });
-        auto elapsed = std::chrono::steady_clock::now() - start;
-        REQUIRE(result);
-        CHECK(result->exit_code == 1);
-        CHECK(result->stdout_text.empty());
-        CHECK(result->stderr_text.find("timed out") != std::string::npos);
-        CHECK(elapsed >= std::chrono::milliseconds(100));
-        CHECK(elapsed < std::chrono::seconds(1));
-    }
+    CHECK(wm.received() == std::vector<std::string>{ "scratchpad toggle --help" });
 }
 
 TEST_CASE("lwmctl rejects notification metadata before connecting", "[ipc][lwmctl]")
 {
     for (auto const& arg : { "app-name=Ghostty", "desktop-entry=Ghostty", "window=123 app-name=Ghostty" })
     {
-        auto result =
-            run_command(LWMCTL_BINARY_PATH, { "--socket", "/nonexistent/lwm-test.sock", "notify-attention", arg });
+        auto result = run_command(LWMCTL_BINARY_PATH, { "notify-attention", arg }, { { "DISPLAY", ":nonexistent" } });
         REQUIRE(result);
         REQUIRE(result->exit_code == 1);
         REQUIRE(result->stderr_text.find("usage: notify-attention window=<xid>") != std::string::npos);

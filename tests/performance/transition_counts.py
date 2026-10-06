@@ -7,7 +7,6 @@ import json
 import os
 from pathlib import Path
 import select
-import socket
 import struct
 import subprocess
 import tempfile
@@ -30,6 +29,13 @@ for name, result, arguments in [
                            c.POINTER(c.c_uint), c.POINTER(c.c_uint), c.POINTER(c.c_uint), c.POINTER(c.c_uint)]),
     ("XWarpPointer", INT, [DISPLAY, WINDOW, WINDOW, INT, INT, c.c_uint, c.c_uint, INT, INT]),
     ("XGetSelectionOwner", WINDOW, [DISPLAY, WINDOW]),
+    ("XSelectInput", INT, [DISPLAY, WINDOW, c.c_long]),
+    ("XFlush", INT, [DISPLAY]),
+    ("XPending", INT, [DISPLAY]),
+    ("XNextEvent", INT, [DISPLAY, c.c_void_p]),
+    ("XFree", INT, [c.c_void_p]),
+    ("XGetWindowProperty", INT, [DISPLAY, WINDOW, WINDOW, c.c_long, c.c_long, INT, WINDOW, c.POINTER(WINDOW),
+                                 c.POINTER(INT), c.POINTER(c.c_ulong), c.POINTER(c.c_ulong), c.POINTER(c.c_void_p)]),
 ]:
     function = getattr(X, name)
     function.restype = result
@@ -77,17 +83,67 @@ def stop(process):
             process.wait()
 
 
-def ipc(path, command):
-    with socket.socket(socket.AF_UNIX) as connection:
-        connection.settimeout(3)
-        connection.connect(str(path))
-        connection.sendall(command.encode() + b"\n")
-        data = bytearray()
-        while chunk := connection.recv(65536):
-            data.extend(chunk)
-    if data != b"ok\n" and not data.startswith(b"ok "):
-        raise RuntimeError((command, bytes(data)))
-    return bytes(data[2:]).strip()
+class PropertyEvent(c.Structure):
+    _fields_ = [("type", INT), ("serial", c.c_ulong), ("send_event", INT), ("display", DISPLAY),
+                ("window", WINDOW), ("atom", WINDOW), ("time", c.c_ulong), ("state", INT)]
+
+
+class Event(c.Union):
+    _fields_ = [("type", INT), ("property", PropertyEvent), ("pad", c.c_long * 24)]
+
+
+def text_property(display, window, property, delete=False):
+    kind, size_format, count, after, data = WINDOW(), INT(), c.c_ulong(), c.c_ulong(), c.c_void_p()
+    utf8 = X.XInternAtom(display, b"UTF8_STRING", 0)
+    X.XGetWindowProperty(display, window, property, 0, 1 << 24, int(delete), utf8, c.byref(kind),
+                         c.byref(size_format), c.byref(count), c.byref(after), c.byref(data))
+    value = c.string_at(data, count.value) if data else b""
+    X.XFree(data)
+    return value
+
+
+def published_state(display):
+    """The WM's published state, read from the X server without involving the WM."""
+    owner = X.XGetSelectionOwner(display, X.XInternAtom(display, b"WM_S0", 0))
+    value = text_property(display, owner, X.XInternAtom(display, b"_LWM_STATE", 0)) if owner else b""
+    return json.loads(value) if value else {"windows": {"windows": []}}
+
+
+def ipc(display_name, command, timeout=3):
+    """Send one command as lwmctl does, on a private connection; return the reply value."""
+    display = X.XOpenDisplay(display_name.encode())
+    if not display:
+        raise ConnectionRefusedError("X display")
+    try:
+        atom = lambda name: X.XInternAtom(display, name.encode(), 0)
+        owner = X.XGetSelectionOwner(display, atom("WM_S0"))
+        if not owner:
+            raise ConnectionRefusedError("lwm is not running")
+        request, reply, utf8 = atom("_LWM_COMMAND"), atom("_LWM_REPLY"), atom("UTF8_STRING")
+        window = X.XCreateSimpleWindow(display, X.XDefaultRootWindow(display), -1, -1, 1, 1, 0, 0, 0)
+        X.XSelectInput(display, window, 1 << 22)  # PropertyChangeMask
+        text = command.encode()
+        X.XChangeProperty(display, window, request, utf8, 8, 0, text, len(text))
+        message = ClientMessage(type=33, display=display, window=owner, message_type=request, format=32)
+        message.data[0] = window
+        X.XSendEvent(display, owner, 0, 0, c.byref(message))
+        X.XFlush(display)
+        deadline = time.monotonic() + timeout
+        event = Event()
+        while time.monotonic() < deadline:
+            if not X.XPending(display):
+                time.sleep(0.0002)
+                continue
+            X.XNextEvent(display, c.byref(event))
+            if event.type != 28 or event.property.atom != reply or event.property.state != 0:
+                continue
+            value = text_property(display, window, reply, delete=True)
+            if value != b"ok" and not value.startswith(b"ok "):
+                raise RuntimeError((command, value))
+            return value[3:]
+        raise TimeoutError(command)
+    finally:
+        X.XCloseDisplay(display)
 
 
 def wm_owner(display_name):
@@ -152,9 +208,8 @@ def measure(binary, library, scenario, operations):
         counts_path.write_bytes(bytes(48))
         log_path = directory / "wm.log"
         log = cleanup.enter_context(log_path.open("wb"))
-        environment = dict(os.environ, DISPLAY=display_name, XDG_RUNTIME_DIR=temporary,
-                           LD_PRELOAD=str(library), LWM_TRANSITION_COUNTS=str(counts_path))
-        environment.pop("LWM_SOCKET", None)
+        environment = dict(os.environ, DISPLAY=display_name, LD_PRELOAD=str(library),
+                           LWM_TRANSITION_COUNTS=str(counts_path))
         atom = lambda name: X.XInternAtom(display, name.encode(), 0)
         if scenario == "dock_startup":
             for index in range(operations):
@@ -170,8 +225,7 @@ def measure(binary, library, scenario, operations):
         wm = subprocess.Popen([str(binary), "--config", str(config_path), "--log-target", "stderr", "--log-level", "error"],
                               env=environment, stdout=log, stderr=log)
         cleanup.callback(stop, wm)
-        path = directory / "lwm" / ("ipc-" + display_name.replace(":", "_") + ".sock")
-        wait(lambda: ipc(path, "ping") == b"pong", wm, log_path)
+        wait(lambda: ipc(display_name, "ping") == b"pong", wm, log_path)
         if scenario == "dock_startup":
             # The successful ping follows startup completion, including adoption.
             counts = struct.unpack("=6Q", counts_path.read_bytes())
@@ -188,9 +242,9 @@ def measure(binary, library, scenario, operations):
             X.XMapWindow(display, window)
             windows.append(window)
         X.XSync(display, 0)
-        wait(lambda: len(json.loads(ipc(path, "window list"))["windows"]) == client_count, wm, log_path)
+        wait(lambda: len(json.loads(ipc(display_name, "window list"))["windows"]) == client_count, wm, log_path)
         target = windows[0]
-        ipc(path, f"focus window={target}")
+        ipc(display_name, f"focus window={target}")
         name_atom, utf8 = atom("_NET_WM_NAME"), atom("UTF8_STRING")
         dragging = "drag" in scenario
         relocating = "relocation" in scenario
@@ -201,17 +255,17 @@ def measure(binary, library, scenario, operations):
             X.XChangeProperty(display, target, name_atom, utf8, 8, 0, marker, 12)
             X.XSync(display, 0)
             wait(lambda: any(client["id"] == target and client["title"] == "drag-started"
-                             for client in json.loads(ipc(path, "window list"))["windows"]), wm, log_path)
+                             for client in json.loads(ipc(display_name, "window list"))["windows"]), wm, log_path)
         time.sleep(0.05)
         start_position = position(display, target) if dragging else None
         ratio_position = position(display, windows[1]) if scenario == "tiled_ratio" else None
         before = struct.unpack("=6Q", counts_path.read_bytes())
         for index in range(operations):
             if scenario == "tiled_ratio":
-                ipc(path, f"ratio set {0.45 if index % 2 == 0 else 0.55}")
+                ipc(display_name, f"ratio set {0.45 if index % 2 == 0 else 0.55}")
                 continue
             if scenario == "workspace":
-                ipc(path, f"workspace switch {index % 2}")
+                ipc(display_name, f"workspace switch {index % 2}")
                 continue
             if relocating:
                 event = ClientMessage(type=33, display=display, window=target,
@@ -227,7 +281,11 @@ def measure(binary, library, scenario, operations):
             X.XChangeProperty(display, target, name_atom, utf8, 8, 0, value, len(title))
             X.XSync(display, 0)
             def settled():
-                clients = json.loads(ipc(path, "window list"))["windows"]
+                # Watching costs the WM nothing; a drag publishes on release,
+                # so its progress is the window's own position.
+                if dragging:
+                    return position(display, target) == tuple(value + index + 1 for value in start_position)
+                clients = published_state(display)["windows"]["windows"]
                 for client in clients:
                     if client["id"] != target or client["title"] != title:
                         continue
@@ -243,7 +301,7 @@ def measure(binary, library, scenario, operations):
         if scenario == "tiled_ratio" and position(display, windows[1]) == ratio_position:
             raise AssertionError("Ratio workload did not change layout")
         if relocating:
-            workspaces = json.loads(ipc(path, "workspace list"))["monitors"][0]["workspaces"]
+            workspaces = json.loads(ipc(display_name, "workspace list"))["monitors"][0]["workspaces"]
             expected = [client_count - operations % 2, operations % 2] if scenario.startswith("tiled_") else [0, 0]
             if [workspace["window_count"] for workspace in workspaces] != expected:
                 raise AssertionError("Relocation lost or duplicated tiled membership")
@@ -257,7 +315,7 @@ def measure(binary, library, scenario, operations):
             X.XChangeProperty(display, target, name_atom, utf8, 8, 0, marker, 13)
             X.XSync(display, 0)
             wait(lambda: any(client["id"] == target and client["title"] == "drag-finished"
-                             for client in json.loads(ipc(path, "window list"))["windows"]), wm, log_path)
+                             for client in json.loads(ipc(display_name, "window list"))["windows"]), wm, log_path)
         time.sleep(0.05)
         after = struct.unpack("=6Q", counts_path.read_bytes())
         names = ("get_property", "geometry_configure", "visibility_barrier", "query_tree", "flush", "get_geometry")
@@ -287,7 +345,8 @@ def main():
                 if scenario == "tiled_ratio":
                     if not operations <= counts["geometry_configure"] <= operations * 10:
                         raise AssertionError("Inactive or excessive ratio layout: " + json.dumps(result))
-                    if counts["query_tree"] or counts["get_property"] or counts["get_geometry"]:
+                    # Each IPC command costs exactly the read of its request property.
+                    if counts["query_tree"] or counts["get_property"] != operations or counts["get_geometry"]:
                         raise AssertionError("Layout-only change reconciled unrelated state: " + json.dumps(result))
                     if counts["visibility_barrier"] > operations:
                         raise AssertionError("Repeated crossing barriers: " + json.dumps(result))
@@ -311,7 +370,8 @@ def main():
                     if not operations <= counts["geometry_configure"] <= geometry_budget:
                         raise AssertionError("Inactive or excessive relocation geometry: " + json.dumps(result))
                 operations_flush_budget = result["operations"] * 20
-                reads = result["operations"] * (1 if scenario == "metadata" else 2)
+                # A workspace switch is an IPC command, which reads its request property.
+                reads = result["operations"] * (1 if scenario == "metadata" else 3 if scenario == "workspace" else 2)
                 if not result["operations"] - 1 <= counts["get_property"] <= reads:
                     raise AssertionError("Unexpected property reads or inactive tracer: " + json.dumps(result))
                 limit = 0 if scenario == "metadata" else result["operations"]

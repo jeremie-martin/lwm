@@ -115,8 +115,8 @@ restarting into an incompatible version retains EWMH workspace placement but
 falls back to fresh adoption for private state. Startup and unexpected runtime
 failures exit with a diagnostic rather than entering a restart loop.
 
-For scripts and panels, [IPC.md](IPC.md) defines discovery, commands, and the JSON
-state that `lwmctl watch` streams. [X11.md](X11.md) defines application-facing behavior and
+For scripts and panels, [IPC.md](IPC.md) defines the commands, the X-based transport,
+and the JSON state that `lwmctl watch` streams. [X11.md](X11.md) defines application-facing behavior and
 intentional protocol limits.
 
 ## Diagnostics and notifications

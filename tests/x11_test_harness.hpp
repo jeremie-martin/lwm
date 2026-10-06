@@ -22,9 +22,7 @@
 #include <vector>
 
 #include <poll.h>
-#include <sys/socket.h>
 #include <sys/types.h>
-#include <sys/un.h>
 #include <sys/wait.h>
 #include <unistd.h>
 #include <xcb/xcb.h>
@@ -935,84 +933,48 @@ inline std::string make_temp_dir()
     return std::string(result);
 }
 
-inline std::optional<std::string> wait_for_ipc_socket_path(X11Connection& conn)
+// Sends one command as lwmctl does, from a requester window on a private
+// connection, and returns the raw reply; nullopt without a reply in time.
+inline std::optional<std::string>
+send_ipc_command(std::string const& command, std::chrono::milliseconds timeout = std::chrono::seconds(2))
 {
-    auto atom = intern_atom(conn.get(), "_LWM_IPC_SOCKET");
-    std::optional<std::string> path;
+    X11Connection conn;
+    if (!conn.ok())
+        return std::nullopt;
+    auto owner = wm_owner(conn);
+    if (owner == XCB_NONE)
+        return std::nullopt;
+    auto request = intern_atom(conn.get(), "_LWM_COMMAND");
+    auto reply = intern_atom(conn.get(), "_LWM_REPLY");
+    auto utf8 = intern_atom(conn.get(), "UTF8_STRING");
+    xcb_window_t requester = xcb_generate_id(conn.get());
+    uint32_t events = XCB_EVENT_MASK_PROPERTY_CHANGE;
+    xcb_create_window(conn.get(), 0, requester, conn.root(), -1, -1, 1, 1, 0, XCB_WINDOW_CLASS_INPUT_ONLY, XCB_COPY_FROM_PARENT, XCB_CW_EVENT_MASK, &events);
+    xcb_change_property(conn.get(), XCB_PROP_MODE_REPLACE, requester, request, utf8, 8, command.size(), command.data());
+    xcb_client_message_event_t message{ };
+    message.response_type = XCB_CLIENT_MESSAGE;
+    message.format = 32;
+    message.window = owner;
+    message.type = request;
+    message.data.data32[0] = requester;
+    xcb_send_event(conn.get(), 0, owner, XCB_EVENT_MASK_NO_EVENT, reinterpret_cast<char const*>(&message));
+    xcb_flush(conn.get());
+    std::optional<std::string> response;
     wait_for_condition(
         [&]
         {
-            path = get_window_property_string(conn.get(), conn.root(), atom);
-            return path && !path->empty();
+            while (auto* event = xcb_poll_for_event(conn.get()))
+            {
+                auto const* property = reinterpret_cast<xcb_property_notify_event_t const*>(event);
+                if ((event->response_type & ~0x80) == XCB_PROPERTY_NOTIFY && property->atom == reply
+                    && property->state == XCB_PROPERTY_NEW_VALUE)
+                    response = get_window_property_string(conn.get(), requester, reply).value_or("");
+                free(event);
+            }
+            return response.has_value();
         },
-        std::chrono::seconds(2)
+        timeout
     );
-    return path;
-}
-
-inline std::optional<std::string> send_raw_ipc(std::string const& path, std::string const& command)
-{
-    if (path.size() >= sizeof(sockaddr_un::sun_path))
-        return std::nullopt;
-    struct Socket
-    {
-        int fd = socket(AF_UNIX, SOCK_STREAM | SOCK_CLOEXEC | SOCK_NONBLOCK, 0);
-        ~Socket()
-        {
-            if (fd >= 0)
-                close(fd);
-        }
-    } connection;
-    int fd = connection.fd;
-    if (fd < 0)
-        return std::nullopt;
-    auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(2);
-    auto ready = [&](short events)
-    {
-        auto remaining =
-            std::chrono::duration_cast<std::chrono::milliseconds>(deadline - std::chrono::steady_clock::now());
-        pollfd descriptor{ fd, events, 0 };
-        return remaining.count() > 0 && poll(&descriptor, 1, remaining.count()) > 0;
-    };
-    sockaddr_un address{};
-    address.sun_family = AF_UNIX;
-    std::memcpy(address.sun_path, path.c_str(), path.size() + 1);
-    if (connect(fd, reinterpret_cast<sockaddr*>(&address), sizeof(address)) < 0)
-        return std::nullopt;
-    std::string request = command + '\n';
-    size_t sent = 0;
-    while (sent < request.size())
-    {
-        if (!ready(POLLOUT))
-            return std::nullopt;
-        auto n = send(fd, request.data() + sent, request.size() - sent, MSG_NOSIGNAL);
-        if (n > 0)
-            sent += n;
-        else if (errno != EINTR && errno != EAGAIN)
-            return std::nullopt;
-    }
-    shutdown(fd, SHUT_WR);
-    std::string response;
-    while (ready(POLLIN))
-    {
-        char buffer[4096];
-        auto n = recv(fd, buffer, sizeof(buffer), 0);
-        if (n == 0)
-            return response;
-        if (n > 0)
-            response.append(buffer, n);
-        else if (errno != EINTR && errno != EAGAIN)
-            return std::nullopt;
-    }
-    return std::nullopt;
-}
-
-inline std::optional<std::string> send_ipc_command(std::string const& path, std::string const& command)
-{
-    auto response = send_raw_ipc(path, command);
-    if (response)
-        while (!response->empty() && (response->back() == '\n' || response->back() == '\r' || response->back() == ' '))
-            response->pop_back();
     return response;
 }
 
@@ -1023,13 +985,11 @@ inline bool wait_for_wm_ready(X11Connection& conn, std::chrono::milliseconds tim
         [&]
         {
             auto current = supporting_wm_window(conn);
-            if (!current || *current == XCB_NONE)
+            if (!current || *current == XCB_NONE || *current != wm_owner(conn))
                 return false;
             auto atom = intern_atom(conn.get(), "_NET_SUPPORTING_WM_CHECK");
-            if (get_window_property_window(conn.get(), *current, atom) != current)
-                return false;
-            auto path = get_window_property_string(conn.get(), conn.root(), intern_atom(conn.get(), "_LWM_IPC_SOCKET"));
-            return path && send_ipc_command(*path, "ping") == "ok pong";
+            return get_window_property_window(conn.get(), *current, atom) == current
+                && send_ipc_command("ping", timeout) == "ok pong";
         },
         timeout
     );
@@ -1226,7 +1186,6 @@ public:
                 dup2(diagnostics, STDERR_FILENO);
                 close(diagnostics);
             }
-            unsetenv("LWM_SOCKET");
             if (!display_.empty())
                 setenv("DISPLAY", display_.c_str(), 1);
             if (!config_home_.empty())
@@ -1378,17 +1337,9 @@ struct TestEnvironment
         X11Connection conn;
         REQUIRE(conn.ok());
         LwmProcess wm(env.display(), std::move(config));
-        auto socket_atom = intern_atom(conn.get(), "_LWM_IPC_SOCKET");
+        // The WM_S0 selection and its owner window die with a previous WM.
         bool ready = wait_for_condition(
-            [&]
-            {
-                if (!wm.running())
-                    return true;
-                auto path = get_window_property_string(conn.get(), conn.root(), socket_atom);
-                // A previous WM can leave root properties behind on a reused server.
-                return path && path->starts_with(wm.runtime_dir() + "/")
-                    && wait_for_wm_ready(conn, std::chrono::milliseconds(10));
-            },
+            [&] { return !wm.running() || wait_for_wm_ready(conn, std::chrono::milliseconds(10)); },
             std::chrono::seconds(2)
         );
         INFO(wm.diagnostics());
@@ -1405,17 +1356,9 @@ inline std::filesystem::path lwmctl_executable_path()
     return path;
 }
 
-inline std::optional<CommandResult>
-run_lwmctl(LwmProcess const& wm, std::vector<std::string> const& args, std::string socket_path = {})
+inline std::optional<CommandResult> run_lwmctl(LwmProcess const& wm, std::vector<std::string> const& args)
 {
-    std::vector<std::pair<std::string, std::string>> env = {
-        {         "DISPLAY",     wm.display() },
-        { "XDG_RUNTIME_DIR", wm.runtime_dir() },
-    };
-    if (!socket_path.empty())
-        env.emplace_back("LWM_SOCKET", std::move(socket_path));
-
-    return run_command(lwmctl_executable_path(), args, env, { "LWM_SOCKET" });
+    return run_command(lwmctl_executable_path(), args, { { "DISPLAY", wm.display() } });
 }
 
 } // namespace lwm::test

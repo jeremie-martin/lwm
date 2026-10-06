@@ -15,9 +15,7 @@ add_library(liblwm STATIC
     core/geometry.cpp
     core/focus.cpp
     core/command.cpp
-    core/ipc_server.cpp
     core/restart.cpp
-    core/ipc.cpp
     core/window_rules.cpp
     config/config.cpp
     layout/layout.cpp

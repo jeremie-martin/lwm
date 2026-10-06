@@ -89,7 +89,7 @@ TEST_CASE("Unexpected event-loop exceptions terminate instead of reconstructing"
             "critical"
     },
         { { "DISPLAY", server.display() } },
-        { "XDG_CONFIG_HOME", "LWM_SOCKET" }
+        { "XDG_CONFIG_HOME" }
     );
     REQUIRE(result);
     INFO(result->stderr_text);

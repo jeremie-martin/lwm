@@ -1203,8 +1203,6 @@ TEST_CASE(
     if (!env)
         SKIP("X11 unavailable");
     auto& conn = env->conn;
-    auto socket = wait_for_ipc_socket_path(conn);
-    REQUIRE(socket);
     auto window = create_window(conn, 10, 10, 300, 200);
     set_window_type(conn, window, intern_atom(conn.get(), "_NET_WM_WINDOW_TYPE_DIALOG"));
     set_window_title(conn, window, "work-one");
@@ -1236,7 +1234,7 @@ TEST_CASE(
     REQUIRE(wait_for_condition(
         [&]
         {
-            auto reply = send_ipc_command(*socket, "window list");
+            auto reply = send_ipc_command("window list");
             if (!reply || !reply->starts_with("ok "))
                 return false;
             auto value = nlohmann::json::parse(reply->substr(3), nullptr, false);
@@ -1332,8 +1330,6 @@ TEST_CASE("Integration: titles validate format and retain bounded text fallback"
     auto window = create_window(conn, 10, 10, 200, 150);
     map_window(conn, window);
     REQUIRE(wait_for_active_window(conn, window, kTimeout));
-    auto socket = wait_for_ipc_socket_path(conn);
-    REQUIRE(socket);
     auto name = intern_atom(conn.get(), "_NET_WM_NAME");
     auto utf8 = intern_atom(conn.get(), "UTF8_STRING");
     std::string fallback = "legacy title";
@@ -1353,7 +1349,7 @@ TEST_CASE("Integration: titles validate format and retain bounded text fallback"
         REQUIRE(wait_for_condition(
             [&]
             {
-                auto reply = send_ipc_command(*socket, "window list");
+                auto reply = send_ipc_command("window list");
                 REQUIRE(reply);
                 REQUIRE(reply->starts_with("ok "));
                 auto snapshot = nlohmann::json::parse(reply->substr(3));
@@ -1435,8 +1431,6 @@ TEST_CASE("Integration: admission subscribes before identity and dependent prope
                     { "LWM_TEST_TYPE", std::to_string(property_type) },
                     { "LWM_TEST_VALUE", std::to_string(value) } });
     REQUIRE(wait_for_wm_ready(conn, kTimeout));
-    auto socket = wait_for_ipc_socket_path(conn);
-    REQUIRE(socket);
     if (!adopting)
     {
         map_window(conn, parent);
@@ -1447,7 +1441,7 @@ TEST_CASE("Integration: admission subscribes before identity and dependent prope
     observe_title_after_events(conn, child);
     REQUIRE(read_property32(conn.get(), target, property, property_type) == std::optional{ std::vector<uint32_t>{ value } });
     if (identity)
-        CHECK(ipc_json(*socket, "window list").at("windows").at(1).at("kind") == "floating");
+        CHECK(ipc_json("window list").at("windows").at(1).at("kind") == "floating");
     else
     {
         auto active = intern_atom(conn.get(), "_NET_ACTIVE_WINDOW");

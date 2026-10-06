@@ -70,8 +70,7 @@ def measure(binary):
 
         config = directory / "config.toml"
         config.write_text("[workspaces]\ncount = 2\n")
-        environment = dict(os.environ, DISPLAY=display_name, XDG_RUNTIME_DIR=temporary)
-        environment.pop("LWM_SOCKET", None)
+        environment = dict(os.environ, DISPLAY=display_name)
         wm = subprocess.Popen(
             [
                 str(Path(binary).resolve()),
@@ -87,33 +86,33 @@ def measure(binary):
             stderr=log,
         )
         cleanup.callback(stop, wm)
-        path = directory / "lwm" / ("ipc-" + display_name.replace(":", "_") + ".sock")
-        wait(lambda: ipc(path, "ping") == b"pong", wm, logfile)
+        wait(lambda: ipc(display_name, "ping") == b"pong", wm, logfile)
 
         def changed(old):
             try:
-                return wm_owner(display_name) not in (0, old) and ipc(path, "ping") == b"pong"
+                return wm_owner(display_name) not in (0, old) and ipc(display_name, "ping") == b"pong"
             except (ConnectionResetError, BrokenPipeError):
                 return False
 
         before = clients()
         for index in range(20):
             old = wm_owner(display_name)
-            ipc(path, "restart" if index % 2 else "exec /definitely/missing/lwm-binary")
+            ipc(display_name, "restart" if index % 2 else "exec /definitely/missing/lwm-binary")
             wait(lambda: changed(old), wm, logfile)
         # With no application/observer connection, the server may reset unless
-        # the handoff preserves it. IPC uses no X connection of its own.
-        ipc(path, "workspace switch 1")
-        snapshot = json.loads(ipc(path, "state"))
+        # the handoff preserves it. Each IPC command closes its connection after
+        # its reply, before the WM execs.
+        ipc(display_name, "workspace switch 1")
+        snapshot = json.loads(ipc(display_name, "state"))
         owner = wm_owner(display_name)
         X.XCloseDisplay(display)
         display = None
-        ipc(path, "restart")
+        ipc(display_name, "restart")
         # An observer connecting during the handoff could itself end the last
         # session and reset the server; probe only once the successor is up.
         time.sleep(1)
         wait(lambda: changed(owner), wm, logfile)
-        if json.loads(ipc(path, "state"))["workspaces"] != snapshot["workspaces"]:
+        if json.loads(ipc(display_name, "state"))["workspaces"] != snapshot["workspaces"]:
             raise AssertionError("Empty-display restart lost workspace state")
         display = X.XOpenDisplay(display_name.encode())
         if not display:
