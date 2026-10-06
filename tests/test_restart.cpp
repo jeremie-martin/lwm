@@ -774,9 +774,9 @@ TEST_CASE("Valid ownership survives changed observations and filters vanished cl
         });
     }
     target.adopt(observed, &*graph);
-    CHECK(target.require(1).kind() == Client::Kind::Tiled);
-    CHECK(target.require(3).kind() == Client::Kind::Tiled);
-    CHECK(target.require(4).kind() == Client::Kind::Floating);
+    CHECK(target.require(1).tiled());
+    CHECK(target.require(3).tiled());
+    CHECK(!target.require(4).tiled());
     CHECK_FALSE(target.require(4).preferences.floating);
     CHECK(target.scratchpad_claim(1)->name == "named");
     CHECK(target.named_scratchpad("pending")->pending_launch());
@@ -787,11 +787,11 @@ TEST_CASE("Valid ownership survives changed observations and filters vanished cl
     // still follows defaults for an ordinary client, while claims retain mode.
     target.window_type(4, WindowType::Utility);
     target.window_type(4, WindowType::Normal);
-    CHECK(target.require(4).kind() == Client::Kind::Tiled);
+    CHECK(target.require(4).tiled());
     target.window_type(1, WindowType::Dialog);
     target.window_type(3, WindowType::Dialog);
-    CHECK(target.require(1).kind() == Client::Kind::Tiled);
-    CHECK(target.require(3).kind() == Client::Kind::Tiled);
+    CHECK(target.require(1).tiled());
+    CHECK(target.require(3).tiled());
     CHECK_FALSE(invariants::validate(target));
 }
 

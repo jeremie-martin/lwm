@@ -102,7 +102,7 @@ WindowList window_list(State const& state)
         list.windows.push_back({ c->id,
                                  c->monitor,
                                  c->workspace,
-                                 client_kind_str(c->kind()),
+                                 client_kind_str(*c),
                                  c->wm_class,
                                  c->wm_class_name,
                                  c->name,

@@ -42,7 +42,7 @@ public:
     struct WindowDrag
     {
         xcb_window_t window;
-        Client::Kind kind;
+        bool tiled;
         size_t monitor;
         size_t workspace;
         Geometry start_geometry;

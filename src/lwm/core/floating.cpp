@@ -57,25 +57,12 @@ Geometry drag_geometry(Geometry start, int32_t dx, int32_t dy, ResizeEdge edges)
     return start;
 }
 
+// Center on the parent when there is one, otherwise on the area; stay inside the area.
 Geometry place_floating(Geometry area, uint16_t width, uint16_t height, std::optional<Geometry> parent)
 {
-    int32_t target_x = 0;
-    int32_t target_y = 0;
-
-    if (parent)
-    {
-        target_x =
-            static_cast<int32_t>(parent->x) + (static_cast<int32_t>(parent->width) - static_cast<int32_t>(width)) / 2;
-        target_y =
-            static_cast<int32_t>(parent->y) + (static_cast<int32_t>(parent->height) - static_cast<int32_t>(height)) / 2;
-    }
-    else
-    {
-        target_x = static_cast<int32_t>(area.x) + (static_cast<int32_t>(area.width) - static_cast<int32_t>(width)) / 2;
-        target_y =
-            static_cast<int32_t>(area.y) + (static_cast<int32_t>(area.height) - static_cast<int32_t>(height)) / 2;
-    }
-
+    auto const& anchor = parent ? *parent : area;
+    int32_t target_x = anchor.x + (static_cast<int32_t>(anchor.width) - static_cast<int32_t>(width)) / 2;
+    int32_t target_y = anchor.y + (static_cast<int32_t>(anchor.height) - static_cast<int32_t>(height)) / 2;
     return clamp_geometry(area, Geometry{ 0, 0, width, height }, target_x, target_y);
 }
 

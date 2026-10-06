@@ -65,7 +65,7 @@ TEST_CASE("Mode changes keep tile slots and one normal floating rectangle", "[st
     auto expected = state.normal_geometry(state.require(2));
     state.floating(2, true);
     auto const& client = state.require(2);
-    REQUIRE(client.kind() == Client::Kind::Floating);
+    REQUIRE(!client.tiled());
     CHECK(floating_mode(client)->geometry == expected);
     state.geometry(2, { 50, 60, 300, 200 });
     state.floating(2, false);
@@ -136,20 +136,20 @@ TEST_CASE("Type and transient updates change only default modes", "[state][mode]
     auto state = test::state();
     add(state, 1);
     state.transient(1, 99);
-    CHECK(state.require(1).kind() == Client::Kind::Floating);
+    CHECK(!state.require(1).tiled());
     state.transient(1, XCB_NONE);
-    CHECK(state.require(1).kind() == Client::Kind::Tiled);
+    CHECK(state.require(1).tiled());
     state.floating(1, false);
     state.window_type(1, WindowType::Dialog);
-    CHECK(state.require(1).kind() == Client::Kind::Tiled);
+    CHECK(state.require(1).tiled());
     add(state, 2);
     state.pool_scratchpad(2);
     state.window_type(2, WindowType::Dialog);
-    CHECK(state.require(2).kind() == Client::Kind::Tiled);
+    CHECK(state.require(2).tiled());
     // Runtime conversion into a dock type has no normal default.
     add(state, 3);
     state.window_type(3, WindowType::Dock);
-    CHECK(state.require(3).kind() == Client::Kind::Tiled);
+    CHECK(state.require(3).tiled());
 }
 
 TEST_CASE("Visibility is derived from workspace, iconic, sticky and show-desktop state", "[state][visibility]")
@@ -648,7 +648,7 @@ TEST_CASE("Admission derives roles and placement from observations alone", "[sta
     WindowObservation tiled_child{ .id = 4, .transient_for = 3 };
     WindowObservation floating_child{ .id = 5, .transient_for = 3, .geometry = Geometry{ 0, 0, 200, 100 } };
     state.admit(tiled_child);
-    CHECK(state.require(4).kind() == Client::Kind::Tiled);
+    CHECK(state.require(4).tiled());
     CHECK(state.require(4).workspace == 2);
     test::configure(state, [](Config& config) { config.rules.clear(); });
     state.admit(floating_child);

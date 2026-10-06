@@ -9,8 +9,7 @@ struct WindowClassification
 {
     WindowRole role = WindowRole::Client;
     bool floating = false; ///< Default mode of a client
-    bool skip_taskbar = false;
-    bool skip_pager = false;
+    bool skip = false;     ///< Default for both taskbar and pager; transients always skip
     bool above = false; // For UTILITY windows
 };
 

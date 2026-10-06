@@ -48,7 +48,7 @@ std::vector<xcb_window_t> compute_order(State const& state, State::FullscreenVis
             : layer == LayerHint::Above ? Tier::Above
             : layer == LayerHint::Below ? Tier::Below
                                         : Tier::Normal;
-        bool floating = client.kind() == Client::Kind::Floating;
+        bool floating = !client.tiled();
         bool visible = in_view && !suppressed;
         has_transients |= visible && floating && client.transient_for != XCB_NONE;
         ranked.push_back({ id, visible, tier, floating, client.order, client.transient_for });

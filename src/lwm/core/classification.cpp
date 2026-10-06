@@ -8,30 +8,28 @@ WindowClassification classify_window_type(WindowType type, bool is_transient)
     switch (type)
     {
         case WindowType::Desktop:
-            return { Desktop, false, true, true };
+            return { Desktop, false, true };
         case WindowType::Dock:
-            return { Dock, false, true, true };
+            return { Dock, false, true };
         case WindowType::Toolbar:
         case WindowType::Menu:
         case WindowType::Splash:
-            return { Client, true, true, true };
+            return { Client, true, true };
         case WindowType::Utility:
-            return { Client, true, true, true, true };
+            return { Client, true, true, true };
         case WindowType::Dialog:
-            return { Client, true };
+            return { Client, true, is_transient };
         case WindowType::DropdownMenu:
         case WindowType::PopupMenu:
         case WindowType::Tooltip:
         case WindowType::Notification:
         case WindowType::Combo:
         case WindowType::Dnd:
-            return { Popup, false, true, true };
+            return { Popup, false, true };
         case WindowType::Normal:
             break;
     }
-    if (is_transient)
-        return { Client, true, true, true };
-    return { };
+    return { Client, is_transient, is_transient };
 }
 
 namespace {
@@ -52,12 +50,12 @@ LayerHint effective_layer(Client const& client)
 
 bool skips_taskbar(Client const& client)
 {
-    return client.preferences.skip_taskbar.value_or(defaults(client).skip_taskbar || client.transient_for != XCB_NONE);
+    return client.preferences.skip_taskbar.value_or(defaults(client).skip);
 }
 
 bool skips_pager(Client const& client)
 {
-    return client.preferences.skip_pager.value_or(defaults(client).skip_pager || client.transient_for != XCB_NONE);
+    return client.preferences.skip_pager.value_or(defaults(client).skip);
 }
 
 WindowStates published_states(Client const& client, bool focused)

@@ -131,7 +131,7 @@ void State::insert_registered(Client client)
     forget_missing_tile_slot(client);
     auto [it, inserted] = clients_.emplace(client.id, std::move(client));
     assert(inserted);
-    if (it->second.kind() == Client::Kind::Tiled)
+    if (it->second.tiled())
         attach(it->second);
     if (it->second.fullscreen)
         request_fullscreen(it->first);
@@ -166,7 +166,7 @@ void State::erase(xcb_window_t id)
     if (!client)
         return;
     mutated();
-    if (client->kind() == Client::Kind::Tiled)
+    if (client->tiled())
         detach(*client);
     release_scratchpad(id);
     clients_.erase(id);
@@ -374,7 +374,7 @@ std::optional<uint32_t> State::complete_focus(uint32_t input_time)
         if (request->record_user_time && time
             && (!client.user_time || !timestamp_is_before(time, client.user_time)))
             client.user_time = time;
-        if (client.kind() == Client::Kind::Tiled)
+        if (client.tiled())
             edit_workspace(client.monitor, client.workspace).preferred_tile = XCB_NONE;
         clear_urgency(client.id);
     }
@@ -432,7 +432,7 @@ bool State::relocate(
     if (monitor >= monitors_.size() || workspace >= monitors_[monitor].workspaces.size())
         return false;
     auto& client = clients_.at(id);
-    bool tiled = client.kind() == Client::Kind::Tiled;
+    bool tiled = client.tiled();
     size_t source = client.monitor;
     if (source == monitor && client.workspace == workspace)
     {
@@ -498,7 +498,7 @@ void State::forget_missing_tile_slot(Client& client) const
 void State::set_mode(xcb_window_t id, bool floating)
 {
     auto& client = clients_.at(id);
-    if (floating == (client.kind() == Client::Kind::Floating))
+    if (floating != client.tiled())
         return;
     mutated();
     LWM_LOG_DEBUG("Client kind changed: window={:#x} floating={}", id, floating);
@@ -540,7 +540,7 @@ void State::toggle_floating(xcb_window_t id)
     auto const& client = require(id);
     if (client.fullscreen || client.iconic || showing_desktop_)
         return;
-    bool floating = client.kind() == Client::Kind::Floating;
+    bool floating = !client.tiled();
     if (floating)
         maximize(id, false, false);
     this->floating(id, !floating);

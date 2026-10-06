@@ -67,7 +67,7 @@ std::optional<Client> State::classify(WindowObservation const& window, restart::
         window.id,
         window.transient_for,
         natural ? (*natural ? "floating" : "tiled") : "retained",
-        client_kind_str(client.kind()),
+        client_kind_str(client),
         rule != nullptr
     );
     client.monitor = focused_monitor_;
@@ -413,15 +413,10 @@ void State::transient(xcb_window_t id, xcb_window_t parent)
         apply_default_mode(id);
         if (auto const* target = find(parent); target && relocate(id, target->monitor, target->workspace))
             if (auto const* floating = floating_mode(require(id)))
-                geometry(
-                    id,
-                    floating::place_floating(
-                        monitors_[target->monitor].working_area(),
-                        floating->geometry.width,
-                        floating->geometry.height,
-                        frame(*target)
-                    )
-                );
+            {
+                CenteredSize size{ floating->geometry.width, floating->geometry.height, parent };
+                geometry(id, resolve_geometry(id, size, std::nullopt));
+            }
     }
     reconcile_metadata(id);
 }

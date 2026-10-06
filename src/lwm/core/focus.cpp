@@ -66,7 +66,7 @@ xcb_window_t fallback(State const& state, size_t monitor)
     }
     Client const* best = nullptr;
     for (auto const& [id, client] : state.clients())
-        if (client.kind() == Client::Kind::Floating && eligible(client) && (!best || newer(client, *best)))
+        if (!client.tiled() && eligible(client) && (!best || newer(client, *best)))
             best = &client;
     return best ? best->id : XCB_NONE;
 }

@@ -339,13 +339,7 @@ struct NamedScratchpad
 /// docks and desktop windows are Fixtures and never Clients.
 struct Client : ClientIntent
 {
-    enum class Kind
-    {
-        Tiled,
-        Floating
-    };
-
-    Kind kind() const { return std::holds_alternative<TiledMode>(mode) ? Kind::Tiled : Kind::Floating; }
+    bool tiled() const { return std::holds_alternative<TiledMode>(mode); }
 
     std::string name;
     std::string wm_class;
@@ -371,11 +365,8 @@ struct Client : ClientIntent
     std::optional<RuleActions> rule;
 };
 
-/// Stable lowercase name for a client kind shared by IPC JSON and `_LWM_WINDOW_CLASS`.
-inline char const* client_kind_str(Client::Kind kind)
-{
-    return kind == Client::Kind::Tiled ? "tiled" : "floating";
-}
+/// Stable lowercase name for a client's mode shared by IPC JSON and `_LWM_WINDOW_CLASS`.
+inline char const* client_kind_str(Client const& client) { return client.tiled() ? "tiled" : "floating"; }
 
 inline TiledMode* tiled_mode(Client& client) { return std::get_if<TiledMode>(&client.mode); }
 inline TiledMode const* tiled_mode(Client const& client) { return std::get_if<TiledMode>(&client.mode); }
@@ -385,7 +376,7 @@ inline FloatingMode const* floating_mode(Client const& client) { return std::get
 // Tiled clients retain maximize flags as a preference; only floating presentation honors them.
 inline bool presents_maximized(Client const& client)
 {
-    return client.kind() == Client::Kind::Floating && (client.maximized_horz || client.maximized_vert);
+    return !client.tiled() && (client.maximized_horz || client.maximized_vert);
 }
 
 /// Docks and desktop windows: registered, listed and stacked, but outside

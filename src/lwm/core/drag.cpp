@@ -35,7 +35,7 @@ State::Press State::press(xcb_window_t window, int16_t x, int16_t y, uint8_t but
         };
         // Tiled and root clicks prefer a split; otherwise resize a floating
         // window or convert a tile once the pointer is held.
-        if (binding->action == MouseAction::ResizeFloating && (!client || client->kind() == Client::Kind::Tiled))
+        if (binding->action == MouseAction::ResizeFloating && (!client || client->tiled()))
             if (auto hit = split_at(x, y))
                 return { true, *hit };
         if (client)
@@ -78,7 +78,7 @@ State::Press State::press(xcb_window_t window, int16_t x, int16_t y, uint8_t but
 std::optional<State::Interaction> State::moveresize(xcb_window_t id, floating::ResizeEdge edges) const
 {
     auto const* client = find(id);
-    if (!client || client->kind() != Client::Kind::Floating || !can_drag(id))
+    if (!client || client->tiled() || !can_drag(id))
         return std::nullopt;
     return Grip{ id, edges };
 }
@@ -99,7 +99,7 @@ void State::begin_drag(Interaction const& interaction, int16_t x, int16_t y, uin
         focus(id);
         auto const& client = require(id);
         // A tiled resize away from a split becomes a floating resize.
-        if (client.kind() == Client::Kind::Tiled && edges != floating::ResizeEdge::None)
+        if (client.tiled() && edges != floating::ResizeEdge::None)
             floating(id, true);
         if (presents_maximized(client))
         {
@@ -107,7 +107,7 @@ void State::begin_drag(Interaction const& interaction, int16_t x, int16_t y, uin
             geometry(id, frame(client));
             maximize(id, false, false);
         }
-        WindowDrag drag{ id, client.kind(), client.monitor, client.workspace, normal_geometry(client), edges };
+        WindowDrag drag{ id, client.tiled(), client.monitor, client.workspace, normal_geometry(client), edges };
         drag_ = Drag{ drag, x, y, x, y, button };
         return;
     }
@@ -143,14 +143,14 @@ void State::drag_to(int16_t x, int16_t y)
     drag_->last_y = y;
     if (auto* window = std::get_if<WindowDrag>(&drag_->operation))
     {
-        if (window->kind == Client::Kind::Tiled)
+        if (window->tiled)
         {
             // The tile preview is presentation only; membership changes on release.
             mutated();
             return;
         }
         auto const* client = find(window->window);
-        if (!client || client->kind() != window->kind)
+        if (!client || client->tiled() != window->tiled)
         {
             end_drag(false);
             return;
@@ -175,7 +175,7 @@ bool State::drag_valid() const
     if (auto const* window = std::get_if<WindowDrag>(&drag_->operation))
     {
         auto const* client = find(window->window);
-        return client && client->kind() == window->kind && visible(*client) && !client->fullscreen
+        return client && client->tiled() == window->tiled && visible(*client) && !client->fullscreen
             && !presents_maximized(*client) && client->monitor == window->monitor && client->workspace == window->workspace
             && !showing_desktop_;
     }
@@ -206,7 +206,7 @@ std::optional<double> State::end_drag(bool commit)
     }
     auto const& move = std::get<WindowDrag>(drag.operation);
     auto const* client = find(move.window);
-    if (!commit || move.kind != Client::Kind::Tiled || !client || client->kind() != Client::Kind::Tiled)
+    if (!commit || !move.tiled || !client || !client->tiled())
         return std::nullopt;
     // Layout slots are not membership indices: hidden members have no slot and
     // sticky guests belong to another workspace. A drop on the guest suffix
@@ -237,7 +237,7 @@ std::optional<double> State::end_drag(bool commit)
 // A tiled move previews its rectangle without changing membership.
 std::optional<Geometry> State::drag_preview(Client const& client) const
 {
-    if (drag_ && client.kind() == Client::Kind::Tiled && !client.fullscreen)
+    if (drag_ && client.tiled() && !client.fullscreen)
         if (auto const* move = std::get_if<WindowDrag>(&drag_->operation); move && move->window == client.id)
             return floating::drag_geometry(move->start_geometry, drag_->dx(), drag_->dy(), move->edges);
     return std::nullopt;

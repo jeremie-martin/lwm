@@ -186,7 +186,7 @@ void WindowManager::handle_window_removal(xcb_window_t window)
 std::optional<std::pair<std::string_view, Placement>> WindowManager::describe(xcb_window_t window) const
 {
     if (auto const* client = state_.find(window))
-        return std::pair{ std::string_view(client_kind_str(client->kind())), Placement{ client->monitor, client->workspace } };
+        return std::pair{ std::string_view(client_kind_str(*client)), Placement{ client->monitor, client->workspace } };
     if (auto const* fixture = state_.find_fixture(window))
         return std::pair{ std::string_view(fixture_role_str(fixture->role)), Placement{ } };
     return std::nullopt;

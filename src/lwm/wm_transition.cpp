@@ -225,9 +225,9 @@ bool WindowManager::publish_properties(Client const& client, Output& output, Sta
                                    e->_NET_WM_ACTION_BELOW,         e->_NET_WM_ACTION_MAXIMIZE_VERT,
                                    e->_NET_WM_ACTION_MAXIMIZE_HORZ, e->_NET_WM_ACTION_MOVE,
                                    e->_NET_WM_ACTION_RESIZE };
-    auto allowed = std::span(actions).first(client.kind() == Client::Kind::Floating ? 11 : 9);
+    auto allowed = std::span(actions).first(!client.tiled() ? 11 : 9);
     publish(id, e->_NET_WM_ALLOWED_ACTIONS, XCB_ATOM_ATOM, allowed);
-    publish(id, atoms_.lwm_window_class, e->UTF8_STRING, 8, client_kind_str(client.kind()));
+    publish(id, atoms_.lwm_window_class, e->UTF8_STRING, 8, client_kind_str(client));
     if (auto const& m = client.fullscreen_monitors)
     {
         uint32_t const indices[] = { m->top, m->bottom, m->left, m->right };
