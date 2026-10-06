@@ -13,6 +13,11 @@ it gives a decision one home. Report the net production-line change for simplifi
 work; deleting tests, comments or documentation does not count toward it. Prefer
 deletion, consolidation, derivation and established libraries over new layers.
 
+Line-level review reaches diminishing returns quickly; the largest simplifications
+come from asking whether a whole subsystem needs to exist in its current form, from
+the user's side of its contract. DECISIONS.md records how the IPC redesign was found
+that way and lists open candidates; use the same process for them.
+
 Window-management behavior has been refined through many iterations. Preserve geometry,
 focus, placement and fullscreen semantics unless a behavior change is requested.
 Configuration and parsing conventions can be challenged when they cause
