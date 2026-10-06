@@ -517,3 +517,52 @@ TEST_CASE("Integration: resolved launch bindings preserve argv and replace refer
         REQUIRE(wait_for_condition([&] { return read_text_file(shell_path) == "second"; }, kTimeout));
     }
 }
+
+TEST_CASE("Integration: key bindings follow keyboard mapping changes", "[integration][config][keyboard]")
+{
+    auto env = TestEnvironment::create(R"(
+[workspaces]
+count = 2
+[[binds]]
+key = "F35"
+action = "workspace switch 1"
+)");
+    REQUIRE(env);
+    auto& conn = env->conn;
+    if (!extension_available(conn, &xcb_test_id))
+        SKIP("XTEST extension not available");
+    REQUIRE_FALSE(first_keycode_for_keysym(conn, XK_F35));
+    // Map the bound keysym onto a spare keycode, as a layout switch would.
+    auto const* setup = xcb_get_setup(conn.get());
+    auto count = static_cast<uint8_t>(setup->max_keycode - setup->min_keycode + 1);
+    auto* mapping = xcb_get_keyboard_mapping_reply(conn.get(), xcb_get_keyboard_mapping(conn.get(), setup->min_keycode, count), nullptr);
+    REQUIRE(mapping);
+    auto per = mapping->keysyms_per_keycode;
+    auto const* syms = xcb_get_keyboard_mapping_keysyms(mapping);
+    std::optional<xcb_keycode_t> spare;
+    for (int i = count - 1; i >= 0 && !spare; --i)
+        if (std::all_of(syms + i * per, syms + (i + 1) * per, [](xcb_keysym_t sym) { return sym == XCB_NO_SYMBOL; }))
+            spare = static_cast<xcb_keycode_t>(setup->min_keycode + i);
+    free(mapping);
+    REQUIRE(spare);
+    std::vector<xcb_keysym_t> bound(per, XCB_NO_SYMBOL);
+    bound[0] = XK_F35;
+    xcb_change_keyboard_mapping(conn.get(), 1, *spare, per, bound.data());
+    xcb_flush(conn.get());
+    // The reply follows the WM's handling of the earlier MappingNotify and its grabs.
+    REQUIRE(send_ipc_command("ping") == "ok pong");
+    REQUIRE(send_key(conn, XK_F35));
+    REQUIRE(wait_for_property_cardinal(conn.get(), conn.root(), intern_atom(conn.get(), "_NET_CURRENT_DESKTOP"), 1, kTimeout));
+}
+
+TEST_CASE("Integration: an invalid file at startup falls back to the default configuration", "[integration][config]")
+{
+    auto env = TestEnvironment::create("[not valid\n");
+    REQUIRE(env);
+    CHECK(env->wm.running());
+    // Logging is asynchronous; the record arrives shortly after startup.
+    CHECK(wait_for_condition(
+        [&] { return env->wm.diagnostics().find("using the default configuration") != std::string::npos; }, kTimeout
+    ));
+    CHECK(send_ipc_command("ping") == "ok pong");
+}

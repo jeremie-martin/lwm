@@ -182,7 +182,7 @@ TEST_CASE("Integration: a state too large for one X request is withheld rather t
         set_window_wm_class(conn, windows.back(), text, text);
         map_window(conn, windows.back());
     }
-    REQUIRE(wait_for_active_window(conn, windows.back(), std::chrono::seconds(10)));
+    REQUIRE(wait_for_active_window(conn, windows.back(), std::chrono::seconds(40))); // Slow under sanitizers
     CHECK(send_ipc_command("state", std::chrono::seconds(10)) == "error response too large");
     CHECK(send_ipc_command("ping") == "ok pong");
     CHECK(env->wm.running());

@@ -67,10 +67,14 @@ or an X11 display-manager session:
 LWM refuses to start alongside another window manager. To try it inside an
 existing desktop, use the [nested preview](TESTING.md#nested-preview).
 
-An explicit configuration path must exist and parse successfully. Without
-`--config`, LWM reads `$XDG_CONFIG_HOME/lwm/config.toml` only when `XDG_CONFIG_HOME`
-is set; an absent implicit file means built-in defaults. `lwm --help` lists
-startup options; value options accept `--option VALUE` or `--option=VALUE`.
+Without `--config`, LWM reads `${XDG_CONFIG_HOME:-$HOME/.config}/lwm/config.toml`;
+an absent implicit file means built-in defaults. A missing explicit file or an
+invalid one is logged at critical level and LWM starts with the defaults, so a
+mistake cannot end a session that LWM leads; a failed reload keeps the active
+configuration. `lwm --check-config [--config PATH]` validates a file without a
+display and exits nonzero with the error. Key grabs follow keyboard mapping changes,
+such as `setxkbmap`. `lwm --help` lists startup options; value options accept
+`--option VALUE` or `--option=VALUE`.
 
 Installation defaults to `/usr/local/bin` and includes `lwm`, `lwmctl`,
 `lwm-notify`, and `lwm-notify-bridge`. Set `CMAKE_INSTALL_PREFIX` and

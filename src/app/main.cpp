@@ -18,8 +18,10 @@
 
 std::string default_config_path()
 {
-    if (char const* xdg = std::getenv("XDG_CONFIG_HOME"))
+    if (char const* xdg = std::getenv("XDG_CONFIG_HOME"); xdg && *xdg)
         return std::string(xdg) + "/lwm/config.toml";
+    if (char const* home = std::getenv("HOME"); home && *home)
+        return std::string(home) + "/.config/lwm/config.toml";
     return "";
 }
 
@@ -37,6 +39,13 @@ int main(int argc, char* argv[])
     {
         std::cout << LWM_VERSION << '\n';
         return 0;
+    }
+    if (parsed->check_config)
+    {
+        auto config = lwm::load_config(parsed->config_path.value_or(default_config_path()), true);
+        if (!config)
+            std::cerr << "lwm: " << config.error() << '\n';
+        return config ? 0 : 1;
     }
 
     // Signals precede logging and outlive it; both survive failed-exec recovery.
@@ -75,9 +84,14 @@ int main(int argc, char* argv[])
         {
             phase = "Configuration loading";
             LWM_LOG_INFO("Loading config: {}", config_path.empty() ? "defaults" : config_path);
+            // LWM is usually the session process: a mistake in the file must not end
+            // the session, so startup and exec restart fall back to the defaults.
             auto config = lwm::load_config(config_path, explicit_config);
             if (!config)
-                throw std::runtime_error(config.error());
+            {
+                LWM_LOG_CRITICAL("{}; using the default configuration", config.error());
+                config = lwm::default_config();
+            }
 
             std::string restart_binary;
             {

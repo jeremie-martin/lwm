@@ -29,6 +29,11 @@ std::expected<Options, std::string> parse(int argc, char* const argv[])
             options.version = true;
             return options;
         }
+        if (arg == "--check-config")
+        {
+            options.check_config = true;
+            continue;
+        }
 
         auto separator = arg.find('=');
         auto name = arg.substr(0, separator);
@@ -84,6 +89,7 @@ std::string usage(std::string_view program)
           "startup options:\n"
           "  -h, --help                 show this help\n"
           "  -v, --version              show the installed version\n"
+          "      --check-config         validate the configuration file and exit\n"
           "      --config PATH          select a configuration file\n"
           "      --log-level LEVEL      trace, debug, info, warn, error, critical, off\n"
           "      --log-target TARGET    journal (default) or stderr\n"

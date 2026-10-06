@@ -135,6 +135,15 @@ void WindowManager::handle_event(xcb_generic_event_t const& event)
         case XCB_PROPERTY_NOTIFY:
             handle_property_notify(reinterpret_cast<xcb_property_notify_event_t const&>(event));
             break;
+        // A changed keyboard mapping moves keysyms to other keycodes; refreshing
+        // reports whether it was one.
+        case XCB_MAPPING_NOTIFY:
+        {
+            auto mapping = reinterpret_cast<xcb_mapping_notify_event_t const&>(event);
+            if (xcb_refresh_keyboard_mapping(conn_.keysyms(), &mapping))
+                grab_keys();
+            break;
+        }
         case XCB_SELECTION_CLEAR:
             if (reinterpret_cast<xcb_selection_clear_event_t const&>(event).selection == atoms_.wm_s0)
             {

@@ -17,6 +17,7 @@ struct Options
     std::vector<std::string> restart_argv;
     bool help = false;
     bool version = false;
+    bool check_config = false;
 };
 
 /// Parse LWM startup arguments without consulting the filesystem or X11.

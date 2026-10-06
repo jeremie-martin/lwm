@@ -268,18 +268,39 @@ TEST_CASE("Real startup rejects an empty explicit config path", "[logging][cli]"
     REQUIRE(result.stderr_text.find("using defaults") == std::string::npos);
 }
 
-TEST_CASE("Explicit malformed config is fatal at a high log threshold", "[logging][cli]")
+TEST_CASE("Explicit malformed config falls back to defaults at a high log threshold", "[logging][cli]")
 {
     fs::path directory = make_temp_directory();
     fs::path config_path = directory / "invalid.toml";
     std::ofstream(config_path) << "[not valid\n";
 
+    // Without a display, startup still fails afterwards, on the X connection.
     auto result = run_lwm({ "--config", config_path.string(), "--log-target", "stderr", "--log-level", "error" }, true);
     REQUIRE(result.exit_code == 1);
     REQUIRE(result.stderr_text.find("CRITICAL") != std::string::npos);
     REQUIRE(result.stderr_text.find("Config error") != std::string::npos);
     REQUIRE(result.stderr_text.find(config_path.string()) != std::string::npos);
-    REQUIRE(result.stderr_text.find("using defaults") == std::string::npos);
+    REQUIRE(result.stderr_text.find("using the default configuration") != std::string::npos);
+    fs::remove_all(directory);
+}
+
+TEST_CASE("Configuration checks report errors without a display", "[logging][cli]")
+{
+    fs::path directory = make_temp_directory();
+    fs::path valid = directory / "valid.toml";
+    fs::path invalid = directory / "invalid.toml";
+    std::ofstream(valid) << "[appearance]\nborder_width = 3\n";
+    std::ofstream(invalid) << "[appearance]\nborder_width = -1\n";
+    auto passed = run_lwm({ "--check-config", "--config", valid.string() }, true);
+    CHECK(passed.exit_code == 0);
+    CHECK(passed.stdout_text.empty());
+    CHECK(passed.stderr_text.empty());
+    auto failed = run_lwm({ "--check-config", "--config", invalid.string() }, true);
+    CHECK(failed.exit_code == 1);
+    CHECK(failed.stderr_text.find("border_width") != std::string::npos);
+    auto missing = run_lwm({ "--check-config", "--config", (directory / "absent.toml").string() }, true);
+    CHECK(missing.exit_code == 1);
+    CHECK(missing.stderr_text.find("does not exist") != std::string::npos);
     fs::remove_all(directory);
 }
 

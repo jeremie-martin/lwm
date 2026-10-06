@@ -296,7 +296,11 @@ A private reflect-cpp schema validates TOML over toml++; the loader resolves nam
 bounds, command references and compiled regexes into plain runtime values. Bindings'
 `action` strings and IPC requests share one command parser; bindings reject queries.
 Actions succeed silently; their outcome is the published state. Execution copies a
-binding's action because reload can replace the configuration that owns it. Startup options own logging policy; reload does not.
+binding's action because reload can replace the configuration that owns it. Startup
+and exec restart fall back to the defaults when the file is missing or invalid, since
+LWM usually leads the session; reload keeps the active configuration. A
+MappingNotify refreshes the key symbols and regrabs bindings. Startup options own
+logging policy; reload does not.
 
 IPC needs no transport of its own: a request is a `_LWM_COMMAND` ClientMessage naming
 the caller's window, handled like any other X event. The handler reads and deletes
