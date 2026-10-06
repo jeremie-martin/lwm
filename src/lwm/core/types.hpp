@@ -429,8 +429,7 @@ enum class LayoutStrategy
     Monocle ///< All tiled windows occupy the full content rect; stacking determines which is on top.
 };
 
-/// Stable name for a layout strategy. Single source of truth for IPC JSON,
-/// config parsing, and command replies.
+/// Stable name for a layout strategy, as configuration, commands and IPC JSON spell it.
 inline char const* layout_strategy_str(LayoutStrategy strategy)
 {
     switch (strategy)

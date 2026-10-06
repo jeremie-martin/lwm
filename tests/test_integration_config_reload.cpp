@@ -8,8 +8,6 @@
 #include <nlohmann/json.hpp>
 #include <optional>
 #include <sstream>
-#include <sys/socket.h>
-#include <sys/un.h>
 #include <unistd.h>
 
 using namespace lwm::test;

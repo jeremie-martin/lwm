@@ -13,8 +13,6 @@
 #include <nlohmann/json.hpp>
 #include <optional>
 #include <string_view>
-#include <sys/socket.h>
-#include <sys/un.h>
 #include <unistd.h>
 #include <vector>
 
@@ -791,7 +789,7 @@ TEST_CASE("Integration: workspace, fullscreen, scratchpad and restart transition
         REQUIRE(wait_for_active_window(conn, b, kTimeout));
         REQUIRE(wait_for_condition([&] { return visible(b) && !visible(a); }, kTimeout));
         send_client_message(conn, b, state, 0, fullscreen);
-        // Wait for the state request before issuing a command on another socket.
+        // Wait for the state request before issuing a command on another connection.
         REQUIRE(wait_for_condition(
             [&]
             {

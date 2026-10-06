@@ -154,10 +154,12 @@ Install Xephyr and run from an existing X session:
 ```
 
 The script builds Debug in `build`, starts display `:100` (which must be free),
-and seeds `test-config/config.toml` from the example if absent. Edit its commands
-for installed applications. Diagnostics go to the terminal; press Enter to stop.
+and seeds `~/.cache/lwm-preview/config.toml` from the example if absent. Edit its
+commands for installed applications. Diagnostics go to the terminal; press Enter to
+stop, and everything the script started exits with it.
 Start applications with `DISPLAY=:100 <program>`.
 
-When available, Polybar uses [config/polybar.ini](config/polybar.ini). Adjust its
-PulseAudio and battery settings (`BAT0`/`ACA0`). `scripts/launch-polybar.sh` is for
+When available, Polybar uses [config/polybar.ini](config/polybar.ini), whose `lwm`
+module follows `lwmctl watch` through `scripts/lwm-status.sh` (requires `jq`). Adjust
+its PulseAudio and battery settings (`BAT0`/`ACA0`). `scripts/launch-polybar.sh` is for
 your desktop session: it replaces existing bars and starts one per output.

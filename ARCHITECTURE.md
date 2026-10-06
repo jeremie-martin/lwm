@@ -145,7 +145,7 @@ the frozen model. A ConfigureNotify mismatch forgets cached geometry without for
 completion; a conflicting urgency hint forces reconciliation. Explicit focus reasserts
 X focus, focused state and stacking even when the selected window is unchanged.
 
-The event loop polls X and the signal pipe. X batches stop after 64 events or
+The event loop polls the X connection, waking for close deadlines. X batches stop after 64 events or
 2 ms; pointer motion is coalesced up to the next non-motion event. Crossing drains only
 consume events already queued and defer unrelated ones; handlers never re-enter.
 

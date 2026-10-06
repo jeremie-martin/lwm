@@ -6,8 +6,6 @@
 #include <chrono>
 #include <cstring>
 #include <optional>
-#include <sys/socket.h>
-#include <sys/un.h>
 #include <xcb/xtest.h>
 
 using namespace lwm::test;

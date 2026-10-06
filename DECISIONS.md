@@ -181,7 +181,7 @@ Removing each would save 25–40 lines, but it would remove behaviour users rely
   designated-initializer construction in tests.
 - Modeling `WindowRole` as `Fixture::Role` weakens the type.
 - Dropping `drag_to`'s client re-check lets completion skip settling.
-- Dropping `RootOutput::fullscreen_owners` loses the owner-change log line that
+- Dropping `WindowManager::fullscreen_owners_` loses the owner-change log line that
   integration tests assert.
 - Removing the defaulted `operator==` on actions removes syntax, not knowledge.
 - Giving runtime `Config` reflect-cpp types would remove the duplicated input schema
