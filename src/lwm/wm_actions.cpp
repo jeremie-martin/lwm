@@ -32,7 +32,7 @@ Result WindowManager::execute(Action const& action, std::string_view source)
     };
     return std::visit(
         Overloaded{
-            [&](Kill const&) { return on_active([&] { kill_window(active); }); },
+            [&](Kill const&) { return on_active([&] { close_window(active); }); },
             [&](ReloadConfig const&) { return reload_config(source); },
             [&](Restart const&) { return restart({ }); },
             [&](Exec const& exec) { return restart(exec.binary); },
@@ -140,7 +140,9 @@ Result WindowManager::execute(Action const& action, std::string_view source)
                 auto launch = state_.toggle_scratchpad(toggle.name);
                 if (!launch)
                     return fail(launch.error());
-                if (*launch && launch_program((*launch)->spawn, "scratchpad"))
+                if (*launch && !launch_program((*launch)->spawn, "scratchpad"))
+                    return fail("launch failed");
+                if (*launch)
                     state_.scratchpad_pending(toggle.name, true);
                 return { };
             },

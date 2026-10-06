@@ -103,7 +103,9 @@ private:
     uint64_t published_revision_ = UINT64_MAX;
 
     std::deque<xcb_generic_event_t> deferred_events_;
-    std::unordered_map<xcb_window_t, std::chrono::steady_clock::time_point> pending_kills_;
+    // Windows asked to close. A ping-capable client is killed at its deadline unless it
+    // answers; closing a window again kills it.
+    std::unordered_map<xcb_window_t, std::optional<std::chrono::steady_clock::time_point>> closing_;
     bool pointer_grabbed_ = false; ///< Held exactly while State has a drag
     std::optional<RunResult> stop_; ///< Set when the event loop should end
     xcb_window_t restart_requester_ = XCB_NONE; ///< IPC caller of a restart, awaited before exec
@@ -113,8 +115,6 @@ private:
     // Unlike last_event_time_, never fed by PropertyNotify: user_time stamping
     // must reflect user interaction, not property churn.
     uint32_t last_input_time_ = XCB_CURRENT_TIME;
-    xcb_keysym_t last_toggle_keysym_ = XCB_NO_SYMBOL;
-    xcb_timestamp_t last_toggle_release_time_ = 0;
     xcb_cursor_t cursor_default_ = XCB_NONE;
     xcb_cursor_t cursor_resize_h_ = XCB_NONE;
     xcb_cursor_t cursor_resize_v_ = XCB_NONE;
@@ -135,7 +135,7 @@ private:
     void dispatch_event(xcb_generic_event_t const& event, size_t& remaining, std::chrono::steady_clock::time_point deadline);
     std::expected<void, std::string> reload_config(std::string_view source);
     bool launch_program(std::vector<std::string> const& command, std::string_view source);
-    void kill_window(xcb_window_t window);
+    void close_window(xcb_window_t window);
     void handle_timeouts();
     void send_protocol_message(xcb_window_t window, xcb_atom_t protocol, uint32_t timestamp, uint32_t d2 = 0);
     void set_root_cursor(xcb_cursor_t cursor);
@@ -180,8 +180,6 @@ private:
     void handle_button_press(xcb_button_press_event_t const& e);
     void handle_button_release(xcb_button_release_event_t const& e);
     void handle_key_press(xcb_key_press_event_t const& e);
-    void handle_key_release(xcb_key_release_event_t const& e);
-    bool is_auto_repeat_toggle(xcb_keysym_t keysym, xcb_timestamp_t time);
     void handle_client_message(xcb_client_message_event_t const& e);
     void handle_restack_message(xcb_client_message_event_t const& e);
     void handle_wm_state_change(xcb_client_message_event_t const& e);

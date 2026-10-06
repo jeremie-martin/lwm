@@ -281,8 +281,8 @@ RunResult WindowManager::run()
     while (!stop_)
     {
         std::optional<std::chrono::steady_clock::time_point> deadline;
-        for (auto const& [window, kill_at] : pending_kills_)
-            if (!deadline || kill_at < *deadline)
+        for (auto const& [window, kill_at] : closing_)
+            if (kill_at && (!deadline || *kill_at < *deadline))
                 deadline = kill_at;
         int timeout_ms = -1;
         if (deadline)
@@ -382,10 +382,10 @@ void WindowManager::handle_timeouts()
 {
     auto now = std::chrono::steady_clock::now();
     std::erase_if(
-        pending_kills_,
+        closing_,
         [&](auto const& entry)
         {
-            if (entry.second > now)
+            if (!entry.second || *entry.second > now)
                 return false;
             LWM_LOG_WARN("Close timed out: window={:#x}; killing client connection", entry.first);
             xcb_kill_client(conn_.get(), entry.first);
@@ -454,22 +454,27 @@ bool WindowManager::launch_program(std::vector<std::string> const& command, std:
     return error == 0;
 }
 
-// A ping reply cancels the pending force-kill even if the client stays open
-// (for example, to show a save dialog). See X11.md for close behavior.
-void WindowManager::kill_window(xcb_window_t window)
+// Closing asks the client. Only an unanswered ping proves a client hung, so only a
+// ping-capable client is killed automatically; a client that may be showing a save
+// dialog is killed only when the user closes it again. See X11.md for close behavior.
+void WindowManager::close_window(xcb_window_t window)
 {
     auto protocols = read_protocols(window);
-    if (!std::ranges::contains(protocols, atoms_.wm_delete_window))
+    if (closing_.contains(window) || !std::ranges::contains(protocols, atoms_.wm_delete_window))
     {
-        LWM_LOG_DEBUG("Close: window={:#x} has no WM_DELETE_WINDOW; killing client connection", window);
+        LWM_LOG_DEBUG("Close: window={:#x}; killing client connection", window);
         xcb_kill_client(conn_.get(), window);
+        closing_.erase(window);
         return;
     }
     send_protocol_message(window, atoms_.wm_delete_window, last_event_time_);
+    auto& deadline = closing_[window];
     if (std::ranges::contains(protocols, ewmh_.get()->_NET_WM_PING))
+    {
         send_protocol_message(window, ewmh_.get()->_NET_WM_PING, last_event_time_, window);
+        deadline = std::chrono::steady_clock::now() + KILL_TIMEOUT;
+    }
     LWM_LOG_DEBUG("Close requested: window={:#x} protocol=WM_DELETE_WINDOW", window);
-    pending_kills_[window] = std::chrono::steady_clock::now() + KILL_TIMEOUT;
 }
 
 // Protocol messages

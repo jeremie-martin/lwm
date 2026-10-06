@@ -84,7 +84,7 @@ Cycling fails when no window is eligible, including while showing the desktop.
 | `focus window=<xid>` | focus a window, switching workspace if needed |
 | `focus next` / `focus prev` | cycle eligible windows in recent-use order |
 | `window list` | tiled and floating client state as JSON |
-| `window close` | close the active window |
+| `window close` | ask the active window to close; closing it again while it is still open kills its client |
 | `window fullscreen` / `window float` | toggle fullscreen or floating on the active window |
 | `window swap next` / `window swap prev` | swap the active tile with its neighbor |
 | `window to-workspace N` | move the active window to workspace `N` of its monitor |

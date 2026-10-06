@@ -1,6 +1,7 @@
 #include "x11_test_harness.hpp"
 #include "wm_observations.hpp"
 #include <catch2/generators/catch_generators.hpp>
+#include <thread>
 
 using namespace lwm::test;
 
@@ -142,6 +143,83 @@ TEST_CASE("Integration: window close reaches clients without the delete protocol
     auto reply = send_ipc_command("window close");
     REQUIRE(reply);
     CHECK(*reply == "error no active window");
+}
+
+TEST_CASE("Integration: closing asks first, and closing again kills", "[integration][ipc][actions][close]")
+{
+    auto env = TestEnvironment::create();
+    if (!env)
+        SKIP("X11 unavailable");
+    auto& conn = env->conn;
+    bool ping = GENERATE(false, true);
+    CAPTURE(ping);
+    X11Connection victim_connection;
+    REQUIRE(victim_connection.ok());
+    auto* c = victim_connection.get();
+    auto protocols = intern_atom(c, "WM_PROTOCOLS");
+    auto delete_window = intern_atom(c, "WM_DELETE_WINDOW");
+    auto ping_atom = intern_atom(c, "_NET_WM_PING");
+    auto victim = create_window(victim_connection, 10, 10, 200, 150);
+    std::vector<xcb_atom_t> supported{ delete_window };
+    if (ping)
+        supported.push_back(ping_atom);
+    xcb_change_property(c, XCB_PROP_MODE_REPLACE, victim, protocols, XCB_ATOM_ATOM, 32, supported.size(), supported.data());
+    map_window(victim_connection, victim);
+    REQUIRE(wait_for_active_window(conn, victim, kTimeout));
+    std::vector<xcb_client_message_event_t> messages;
+    auto received = [&](xcb_atom_t protocol)
+    {
+        auto find = [&] { return std::ranges::find_if(messages, [&](auto const& m) { return m.data.data32[0] == protocol; }); };
+        wait_for_condition(
+            [&]
+            {
+                while (auto* event = xcb_poll_for_event(c))
+                {
+                    auto const& m = reinterpret_cast<xcb_client_message_event_t const&>(*event);
+                    if ((event->response_type & ~0x80) == XCB_CLIENT_MESSAGE && m.type == protocols)
+                        messages.push_back(m);
+                    free(event);
+                }
+                return find() != messages.end();
+            },
+            kTimeout
+        );
+        return find() == messages.end() ? std::nullopt : std::optional{ *find() };
+    };
+    ipc_ok("window close");
+    REQUIRE(received(delete_window));
+    if (ping)
+    {
+        auto request = received(ping_atom);
+        REQUIRE(request);
+        request->window = victim_connection.root();
+        xcb_send_event(c, 0, victim_connection.root(), XCB_EVENT_MASK_SUBSTRUCTURE_NOTIFY | XCB_EVENT_MASK_SUBSTRUCTURE_REDIRECT, reinterpret_cast<char const*>(&*request));
+        xcb_flush(c);
+    }
+    // Past the deadline: a client without ping, or one that answered it, may be
+    // showing a save dialog and is not killed automatically.
+    std::this_thread::sleep_for(std::chrono::milliseconds(5500));
+    CHECK_FALSE(window_entry(victim).is_null());
+    ipc_ok("window close");
+    REQUIRE(wait_for_condition([&] { return window_entry(victim).is_null(); }, kTimeout));
+}
+
+TEST_CASE("Integration: a client that ignores a close ping is killed at the deadline", "[integration][ipc][actions][close]")
+{
+    auto env = TestEnvironment::create();
+    if (!env)
+        SKIP("X11 unavailable");
+    auto& conn = env->conn;
+    X11Connection victim_connection;
+    REQUIRE(victim_connection.ok());
+    auto* c = victim_connection.get();
+    auto victim = create_window(victim_connection, 10, 10, 200, 150);
+    xcb_atom_t supported[] = { intern_atom(c, "WM_DELETE_WINDOW"), intern_atom(c, "_NET_WM_PING") };
+    xcb_change_property(c, XCB_PROP_MODE_REPLACE, victim, intern_atom(c, "WM_PROTOCOLS"), XCB_ATOM_ATOM, 32, 2, supported);
+    map_window(victim_connection, victim);
+    REQUIRE(wait_for_active_window(conn, victim, kTimeout));
+    ipc_ok("window close");
+    REQUIRE(wait_for_condition([&] { return window_entry(victim).is_null(); }, std::chrono::seconds(8)));
 }
 
 TEST_CASE("Integration: pooled tiles stay tiled and consistent while hidden", "[integration][scratchpad]")

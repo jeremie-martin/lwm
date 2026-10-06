@@ -123,9 +123,6 @@ void WindowManager::handle_event(xcb_generic_event_t const& event)
         case XCB_KEY_PRESS:
             handle_key_press(reinterpret_cast<xcb_key_press_event_t const&>(event));
             break;
-        case XCB_KEY_RELEASE:
-            handle_key_release(reinterpret_cast<xcb_key_release_event_t const&>(event));
-            break;
         case XCB_CLIENT_MESSAGE:
             handle_client_message(reinterpret_cast<xcb_client_message_event_t const&>(event));
             break;
@@ -175,7 +172,7 @@ void WindowManager::handle_map_request(xcb_map_request_event_t const& e)
 
 void WindowManager::handle_window_removal(xcb_window_t window)
 {
-    pending_kills_.erase(window);
+    closing_.erase(window);
     state_.erase(window);
 }
 
@@ -278,19 +275,6 @@ xcb_cursor_t WindowManager::split_cursor(State::SplitHit const& split) const
     return split.hit.direction == SplitDirection::Horizontal ? cursor_resize_h_ : cursor_resize_v_;
 }
 
-// X11 auto-repeat sends KeyRelease/KeyPress pairs with identical timestamps.
-bool WindowManager::is_auto_repeat_toggle(xcb_keysym_t keysym, xcb_timestamp_t time)
-{
-    if (keysym == last_toggle_keysym_ && time == last_toggle_release_time_)
-    {
-        LWM_LOG_TRACE("Key repeat suppressed: keysym={:#x} time={}", keysym, time);
-        return true;
-    }
-    last_toggle_keysym_ = keysym;
-    last_toggle_release_time_ = 0;
-    return false;
-}
-
 void WindowManager::handle_key_press(xcb_key_press_event_t const& e)
 {
     xcb_keysym_t keysym = xcb_key_press_lookup_keysym(conn_.keysyms(), const_cast<xcb_key_press_event_t*>(&e), 0);
@@ -304,17 +288,8 @@ void WindowManager::handle_key_press(xcb_key_press_event_t const& e)
     // Executing may reload and replace the configuration that owns the binding.
     Action action = binding->second;
     LWM_LOG_TRACE("Key action: keysym={:#x} modifiers={:#x}", keysym, e.state);
-    if (std::holds_alternative<action::ToggleWorkspace>(action) && is_auto_repeat_toggle(keysym, e.time))
-        return;
     if (auto result = execute(action, "keybind"); !result)
         LWM_LOG_DEBUG("Key action failed: keysym={:#x} error={}", keysym, result.error());
-}
-
-void WindowManager::handle_key_release(xcb_key_release_event_t const& e)
-{
-    xcb_keysym_t keysym = xcb_key_press_lookup_keysym(conn_.keysyms(), const_cast<xcb_key_release_event_t*>(&e), 0);
-    if (keysym == last_toggle_keysym_)
-        last_toggle_release_time_ = e.time;
 }
 
 // Client messages
@@ -327,12 +302,13 @@ void WindowManager::handle_client_message(xcb_client_message_event_t const& e)
         handle_command(e.data.data32[0]);
     else if (e.type == ewmh->WM_PROTOCOLS && e.data.data32[0] == ewmh->_NET_WM_PING)
     {
-        xcb_window_t window = e.data.data32[2] != XCB_NONE ? e.data.data32[2] : e.window;
-        pending_kills_.erase(window);
+        // A responsive client keeps its window open; only another close kills it.
+        if (auto it = closing_.find(e.data.data32[2] != XCB_NONE ? e.data.data32[2] : e.window); it != closing_.end())
+            it->second.reset();
     }
     // Only managed windows can be closed; LWM's own windows are never targets.
     else if (e.type == ewmh->_NET_CLOSE_WINDOW && (client || state_.find_fixture(e.window)))
-        kill_window(e.window);
+        close_window(e.window);
     else if (e.type == ewmh->_NET_WM_FULLSCREEN_MONITORS && client)
         state_.fullscreen_monitors(
             e.window,

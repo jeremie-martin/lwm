@@ -438,7 +438,7 @@ match = { class = "LaunchTest" }
         SKIP("X11 unavailable");
     for (int i = 0; i < 2; ++i)
     {
-        REQUIRE(send_ipc_command("scratchpad toggle broken") == "ok");
+        REQUIRE(send_ipc_command("scratchpad toggle broken") == "error launch failed");
         auto state = send_ipc_command("scratchpad list");
         REQUIRE(state);
         CHECK(state->find("\"pending\":false") != std::string::npos);
