@@ -119,9 +119,9 @@ public:
     void insert_fixture(xcb_window_t id, Fixture::Role role, DockStrut strut = { });
     void reserve(xcb_window_t id, DockStrut strut);
     void erase(xcb_window_t id);
-    // Records a close request and returns whether the window was already asked, in
-    // which case closing it again kills its client.
-    bool ask_to_close(xcb_window_t id) { return !closing_.insert(id).second; }
+    // Records a close request and returns whether to kill the client: it cannot be
+    // asked to close, or was asked already. Otherwise the shell asks it.
+    bool close(xcb_window_t id, bool deletable) { return !closing_.insert(id).second || !deletable; }
 
     // Configuration and topology
     // Layout, scratchpad slots, matching rules and the workspace count follow

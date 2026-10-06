@@ -57,8 +57,8 @@ template <bool Window> std::expected<uint32_t, std::string> integer(std::string_
     return result;
 }
 
-// Each declaration binds its typed parser to the request constructor. CLI arity
-// follows that declaration; no intermediate value or runtime extraction is needed.
+// Each declaration binds its typed parser to the request constructor; no
+// intermediate value or runtime extraction is needed.
 template <typename T, auto Parse>
 constexpr CommandSpec takes(std::string_view name, std::string_view help, std::string_view description)
 {

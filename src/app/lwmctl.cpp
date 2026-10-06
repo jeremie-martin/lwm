@@ -60,14 +60,11 @@ public:
         auto reply = lwm::reply(xcb_get_selection_owner_reply(conn(), xcb_get_selection_owner(conn(), selection), nullptr));
         return reply ? reply->owner : XCB_NONE;
     }
-    // The screen's WM, if it is LWM: another WM's owner window carries no state.
+    // The screen's WM, if it is LWM, which names its owner window "lwm".
     xcb_window_t lwm_owner() const
     {
         auto window = owner();
-        auto state = lwm::reply(xcb_get_property_reply(
-            conn(), xcb_get_property(conn(), 0, window, this->state, XCB_GET_PROPERTY_TYPE_ANY, 0, 0), nullptr
-        ));
-        return state && state->type != XCB_NONE ? window : XCB_NONE;
+        return window != XCB_NONE && text(window, name) == "lwm" ? window : XCB_NONE;
     }
     // Selects events on a window; false if it no longer exists.
     bool select(xcb_window_t window, uint32_t events) const
@@ -82,7 +79,8 @@ public:
     }
 
     // Declared after the connection, which initializes first.
-    xcb_atom_t const selection = atom("WM_S0"), utf8 = atom("UTF8_STRING"), state = atom("_LWM_STATE");
+    xcb_atom_t const selection = atom("WM_S0"), utf8 = atom("UTF8_STRING"), state = atom("_LWM_STATE"),
+                       name = atom("_NET_WM_NAME");
 };
 
 // Sends one command from a private requester window and waits for its reply.

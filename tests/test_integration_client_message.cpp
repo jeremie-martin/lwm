@@ -161,6 +161,37 @@ TEST_CASE("Integration: client message to invalid window ID is ignored", "[integ
     destroy_window(conn, w1);
 }
 
+TEST_CASE("Integration: a _NET_WM_STATE too large for one request is not rewritten", "[integration][client_message][ewmh]")
+{
+    auto test_env = TestEnvironment::create();
+    if (!test_env)
+        SKIP("Test environment not available");
+    auto& conn = test_env->conn;
+    xcb_atom_t net_wm_state = intern_atom(conn.get(), "_NET_WM_STATE");
+    xcb_window_t window = create_window(conn, 10, 10, 200, 150);
+    map_window(conn, window);
+    REQUIRE(wait_for_active_window(conn, window, kTimeout));
+    // Foreign atoms, appended in chunks until the property exceeds one request.
+    std::vector<xcb_atom_t> foreign(1U << 20, intern_atom(conn.get(), "_TEST_FOREIGN_STATE"));
+    size_t words = 0;
+    while (words <= xcb_get_maximum_request_length(conn.get()))
+    {
+        xcb_change_property(conn.get(), XCB_PROP_MODE_APPEND, window, net_wm_state, XCB_ATOM_ATOM, 32, foreign.size(), foreign.data());
+        words += foreign.size();
+    }
+    // Activation reasserts focus, which merges LWM's atoms with the foreign ones.
+    xcb_window_t other = create_window(conn, 10, 10, 200, 150);
+    map_window(conn, other);
+    REQUIRE(wait_for_active_window(conn, other, kTimeout));
+    send_client_message(conn, window, intern_atom(conn.get(), "_NET_ACTIVE_WINDOW"), 2, XCB_CURRENT_TIME);
+    REQUIRE(wait_for_active_window(conn, window, kTimeout));
+    auto alive = run_lwmctl(test_env->wm, { "version" });
+    REQUIRE(alive);
+    CHECK(alive->exit_code == 0);
+    destroy_window(conn, other);
+    destroy_window(conn, window);
+}
+
 TEST_CASE("Integration: close requests for LWM's own windows are ignored", "[integration][client_message][edge]")
 {
     auto test_env = TestEnvironment::create();

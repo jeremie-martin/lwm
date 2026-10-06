@@ -174,6 +174,14 @@ names = ["1", "2", "3"]
     CHECK(loaded->appearance.border_width == Config{ }.appearance.border_width);
 }
 
+TEST_CASE("A configuration path that cannot be read is an error, not an exception", "[config]")
+{
+    auto directory = std::filesystem::temp_directory_path();
+    auto loaded = load_config(directory.string(), true);
+    REQUIRE_FALSE(loaded);
+    CHECK(loaded.error() == "Cannot read config file '" + directory.string() + "'");
+}
+
 TEST_CASE("The built-in defaults are the example file", "[config]")
 {
     auto defaults = default_config();

@@ -28,18 +28,24 @@ void WindowManager::prepare_restart()
     state_.end_drag(false);
     release_pointer();
     auto root = conn_.screen()->root;
+    // A snapshot the server would refuse is dropped; the successor adopts windows afresh.
     auto text = restart::encode(state_.snapshot());
-    xcb_change_property(
-        conn_.get(),
-        XCB_PROP_MODE_REPLACE,
-        root,
-        atoms_.lwm_restart,
-        ewmh_.get()->UTF8_STRING,
-        8,
-        static_cast<uint32_t>(text.size()),
-        text.data()
-    );
-    LWM_LOG_INFO("Restart state serialized: clients={} bytes={}", state_.clients().size(), text.size());
+    if (conn_.fits_property(text.size()))
+    {
+        xcb_change_property(
+            conn_.get(),
+            XCB_PROP_MODE_REPLACE,
+            root,
+            atoms_.lwm_restart,
+            ewmh_.get()->UTF8_STRING,
+            8,
+            static_cast<uint32_t>(text.size()),
+            text.data()
+        );
+        LWM_LOG_INFO("Restart state serialized: clients={} bytes={}", state_.clients().size(), text.size());
+    }
+    else
+        LWM_LOG_WARN("Restart state not saved: bytes={} exceeds the request limit", text.size());
 
     // Hidden windows return on-screen so they stay recoverable if exec fails;
     // the successor publishes their visibility again.

@@ -37,7 +37,7 @@ struct FakeWm
         auto utf8 = intern_atom(conn.get(), "UTF8_STRING");
         REQUIRE(wm_owner(conn) == window);
         if (answer != Answer::Foreign)
-            xcb_change_property(conn.get(), XCB_PROP_MODE_REPLACE, window, intern_atom(conn.get(), "_LWM_STATE"), utf8, 8, 2, "{}");
+            xcb_change_property(conn.get(), XCB_PROP_MODE_REPLACE, window, intern_atom(conn.get(), "_NET_WM_NAME"), utf8, 8, 3, "lwm");
         xcb_flush(conn.get());
         thread = std::jthread(
             [=, this](std::stop_token stop)

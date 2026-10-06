@@ -491,10 +491,20 @@ ConfigLoadResult load_config(std::string const& path, bool required)
         return std::unexpected("Cannot inspect config file '" + path + "': " + error.message());
     if (exists)
     {
+        // A path that opens but cannot be read, such as a directory, fails like an unreadable file.
         std::ifstream file(path, std::ios::binary);
+        std::string text;
+        try
+        {
+            text.assign(std::istreambuf_iterator<char>(file), { });
+        }
+        catch (std::ios_base::failure const&)
+        {
+            file.setstate(std::ios::badbit);
+        }
         if (!file)
             return std::unexpected("Cannot read config file '" + path + "'");
-        return parse_config(std::string(std::istreambuf_iterator<char>(file), { }), path);
+        return parse_config(std::move(text), path);
     }
     if (!required)
         return default_config();

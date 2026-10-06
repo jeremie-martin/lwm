@@ -13,11 +13,6 @@
 
 namespace lwm {
 
-namespace {
-
-
-} // namespace
-
 WindowManager::WindowManager(Config config, std::string config_path)
     : ewmh_(conn_)
     , config_path_(std::move(config_path))
@@ -90,6 +85,8 @@ void WindowManager::create_wm_window()
         0,
         nullptr
     );
+    // The name identifies LWM to lwmctl from the moment it owns the screen.
+    xcb_ewmh_set_wm_name(ewmh_.get(), wm_window_, 3, "lwm");
 }
 
 void WindowManager::create_cursors()
@@ -415,7 +412,7 @@ bool WindowManager::launch_program(std::vector<std::string> const& command, std:
 // its connection. See X11.md for close behavior.
 void WindowManager::close_window(xcb_window_t window)
 {
-    if (state_.ask_to_close(window) || !std::ranges::contains(read_protocols(window), atoms_.wm_delete_window))
+    if (state_.close(window, std::ranges::contains(read_protocols(window), atoms_.wm_delete_window)))
     {
         LWM_LOG_DEBUG("Close: window={:#x}; killing client connection", window);
         xcb_kill_client(conn_.get(), window);
@@ -427,12 +424,7 @@ void WindowManager::close_window(xcb_window_t window)
 
 // Protocol messages
 
-void WindowManager::send_protocol_message(
-    xcb_window_t window,
-    xcb_atom_t protocol,
-    uint32_t timestamp,
-    uint32_t d2
-)
+void WindowManager::send_protocol_message(xcb_window_t window, xcb_atom_t protocol, uint32_t timestamp)
 {
     xcb_client_message_event_t event{ };
     event.response_type = XCB_CLIENT_MESSAGE;
@@ -441,7 +433,6 @@ void WindowManager::send_protocol_message(
     event.format = 32;
     event.data.data32[0] = protocol;
     event.data.data32[1] = timestamp ? timestamp : XCB_CURRENT_TIME;
-    event.data.data32[2] = d2;
     xcb_send_event(conn_.get(), 0, window, XCB_EVENT_MASK_NO_EVENT, reinterpret_cast<char*>(&event));
 }
 

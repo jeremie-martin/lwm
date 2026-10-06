@@ -129,7 +129,7 @@ private:
     std::expected<void, std::string> reload_config(std::string_view source);
     bool launch_program(std::vector<std::string> const& command, std::string_view source);
     void close_window(xcb_window_t window);
-    void send_protocol_message(xcb_window_t window, xcb_atom_t protocol, uint32_t timestamp, uint32_t d2 = 0);
+    void send_protocol_message(xcb_window_t window, xcb_atom_t protocol, uint32_t timestamp);
     void set_root_cursor(xcb_cursor_t cursor);
 
     // wm_observe.cpp: X reads. Requests are pipelined; decoders are shared by
@@ -166,7 +166,6 @@ private:
     // wm_events.cpp: X event handlers
     void handle_event(xcb_generic_event_t const& event);
     void handle_map_request(xcb_map_request_event_t const& e);
-    void handle_window_removal(xcb_window_t window);
     void handle_enter_notify(xcb_enter_notify_event_t const& e);
     void handle_motion_notify(xcb_motion_notify_event_t const& e);
     void handle_button_press(xcb_button_press_event_t const& e);

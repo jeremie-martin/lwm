@@ -1,5 +1,6 @@
 #include "xproperty.hpp"
 #include "ewmh.hpp"
+#include "log.hpp"
 #include <algorithm>
 #include <cstring>
 
@@ -52,7 +53,6 @@ void Ewmh::advertise(xcb_window_t check, std::vector<xcb_atom_t> const& extra_su
 {
     xcb_ewmh_set_supporting_wm_check(&ewmh_, conn_.screen()->root, check);
     xcb_ewmh_set_supporting_wm_check(&ewmh_, check, check);
-    xcb_ewmh_set_wm_name(&ewmh_, check, 3, "lwm");
     std::vector<xcb_atom_t> supported = {
         ewmh_._NET_SUPPORTED,
         ewmh_._NET_SUPPORTING_WM_CHECK,
@@ -135,10 +135,13 @@ void Ewmh::update_window_states(std::span<std::pair<xcb_window_t, WindowStates> 
                 atoms.push_back(state_atoms_[i]);
         if (atoms == previous)
             continue;
+        // Other parties' atoms are kept, but never into a request the server would refuse.
         if (atoms.empty())
             xcb_delete_property(conn_.get(), window, ewmh_._NET_WM_STATE);
-        else
+        else if (conn_.fits_property(atoms.size() * sizeof(xcb_atom_t)))
             xcb_ewmh_set_wm_state(&ewmh_, window, atoms.size(), atoms.data());
+        else
+            LWM_LOG_WARN("Not publishing _NET_WM_STATE: window={:#x} atoms={} exceeds the request limit", window, atoms.size());
     }
 }
 
