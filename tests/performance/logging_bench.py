@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Measure actual WM latency/CPU and blocked-stderr behavior on a private Xvfb.
 
-Optionally compare a pre-Quill LWM binary. This measures the complete implementation,
+Optionally compare another LWM build. This measures the complete implementation,
 including changed call sites and delivery policy, not isolated library performance.
 """
 import argparse
@@ -97,11 +97,9 @@ def measure(binary, level, blocked=False, affinity=None, switches=400, target_na
             except BlockingIOError:
                 pass
             os.set_blocking(writer, True)
-            # An INFO reload outcome guarantees a write after the pipe is full.
-            try:
-                request(display, "reload-config", .3)
-            except TimeoutError:
-                pass  # A historical synchronous logger can stall here too.
+            # An INFO reload outcome guarantees a write after the pipe is full; the
+            # asynchronous logger must not delay its reply.
+            request(display, "reload-config", .3)
             time.sleep(.2)
             samples = []
             for command in ["workspace switch 1", "ping", "restart"]:

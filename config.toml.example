@@ -168,7 +168,6 @@ action = "reload-config"
 # Workspace indices, ratio bounds, and scratchpad names are checked at load time.
 # An action table uses the structured command syntax above. Its shell/argv/ref
 # forms are resolved while loading; runtime launch always receives an argv vector.
-# Old per-action fields such as toggle_fullscreen = true are rejected.
 
 # Generated workspace binding groups. If [[binds]] is absent, the first group
 # for a mode/modifier pair replaces that built-in group. If [[binds]] is
