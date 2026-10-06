@@ -717,6 +717,13 @@ TEST_CASE("Button presses choose bindings before click focus and split gestures"
     CHECK(command.consumed);
     CHECK(command.action == Action{ action::ToggleFloat{ } });
     CHECK(state.active_window() == 2);
+    // A client that refuses focus runs nothing; the command cannot reach window 2.
+    state.focus_hints(1, false, false);
+    auto refused = state.press(1, 100, 100, 2, super, 5600);
+    CHECK(refused.consumed);
+    CHECK_FALSE(refused.action);
+    CHECK(state.active_window() == 2);
+    state.focus_hints(1, true, false);
     state.focus(1);
     // Hidden clients swallow clicks without focusing.
     state.iconic(2, true);
@@ -798,6 +805,41 @@ TEST_CASE("Adopted newcomers anchor to saved intent without replaying the parent
         CHECK(center(state.frame(state.require(2))) == center(state.frame(state.require(1))));
         CHECK_FALSE(invariants::validate(state));
     }
+}
+
+TEST_CASE("Rule sizes use the same frame sizing as application requests", "[state][rules][geometry]")
+{
+    auto state = test::state();
+    test::configure(state, [](Config& config) {
+        config.rules = { { .match = { .title_regex = std::regex("small") }, .actions = { .geometry = RuleGeometry{ .width = 9 } } } };
+    });
+    add(state, 1, { .floating = true, .geometry = { 10, 20, 3, 3 } });
+    state.title(1, "small");
+    // A 1x1 window inside a clipped border becomes 9x1 inside the configured 2px border.
+    auto frame = floating_mode(state.require(1))->geometry;
+    CHECK(frame.width == 13);
+    CHECK(frame.height == 5);
+}
+
+TEST_CASE("Reload with fewer workspaces folds clients, claims and focus into the last one", "[state][reload][fullscreen]")
+{
+    auto state = test::state(1, 3);
+    add(state, 1);
+    add(state, 2, { .workspace = 1 });
+    add(state, 3, { .workspace = 2 });
+    add(state, 4, { .workspace = 2 });
+    state.fullscreen(2, true);
+    state.fullscreen(4, true);
+    state.switch_workspace(0, 2);
+    test::focus(state, 3);
+    test::configure(state, [](Config& config) { config.workspaces = test::names(1); });
+    state.settle();
+    REQUIRE(state.monitors()[0].workspaces.size() == 1);
+    for (xcb_window_t id : { 1, 2, 3, 4 }) CHECK(state.require(id).workspace == 0);
+    CHECK(state.monitors()[0].current_workspace == 0);
+    CHECK(state.fullscreen_owners().at(0) == 4);
+    CHECK(state.active_window() == 4);
+    CHECK_FALSE(invariants::validate(state));
 }
 
 TEST_CASE("Initial geometry rules override hints after monitor relocation in both admission paths", "[state][admission][rules][placement]")

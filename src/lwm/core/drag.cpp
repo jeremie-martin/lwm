@@ -27,10 +27,14 @@ State::Press State::press(xcb_window_t window, int16_t x, int16_t y, uint8_t but
     );
     if (binding != config_.mousebinds.end())
     {
+        // Commands act on the active window, so a clicked client that refuses
+        // focus runs nothing rather than letting the command reach another window.
         if (auto const* action = std::get_if<Action>(&binding->action))
         {
             if (client && window != active_window_)
                 focus(window);
+            if (client && window != active_window_)
+                return { true };
             return { true, std::nullopt, *action };
         }
         auto grip = [&](Edge edges) -> Press

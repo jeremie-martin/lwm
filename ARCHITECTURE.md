@@ -73,9 +73,9 @@ the drag ended by release, cancellation, invalidation, reload or topology change
 
 ## Model and ownership
 
-`State` owns the installed `Config`. `configure()` validates workspace-count
-compatibility, then installs the configuration, reconciles scratchpad slots and
-reapplies every matching rule; a rejected candidate changes nothing.
+`State` owns the installed `Config`. `configure()` installs an already validated
+configuration, rebinds workspaces when their count changed, reconciles scratchpad
+slots and reapplies every matching rule.
 
 Each monitor has an output name, geometry, derived workarea reservation, and the
 configured number of workspaces; a reload that changes the count rebinds like a

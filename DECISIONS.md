@@ -101,7 +101,7 @@ them from, so a client that minimized itself simply disappeared. `WM_CHANGE_STAT
 
 ## Drop SIGHUP reload (2026-10-06)
 
-`lwmctl reload-config` and bindings already reload; the signal added a self-pipe, a
+`lwmctl config reload` and bindings already reload; the signal added a self-pipe, a
 second event source in the loop and a third reload origin. The X connection is now
 the only event source.
 
@@ -146,6 +146,16 @@ The example file restated every default and a test kept the two in agreement. Ma
 the example the only home would leave `Config{}` zeroed for the model and tests and
 need a merge of omitted keys; instead the example shows defaults commented out and
 binds keys, and the initializers are the one home.
+
+## Keep scratchpads as slots and a pool (2026-10-06)
+
+A from-scratch study (gpt-6.1-sol, checked against the code) found that rule-assigned
+tags with one toggle command would be roughly line-neutral: client-owned membership,
+pool ranks independent of focus, pending launches and singleton occupancy would all
+move rather than disappear, and rules stop at the first match where named matching
+skips occupied slots. Only dropping launch-on-demand and dedicated recall sizing would
+save about 150 lines. Revisit if prestarted recall groups are preferred to dedicated
+launch-on-demand pads.
 
 ## Keep WM_HINTS urgency mirroring (2026-10-06)
 
@@ -209,9 +219,6 @@ that follow their effects. The process that got there:
 
 The same question applied to the remaining subsystems:
 
-- **Scratchpads as tagged windows.** Named slots, the pool, pending launches and
-  claims form a separate membership system beside rules. A rule-assigned tag and one
-  generic toggle-by-tag command might cover both kinds. Less certain than the above.
 - **Logging.** Asynchronous Quill logging exists so that a slow log reader cannot
   stall the WM. Probably essential, but unquestioned.
 
