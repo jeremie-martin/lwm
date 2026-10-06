@@ -48,7 +48,6 @@ std::string floating_hidden_workspace_rule_config()
 {
     return R"(
 [workspaces]
-count = 2
 names = ["one", "two"]
 
 [[rules]]
@@ -753,7 +752,7 @@ TEST_CASE(
 
 TEST_CASE("Integration: lwmctl focus reports redirected focus as failure", "[integration][focus][fullscreen][ipc]")
 {
-    auto test_env = TestEnvironment::create("[workspaces]\ncount = 2\n");
+    auto test_env = TestEnvironment::create("[workspaces]\nnames = [\"1\", \"2\"]\n");
     if (!test_env)
         SKIP("Test environment not available");
 
@@ -1705,13 +1704,10 @@ TEST_CASE(
 {
     auto env = TestEnvironment::create(R"(
 [workspaces]
-count = 2
-[[binds]]
-key = "F5"
-action = "focus next"
-[[binds]]
-key = "F6"
-action = "focus prev"
+names = ["1", "2"]
+[binds]
+"F5" = "focus next"
+"F6" = "focus prev"
 )");
     if (!env)
         SKIP("X11 unavailable");

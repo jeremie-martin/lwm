@@ -1,18 +1,22 @@
-# LWM configuration reference and starter file.
+# LWM configuration reference, and the built-in default configuration.
+# The file is the whole configuration: bindings exist only if listed here, and
+# only omitted settings take the default values shown. Without a file, LWM uses
+# this one. Check a file with `lwm --check-config --config PATH`.
 # Unknown sections and keys, missing required fields, and wrong types are errors.
 # Numeric values must be finite and within the documented bounds; they never wrap.
 # Booleans use true/false; integer settings use integers, not 1.0 or true.
 # Ratios and size fractions accept either integer or floating-point numbers.
-# Omitted settings use built-in defaults; the active entries below are a starter
-# configuration, not an exhaustive dump of defaults. README.md explains file selection.
+# README.md explains file selection.
 #
-# Reload with `lwmctl reload-config`, an action = "reload-config" binding, or SIGHUP. Invalid
-# input leaves the active configuration unchanged. Reload updates appearance,
-# bindings, names, focus/layout parameters, commands, scratchpads, and matched rules.
-# It does not run autostart, change workspace count, or replace the layout strategy
-# of existing workspaces (use `lwmctl layout set`). Removing a rule does not undo
-# effects already applied. Surviving scratchpad names keep claims/pending launches;
-# removing a name releases and deiconifies its window.
+# Reload with `lwmctl reload-config`, a "reload-config" binding, or SIGHUP. Invalid
+# input leaves the active configuration unchanged; at startup it is logged and the
+# defaults are used. Reload updates appearance, bindings, names, focus/layout
+# parameters, scratchpads, and matched rules. It does not change the number of
+# workspaces or replace the layout strategy of existing workspaces (use
+# `lwmctl layout set`). Removing a rule does not undo effects already applied.
+# Surviving scratchpad names keep claims/pending launches; removing a name
+# releases and deiconifies its window. Programs that should start with the
+# session belong in ~/.xinitrc or the display manager's session script.
 
 [appearance]
 # Pixel padding and border width: 0..65535; colors: unsigned 32-bit values.
@@ -35,173 +39,66 @@ resize_grab_threshold = 8
 [focus]
 warp_cursor_on_monitor_change = false
 
-[commands]
-# Adjust these programs for the installed desktop environment. Each command is
-# exactly one of { argv = [...] } or { shell = "..." }. Command references are
-# allowed only at use sites such as binds, autostart, and scratchpads.
-terminal = { argv = ["/usr/local/bin/st"] }
-launcher = { argv = ["dmenu_run"] }
-
 [workspaces]
-# Number of workspaces per monitor (1..65535).
-count = 10
-# Rules, keybinds, and IPC use zero-based workspace indices within a monitor.
-# EWMH flattens all monitors' workspaces into one desktop list (see X11.md).
-# Names are display labels exposed to EWMH bars and pagers. When count is
-# omitted, nonempty names determine it; otherwise missing names become numeric
-# labels and excess names are discarded.
+# Display labels of each monitor's workspaces; their number (1..65535) is the
+# workspace count. Rules, bindings, and IPC use zero-based workspace indices
+# within a monitor; EWMH flattens all monitors' workspaces into one desktop list
+# (see X11.md).
 names = ["1", "2", "3", "4", "5", "6", "7", "8", "9", "10"]
 
-# Commands run on fresh startup, not on reload or exec restart. Use:
-# - { ref = "name" } to reuse an entry from [commands]
-# - { argv = ["cmd", "--flag"] } for structured execution without a shell
-# - { shell = "cd ~/proj && make run" } for explicit /bin/sh -c execution
-# Empty arguments are preserved; executable/shell text must be nonempty.
-# Neither argv strings nor shell text may contain NUL.
-[autostart]
-commands = [
-]
+# Mouse bindings: "modifiers+button" = action.
+# Modifiers: shift, ctrl/control, alt, super, in any order; none means a bare
+# button. Buttons are 1..255 (X11: 1 = left, 2 = middle, 3 = right).
+# Actions: "drag_window", "resize_floating", "toggle_float".
+[mousebinds]
+"super+1" = "drag_window"
+"super+3" = "resize_floating"
+"super+2" = "toggle_float"
 
-# Mouse bindings. Defining any [[mousebinds]] replaces all built-in mouse
-# bindings.
-# mod: modifiers only ("super", "super+shift", "ctrl", ...); empty means none.
-# Modifiers: shift, ctrl/control, alt, super. Order is irrelevant. Empty tokens
-# (e.g. "super+") and repeated modifiers are rejected.
-# button: 1..255 (X11: 1 = left, 2 = middle, 3 = right)
-# action: "drag_window", "resize_floating", "toggle_float"
-[[mousebinds]]
-mod = "super"
-button = 1
-action = "drag_window"
+# Key bindings: "modifiers+key" = action. Keys use X11 keysym names; a
+# modifier/keysym pair may be bound once, whatever the modifier order.
+# An action is either command text, exactly as `lwmctl` takes it (see
+# `lwmctl --help` and IPC.md; queries cannot be bound), or the argv list of a
+# program to launch, executed without a shell. Use ["sh", "-c", "..."] for shell
+# syntax. Text arguments consume the rest of the command, so names and paths may
+# contain spaces. Workspace indices, ratio bounds, and scratchpad names are
+# checked when loading. Examples of other commands:
+#   "super+Tab" = "workspace toggle"
+#   "super+m" = "layout set monocle"
+#   "super+u" = "scratchpad toggle terminal"
+[binds]
+"super+Return" = ["/usr/local/bin/st"]
+"super+d" = ["dmenu_run"]
+"super+q" = "window close"
+"super+Left" = "monitor focus left"
+"super+Right" = "monitor focus right"
+"super+shift+Left" = "window to-monitor left"
+"super+shift+Right" = "window to-monitor right"
+"super+f" = "window fullscreen"
+"super+shift+f" = "window float"
+"super+j" = "focus next"
+"super+k" = "focus prev"
+"super+h" = "ratio adjust -0.05"
+"super+l" = "ratio adjust 0.05"
+"super+shift+j" = "window swap next"
+"super+shift+k" = "window swap prev"
+"super+shift+r" = "reload-config"
 
-[[mousebinds]]
-mod = "super"
-button = 3
-action = "resize_floating"
-
-[[mousebinds]]
-mod = "super"
-button = 2
-action = "toggle_float"
-
-# Explicit bindings
-# key: one combo string, e.g. "super+Return", "super+shift+Left", "Print"
-# Each [[binds]] entry has one action: WM command text or a process command table.
-# Actions use the same command text as lwmctl, without the executable name.
-# Queries cannot be bound; invalid commands fail configuration loading.
-# Keys use X11 keysym names. Duplicate modifier/keysym pairs are rejected,
-# including aliases and reordered modifiers.
-# Defining any [[binds]] starts from an empty key-binding set; list every
-# non-workspace binding to retain. The workspace groups below are then added.
-[[binds]]
-key = "super+Return"
-action = { ref = "terminal" }
-
-[[binds]]
-key = "super+d"
-action = { ref = "launcher" }
-
-[[binds]]
-key = "super+q"
-action = "window close"
-
-[[binds]]
-key = "super+Left"
-action = "monitor focus left"
-
-[[binds]]
-key = "super+Right"
-action = "monitor focus right"
-
-[[binds]]
-key = "super+shift+Left"
-action = "window to-monitor left"
-
-[[binds]]
-key = "super+shift+Right"
-action = "window to-monitor right"
-
-[[binds]]
-key = "super+f"
-action = "window fullscreen"
-
-[[binds]]
-key = "super+shift+f"
-action = "window float"
-
-[[binds]]
-key = "super+j"
-action = "focus next"
-
-[[binds]]
-key = "super+k"
-action = "focus prev"
-
-[[binds]]
-key = "super+h"
-action = "ratio adjust -0.05"
-
-[[binds]]
-key = "super+l"
-action = "ratio adjust 0.05"
-
-[[binds]]
-key = "super+shift+j"
-action = "window swap next"
-
-[[binds]]
-key = "super+shift+k"
-action = "window swap prev"
-
-[[binds]]
-key = "super+shift+r"
-action = "reload-config"
-
-# The command reference is `lwmctl --help` and IPC.md. For example:
-# action = "workspace toggle"
-# action = "layout set monocle"
-# action = "scratchpad toggle terminal"
-# action = "exec /usr/local/bin/lwm"
-# Text arguments consume the remainder of the command: names and paths may
-# contain spaces without shell quoting inside the TOML string. Commands must
-# fit the same 4096-byte request limit as IPC and contain no newline or NUL.
-# Workspace indices, ratio bounds, and scratchpad names are checked at load time.
-# An action table uses the structured command syntax above. Its shell/argv/ref
-# forms are resolved while loading; runtime launch always receives an argv vector.
-
-# Generated workspace binding groups. If [[binds]] is absent, the first group
-# for a mode/modifier pair replaces that built-in group. If [[binds]] is
-# present, groups add bindings to the explicit set. Multiple groups with the
-# same mode/modifier may coexist, as below for AZERTY and QWERTY symbols.
-# Group identity uses modifiers, not their spelling or order.
-# mode:
-#   "switch" => focus workspace N
-#   "move"   => send focused window to workspace N
-# keys length must exactly match [workspaces].count.
-[[workspace_binds]]
-mode = "switch"
-mod = "super"
+# Workspace keys: key N of a group switches to (switch modifiers) or moves the
+# active window to (move modifiers) workspace N. Each group lists exactly one key
+# per workspace; define one group per keyboard layout. A group may set switch,
+# move, or both, and must not collide with other bindings.
+[[workspace_keys]] # AZERTY
+switch = "super"
+move = "super+shift"
 keys = [
   "ampersand", "eacute", "quotedbl", "apostrophe", "parenleft",
   "minus", "egrave", "underscore", "ccedilla", "agrave",
 ]
 
-[[workspace_binds]]
-mode = "move"
-mod = "super+shift"
-keys = [
-  "ampersand", "eacute", "quotedbl", "apostrophe", "parenleft",
-  "minus", "egrave", "underscore", "ccedilla", "agrave",
-]
-
-[[workspace_binds]]
-mode = "switch"
-mod = "super"
-keys = ["1", "2", "3", "4", "5", "6", "7", "8", "9", "0"]
-
-[[workspace_binds]]
-mode = "move"
-mod = "super+shift"
+[[workspace_keys]] # QWERTY
+switch = "super"
+move = "super+shift"
 keys = ["1", "2", "3", "4", "5", "6", "7", "8", "9", "0"]
 
 # Window rules
@@ -261,17 +158,11 @@ keys = ["1", "2", "3", "4", "5", "6", "7", "8", "9", "0"]
 # A failed exec leaves the scratchpad retryable. If a launched program never
 # creates a matching window, use `lwmctl scratchpad cancel-launch NAME` before
 # retrying. Cancellation does not terminate the program.
-# Toggle with:
-#   [[binds]]
-#   key = "super+u"
-#   action = "scratchpad toggle terminal"
-#
-# Generic scratchpad pool actions:
-#   action = "scratchpad stash"
-#   action = "scratchpad cycle"
+# Toggle with a binding such as "super+u" = "scratchpad toggle terminal".
+# The generic pool uses "scratchpad stash" and "scratchpad cycle".
 
 # [[scratchpads]]
 # name = "terminal"
-# spawn = { argv = ["alacritty", "--title", "dropdown"] }
+# spawn = ["alacritty", "--title", "dropdown"]
 # match = { class = "Alacritty", title = "dropdown" }
 # size = { width = 0.8, height = 0.6 }

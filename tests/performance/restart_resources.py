@@ -69,7 +69,7 @@ def measure(binary):
                 X.XFree(data)
 
         config = directory / "config.toml"
-        config.write_text("[workspaces]\ncount = 2\n")
+        config.write_text("[workspaces]\nnames = [\"1\", \"2\"]\n")
         environment = dict(os.environ, DISPLAY=display_name)
         wm = subprocess.Popen(
             [

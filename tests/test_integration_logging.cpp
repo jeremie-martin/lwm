@@ -1,4 +1,5 @@
 #include "x11_test_harness.hpp"
+#include <X11/keysym.h>
 #include <nlohmann/json.hpp>
 
 #include <catch2/catch_test_macros.hpp>
@@ -194,19 +195,22 @@ TEST_CASE("Integration: launch failures identify the command without disclosing 
     LwmProcess wm(
         environment.display(),
         R"(
-[autostart]
-commands = [{ argv = ["/definitely/missing/lwm-application", "private-argument"] }]
+[binds]
+F7 = ["/definitely/missing/lwm-application", "private-argument"]
 )",
         { "--log-level", "debug" }
     );
     REQUIRE(wait_for_wm_ready(connection, std::chrono::seconds(2)));
+    if (!extension_available(connection, &xcb_test_id))
+        SKIP("XTEST extension not available");
+    REQUIRE(send_key(connection, XK_F7));
     REQUIRE(wait_for_condition(
-        [&] { return wm.diagnostics().find("WM ready:") != std::string::npos; },
+        [&] { return wm.diagnostics().find("Launch failed:") != std::string::npos; },
         std::chrono::seconds(2)
     ));
     auto diagnostics = wm.diagnostics();
     REQUIRE(
-        diagnostics.find("Launch failed: source=autostart executable=/definitely/missing/lwm-application")
+        diagnostics.find("Launch failed: source=keybind executable=/definitely/missing/lwm-application")
         != std::string::npos
     );
     REQUIRE(diagnostics.find("stage=spawn code=" + std::to_string(ENOENT)) != std::string::npos);

@@ -70,45 +70,28 @@ template <typename T> T const* action_as(Action const& action) { return std::get
 
 } // namespace
 
-TEST_CASE("Config parser loads commands, binds, workspace bind groups, and structured rules", "[config]")
+TEST_CASE("Config parser loads bindings, workspace keys, scratchpads, and structured rules", "[config]")
 {
     auto loaded = load_from_string(R"(
-[commands]
-terminal = { argv = ["/usr/bin/ghostty"] }
-launcher = { shell = "rofi -show drun" }
-notify = { argv = ["/usr/bin/printf", "hi"] }
-
 [workspaces]
-count = 3
 names = ["code", "chat", "misc"]
 
 [[scratchpads]]
 name = "term"
-spawn = { ref = "terminal" }
+spawn = ["/usr/bin/ghostty"]
 match = { class = "Ghostty", title = "dropdown" }
 size = { width = 0.8, height = 0.6 }
 
-[autostart]
-commands = [{ ref = "notify" }]
+[binds]
+"super+Return" = ["/usr/bin/ghostty"]
+"super+u" = "scratchpad toggle term"
 
-[[binds]]
-key = "super+Return"
-action = { ref = "terminal" }
-
-[[binds]]
-key = "super+u"
-action = "scratchpad toggle term"
-
-[[workspace_binds]]
-mode = "switch"
-mod = "super"
+[[workspace_keys]]
+switch = "super"
 keys = ["1", "2", "3"]
-
-[[workspace_binds]]
-mode = "move"
-mod = "super+shift"
+[[workspace_keys]]
+move = "super+shift"
 keys = ["F1", "F2", "F3"]
-
 [[rules]]
 match = { title = "dropdown" }
 apply = { floating = true, scratchpad = "term", center = true }
@@ -118,8 +101,6 @@ apply = { floating = true, scratchpad = "term", center = true }
 
     auto const& cfg = *loaded;
     REQUIRE(cfg.scratchpads.front().spawn == std::vector<std::string>{ "/usr/bin/ghostty" });
-    REQUIRE(cfg.autostart.size() == 1);
-    REQUIRE(cfg.autostart.front().front() == "/usr/bin/printf");
     REQUIRE(cfg.scratchpads.size() == 1);
     REQUIRE(cfg.keybinds.size() == 8);
     REQUIRE(action_as<action::Spawn>(cfg.keybinds.at({ XCB_MOD_MASK_4, XK_Return })) != nullptr);
@@ -133,13 +114,10 @@ apply = { floating = true, scratchpad = "term", center = true }
 TEST_CASE("Config parser recognizes swap_next and swap_prev actions", "[config][keybind]")
 {
     auto loaded = load_from_string(R"(
-[[binds]]
-key = "super+shift+j"
-action = "window swap next"
+[binds]
+"super+shift+j" = "window swap next"
+"super+shift+k" = "window swap prev"
 
-[[binds]]
-key = "super+shift+k"
-action = "window swap prev"
 )");
 
     REQUIRE(loaded.has_value());
@@ -174,82 +152,73 @@ retired_overlay = true
 TEST_CASE("Config parser rejects wrong top-level section types", "[config]")
 {
     auto loaded = load_from_string(R"(
-[binds]
+[[binds]]
 key = "super+q"
 action = "window close"
 )");
 
     REQUIRE_FALSE(loaded.has_value());
     CHECK(loaded.error().find("binds") != std::string::npos);
-    CHECK(loaded.error().find("array") != std::string::npos);
 }
 
-TEST_CASE("Config parser regenerates default bindings from overridden commands and workspace count", "[config]")
+TEST_CASE("A configuration file binds exactly what it lists", "[config]")
 {
     auto loaded = load_from_string(R"(
-[commands]
-terminal = { argv = ["/usr/bin/ghostty"] }
-
 [workspaces]
-count = 3
+names = ["1", "2", "3"]
 )");
 
     REQUIRE(loaded.has_value());
-    REQUIRE_FALSE(loaded->keybinds.empty());
-    auto const* spawn_action = action_as<action::Spawn>(loaded->keybinds.at({ XCB_MOD_MASK_4, XK_Return }));
-    REQUIRE(spawn_action != nullptr);
-    REQUIRE(spawn_action->argv.front() == "/usr/bin/ghostty");
-
-    size_t switch_bind_count = 0;
-    for (auto const& keybind : loaded->keybinds)
-    {
-        if (action_as<action::SwitchWorkspace>(keybind.second))
-            ++switch_bind_count;
-    }
-    REQUIRE(switch_bind_count == 6);
+    CHECK(loaded->keybinds.empty());
+    CHECK(loaded->mousebinds.empty());
+    CHECK(loaded->workspaces == std::vector<std::string>{ "1", "2", "3" });
+    CHECK(loaded->appearance.border_width == Config{ }.appearance.border_width);
 }
 
-TEST_CASE("Config parser keeps non-workspace defaults when only workspace bind groups are overridden", "[config]")
+TEST_CASE("The built-in defaults are the example file and agree with omitted-setting defaults", "[config]")
+{
+    auto defaults = default_config();
+    CHECK(defaults.workspaces == Config{ }.workspaces);
+    CHECK(defaults.appearance.padding == Config{ }.appearance.padding);
+    CHECK(defaults.appearance.border_width == Config{ }.appearance.border_width);
+    CHECK(defaults.appearance.border_color == Config{ }.appearance.border_color);
+    CHECK(defaults.appearance.urgent_border_color == Config{ }.appearance.urgent_border_color);
+    CHECK(defaults.layout.default_ratio == Config{ }.layout.default_ratio);
+    CHECK(defaults.layout.min_ratio == Config{ }.layout.min_ratio);
+    CHECK(defaults.layout.resize_grab_threshold == Config{ }.layout.resize_grab_threshold);
+    CHECK(defaults.mousebinds.size() == 3);
+    CHECK(action_as<action::Spawn>(defaults.keybinds.at({ XCB_MOD_MASK_4, XK_Return })));
+    CHECK(defaults.keybinds.at({ XCB_MOD_MASK_4, XK_1 }) == Action{ action::SwitchWorkspace{ 0 } });
+    CHECK(defaults.keybinds.at({ XCB_MOD_MASK_4 | XCB_MOD_MASK_SHIFT, XK_ampersand }) == Action{ action::MoveToWorkspace{ 0 } });
+}
+
+TEST_CASE("Workspace key groups switch, move, or both", "[config][keybind]")
 {
     auto loaded = load_from_string(R"(
-[commands]
-terminal = { argv = ["/usr/bin/ghostty"] }
-
 [workspaces]
-count = 3
+names = ["a", "b"]
 
-[[workspace_binds]]
-mode = "switch"
-mod = "super"
-keys = ["F1", "F2", "F3"]
+[[workspace_keys]]
+switch = "super"
+move = "super+shift"
+keys = ["1", "2"]
+
+[[workspace_keys]]
+switch = "alt"
+keys = ["F1", "F2"]
 )");
-
     REQUIRE(loaded.has_value());
+    CHECK(loaded->keybinds.size() == 6);
+    CHECK(loaded->keybinds.at({ XCB_MOD_MASK_4, XK_2 }) == Action{ action::SwitchWorkspace{ 1 } });
+    CHECK(loaded->keybinds.at({ XCB_MOD_MASK_4 | XCB_MOD_MASK_SHIFT, XK_2 }) == Action{ action::MoveToWorkspace{ 1 } });
+    CHECK(loaded->keybinds.at({ XCB_MOD_MASK_1, XK_F1 }) == Action{ action::SwitchWorkspace{ 0 } });
 
-    bool saw_terminal_spawn = false;
-    bool saw_focus_monitor = false;
-    size_t switch_bind_count = 0;
-    size_t move_bind_count = 0;
-
-    for (auto const& keybind : loaded->keybinds)
-    {
-        if (auto const* spawn = action_as<action::Spawn>(keybind.second); spawn && keybind.first.keysym == XK_Return)
-        {
-            saw_terminal_spawn =
-                spawn->argv.front() == "/usr/bin/ghostty";
-        }
-        if (action_as<action::FocusMonitor>(keybind.second))
-            saw_focus_monitor = true;
-        if (action_as<action::SwitchWorkspace>(keybind.second))
-            ++switch_bind_count;
-        if (action_as<action::MoveToWorkspace>(keybind.second))
-            ++move_bind_count;
-    }
-
-    CHECK(saw_terminal_spawn);
-    CHECK(saw_focus_monitor);
-    CHECK(switch_bind_count == 3);
-    CHECK(move_bind_count == 6);
+    auto neither = load_from_string("[workspaces]\nnames = [\"a\"]\n[[workspace_keys]]\nkeys = [\"1\"]\n");
+    REQUIRE_FALSE(neither);
+    CHECK(neither.error().find("must define switch, move, or both") != std::string::npos);
+    auto short_group = load_from_string("[[workspace_keys]]\nswitch = \"super\"\nkeys = [\"1\"]\n");
+    REQUIRE_FALSE(short_group);
+    CHECK(short_group.error().find("exactly 10 entries") != std::string::npos);
 }
 
 TEST_CASE("Config parser rejects invalid key combos and duplicate bindings", "[config]")
@@ -257,9 +226,8 @@ TEST_CASE("Config parser rejects invalid key combos and duplicate bindings", "[c
     SECTION("invalid key")
     {
         auto loaded = load_from_string(R"(
-[[binds]]
-key = "super+DefinitelyNotAKeysym"
-action = "window close"
+[binds]
+"super+DefinitelyNotAKeysym" = "window close"
 )");
 
         REQUIRE_FALSE(loaded.has_value());
@@ -270,35 +238,31 @@ action = "window close"
     {
         auto loaded = load_from_string(R"(
 [workspaces]
-count = 2
+names = ["1", "2"]
 
-[[binds]]
-key = "super+1"
-action = "workspace switch 0"
+[binds]
+"super+1" = "workspace switch 0"
 
-[[workspace_binds]]
-mode = "switch"
-mod = "super"
-keys = ["1", "2"]
-)");
+[[workspace_keys]]
+switch = "super"
+keys = ["1", "2"])");
 
         REQUIRE_FALSE(loaded.has_value());
         REQUIRE(loaded.error().find("duplicates an existing binding") != std::string::npos);
     }
 }
 
-TEST_CASE("Config parser rejects missing command refs and invalid regexes", "[config]")
+TEST_CASE("Config parser rejects unknown commands and invalid regexes", "[config]")
 {
-    SECTION("missing command ref")
+    SECTION("unknown command")
     {
         auto loaded = load_from_string(R"(
-[[binds]]
-key = "super+Return"
-action = { ref = "missing_alias" }
+[binds]
+"super+Return" = "launch terminal"
 )");
 
         REQUIRE_FALSE(loaded.has_value());
-        REQUIRE(loaded.error().find("unknown command 'missing_alias'") != std::string::npos);
+        REQUIRE(loaded.error().find("[binds].super+Return: unknown command") != std::string::npos);
     }
 
     SECTION("invalid rule regex")
@@ -329,7 +293,6 @@ apply = {}
     {
         auto loaded = load_from_string(R"(
 [workspaces]
-count = 2
 names = ["code", "chat"]
 
 [[rules]]
@@ -345,7 +308,6 @@ apply = { workspace = "oops" }
     {
         auto loaded = load_from_string(R"(
 [workspaces]
-count = 2
 names = ["code", "chat"]
 
 [[rules]]
@@ -405,7 +367,7 @@ TEST_CASE("Config rejects numeric narrowing and excessive workspace allocation",
 {
     for (auto const* text : { "[appearance]\npadding = 4294967296",
                               "[appearance]\nborder_width = 65536",
-                              "[workspaces]\ncount = 4294967296",
+                              "[workspaces]\nnames = []",
                               "[[rules]]\nmatch = { class = 'X' }\napply = { monitor = 4294967296 }" })
     {
         INFO(text);
@@ -418,18 +380,16 @@ TEST_CASE("Binding identity uses modifiers and keysyms rather than spelling", "[
 {
     auto loaded = load_from_string(R"(
 [workspaces]
-count = 2
-[[workspace_binds]]
-mode = "move"
-mod = "shift+super"
-keys = ["F1", "F2"]
-)");
+names = ["1", "2"]
+[[workspace_keys]]
+move = "shift+super"
+keys = ["F1", "F2"])");
     REQUIRE(loaded);
     size_t moves = 0;
     for (auto const& [binding, action] : loaded->keybinds)
         if (std::holds_alternative<action::MoveToWorkspace>(action))
             ++moves;
-    CHECK(moves == 2); // Replaces the default super+shift group, regardless of ordering.
+    CHECK(moves == 2); // Modifier order does not matter.
     auto const& action = loaded->keybinds.at({ XCB_MOD_MASK_4 | XCB_MOD_MASK_SHIFT, XK_F2 });
     REQUIRE(std::holds_alternative<action::MoveToWorkspace>(action));
     CHECK(std::get<action::MoveToWorkspace>(action).workspace == 1);
@@ -437,22 +397,19 @@ keys = ["F1", "F2"]
     for (std::string combo : { "super+", "super++a", "+a", "super+super+a", "ctrl+control+a", "unknown+a" })
     {
         CAPTURE(combo);
-        CHECK_FALSE(load_from_string("[[binds]]\nkey = \"" + combo + "\"\naction = 'window close'\n"));
+        CHECK_FALSE(load_from_string("[binds]\n\"" + combo + "\" = 'window close'\n"));
     }
     for (std::string modifiers : { "super+", "+super", "super++shift", "ctrl+control" })
     {
         CAPTURE(modifiers);
         CHECK_FALSE(
-            load_from_string("[[mousebinds]]\nmod = \"" + modifiers + "\"\nbutton = 1\naction = \"drag_window\"\n")
+            load_from_string("[mousebinds]\n\"" + modifiers + "+1\" = \"drag_window\"\n")
         );
     }
     auto duplicate = load_from_string(R"(
-[[binds]]
-key = "control+shift+a"
-action = "window close"
-[[binds]]
-key = "shift+ctrl+a"
-action = "restart"
+[binds]
+"control+shift+a" = "window close"
+"shift+ctrl+a" = "restart"
 )");
     REQUIRE_FALSE(duplicate);
     CHECK(duplicate.error().find("duplicates") != std::string::npos);
@@ -478,7 +435,7 @@ apply = { floating = true }
             CAPTURE(field, pattern);
             auto matcher = "match = { " + field + " = \"" + pattern + "\" }\n";
             CHECK_FALSE(load_from_string("[[rules]]\n" + matcher + "apply = { floating = true }\n"));
-            CHECK_FALSE(load_from_string("[[scratchpads]]\nname = \"term\"\nspawn = { argv = [\"true\"] }\n" + matcher)
+            CHECK_FALSE(load_from_string("[[scratchpads]]\nname = \"term\"\nspawn = [\"true\"]\n" + matcher)
             );
         }
     CHECK_FALSE(load_from_string("[[rules]]\nmatch = { type = \"unknown\" }\napply = { floating = true }\n"));
@@ -492,32 +449,17 @@ min_ratio = 0.2
 
 [[scratchpads]]
 name = "term"
-spawn = { argv = ["true"] }
+spawn = ["true"]
 match = { class = "Term" }
 
-[[binds]]
-key = "super+m"
-action = "layout set monocle"
+[binds]
+"super+m" = "layout set monocle"
+"super+r" = "ratio set 0.4"
+"super+l" = "ratio adjust 0.05"
+"super+e" = "exec /usr/local/bin/lwm"
+"super+c" = "scratchpad cancel-launch term"
+"super+n" = "workspace next"
 
-[[binds]]
-key = "super+r"
-action = "ratio set 0.4"
-
-[[binds]]
-key = "super+l"
-action = "ratio adjust 0.05"
-
-[[binds]]
-key = "super+e"
-action = "exec /usr/local/bin/lwm"
-
-[[binds]]
-key = "super+c"
-action = "scratchpad cancel-launch term"
-
-[[binds]]
-key = "super+n"
-action = "workspace next"
 )");
     REQUIRE(loaded);
     auto const& binds = loaded->keybinds;
@@ -528,11 +470,11 @@ action = "workspace next"
     CHECK(binds.at({ XCB_MOD_MASK_4, XK_c }) == Action{ action::ScratchpadCancelLaunch{ "term" } });
     CHECK(binds.at({ XCB_MOD_MASK_4, XK_n }) == Action{ action::CycleWorkspace{ 1 } });
 
-    for (auto const* text : { "[[binds]]\nkey = \"super+a\"\nset_layout = \"spiral\"\n",
-                              "[layout]\nmin_ratio = 0.2\n[[binds]]\nkey = \"super+a\"\naction = 'ratio set 0.9'\n",
-                              "[[binds]]\nkey = \"super+a\"\naction = 'exec'\n",
-                              "[[binds]]\nkey = \"super+a\"\naction = 'scratchpad toggle missing'\n",
-                              "[[binds]]\nkey = \"super+a\"\nratio_grow = true\n" })
+    for (auto const* text : { "[binds]\n\"super+a\" = 'layout set spiral'\n",
+                              "[layout]\nmin_ratio = 0.2\n[binds]\n\"super+a\" = 'ratio set 0.9'\n",
+                              "[binds]\n\"super+a\" = 'exec'\n",
+                              "[binds]\n\"super+a\" = 'scratchpad toggle missing'\n",
+                              "[binds]\n\"super+a\" = 'ratio grow'\n" })
     {
         CAPTURE(text);
         CHECK_FALSE(load_from_string(text));
@@ -564,15 +506,15 @@ apply = { layer = "normal" }
     CHECK(loaded->layout.strategy == LayoutStrategy::MasterStack);
 }
 
-TEST_CASE("Configuration decoding preserves absence, explicit false, and empty bindings", "[config]")
+TEST_CASE("Configuration decoding preserves absence, explicit false, and empty sections", "[config]")
 {
-    auto defaults = load_from_string("");
-    REQUIRE(defaults);
-    CHECK_FALSE(defaults->keybinds.empty());
-    CHECK_FALSE(defaults->mousebinds.empty());
-    CHECK(defaults->workspaces.names.size() == 10);
+    auto empty_file = load_from_string("");
+    REQUIRE(empty_file);
+    CHECK(empty_file->keybinds.empty());
+    CHECK(empty_file->mousebinds.empty());
+    CHECK(empty_file->workspaces.size() == 10);
 
-    auto empty = load_from_string("binds = []\nmousebinds = []");
+    auto empty = load_from_string("[binds]\n[mousebinds]\n");
     REQUIRE(empty);
     CHECK(empty->keybinds.empty());
     CHECK(empty->mousebinds.empty());
@@ -597,34 +539,33 @@ apply = { center = true }
     CHECK_FALSE(rules->rules[1].transient.has_value());
     CHECK_FALSE(rules->rules[1].actions.floating.has_value());
 }
-
 TEST_CASE("Configuration rejects malformed nested values at their owning field", "[config]")
 {
     for (auto const& [text, field] : std::initializer_list<std::pair<std::string, std::string>>{
-             {                              "[focus]\nwarp_cursor_on_monitor_change = 0", "warp_cursor_on_monitor_change" },
-             {                                             "[appearance]\npadding = 1.5",                       "padding" },
-             {                                         "[appearance]\nborder_color = -1",                  "border_color" },
-             {                                 "[appearance]\nborder_color = 4294967296",                  "border_color" },
-             {                    "[[mousebinds]]\nbutton = 256\naction = 'drag_window'",                        "button" },
-             {                                  "[[mousebinds]]\naction = 'drag_window'",                        "button" },
-             {                                                  "[[binds]]\naction = 'window close'",                           "key" },
-             {                                         "[[binds]]\nkey = 'F1'\naction = 1",                          "action" },
-             {                                     "[[binds]]\nkey = 'F1'\naction = false",                          "action" },
-             {                           "[[binds]]\nkey = 'F1'\naction = 'workspace switch 1.0'",              "workspace index" },
-             {         "[[binds]]\nkey = 'F1'\naction = { argv = ['true'], typo = true }",                          "action" },
-             {                           "[commands]\nterminal = { argv = ['true', 1] }",                          "argv" },
-             {                                               "[commands]\nterminal = {}",                      "terminal" },
-             {              "[commands]\nterminal = { argv = ['true'], shell = 'true' }",                      "terminal" },
-             {                              "[commands]\nterminal = { ref = 'browser' }",                           "ref" },
-             {                                    "[commands]\nterminal = { argv = [] }",                          "argv" },
-             {                                  "[commands]\nterminal = { argv = [''] }",                          "argv" },
-             {                      "[[binds]]\nkey = 'F1'\naction = 'window close'\nspawn = {argv = ['true']}",            "spawn" },
-             { "[[scratchpads]]\nname = 'term'\nspawn = { argv = ['true'] }\nmatch = {}",                       "matcher" },
-             {                                         "[unknown_section]\nvalue = true",               "unknown_section" },
-             {                    "[[rules]]\napply.geometry = { width = 10, typo = 1 }",                          "typo" },
-             { "[[rules]]\nmatch = { transient = 'false' }\napply = { floating = true }",                     "transient" },
-             {                                      "[[rules]]\nmatch = { class = 'X' }",                         "apply" },
-    })
+             { "[focus]\nwarp_cursor_on_monitor_change = 0", "warp_cursor_on_monitor_change" },
+             { "[appearance]\npadding = 1.5", "padding" },
+             { "[appearance]\nborder_color = -1", "border_color" },
+             { "[appearance]\nborder_color = 4294967296", "border_color" },
+             { "[mousebinds]\n'super+256' = 'drag_window'", "button number" },
+             { "[mousebinds]\n'super' = 'drag_window'", "button number" },
+             { "[mousebinds]\n'super+1' = 'drag'", "mousebinds" },
+             { "[mousebinds]\n'super+1' = 'drag_window'\n'super+01' = 'toggle_float'", "duplicates" },
+             { "[binds]\n'F1' = 1", "binds" },
+             { "[binds]\n'F1' = false", "binds" },
+             { "[binds]\n'F1' = 'workspace switch 1.0'", "workspace index" },
+             { "[binds]\n'F1' = []", "nonempty executable" },
+             { "[binds]\n'F1' = ['']", "nonempty executable" },
+             { "[[scratchpads]]\nname = 'term'\nspawn = []\nmatch = { class = 'T' }", "nonempty executable" },
+             { "[[scratchpads]]\nname = 'term'\nspawn = ['true']\nmatch = {}", "matcher" },
+             { "[workspaces]\ncount = 3", "count" },
+             { "[commands]\nterminal = ['st']", "commands" },
+             { "[autostart]\ncommands = []", "autostart" },
+             { "[[workspace_binds]]\nmode = 'switch'", "workspace_binds" },
+             { "[unknown_section]\nvalue = true", "unknown_section" },
+             { "[[rules]]\napply.geometry = { width = 10, typo = 1 }", "typo" },
+             { "[[rules]]\nmatch = { transient = 'false' }\napply = { floating = true }", "transient" },
+             { "[[rules]]\nmatch = { class = 'X' }", "apply" },
+         })
     {
         CAPTURE(text);
         auto loaded = load_from_string(text);
@@ -632,7 +573,6 @@ TEST_CASE("Configuration rejects malformed nested values at their owning field",
         CHECK(loaded.error().find(field) != std::string::npos);
     }
 }
-
 TEST_CASE("Numeric action and scratchpad values accept integers without coercing other types", "[config]")
 {
     auto loaded = load_from_string(R"(
@@ -640,12 +580,11 @@ TEST_CASE("Numeric action and scratchpad values accept integers without coercing
 border_color = 4294967295
 [[scratchpads]]
 name = 'term'
-spawn = { argv = ['true'] }
+spawn = ['true']
 match = { class = 'Term' }
 size = { width = 1, height = 1 }
-[[binds]]
-key = 'F1'
-action = "ratio adjust 0"
+[binds]
+'F1' = "ratio adjust 0"
 )");
     REQUIRE(loaded);
     CHECK(loaded->appearance.border_color == UINT32_MAX);
@@ -656,10 +595,10 @@ action = "ratio adjust 0"
     for (std::string value : { "nan", "inf", "-inf", "true", "'0.5'" })
     {
         CAPTURE(value);
-        CHECK_FALSE(load_from_string("[[binds]]\nkey = 'F1'\naction = \"ratio adjust " + value + "\""));
-        CHECK_FALSE(load_from_string("[[binds]]\nkey = 'F1'\naction = \"ratio set " + value + "\""));
+        CHECK_FALSE(load_from_string("[binds]\n'F1' = \"ratio adjust " + value + "\""));
+        CHECK_FALSE(load_from_string("[binds]\n'F1' = \"ratio set " + value + "\""));
         CHECK_FALSE(load_from_string(
-            "[[scratchpads]]\nname = 'term'\nspawn = { argv = ['true'] }\n"
+            "[[scratchpads]]\nname = 'term'\nspawn = ['true']\n"
             "match = { class = 'Term' }\nsize = { width = "
             + value + " }"
         ));
@@ -674,67 +613,50 @@ TEST_CASE("Bindings use the shared command grammar and reject non-actions", "[co
     {
         CAPTURE(text);
         auto loaded = load_from_string(
-            "[[scratchpads]]\nname = 'a name with spaces'\nspawn = {argv = ['true']}\nmatch = {class = 'Term'}\n"
-            "[[binds]]\nkey = 'F1'\naction = '" + text + "'\n");
+            "[[scratchpads]]\nname = 'a name with spaces'\nspawn = ['true']\nmatch = {class = 'Term'}\n"
+            "[binds]\n'F1' = '" + text + "'\n");
         REQUIRE(loaded);
         auto parsed = command::parse_command(text);
         REQUIRE(parsed);
         CHECK(loaded->keybinds.at({ 0, XK_F1 }) == std::get<Action>(*parsed));
     }
-    for (std::string text : { "ping", "state", "window list", "subscribe", "subscribe focus_change",
+    for (std::string text : { "ping", "state", "window list", "version", "watch",
                              "workspace switch 10", "window to-workspace 10", "monitor focus up",
                              "scratchpad toggle missing", "scratchpad cancel-launch missing", "ratio set 0.99" })
     {
         CAPTURE(text);
-        CHECK_FALSE(load_from_string("[[binds]]\nkey = 'F1'\naction = '" + text + "'\n"));
+        CHECK_FALSE(load_from_string("[binds]\n'F1' = '" + text + "'\n"));
     }
-    CHECK_FALSE(load_from_string("[[binds]]\nkey = 'F1'\n"));
-    CHECK_FALSE(load_from_string("[[binds]]\nkey = 'F1'\nkill = true\n"));
-    CHECK_FALSE(load_from_string("[[binds]]\nkey = 'F1'\naction = 'window close'\nspawn = {argv = ['true']}\n"));
+    CHECK_FALSE(load_from_string("[binds]\n'F1' = {}\n"));
 }
 
-TEST_CASE("Command references and shell syntax are fully resolved during configuration loading", "[config][spawn]")
+TEST_CASE("Launch commands are argv lists executed without a shell", "[config][spawn]")
 {
     auto loaded = load_from_string(R"(
-[commands]
-literal = {argv = ['/bin/printf', '%s', '', '$HOME; two words']}
-script = {shell = 'printf "%s" "$HOME"'}
-[autostart]
-commands = [{ref = 'literal'}, {ref = 'script'}]
 [[scratchpads]]
 name = 'term'
-spawn = {ref = 'script'}
+spawn = ['sh', '-c', 'printf "%s" "$HOME"']
 match = {class = 'Term'}
-[[binds]]
-key = 'F1'
-action = {ref = 'literal'}
-[[binds]]
-key = 'F2'
-action = {ref = 'script'}
+[binds]
+'F1' = ['/bin/printf', '%s', '', '$HOME; two words']
 )");
     REQUIRE(loaded);
     std::vector<std::string> literal{ "/bin/printf", "%s", "", "$HOME; two words" };
-    std::vector<std::string> shell{ "/bin/sh", "-c", "printf \"%s\" \"$HOME\"" };
     CHECK(std::get<action::Spawn>(loaded->keybinds.at({ 0, XK_F1 })).argv == literal);
-    CHECK(std::get<action::Spawn>(loaded->keybinds.at({ 0, XK_F2 })).argv == shell);
-    CHECK(loaded->autostart == std::vector<std::vector<std::string>>{ literal, shell });
-    CHECK(loaded->scratchpads.front().spawn == shell);
-    for (std::string command : { R"({shell = "echo\u0000hidden"})", R"({argv = ["true", "a\u0000b"]})" })
-    {
-        CAPTURE(command);
-        auto rejected = load_from_string("[autostart]\ncommands = [" + command + "]\n");
-        REQUIRE_FALSE(rejected);
-        CHECK(rejected.error().find("NUL") != std::string::npos);
-    }
+    CHECK(loaded->scratchpads.front().spawn == std::vector<std::string>{ "sh", "-c", "printf \"%s\" \"$HOME\"" });
+    auto rejected = load_from_string(R"([binds]
+'F1' = ["true", "a\u0000b"]
+)");
+    REQUIRE_FALSE(rejected);
+    CHECK(rejected.error().find("NUL") != std::string::npos);
 }
-
 TEST_CASE("Configuration choices lower to one runtime meaning", "[config][rules]")
 {
     for (std::string selector : { "1", "'code'" })
     {
         CAPTURE(selector);
         auto config = load_from_string(
-            "[workspaces]\nnames = ['web', 'code']\n[[rules]]\napply = {workspace = " + selector + "}\n"
+            "[workspaces]\nnames = [\"web\", \"code\"]\n[[rules]]\napply = {workspace = " + selector + "}\n"
         );
         REQUIRE(config);
         CHECK(config->rules.front().actions.workspace == 1);
@@ -777,25 +699,16 @@ TEST_CASE("Configuration choices lower to one runtime meaning", "[config][rules]
     }
 }
 
-TEST_CASE("Command forms are exclusive at every configuration use site", "[config][spawn]")
+TEST_CASE("Launch commands must be nonempty argv lists at every use site", "[config][spawn]")
 {
-    for (std::string command : {
-             "{}", "{ref = 'terminal', argv = ['true']}", "{ref = 'terminal', shell = 'true'}",
-             "{argv = ['true'], shell = 'true'}", "{ref = 'terminal', typo = true}", "{ref = ''}",
-             "{argv = []}", "{argv = ['']}", "{shell = ''}", "{argv = ['true', 1]}"
-         })
+    for (std::string command : { "{}", "[]", "['']", "['true', 1]", "{argv = ['true']}", "{shell = 'true'}" })
     {
         CAPTURE(command);
-        CHECK_FALSE(load_from_string("[autostart]\ncommands = [" + command + "]\n"));
-        CHECK_FALSE(load_from_string("[[binds]]\nkey = 'F1'\naction = " + command + "\n"));
-        CHECK_FALSE(load_from_string(
-            "[[scratchpads]]\nname = 'term'\nmatch = {class = 'Term'}\nspawn = " + command + "\n"
-        ));
+        CHECK_FALSE(load_from_string("[binds]\n'F1' = " + command + "\n"));
+        CHECK_FALSE(load_from_string("[[scratchpads]]\nname = 'term'\nmatch = {class = 'Term'}\nspawn = " + command + "\n"));
     }
-    CHECK_FALSE(load_from_string("[commands]\nterminal = {ref = 'browser'}\n"));
-    CHECK_FALSE(load_from_string("[[binds]]\nkey = 'F1'\nspawn = {argv = ['true']}\n"));
+    CHECK(load_from_string("[binds]\n'F1' = ['true']\n"));
 }
-
 TEST_CASE("Rule window types decode from the runtime enum", "[config][rules]")
 {
     for (auto const& [name, type] : {

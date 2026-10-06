@@ -50,7 +50,7 @@ TEST_CASE("Signal ownership survives failed WM construction and releases descrip
 
 TEST_CASE("SIGHUP reload survives WM reconstruction after failed exec", "[integration][lifecycle][restart]")
 {
-    auto env = TestEnvironment::create("[workspaces]\ncount = 2\n");
+    auto env = TestEnvironment::create("[workspaces]\nnames = [\"1\", \"2\"]\n");
     REQUIRE(env);
     auto names = intern_atom(env->conn.get(), "_NET_DESKTOP_NAMES");
     for (std::string expected : { "first", "second" })
@@ -61,7 +61,7 @@ TEST_CASE("SIGHUP reload survives WM reconstruction after failed exec", "[integr
         REQUIRE(result);
         REQUIRE(result->exit_code == 0);
         REQUIRE(wait_for_wm_restart(env->conn, std::chrono::seconds(2), *previous));
-        REQUIRE(env->wm.write_config("[workspaces]\ncount = 2\nnames = [\"" + expected + "\", \"other\"]\n"));
+        REQUIRE(env->wm.write_config("[workspaces]\nnames = [\"" + expected + "\", \"other\"]\n"));
         REQUIRE(kill(env->wm.pid(), SIGHUP) == 0);
         REQUIRE(wait_for_property_strings(
             env->conn.get(),

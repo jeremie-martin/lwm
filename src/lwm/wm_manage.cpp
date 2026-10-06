@@ -25,8 +25,6 @@ void WindowManager::scan_existing_windows(bool handoff)
     state_.adopt(windows, handoff_ ? &*handoff_ : nullptr, pointer);
     handoff_.reset();
     for (auto const& window : windows) manage(window, true);
-    if (!handoff)
-        for (auto const& command : config().autostart) launch_program(command, "autostart");
 }
 
 // X resources follow the role State chose; observation already selected its

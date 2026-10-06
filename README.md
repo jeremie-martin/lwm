@@ -4,8 +4,8 @@ LWM is a tiling window manager for X11, written in C++26. It provides master-sta
 and monocle layouts, floating windows, per-monitor workspaces, focus-follows-mouse,
 scratchpads, RandR hotplug handling, and the `lwmctl` control client.
 
-Run a compositor, panel, launcher, and desktop services separately, from your X
-session or the configuration's `[autostart]` commands.
+Run a compositor, panel, launcher, and desktop services separately, from
+`~/.xinitrc` or your display manager's session script.
 
 ## Build
 
@@ -85,11 +85,13 @@ are harmless and directories are left in place.
 
 ## Configure and control
 
-[config.toml.example](config.toml.example) is the configuration reference and
-starter file, including bindings, rules, scratchpads, defaults, and reload limits.
-Bindings use `action = "COMMAND"` with the same command text as `lwmctl`, or
-`action = { ref = "terminal" }` (also accepting explicit `argv` or `shell`) to launch
-a process. Rule placement uses `workspace` and `monitor`, each accepting an index or
+[config.toml.example](config.toml.example) is the configuration reference, starter
+file and built-in default. A file is the whole configuration: only what it binds is
+bound. Key bindings map a combo to the command text `lwmctl` takes, as in
+`"super+f" = "window fullscreen"`, or to the argv list of a program to launch, as in
+`"super+Return" = ["ghostty"]`. Workspace names define the workspace count, and a
+`[[workspace_keys]]` group binds one keyboard layout's keys to switch and move. Rule
+placement uses `workspace` and `monitor`, each accepting an index or
 a name; rule layers use `layer = "normal"`, `"above"`, or `"below"`; rule window types
 use their enum names with exact casing, e.g. `Dialog` and `PopupMenu`. Invalid
 reloads keep the active configuration.

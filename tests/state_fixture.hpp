@@ -47,10 +47,18 @@ inline void outputs(State& state, std::vector<Topology::Output> outputs)
     state.replace_topology({ std::move(outputs), screen });
 }
 
+// Numeric workspace names, as many as the workspace count.
+inline std::vector<std::string> names(size_t count)
+{
+    std::vector<std::string> result;
+    for (size_t i = 1; i <= count; ++i) result.push_back(std::to_string(i));
+    return result;
+}
+
 inline State state(size_t monitors = 1, size_t workspaces = 3)
 {
     State state;
-    configure(state, [&](Config& config) { config.workspaces.count = workspaces; });
+    configure(state, [&](Config& config) { config.workspaces = names(workspaces); });
     std::vector<Topology::Output> discovered;
     for (size_t i = 0; i < monitors; ++i) discovered.push_back(output("M" + std::to_string(i), static_cast<int16_t>(i * 1000)));
     outputs(state, std::move(discovered));

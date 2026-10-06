@@ -36,7 +36,7 @@ TEST_CASE(
     CAPTURE(rules, presentation);
     auto env = TestEnvironment::create(R"(
 [workspaces]
-count = 2
+names = ["1", "2"]
 [[rules]]
 match = { title = 'float' }
 apply = { floating = true, fullscreen = false }
@@ -331,7 +331,7 @@ TEST_CASE(
     "[integration][transition][geometry][property]"
 )
 {
-    auto env = TestEnvironment::create("[workspaces]\ncount = 2\n");
+    auto env = TestEnvironment::create("[workspaces]\nnames = [\"1\", \"2\"]\n");
     if (!env)
         SKIP("X11 unavailable");
     auto& conn = env->conn;
@@ -378,7 +378,7 @@ TEST_CASE(
 {
     auto env = TestEnvironment::create(R"(
 [workspaces]
-count = 2
+names = ["1", "2"]
 [[rules]]
 match = { title = 'hidden' }
 apply = { floating = false, workspace = 1, sticky = false, fullscreen = true }
@@ -514,7 +514,7 @@ TEST_CASE(
     bool changed = GENERATE(false, true);
     std::string_view mode = GENERATE("floating", "fullscreen", "hidden", "hidden_tiled");
     CAPTURE(changed, mode);
-    auto env = TestEnvironment::create("[workspaces]\ncount = 2\n");
+    auto env = TestEnvironment::create("[workspaces]\nnames = [\"1\", \"2\"]\n");
     if (!env)
         SKIP("X11 unavailable");
     auto& conn = env->conn;
@@ -584,7 +584,7 @@ TEST_CASE(
 
 TEST_CASE("Integration: focusing a window on another workspace settles focus and visibility", "[integration][transition]")
 {
-    auto env = TestEnvironment::create("[workspaces]\ncount = 2\n");
+    auto env = TestEnvironment::create("[workspaces]\nnames = [\"1\", \"2\"]\n");
     if (!env)
         SKIP("X11 unavailable");
     auto& conn = env->conn;
@@ -1149,7 +1149,7 @@ TEST_CASE(
 {
     auto env = TestEnvironment::create(R"(
 [workspaces]
-count = 2
+names = ["1", "2"]
 [[rules]]
 match = { class = "Parked" }
 apply = { workspace = 1 }
@@ -1189,7 +1189,7 @@ TEST_CASE(
     CAPTURE(replay, hidden);
     auto env = TestEnvironment::create(R"(
 [workspaces]
-count = 2
+names = ["1", "2"]
 [[rules]]
 match = { class = "FullscreenChanged" }
 apply = { fullscreen = true, skip_pager = true }
@@ -1284,7 +1284,7 @@ TEST_CASE(
     bool hidden = GENERATE(false, true);
     bool failed_exec = GENERATE(false, true);
     CAPTURE(hidden, failed_exec);
-    auto env = TestEnvironment::create("[workspaces]\ncount=2\n");
+    auto env = TestEnvironment::create("[workspaces]\nnames = [\"1\", \"2\"]\n");
     REQUIRE(env);
     auto& conn = env->conn;
     auto first = create_window(conn, 10, 10, 320, 240);

@@ -55,7 +55,7 @@ TEST_CASE(
         SKIP("Select the owned Xorg dummy server for multi-output coverage");
     auto env = TestEnvironment::create(R"(
 [workspaces]
-count = 2
+names = ["1", "2"]
 [[rules]]
 match = { class = "FloatingOutput" }
 apply = { floating = true, monitor = "DUMMY1" }
@@ -187,15 +187,12 @@ TEST_CASE(
         SKIP("Select the owned Xorg dummy server for multi-output coverage");
     auto env = TestEnvironment::create(R"(
 [workspaces]
-count = 2
+names = ["1", "2"]
 [focus]
 warp_cursor_on_monitor_change = false
-[[binds]]
-key = "F9"
-action = "window to-monitor right"
-[[binds]]
-key = "F10"
-action = "window to-workspace 1"
+[binds]
+"F9" = "window to-monitor right"
+"F10" = "window to-workspace 1"
 )");
     REQUIRE(env);
     RestoreOutputs restore;
@@ -279,7 +276,7 @@ TEST_CASE(
     auto* server = std::getenv("LWM_TEST_XSERVER");
     if (!server || std::strcmp(server, "Xorg") != 0)
         SKIP("Select the owned Xorg dummy server for multi-output coverage");
-    auto env = TestEnvironment::create("[workspaces]\ncount = 1\n");
+    auto env = TestEnvironment::create("[workspaces]\nnames = [\"1\"]\n");
     REQUIRE(env);
     REQUIRE(env->x11_env.owns_display());
     RestoreOutputs restore;
@@ -405,7 +402,7 @@ TEST_CASE(
     auto* server = std::getenv("LWM_TEST_XSERVER");
     if (!server || std::strcmp(server, "Xorg") != 0)
         SKIP("Select the owned Xorg dummy server for multi-output coverage");
-    auto env = TestEnvironment::create("[workspaces]\ncount = 2\n");
+    auto env = TestEnvironment::create("[workspaces]\nnames = [\"1\", \"2\"]\n");
     REQUIRE(env);
     RestoreOutputs restore;
     auto& conn = env->conn;
@@ -470,7 +467,7 @@ TEST_CASE(
         SKIP("Select the owned Xorg dummy server for multi-output coverage");
     bool removed = GENERATE(false, true);
     CAPTURE(removed);
-    auto env = TestEnvironment::create("[workspaces]\ncount = 2\n");
+    auto env = TestEnvironment::create("[workspaces]\nnames = [\"1\", \"2\"]\n");
     REQUIRE(env);
     RestoreOutputs restore;
     auto& conn = env->conn;
@@ -628,10 +625,10 @@ TEST_CASE(
     CAPTURE(kind);
     auto env = TestEnvironment::create(R"(
 [workspaces]
-count = 2
+names = ["1", "2"]
 [[scratchpads]]
 name = "recall"
-spawn = { argv = ["/bin/true"] }
+spawn = ["/bin/true"]
 match = { class = "RecallNamed" }
 )");
     REQUIRE(env);

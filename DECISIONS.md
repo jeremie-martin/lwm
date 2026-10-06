@@ -52,6 +52,26 @@ where LWM is the session process, as on both maintainer hosts. Revisit only if
 something respawns LWM inside a surviving X server, and then first publish the
 existing snapshot continuously through the property cache, which costs about no lines.
 
+## Keep a declarative configuration file, and make it the whole configuration (2026-10-06)
+
+A shell script of `lwmctl bind/rule/set` commands was rejected by four independent
+reviews with code access. It moves the loader into new command grammars and an argv
+quoting layer; keeping whole-file rejection needs staged transactions across separate
+`lwmctl` calls, i.e. per-caller state the X-carried IPC deliberately lacks; the
+workspace count is fixed before a script could run; clearing and re-running on reload
+releases scratchpad claims and reapplies rules repeatedly; and readiness, restart and
+error reporting all get harder. Host differences stay in separate files or a generator.
+
+Instead the TOML file became the whole configuration. The example file is embedded as
+the built-in defaults, deleting the hand-written default bindings, commands and mouse
+bindings and the rules for when a group replaced a built-in one. Bindings are a table
+mapping a combo to command text or an argv list, deleting `[commands]`, `ref` and
+`shell` (`["sh", "-c", "..."]` is an argv). Workspace names are the count, deleting the
+separate count and its reconciliation. `[[workspace_keys]]` groups carry both switch
+and move modifiers; mouse bindings are a table, and duplicates are rejected. `[autostart]`
+was removed: the session script (`~/.xinitrc` or the display manager's) already owns
+process lifetimes, readiness and cleanup, and LWM-run autostart duplicated it.
+
 ## Keep WM_HINTS urgency mirroring (2026-10-06)
 
 Writing urgency into the application-owned `WM_HINTS`, detecting its echo and
@@ -114,13 +134,6 @@ that follow their effects. The process that got there:
 
 The same question applied to the remaining subsystems:
 
-- **Configuration as a script of `lwmctl` commands** (the herbstluftwm model).
-  `lwmctl bind`, `lwmctl rule` and `lwmctl set` applied by a shell script, with
-  reload re-running it, could remove most of the TOML schema, its resolution layer
-  and generated default bindings, and would give conditionals and per-host
-  configuration for free. Cost: today an invalid file is rejected whole before
-  anything changes; a script applies commands one by one, so that guarantee would
-  need a replacement (for example staging commands until a final `apply`).
 - **Scratchpads as tagged windows.** Named slots, the pool, pending launches and
   claims form a separate membership system beside rules. A rule-assigned tag and one
   generic toggle-by-tag command might cover both kinds. Less certain than the above.

@@ -14,7 +14,7 @@ bool near(nlohmann::json const& value, double expected) { return std::abs(value.
 
 TEST_CASE("Integration: watch prints the attached state, then only changed states", "[integration][watch]")
 {
-    auto env = TestEnvironment::create("[workspaces]\ncount = 2\n");
+    auto env = TestEnvironment::create("[workspaces]\nnames = [\"1\", \"2\"]\n");
     if (!env)
         SKIP("X11 unavailable");
     auto& conn = env->conn;
@@ -56,7 +56,7 @@ TEST_CASE("Integration: watch reports layout changes from bindings, IPC and spli
 {
     auto env = TestEnvironment::create(
         "[layout]\nmin_ratio = 0.1\n[appearance]\npadding = 10\nborder_width = 1\n"
-        "[[binds]]\nkey = \"super+l\"\naction = 'ratio adjust 0.05'\n"
+        "[binds]\n\"super+l\" = 'ratio adjust 0.05'\n"
     );
     if (!env)
         SKIP("X11 unavailable");

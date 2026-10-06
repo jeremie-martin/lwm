@@ -9,13 +9,10 @@ namespace {
 constexpr auto timeout = std::chrono::seconds(2);
 constexpr auto config = R"(
 [workspaces]
-count = 2
-[[binds]]
-key = "F5"
-action = "window to-workspace 1"
-[[binds]]
-key = "F6"
-action = "window float"
+names = ["1", "2"]
+[binds]
+"F5" = "window to-workspace 1"
+"F6" = "window float"
 )";
 void park_pointer(X11Connection& conn)
 {
@@ -332,7 +329,7 @@ TEST_CASE(
     "[integration][restart][placement][property][scratchpad]"
 )
 {
-    auto env = TestEnvironment::create("[workspaces]\ncount = 2\n");
+    auto env = TestEnvironment::create("[workspaces]\nnames = [\"1\", \"2\"]\n");
     if (!env)
         SKIP("X11 unavailable");
     auto& conn = env->conn;
@@ -407,10 +404,10 @@ TEST_CASE("Integration: restart preserves client ownership across non-client typ
     CAPTURE(type, path);
     auto env = TestEnvironment::create(R"(
 [workspaces]
-count = 2
+names = ["1", "2"]
 [[scratchpads]]
 name = "named"
-spawn = { argv = ["/bin/true"] }
+spawn = ["/bin/true"]
 match = { class = "NamedOwner" }
 )");
     REQUIRE(env);
@@ -692,7 +689,7 @@ TEST_CASE("Integration: adoption resolves mixed transient chains before publishi
 padding = 0
 border_width = 0
 [workspaces]
-count = 2
+names = ["1", "2"]
 [[rules]]
 match = { class = "StartupParent" }
 apply = { workspace = 1 }

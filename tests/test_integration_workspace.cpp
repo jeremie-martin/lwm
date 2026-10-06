@@ -300,7 +300,7 @@ std::optional<std::vector<xcb_window_t>> get_client_list(X11Connection& conn, xc
 
 TEST_CASE("Integration: workspace switch back and forth", "[integration][workspace]")
 {
-    auto test_env = TestEnvironment::create("[workspaces]\ncount = 2\n");
+    auto test_env = TestEnvironment::create("[workspaces]\nnames = [\"1\", \"2\"]\n");
     if (!test_env)
         SKIP("Test environment not available");
 
@@ -324,7 +324,7 @@ TEST_CASE("Integration: workspace switch back and forth", "[integration][workspa
 
 TEST_CASE("Integration: windows persist across workspace switches", "[integration][workspace]")
 {
-    auto test_env = TestEnvironment::create("[workspaces]\ncount = 2\n");
+    auto test_env = TestEnvironment::create("[workspaces]\nnames = [\"1\", \"2\"]\n");
     if (!test_env)
         SKIP("Test environment not available");
 
@@ -366,7 +366,7 @@ TEST_CASE(
     "[integration][workspace][fullscreen]"
 )
 {
-    auto test_env = TestEnvironment::create("[workspaces]\ncount = 2\n");
+    auto test_env = TestEnvironment::create("[workspaces]\nnames = [\"1\", \"2\"]\n");
     if (!test_env)
         SKIP("Test environment not available");
 
@@ -466,7 +466,7 @@ TEST_CASE(
     "[integration][workspace][focus][visibility]"
 )
 {
-    auto test_env = TestEnvironment::create("[workspaces]\ncount = 2\n");
+    auto test_env = TestEnvironment::create("[workspaces]\nnames = [\"1\", \"2\"]\n");
     if (!test_env)
         SKIP("Test environment not available");
 
@@ -585,7 +585,7 @@ TEST_CASE(
 // =============================================================================
 TEST_CASE("Integration: monocle layout assigns identical geometries", "[integration][layout][monocle]")
 {
-    auto test_env = TestEnvironment::create("[workspaces]\ncount = 2\n");
+    auto test_env = TestEnvironment::create("[workspaces]\nnames = [\"1\", \"2\"]\n");
     if (!test_env)
         SKIP("Test environment not available");
 
@@ -639,15 +639,12 @@ TEST_CASE("Integration: monocle layout assigns identical geometries", "[integrat
 TEST_CASE("Integration: JSON list IPC replies match the documented schema", "[integration][ipc][json]")
 {
     auto test_env = TestEnvironment::create(R"(
-[commands]
-terminal = { argv = ["/bin/true"] }
-
 [workspaces]
-count = 2
+names = ["1", "2"]
 
 [[scratchpads]]
 name = "terminal"
-spawn = { ref = "terminal" }
+spawn = ["/bin/true"]
 match = { class = "ScratchpadClass" }
 )");
     if (!test_env)
@@ -685,7 +682,7 @@ match = { class = "ScratchpadClass" }
 
 TEST_CASE("Integration: managed windows publish zero frame extents", "[integration][ewmh][frame_extents]")
 {
-    auto test_env = TestEnvironment::create("[workspaces]\ncount = 2\n");
+    auto test_env = TestEnvironment::create("[workspaces]\nnames = [\"1\", \"2\"]\n");
     if (!test_env)
         SKIP("Test environment not available");
 
@@ -709,11 +706,10 @@ TEST_CASE("Integration: monocle swap focuses adjacent tiled window", "[integrati
 {
     auto test_env = TestEnvironment::create(R"(
 [workspaces]
-count = 2
+names = ["1", "2"]
 
-[[binds]]
-key = "super+j"
-action = "window swap next"
+[binds]
+"super+j" = "window swap next"
 )");
     if (!test_env)
         SKIP("Test environment not available");
@@ -756,7 +752,7 @@ action = "window swap next"
 
 TEST_CASE("Integration: workspace, fullscreen, scratchpad and restart transitions compose", "[integration][sequence][restart]")
 {
-    auto env = TestEnvironment::create("[workspaces]\ncount = 2\n");
+    auto env = TestEnvironment::create("[workspaces]\nnames = [\"1\", \"2\"]\n");
     if (!env)
         SKIP("Xvfb not available");
     auto& conn = env->conn;
@@ -850,7 +846,7 @@ TEST_CASE("Integration: invalid ratio commands cannot poison layout state", "[in
 
 TEST_CASE("Integration: restart consumes its handoff and rejects damaged snapshots", "[integration][restart][malformed][layout][monocle]")
 {
-    auto env = TestEnvironment::create("[workspaces]\ncount = 2\n");
+    auto env = TestEnvironment::create("[workspaces]\nnames = [\"1\", \"2\"]\n");
     if (!env)
         SKIP("X11 unavailable");
     auto& conn = env->conn;
@@ -924,7 +920,7 @@ TEST_CASE("Integration: restart consumes its handoff and rejects damaged snapsho
 
 TEST_CASE("Integration: restart places unrecorded windows on the restored workspace", "[integration][restart]")
 {
-    auto env = TestEnvironment::create("[workspaces]\ncount = 3\n");
+    auto env = TestEnvironment::create("[workspaces]\nnames = [\"1\", \"2\", \"3\"]\n");
     if (!env)
         SKIP("Test environment not available");
     auto& conn = env->conn;
@@ -960,13 +956,10 @@ TEST_CASE("Integration: restart preserves the selected workspace and previous-wo
 {
     auto env = TestEnvironment::create(R"(
 [workspaces]
-count = 4
-[[binds]]
-key = "super+Tab"
-action = "workspace toggle"
-[[binds]]
-key = "super+r"
-action = "restart"
+names = ["1", "2", "3", "4"]
+[binds]
+"super+Tab" = "workspace toggle"
+"super+r" = "restart"
 )");
     if (!env)
         SKIP("X11 unavailable");

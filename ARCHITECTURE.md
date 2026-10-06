@@ -293,8 +293,10 @@ names survive.
 ## Configuration and IPC
 
 A private reflect-cpp schema validates TOML over toml++; the loader resolves names,
-bounds, command references and compiled regexes into plain runtime values. Bindings'
-`action` strings and IPC requests share one command parser; bindings reject queries.
+bounds and compiled regexes into plain runtime values. The file is the whole
+configuration; the built-in defaults are `config.toml.example`, embedded with `#embed`
+and parsed by the same loader. Binding command text and IPC requests share one
+command parser; bindings reject queries.
 Actions succeed silently; their outcome is the published state. Execution copies a
 binding's action because reload can replace the configuration that owns it. Startup
 and exec restart fall back to the defaults when the file is missing or invalid, since
@@ -343,8 +345,8 @@ Restoration overlays saved intent on surviving observations, installs the saved
 graph, rebinds it to discovered outputs through the live topology code (folding fewer
 workspaces into the last), filters vanished clients, admits newcomers on the restored
 current workspace unless a desktop hint places them, keeps surviving fullscreen claims
-before new ones, and restores scratchpad state. Autostart is suppressed whenever a
-predecessor handed over.
+before new ones, and restores scratchpad state. The pointer selects the initial
+monitor only when no predecessor handed over.
 
 ## Logging
 

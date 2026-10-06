@@ -42,7 +42,7 @@ def measure(binary, level, blocked=False, affinity=None, switches=400, target_na
         finally:
             os.close(read_fd)
         config = directory / "config.toml"
-        config.write_text("[workspaces]\ncount=2\n")
+        config.write_text("[workspaces]\nnames = [\"1\", \"2\"]\n")
         environment = dict(os.environ, DISPLAY=display)
         if blocked:
             reader, writer = os.pipe()

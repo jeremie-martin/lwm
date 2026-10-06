@@ -33,7 +33,7 @@ TEST_CASE(
     "[integration][client_message][workspace]"
 )
 {
-    auto test_env = TestEnvironment::create("[workspaces]\ncount = 2\n");
+    auto test_env = TestEnvironment::create("[workspaces]\nnames = [\"1\", \"2\"]\n");
     if (!test_env)
         SKIP("Test environment not available");
 
@@ -96,7 +96,7 @@ TEST_CASE(
     "[integration][client_message][workspace][edge]"
 )
 {
-    auto test_env = TestEnvironment::create("[workspaces]\ncount = 2\n");
+    auto test_env = TestEnvironment::create("[workspaces]\nnames = [\"1\", \"2\"]\n");
     if (!test_env)
         SKIP("Test environment not available");
 
@@ -134,7 +134,7 @@ TEST_CASE(
 
 TEST_CASE("Integration: client message to invalid window ID is ignored", "[integration][client_message][edge]")
 {
-    auto test_env = TestEnvironment::create("[workspaces]\ncount = 2\n");
+    auto test_env = TestEnvironment::create("[workspaces]\nnames = [\"1\", \"2\"]\n");
     if (!test_env)
         SKIP("Test environment not available");
 
@@ -192,7 +192,7 @@ TEST_CASE(
     "[integration][client_message][workspace][focus]"
 )
 {
-    auto test_env = TestEnvironment::create("[workspaces]\ncount = 2\n");
+    auto test_env = TestEnvironment::create("[workspaces]\nnames = [\"1\", \"2\"]\n");
     if (!test_env)
         SKIP("Test environment not available");
 
@@ -237,7 +237,7 @@ TEST_CASE(
     "[integration][client_message][workspace][sticky]"
 )
 {
-    auto test_env = TestEnvironment::create("[workspaces]\ncount = 2\n");
+    auto test_env = TestEnvironment::create("[workspaces]\nnames = [\"1\", \"2\"]\n");
     if (!test_env)
         SKIP("Test environment not available");
 
@@ -279,7 +279,7 @@ TEST_CASE(
     "[integration][client_message][workspace][sticky][edge]"
 )
 {
-    auto test_env = TestEnvironment::create("[workspaces]\ncount = 2\n");
+    auto test_env = TestEnvironment::create("[workspaces]\nnames = [\"1\", \"2\"]\n");
     if (!test_env)
         SKIP("Test environment not available");
 
@@ -311,7 +311,7 @@ TEST_CASE(
     "[integration][client_message][focus][user_time]"
 )
 {
-    auto test_env = TestEnvironment::create("[workspaces]\ncount = 2\n");
+    auto test_env = TestEnvironment::create("[workspaces]\nnames = [\"1\", \"2\"]\n");
     if (!test_env)
         SKIP("Test environment not available");
 
@@ -397,7 +397,7 @@ TEST_CASE(
     "[integration][client_message][focus][user_time]"
 )
 {
-    auto test_env = TestEnvironment::create("[workspaces]\ncount = 2\n");
+    auto test_env = TestEnvironment::create("[workspaces]\nnames = [\"1\", \"2\"]\n");
     if (!test_env)
         SKIP("Test environment not available");
 
@@ -430,7 +430,7 @@ TEST_CASE(
     "[integration][client_message][focus][user_time]"
 )
 {
-    auto test_env = TestEnvironment::create("[workspaces]\ncount = 2\n");
+    auto test_env = TestEnvironment::create("[workspaces]\nnames = [\"1\", \"2\"]\n");
     if (!test_env)
         SKIP("Test environment not available");
 
@@ -468,7 +468,7 @@ TEST_CASE(
     "[integration][client_message][focus][user_time][wraparound]"
 )
 {
-    auto test_env = TestEnvironment::create("[workspaces]\ncount = 2\n");
+    auto test_env = TestEnvironment::create("[workspaces]\nnames = [\"1\", \"2\"]\n");
     if (!test_env)
         SKIP("Test environment not available");
 
@@ -521,7 +521,7 @@ TEST_CASE(
     "[integration][client_message][focus][fullscreen][user_time]"
 )
 {
-    auto test_env = TestEnvironment::create("[workspaces]\ncount = 2\n");
+    auto test_env = TestEnvironment::create("[workspaces]\nnames = [\"1\", \"2\"]\n");
     if (!test_env)
         SKIP("Test environment not available");
 

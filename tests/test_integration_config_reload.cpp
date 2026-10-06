@@ -43,13 +43,7 @@ std::string toml_escape(std::string const& value)
     return out;
 }
 
-std::string make_config(
-    std::string const& first_name,
-    std::string const& second_name,
-    std::optional<size_t> workspace_count = 2,
-    std::string const& autostart_command = {},
-    std::string const& extra = {}
-)
+std::string make_config(std::vector<std::string> const& names, std::string const& extra = {})
 {
     std::ostringstream out;
     out << "[appearance]\n";
@@ -57,19 +51,11 @@ std::string make_config(
     out << "border_width = 2\n";
     out << "border_color = 0xFF0000\n\n";
     out << "[workspaces]\n";
-    if (workspace_count.has_value())
-        out << "count = " << *workspace_count << "\n";
-    out << "names = [\"" << toml_escape(first_name) << "\", \"" << toml_escape(second_name) << "\"]\n";
-
-    if (!autostart_command.empty())
-    {
-        out << "\n[autostart]\n";
-        out << "commands = [{ shell = \"" << toml_escape(autostart_command) << "\" }]\n";
-    }
-
+    out << "names = [";
+    for (size_t i = 0; i < names.size(); ++i) out << (i ? ", " : "") << '"' << toml_escape(names[i]) << '"';
+    out << "]\n";
     if (!extra.empty())
         out << "\n" << extra;
-
     return out.str();
 }
 
@@ -89,36 +75,8 @@ bool wait_for_desktop_names(X11Connection& conn, std::vector<std::string> expect
     return wait_for_property_strings(conn.get(), conn.root(), names_atom, std::move(expected), kTimeout);
 }
 
-size_t line_count(std::filesystem::path const& path)
-{
-    std::string contents = read_text_file(path);
-    if (contents.empty())
-        return 0;
-
-    size_t count = 0;
-    for (char ch : contents)
-    {
-        if (ch == '\n')
-            ++count;
-    }
-
-    if (!contents.empty() && contents.back() != '\n')
-        ++count;
-
-    return count;
-}
 
 // A shell whose command line names `needle` is found until its commands have finished.
-bool process_running_with_argument(std::string const& needle)
-{
-    std::error_code ec;
-    for (auto const& entry : std::filesystem::directory_iterator("/proc", ec))
-    {
-        if (read_text_file(entry.path() / "cmdline").find(needle) != std::string::npos)
-            return true;
-    }
-    return false;
-}
 
 std::optional<std::pair<int16_t, int16_t>> window_center(X11Connection& conn, xcb_window_t window)
 {
@@ -142,19 +100,20 @@ TEST_CASE(
     "[integration][ipc][reload]"
 )
 {
-    auto env = TestEnvironment::create(make_config("dev", "web"));
+    auto env = TestEnvironment::create(make_config({ "dev", "web" }));
     if (!env)
         SKIP("Test environment not available");
 
     REQUIRE(wait_for_desktop_names(env->conn, { "dev", "web" }));
 
-    REQUIRE(env->wm.write_config(make_config("code", "chat")));
+    REQUIRE(env->wm.write_config(make_config({ "code", "chat" })));
     auto reload_ok = run_lwmctl(env->wm, { "reload-config" });
     REQUIRE(reload_ok.has_value());
     REQUIRE(reload_ok->exit_code == 0);
     REQUIRE(wait_for_desktop_names(env->conn, { "code", "chat" }));
 
-    REQUIRE(env->wm.write_config("[workspaces]\ncount = 2\nnames = [\"broken\"\n"));
+    // The workspace count cannot change live.
+    REQUIRE(env->wm.write_config("[workspaces]\nnames = [\"broken\", \"2\", \"3\"]\n"));
     auto reload_bad = run_lwmctl(env->wm, { "reload-config" });
     REQUIRE(reload_bad.has_value());
     REQUIRE(reload_bad->exit_code != 0);
@@ -163,7 +122,7 @@ TEST_CASE(
 
 TEST_CASE("Integration: reload-config rejects workspace-count changes", "[integration][ipc][reload]")
 {
-    auto env = TestEnvironment::create(make_config("one", "two"));
+    auto env = TestEnvironment::create(make_config({ "one", "two" }));
     if (!env)
         SKIP("Test environment not available");
 
@@ -172,7 +131,7 @@ TEST_CASE("Integration: reload-config rejects workspace-count changes", "[integr
     REQUIRE(desktops_atom != XCB_NONE);
     REQUIRE(wait_for_property_cardinal(env->conn.get(), env->conn.root(), desktops_atom, 2, kTimeout));
 
-    REQUIRE(env->wm.write_config(make_config("one", "two", 3)));
+    REQUIRE(env->wm.write_config(make_config({ "one", "two", "3" })));
     auto reload_result = run_lwmctl(env->wm, { "reload-config" });
     REQUIRE(reload_result.has_value());
     REQUIRE(reload_result->exit_code != 0);
@@ -181,46 +140,12 @@ TEST_CASE("Integration: reload-config rejects workspace-count changes", "[integr
     REQUIRE(wait_for_desktop_names(env->conn, { "one", "two" }));
 }
 
-TEST_CASE("Integration: reload-config does not rerun autostart", "[integration][ipc][reload][autostart]")
-{
-    auto marker_dir = make_temp_dir();
-    REQUIRE_FALSE(marker_dir.empty());
-
-    std::filesystem::path marker_path = std::filesystem::path(marker_dir) / "autostart.log";
-    std::string autostart_cmd = "sh -c 'echo start >> " + marker_path.string() + "'";
-
-    auto env = TestEnvironment::create(make_config("alpha", "beta", 2, autostart_cmd));
-    if (!env)
-        SKIP("Test environment not available");
-
-
-    REQUIRE(wait_for_condition(
-        [&marker_path]() { return std::filesystem::exists(marker_path) && line_count(marker_path) == 1; },
-        kTimeout
-    ));
-    REQUIRE(wait_for_condition([&] { return !process_running_with_argument(marker_path.string()); }, kTimeout));
-
-    REQUIRE(env->wm.write_config(make_config("gamma", "delta", 2, autostart_cmd)));
-    auto reload_result = run_lwmctl(env->wm, { "reload-config" });
-    REQUIRE(reload_result.has_value());
-    REQUIRE(reload_result->exit_code == 0);
-    REQUIRE(wait_for_desktop_names(env->conn, { "gamma", "delta" }));
-
-    // Launching returns only after exec, so a rerun during reload would have a shell by now.
-    // Check that no such shell is still running before checking that none appended a line.
-    REQUIRE_FALSE(process_running_with_argument(marker_path.string()));
-    REQUIRE(line_count(marker_path) == 1);
-
-    std::error_code ec;
-    std::filesystem::remove_all(marker_dir, ec);
-}
-
 TEST_CASE(
     "Integration: reload-config reapplies geometry rules to visible floating windows",
     "[integration][ipc][reload][rules]"
 )
 {
-    auto env = TestEnvironment::create(make_config("left", "right"));
+    auto env = TestEnvironment::create(make_config({ "left", "right" }));
     if (!env)
         SKIP("Test environment not available");
 
@@ -238,7 +163,7 @@ TEST_CASE(
 match = { type = "Dialog" }
 apply = { geometry = { x = 300, y = 200, width = 240, height = 160 } }
 )";
-    REQUIRE(env->wm.write_config(make_config("left", "right", 2, {}, rules)));
+    REQUIRE(env->wm.write_config(make_config({ "left", "right" }, rules)));
 
     auto reload_result = run_lwmctl(env->wm, { "reload-config" });
     REQUIRE(reload_result.has_value());
@@ -253,7 +178,7 @@ TEST_CASE(
     "[integration][ipc][reload][rules][workspace]"
 )
 {
-    auto env = TestEnvironment::create(make_config("left", "right"));
+    auto env = TestEnvironment::create(make_config({ "left", "right" }));
     if (!env)
         SKIP("Test environment not available");
 
@@ -278,7 +203,7 @@ TEST_CASE(
 match = { title = "reload-move" }
 apply = { workspace = 1 }
 )";
-    REQUIRE(env->wm.write_config(make_config("left", "right", 2, {}, rules)));
+    REQUIRE(env->wm.write_config(make_config({ "left", "right" }, rules)));
 
     auto reload_result = run_lwmctl(env->wm, { "reload-config" });
     REQUIRE(reload_result.has_value());
@@ -300,11 +225,11 @@ TEST_CASE(
     std::string scratchpad = R"(
 [[scratchpads]]
 name = "scratchpad"
-spawn = { argv = ["/bin/true"] }
+spawn = ["/bin/true"]
 match = { class = "ScratchpadClass", instance = "scratchpad-instance" }
 size = { width = 0.8, height = 0.6 }
 )";
-    auto env = TestEnvironment::create(make_config("one", "two", 2, {}, scratchpad));
+    auto env = TestEnvironment::create(make_config({ "one", "two" }, scratchpad));
     if (!env)
         SKIP("Test environment not available");
 
@@ -347,7 +272,7 @@ size = { width = 0.8, height = 0.6 }
     xcb_flush(env->conn.get());
     REQUIRE(wait_for_active_window(env->conn, fallback, kTimeout));
 
-    REQUIRE(env->wm.write_config(make_config("one", "two")));
+    REQUIRE(env->wm.write_config(make_config({ "one", "two" })));
     auto reload_result = run_lwmctl(env->wm, { "reload-config" });
     REQUIRE(reload_result.has_value());
     REQUIRE(reload_result->exit_code == 0);
@@ -362,14 +287,10 @@ TEST_CASE("Integration: a reload binding can replace itself and publish new bind
 {
     auto env = TestEnvironment::create(R"(
 [workspaces]
-count = 2
 names = ["before", "two"]
-[[binds]]
-key = "F5"
-action = "reload-config"
-[[binds]]
-key = "F6"
-action = "workspace switch 1"
+[binds]
+"F5" = "reload-config"
+"F6" = "workspace switch 1"
 )");
     REQUIRE(env);
     auto& conn = env->conn;
@@ -378,11 +299,9 @@ action = "workspace switch 1"
     REQUIRE(wait_for_property_cardinal(conn.get(), conn.root(), desktop, 1, kTimeout));
     REQUIRE(env->wm.write_config(R"(
 [workspaces]
-count = 2
 names = ["after", "two"]
-[[binds]]
-key = "F6"
-action = "workspace switch 0"
+[binds]
+"F6" = "workspace switch 0"
 )"));
     REQUIRE(send_key(conn, XK_F5));
     REQUIRE(wait_for_desktop_names(conn, { "after", "two" }));
@@ -392,11 +311,9 @@ action = "workspace switch 0"
     // Invalid replacement must leave both the published config and working bindings intact.
     REQUIRE(env->wm.write_config(R"(
 [workspaces]
-count = 2
 names = ["invalid", "two"]
-[[binds]]
-key = "F6"
-action = "workspace switch 1"
+[binds]
+"F6" = "workspace switch 1"
 [[rules]]
 match = { title = "[invalid" }
 apply = { floating = true }
@@ -421,14 +338,14 @@ TEST_CASE(
     {
         std::string result = R"(
 [workspaces]
-count = 2
+names = ["1", "2"]
 [[scratchpads]]
 name = "pending"
-spawn = { argv = ["/bin/true"] }
+spawn = ["/bin/true"]
 match = { class = "Pending" }
 )";
         if (keep_claimed)
-            result += "\n[[scratchpads]]\nname = \"claimed\"\nspawn = { argv = [\"/bin/true\"] }\nmatch = { class = \""
+            result += "\n[[scratchpads]]\nname = \"claimed\"\nspawn = [\"/bin/true\"]\nmatch = { class = \""
                 + pattern + "\" }\n";
         return result;
     };
@@ -472,21 +389,20 @@ match = { class = "Pending" }
     REQUIRE(wait_for_condition([&] { return !has_state(conn, window, hidden); }, kTimeout));
 }
 
-TEST_CASE("Integration: resolved launch bindings preserve argv and replace references on reload", "[integration][reload][keybind][spawn]")
+TEST_CASE("Integration: launch bindings preserve argv and follow reload", "[integration][reload][keybind][spawn]")
 {
     auto env = TestEnvironment::create();
     if (!env)
         SKIP("X11 unavailable");
     auto literal_path = std::filesystem::path(env->wm.runtime_dir()) / "literal output";
     auto shell_path = std::filesystem::path(env->wm.runtime_dir()) / "shell output";
-    auto config = [&](std::string const& marker)
+    auto config = [&](std::string const& marker, std::string const& binds = "", std::string const& tail = "")
     {
-        return "[commands]\n"
-            "literal = {argv = ['/bin/sh', '-c', 'out=$1; shift; printf \"<%s>\" \"$@\" > \"$out\"', "
-            "'capture', '" + literal_path.string() + "', '', '$HOME; untouched', 'two words']}\n"
-            "script = {shell = \"printf '%s' \\\"$(printf " + marker + ")\\\" > '" + shell_path.string() + "'\"}\n"
-            "[[binds]]\nkey = 'F6'\naction = {ref = 'literal'}\n"
-            "[[binds]]\nkey = 'F7'\naction = {ref = 'script'}\n";
+        return "[binds]\n"
+               "F6 = ['/bin/sh', '-c', 'out=$1; shift; printf \"<%s>\" \"$@\" > \"$out\"', "
+               "'capture', '" + literal_path.string() + "', '', '$HOME; untouched', 'two words']\n"
+               "F7 = ['sh', '-c', \"printf '%s' \\\"$(printf " + marker + ")\\\" > '" + shell_path.string() + "'\"]\n"
+            + binds + tail;
     };
     REQUIRE(env->wm.write_config(config("first")));
     REQUIRE(send_ipc_command("reload-config") == "ok");
@@ -500,15 +416,15 @@ TEST_CASE("Integration: resolved launch bindings preserve argv and replace refer
     REQUIRE(send_key(env->conn, XK_F7));
     REQUIRE(wait_for_condition([&] { return read_text_file(shell_path) == "second"; }, kTimeout));
 
-    for (std::string invalid : {
-             "[[binds]]\nkey = 'F8'\naction = 'state'\n",
-             "[[binds]]\nkey = 'F8'\naction = {argv = ['true'], shell = 'true'}\n",
-             "[[rules]]\napply = {workspace = 0, workspace_name = '1'}\n",
-             "[[rules]]\napply = {layer = 'above', below = true}\n"
+    for (auto const& [binds, tail] : std::initializer_list<std::pair<std::string, std::string>>{
+             { "F8 = 'state'\n", "" },
+             { "F8 = {argv = ['true']}\n", "" },
+             { "", "[[rules]]\napply = {workspace = 0, workspace_name = '1'}\n" },
+             { "", "[[rules]]\napply = {layer = 'above', below = true}\n" },
          })
     {
-        CAPTURE(invalid);
-        REQUIRE(env->wm.write_config(config("rejected") + invalid));
+        CAPTURE(binds, tail);
+        REQUIRE(env->wm.write_config(config("rejected", binds, tail)));
         auto rejected = send_ipc_command("reload-config");
         REQUIRE(rejected);
         REQUIRE(rejected->starts_with("error "));
@@ -522,10 +438,9 @@ TEST_CASE("Integration: key bindings follow keyboard mapping changes", "[integra
 {
     auto env = TestEnvironment::create(R"(
 [workspaces]
-count = 2
-[[binds]]
-key = "F35"
-action = "workspace switch 1"
+names = ["1", "2"]
+[binds]
+"F35" = "workspace switch 1"
 )");
     REQUIRE(env);
     auto& conn = env->conn;

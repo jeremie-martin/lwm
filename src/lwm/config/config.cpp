@@ -7,8 +7,8 @@
 #undef Below
 #include <algorithm>
 #include <array>
+#include <charconv>
 #include <cmath>
-#include <rfl/Field.hpp>
 #include <rfl/Literal.hpp>
 #include <rfl/NoExtraFields.hpp>
 #include <rfl/Rename.hpp>
@@ -16,7 +16,7 @@
 #include <rfl/comparisons.hpp>
 #include <rfl/toml/read.hpp>
 #include <filesystem>
-#include <set>
+#include <fstream>
 #include <stdexcept>
 #include <string_view>
 
@@ -62,18 +62,9 @@ struct Focus
 };
 struct Workspaces
 {
-    OptionalInteger<1, 65535> count;
-    std::optional<std::vector<std::string>> names;
+    std::vector<std::string> names; ///< The list is the workspace count
 };
-using Argv = rfl::Field<"argv", std::vector<std::string>>;
-using Shell = rfl::Field<"shell", std::string>;
-using Reference = rfl::Field<"ref", std::string>;
-using Executable = std::variant<Argv, Shell>;
-using Command = std::variant<Argv, Shell, Reference>;
-struct Autostart
-{
-    std::optional<std::vector<Command>> commands;
-};
+using Argv = std::vector<std::string>;
 struct Match
 {
     rfl::Rename<"class", Text> class_name;
@@ -93,7 +84,7 @@ struct Size
 struct Scratchpad
 {
     std::string name;
-    Command spawn;
+    Argv spawn;
     Match match;
     std::optional<Size> size;
 };
@@ -116,35 +107,26 @@ struct Rule
     std::optional<RuleMatch> match;
     RuleActions apply;
 };
-struct Bind
+// Command text as lwmctl takes it, or the argv of a process to launch.
+using BindAction = std::variant<std::string, Argv>;
+// One keyboard layout's workspace keys: modifier+key N switches to or moves to workspace N.
+struct WorkspaceKeys
 {
-    std::string key;
-    std::variant<std::string, Command> action;
-};
-struct WorkspaceBind
-{
-    rfl::Literal<"switch", "move"> mode;
-    std::string mod;
+    rfl::Rename<"switch", Text> switch_mod;
+    Text move;
     std::vector<std::string> keys;
 };
-struct MouseBind
-{
-    Text mod;
-    Integer<1, 255> button;
-    rfl::Literal<"drag_window", "resize_floating", "toggle_float"> action;
-};
+using MouseAction = rfl::Literal<"drag_window", "resize_floating", "toggle_float">;
 struct Config
 {
     std::optional<Appearance> appearance;
     std::optional<Layout> layout;
     std::optional<Focus> focus;
     std::optional<Workspaces> workspaces;
-    std::optional<std::map<std::string, Executable>> commands;
-    std::optional<Autostart> autostart;
     std::optional<std::vector<Scratchpad>> scratchpads;
-    std::optional<std::vector<Bind>> binds;
-    std::optional<std::vector<WorkspaceBind>> workspace_binds;
-    std::optional<std::vector<MouseBind>> mousebinds;
+    std::optional<std::map<std::string, BindAction>> binds;
+    std::optional<std::vector<WorkspaceKeys>> workspace_keys;
+    std::optional<std::map<std::string, MouseAction>> mousebinds;
     std::optional<std::vector<Rule>> rules;
 };
 
@@ -207,18 +189,16 @@ xcb_keysym_t parse_keysym(std::string const& key, std::string const& context)
     return static_cast<xcb_keysym_t>(symbol);
 }
 
-KeyBinding parse_key_combo(std::string const& combo, std::string const& context)
+// "mod+mod+KEY": the modifiers and the final component.
+std::pair<uint16_t, std::string> parse_combo(std::string const& combo, std::string const& context)
 {
     auto separator = combo.rfind('+');
     // A leading '+' is an empty modifier, not an unmodified key.
     if (separator == 0)
         throw std::runtime_error(context + " contains an empty modifier");
-    auto modifier = parse_modifiers(
-        separator == combo.npos ? std::string_view{} : std::string_view(combo).substr(0, separator),
-        context
-    );
-    auto keysym = parse_keysym(combo.substr(separator == combo.npos ? 0 : separator + 1), context);
-    return KeyBinding{ modifier, keysym };
+    if (separator == combo.npos)
+        return { 0, combo };
+    return { parse_modifiers(std::string_view(combo).substr(0, separator), context), combo.substr(separator + 1) };
 }
 
 template <typename Match> WindowMatcher parse_matchers(Match const& input, std::string const& context)
@@ -243,32 +223,10 @@ template <typename Match> WindowMatcher parse_matchers(Match const& input, std::
              pattern(input.title, "title") };
 }
 
-using Commands = std::map<std::string, std::vector<std::string>>;
-
-template <typename Command>
-std::vector<std::string> resolve_command(Command const& input, std::string const& context, Commands const& registry)
+std::vector<std::string> launch_argv(schema::Argv argv, std::string const& context)
 {
-    auto argv = std::visit(
-        Overloaded{
-            [](schema::Argv const& value) { return value.value(); },
-            [&](schema::Shell const& value) -> std::vector<std::string>
-            {
-                if (value.value().empty())
-                    throw std::runtime_error(context + ".shell must be nonempty text");
-                return { "/bin/sh", "-c", value.value() };
-            },
-            [&](schema::Reference const& value)
-            {
-                auto it = registry.find(value.value());
-                if (it == registry.end())
-                    throw std::runtime_error(context + ".ref points to unknown command '" + value.value() + "'");
-                return it->second;
-            }
-        },
-        input
-    );
     if (argv.empty() || argv.front().empty())
-        throw std::runtime_error(context + ".argv must contain a nonempty executable");
+        throw std::runtime_error(context + " must start with a nonempty executable");
     if (std::ranges::any_of(argv, [](auto const& arg) { return arg.contains('\0'); }))
         throw std::runtime_error(context + " must not contain NUL");
     return argv;
@@ -295,21 +253,21 @@ double parse_ratio(double value, std::string const& context, LayoutConfig const&
     return value;
 }
 
-Action parse_binding(schema::Bind const& input, std::string const& context, Config const& config, Commands const& commands)
+Action parse_binding(schema::BindAction const& input, std::string const& context, Config const& config)
 {
-    if (auto spawn = std::get_if<schema::Command>(&input.action))
-        return action::Spawn{ resolve_command(*spawn, context + ".action", commands) };
-    auto request = command::parse_command(std::get<std::string>(input.action));
+    if (auto const* argv = std::get_if<schema::Argv>(&input))
+        return action::Spawn{ launch_argv(*argv, context) };
+    auto request = command::parse_command(std::get<std::string>(input));
     if (!request)
-        throw std::runtime_error(context + ".action: " + request.error());
+        throw std::runtime_error(context + ": " + request.error());
     auto* operation = std::get_if<Action>(&*request);
     if (!operation)
-        throw std::runtime_error(context + ".action must be an operation, not a query or subscription");
+        throw std::runtime_error(context + " must be an operation, not a query");
     // Resolve configuration references now; execution still checks live state.
     std::visit(
         Overloaded{
-            [&](action::SwitchWorkspace const& a) { parse_workspace_index(a.workspace, context, config.workspaces.count); },
-            [&](action::MoveToWorkspace const& a) { parse_workspace_index(a.workspace, context, config.workspaces.count); },
+            [&](action::SwitchWorkspace const& a) { parse_workspace_index(a.workspace, context, config.workspaces.size()); },
+            [&](action::MoveToWorkspace const& a) { parse_workspace_index(a.workspace, context, config.workspaces.size()); },
             [&](action::SetRatio const& a) { parse_ratio(a.value, context, config.layout); },
             [&](action::ScratchpadToggle const& a) { parse_scratchpad_name(a.name, context, config); },
             [&](action::ScratchpadCancelLaunch const& a) { parse_scratchpad_name(a.name, context, config); },
@@ -320,7 +278,7 @@ Action parse_binding(schema::Bind const& input, std::string const& context, Conf
     return std::move(*operation);
 }
 
-void parse_scratchpad(schema::Scratchpad const& input, std::string const& context, Config& config, Commands const& commands)
+void parse_scratchpad(schema::Scratchpad const& input, std::string const& context, Config& config)
 {
     if (input.name.empty())
         throw std::runtime_error(context + ".name must not be empty");
@@ -328,7 +286,7 @@ void parse_scratchpad(schema::Scratchpad const& input, std::string const& contex
         throw std::runtime_error(context + ".name duplicates scratchpad '" + input.name + "'");
     ScratchpadConfig scratchpad;
     scratchpad.name = input.name;
-    scratchpad.spawn = resolve_command(input.spawn, context + ".spawn", commands);
+    scratchpad.spawn = launch_argv(input.spawn, context + ".spawn");
     scratchpad.match = parse_matchers(input.match, context + ".match");
     if (scratchpad.match.empty())
         throw std::runtime_error(context + ".match must define at least one matcher");
@@ -366,16 +324,16 @@ void parse_rule(schema::Rule const& input, std::string const& context, Config& c
     {
         if (auto name = std::get_if<std::string>(&*in.workspace))
         {
-            auto it = std::ranges::find(config.workspaces.names, *name);
-            if (it == config.workspaces.names.end())
+            auto it = std::ranges::find(config.workspaces, *name);
+            if (it == config.workspaces.end())
                 throw std::runtime_error(context + ".apply.workspace points to unknown workspace '" + *name + "'");
-            out.workspace = static_cast<size_t>(it - config.workspaces.names.begin());
+            out.workspace = static_cast<size_t>(it - config.workspaces.begin());
         }
         else
             out.workspace = parse_workspace_index(
                 std::get<schema::Integer<0, 65534>>(*in.workspace).value(),
                 context + ".apply.workspace",
-                config.workspaces.count
+                config.workspaces.size()
             );
     }
     if (in.monitor)
@@ -408,72 +366,17 @@ void parse_rule(schema::Rule const& input, std::string const& context, Config& c
     config.rules.push_back(std::move(rule));
 }
 
-void add_default_keybinds(Config& config, Commands const& commands)
-{
-    using namespace action;
-    auto key = [](char const* name) { return static_cast<xcb_keysym_t>(XStringToKeysym(name)); };
-    auto bind = [&](uint16_t mod, char const* name, Action action)
-    { config.keybinds[{ mod, key(name) }] = std::move(action); };
-    uint16_t const super = XCB_MOD_MASK_4;
-    uint16_t const super_shift = XCB_MOD_MASK_4 | XCB_MOD_MASK_SHIFT;
-
-    for (auto [name, command] : {
-             std::pair{ "Return", "terminal" },
-             std::pair{      "d", "launcher" }
-    })
-        if (auto it = commands.find(command); it != commands.end())
-            bind(super, name, Spawn{ it->second });
-    bind(super, "q", Kill{});
-    char const* const azerty[] = { "ampersand", "eacute", "quotedbl",   "apostrophe", "parenleft",
-                                   "minus",     "egrave", "underscore", "ccedilla",   "agrave" };
-    char const* const digits[] = { "1", "2", "3", "4", "5", "6", "7", "8", "9", "0" };
-    for (size_t i = 0; i < std::min<size_t>(config.workspaces.count, 10); ++i)
-        for (auto const* keys : { azerty, digits })
-        {
-            bind(super, keys[i], SwitchWorkspace{ i });
-            bind(super_shift, keys[i], MoveToWorkspace{ i });
-        }
-    bind(super, "Left", FocusMonitor{ -1 });
-    bind(super, "Right", FocusMonitor{ 1 });
-    bind(super_shift, "Left", MoveToMonitor{ -1 });
-    bind(super_shift, "Right", MoveToMonitor{ 1 });
-    bind(super, "f", ToggleFullscreen{});
-    bind(super_shift, "f", ToggleFloat{});
-    bind(super, "j", FocusCycle{ true });
-    bind(super, "k", FocusCycle{ false });
-    bind(super, "h", AdjustRatio{ -0.05 });
-    bind(super, "l", AdjustRatio{ 0.05 });
-}
-
-Commands default_commands()
-{
-    return { { "terminal", { "/usr/local/bin/st" } }, { "browser", { "/usr/bin/firefox" } }, { "launcher", { "dmenu_run" } } };
-}
-
-Config default_values()
-{
-    Config config;
-    config.workspaces.names.resize(config.workspaces.count);
-    for (size_t i = 0; i < config.workspaces.names.size(); ++i) config.workspaces.names[i] = std::to_string(i + 1);
-    config.mousebinds = {
-        { XCB_MOD_MASK_4, 1,     MouseAction::DragWindow },
-        { XCB_MOD_MASK_4, 3, MouseAction::ResizeFloating },
-        { XCB_MOD_MASK_4, 2,    MouseAction::ToggleFloat },
-    };
-    return config;
-}
-
-ConfigLoadResult read_config(std::string const& path)
+// The file is the whole configuration: only settings it omits take defaults.
+ConfigLoadResult parse_config(std::string_view text, std::string const& source)
 {
     try
     {
-        auto document = toml::parse_file(path);
+        auto document = toml::parse(text, source);
         auto decoded = rfl::toml::read<schema::Config, rfl::NoExtraFields>(&document);
         if (!decoded)
             throw std::runtime_error(decoded.error().what());
         auto const& input = *decoded;
-        Config config = default_values();
-        auto commands = default_commands();
+        Config config;
         if (auto const& appearance = input.appearance)
         {
             assign(appearance->padding, config.appearance.padding);
@@ -500,100 +403,57 @@ ConfigLoadResult read_config(std::string const& path)
         }
         if (input.focus)
             config.focus.warp_cursor_on_monitor_change = input.focus->warp_cursor_on_monitor_change.value_or(false);
-        if (input.commands)
-            for (auto const& [name, command] : *input.commands)
-                commands[name] = resolve_command(command, "[commands]." + name, commands);
         if (input.workspaces)
         {
-            auto names = input.workspaces->names.value_or(std::vector<std::string>{});
-            if (names.size() > 65535)
-                throw std::runtime_error("[workspaces].names cannot contain more than 65535 entries");
-            if (!names.empty())
-                config.workspaces.count = names.size();
-            assign(input.workspaces->count, config.workspaces.count);
-            size_t named = std::min(names.size(), config.workspaces.count);
-            names.resize(config.workspaces.count);
-            for (size_t i = named; i < names.size(); ++i) names[i] = std::to_string(i + 1);
-            config.workspaces.names = std::move(names);
+            if (input.workspaces->names.empty() || input.workspaces->names.size() > 65535)
+                throw std::runtime_error("[workspaces].names must contain 1..65535 entries");
+            config.workspaces = input.workspaces->names;
         }
         // Resolve declarations before their use sites. No unresolved input escapes this load.
-        for_each(
-            input.scratchpads,
-            "scratchpads",
-            [&](auto const& value, auto const& context) { parse_scratchpad(value, context, config, commands); }
-        );
-        if (input.autostart)
-            for_each(
-                input.autostart->commands,
-                "autostart.commands",
-                [&](auto const& value, auto const& context)
-                { config.autostart.push_back(resolve_command(value, context, commands)); }
-            );
-        if (!input.binds)
-            add_default_keybinds(config, commands);
-        for_each(
-            input.binds,
-            "binds",
-            [&](auto const& value, auto const& context)
+        for_each(input.scratchpads, "scratchpads", [&](auto const& value, auto const& context) { parse_scratchpad(value, context, config); });
+        if (input.binds)
+            for (auto const& [combo, action] : *input.binds)
             {
-                add_binding(
-                    config,
-                    parse_key_combo(value.key, context + ".key"),
-                    parse_binding(value, context, config, commands),
-                    context
-                );
+                auto context = "[binds]." + combo;
+                auto [modifier, key] = parse_combo(combo, context);
+                add_binding(config, { modifier, parse_keysym(key, context) }, parse_binding(action, context, config), context);
             }
-        );
-        std::set<std::pair<uint16_t, bool>> replaced;
         for_each(
-            input.workspace_binds,
-            "workspace_binds",
+            input.workspace_keys,
+            "workspace_keys",
             [&](auto const& value, auto const& context)
             {
-                bool move = value.mode == "move";
-                auto mod = parse_modifiers(value.mod, context + ".mod");
-                if (value.keys.size() != config.workspaces.count)
+                if (!value.switch_mod.value() && !value.move)
+                    throw std::runtime_error(context + " must define switch, move, or both");
+                if (value.keys.size() != config.workspaces.size())
                     throw std::runtime_error(
-                        context + ".keys must contain exactly " + std::to_string(config.workspaces.count) + " entries"
-                    );
-                if (!input.binds && replaced.insert({ mod, move }).second)
-                    std::erase_if(
-                        config.keybinds,
-                        [&](auto const& binding)
-                        {
-                            return binding.first.modifier == mod
-                                && (move ? std::holds_alternative<action::MoveToWorkspace>(binding.second)
-                                         : std::holds_alternative<action::SwitchWorkspace>(binding.second));
-                        }
+                        context + ".keys must contain exactly " + std::to_string(config.workspaces.size()) + " entries"
                     );
                 for (size_t i = 0; i < value.keys.size(); ++i)
                 {
                     auto key_context = context + ".keys[" + std::to_string(i) + "]";
-                    Action action =
-                        move ? Action{ action::MoveToWorkspace{ i } } : Action{ action::SwitchWorkspace{ i } };
-                    add_binding(
-                        config,
-                        { mod, parse_keysym(value.keys[i], key_context) },
-                        std::move(action),
-                        key_context
-                    );
+                    auto keysym = parse_keysym(value.keys[i], key_context);
+                    if (auto const& mod = value.switch_mod.value())
+                        add_binding(config, { parse_modifiers(*mod, context + ".switch"), keysym }, action::SwitchWorkspace{ i }, key_context);
+                    if (auto const& mod = value.move)
+                        add_binding(config, { parse_modifiers(*mod, context + ".move"), keysym }, action::MoveToWorkspace{ i }, key_context);
                 }
             }
         );
         if (input.mousebinds)
-            config.mousebinds.clear();
-        for_each(
-            input.mousebinds,
-            "mousebinds",
-            [&](auto const& value, auto const& context)
+            for (auto const& [combo, action] : *input.mousebinds)
             {
-                auto action = std::array{ MouseAction::DragWindow, MouseAction::ResizeFloating, MouseAction::ToggleFloat }
-                                  [value.action.value()];
-                config.mousebinds.push_back({ parse_modifiers(value.mod.value_or(""), context + ".mod"),
-                                              static_cast<uint8_t>(value.button.value()),
-                                              action });
+                auto context = "[mousebinds]." + combo;
+                auto [modifier, button] = parse_combo(combo, context);
+                int value = 0;
+                auto [end, error] = std::from_chars(button.data(), button.data() + button.size(), value);
+                if (error != std::errc{} || end != button.data() + button.size() || value < 1 || value > 255)
+                    throw std::runtime_error(context + " must end with a button number 1..255");
+                if (std::ranges::any_of(config.mousebinds, [&](auto const& bind) { return bind.modifier == modifier && bind.button == value; }))
+                    throw std::runtime_error(context + " duplicates an existing binding");
+                config.mousebinds.push_back({ modifier, static_cast<uint8_t>(value),
+                                              std::array{ MouseAction::DragWindow, MouseAction::ResizeFloating, MouseAction::ToggleFloat }[action.value()] });
             }
-        );
         for_each(
             input.rules,
             "rules",
@@ -603,17 +463,22 @@ ConfigLoadResult read_config(std::string const& path)
     }
     catch (std::exception const& error)
     {
-        return std::unexpected("Config error in '" + path + "': " + error.what());
+        return std::unexpected("Config error in '" + source + "': " + error.what());
     }
 }
 
 } // namespace
 
+// The shipped example is the default configuration, so defaults have one home.
 Config default_config()
 {
-    auto config = default_values();
-    add_default_keybinds(config, default_commands());
-    return config;
+    static constexpr char text[] = {
+#embed "../../../config.toml.example"
+    };
+    auto config = parse_config({ text, sizeof text }, "built-in defaults");
+    if (!config)
+        throw std::logic_error(config.error());
+    return std::move(*config);
 }
 
 ConfigLoadResult load_config(std::string const& path, bool required)
@@ -623,7 +488,12 @@ ConfigLoadResult load_config(std::string const& path, bool required)
     if (error)
         return std::unexpected("Cannot inspect config file '" + path + "': " + error.message());
     if (exists)
-        return read_config(path);
+    {
+        std::ifstream file(path, std::ios::binary);
+        if (!file)
+            return std::unexpected("Cannot read config file '" + path + "'");
+        return parse_config(std::string(std::istreambuf_iterator<char>(file), { }), path);
+    }
     if (!required)
         return default_config();
     return std::unexpected(path.empty() ? "no config path is configured" : "config file does not exist: " + path);

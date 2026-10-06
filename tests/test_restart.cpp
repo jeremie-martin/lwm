@@ -326,7 +326,7 @@ TEST_CASE("Restart rebinding matches live output reconciliation", "[restart][sta
     auto prepare = [&](State& state, size_t count)
     {
         test::configure(state, [&](Config& config) {
-            config.workspaces.count = count;
+            config.workspaces = test::names(count);
             config.layout.strategy = LayoutStrategy::Monocle;
         });
         test::outputs(state, discovered);

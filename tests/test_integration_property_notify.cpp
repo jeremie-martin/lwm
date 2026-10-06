@@ -111,7 +111,6 @@ std::string title_rule_geometry_config()
 {
     return R"(
 [workspaces]
-count = 1
 names = ["1"]
 
 [[rules]]
@@ -124,7 +123,6 @@ std::string title_rule_workspace_config()
 {
     return R"(
 [workspaces]
-count = 2
 names = ["one", "two"]
 
 [[rules]]
@@ -137,7 +135,6 @@ std::string type_rule_workspace_config()
 {
     return R"(
 [workspaces]
-count = 2
 names = ["one", "two"]
 
 [[rules]]
@@ -1425,7 +1422,7 @@ TEST_CASE("Integration: admission subscribes before identity and dependent prope
         map_window(conn, child);
     }
     REQUIRE(get_window_geometry(conn, child));
-    LwmProcess wm(server.display(), "[workspaces]\ncount = 2\n", {}, -1, LWM_OBSERVATION_PROBE_PATH,
+    LwmProcess wm(server.display(), "[workspaces]\nnames = [\"1\", \"2\"]\n", {}, -1, LWM_OBSERVATION_PROBE_PATH,
                   { { "LWM_TEST_WINDOW", std::to_string(target) },
                     { "LWM_TEST_PROPERTY", std::to_string(property) },
                     { "LWM_TEST_TYPE", std::to_string(property_type) },

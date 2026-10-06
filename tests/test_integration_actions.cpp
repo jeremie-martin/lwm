@@ -79,7 +79,7 @@ TEST_CASE("Integration: tile swaps skip stashed windows", "[integration][ipc][ac
 
 TEST_CASE("Integration: IPC window actions execute the key-binding operations", "[integration][ipc][actions]")
 {
-    auto env = TestEnvironment::create("[workspaces]\ncount = 3\n");
+    auto env = TestEnvironment::create("[workspaces]\nnames = [\"1\", \"2\", \"3\"]\n");
     if (!env)
         SKIP("X11 unavailable");
     auto& conn = env->conn;

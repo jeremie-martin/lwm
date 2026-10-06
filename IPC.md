@@ -49,11 +49,10 @@ resemble options, and shell-quote names or paths containing spaces.
 ## Commands
 
 Queries read current state. Mutating commands are also accepted verbatim in a
-binding's `action` string, for example `action = "window fullscreen"`; both use one
-parser and executor. Queries cannot be bound. `lwmctl watch` is not a command sent
-to LWM; it reads the published state directly (see [Watching state](#watching-state)). Bindings use a
-structured `action` table to launch processes; IPC callers can launch processes
-themselves. Commands concerning the active window return
+key binding, for example `"super+f" = "window fullscreen"`; both use one parser and
+executor. Queries cannot be bound. `lwmctl watch` is not a command sent to LWM; it
+reads the published state directly (see [Watching state](#watching-state)). Bindings
+launch processes from argv lists; IPC callers can launch processes themselves. Commands concerning the active window return
 `error no active window` when none is selected. Relative monitor/workspace commands
 target the focused monitor; indices are zero-based.
 

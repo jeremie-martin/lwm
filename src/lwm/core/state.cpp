@@ -708,12 +708,12 @@ void State::user_time_window(xcb_window_t id, xcb_window_t window, uint32_t time
 
 uint32_t State::desktop_index(size_t monitor, size_t workspace) const
 {
-    return static_cast<uint32_t>(monitor * config_.workspaces.count + workspace);
+    return static_cast<uint32_t>(monitor * config_.workspaces.size() + workspace);
 }
 
 std::optional<std::pair<size_t, size_t>> State::desktop_placement(uint32_t desktop) const
 {
-    size_t count = config_.workspaces.count;
+    size_t count = config_.workspaces.size();
     if (desktop == STICKY_DESKTOP || desktop / count >= monitors_.size())
         return std::nullopt;
     return std::pair<size_t, size_t>{ desktop / count, desktop % count };
@@ -789,8 +789,8 @@ void State::reset_ratios(size_t monitor)
 
 std::expected<void, std::string> State::configure(Config config)
 {
-    if (!monitors_.empty() && config.workspaces.count != config_.workspaces.count)
-        return std::unexpected("live reload of [workspaces].count is unsupported; restart required");
+    if (!monitors_.empty() && config.workspaces.size() != config_.workspaces.size())
+        return std::unexpected("changing the number of workspaces requires a restart");
     mutated();
     end_drag(false);
     config_ = std::move(config);
@@ -808,7 +808,7 @@ Monitor State::fresh_monitor(std::string name, Geometry geometry) const
     monitor.geometry = geometry;
     Workspace workspace;
     workspace.layout_strategy = config_.layout.strategy;
-    monitor.workspaces.assign(config_.workspaces.count, workspace);
+    monitor.workspaces.assign(config_.workspaces.size(), workspace);
     return monitor;
 }
 

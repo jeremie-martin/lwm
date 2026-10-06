@@ -19,16 +19,12 @@ constexpr auto kTimeout = std::chrono::seconds(2);
 std::string scratchpad_match_config()
 {
     return R"(
-[commands]
-terminal = { argv = ["/bin/true"] }
-
 [workspaces]
-count = 1
 names = ["1"]
 
 [[scratchpads]]
 name = "terminal"
-spawn = { ref = "terminal" }
+spawn = ["/bin/true"]
 match = { class = "ScratchpadClass", instance = "scratchpad-instance" }
 size = { width = 0.8, height = 0.6 }
 )";
@@ -37,16 +33,12 @@ size = { width = 0.8, height = 0.6 }
 std::string title_scratchpad_match_config()
 {
     return R"(
-[commands]
-terminal = { argv = ["/bin/true"] }
-
 [workspaces]
-count = 1
 names = ["1"]
 
 [[scratchpads]]
 name = "terminal"
-spawn = { ref = "terminal" }
+spawn = ["/bin/true"]
 match = { class = "ScratchpadClass", title = "dropdown" }
 size = { width = 0.8, height = 0.6 }
 )";
@@ -266,7 +258,7 @@ TEST_CASE("Integration: scratchpad cycle keeps pooled windows in rotation", "[in
 
 TEST_CASE("Integration: tiled scratchpad pool preserves prior floating geometry", "[integration][scratchpad][floating]")
 {
-    auto test_env = TestEnvironment::create(scratchpad_match_config());
+    auto test_env = TestEnvironment::create(scratchpad_match_config() + "[mousebinds]\n\"super+2\" = \"toggle_float\"\n");
     if (!test_env)
         SKIP("Test environment not available");
 
@@ -439,7 +431,7 @@ TEST_CASE("Integration: scratchpad launch failure remains retryable", "[integrat
     auto env = TestEnvironment::create(R"(
 [[scratchpads]]
 name = "broken"
-spawn = { argv = ["/definitely/missing/lwm-test-program"] }
+spawn = ["/definitely/missing/lwm-test-program"]
 match = { class = "LaunchTest" }
 )");
     if (!env)
@@ -461,7 +453,7 @@ TEST_CASE(
     auto env = TestEnvironment::create(R"(
 [[scratchpads]]
 name = "late"
-spawn = { shell = 'printf "launch\n" >> "$XDG_RUNTIME_DIR/launches"' }
+spawn = ["sh", "-c", 'printf "launch\n" >> "$XDG_RUNTIME_DIR/launches"']
 match = { class = "LaunchTest" }
 )");
     if (!env)
@@ -505,11 +497,14 @@ match = { class = "LaunchTest" }
 TEST_CASE("Integration: spawned commands do not inherit WM descriptors", "[integration][launch]")
 {
     auto env = TestEnvironment::create(R"(
-[autostart]
-commands = [{ shell = 'exec 3>"$XDG_RUNTIME_DIR/child-marker"; for fd in /proc/$$/fd/*; do case "${fd##*/}" in 0|1|2) continue;; esac; readlink "$fd" >> "$XDG_RUNTIME_DIR/child-fds"; done; printf done > "$XDG_RUNTIME_DIR/child-done"' }]
+[[scratchpads]]
+name = "probe"
+spawn = ["sh", "-c", 'exec 3>"$XDG_RUNTIME_DIR/child-marker"; for fd in /proc/$$/fd/*; do case "${fd##*/}" in 0|1|2) continue;; esac; readlink "$fd" >> "$XDG_RUNTIME_DIR/child-fds"; done; printf done > "$XDG_RUNTIME_DIR/child-done"']
+match = { title = "never-matches" }
 )");
     if (!env)
         SKIP("X11 unavailable");
+    ipc_ok("scratchpad toggle probe");
     auto runtime = std::filesystem::path(env->wm.runtime_dir());
     REQUIRE(wait_for_condition([&] { return std::filesystem::exists(runtime / "child-done"); }, kTimeout));
     auto descriptors = read_text_file(runtime / "child-fds");
@@ -525,7 +520,7 @@ TEST_CASE("Integration: pending scratchpad launches continue through restart", "
     auto env = TestEnvironment::create(R"(
 [[scratchpads]]
 name = "late"
-spawn = { shell = 'printf "launch\n" >> "$XDG_RUNTIME_DIR/launches"' }
+spawn = ["sh", "-c", 'printf "launch\n" >> "$XDG_RUNTIME_DIR/launches"']
 match = { class = "LaunchTest", title = "ready" }
 )");
     REQUIRE(env);
@@ -590,7 +585,7 @@ TEST_CASE("Integration: a pending scratchpad can arrive during exec handoff", "[
     config += R"(
 [[scratchpads]]
 name = "second"
-spawn = { ref = "terminal" }
+spawn = ["/bin/true"]
 match = { class = "ScratchpadClass", title = "dropdown" }
 size = { width = 0.8, height = 0.6 }
 )";
@@ -678,7 +673,7 @@ TEST_CASE(
     bool floating = GENERATE(false, true);
     auto hidden_by = GENERATE("workspace", "minimize");
     CAPTURE(floating, hidden_by);
-    auto env = TestEnvironment::create("[workspaces]\ncount = 2\nnames = [\"1\", \"2\"]\n");
+    auto env = TestEnvironment::create("[workspaces]\nnames = [\"1\", \"2\"]\n");
     REQUIRE(env);
     auto& conn = env->conn;
     ipc_ok("scratchpad cycle"); // Empty pool is a no-op.

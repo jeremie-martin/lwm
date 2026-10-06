@@ -195,7 +195,8 @@ def measure(binary, library, scenario, operations):
         root = X.XDefaultRootWindow(display)
         X.XWarpPointer(display, 0, root, 0, 0, 0, 0, 1599, 999)
         X.XSync(display, 0)
-        config = "[workspaces]\ncount = 2\n[appearance]\npadding = 10\nborder_width = 1\n"
+        config = ('[workspaces]\nnames = ["1", "2"]\n[appearance]\npadding = 10\nborder_width = 1\n'
+                  '[mousebinds]\n"super+1" = "drag_window"\n"super+3" = "resize_floating"\n')
         if scenario in ("sticky", "sticky_fullscreen"):
             for digits, enabled in [("02468", "true"), ("13579", "false")]:
                 actions = f"sticky = {enabled}"

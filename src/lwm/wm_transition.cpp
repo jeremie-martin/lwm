@@ -316,7 +316,7 @@ void WindowManager::publish_root(std::vector<State::Projected> const& clients, b
     for (auto const& m : monitors)
     {
         Geometry area = m.working_area();
-        for (auto const& name : config().workspaces.names)
+        for (auto const& name : config().workspaces)
         {
             names.append(name).push_back('\0');
             viewports.insert(viewports.end(), { static_cast<uint32_t>(std::max(0, m.geometry.x - desktop.x)),
@@ -328,7 +328,7 @@ void WindowManager::publish_root(std::vector<State::Projected> const& clients, b
         }
     }
     auto const& focused = monitors[state_.focused_monitor()];
-    uint32_t const count[] = { static_cast<uint32_t>(monitors.size() * config().workspaces.count) };
+    uint32_t const count[] = { static_cast<uint32_t>(monitors.size() * config().workspaces.size()) };
     uint32_t const size[] = { desktop.width, desktop.height };
     uint32_t const current[] = { state_.desktop_index(state_.focused_monitor(), focused.current_workspace) };
     uint32_t const active[] = { state_.active_window() };

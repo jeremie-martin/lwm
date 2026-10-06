@@ -79,12 +79,6 @@ struct FocusConfig
     bool warp_cursor_on_monitor_change = false;
 };
 
-struct WorkspacesConfig
-{
-    size_t count = 10;
-    std::vector<std::string> names; ///< Exactly `count` display labels
-};
-
 struct LayoutConfig
 {
     LayoutStrategy strategy = LayoutStrategy::MasterStack;
@@ -110,8 +104,7 @@ struct Config
     AppearanceConfig appearance;
     LayoutConfig layout;
     FocusConfig focus;
-    WorkspacesConfig workspaces;
-    std::vector<std::vector<std::string>> autostart;
+    std::vector<std::string> workspaces = { "1", "2", "3", "4", "5", "6", "7", "8", "9", "10" }; ///< Names; the count
     std::map<KeyBinding, Action> keybinds;
     std::vector<MousebindConfig> mousebinds;
     std::vector<WindowRuleConfig> rules;

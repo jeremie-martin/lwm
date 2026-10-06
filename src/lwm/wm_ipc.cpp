@@ -81,7 +81,7 @@ WorkspaceList workspace_list(State const& state)
             auto const& workspace = monitor.workspaces[w];
             auto root = workspace.split_ratios.find(SplitAddress{ 0 });
             view.workspaces.push_back({ w,
-                                        state.config().workspaces.names[w],
+                                        state.config().workspaces[w],
                                         w == monitor.current_workspace,
                                         workspace.windows.size(),
                                         layout_strategy_str(workspace.layout_strategy),
