@@ -118,11 +118,17 @@ uint64_t State::register_window(xcb_window_t id)
 
 void State::insert(Client client)
 {
-    assert(client.monitor < monitors_.size() && client.workspace < monitors_[client.monitor].workspaces.size());
-    mutated();
-    forget_missing_tile_slot(client);
     client.order = register_window(client.id);
     client.mru_order = 0;
+    insert_registered(std::move(client));
+}
+
+void State::insert_registered(Client client)
+{
+    assert(client.monitor < monitors_.size() && client.workspace < monitors_[client.monitor].workspaces.size());
+    assert(client.order < next_order_);
+    mutated();
+    forget_missing_tile_slot(client);
     auto [it, inserted] = clients_.emplace(client.id, std::move(client));
     assert(inserted);
     if (it->second.kind() == Client::Kind::Tiled)

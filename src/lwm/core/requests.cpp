@@ -130,12 +130,10 @@ void State::moveresize_request(xcb_window_t id, GeometryRequest request)
     auto const* floating = client ? floating_mode(*client) : nullptr;
     if (!floating)
         return;
-    auto window = inset(floating->geometry, border(*client));
-    window.x = request.x.value_or(window.x);
-    window.y = request.y.value_or(window.y);
-    window.width = request.width.value_or(window.width);
-    window.height = request.height.value_or(window.height);
-    request_geometry(id, outset(window, border(*client)));
+    auto frame = resize_frame(*client, floating->geometry, request.width, request.height);
+    frame.x = request.x.value_or(frame.x);
+    frame.y = request.y.value_or(frame.y);
+    request_geometry(id, frame);
 }
 
 } // namespace lwm

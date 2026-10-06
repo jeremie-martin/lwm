@@ -37,6 +37,17 @@ add_executable(lwm_runtime_failure_probe
 target_link_libraries(lwm_runtime_failure_probe PRIVATE liblwm)
 target_link_options(lwm_runtime_failure_probe PRIVATE "LINKER:--export-dynamic-symbol=xcb_poll_for_event")
 
+# Exercise the real observer with a property write between its request and reply.
+add_executable(lwm_observation_probe
+  observation_probe.cpp
+  ${PROJECT_SOURCE_DIR}/src/app/main.cpp
+  ${PROJECT_SOURCE_DIR}/src/app/cli.cpp
+)
+target_link_libraries(lwm_observation_probe PRIVATE liblwm ${CMAKE_DL_LIBS})
+target_link_options(lwm_observation_probe PRIVATE
+  "LINKER:--export-dynamic-symbol=xcb_get_property"
+  "LINKER:--export-dynamic-symbol=xcb_get_property_reply")
+
 # A real exec replacement that stops before starting the successor, allowing
 # tests to change the display during the handoff without timing races.
 add_executable(lwm_restart_gate restart_gate.cpp)
@@ -89,11 +100,12 @@ target_compile_definitions(lwm_tests PRIVATE
     LWM_BINARY_PATH="$<TARGET_FILE:lwm>"
     LWM_RESTART_GATE_PATH="$<TARGET_FILE:lwm_restart_gate>"
     LWM_RUNTIME_FAILURE_PROBE_PATH="$<TARGET_FILE:lwm_runtime_failure_probe>"
+    LWM_OBSERVATION_PROBE_PATH="$<TARGET_FILE:lwm_observation_probe>"
     LWM_XORG_CONFIG_PATH="${CMAKE_CURRENT_SOURCE_DIR}/xorg-dummy.conf"
     LWM_NOTIFY_BRIDGE_PATH="${PROJECT_SOURCE_DIR}/scripts/lwm-notify-bridge.sh"
     LWMCTL_BINARY_PATH="$<TARGET_FILE:lwmctl>"
 )
-add_dependencies(lwm_tests lwm lwmctl lwm_runtime_failure_probe lwm_restart_gate)
+add_dependencies(lwm_tests lwm lwmctl lwm_runtime_failure_probe lwm_restart_gate lwm_observation_probe)
 
 include(Catch)
 foreach(target IN ITEMS lwm_tests lwm_logging_tests)

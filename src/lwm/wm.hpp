@@ -25,9 +25,9 @@ namespace lwm {
 // reject the whole ChangeWindowAttributes request. Use passive client grabs for
 // clicks; ReplayPointer skips ancestor grabs, so root grabs alone are insufficient.
 // PointerMotion is shared and lets focus-following recover when an application
-// selected motion events before another window took focus. Docks use the same
-// mask: crossing selects the pointer's monitor and properties carry struts.
-constexpr uint32_t kManagedWindowEventMask =
+// selected motion events before another window took focus. Every observed role
+// shares this interest; only its property reads and management effects differ.
+constexpr uint32_t kObservedWindowEventMask =
     XCB_EVENT_MASK_ENTER_WINDOW | XCB_EVENT_MASK_PROPERTY_CHANGE | XCB_EVENT_MASK_POINTER_MOTION;
 
 enum class RunResult
@@ -161,7 +161,6 @@ private:
     struct Observed
     {
         WindowObservation window;
-        WindowRole role = WindowRole::Popup;
         bool manageable = false; ///< Exists and is not override-redirect (and is viewable when adopting)
         uint32_t sync_counter = 0;
         uint64_t sync_value = 0;
@@ -169,7 +168,7 @@ private:
     std::vector<Observed> observe(std::span<xcb_window_t const> windows, bool adopting);
     WindowType window_type(xcb_get_property_cookie_t cookie) const;
     std::vector<xcb_atom_t> read_protocols(xcb_window_t window) const;
-    void watch_user_time_window(xcb_window_t window, xcb_get_window_attributes_cookie_t cookie);
+    xcb_get_property_cookie_t observe_user_time(xcb_window_t window, xcb_get_window_attributes_cookie_t cookie);
     std::optional<Geometry> read_window_geometry(xcb_window_t window) const;
 
     // wm_manage.cpp: admission adapters

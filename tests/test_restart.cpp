@@ -506,6 +506,44 @@ TEST_CASE("Admission preserves shared registration ranks independently of scan o
     CHECK_FALSE(invariants::validate(target));
 }
 
+TEST_CASE("Scene registration follows observation order across roles and handoff gaps", "[state][restart][registration]")
+{
+    auto source = test::state();
+    source.adopt({ { .id = 1 }, { .id = 2, .type = WindowType::Dock },
+                   { .id = 9, .type = WindowType::Tooltip }, { .id = 3 },
+                   { .id = 4, .type = WindowType::Desktop } }, nullptr);
+    CHECK(source.require(1).order == 0);
+    CHECK(source.find_fixture(2)->order == 1);
+    CHECK(source.require(3).order == 2);
+    CHECK(source.find_fixture(4)->order == 3);
+    auto snapshot = restart::decode(restart::encode(source.snapshot()));
+    REQUIRE(snapshot);
+    auto target = test::state();
+    target.adopt({ { .id = 6 }, { .id = 2, .type = WindowType::Dock },
+                   { .id = 5, .type = WindowType::Dock }, { .id = 3 },
+                   { .id = 7 }, { .id = 8, .type = WindowType::Desktop } }, &*snapshot);
+    CHECK(target.find_fixture(2)->order == 1);
+    CHECK(target.require(3).order == 2);
+    CHECK(target.require(6).order == 4); // Vanished identities still reserve their saved ranks.
+    CHECK(target.require(6).order < target.find_fixture(5)->order);
+    CHECK(target.find_fixture(5)->order < target.require(7).order);
+    CHECK(target.require(7).order < target.find_fixture(8)->order);
+    CHECK_FALSE(invariants::validate(target));
+    CHECK(restart::decode(restart::encode(target.snapshot())));
+}
+
+TEST_CASE("Restart rejects empty frames before they reach geometry projection", "[restart][codec][geometry]")
+{
+    auto state = test::state();
+    add_floating(state, 1);
+    auto snapshot = state.snapshot();
+    REQUIRE(restart::decode(restart::encode(snapshot)));
+    SECTION("Output") { snapshot.monitors[0].geometry.width = 0; }
+    SECTION("Floating frame") { std::get<FloatingMode>(snapshot.clients[0].mode).geometry.height = 0; }
+    SECTION("Remembered floating frame") { snapshot.clients[0].mode = TiledMode{ Geometry{ 0, 0, 0, 10 } }; snapshot.monitors[0].workspaces[0].windows = { 1 }; }
+    CHECK_FALSE(restart::decode(restart::encode(snapshot)));
+}
+
 TEST_CASE("Restart decoder rejects malformed typed values before narrowing or defaulting", "[restart][codec]")
 {
     auto original = unpack_json(restart::encode(sample()));

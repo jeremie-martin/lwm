@@ -780,3 +780,65 @@ apply = { floating = false }
     CHECK(counts.at(1).at("window_count") == 3);
     for (auto window : { floating, tile, parent, peer }) destroy_window(conn, window);
 }
+
+TEST_CASE("Integration: border reloads and partial geometry requests preserve frame boundaries", "[integration][geometry][border]")
+{
+    auto& server = X11TestEnvironment::instance();
+    if (!server.available()) SKIP("Test environment not available");
+    X11Connection conn;
+    REQUIRE(conn.ok());
+    auto config = [](uint32_t border)
+    {
+        return "[appearance]\nborder_width = " + std::to_string(border) + "\n[[rules]]\napply.floating = true\n";
+    };
+    LwmProcess wm(server.display(), config(0));
+    REQUIRE(wait_for_wm_ready(conn, std::chrono::seconds(2)));
+    auto socket = wait_for_ipc_socket_path(conn);
+    REQUIRE(socket);
+    auto window = create_window(conn, 10, 20, 3, 3);
+    map_window(conn, window);
+    REQUIRE(wait_for_active_window(conn, window, std::chrono::seconds(2)));
+    auto initial = require_window_geometry(conn, window);
+    REQUIRE(initial.width == 3);
+    REQUIRE(initial.height == 3);
+    REQUIRE(wm.write_config(config(65535)));
+    ipc_ok(*socket, "reload-config");
+    REQUIRE(wait_for_window_geometry(conn, window, initial.x, initial.y, 1, 1));
+    CHECK(get_window_border_width(conn, window) == 1);
+    uint32_t x = initial.x + 1;
+    xcb_configure_window(conn.get(), window, XCB_CONFIG_WINDOW_X, &x);
+    observe_title_after_events(conn, window);
+    CHECK(require_window_geometry(conn, window) == WindowGeometry{ static_cast<int16_t>(x), initial.y, 1, 1 });
+    CHECK(get_window_border_width(conn, window) == 1);
+    REQUIRE(wm.write_config(config(2)));
+    ipc_ok(*socket, "reload-config");
+    uint32_t width = 9;
+    xcb_configure_window(conn.get(), window, XCB_CONFIG_WINDOW_WIDTH, &width);
+    observe_title_after_events(conn, window);
+    CHECK(require_window_geometry(conn, window) == WindowGeometry{ static_cast<int16_t>(x), initial.y, 9, 1 });
+    CHECK(get_window_border_width(conn, window) == 2);
+    destroy_window(conn, window);
+}
+
+TEST_CASE("Integration: cold client-list publication interleaves every managed role", "[integration][placement][registration]")
+{
+    auto& server = X11TestEnvironment::instance();
+    if (!server.available()) SKIP("Test environment not available");
+    X11Connection conn;
+    REQUIRE(conn.ok());
+    std::vector<xcb_window_t> windows;
+    for (auto type : { "_NET_WM_WINDOW_TYPE_NORMAL", "_NET_WM_WINDOW_TYPE_DOCK",
+                       "_NET_WM_WINDOW_TYPE_DESKTOP", "_NET_WM_WINDOW_TYPE_NORMAL" })
+    {
+        auto window = create_window(conn, 10, 10, 100, 100);
+        REQUIRE(set_window_type(conn, window, intern_atom(conn.get(), type)));
+        map_window(conn, window);
+        windows.push_back(window);
+    }
+    REQUIRE(get_window_geometry(conn, windows.back()));
+    LwmProcess wm(server.display());
+    REQUIRE(wait_for_wm_ready(conn, std::chrono::seconds(2)));
+    auto list = intern_atom(conn.get(), "_NET_CLIENT_LIST");
+    CHECK(get_window_property_windows(conn.get(), conn.root(), list) == windows);
+    for (auto window : windows) destroy_window(conn, window);
+}

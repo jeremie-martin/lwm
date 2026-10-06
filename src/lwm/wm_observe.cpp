@@ -1,6 +1,5 @@
-// X reads. Every observation sends its requests before collecting any reply,
-// so admission costs one round trip per batch; single-property updates reuse
-// the same decoders.
+// X reads are pipelined across each batch. Property observation always starts
+// with subscription; single-property updates reuse the same decoders.
 
 #include "lwm/core/xproperty.hpp"
 #include "wm.hpp"
@@ -145,37 +144,12 @@ xcb_get_property_cookie_t request_user_time(xcb_connection_t* conn, xcb_ewmh_con
 
 } // namespace
 
-// Pipelined stages: identity and role first, then only what the role needs,
-// then the rare reads that depend on those replies.
+// Attributes gate admission, subscription precedes identity, and identity
+// chooses the remaining reads. Each stage is pipelined across the batch.
 std::vector<WindowManager::Observed> WindowManager::observe(std::span<xcb_window_t const> windows, bool adopting)
 {
     auto* c = conn_.get();
     auto* e = ewmh_.get();
-    struct Identity
-    {
-        xcb_get_window_attributes_cookie_t attributes;
-        xcb_get_property_cookie_t type, transient;
-    };
-    std::vector<Identity> identities;
-    identities.reserve(windows.size());
-    for (auto window : windows)
-        identities.push_back({ xcb_get_window_attributes(c, window),
-                               xcb_ewmh_get_wm_window_type(e, window),
-                               request(c, window, XCB_ATOM_WM_TRANSIENT_FOR, XCB_ATOM_WINDOW, 1) });
-    std::vector<Observed> result(windows.size());
-    for (size_t i = 0; i < windows.size(); ++i)
-    {
-        auto& observed = result[i];
-        auto& w = observed.window;
-        w.id = windows[i];
-        if (auto attributes = reply(xcb_get_window_attributes_reply(c, identities[i].attributes, nullptr)))
-            observed.manageable =
-                !attributes->override_redirect && (!adopting || attributes->map_state == XCB_MAP_STATE_VIEWABLE);
-        w.type = window_type(identities[i].type);
-        w.transient_for = window_value(c, identities[i].transient);
-        observed.role = State::role(w.id, w.type, w.transient_for != XCB_NONE, handoff_ ? &*handoff_ : nullptr);
-    }
-
     struct Properties
     {
         xcb_get_geometry_cookie_t geometry;
@@ -183,48 +157,73 @@ std::vector<WindowManager::Observed> WindowManager::observe(std::span<xcb_window
         xcb_get_property_cookie_t wm_class, desktop, state, hints, normal_hints, protocols, time_window, time,
             fullscreen_monitors, sync_counter;
     };
-    std::vector<std::optional<Properties>> properties(windows.size());
-    std::vector<std::optional<StrutCookies>> struts(windows.size());
+    // Each window carries its own staged requests and observed values.
+    struct Pending
+    {
+        Observed value;
+        xcb_get_window_attributes_cookie_t attributes;
+        xcb_get_property_cookie_t type, transient;
+        std::optional<Properties> properties;
+        std::optional<StrutCookies> strut;
+        std::optional<xcb_get_window_attributes_cookie_t> time_window;
+        std::optional<xcb_get_property_cookie_t> time;
+        std::optional<xcb_get_geometry_cookie_t> parent;
+        std::optional<xcb_sync_query_counter_cookie_t> counter;
+    };
+    std::vector<Pending> pending(windows.size());
     for (size_t i = 0; i < windows.size(); ++i)
     {
-        auto window = windows[i];
-        if (!result[i].manageable)
+        pending[i].value.window.id = windows[i];
+        pending[i].attributes = xcb_get_window_attributes(c, windows[i]);
+    }
+    for (auto& reads : pending)
+    {
+        auto const& w = reads.value.window;
+        auto attr = reply(xcb_get_window_attributes_reply(c, reads.attributes, nullptr));
+        if (!attr || attr->override_redirect || (adopting && attr->map_state != XCB_MAP_STATE_VIEWABLE))
             continue;
-        // Subscribe before reading, so a later property change cannot be missed.
-        auto role = result[i].role;
-        if (role != WindowRole::Popup)
-        {
-            uint32_t mask = role == WindowRole::Desktop ? XCB_EVENT_MASK_PROPERTY_CHANGE : kManagedWindowEventMask;
-            xcb_change_window_attributes(c, window, XCB_CW_EVENT_MASK, &mask);
-        }
+        reads.value.manageable = true;
+        uint32_t mask = attr->your_event_mask | kObservedWindowEventMask;
+        xcb_change_window_attributes(c, w.id, XCB_CW_EVENT_MASK, &mask);
+        reads.type = xcb_ewmh_get_wm_window_type(e, w.id);
+        reads.transient = request(c, w.id, XCB_ATOM_WM_TRANSIENT_FOR, XCB_ATOM_WINDOW, 1);
+    }
+    for (auto& reads : pending)
+    {
+        if (!reads.value.manageable)
+            continue;
+        auto& w = reads.value.window;
+        w.type = window_type(reads.type);
+        w.transient_for = window_value(c, reads.transient);
+        auto role = State::role(w.id, w.type, w.transient_for != XCB_NONE, handoff_ ? &*handoff_ : nullptr);
         if (role == WindowRole::Dock)
-            struts[i] = request_strut(c, e, window);
-        if (result[i].role == WindowRole::Client)
-            properties[i] = Properties{
-                xcb_get_geometry(c, window),
-                { request(c, window, e->_NET_WM_NAME, e->UTF8_STRING, kTitleLimit),
-                  request(c, window, XCB_ATOM_WM_NAME, XCB_ATOM_STRING, kTitleLimit) },
-                xcb_icccm_get_wm_class(c, window),
-                xcb_ewmh_get_wm_desktop(e, window),
-                xcb_ewmh_get_wm_state(e, window),
-                xcb_icccm_get_wm_hints(c, window),
-                xcb_icccm_get_wm_normal_hints(c, window),
-                xcb_icccm_get_wm_protocols(c, window, e->WM_PROTOCOLS),
-                request(c, window, e->_NET_WM_USER_TIME_WINDOW, XCB_ATOM_WINDOW, 1),
-                request_user_time(c, e, window),
-                xcb_ewmh_get_wm_fullscreen_monitors(e, window),
-                request(c, window, e->_NET_WM_SYNC_REQUEST_COUNTER, XCB_ATOM_CARDINAL, 2),
+            reads.strut = request_strut(c, e, w.id);
+        if (role == WindowRole::Client)
+            reads.properties = Properties{
+                xcb_get_geometry(c, w.id),
+                { request(c, w.id, e->_NET_WM_NAME, e->UTF8_STRING, kTitleLimit),
+                  request(c, w.id, XCB_ATOM_WM_NAME, XCB_ATOM_STRING, kTitleLimit) },
+                xcb_icccm_get_wm_class(c, w.id),
+                xcb_ewmh_get_wm_desktop(e, w.id),
+                xcb_ewmh_get_wm_state(e, w.id),
+                xcb_icccm_get_wm_hints(c, w.id),
+                xcb_icccm_get_wm_normal_hints(c, w.id),
+                xcb_icccm_get_wm_protocols(c, w.id, e->WM_PROTOCOLS),
+                request(c, w.id, e->_NET_WM_USER_TIME_WINDOW, XCB_ATOM_WINDOW, 1),
+                request_user_time(c, e, w.id),
+                xcb_ewmh_get_wm_fullscreen_monitors(e, w.id),
+                request(c, w.id, e->_NET_WM_SYNC_REQUEST_COUNTER, XCB_ATOM_CARDINAL, 2),
             };
     }
-    for (size_t i = 0; i < windows.size(); ++i)
+    for (auto& reads : pending)
     {
-        auto& observed = result[i];
+        auto& observed = reads.value;
         auto& w = observed.window;
-        if (struts[i])
-            w.strut = strut(c, *struts[i]);
-        if (!properties[i])
+        if (reads.strut)
+            w.strut = strut(c, *reads.strut);
+        if (!reads.properties)
             continue;
-        auto const& cookie = *properties[i];
+        auto const& cookie = *reads.properties;
         w.geometry = geometry(c, cookie.geometry);
         w.name = name(c, cookie.name, e->UTF8_STRING);
         std::tie(w.wm_class_name, w.wm_class) = wm_class(c, cookie.wm_class);
@@ -254,45 +253,32 @@ std::vector<WindowManager::Observed> WindowManager::observe(std::span<xcb_window
         // Basic and extended sync properties both start with the basic counter.
         if (std::ranges::contains(supported, e->_NET_WM_SYNC_REQUEST) && !counters.empty())
             observed.sync_counter = counters.front();
-    }
-
-    // Rare dependent reads: a separate user-time window, a parent LWM does not
-    // manage, and the current value of a sync counter.
-    struct Dependent
-    {
-        std::optional<std::pair<xcb_get_window_attributes_cookie_t, xcb_get_property_cookie_t>> time_window;
-        std::optional<xcb_get_geometry_cookie_t> parent;
-        std::optional<xcb_sync_query_counter_cookie_t> counter;
-    };
-    std::vector<Dependent> dependents(windows.size());
-    for (size_t i = 0; i < windows.size(); ++i)
-    {
-        auto const& w = result[i].window;
-        if (!properties[i])
-            continue;
+        // Rare reads depend on the properties, but are sent across the batch
+        // before collecting any reply. User-time subscription precedes its read.
         if (w.user_time_window != XCB_NONE && w.user_time_window != w.id)
-            dependents[i].time_window = std::pair{ xcb_get_window_attributes(c, w.user_time_window),
-                                                   request_user_time(c, e, w.user_time_window) };
+            reads.time_window = xcb_get_window_attributes(c, w.user_time_window);
         if (w.transient_for != XCB_NONE && !state_.find(w.transient_for))
-            dependents[i].parent = xcb_get_geometry(c, w.transient_for);
-        if (result[i].sync_counter)
-            dependents[i].counter = xcb_sync_query_counter(c, result[i].sync_counter);
+            reads.parent = xcb_get_geometry(c, w.transient_for);
+        if (observed.sync_counter)
+            reads.counter = xcb_sync_query_counter(c, observed.sync_counter);
     }
-    for (size_t i = 0; i < windows.size(); ++i)
+    for (auto& reads : pending)
+        if (reads.time_window)
+            reads.time = observe_user_time(reads.value.window.user_time_window, *reads.time_window);
+    std::vector<Observed> result;
+    result.reserve(pending.size());
+    for (auto& reads : pending)
     {
-        auto& observed = result[i];
-        auto const& dependent = dependents[i];
-        if (auto const& time_window = dependent.time_window)
-        {
-            watch_user_time_window(observed.window.user_time_window, time_window->first);
-            observed.window.user_time = scalar(c, time_window->second, XCB_ATOM_CARDINAL).value_or(0);
-        }
-        if (dependent.parent)
-            observed.window.unmanaged_parent = geometry(c, *dependent.parent);
-        if (dependent.counter)
-            if (auto counter = reply(xcb_sync_query_counter_reply(c, *dependent.counter, nullptr)))
+        auto& observed = reads.value;
+        if (reads.time)
+            observed.window.user_time = scalar(c, *reads.time, XCB_ATOM_CARDINAL).value_or(0);
+        if (reads.parent)
+            observed.window.unmanaged_parent = geometry(c, *reads.parent);
+        if (reads.counter)
+            if (auto counter = reply(xcb_sync_query_counter_reply(c, *reads.counter, nullptr)))
                 observed.sync_value = uint64_t{ static_cast<uint32_t>(counter->counter_value.hi) } << 32
                     | counter->counter_value.lo;
+        result.push_back(std::move(observed));
     }
     return result;
 }
@@ -368,9 +354,10 @@ void WindowManager::handle_property_notify(xcb_property_notify_event_t const& ev
     else if (atom == e->_NET_WM_USER_TIME_WINDOW)
     {
         auto time_window = window_value(c, request(c, window, e->_NET_WM_USER_TIME_WINDOW, XCB_ATOM_WINDOW, 1));
-        if (time_window != XCB_NONE && time_window != window)
-            watch_user_time_window(time_window, xcb_get_window_attributes(c, time_window));
-        state_.user_time_window(window, time_window, user_time(time_window != XCB_NONE ? time_window : window));
+        auto time = time_window != XCB_NONE && time_window != window
+            ? observe_user_time(time_window, xcb_get_window_attributes(c, time_window))
+            : request_user_time(c, e, window);
+        state_.user_time_window(window, time_window, scalar(c, time, XCB_ATOM_CARDINAL).value_or(0));
     }
 }
 
@@ -379,12 +366,14 @@ std::vector<xcb_atom_t> WindowManager::read_protocols(xcb_window_t window) const
     return protocols(conn_.get(), xcb_icccm_get_wm_protocols(conn_.get(), window, ewmh_.get()->WM_PROTOCOLS));
 }
 
-// Observe user-time updates on a separate window without replacing its mask.
-void WindowManager::watch_user_time_window(xcb_window_t window, xcb_get_window_attributes_cookie_t cookie)
+// Subscription and the first read are one operation; preserve existing interest,
+// including root redirection when an application names the root as its time window.
+xcb_get_property_cookie_t WindowManager::observe_user_time(xcb_window_t window, xcb_get_window_attributes_cookie_t cookie)
 {
     auto attributes = reply(xcb_get_window_attributes_reply(conn_.get(), cookie, nullptr));
     uint32_t mask = XCB_EVENT_MASK_PROPERTY_CHANGE | (attributes ? attributes->your_event_mask : 0);
     xcb_change_window_attributes(conn_.get(), window, XCB_CW_EVENT_MASK, &mask);
+    return request_user_time(conn_.get(), ewmh_.get(), window);
 }
 
 std::optional<Geometry> WindowManager::read_window_geometry(xcb_window_t window) const

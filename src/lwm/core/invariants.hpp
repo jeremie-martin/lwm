@@ -18,12 +18,13 @@ struct Violation
 // normalize it. Runtime checks use this same graph, then add live-only facts.
 inline std::optional<Violation> validate(restart::Snapshot const& graph)
 {
+    auto valid_geometry = [](Geometry rectangle) { return rectangle.width && rectangle.height; };
     std::unordered_set<std::string> outputs;
     for (auto const& monitor : graph.monitors)
     {
-        if (monitor.name.empty() || !outputs.insert(monitor.name).second || monitor.workspaces.empty()
+        if (monitor.name.empty() || !valid_geometry(monitor.geometry) || !outputs.insert(monitor.name).second || monitor.workspaces.empty()
             || monitor.current_workspace >= monitor.workspaces.size() || monitor.previous_workspace >= monitor.workspaces.size())
-            return Violation{ "Monitor identity or workspace selection is invalid" };
+            return Violation{ "Monitor geometry, identity or workspace selection is invalid" };
         for (auto const& workspace : monitor.workspaces)
             for (auto const& [address, ratio] : workspace.split_ratios)
                 if (!(ratio > 0 && ratio < 1))
@@ -55,8 +56,12 @@ inline std::optional<Violation> validate(restart::Snapshot const& graph)
             return Violation{ "Client focus recency is invalid or duplicated", client.id };
         if (client.urgency.sources > (static_cast<uint8_t>(UrgencySource::WmInitiated) | static_cast<uint8_t>(UrgencySource::App)))
             return Violation{ "Client urgency sources are invalid", client.id };
-        if (auto const* floating = std::get_if<FloatingMode>(&client.mode);
-            floating && floating->tile_slot && floating->tile_slot->output.empty())
+        auto const* floating = std::get_if<FloatingMode>(&client.mode);
+        auto const* tiled = std::get_if<TiledMode>(&client.mode);
+        if ((floating && !valid_geometry(floating->geometry))
+            || (tiled && tiled->floating && !valid_geometry(*tiled->floating)))
+            return Violation{ "Client frame has an empty extent", client.id };
+        if (floating && floating->tile_slot && floating->tile_slot->output.empty())
             return Violation{ "Tile return slot has no output identity", client.id };
         clients.emplace(client.id, &client);
     }

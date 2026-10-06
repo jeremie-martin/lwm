@@ -458,21 +458,6 @@ inline std::optional<xcb_window_t> supporting_wm_window(X11Connection& conn)
     return get_window_property_window(conn.get(), conn.root(), atom);
 }
 
-inline bool wait_for_wm_ready(X11Connection& conn, std::chrono::milliseconds timeout)
-{
-    return wait_for_condition(
-        [&]()
-        {
-            auto current = supporting_wm_window(conn);
-            if (!current || *current == XCB_NONE)
-                return false;
-            auto atom = intern_atom(conn.get(), "_NET_SUPPORTING_WM_CHECK");
-            return get_window_property_window(conn.get(), *current, atom) == current;
-        },
-        timeout
-    );
-}
-
 inline xcb_window_t create_window(X11Connection& conn, int16_t x, int16_t y, uint16_t width, uint16_t height)
 {
     xcb_window_t window = xcb_generate_id(conn.get());
@@ -1021,6 +1006,25 @@ inline std::optional<std::string> send_ipc_command(std::string const& path, std:
     return response;
 }
 
+// Ownership is advertised before adoption; serving IPC proves startup completion.
+inline bool wait_for_wm_ready(X11Connection& conn, std::chrono::milliseconds timeout)
+{
+    return wait_for_condition(
+        [&]
+        {
+            auto current = supporting_wm_window(conn);
+            if (!current || *current == XCB_NONE)
+                return false;
+            auto atom = intern_atom(conn.get(), "_NET_SUPPORTING_WM_CHECK");
+            if (get_window_property_window(conn.get(), *current, atom) != current)
+                return false;
+            auto path = get_window_property_string(conn.get(), conn.root(), intern_atom(conn.get(), "_LWM_IPC_SOCKET"));
+            return path && send_ipc_command(*path, "ping") == "ok pong";
+        },
+        timeout
+    );
+}
+
 inline std::filesystem::path find_test_executable_path(std::string_view name)
 {
     if (name == "lwm")
@@ -1188,13 +1192,14 @@ public:
         std::string display,
         std::string config_contents = {},
         std::vector<std::string> startup_args = {},
-        int stderr_fd = -1
+        int stderr_fd = -1,
+        std::filesystem::path executable = find_test_executable_path("lwm"),
+        std::vector<std::pair<std::string, std::string>> env = {}
     )
         : display_(std::move(display))
         , config_home_(make_temp_dir())
         , runtime_dir_(make_temp_dir())
     {
-        std::filesystem::path executable = find_test_executable_path("lwm");
         if (executable.empty())
             return;
 
@@ -1218,6 +1223,7 @@ public:
                 setenv("XDG_CONFIG_HOME", config_home_.c_str(), 1);
             if (!runtime_dir_.empty())
                 setenv("XDG_RUNTIME_DIR", runtime_dir_.c_str(), 1);
+            for (auto const& [key, value] : env) setenv(key.c_str(), value.c_str(), 1);
 
             std::vector<std::string> owned_args;
             owned_args.reserve(startup_args.size() + 1);
@@ -1370,7 +1376,7 @@ struct TestEnvironment
                     return true;
                 auto path = get_window_property_string(conn.get(), conn.root(), socket_atom);
                 // A previous WM can leave root properties behind on a reused server.
-                return path && path->starts_with(wm.runtime_dir() + "/") && send_ipc_command(*path, "ping") == "ok pong"
+                return path && path->starts_with(wm.runtime_dir() + "/")
                     && wait_for_wm_ready(conn, std::chrono::milliseconds(10));
             },
             std::chrono::seconds(2)

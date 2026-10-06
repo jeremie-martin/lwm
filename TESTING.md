@@ -71,6 +71,11 @@ control; an obsolete version does not test current decoding. Codec round trips
 and malformed-input tests complement actual adoption/exec tests. Tag composed
 restart tests with `[restart]` wherever they live.
 
+`lwm_observation_probe` links the real WM and interposes XCB property delivery.
+It writes through a separate X connection after the first read but before its reply
+is delivered, testing admission subscription order without sleeps or production hooks.
+The fixture also covers separate user-time windows and both live and cold admission.
+
 Use `TestFd` and the bounded process/socket helpers for cleanup on assertion
 failure. `LwmProcess::wait_for_exit()` tests normal shutdown; `stop()` may force
 termination. Use the CLI only when its process or output behavior is the contract;

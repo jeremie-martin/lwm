@@ -30,8 +30,8 @@ WindowRole State::role(xcb_window_t id, WindowType type, bool transient, restart
     return classify_window_type(type, transient).role;
 }
 
-// Registers fixtures directly and returns the client candidate, or nothing for
-// fixtures and directly mapped popups.
+// Registration order is reserved in observation order, before placement or
+// restoration can reorder clients. Fixtures are installed immediately.
 std::optional<Client> State::classify(WindowObservation const& window, restart::Snapshot const* handoff, bool adopting)
 {
     switch (role(window.id, window.type, window.transient_for != XCB_NONE, handoff))
@@ -49,6 +49,7 @@ std::optional<Client> State::classify(WindowObservation const& window, restart::
     }
     Client client;
     client.id = window.id;
+    client.order = register_window(window.id);
     client.transient_for = window.transient_for;
     client.wm_class_name = window.wm_class_name;
     client.wm_class = window.wm_class;
@@ -122,7 +123,7 @@ void State::admit(WindowObservation const& window)
         if (!floating_mode(*candidate))
             candidate->mode = FloatingMode{ observed_frame(window, border(*candidate)) };
     }
-    insert(std::move(*candidate));
+    insert_registered(std::move(*candidate));
     if (auto placement = prepare_placement(window.id))
         finish_placement(window.id, *placement, window.unmanaged_parent);
     if (auto const& admitted = require(window.id); admitted.monitor == focused_monitor_ && focusable(admitted))
@@ -142,6 +143,13 @@ void State::adopt(
 )
 {
     assert(clients_.empty() && fixtures_.empty());
+    // New observations follow the entire saved rank range, including vanished
+    // windows. Surviving identities recover their ranks during graph restoration.
+    if (handoff)
+    {
+        for (auto const& client : handoff->clients) next_order_ = std::max(next_order_, client.order + 1);
+        for (auto const& fixture : handoff->fixtures) next_order_ = std::max(next_order_, fixture.order + 1);
+    }
     std::vector<Client> candidates;
     std::unordered_map<xcb_window_t, WindowObservation const*> pending;
     for (auto const& window : windows)
@@ -162,7 +170,7 @@ void State::adopt(
                 candidate.monitor = focused_monitor_;
                 candidate.workspace = monitors_[focused_monitor_].current_workspace;
             }
-            insert(std::move(candidate));
+            insert_registered(std::move(candidate));
         }
 
     // Resolve every newcomer's placement and rule effects before deriving any
@@ -246,10 +254,7 @@ std::optional<State::PlacementGeometry> State::size_hint_geometry(xcb_window_t i
         return std::nullopt;
     bool anchored = client.transient_for != XCB_NONE;
     auto const& hints = client.size_hints;
-    auto window = inset(floating->geometry, border(client));
-    window.width = hints.width.value_or(window.width);
-    window.height = hints.height.value_or(window.height);
-    auto rectangle = outset(window, border(client));
+    auto rectangle = resize_frame(client, floating->geometry, hints.width, hints.height);
     auto position = hints.user_position ? hints.user_position : anchored ? std::nullopt : hints.program_position;
     bool center = initial;
     if (position)
@@ -427,17 +432,9 @@ void State::restore_graph(restart::Snapshot const& snapshot, std::span<Client> o
 {
     assert(clients_.empty());
     mutated();
-    // Fixture observations precede workarea discovery. Restore their ranks here,
-    // reserving the complete saved range before allocating newcomer ranks.
-    uint64_t bound = 0;
-    for (auto const& client : snapshot.clients) bound = std::max(bound, client.order + 1);
-    for (auto const& fixture : snapshot.fixtures) bound = std::max(bound, fixture.order + 1);
     for (auto& [id, fixture] : fixtures_)
         if (auto const* saved = snapshot.find_fixture(id))
             fixture.order = saved->order;
-        else
-            fixture.order += bound;
-    next_order_ += bound;
     std::vector<Monitor> discovered;
     for (auto const& monitor : monitors_) discovered.push_back(fresh_monitor(monitor.name, monitor.geometry));
     monitors_.clear();

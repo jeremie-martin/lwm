@@ -502,6 +502,59 @@ TEST_CASE("Presentation draws borders inside the frames the model places", "[sta
     CHECK(presented(1) == std::pair{ Geometry{ 10, 10, 980, 780 }, 0U });
 }
 
+TEST_CASE("Every presentation reconstructs its allocated frame even with oversized borders", "[state][geometry]")
+{
+    auto state = test::state();
+    add_floating(state, 1);
+    for (uint32_t width : { 0U, 1U, 2U, 32767U, 65535U })
+    {
+        test::configure(state, [&](Config& config) { config.appearance.border_width = width; });
+        for (uint16_t x : { 1, 2, 3, 4, 9, 65535 })
+            for (uint16_t y : { 1, 2, 3, 4, 9, 65535 })
+            {
+                state.geometry(1, { 10, 20, x, y });
+                auto [window, border] = state.presentation(state.require(1));
+                INFO("frame=" << x << "x" << y << " configured border=" << width);
+                CHECK(window.width + 2 * border == x);
+                CHECK(window.height + 2 * border == y);
+                CHECK(window.width > 0);
+                CHECK(window.height > 0);
+            }
+    }
+    test::outputs(state, { { "M0", { 0, 0, 12, 3 } } });
+    test::configure(state, [](Config& config) { config.appearance.padding = 0; });
+    for (xcb_window_t id : { 2, 3, 4, 5 }) add(state, id);
+    for (auto const& projected : state.project(state.fullscreen_visibility()))
+    {
+        REQUIRE(projected.presentation);
+        auto [window, border] = *projected.presentation;
+        auto frame = state.frame(*projected.client);
+        CHECK(window.width + 2 * border == frame.width);
+        CHECK(window.height + 2 * border == frame.height);
+    }
+}
+
+TEST_CASE("Window size requests share clipped normal geometry across presentation states", "[state][geometry][requests]")
+{
+    auto state = test::state();
+    add(state, 1, { .floating = true, .geometry = { 10, 20, 3, 3 } });
+    SECTION("Normal") { }
+    SECTION("Maximized") { state.maximize(1, true, true); }
+    SECTION("Fullscreen") { state.fullscreen(1, true); }
+    auto normal = [&] { return state.normal_geometry(state.require(1)); };
+    state.moveresize_request(1, { .x = 30 });
+    CHECK(normal() == Geometry{ 30, 20, 3, 3 });
+    state.size_hints(1, { .width = 1, .height = 1 });
+    CHECK(normal() == Geometry{ 30, 20, 3, 3 });
+    state.moveresize_request(1, { .width = 9 });
+    CHECK(normal() == Geometry{ 30, 20, 13, 5 }); // The unchanged inner height is one pixel.
+    auto revision = state.revision();
+    state.moveresize_request(1, { .width = 9 });
+    CHECK(state.revision() == revision);
+    state.size_hints(1, { .height = 7 });
+    CHECK(normal() == Geometry{ 30, 20, 13, 11 });
+}
+
 TEST_CASE("A projection contains every client once with its final visible rectangle", "[state][geometry][projection]")
 {
     auto state = test::state(2);

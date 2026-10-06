@@ -68,11 +68,26 @@ State::Presentation State::presentation(Client const& client) const { return pre
 
 State::Presentation State::presentation(Client const& client, Geometry frame) const
 {
-    auto border = client.fullscreen ? 0 : this->border(client);
+    auto border = client.fullscreen ? 0 : this->border(client, frame);
     return { inset(frame, border), border };
 }
 
-uint32_t State::border(Client const& client) const { return client.borderless ? 0 : config_.appearance.border_width; }
+uint32_t State::border(Client const& client, Geometry frame) const
+{
+    return client.borderless ? 0 : std::min(config_.appearance.border_width, (std::min(frame.width, frame.height) - 1U) / 2);
+}
+
+// Position-only and unchanged size requests preserve the frame. New window
+// sizes use the configured border; omitted sizes retain the current X extent.
+Geometry State::resize_frame(Client const& client, Geometry frame, std::optional<uint16_t> width, std::optional<uint16_t> height) const
+{
+    auto window = inset(frame, border(client, frame));
+    if (width.value_or(window.width) == window.width && height.value_or(window.height) == window.height)
+        return frame;
+    window.width = width.value_or(window.width);
+    window.height = height.value_or(window.height);
+    return outset(window, border(client));
+}
 
 uint32_t State::border_color(Client const& client) const
 {

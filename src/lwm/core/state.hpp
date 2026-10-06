@@ -169,8 +169,6 @@ public:
     // The presented frame, and the normal frame that presentation states derive from.
     Geometry frame(Client const& client) const;
     Geometry normal_geometry(Client const& client) const;
-    // Normal border width; fullscreen presentation has none.
-    uint32_t border(Client const& client) const;
     uint32_t border_color(Client const& client) const;
 
     // Focus
@@ -357,6 +355,7 @@ private:
         return true;
     }
     uint64_t register_window(xcb_window_t id);
+    void insert_registered(Client client);
     void attach(Client const& client, std::optional<size_t> index = std::nullopt);
     std::optional<TileSlot> detach(Client const& client);
 
@@ -400,6 +399,9 @@ private:
     std::vector<xcb_window_t> workspace_tiles(size_t monitor, size_t workspace, Eligible eligible) const;
     Geometry fullscreen_geometry(Client const& client) const;
     Presentation presentation(Client const& client, Geometry frame) const;
+    // Keep one pixel of window inside the frame; entry uses the largest X extent.
+    uint32_t border(Client const& client, Geometry frame = { 0, 0, UINT16_MAX, UINT16_MAX }) const;
+    Geometry resize_frame(Client const& client, Geometry frame, std::optional<uint16_t> width, std::optional<uint16_t> height) const;
     void request_geometry(xcb_window_t id, Geometry rectangle);
     void set_mode(xcb_window_t id, bool floating);
 

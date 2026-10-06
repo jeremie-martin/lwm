@@ -60,10 +60,12 @@ everything the model needs:
   a window, launching a process (including a scratchpad launch the model requested),
   warping the pointer, restarting, or reloading the file.
 
-Observation is pipelined. `observe()` sends identity requests for a batch of windows,
-lets `State::role()` choose what each role needs, then sends only those requests, so a
-startup scan costs a fixed number of round trips. Property notifications read only
-the changed property with the same decoders. No X-reading callback enters the model.
+Observation is pipelined. `observe()` checks attributes, subscribes every manageable
+window before reading identity, then lets `State::role()` choose the remaining reads.
+Separate user-time windows likewise subscribe before their first timestamp read,
+preserving existing event interest. Each stage costs a fixed number of round trips
+per batch. Property notifications use the same decoders. No X-reading callback enters
+the model, and the shell does not retain a role alongside the observation.
 
 The pointer grab is an effect derived from the model: the shell acquires it before a
 drag starts and completion releases it once the model no longer has a drag, whether
@@ -150,8 +152,11 @@ consume events already queued and defer unrelated ones; handlers never re-enter.
 
 Roles follow identity first: a predecessor's saved fixtures keep their role and saved
 clients stay clients; only newcomers choose a role from their window type.
-`classify()` registers fixtures directly and turns client observations into
-candidates with the admitted rule, initial mode, desktop hint and initial state.
+`classify()` allocates registration ranks in observation order, registers fixtures
+directly and returns client candidates with their rank, rule, mode, desktop hint and
+initial state. Installing a candidate preserves that rank; placement dependencies
+cannot reorder registration. Adoption reserves the saved rank range before registering
+newcomers, and restoration reinstates surviving identities' saved ranks.
 
 - `admit()` handles a live map: register, place, focus when on the focused monitor
   and eligible, then claim a matching named scratchpad. An unrequested scratchpad
@@ -204,7 +209,12 @@ invalidates the slot permanently.
 
 Every rectangle in the model is a frame: the window plus the border drawn inside it.
 Application and rule geometry gains the client's border on entry; `presentation()`
-removes it again and decides the border width and color, so layout, maximize,
+removes it again. Border width fits the frame while retaining at least one pixel of
+window, so the X window and border reconstruct the allocated frame exactly. Size
+hints and geometry requests share normal-frame resizing: unchanged sizes and
+position-only requests preserve the frame; changed sizes preserve omitted inner
+extents and use the configured border within X11's maximum frame size.
+The model decides the border width and color, so layout, maximize,
 fullscreen and placement never account for borders separately. `project()` returns
 every client in registration order with an optional presentation: absent means hidden.
 `normal_geometry()` derives a tiled client's slot even when minimized, off-workspace or
@@ -339,8 +349,8 @@ teardown-related BadWindow/BadDrawable errors are DEBUG.
 
 Types prevent mode/storage disagreement, fixture placement and simultaneous
 Above/Below preferences. `invariants::validate()` checks the persistent graph (valid
-placement, exact tiled membership, unique identities and ranks, consistent fullscreen
-claims, exclusive scratchpad ownership, a managed active window), then live facts:
+placement, nonempty frames, exact tiled membership, unique identities and ranks,
+consistent fullscreen claims, exclusive scratchpad ownership, a managed active window), then live facts:
 registry bounds, fullscreen flags, iconic preferences and focus eligibility. Debug
 builds check on event-loop entry and after every completed operation, aborting on
 violation. Model invariants do not establish X delivery or ordering; integration tests
