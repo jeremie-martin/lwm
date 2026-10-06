@@ -477,9 +477,9 @@ struct Topology
     Geometry screen;
 };
 
-// The workspace graph and output identity survive exec. Workarea reservations
-// are derived from the current docks, not saved.
-struct MonitorState
+// The workspace graph and output identity survive exec. Workareas are derived
+// from the current docks.
+struct Monitor
 {
     std::string name;
     Geometry geometry;
@@ -490,24 +490,7 @@ struct MonitorState
     Workspace& current() { return workspaces[current_workspace]; }
     Workspace const& current() const { return workspaces[current_workspace]; }
 
-    bool operator==(MonitorState const&) const = default;
-};
-
-struct Monitor : MonitorState
-{
-    Strut strut = {}; ///< Derived from dock reservations
-
-    Geometry working_area() const
-    {
-        auto const& [x, y, width, height] = geometry;
-        uint64_t horizontal = static_cast<uint64_t>(strut.left) + strut.right;
-        uint64_t vertical = static_cast<uint64_t>(strut.top) + strut.bottom;
-        // Oversized struts consume the extent without shifting the origin.
-        return { geometry_coordinate(static_cast<int64_t>(x) + (horizontal >= width ? 0 : strut.left)),
-                 geometry_coordinate(static_cast<int64_t>(y) + (vertical >= height ? 0 : strut.top)),
-                 geometry_extent(static_cast<int64_t>(width) - std::min<uint64_t>(width, horizontal)),
-                 geometry_extent(static_cast<int64_t>(height) - std::min<uint64_t>(height, vertical)) };
-    }
+    bool operator==(Monitor const&) const = default;
 };
 
 // The smallest rectangle containing every rectangle in a range, if any.

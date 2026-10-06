@@ -99,9 +99,6 @@ private:
     uint64_t published_revision_ = UINT64_MAX;
 
     std::deque<xcb_generic_event_t> deferred_events_;
-    // Windows asked to close. A ping-capable client is killed at its deadline unless it
-    // answers; closing a window again kills it.
-    std::unordered_map<xcb_window_t, std::optional<std::chrono::steady_clock::time_point>> closing_;
     bool pointer_grabbed_ = false; ///< Held exactly while State has a drag
     std::optional<RunResult> stop_; ///< Set when the event loop should end
     xcb_window_t restart_requester_ = XCB_NONE; ///< IPC caller of a restart, awaited before exec
@@ -132,7 +129,6 @@ private:
     std::expected<void, std::string> reload_config(std::string_view source);
     bool launch_program(std::vector<std::string> const& command, std::string_view source);
     void close_window(xcb_window_t window);
-    void handle_timeouts();
     void send_protocol_message(xcb_window_t window, xcb_atom_t protocol, uint32_t timestamp, uint32_t d2 = 0);
     void set_root_cursor(xcb_cursor_t cursor);
 

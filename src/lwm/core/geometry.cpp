@@ -46,7 +46,7 @@ std::vector<State::Projected> State::project(FullscreenVisibility const& fullscr
     {
         auto const& monitor = monitors_[m];
         auto windows = tiled_participants(m, fullscreen);
-        auto slots = layout().arrange(windows.size(), monitor.working_area(), monitor.current());
+        auto slots = layout().arrange(windows.size(), working_area(monitor), monitor.current());
         for (size_t i = 0; i < windows.size(); ++i)
         {
             auto const& client = require(windows[i]);
@@ -115,7 +115,7 @@ Geometry State::normal_geometry(Client const& client) const
     }
     auto position = std::ranges::find(windows, client.id);
     assert(position != windows.end());
-    auto slots = layout().arrange(windows.size(), monitor.working_area(), monitor.workspaces[workspace]);
+    auto slots = layout().arrange(windows.size(), working_area(monitor), monitor.workspaces[workspace]);
     return slots[static_cast<size_t>(position - windows.begin())];
 }
 
@@ -138,7 +138,7 @@ Geometry State::frame(Client const& client) const
         return fullscreen_geometry(client);
     if (auto const* floating = floating_mode(client))
         return floating::presentation_geometry(
-            floating->geometry, monitors_[client.monitor].working_area(), client.maximized_horz, client.maximized_vert
+            floating->geometry, working_area(monitors_[client.monitor]), client.maximized_horz, client.maximized_vert
         );
     return normal_geometry(client);
 }

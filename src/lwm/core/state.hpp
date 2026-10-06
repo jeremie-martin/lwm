@@ -119,11 +119,16 @@ public:
     void insert_fixture(xcb_window_t id, Fixture::Role role, DockStrut strut = { });
     void reserve(xcb_window_t id, DockStrut strut);
     void erase(xcb_window_t id);
+    // Records a close request and returns whether the window was already asked, in
+    // which case closing it again kills its client.
+    bool ask_to_close(xcb_window_t id) { return !closing_.insert(id).second; }
 
     // Configuration and topology
     // Layout, scratchpad slots, matching rules and the workspace count follow
     // the installed configuration.
     Config const& config() const { return config_; }
+    // The monitor less the deepest dock reservation on each edge.
+    Geometry working_area(Monitor const& monitor) const;
     void configure(Config config);
     // Rebind workspaces by output name and reassign clients. A changed topology
     // fits floating rectangles into the new workareas and clears monitor hints.
@@ -322,6 +327,7 @@ private:
     Config config_;
     Geometry screen_;
     Clients clients_;
+    std::unordered_set<xcb_window_t> closing_; ///< Managed windows already asked to close
     Fixtures fixtures_;
     std::vector<Monitor> monitors_;
     std::vector<NamedScratchpad> named_scratchpads_;
@@ -384,7 +390,6 @@ private:
     // Configuration and topology
     Monitor fresh_monitor(std::string name, Geometry geometry) const;
     void rebind(std::vector<Monitor> monitors);
-    void update_workareas();
     void forget_missing_tile_slot(Client& client) const;
 
     void erase_ratio(size_t monitor, SplitAddress address);

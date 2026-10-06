@@ -73,13 +73,12 @@ TEST_CASE("IPC grammar rejects invalid arguments before execution", "[ipc][comma
         CAPTURE(command);
         CHECK_FALSE(parse_command(command));
     }
-    CHECK_FALSE(encode_command(std::vector<std::string>{ "exec", "two", "arguments" }));
     CHECK_FALSE(encode_command(std::vector<std::string>{ "scratchpad", "toggle", "bad\nname" }));
     CHECK(parse_command("  version  "));
     CHECK(*parse_command("window focus 0X123") == Request{ Action{ action::FocusWindow{ 0x123 } } });
 }
 
-TEST_CASE("Command diagnostics and CLI arity preserve the public grammar", "[ipc][command]")
+TEST_CASE("Command diagnostics preserve the public grammar", "[ipc][command]")
 {
     for (auto const& [input, message] : std::vector<std::pair<std::string, std::string>>{
              { "version extra", "usage: version" },
@@ -102,17 +101,11 @@ TEST_CASE("Command diagnostics and CLI arity preserve the public grammar", "[ipc
         REQUIRE_FALSE(parsed);
         CHECK(parsed.error() == message);
     }
-    // Text is one CLI argument even when its wire value contains spaces.
+    // lwmctl joins its arguments, so the command text is the contract however it is split.
     CHECK(encode_command(std::vector<std::string>{ "exec", "a path with spaces" }) == "exec a path with spaces");
-    auto invalid_argv = [](std::vector<std::string> const& argv, std::string const& message)
-    {
-        auto encoded = encode_command(argv);
-        REQUIRE_FALSE(encoded);
-        CHECK(encoded.error() == message);
-    };
-    invalid_argv({ "exec", "a", "path" }, "usage: exec PATH");
-    invalid_argv({ "version", "" }, "usage: version");
-    invalid_argv({ "workspace", "switch", "2", "" }, "usage: workspace switch N");
+    CHECK(encode_command(std::vector<std::string>{ "exec", "a", "path" }) == "exec a path");
+    CHECK(encode_command(std::vector<std::string>{ "window fullscreen" }) == "window fullscreen");
+    CHECK(encode_command(std::vector<std::string>{ "version", "extra" }).error() == "usage: version");
     CHECK(*parse_command("workspace switch 4294967295")
           == Request{ Action{ action::SwitchWorkspace{ 4294967295U } } });
     CHECK(*parse_command("window focus 0xffffffff") == Request{ Action{ action::FocusWindow{ 4294967295U } } });

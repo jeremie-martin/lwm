@@ -143,7 +143,6 @@ void State::insert_fixture(xcb_window_t id, Fixture::Role role, DockStrut strut)
 {
     mutated();
     fixtures_.emplace(id, Fixture{ { id, role, register_window(id) }, strut });
-    update_workareas();
 }
 
 void State::reserve(xcb_window_t id, DockStrut strut)
@@ -153,15 +152,14 @@ void State::reserve(xcb_window_t id, DockStrut strut)
         return;
     mutated();
     it->second.strut = strut;
-    update_workareas();
 }
 
 void State::erase(xcb_window_t id)
 {
+    closing_.erase(id);
     if (fixtures_.erase(id))
     {
         mutated();
-        update_workareas();
         return;
     }
     auto const* client = find(id);
@@ -451,8 +449,8 @@ bool State::relocate(
     else if (source != monitor && geometry != RelocationGeometry::Preserve)
     {
         auto& rectangle = floating_mode(client)->geometry;
-        auto from = monitors_[source].working_area();
-        auto to = monitors_[monitor].working_area();
+        auto from = working_area(monitors_[source]);
+        auto to = working_area(monitors_[monitor]);
         rectangle = geometry == RelocationGeometry::Translate
             ? floating::translate_to_area(rectangle, from, to)
             : floating::place_floating(to, rectangle.width, rectangle.height, std::nullopt);
@@ -500,7 +498,7 @@ void State::set_mode(xcb_window_t id, bool floating)
     if (auto* tiled = tiled_mode(client))
     {
         auto rectangle = floating::recover_to_area(
-            monitors_[client.monitor].working_area(),
+            working_area(monitors_[client.monitor]),
             tiled->floating ? *tiled->floating : normal_geometry(client)
         );
         auto slot = detach(client);
@@ -817,31 +815,28 @@ void State::replace_topology(Topology topology)
     assert(!topology.outputs.empty());
     std::vector<Monitor> monitors;
     for (auto& output : topology.outputs) monitors.push_back(fresh_monitor(std::move(output.name), output.geometry));
+    // The root extent shapes dock projections even when the outputs are unchanged.
+    if (!(screen_ == topology.screen))
+        mutated();
     screen_ = topology.screen;
     rebind(std::move(monitors));
 }
 
 // Each monitor reserves the deepest projection of any dock on each edge.
-void State::update_workareas()
+Geometry State::working_area(Monitor const& monitor) const
 {
-    for (auto& monitor : monitors_)
+    Strut strut;
+    for (auto const& [id, fixture] : fixtures_)
     {
-        Strut strut;
-        for (auto const& [id, fixture] : fixtures_)
-        {
-            if (fixture.role != Fixture::Role::Dock)
-                continue;
-            auto projected = monitor_strut(fixture.strut, screen_, monitor.geometry);
-            strut.left = std::max(strut.left, projected.left);
-            strut.right = std::max(strut.right, projected.right);
-            strut.top = std::max(strut.top, projected.top);
-            strut.bottom = std::max(strut.bottom, projected.bottom);
-        }
-        if (monitor.strut == strut)
+        if (fixture.role != Fixture::Role::Dock)
             continue;
-        mutated();
-        monitor.strut = strut;
+        auto projected = monitor_strut(fixture.strut, screen_, monitor.geometry);
+        strut.left = std::max(strut.left, projected.left);
+        strut.right = std::max(strut.right, projected.right);
+        strut.top = std::max(strut.top, projected.top);
+        strut.bottom = std::max(strut.bottom, projected.bottom);
     }
+    return lwm::working_area(monitor.geometry, strut);
 }
 
 void State::rebind(std::vector<Monitor> monitors)
@@ -855,9 +850,8 @@ void State::rebind(std::vector<Monitor> monitors)
     if (!topology_changed && std::ranges::equal(monitors_, monitors, [](auto const& a, auto const& b)
         { return a.workspaces.size() == b.workspaces.size(); }))
     {
-        // The root extent can change without changing the outputs. Its only
-        // domain consequence is the dock projection; settle validates drags.
-        update_workareas();
+        // The root extent can change without changing the outputs; its only
+        // domain consequence is the derived dock projection. Settle validates drags.
         return;
     }
     mutated();
@@ -884,7 +878,6 @@ void State::rebind(std::vector<Monitor> monitors)
     auto destinations = preserve_workspaces(previous, monitors);
     focused_monitor_ = focused_monitor_ < destinations.size() ? destinations[focused_monitor_] : 0;
     monitors_ = std::move(monitors);
-    update_workareas();
     auto survives = [&](size_t index)
     {
         return index < previous.size()
@@ -902,7 +895,7 @@ void State::rebind(std::vector<Monitor> monitors)
         {
             c.fullscreen_monitors.reset();
             if (auto* mode = floating_mode(c))
-                mode->geometry = fit_floating(mode->geometry, monitors_[c.monitor].working_area(), displaced);
+                mode->geometry = fit_floating(mode->geometry, working_area(monitors_[c.monitor]), displaced);
         }
     }
 }

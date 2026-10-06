@@ -55,11 +55,8 @@ Result WindowManager::execute(Action const& action, std::string_view source)
             },
             [&](FocusWindow const& focus) -> Result
             {
-                auto const* client = state_.find(focus.window);
-                if (!client)
+                if (!state_.find(focus.window))
                     return fail("unknown window");
-                if (!State::accepts_focus(*client))
-                    return fail("window not focusable");
                 state_.focus(focus.window);
                 if (state_.active_window() != focus.window)
                     return fail("focus request refused");

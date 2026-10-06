@@ -68,7 +68,6 @@ void Ewmh::advertise(xcb_window_t check, std::vector<xcb_atom_t> const& extra_su
         ewmh_._NET_DESKTOP_GEOMETRY,
         ewmh_._NET_WORKAREA,
         ewmh_._NET_WM_STATE,
-        ewmh_._NET_WM_PING,
         ewmh_._NET_CLOSE_WINDOW,
         ewmh_._NET_WM_FULLSCREEN_MONITORS,
         ewmh_._NET_WM_WINDOW_TYPE,

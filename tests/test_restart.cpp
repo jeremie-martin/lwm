@@ -312,7 +312,7 @@ TEST_CASE("Restart rebinding matches live output reconciliation", "[restart][sta
     restored.adopt(observed, &*snapshot);
     CHECK(restored.focused_monitor() == source.focused_monitor());
     for (auto const& monitor : restored.monitors())
-        CHECK(monitor.strut.top == 40);
+        CHECK(restored.working_area(monitor).y == monitor.geometry.y + 40);
     if (workspaces == 1)
     {
         // Retain the survivor's order, fold higher workspaces in order, then

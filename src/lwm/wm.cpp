@@ -15,7 +15,6 @@ namespace lwm {
 
 namespace {
 
-constexpr auto KILL_TIMEOUT = std::chrono::seconds(5);
 
 } // namespace
 
@@ -274,29 +273,16 @@ RunResult WindowManager::run()
     int xfd = xcb_get_file_descriptor(conn_.get());
     while (!stop_)
     {
-        std::optional<std::chrono::steady_clock::time_point> deadline;
-        for (auto const& [window, kill_at] : closing_)
-            if (kill_at && (!deadline || *kill_at < *deadline))
-                deadline = kill_at;
-        int timeout_ms = -1;
-        if (deadline)
-            timeout_ms = static_cast<int>(std::max<int64_t>(
-                0,
-                std::chrono::ceil<std::chrono::milliseconds>(*deadline - std::chrono::steady_clock::now()).count()
-            ));
         // Replies can pull events into XCB's queue without leaving the fd readable.
         while (auto* event = xcb_poll_for_queued_event(conn_.get()))
         {
             deferred_events_.push_back(*event);
             free(event);
         }
-        if (!deferred_events_.empty())
-            timeout_ms = 0;
-
         pollfd fd{ .fd = xfd, .events = POLLIN, .revents = 0 };
-        poll(&fd, 1, timeout_ms);
+        poll(&fd, 1, deferred_events_.empty() ? -1 : 0);
 
-        // Bounded batches keep deadlines responsive under X load.
+        // Bounded batches keep completion responsive under X load.
         size_t remaining = 64;
         auto batch_deadline = std::chrono::steady_clock::now() + std::chrono::milliseconds(2);
         while (remaining && std::chrono::steady_clock::now() < batch_deadline)
@@ -318,7 +304,6 @@ RunResult WindowManager::run()
                 break;
         }
 
-        handle_timeouts();
         if (std::exchange(monitors_dirty_, false))
             refresh_topology();
         complete_transition();
@@ -364,22 +349,6 @@ void WindowManager::dispatch_event(
     }
     handle_event(current);
     complete_transition();
-}
-
-void WindowManager::handle_timeouts()
-{
-    auto now = std::chrono::steady_clock::now();
-    std::erase_if(
-        closing_,
-        [&](auto const& entry)
-        {
-            if (!entry.second || *entry.second > now)
-                return false;
-            LWM_LOG_WARN("Close timed out: window={:#x}; killing client connection", entry.first);
-            xcb_kill_client(conn_.get(), entry.first);
-            return true;
-        }
-    );
 }
 
 // Configuration
@@ -442,26 +411,17 @@ bool WindowManager::launch_program(std::vector<std::string> const& command, std:
     return error == 0;
 }
 
-// Closing asks the client. Only an unanswered ping proves a client hung, so only a
-// ping-capable client is killed automatically; a client that may be showing a save
-// dialog is killed only when the user closes it again. See X11.md for close behavior.
+// Closing asks the client, which may first show a save dialog; closing it again kills
+// its connection. See X11.md for close behavior.
 void WindowManager::close_window(xcb_window_t window)
 {
-    auto protocols = read_protocols(window);
-    if (closing_.contains(window) || !std::ranges::contains(protocols, atoms_.wm_delete_window))
+    if (state_.ask_to_close(window) || !std::ranges::contains(read_protocols(window), atoms_.wm_delete_window))
     {
         LWM_LOG_DEBUG("Close: window={:#x}; killing client connection", window);
         xcb_kill_client(conn_.get(), window);
-        closing_.erase(window);
         return;
     }
     send_protocol_message(window, atoms_.wm_delete_window, last_event_time_);
-    auto& deadline = closing_[window];
-    if (std::ranges::contains(protocols, ewmh_.get()->_NET_WM_PING))
-    {
-        send_protocol_message(window, ewmh_.get()->_NET_WM_PING, last_event_time_, window);
-        deadline = std::chrono::steady_clock::now() + KILL_TIMEOUT;
-    }
     LWM_LOG_DEBUG("Close requested: window={:#x} protocol=WM_DELETE_WINDOW", window);
 }
 

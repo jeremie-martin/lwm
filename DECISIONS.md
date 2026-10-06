@@ -74,10 +74,12 @@ process lifetimes, readiness and cleanup, and LWM-run autostart duplicated it.
 
 ## Close politely, and close twice to kill (2026-10-06)
 
-Closing sends `WM_DELETE_WINDOW`; only a client that also answers `_NET_WM_PING` and
-then fails to answer within 5 seconds is killed, and closing a still-open window again
-kills it. A fixed kill timer for every client destroyed windows that were merely showing
-a confirmation dialog. A client without `WM_DELETE_WINDOW` is killed at once.
+Closing sends `WM_DELETE_WINDOW`, and closing a still-open window again kills it; a
+client without `WM_DELETE_WINDOW` is killed at once. A fixed kill timer for every client
+destroyed windows that were merely showing a confirmation dialog. A ping-based timer
+that killed only clients failing to answer `_NET_WM_PING` within 5 seconds replaced it,
+then was dropped too: it was the event loop's only deadline, and the second close
+already recovers a hung client. Revisit only if hung clients prove common.
 
 ## Repeat every binding alike (2026-10-06)
 

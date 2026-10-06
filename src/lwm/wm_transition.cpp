@@ -314,7 +314,7 @@ void WindowManager::publish_root(std::vector<State::Projected> const& clients, b
     std::vector<uint32_t> viewports, workareas;
     for (auto const& m : monitors)
     {
-        Geometry area = m.working_area();
+        Geometry area = state_.working_area(m);
         for (auto const& name : config().workspaces)
         {
             names.append(name).push_back('\0');

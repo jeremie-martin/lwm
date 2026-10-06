@@ -1,3 +1,4 @@
+#include "lwm/core/workarea.hpp"
 #include "lwm/layout/layout.hpp"
 #include <catch2/catch_test_macros.hpp>
 #include <catch2/matchers/catch_matchers_floating_point.hpp>
@@ -128,9 +129,5 @@ TEST_CASE("Extreme padding and dock struts saturate instead of wrapping", "[layo
         CHECK(g.width == 1);
         CHECK(g.height == 1);
     }
-    Monitor monitor;
-    monitor.geometry.width = 1000;
-    monitor.geometry.height = 800;
-    monitor.strut = { UINT32_MAX, UINT32_MAX, UINT32_MAX, UINT32_MAX };
-    CHECK(monitor.working_area() == Geometry{ 0, 0, 1, 1 });
+    CHECK(working_area({ 0, 0, 1000, 800 }, { UINT32_MAX, UINT32_MAX, UINT32_MAX, UINT32_MAX }) == Geometry{ 0, 0, 1, 1 });
 }

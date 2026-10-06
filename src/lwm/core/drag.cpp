@@ -120,7 +120,7 @@ void State::begin_drag(Interaction const& interaction, int16_t x, int16_t y, uin
     SplitDrag drag{ hit.monitor,
                     monitor.current_workspace,
                     hit.hit,
-                    monitor.working_area(),
+                    working_area(monitor),
                     monitor.current().layout_strategy,
                     tiled_participants(hit.monitor, fullscreen_visibility()) };
     drag_ = Drag{ drag, x, y, x, y, button };
@@ -133,7 +133,7 @@ std::optional<State::SplitHit> State::split_at(int16_t x, int16_t y) const
         return std::nullopt;
     auto const& monitor = monitors_[*index];
     auto count = tiled_participants(*index, fullscreen_visibility()).size();
-    auto hit = layout().hit_test(count, monitor.working_area(), monitor.current(), x, y);
+    auto hit = layout().hit_test(count, working_area(monitor), monitor.current(), x, y);
     return hit ? std::optional{ SplitHit{ *hit, *index } } : std::nullopt;
 }
 
@@ -184,7 +184,7 @@ bool State::drag_valid() const
     if (split.monitor >= monitors_.size())
         return false;
     auto const& monitor = monitors_[split.monitor];
-    return monitor.current_workspace == split.workspace && monitor.working_area() == split.area
+    return monitor.current_workspace == split.workspace && working_area(monitor) == split.area
         && monitor.current().layout_strategy == split.strategy
         && tiled_participants(split.monitor, fullscreen_visibility()) == split.participants;
 }
@@ -207,7 +207,7 @@ void State::end_drag(bool commit)
     auto const& workspace = monitor.current();
     auto participants = tiled_participants(target, fullscreen_visibility());
     std::erase(participants, client->id);
-    auto area = monitor.working_area();
+    auto area = working_area(monitor);
     size_t slot = layout().drop_target_index(participants.size() + 1, area, workspace, drag.last_x, drag.last_y);
     xcb_window_t anchor = slot < participants.size() && require(participants[slot]).workspace == monitor.current_workspace
         ? participants[slot]

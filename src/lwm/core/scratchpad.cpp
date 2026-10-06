@@ -193,7 +193,7 @@ void State::show_named_scratchpad(xcb_window_t window, ScratchpadConfig const& c
     size_t monitor = focused_monitor();
     size_t workspace = monitors()[monitor].current_workspace;
     floating(window, true);
-    Geometry area = monitors()[monitor].working_area();
+    Geometry area = working_area(monitors()[monitor]);
     auto width = geometry_extent(static_cast<int64_t>(area.width * config.width));
     auto height = geometry_extent(static_cast<int64_t>(area.height * config.height));
     geometry(window, floating::place_floating(area, width, height, std::nullopt));

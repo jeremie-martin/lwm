@@ -17,7 +17,7 @@ struct Snapshot
     uint32_t format = restart::format;
     size_t focused_monitor = 0;
     xcb_window_t active = XCB_NONE;
-    std::vector<MonitorState> monitors;
+    std::vector<Monitor> monitors;
     std::vector<ClientIntent> clients; ///< Registration order
     std::vector<FixtureIntent> fixtures; ///< Established roles and registration ranks
     std::vector<NamedScratchpad> named_scratchpads;

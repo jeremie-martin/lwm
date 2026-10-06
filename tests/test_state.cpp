@@ -612,15 +612,15 @@ TEST_CASE("Workareas follow dock reservations and unchanged topology preserves i
     add(state, 1, { .floating = true, .geometry = { -100, -100, 1500, 1000 } });
     state.fullscreen_monitors(1, FullscreenMonitors{ 0, 0, 0, 1 });
     state.insert_fixture(9, Fixture::Role::Dock, DockStrut{ .top = { 40 } });
-    CHECK(state.monitors()[0].working_area() == Geometry{ 0, 40, 1000, 760 });
-    CHECK(state.monitors()[1].working_area() == Geometry{ 1000, 40, 1000, 760 });
+    CHECK(state.working_area(state.monitors()[0]) == Geometry{ 0, 40, 1000, 760 });
+    CHECK(state.working_area(state.monitors()[1]) == Geometry{ 1000, 40, 1000, 760 });
     state.reserve(9, DockStrut{ .top = { 60 } });
-    CHECK(state.monitors()[1].working_area() == Geometry{ 1000, 60, 1000, 740 });
+    CHECK(state.working_area(state.monitors()[1]) == Geometry{ 1000, 60, 1000, 740 });
     // Desktop windows never reserve space.
     state.insert_fixture(10, Fixture::Role::Desktop, DockStrut{ .left = { 300 } });
-    CHECK(state.monitors()[0].working_area().x == 0);
+    CHECK(state.working_area(state.monitors()[0]).x == 0);
     state.erase(9);
-    CHECK(state.monitors()[0].working_area() == state.monitors()[0].geometry);
+    CHECK(state.working_area(state.monitors()[0]) == state.monitors()[0].geometry);
 
     // A spurious refresh of the same outputs keeps intentional geometry and monitor hints.
     test::outputs(state, { test::output("M0"), test::output("M1", 1000) });
@@ -640,7 +640,7 @@ TEST_CASE("Admission derives roles and placement from observations alone", "[sta
     state.admit(dock);
     state.admit(popup);
     REQUIRE(state.find_fixture(1));
-    CHECK(state.monitors()[0].working_area().y == 30);
+    CHECK(state.working_area(state.monitors()[0]).y == 30);
     CHECK_FALSE(state.find(2));
     CHECK_FALSE(state.find_fixture(2));
 

@@ -283,7 +283,7 @@ Geometry State::resolve_geometry(
     auto const& size = std::get<CenteredSize>(placement);
     auto const* parent = find(size.parent);
     return floating::place_floating(
-        monitors_[require(id).monitor].working_area(), size.width, size.height,
+        working_area(monitors_[require(id).monitor]), size.width, size.height,
         parent ? std::optional{ frame(*parent) } : size.parent != XCB_NONE ? unmanaged_parent : std::nullopt
     );
 }
@@ -347,7 +347,7 @@ State::PlacementGeometry State::rule_geometry(xcb_window_t id, RuleActions const
     auto const& position = rule.geometry->position;
     if (!position)
         return CenteredSize{ size.width, size.height };
-    auto area = monitors_[client.monitor].working_area();
+    auto area = working_area(monitors_[client.monitor]);
     return Geometry{ geometry_coordinate(area.x + position->first), geometry_coordinate(area.y + position->second), size.width, size.height };
 }
 
@@ -437,7 +437,7 @@ void State::restore_graph(restart::Snapshot const& snapshot, std::span<Client> o
     std::vector<Monitor> discovered;
     for (auto const& monitor : monitors_) discovered.push_back(fresh_monitor(monitor.name, monitor.geometry));
     monitors_.clear();
-    for (auto const& monitor : snapshot.monitors) monitors_.push_back(Monitor{ monitor });
+    for (auto const& monitor : snapshot.monitors) monitors_.push_back(monitor);
     focused_monitor_ = snapshot.focused_monitor;
     for (auto& client : observed)
     {

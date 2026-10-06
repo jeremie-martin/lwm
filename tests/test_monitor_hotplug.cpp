@@ -148,7 +148,7 @@ TEST_CASE("Root extent changes reconcile only the workarea-dependent interaction
     test::add(state, 1);
     test::add(state, 2);
     state.insert_fixture(9, Fixture::Role::Dock, DockStrut{ .right = { 100 } });
-    REQUIRE(state.monitors()[0].working_area().width == 900);
+    REQUIRE(state.working_area(state.monitors()[0]).width == 900);
     bool split = true;
     SECTION("split drag depends on its captured workarea")
     {
@@ -163,15 +163,15 @@ TEST_CASE("Root extent changes reconcile only the workarea-dependent interaction
         state.begin_drag(State::Grip{ 1, floating::ResizeEdge::None }, 100, 100, 1);
     }
     state.settle();
-    auto revision = state.revision();
     // This extent does not move the reservation's right boundary.
     state.replace_topology({ { test::output("M0") }, { 0, 0, 1000, 900 } });
-    CHECK(state.revision() == revision);
+    CHECK(state.working_area(state.monitors()[0]).width == 900);
     state.settle();
     REQUIRE(state.drag());
+    auto revision = state.revision();
     // Enlarging the root moves its right edge beyond the unchanged output.
     state.replace_topology({ { test::output("M0") }, { 0, 0, 1200, 900 } });
-    CHECK(state.monitors()[0].working_area().width == 1000);
+    CHECK(state.working_area(state.monitors()[0]).width == 1000);
     CHECK(state.revision() > revision);
     state.settle();
     CHECK(bool(state.drag()) == !split);

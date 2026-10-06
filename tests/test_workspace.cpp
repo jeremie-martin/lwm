@@ -1,4 +1,5 @@
 #include "lwm/core/types.hpp"
+#include "lwm/core/workarea.hpp"
 #include "state_fixture.hpp"
 #include <catch2/catch_test_macros.hpp>
 
@@ -35,6 +36,7 @@ TEST_CASE("Window can be found across workspaces", "[workspace]")
 TEST_CASE("Monitor working_area accounts for struts", "[monitor]")
 {
     Monitor mon;
+    Strut strut;
     mon.geometry.x = 0;
     mon.geometry.y = 0;
     mon.geometry.width = 1920;
@@ -42,23 +44,23 @@ TEST_CASE("Monitor working_area accounts for struts", "[monitor]")
     init_workspaces(mon);
 
     // No strut
-    auto area = mon.working_area();
+    auto area = working_area(mon.geometry, strut);
     REQUIRE(area.x == 0);
     REQUIRE(area.y == 0);
     REQUIRE(area.width == 1920);
     REQUIRE(area.height == 1080);
 
     // Add top strut (e.g., Polybar)
-    mon.strut.top = 30;
-    area = mon.working_area();
+    strut.top = 30;
+    area = working_area(mon.geometry, strut);
     REQUIRE(area.x == 0);
     REQUIRE(area.y == 30);
     REQUIRE(area.width == 1920);
     REQUIRE(area.height == 1050);
 
     // Add left strut too
-    mon.strut.left = 50;
-    area = mon.working_area();
+    strut.left = 50;
+    area = working_area(mon.geometry, strut);
     REQUIRE(area.x == 50);
     REQUIRE(area.y == 30);
     REQUIRE(area.width == 1870);
@@ -76,15 +78,16 @@ TEST_CASE("Empty workspace has no focused window", "[workspace]")
 TEST_CASE("Working area handles int16_t coordinate boundaries", "[workspace][edge]")
 {
     Monitor mon;
+    Strut strut;
     init_workspaces(mon);
     mon.geometry.x = 32700;
     mon.geometry.y = 32700;
     mon.geometry.width = 100;
     mon.geometry.height = 100;
-    mon.strut.top = 10;
-    mon.strut.left = 10;
+    strut.top = 10;
+    strut.left = 10;
 
-    auto area = mon.working_area();
+    auto area = working_area(mon.geometry, strut);
     REQUIRE(area.x == 32710);
     REQUIRE(area.y == 32710);
     REQUIRE(area.width == 90);
@@ -94,15 +97,16 @@ TEST_CASE("Working area handles int16_t coordinate boundaries", "[workspace][edg
 TEST_CASE("Working area handles negative coordinates", "[workspace][edge]")
 {
     Monitor mon;
+    Strut strut;
     mon.geometry.x = -1000;
     mon.geometry.y = -1000;
     mon.geometry.width = 1920;
     mon.geometry.height = 1080;
     init_workspaces(mon);
-    mon.strut.top = 50;
-    mon.strut.left = 50;
+    strut.top = 50;
+    strut.left = 50;
 
-    auto area = mon.working_area();
+    auto area = working_area(mon.geometry, strut);
     REQUIRE(area.x == -950);
     REQUIRE(area.y == -950);
     REQUIRE(area.width == 1870);
@@ -112,15 +116,16 @@ TEST_CASE("Working area handles negative coordinates", "[workspace][edge]")
 TEST_CASE("Working area handles maximum uint16_t dimensions", "[workspace][edge]")
 {
     Monitor mon;
+    Strut strut;
     mon.geometry.x = 0;
     mon.geometry.y = 0;
     mon.geometry.width = 65535;
     mon.geometry.height = 65535;
     init_workspaces(mon);
-    mon.strut.left = 100;
-    mon.strut.top = 100;
+    strut.left = 100;
+    strut.top = 100;
 
-    auto area = mon.working_area();
+    auto area = working_area(mon.geometry, strut);
     REQUIRE(area.x == 100);
     REQUIRE(area.y == 100);
     REQUIRE(area.width == 65435);
@@ -130,14 +135,15 @@ TEST_CASE("Working area handles maximum uint16_t dimensions", "[workspace][edge]
 TEST_CASE("Working area with zero struts returns full monitor area", "[workspace][edge]")
 {
     Monitor mon;
+    Strut strut;
     mon.geometry.x = 100;
     mon.geometry.y = 100;
     mon.geometry.width = 1920;
     mon.geometry.height = 1080;
     init_workspaces(mon);
-    mon.strut = {};
+    strut = {};
 
-    auto area = mon.working_area();
+    auto area = working_area(mon.geometry, strut);
     REQUIRE(area.x == 100);
     REQUIRE(area.y == 100);
     REQUIRE(area.width == 1920);
@@ -147,6 +153,7 @@ TEST_CASE("Working area with zero struts returns full monitor area", "[workspace
 TEST_CASE("Working area subtracts each strut independently", "[workspace][edge]")
 {
     Monitor mon;
+    Strut strut;
     mon.geometry.x = 0;
     mon.geometry.y = 0;
     mon.geometry.width = 1920;
@@ -155,31 +162,31 @@ TEST_CASE("Working area subtracts each strut independently", "[workspace][edge]"
 
     SECTION("Top strut")
     {
-        mon.strut.top = 50;
-        auto area = mon.working_area();
+        strut.top = 50;
+        auto area = working_area(mon.geometry, strut);
         REQUIRE(area.y == 50);
         REQUIRE(area.height == 1030);
     }
 
     SECTION("Left strut")
     {
-        mon.strut.left = 100;
-        auto area = mon.working_area();
+        strut.left = 100;
+        auto area = working_area(mon.geometry, strut);
         REQUIRE(area.x == 100);
         REQUIRE(area.width == 1820);
     }
 
     SECTION("Bottom strut")
     {
-        mon.strut.bottom = 80;
-        auto area = mon.working_area();
+        strut.bottom = 80;
+        auto area = working_area(mon.geometry, strut);
         REQUIRE(area.height == 1000);
     }
 
     SECTION("Right strut")
     {
-        mon.strut.right = 120;
-        auto area = mon.working_area();
+        strut.right = 120;
+        auto area = working_area(mon.geometry, strut);
         REQUIRE(area.width == 1800);
     }
 }

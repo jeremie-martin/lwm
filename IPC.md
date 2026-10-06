@@ -44,7 +44,9 @@ may have executed the command; do not retry toggles blindly.
 `lwmctl --help` and command-specific help (for example `lwmctl workspace --help`) print
 to stdout without connecting; an unknown help group returns status 1. Usage errors
 print to stderr and return 1 without connecting. Use `--` before arguments that
-resemble options, and shell-quote names or paths containing spaces.
+resemble options. lwmctl joins its arguments with spaces, so `lwmctl window fullscreen`
+and `lwmctl 'window fullscreen'` are the same command; whitespace runs inside a name
+or path are kept only when quoted.
 
 ## Commands
 

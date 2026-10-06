@@ -36,4 +36,15 @@ Strut monitor_strut(DockStrut const& dock, Geometry root, Geometry monitor)
         inset(dock.bottom, root.y, root_bottom, y, bottom, x, right, true),
     };
 }
+Geometry working_area(Geometry monitor, Strut strut)
+{
+    auto const& [x, y, width, height] = monitor;
+    uint64_t horizontal = static_cast<uint64_t>(strut.left) + strut.right;
+    uint64_t vertical = static_cast<uint64_t>(strut.top) + strut.bottom;
+    return { geometry_coordinate(static_cast<int64_t>(x) + (horizontal >= width ? 0 : strut.left)),
+             geometry_coordinate(static_cast<int64_t>(y) + (vertical >= height ? 0 : strut.top)),
+             geometry_extent(static_cast<int64_t>(width) - std::min<uint64_t>(width, horizontal)),
+             geometry_extent(static_cast<int64_t>(height) - std::min<uint64_t>(height, vertical)) };
+}
+
 } // namespace lwm

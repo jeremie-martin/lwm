@@ -167,11 +167,7 @@ void WindowManager::handle_map_request(xcb_map_request_event_t const& e)
     manage(observed.front(), false);
 }
 
-void WindowManager::handle_window_removal(xcb_window_t window)
-{
-    closing_.erase(window);
-    state_.erase(window);
-}
+void WindowManager::handle_window_removal(xcb_window_t window) { state_.erase(window); }
 
 // Pointer and keyboard
 
@@ -300,12 +296,6 @@ void WindowManager::handle_client_message(xcb_client_message_event_t const& e)
     auto const* client = state_.find(e.window);
     if (e.type == atoms_.lwm_command && e.window == wm_window_)
         handle_command(e.data.data32[0]);
-    else if (e.type == ewmh->WM_PROTOCOLS && e.data.data32[0] == ewmh->_NET_WM_PING)
-    {
-        // A responsive client keeps its window open; only another close kills it.
-        if (auto it = closing_.find(e.data.data32[2] != XCB_NONE ? e.data.data32[2] : e.window); it != closing_.end())
-            it->second.reset();
-    }
     // Only managed windows can be closed; LWM's own windows are never targets.
     else if (e.type == ewmh->_NET_CLOSE_WINDOW && (client || state_.find_fixture(e.window)))
         close_window(e.window);

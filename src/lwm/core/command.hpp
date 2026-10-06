@@ -26,7 +26,6 @@ using Request = std::variant<Query, Action>;
 struct CommandSpec
 {
     std::string_view name;
-    size_t arguments; ///< CLI arguments after the name
     std::string_view usage;
     std::string_view description;
     std::expected<Request, std::string> (*parse)(std::string_view, CommandSpec const&);

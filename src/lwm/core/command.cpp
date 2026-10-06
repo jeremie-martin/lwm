@@ -1,5 +1,4 @@
 #include "command.hpp"
-#include <algorithm>
 #include <charconv>
 #include <cmath>
 #include <utility>
@@ -63,7 +62,7 @@ template <bool Window> std::expected<uint32_t, std::string> integer(std::string_
 template <typename T, auto Parse>
 constexpr CommandSpec takes(std::string_view name, std::string_view help, std::string_view description)
 {
-    return { name, 1, help, description,
+    return { name, help, description,
              [](std::string_view value, CommandSpec const& spec) -> std::expected<Request, std::string>
              {
                  return Parse(value, spec).transform([](auto parsed) { return Request{ T{ std::move(parsed) } }; });
@@ -73,7 +72,7 @@ constexpr CommandSpec takes(std::string_view name, std::string_view help, std::s
 template <typename T, auto... Arguments>
 constexpr CommandSpec fixed(std::string_view name, std::string_view help, std::string_view description)
 {
-    return { name, 0, help, description,
+    return { name, help, description,
              [](std::string_view value, CommandSpec const& spec) -> std::expected<Request, std::string>
              {
                  if (!value.empty()) return usage(spec);
@@ -171,13 +170,8 @@ std::expected<std::string, std::string> encode_command(std::span<std::string con
             text += ' ';
         text += argument;
     }
-    auto parsed = parse_command(text);
-    if (!parsed)
+    if (auto parsed = parse_command(text); !parsed)
         return std::unexpected(parsed.error());
-    auto const& spec = *find_spec(trim(text));
-    size_t words = 1 + std::count(spec.name.begin(), spec.name.end(), ' ');
-    if (arguments.size() != words + spec.arguments)
-        return std::unexpected("usage: " + std::string(spec.usage));
     return text;
 }
 
