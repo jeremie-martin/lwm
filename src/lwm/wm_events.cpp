@@ -160,7 +160,7 @@ void WindowManager::handle_map_request(xcb_map_request_event_t const& e)
     auto observed = observe({ &window, 1 }, false);
     if (observed.empty())
         return;
-    state_.admit(observed.front().window);
+    state_.admit(observed.front());
     manage(observed.front(), false);
     if (!ipc_.has_subscribers(event_mask<event::window_map>))
         return;

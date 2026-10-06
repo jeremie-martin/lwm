@@ -17,7 +17,6 @@
 #include <string>
 #include <unordered_map>
 #include <vector>
-#include <xcb/sync.h>
 
 namespace lwm {
 
@@ -74,9 +73,6 @@ private:
         std::optional<uint32_t> border_color;
         std::optional<WindowStates> states; ///< Owned _NET_WM_STATE values, merged with other parties' atoms
         std::optional<bool> urgent;         ///< Urgency mirrored into the application's WM_HINTS
-        // Protocol bookkeeping, not projections of state.
-        uint32_t sync_counter = 0;
-        uint64_t sync_value = 0;
     };
 
     struct RootOutput
@@ -152,19 +148,13 @@ private:
     bool launch_program(std::vector<std::string> const& command, std::string_view source);
     void kill_window(xcb_window_t window);
     void handle_timeouts();
-    void send_protocol_message(xcb_window_t window, xcb_atom_t protocol, uint32_t timestamp, uint32_t d2 = 0, uint32_t d3 = 0);
+    void send_protocol_message(xcb_window_t window, xcb_atom_t protocol, uint32_t timestamp, uint32_t d2 = 0);
     void set_root_cursor(xcb_cursor_t cursor);
 
     // wm_observe.cpp: X reads. Requests are pipelined; decoders are shared by
     // batch admission and single-property updates.
-    struct Observed
-    {
-        WindowObservation window;
-        uint32_t sync_counter = 0;
-        uint64_t sync_value = 0;
-    };
     // Only windows that exist and are not override-redirect (and are viewable when adopting).
-    std::vector<Observed> observe(std::span<xcb_window_t const> windows, bool adopting);
+    std::vector<WindowObservation> observe(std::span<xcb_window_t const> windows, bool adopting);
     WindowType window_type(xcb_get_property_cookie_t cookie) const;
     std::vector<xcb_atom_t> read_protocols(xcb_window_t window) const;
     xcb_get_property_cookie_t observe_user_time(xcb_window_t window, xcb_get_window_attributes_cookie_t cookie);
@@ -172,7 +162,7 @@ private:
 
     // wm_manage.cpp: admission adapters
     void scan_existing_windows(bool handoff);
-    void manage(Observed const& observed, bool adopting);
+    void manage(WindowObservation const& observed, bool adopting);
 
     // wm_transition.cpp: operation completion and publication
     void complete_transition();

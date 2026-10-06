@@ -25,7 +25,7 @@ if(LWM_SANITIZERS)
 endif()
 
 find_package(PkgConfig REQUIRED)
-pkg_check_modules(XCB REQUIRED IMPORTED_TARGET xcb xcb-keysyms xcb-randr xcb-ewmh xcb-icccm xcb-sync x11)
+pkg_check_modules(XCB REQUIRED IMPORTED_TARGET xcb xcb-keysyms xcb-randr xcb-ewmh xcb-icccm x11)
 
 pkg_check_modules(SYSTEMD REQUIRED IMPORTED_TARGET libsystemd)
 

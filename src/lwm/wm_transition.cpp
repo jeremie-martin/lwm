@@ -117,8 +117,8 @@ bool WindowManager::publish_clients(std::vector<State::Projected> const& clients
     return moved;
 }
 
-// Owns WM-driven configure requests, sync notifications and synthetic
-// ConfigureNotify replies. An unchanged rectangle and border are skipped.
+// Owns WM-driven configure requests and synthetic ConfigureNotify replies.
+// An unchanged rectangle and border are skipped.
 bool WindowManager::write_geometry(xcb_window_t window, Output& output, State::Presentation const& presentation)
 {
     if (!output.hidden && output.presentation == presentation)
@@ -135,17 +135,6 @@ bool WindowManager::write_geometry(xcb_window_t window, Output& output, State::P
     );
     output.hidden = false;
     output.presentation = presentation;
-    if (output.sync_counter)
-    {
-        uint64_t value = ++output.sync_value;
-        send_protocol_message(
-            window,
-            ewmh_.get()->_NET_WM_SYNC_REQUEST,
-            last_event_time_,
-            static_cast<uint32_t>(value),
-            static_cast<uint32_t>(value >> 32)
-        );
-    }
     uint32_t values[] = { static_cast<uint32_t>(geometry.x),
                           static_cast<uint32_t>(geometry.y),
                           geometry.width,

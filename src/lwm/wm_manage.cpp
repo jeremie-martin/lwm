@@ -16,9 +16,7 @@ void WindowManager::scan_existing_windows(bool handoff)
         children.assign(first, first + xcb_query_tree_children_length(tree.get()));
     }
     // Only viewable, redirected windows are adopted.
-    auto observed = observe(children, true);
-    std::vector<WindowObservation> windows;
-    for (auto const& window : observed) windows.push_back(window.window);
+    auto windows = observe(children, true);
 
     std::optional<std::pair<int16_t, int16_t>> pointer;
     if (!handoff)
@@ -26,16 +24,16 @@ void WindowManager::scan_existing_windows(bool handoff)
             pointer = { query->root_x, query->root_y };
     state_.adopt(windows, handoff_ ? &*handoff_ : nullptr, pointer);
     handoff_.reset();
-    for (auto const& window : observed) manage(window, true);
+    for (auto const& window : windows) manage(window, true);
     if (!handoff)
         for (auto const& command : config().autostart) launch_program(command, "autostart");
 }
 
 // X resources follow the role State chose; observation already selected its
 // events. Adopted windows are already mapped; live popups are mapped directly.
-void WindowManager::manage(Observed const& observed, bool adopting)
+void WindowManager::manage(WindowObservation const& observed, bool adopting)
 {
-    auto window = observed.window.id;
+    auto window = observed.id;
     if (auto const* fixture = state_.find_fixture(window))
     {
         if (fixture->role == Fixture::Role::Desktop)
@@ -56,9 +54,7 @@ void WindowManager::manage(Observed const& observed, bool adopting)
     // Seed publication with what the window already carries.
     auto& output = outputs_[window];
     output.mapped = adopting;
-    output.urgent = observed.window.urgent;
-    output.sync_counter = observed.sync_counter;
-    output.sync_value = observed.sync_value;
+    output.urgent = observed.urgent;
     xcb_grab_button(
         conn_.get(),
         0,

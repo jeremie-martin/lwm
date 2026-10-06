@@ -146,7 +146,7 @@ xcb_get_property_cookie_t request_user_time(xcb_connection_t* conn, xcb_ewmh_con
 
 // Attributes gate admission, subscription precedes identity, and identity
 // chooses the remaining reads. Each stage is pipelined across the batch.
-std::vector<WindowManager::Observed> WindowManager::observe(std::span<xcb_window_t const> windows, bool adopting)
+std::vector<WindowObservation> WindowManager::observe(std::span<xcb_window_t const> windows, bool adopting)
 {
     auto* c = conn_.get();
     auto* e = ewmh_.get();
@@ -155,12 +155,12 @@ std::vector<WindowManager::Observed> WindowManager::observe(std::span<xcb_window
         xcb_get_geometry_cookie_t geometry;
         NameCookies name;
         xcb_get_property_cookie_t wm_class, desktop, state, hints, normal_hints, protocols, time_window, time,
-            fullscreen_monitors, sync_counter;
+            fullscreen_monitors;
     };
     // Each window carries its own staged requests and observed values.
     struct Pending
     {
-        Observed value;
+        WindowObservation window;
         bool manageable = false;
         xcb_get_window_attributes_cookie_t attributes;
         xcb_get_property_cookie_t type, transient;
@@ -169,17 +169,16 @@ std::vector<WindowManager::Observed> WindowManager::observe(std::span<xcb_window
         std::optional<xcb_get_window_attributes_cookie_t> time_window;
         std::optional<xcb_get_property_cookie_t> time;
         std::optional<xcb_get_geometry_cookie_t> parent;
-        std::optional<xcb_sync_query_counter_cookie_t> counter;
     };
     std::vector<Pending> pending(windows.size());
     for (size_t i = 0; i < windows.size(); ++i)
     {
-        pending[i].value.window.id = windows[i];
+        pending[i].window.id = windows[i];
         pending[i].attributes = xcb_get_window_attributes(c, windows[i]);
     }
     for (auto& reads : pending)
     {
-        auto const& w = reads.value.window;
+        auto const& w = reads.window;
         auto attr = reply(xcb_get_window_attributes_reply(c, reads.attributes, nullptr));
         if (!attr || attr->override_redirect || (adopting && attr->map_state != XCB_MAP_STATE_VIEWABLE))
             continue;
@@ -193,7 +192,7 @@ std::vector<WindowManager::Observed> WindowManager::observe(std::span<xcb_window
     {
         if (!reads.manageable)
             continue;
-        auto& w = reads.value.window;
+        auto& w = reads.window;
         w.type = window_type(reads.type);
         w.transient_for = window_value(c, reads.transient);
         auto role = State::role(w.id, w.type, w.transient_for != XCB_NONE, handoff_ ? &*handoff_ : nullptr);
@@ -213,13 +212,11 @@ std::vector<WindowManager::Observed> WindowManager::observe(std::span<xcb_window
                 request(c, w.id, e->_NET_WM_USER_TIME_WINDOW, XCB_ATOM_WINDOW, 1),
                 request_user_time(c, e, w.id),
                 xcb_ewmh_get_wm_fullscreen_monitors(e, w.id),
-                request(c, w.id, e->_NET_WM_SYNC_REQUEST_COUNTER, XCB_ATOM_CARDINAL, 2),
             };
     }
     for (auto& reads : pending)
     {
-        auto& observed = reads.value;
-        auto& w = observed.window;
+        auto& w = reads.window;
         if (reads.strut)
             w.strut = strut(c, *reads.strut);
         if (!reads.properties)
@@ -242,46 +239,33 @@ std::vector<WindowManager::Observed> WindowManager::observe(std::span<xcb_window
         w.initially_iconic = observed_hints.initially_iconic;
         w.urgent = observed_hints.urgent;
         w.size_hints = size_hints(c, cookie.normal_hints);
-        auto supported = protocols(c, cookie.protocols);
-        w.supports_take_focus = std::ranges::contains(supported, atoms_.wm_take_focus);
+        w.supports_take_focus = std::ranges::contains(protocols(c, cookie.protocols), atoms_.wm_take_focus);
         w.user_time_window = window_value(c, cookie.time_window);
         w.user_time = scalar(c, cookie.time, XCB_ATOM_CARDINAL).value_or(0);
         xcb_ewmh_get_wm_fullscreen_monitors_reply_t monitors;
         if (xcb_ewmh_get_wm_fullscreen_monitors_reply(e, cookie.fullscreen_monitors, &monitors, nullptr))
             w.fullscreen_monitors = FullscreenMonitors{ monitors.top, monitors.bottom, monitors.left, monitors.right };
-        auto counter_reply = xproperty::receive(c, cookie.sync_counter);
-        auto counters = xproperty::words(counter_reply, XCB_ATOM_CARDINAL);
-        // Basic and extended sync properties both start with the basic counter.
-        if (std::ranges::contains(supported, e->_NET_WM_SYNC_REQUEST) && !counters.empty())
-            observed.sync_counter = counters.front();
         // Rare reads depend on the properties, but are sent across the batch
         // before collecting any reply. User-time subscription precedes its read.
         if (w.user_time_window != XCB_NONE && w.user_time_window != w.id)
             reads.time_window = xcb_get_window_attributes(c, w.user_time_window);
         if (w.transient_for != XCB_NONE && !state_.find(w.transient_for))
             reads.parent = xcb_get_geometry(c, w.transient_for);
-        if (observed.sync_counter)
-            reads.counter = xcb_sync_query_counter(c, observed.sync_counter);
     }
     for (auto& reads : pending)
         if (reads.time_window)
-            reads.time = observe_user_time(reads.value.window.user_time_window, *reads.time_window);
-    std::vector<Observed> result;
+            reads.time = observe_user_time(reads.window.user_time_window, *reads.time_window);
+    std::vector<WindowObservation> result;
     result.reserve(pending.size());
     for (auto& reads : pending)
     {
         if (!reads.manageable)
             continue;
-        auto& observed = reads.value;
         if (reads.time)
-            observed.window.user_time = scalar(c, *reads.time, XCB_ATOM_CARDINAL).value_or(0);
+            reads.window.user_time = scalar(c, *reads.time, XCB_ATOM_CARDINAL).value_or(0);
         if (reads.parent)
-            observed.window.unmanaged_parent = geometry(c, *reads.parent);
-        if (reads.counter)
-            if (auto counter = reply(xcb_sync_query_counter_reply(c, *reads.counter, nullptr)))
-                observed.sync_value = uint64_t{ static_cast<uint32_t>(counter->counter_value.hi) } << 32
-                    | counter->counter_value.lo;
-        result.push_back(std::move(observed));
+            reads.window.unmanaged_parent = geometry(c, *reads.parent);
+        result.push_back(std::move(reads.window));
     }
     return result;
 }

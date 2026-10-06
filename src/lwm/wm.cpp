@@ -521,8 +521,7 @@ void WindowManager::send_protocol_message(
     xcb_window_t window,
     xcb_atom_t protocol,
     uint32_t timestamp,
-    uint32_t d2,
-    uint32_t d3
+    uint32_t d2
 )
 {
     xcb_client_message_event_t event{ };
@@ -533,7 +532,6 @@ void WindowManager::send_protocol_message(
     event.data.data32[0] = protocol;
     event.data.data32[1] = timestamp ? timestamp : XCB_CURRENT_TIME;
     event.data.data32[2] = d2;
-    event.data.data32[3] = d3;
     xcb_send_event(conn_.get(), 0, window, XCB_EVENT_MASK_NO_EVENT, reinterpret_cast<char*>(&event));
 }
 

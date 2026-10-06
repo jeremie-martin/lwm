@@ -228,8 +228,7 @@ divide stack slots from the remainder. Monocle has no resize boundaries. Partici
 are eligible tiles of the current workspace, then sticky tiles of others; fullscreen
 clients take no slot.
 
-`write_geometry()` owns WM-driven configure requests, sync messages and synthetic
-ConfigureNotify. An unchanged rectangle is skipped, but an outstanding ConfigureRequest
+`write_geometry()` owns WM-driven configure requests and synthetic ConfigureNotify. An unchanged rectangle is skipped, but an outstanding ConfigureRequest
 still receives its acknowledgement.
 
 ## Visibility, focus and stacking

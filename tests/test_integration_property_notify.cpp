@@ -7,7 +7,6 @@
 #include <optional>
 #include <thread>
 #include <vector>
-#include <xcb/sync.h>
 #include <xcb/xcb_icccm.h>
 #include <xcb/xtest.h>
 
@@ -1374,71 +1373,6 @@ TEST_CASE("Integration: titles validate format and retain bounded text fallback"
     check(long_title.substr(0, 4096));
     xcb_delete_property(conn.get(), window, name);
     check(fallback);
-}
-
-TEST_CASE(
-    "Integration: sync notifications accept basic and extended counter properties",
-    "[integration][property][sync]"
-)
-{
-    auto env = TestEnvironment::create();
-    REQUIRE(env);
-    auto& conn = env->conn;
-    auto* initialized = xcb_sync_initialize_reply(conn.get(), xcb_sync_initialize(conn.get(), 3, 1), nullptr);
-    REQUIRE(initialized);
-    free(initialized);
-    auto protocols = intern_atom(conn.get(), "WM_PROTOCOLS");
-    auto request = intern_atom(conn.get(), "_NET_WM_SYNC_REQUEST");
-    auto property = intern_atom(conn.get(), "_NET_WM_SYNC_REQUEST_COUNTER");
-    auto check = [&](uint8_t format, uint32_t count, bool accepted)
-    {
-        auto window = create_window(conn, 10, 10, 200, 150);
-        xcb_sync_counter_t counters[] = { xcb_generate_id(conn.get()), xcb_generate_id(conn.get()), 0 };
-        xcb_sync_create_counter(conn.get(), counters[0], { 0, 100 });
-        xcb_sync_create_counter(conn.get(), counters[1], { 0, 200 });
-        xcb_change_property(conn.get(), XCB_PROP_MODE_REPLACE, window, protocols, XCB_ATOM_ATOM, 32, 1, &request);
-        xcb_change_property(
-            conn.get(),
-            XCB_PROP_MODE_REPLACE,
-            window,
-            property,
-            XCB_ATOM_CARDINAL,
-            format,
-            count,
-            counters
-        );
-        map_window(conn, window);
-        REQUIRE(wait_for_active_window(conn, window, kTimeout));
-        observe_title_after_events(conn, window);
-        // The WM has completed mapping; this reply brings prior messages into our event queue.
-        free(xcb_get_input_focus_reply(conn.get(), xcb_get_input_focus(conn.get()), nullptr));
-        std::optional<uint32_t> first_value;
-        while (auto* event = xcb_poll_for_event(conn.get()))
-        {
-            if ((event->response_type & 0x7f) == XCB_CLIENT_MESSAGE)
-            {
-                auto* message = reinterpret_cast<xcb_client_message_event_t*>(event);
-                if (message->window == window && message->type == protocols && message->data.data32[0] == request
-                    && !first_value)
-                    first_value = message->data.data32[2];
-            }
-            free(event);
-        }
-        if (accepted)
-        {
-            REQUIRE(first_value);
-            CHECK(*first_value == 101); // Uses the basic counter even when the extended one exists.
-        }
-        else
-            CHECK_FALSE(first_value);
-        destroy_window(conn, window);
-        xcb_sync_destroy_counter(conn.get(), counters[0]);
-        xcb_sync_destroy_counter(conn.get(), counters[1]);
-    };
-    check(32, 1, true);
-    check(32, 2, true);
-    check(8, 4, false);
-    check(32, 3, false);
 }
 
 TEST_CASE("Integration: admission subscribes before identity and dependent property reads", "[integration][property][observation]")

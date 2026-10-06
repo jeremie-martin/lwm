@@ -15,13 +15,13 @@ use `-freflection-latest`, but GCC is the tested compiler. Check these versions
 before using distribution packages.
 
 System libraries are libsystemd and the X11/XCB modules `xcb`, `xcb-keysyms`,
-`xcb-randr`, `xcb-ewmh`, `xcb-icccm`, `xcb-sync`, and `x11`. Tests also require
+`xcb-randr`, `xcb-ewmh`, `xcb-icccm`, and `x11`. Tests also require
 `xcb-xtest` and Xvfb. For example, on Debian/Ubuntu:
 
 ```sh
 sudo apt install cmake g++ git pkg-config libsystemd-dev libx11-dev libxcb1-dev \
   libxcb-keysyms1-dev libxcb-randr0-dev libxcb-ewmh-dev \
-  libxcb-icccm4-dev libxcb-sync-dev libxcb-xtest0-dev xvfb
+  libxcb-icccm4-dev libxcb-xtest0-dev xvfb
 ```
 
 On Arch Linux:

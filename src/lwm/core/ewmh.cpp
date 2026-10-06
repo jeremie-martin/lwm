@@ -81,8 +81,6 @@ void Ewmh::advertise(xcb_window_t check, std::vector<xcb_atom_t> const& extra_su
         ewmh_._NET_WM_STATE_SKIP_TASKBAR,
         ewmh_._NET_WM_STATE_SKIP_PAGER,
         ewmh_._NET_WM_PING,
-        ewmh_._NET_WM_SYNC_REQUEST,
-        ewmh_._NET_WM_SYNC_REQUEST_COUNTER,
         ewmh_._NET_CLOSE_WINDOW,
         ewmh_._NET_WM_FULLSCREEN_MONITORS,
         ewmh_._NET_WM_WINDOW_TYPE,
