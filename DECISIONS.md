@@ -123,6 +123,13 @@ A rule could name a scratchpad to claim matching windows, beside the scratchpad'
 required `match`. Two routes to one claim; the scratchpad's matcher is the one kept.
 Lost: claiming by window type or transient state, which only rules match.
 
+## Make rule geometry relative and partial (2026-10-06)
+
+Rule `geometry` was absolute root coordinates with 0/0/800/600 filled in for omitted
+fields, and `center` separately discarded the position. Now x and y are relative to
+the target monitor's workarea and given together, omitting them centres the window,
+and omitted sizes keep the window's own. `center` is gone: `geometry = { }` centres.
+
 ## Keep scalar defaults in `Config` initializers (2026-10-06)
 
 The example file restated every default and a test kept the two in agreement. Making

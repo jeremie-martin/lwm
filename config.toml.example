@@ -118,19 +118,21 @@ keys = ["1", "2", "3", "4", "5", "6", "7", "8", "9", "0"]
 #
 # apply must contain at least one action. Keys:
 #   floating, fullscreen, sticky, skip_taskbar, skip_pager
-#   borderless, center      => true/false
+#   borderless              => true/false
 #   geometry = { x = 100, y = 100, width = 800, height = 600 }
 #   workspace = 1 or "dev"  # zero-based index or configured workspace name
 #   monitor = 0 or "HDMI-1" # zero-based index or output name
 #   layer = "normal", "above", or "below"
 # Workspace names must appear in [workspaces].names. Omitting layer leaves the
-# preference unchanged; layer = "normal" explicitly clears it. Missing geometry
-# fields default to x=0, y=0, width=800, height=600. Match regexes must be valid
+# preference unchanged; layer = "normal" explicitly clears it. Geometry applies
+# to floating windows: x and y are relative to the monitor's workarea and are given
+# together; without them the window is centred. Omitted width or height keeps the
+# window's size, so geometry = { } just centres it. Match regexes must be valid
 # and nonempty; they are compiled when loading the configuration. Malformed
 # configuration is rejected before any rules apply.
 #
 # Rules affect only tiled/floating clients; they cannot convert desktop, dock,
-# or direct-mapped popup types. geometry and center affect floating clients.
+# or direct-mapped popup types.
 # Geometry x/y must be within -32768..32767 and width/height within 1..65535;
 # width and height size the window inside its border.
 # Explicit false state overrides and borderless apply on initial mapping as well
@@ -143,10 +145,10 @@ keys = ["1", "2", "3", "4", "5", "6", "7", "8", "9", "0"]
 # Fullscreen is a setting: applying true to an already-fullscreen window preserves
 # its ownership priority. Changing false to true establishes a new fullscreen claim.
 
-# Example: float and center dialog windows
+# Example: float and centre dialog windows at 800x600
 # [[rules]]
 # match = { type = "Dialog" }
-# apply = { floating = true, center = true }
+# apply = { floating = true, geometry = { width = 800, height = 600 } }
 
 # Example: pin Slack to a monitor/workspace
 # [[rules]]

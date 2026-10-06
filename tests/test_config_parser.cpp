@@ -94,7 +94,7 @@ move = "super+shift"
 keys = ["F1", "F2", "F3"]
 [[rules]]
 match = { title = "dropdown" }
-apply = { floating = true, center = true }
+apply = { floating = true, geometry = { } }
 )");
 
     REQUIRE(loaded.has_value());
@@ -480,7 +480,7 @@ names = ["web", "code", "chat"]
 
 [[rules]]
 match = { class = "A" }
-apply = { workspace = "chat", monitor = "HDMI-1", layer = "below", geometry = { x = 5 } }
+apply = { workspace = "chat", monitor = "HDMI-1", layer = "below", geometry = { x = 5, y = -6, height = 7 } }
 
 [[rules]]
 match = { class = "B" }
@@ -491,7 +491,7 @@ apply = { layer = "normal" }
     CHECK(first.workspace == 2);
     CHECK(first.monitor == std::variant<size_t, std::string>{ std::string("HDMI-1") });
     CHECK(first.layer == LayerHint::Below);
-    CHECK(first.geometry == Geometry{ 5, 0, 800, 600 });
+    CHECK(first.geometry == RuleGeometry{ .position = std::pair<int16_t, int16_t>{ 5, -6 }, .height = 7 });
     // Selecting normal explicitly clears a layer preference.
     CHECK(loaded->rules[1].actions.layer == LayerHint::Normal);
     CHECK(loaded->layout.strategy == LayoutStrategy::MasterStack);
@@ -515,7 +515,7 @@ TEST_CASE("Configuration decoding preserves absence, explicit false, and empty s
 match = { transient = false }
 apply = { floating = false, fullscreen = false, sticky = false, skip_taskbar = false, skip_pager = false, borderless = false }
 [[rules]]
-apply = { center = true }
+apply = { geometry = { } }
 )");
     REQUIRE(rules);
     REQUIRE(rules->rules.size() == 2);
@@ -529,6 +529,10 @@ apply = { center = true }
     CHECK(explicit_false.actions.borderless == false);
     CHECK_FALSE(rules->rules[1].transient.has_value());
     CHECK_FALSE(rules->rules[1].actions.floating.has_value());
+    CHECK(rules->rules[1].actions.geometry == RuleGeometry{ });
+    auto half = load_from_string("[[rules]]\napply = { geometry = { x = 5 } }\n");
+    REQUIRE_FALSE(half);
+    CHECK(half.error().find("must set both x and y") != std::string::npos);
 }
 TEST_CASE("Configuration rejects malformed nested values at their owning field", "[config]")
 {

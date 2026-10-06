@@ -258,6 +258,17 @@ struct WindowObservation
     DockStrut strut;
 };
 
+/// A rule's floating frame: a position relative to the monitor's workarea, or
+/// centred when absent, and an inner size that defaults to the current one.
+struct RuleGeometry
+{
+    std::optional<std::pair<int16_t, int16_t>> position;
+    std::optional<uint16_t> width;
+    std::optional<uint16_t> height;
+
+    bool operator==(RuleGeometry const&) const = default;
+};
+
 /// Typed actions of a window rule. Unset fields leave the window unchanged.
 struct RuleActions
 {
@@ -270,8 +281,7 @@ struct RuleActions
     std::optional<bool> skip_taskbar;
     std::optional<bool> skip_pager;
     std::optional<bool> borderless;
-    std::optional<Geometry> geometry;
-    bool center = false;
+    std::optional<RuleGeometry> geometry;
 
     bool operator==(RuleActions const&) const = default;
 };

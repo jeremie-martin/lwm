@@ -95,7 +95,7 @@ struct Geometry
 };
 struct RuleActions
 {
-    Flag floating, fullscreen, sticky, skip_taskbar, skip_pager, borderless, center;
+    Flag floating, fullscreen, sticky, skip_taskbar, skip_pager, borderless;
     std::optional<std::variant<Integer<0, 65534>, std::string>> workspace;
     std::optional<std::variant<Integer<0, 2147483647>, std::string>> monitor;
     std::optional<rfl::Literal<"normal", "above", "below">> layer;
@@ -317,7 +317,7 @@ void parse_rule(schema::Rule const& input, std::string const& context, Config& c
     auto const& in = input.apply;
     auto& out = rule.actions;
     if (!in.floating && !in.fullscreen && !in.layer && !in.sticky && !in.skip_taskbar && !in.skip_pager
-        && !in.borderless && !in.center && !in.workspace && !in.monitor && !in.geometry)
+        && !in.borderless && !in.workspace && !in.monitor && !in.geometry)
         throw std::runtime_error(context + ".apply must define at least one action");
     if (in.workspace)
     {
@@ -350,15 +350,15 @@ void parse_rule(schema::Rule const& input, std::string const& context, Config& c
     out.skip_taskbar = in.skip_taskbar;
     out.skip_pager = in.skip_pager;
     out.borderless = in.borderless;
-    out.center = in.center.value_or(false);
-    if (in.geometry)
+    if (auto const& geometry = in.geometry)
     {
-        Geometry geometry{ 0, 0, 800, 600 };
-        assign(in.geometry->x, geometry.x);
-        assign(in.geometry->y, geometry.y);
-        assign(in.geometry->width, geometry.width);
-        assign(in.geometry->height, geometry.height);
-        out.geometry = geometry;
+        if (geometry->x.has_value() != geometry->y.has_value())
+            throw std::runtime_error(context + ".apply.geometry must set both x and y, or neither");
+        auto& frame = out.geometry.emplace();
+        if (geometry->x)
+            frame.position = { static_cast<int16_t>(geometry->x->value()), static_cast<int16_t>(geometry->y->value()) };
+        assign(geometry->width, frame.width);
+        assign(geometry->height, frame.height);
     }
     config.rules.push_back(std::move(rule));
 }

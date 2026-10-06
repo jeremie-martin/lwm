@@ -780,7 +780,7 @@ TEST_CASE("Adopted newcomers anchor to saved intent without replaying the parent
         auto state = test::state();
         test::configure(state, [](Config& config) {
             config.rules = { { .match = { .class_regex = std::regex("parent") },
-                               .actions = { .workspace = 2, .geometry = Geometry{ 1, 2, 400, 300 } } } };
+                               .actions = { .workspace = 2, .geometry = RuleGeometry{ .position = std::pair<int16_t, int16_t>{ 1, 2 }, .width = 400, .height = 300 } } } };
         });
         state.adopt({ { .id = 2, .transient_for = 1, .geometry = Geometry{ 0, 0, 100, 60 } },
                       { .id = 1, .wm_class = "parent" } }, &saved, std::nullopt);
@@ -804,8 +804,9 @@ TEST_CASE("Initial geometry rules override hints after monitor relocation in bot
                 config.appearance.border_width = 0;
                 RuleActions actions{ .workspace = 2, .monitor = size_t{1} };
                 if (geometry_rule)
-                    actions.geometry = Geometry{ 1100, 200, 210, 140 };
-                actions.center = geometry_rule == 2;
+                    actions.geometry = RuleGeometry{
+                        .position = geometry_rule == 1 ? std::optional{ std::pair<int16_t, int16_t>{ 100, 200 } } : std::nullopt,
+                        .width = 210, .height = 140 };
                 config.rules = { { .match = { .class_regex = std::regex("child") }, .actions = actions } };
             });
             WindowObservation parent{ .id = 1 };

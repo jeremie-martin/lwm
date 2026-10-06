@@ -83,7 +83,7 @@ TEST_CASE("Metadata compares rule actions while reload deliberately reapplies th
     Config config;
     auto first = rule(std::nullopt, true);
     first.match.title_regex.emplace("first");
-    first.actions.geometry = Geometry{ 70, 80, 200, 100 }; // A window inside a 2px border
+    first.actions.geometry = RuleGeometry{ .position = std::pair<int16_t, int16_t>{ 70, 80 }, .width = 200, .height = 100 }; // A window inside a 2px border
     first.actions.fullscreen = true;
     auto second = first;
     second.match.title_regex.emplace("second");
@@ -148,7 +148,7 @@ TEST_CASE("Pending metadata claims precede rule actions but reload does not clai
     auto matched = rule(std::nullopt, false);
     matched.match.title_regex.emplace("ready");
     matched.actions.workspace = 2;
-    matched.actions.geometry = Geometry{ 1, 2, 300, 200 };
+    matched.actions.geometry = RuleGeometry{ .position = std::pair<int16_t, int16_t>{ 1, 2 }, .width = 300, .height = 200 };
     config.scratchpads.back().match = matched.match;
     config.rules.push_back(matched);
     test::configure(state, [&](Config& installed) {

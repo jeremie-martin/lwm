@@ -339,12 +339,20 @@ void State::apply_rule_state(xcb_window_t window, RuleActions const& rule)
 
 State::PlacementGeometry State::rule_geometry(xcb_window_t id, RuleActions const& rule, PlacementGeometry placement) const
 {
-    if (rule.geometry)
-        placement = outset(*rule.geometry, border(require(id)));
-    if (rule.center)
-        placement = std::visit([](auto const& frame) -> PlacementGeometry
-        { return CenteredSize{ frame.width, frame.height }; }, placement);
-    return placement;
+    if (!rule.geometry)
+        return placement;
+    auto const& client = require(id);
+    auto border = 2 * static_cast<int64_t>(this->border(client));
+    auto [width, height] = std::visit([](auto const& frame) { return std::pair{ frame.width, frame.height }; }, placement);
+    if (rule.geometry->width)
+        width = geometry_extent(*rule.geometry->width + border);
+    if (rule.geometry->height)
+        height = geometry_extent(*rule.geometry->height + border);
+    auto const& position = rule.geometry->position;
+    if (!position)
+        return CenteredSize{ width, height };
+    auto area = monitors_[client.monitor].working_area();
+    return Geometry{ geometry_coordinate(area.x + position->first), geometry_coordinate(area.y + position->second), width, height };
 }
 
 void State::apply_rule(xcb_window_t id, RuleActions const& rule)

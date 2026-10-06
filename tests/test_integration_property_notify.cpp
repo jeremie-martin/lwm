@@ -115,7 +115,7 @@ names = ["1"]
 
 [[rules]]
 match = { title = "micro" }
-apply = { floating = true, center = true, geometry = { width = 400, height = 240 } }
+apply = { floating = true, geometry = { width = 400, height = 240 } }
 )";
 }
 
@@ -1188,11 +1188,11 @@ TEST_CASE(
     SECTION("unrelated rule") { config = "[[rules]]\nmatch = { class = 'Other' }\napply = { floating = true }\n"; }
     SECTION("same matching title rule")
     {
-        config = "[[rules]]\nmatch = { title = 'work-.*' }\napply = { floating = true, center = true }\n";
+        config = "[[rules]]\nmatch = { title = 'work-.*' }\napply = { floating = true, geometry = { } }\n";
     }
     SECTION("same matching class rule")
     {
-        config = "[[rules]]\nmatch = { class = 'Stable.*' }\napply = { floating = true, center = true }\n";
+        config = "[[rules]]\nmatch = { class = 'Stable.*' }\napply = { floating = true, geometry = { } }\n";
     }
     auto env = TestEnvironment::create(config);
     if (!env)

@@ -849,7 +849,7 @@ padding = 0
 border_width = 0
 [[rules]]
 match = { type = "Dialog" }
-apply = { center = true }
+apply = { geometry = { } }
 )");
     REQUIRE(wait_for_wm_ready(conn, timeout));
     REQUIRE(send_ipc_command("ping"));
@@ -1334,8 +1334,8 @@ TEST_CASE(
     std::string config = R"(
 [[rules]]
 match = { class = "GeometryRule" }
-apply = { floating = true, geometry = { x = 100, y = 100, width = 240, height = 160 }, center = )";
-    config += center ? "true }\n" : "false }\n";
+apply = { floating = true, geometry = { )";
+    config += center ? "width = 240, height = 160 } }\n" : "x = 100, y = 100, width = 240, height = 160 } }\n";
     auto env = TestEnvironment::create(config);
     REQUIRE(env);
     auto& conn = env->conn;
