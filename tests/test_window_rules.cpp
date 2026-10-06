@@ -104,7 +104,7 @@ TEST_CASE("Metadata compares rule actions while reload deliberately reapplies th
     CHECK(state.fullscreen_owners().at(0) == 2);
     state.title(1, "unmatched");
     CHECK_FALSE(state.require(1).rule);
-    CHECK(state.require(1).fullscreen);
+    CHECK(state.require(1).fullscreen());
     CHECK(floating_mode(state.require(1))->geometry == Geometry{ 70, 80, 204, 104 });
 }
 
@@ -149,7 +149,7 @@ TEST_CASE("Pending metadata claims precede rule actions but reload does not clai
     matched.match.title_regex.emplace("ready");
     matched.actions.workspace = 2;
     matched.actions.geometry = Geometry{ 1, 2, 300, 200 };
-    matched.actions.scratchpad = "term";
+    config.scratchpads.back().match = matched.match;
     config.rules.push_back(matched);
     test::configure(state, [&](Config& installed) {
         installed.scratchpads = config.scratchpads;

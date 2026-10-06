@@ -10,41 +10,44 @@
 #
 # Reload with `lwmctl reload-config` or a "reload-config" binding. Invalid
 # input leaves the active configuration unchanged; at startup it is logged and the
-# defaults are used. Reload updates appearance, bindings, names, focus/layout
-# parameters, scratchpads, and matched rules. It does not change the number of
-# workspaces or replace the layout strategy of existing workspaces (use
-# `lwmctl layout set`). Removing a rule does not undo effects already applied.
+# defaults are used. Reload updates appearance, bindings, workspaces, focus/layout
+# parameters, scratchpads, and matched rules. Windows on removed workspaces move to
+# the last remaining one. Reload does not replace the layout strategy of existing
+# workspaces (use `lwmctl layout set`). Removing a rule does not undo effects
+# already applied.
 # Surviving scratchpad names keep claims/pending launches; removing a name
 # releases and deiconifies its window. Programs that should start with the
 # session belong in ~/.xinitrc or the display manager's session script.
 
+# Omitted settings take the defaults shown commented out below.
+
 [appearance]
 # Pixel padding and border width: 0..65535; colors: unsigned 32-bit values.
-padding = 10
-border_width = 2
-border_color = 0xFF0000
-urgent_border_color = 0xFFA500
+# padding = 10
+# border_width = 2
+# border_color = 0xFF0000
+# urgent_border_color = 0xFFA500
 
 [layout]
 # Layout strategy: "master-stack" (default tiling) or "monocle" (every tiled
 # window fills the workspace; stacking determines what is on top).
-strategy = "master-stack"
+# strategy = "master-stack"
 # min_ratio must be 0.05..0.45. default_ratio must be within
 # [min_ratio, 1 - min_ratio].
-default_ratio = 0.5
-min_ratio = 0.1
+# default_ratio = 0.5
+# min_ratio = 0.1
 # Pointer distance in pixels for grabbing an internal tiled split (1..100).
-resize_grab_threshold = 8
+# resize_grab_threshold = 8
 
 [focus]
-warp_cursor_on_monitor_change = false
+# warp_cursor_on_monitor_change = false
 
-[workspaces]
+# [workspaces]
 # Display labels of each monitor's workspaces; their number (1..65535) is the
 # workspace count. Rules, bindings, and IPC use zero-based workspace indices
 # within a monitor; EWMH flattens all monitors' workspaces into one desktop list
 # (see X11.md).
-names = ["1", "2", "3", "4", "5", "6", "7", "8", "9", "10"]
+# names = ["1", "2", "3", "4", "5", "6", "7", "8", "9", "10"]
 
 # Mouse bindings: "modifiers+button" = action.
 # Modifiers: shift, ctrl/control, alt, super, in any order; none means a bare
@@ -120,7 +123,6 @@ keys = ["1", "2", "3", "4", "5", "6", "7", "8", "9", "0"]
 #   workspace = 1 or "dev"  # zero-based index or configured workspace name
 #   monitor = 0 or "HDMI-1" # zero-based index or output name
 #   layer = "normal", "above", or "below"
-#   scratchpad = "music"
 # Workspace names must appear in [workspaces].names. Omitting layer leaves the
 # preference unchanged; layer = "normal" explicitly clears it. Missing geometry
 # fields default to x=0, y=0, width=800, height=600. Match regexes must be valid

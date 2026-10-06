@@ -1,5 +1,6 @@
 #include "restart_handoff.hpp"
 #include "lwm/core/restart.hpp"
+#include "lwm/core/xproperty.hpp"
 #include <X11/Xlib.h>
 #include <algorithm>
 #include <array>
@@ -864,40 +865,39 @@ TEST_CASE("Integration: restart consumes its handoff and rejects damaged snapsho
     REQUIRE(instance);
     PausedRestart restart(env->wm);
     auto property = intern_atom(conn.get(), "_LWM_RESTART");
-    auto snapshot = read_property32(conn.get(), conn.root(), property, XCB_ATOM_CARDINAL);
+    auto utf8 = intern_atom(conn.get(), "UTF8_STRING");
+    auto snapshot = lwm::xproperty::text(conn.get(), conn.root(), property, utf8);
     REQUIRE(snapshot);
-    REQUIRE(snapshot->size() > 1);
+    auto graph = JsonValue::parse(*snapshot);
     bool intact = false;
     SECTION("Intact handoff preserves layout") { intact = true; }
-    SECTION("Incompatible format") { ++snapshot->front(); }
+    SECTION("Incompatible format")
+    {
+        graph["format"] = lwm::restart::format + 1;
+        snapshot = graph.dump();
+    }
     SECTION("Current format with a truncated record") { snapshot->pop_back(); }
-    SECTION("Current format with trailing data") { snapshot->push_back(0); }
+    SECTION("Current format with trailing data") { *snapshot += "{}"; }
     SECTION("Current format with conflicting scratchpad ownership")
     {
-        auto bytes = reinterpret_cast<char const*>(snapshot->data() + 2);
-        auto graph = JsonValue::parse(bytes, bytes + (*snapshot)[1]);
         graph["named_scratchpads"] = JsonValue::array({ { { "name", "saved" }, { "window", first } } });
         graph["pool"] = JsonValue::array({ first });
-        auto payload = graph.dump();
-        snapshot->assign(2 + (payload.size() + 3) / 4, 0);
-        (*snapshot)[0] = lwm::restart::format;
-        (*snapshot)[1] = payload.size();
-        std::memcpy(snapshot->data() + 2, payload.data(), payload.size());
+        snapshot = graph.dump();
     }
     xcb_change_property(
         conn.get(),
         XCB_PROP_MODE_REPLACE,
         conn.root(),
         property,
-        XCB_ATOM_CARDINAL,
-        32,
+        utf8,
+        8,
         static_cast<uint32_t>(snapshot->size()),
         snapshot->data()
     );
     REQUIRE(get_window_geometry(conn, conn.root())); // Finish the edit before resuming startup.
     restart.resume();
     REQUIRE(wait_for_wm_restart(conn, kTimeout, *instance));
-    CHECK_FALSE(read_property32(conn.get(), conn.root(), property, XCB_ATOM_CARDINAL));
+    CHECK_FALSE(lwm::xproperty::text(conn.get(), conn.root(), property, utf8));
     auto workspaces = ipc_json("workspace list");
     CHECK(
         workspaces.at("monitors").at(0).at("workspaces").at(1).at("layout")

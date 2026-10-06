@@ -1,6 +1,5 @@
 #include "restart.hpp"
 #include "invariants.hpp"
-#include <cstring>
 #include <memory>
 #include <rfl/AddTagsToVariants.hpp>
 #include <rfl/NoExtraFields.hpp>
@@ -75,28 +74,15 @@ FixtureIntent const* Snapshot::find_fixture(xcb_window_t window) const
     return fixture == fixtures.end() ? nullptr : &*fixture;
 }
 
-std::vector<uint32_t> encode(Snapshot const& snapshot)
+std::string encode(Snapshot const& snapshot)
 {
-    // X11 output names are byte strings. Preserve them even if they are not UTF-8.
-    auto payload = rfl::json::write<Wire>(snapshot, YYJSON_WRITE_ALLOW_INVALID_UNICODE);
-    if (payload.size() > UINT32_MAX)
-        throw std::length_error("Restart snapshot is too large");
-    std::vector<uint32_t> words(2 + (payload.size() + 3) / 4);
-    words[0] = format;
-    words[1] = static_cast<uint32_t>(payload.size());
-    std::memcpy(words.data() + 2, payload.data(), payload.size());
-    return words;
+    return rfl::json::write<Wire>(snapshot, YYJSON_WRITE_ALLOW_INVALID_UNICODE);
 }
 
-std::optional<Snapshot> decode(std::span<uint32_t const> words)
+std::optional<Snapshot> decode(std::string_view text)
 {
-    if (words.size() < 2 || words[0] != format || words.size() != 2 + (size_t{ words[1] } + 3) / 4)
-        return std::nullopt;
-    auto bytes = std::string_view(reinterpret_cast<char const*>(words.data() + 2), (words.size() - 2) * 4);
-    if (bytes.substr(words[1]).find_first_not_of('\0') != bytes.npos)
-        return std::nullopt;
     std::unique_ptr<yyjson_doc, decltype(&yyjson_doc_free)> document(
-        yyjson_read(bytes.data(), words[1], YYJSON_READ_ALLOW_INVALID_UNICODE),
+        yyjson_read(text.data(), text.size(), YYJSON_READ_ALLOW_INVALID_UNICODE),
         &yyjson_doc_free
     );
     if (!document)
@@ -105,7 +91,7 @@ std::optional<Snapshot> decode(std::span<uint32_t const> words)
         Reader{},
         Reader::InputVarType(yyjson_doc_get_root(document.get()))
     );
-    if (!snapshot || invariants::validate(*snapshot).has_value())
+    if (!snapshot || snapshot->format != format || invariants::validate(*snapshot).has_value())
         return std::nullopt;
     return std::move(*snapshot);
 }

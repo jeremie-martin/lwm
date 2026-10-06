@@ -77,8 +77,9 @@ the drag ended by release, cancellation, invalidation, reload or topology change
 compatibility, then installs the configuration, reconciles scratchpad slots and
 reapplies every matching rule; a rejected candidate changes nothing.
 
-Each monitor has an output name, geometry, derived workarea reservation, and a fixed
-number of workspaces. One workspace is current; the previous index supports toggling.
+Each monitor has an output name, geometry, derived workarea reservation, and the
+configured number of workspaces; a reload that changes the count rebinds like a
+topology change. One workspace is current; the previous index supports toggling.
 `focused_monitor` selects the target for commands and is distinct from X input focus.
 
 The registry has two kinds of managed window:
@@ -100,7 +101,7 @@ Authoritative state:
 | `Workspace::preferred_tile` | Destination intent after relocation; actual tiled focus clears it |
 | `Client::order` / `Fixture::order` | Registration order across both registries |
 | `Client::mru_order` | Completed focus recency; zero means never focused |
-| `fullscreen_claims_` | Fullscreen clients in interaction order, oldest to newest |
+| `Client::fullscreen_claim` | Fullscreen claim rank, newest highest; zero means not fullscreen |
 | `active_window` | Final selected managed window, or none |
 | Named scratchpad slots and pool | The only scratchpad membership records |
 | `drag_` | The current pointer interaction, if any |
@@ -166,8 +167,9 @@ newcomers, and restoration reinstates surviving identities' saved ranks.
   placement and rule effects in parent order, then resolve floating frames against
   the completed tiled scene. Both passes visit each newcomer at most once, even with malformed
   cycles. This is the sole startup/restart entry point; graph restoration is private.
-  After rules, it reconstructs fullscreen history once: surviving handoff claims,
-  then new claims in observation order. It selects the pointer's monitor on a cold start, chooses focus, and
+  The application's state decides which survivors are fullscreen; surviving claims
+  keep their saved ranks, and claims made during adoption rank after them in
+  observation order. It selects the pointer's monitor on a cold start, chooses focus, and
   lets pending launches claim remaining clients after a handoff.
 
 Placement shares one implementation for initial placement and later size-hint
@@ -243,7 +245,7 @@ derived, and `Output::hidden` means LWM moved the window off-screen. Normal clie
 are mapped once; workspace hiding does not unmap them.
 
 `fullscreen()` is idempotent and used by rules; `request_fullscreen()` renews the
-claim and is used by interactions and restoration. Entering fullscreen clears
+claim rank and is used by interactions and restoration. Entering fullscreen clears
 maximize. Focus eligibility requires visibility and an input hint or `WM_TAKE_FOCUS`.
 
 `focus()` deiconifies and selects the placement, then falls back if the target is
@@ -292,8 +294,10 @@ names survive.
 
 A private reflect-cpp schema validates TOML over toml++; the loader resolves names,
 bounds and compiled regexes into plain runtime values. The file is the whole
-configuration; the built-in defaults are `config.toml.example`, embedded with `#embed`
-and parsed by the same loader. Binding command text and IPC requests share one
+configuration: omitted settings take the `Config` member initializers, and omitted
+bindings and rules are empty. The built-in configuration is `config.toml.example`,
+embedded with `#embed` and parsed by the same loader; it binds keys and leaves settings
+at their initializers. Binding command text and IPC requests share one
 command parser; bindings reject queries.
 Actions succeed silently; their outcome is the published state. Execution copies a
 binding's action because reload can replace the configuration that owns it. Startup
@@ -331,12 +335,11 @@ preferences, urgency, focus ranks, workspace graphs, scratchpad claims, pending
 launches, pool order, fullscreen claims and fixture roles with registration ranks.
 Application properties are observed afresh; derived rectangles, dock reservations
 and publication caches are not saved. The live value types are the snapshot schema,
-encoded with reflect-cpp over yyjson inside a CARDINAL envelope (format word, byte
-length, zero padding). Decoding rejects duplicate or extra fields, ambiguous variant
-tags and narrowing, then validates the persistent graph with the same validator Debug
-builds use. Any malformed or incompatible snapshot is rejected whole and windows are
-adopted afresh. The current format is 14; schema changes require a bump and there is
-no migration.
+encoded with reflect-cpp over yyjson as `UTF8_STRING` JSON whose `format` field names
+the schema. Decoding rejects duplicate or extra fields, ambiguous variant tags and
+narrowing, then validates the persistent graph with the same validator Debug builds
+use. Any malformed or incompatible snapshot is rejected whole and windows are adopted
+afresh. Schema changes bump `restart::format`; there is no migration.
 
 Restoration overlays saved intent on surviving observations, installs the saved
 graph, rebinds it to discovered outputs through the live topology code (folding fewer

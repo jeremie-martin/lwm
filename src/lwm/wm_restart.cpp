@@ -11,21 +11,16 @@ namespace lwm {
 void WindowManager::read_handoff()
 {
     auto root = conn_.screen()->root;
-    auto words = xproperty::read_words(conn_.get(), root, atoms_.lwm_restart, XCB_ATOM_CARDINAL, 1U << 24);
+    auto text = xproperty::text(conn_.get(), root, atoms_.lwm_restart, ewmh_.get()->UTF8_STRING);
     xcb_delete_property(conn_.get(), root, atoms_.lwm_restart);
-    if (words.empty())
+    if (!text)
         return;
-    handoff_ = restart::decode(words);
+    handoff_ = restart::decode(*text);
     if (!handoff_)
-        LWM_LOG_WARN(
-            "Ignoring restart state: reason={} format={} expected={}; adopting windows afresh",
-            words.front() != restart::format ? "format mismatch" : "malformed snapshot",
-            words.front(),
-            restart::format
-        );
+        LWM_LOG_WARN("Ignoring restart state: malformed or not format {}; adopting windows afresh", restart::format);
     else
-        LWM_LOG_INFO("Restart state accepted: format={} monitors={} clients={} focused_monitor={} active_window={:#x}",
-                     words.front(), handoff_->monitors.size(), handoff_->clients.size(), handoff_->focused_monitor, handoff_->active);
+        LWM_LOG_INFO("Restart state accepted: monitors={} clients={} focused_monitor={} active_window={:#x}",
+                     handoff_->monitors.size(), handoff_->clients.size(), handoff_->focused_monitor, handoff_->active);
 }
 
 void WindowManager::prepare_restart()
@@ -33,18 +28,18 @@ void WindowManager::prepare_restart()
     state_.end_drag(false);
     release_pointer();
     auto root = conn_.screen()->root;
-    auto words = restart::encode(state_.snapshot());
+    auto text = restart::encode(state_.snapshot());
     xcb_change_property(
         conn_.get(),
         XCB_PROP_MODE_REPLACE,
         root,
         atoms_.lwm_restart,
-        XCB_ATOM_CARDINAL,
-        32,
-        static_cast<uint32_t>(words.size()),
-        words.data()
+        ewmh_.get()->UTF8_STRING,
+        8,
+        static_cast<uint32_t>(text.size()),
+        text.data()
     );
-    LWM_LOG_INFO("Restart state serialized: clients={} words={}", state_.clients().size(), words.size());
+    LWM_LOG_INFO("Restart state serialized: clients={} bytes={}", state_.clients().size(), text.size());
 
     // Hidden windows return on-screen so they stay recoverable if exec fails;
     // the successor publishes their visibility again.

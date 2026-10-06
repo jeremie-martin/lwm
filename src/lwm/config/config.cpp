@@ -99,7 +99,6 @@ struct RuleActions
     std::optional<std::variant<Integer<0, 65534>, std::string>> workspace;
     std::optional<std::variant<Integer<0, 2147483647>, std::string>> monitor;
     std::optional<rfl::Literal<"normal", "above", "below">> layer;
-    Text scratchpad;
     std::optional<Geometry> geometry;
 };
 struct Rule
@@ -318,7 +317,7 @@ void parse_rule(schema::Rule const& input, std::string const& context, Config& c
     auto const& in = input.apply;
     auto& out = rule.actions;
     if (!in.floating && !in.fullscreen && !in.layer && !in.sticky && !in.skip_taskbar && !in.skip_pager
-        && !in.borderless && !in.center && !in.workspace && !in.monitor && !in.scratchpad && !in.geometry)
+        && !in.borderless && !in.center && !in.workspace && !in.monitor && !in.geometry)
         throw std::runtime_error(context + ".apply must define at least one action");
     if (in.workspace)
     {
@@ -361,8 +360,6 @@ void parse_rule(schema::Rule const& input, std::string const& context, Config& c
         assign(in.geometry->height, geometry.height);
         out.geometry = geometry;
     }
-    if (in.scratchpad)
-        out.scratchpad = parse_scratchpad_name(*in.scratchpad, context + ".apply.scratchpad", config);
     config.rules.push_back(std::move(rule));
 }
 

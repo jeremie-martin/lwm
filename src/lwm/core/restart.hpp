@@ -2,18 +2,19 @@
 
 #include "types.hpp"
 #include <optional>
-#include <span>
 #include <string>
+#include <string_view>
 #include <vector>
 
 // Exec handoff snapshot. The domain values define the current schema;
 // incompatible formats are rejected rather than migrated.
 namespace lwm::restart {
 
-inline constexpr uint32_t format = 15; // Bump when the snapshot schema changes.
+inline constexpr uint32_t format = 16; // Bump when the snapshot schema changes.
 
 struct Snapshot
 {
+    uint32_t format = restart::format;
     size_t focused_monitor = 0;
     xcb_window_t active = XCB_NONE;
     std::vector<MonitorState> monitors;
@@ -21,15 +22,15 @@ struct Snapshot
     std::vector<FixtureIntent> fixtures; ///< Established roles and registration ranks
     std::vector<NamedScratchpad> named_scratchpads;
     std::vector<xcb_window_t> pool;
-    std::vector<xcb_window_t> fullscreen_claims; ///< Oldest to newest, including hidden and iconic clients
 
     ClientIntent const* find(xcb_window_t window) const;
     FixtureIntent const* find_fixture(xcb_window_t window) const;
     bool operator==(Snapshot const&) const = default;
 };
 
-std::vector<uint32_t> encode(Snapshot const& snapshot);
+// JSON text; X11 output names are byte strings and are preserved even if not UTF-8.
+std::string encode(Snapshot const& snapshot);
 // Rejects any other format and any record that is incomplete or out of range.
-std::optional<Snapshot> decode(std::span<uint32_t const> words);
+std::optional<Snapshot> decode(std::string_view text);
 
 } // namespace lwm::restart

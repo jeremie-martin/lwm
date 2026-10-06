@@ -18,7 +18,7 @@ TEST_CASE("IPC grammar preserves public command spellings and typed requests", "
     };
     check({ "ping" }, "ping", Query::Ping);
     check({ "state" }, "state", Query::State);
-    check({ "exec", "/tmp/a wm" }, "exec /tmp/a wm", Action{ action::Exec{ "/tmp/a wm" } });
+    check({ "exec", "/tmp/a wm" }, "exec /tmp/a wm", Action{ action::Restart{ "/tmp/a wm" } });
     check({ "layout", "set", "monocle" }, "layout set monocle", Action{ action::SetLayout{ LayoutStrategy::Monocle } });
     check(
         { "scratchpad", "toggle", "a name with spaces" },

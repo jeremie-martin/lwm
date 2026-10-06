@@ -117,6 +117,19 @@ monitoring consumer.
 Every X server LWM targets has RandR; the fallback to a single root-sized monitor was an
 untested second topology path. Startup now fails with a clear error without it.
 
+## Drop rule `apply.scratchpad` (2026-10-06)
+
+A rule could name a scratchpad to claim matching windows, beside the scratchpad's own
+required `match`. Two routes to one claim; the scratchpad's matcher is the one kept.
+Lost: claiming by window type or transient state, which only rules match.
+
+## Keep scalar defaults in `Config` initializers (2026-10-06)
+
+The example file restated every default and a test kept the two in agreement. Making
+the example the only home would leave `Config{}` zeroed for the model and tests and
+need a merge of omitted keys; instead the example shows defaults commented out and
+binds keys, and the initializers are the one home.
+
 ## Keep WM_HINTS urgency mirroring (2026-10-06)
 
 Writing urgency into the application-owned `WM_HINTS`, detecting its echo and

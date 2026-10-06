@@ -3,7 +3,6 @@
 #include "lwm/core/state.hpp"
 #include "state_fixture.hpp"
 #include <catch2/catch_test_macros.hpp>
-#include <cstring>
 #include <nlohmann/json.hpp>
 
 using namespace lwm;
@@ -11,25 +10,6 @@ using test::add;
 using test::add_floating;
 
 namespace {
-
-// The private handoff envelope is format, byte length, then zero-padded JSON.
-std::vector<uint32_t> pack_json(std::string const& text)
-{
-    std::vector<uint32_t> words(2 + (text.size() + 3) / 4);
-    words[0] = restart::format;
-    words[1] = static_cast<uint32_t>(text.size());
-    std::memcpy(words.data() + 2, text.data(), text.size());
-    return words;
-}
-
-nlohmann::json unpack_json(std::vector<uint32_t> const& words)
-{
-    REQUIRE(words.size() >= 2);
-    REQUIRE(words[0] == restart::format);
-    REQUIRE(words[1] <= (words.size() - 2) * 4);
-    auto data = reinterpret_cast<char const*>(words.data() + 2);
-    return nlohmann::json::parse(data, data + words[1]);
-}
 
 restart::Snapshot sample()
 {
@@ -65,7 +45,8 @@ restart::Snapshot sample()
     snapshot.clients[1].order = 0;
     snapshot.clients[2].order = 1;
     snapshot.fixtures = { { 0x400, Fixture::Role::Dock, 3 } };
-    snapshot.fullscreen_claims = { 0x200, 0x100 };
+    snapshot.clients[1].fullscreen_claim = 1;
+    snapshot.clients[0].fullscreen_claim = (uint64_t{ 1 } << 40) + 2;
     return snapshot;
 }
 
@@ -74,39 +55,24 @@ restart::Snapshot sample()
 TEST_CASE("Restart snapshots round-trip every field", "[restart][codec]")
 {
     auto snapshot = sample();
-    auto words = restart::encode(snapshot);
-    REQUIRE(words.front() == restart::format);
-    CHECK(restart::decode(words) == snapshot);
+    CHECK(restart::decode(restart::encode(snapshot)) == snapshot);
     CHECK(restart::decode(restart::encode({})) == restart::Snapshot{});
 }
 
 TEST_CASE("Restart decoding rejects other formats and malformed records", "[restart][codec]")
 {
-    auto words = restart::encode(sample());
-    CHECK_FALSE(restart::decode({}));
-    auto other = words;
+    CHECK_FALSE(restart::decode({ }));
     for (auto format : { restart::format - 1, restart::format + 1 })
     {
-        other[0] = format;
-        CHECK_FALSE(restart::decode(other));
+        auto other = sample();
+        other.format = format;
+        CHECK_FALSE(restart::decode(restart::encode(other)));
     }
-    // Every truncation and any trailing word is rejected rather than partially applied.
-    for (size_t size = 0; size < words.size(); ++size)
-    {
-        CAPTURE(size);
-        CHECK_FALSE(restart::decode(std::span(words).first(size)));
-    }
-    auto longer = words;
-    longer.push_back(0);
-    CHECK_FALSE(restart::decode(longer));
-    // Oversized counts cannot drive allocation.
-    std::vector<uint32_t> huge{ restart::format, 0, 0, 0, 0xFFFFFFFF };
-    CHECK_FALSE(restart::decode(huge));
-    // Claims must reference distinct saved clients.
-    for (auto claim : { xcb_window_t{ 0x200 }, xcb_window_t{ XCB_NONE }, xcb_window_t{ 0x999 } })
+    // Fullscreen claim ranks are distinct and bounded.
+    for (auto claim : { uint64_t{ 1 }, UINT64_MAX })
     {
         auto invalid = sample();
-        invalid.fullscreen_claims[1] = claim;
+        invalid.clients[0].fullscreen_claim = claim;
         CHECK_FALSE(restart::decode(restart::encode(invalid)));
     }
     auto invalid_recency = sample();
@@ -217,13 +183,14 @@ TEST_CASE("Restart wire schema directly represents domain values", "[restart][co
         "clients": [{"id": 7, "monitor": 0, "workspace": 0,
             "mode": {"TiledMode": {"floating": null}},
             "preferences": {"floating": null, "skip_taskbar": null, "skip_pager": null, "layer": null},
-            "urgency": {"sources": 0}, "borderless": false, "desktop_pinned": false, "fullscreen_monitors": null, "mru_order": 0, "order": 0}],
-        "fixtures": [], "named_scratchpads": [], "pool": [], "fullscreen_claims": [7]
+            "urgency": {"sources": 0}, "borderless": false, "desktop_pinned": false, "fullscreen_monitors": null, "mru_order": 0, "order": 0, "fullscreen_claim": 4}],
+        "fixtures": [], "named_scratchpads": [], "pool": []
     })");
-    auto decoded = restart::decode(pack_json(document.dump()));
+    document["format"] = restart::format;
+    auto decoded = restart::decode(document.dump());
     REQUIRE(decoded);
-    CHECK(decoded->fullscreen_claims == std::vector<xcb_window_t>{ 7 });
-    CHECK(unpack_json(restart::encode(*decoded)) == document);
+    CHECK(decoded->clients.at(0).fullscreen_claim == 4);
+    CHECK(nlohmann::json::parse(restart::encode(*decoded)) == document);
 }
 
 TEST_CASE("Restart restores claim history independently of focus and adoption order", "[restart][state]")
@@ -235,13 +202,14 @@ TEST_CASE("Restart restores claim history independently of focus and adoption or
     test::focus(source, 2); // Focus recency is deliberately not fullscreen claim order.
     source.switch_workspace(0, 1);
     auto snapshot = source.snapshot();
-    CHECK(snapshot.fullscreen_claims == std::vector<xcb_window_t>{ 2, 3, 1 });
+    auto claim = [&](xcb_window_t id) { return snapshot.find(id)->fullscreen_claim; };
+    CHECK((claim(2) < claim(3) && claim(3) < claim(1)));
 
     auto target = test::state();
     std::vector<WindowObservation> observed{
         test::observe(source.require(3)), test::observe(source.require(1)), test::observe(source.require(2))
     };
-    SECTION("hidden and minimized candidates retain their order")
+    SECTION("hidden candidates retain their order")
     {
         target.adopt(observed, &snapshot);
         CHECK(target.fullscreen_owners().at(0) == XCB_NONE);
@@ -330,7 +298,7 @@ TEST_CASE("Restart rebinding matches live output reconciliation", "[restart][sta
         });
         test::outputs(state, discovered);
     };
-    // The live workspace count is fixed, so live reconciliation uses the saved count.
+    // Live reconciliation uses the saved count.
     source.insert_fixture(99, Fixture::Role::Dock, DockStrut{ .top = { 40 } });
     prepare(source, 3);
 
@@ -545,11 +513,11 @@ TEST_CASE("Restart rejects empty frames before they reach geometry projection", 
 
 TEST_CASE("Restart decoder rejects malformed typed values before narrowing or defaulting", "[restart][codec]")
 {
-    auto original = unpack_json(restart::encode(sample()));
-    REQUIRE(restart::decode(pack_json(original.dump())) == sample());
+    auto original = nlohmann::json::parse(restart::encode(sample()));
+    REQUIRE(restart::decode(original.dump()) == sample());
     auto invalid_role = original;
     invalid_role["fixtures"][0]["role"] = "Popup";
-    CHECK_FALSE(restart::decode(pack_json(invalid_role.dump())));
+    CHECK_FALSE(restart::decode(invalid_role.dump()));
     for (auto const& [path, value] : std::vector<std::pair<std::string, nlohmann::json>>{
              {                 "/clients/0/id",                                uint64_t{ 1 } << 32 },
              {                "/clients/0/monitor",                                                 -1 },
@@ -572,61 +540,55 @@ TEST_CASE("Restart decoder rejects malformed typed values before narrowing or de
         CAPTURE(path, value);
         auto damaged = original;
         damaged[nlohmann::json::json_pointer(path)] = value;
-        CHECK_FALSE(restart::decode(pack_json(damaged.dump())));
+        CHECK_FALSE(restart::decode(damaged.dump()));
     }
-    SECTION("Every incomplete JSON payload is rejected with an accurate envelope")
+    SECTION("Every incomplete JSON payload is rejected")
     {
         auto payload = original.dump();
         for (size_t size = 0; size < payload.size(); ++size)
         {
             CAPTURE(size);
-            CHECK_FALSE(restart::decode(pack_json(payload.substr(0, size))));
+            CHECK_FALSE(restart::decode(payload.substr(0, size)));
         }
     }
     SECTION("Missing optional fields are damage, not defaults")
     {
         original["clients"][0]["preferences"].erase("floating");
-        CHECK_FALSE(restart::decode(pack_json(original.dump())));
+        CHECK_FALSE(restart::decode(original.dump()));
     }
     SECTION("Unknown nested fields are rejected")
     {
         original["clients"][0]["preferences"]["unknown"] = true;
-        CHECK_FALSE(restart::decode(pack_json(original.dump())));
+        CHECK_FALSE(restart::decode(original.dump()));
     }
     SECTION("Variant tag must match its payload")
     {
         original["clients"][0]["mode"] = {
             { "FloatingMode", { { "floating", nullptr } } }
         };
-        CHECK_FALSE(restart::decode(pack_json(original.dump())));
+        CHECK_FALSE(restart::decode(original.dump()));
     }
     SECTION("A valid mode cannot hide an extra tag")
     {
         original["clients"][0]["mode"]["UnknownMode"] = nullptr;
-        CHECK_FALSE(restart::decode(pack_json(original.dump())));
+        CHECK_FALSE(restart::decode(original.dump()));
     }
     SECTION("Two valid mode tags cannot choose one by their order")
     {
         original["clients"][0]["mode"]["FloatingMode"] = original["clients"][1]["mode"]["FloatingMode"];
-        CHECK_FALSE(restart::decode(pack_json(original.dump())));
+        CHECK_FALSE(restart::decode(original.dump()));
     }
     SECTION("Duplicate fields cannot overwrite decoded values")
     {
         auto text = original.dump();
         text.insert(1, "\"focused_monitor\":0,");
-        CHECK_FALSE(restart::decode(pack_json(text)));
+        CHECK_FALSE(restart::decode(text));
     }
-    SECTION("Length and padding cannot hide trailing data")
+    SECTION("Trailing data is rejected")
     {
         auto text = original.dump();
-        while (text.size() % 4 == 0) text += ' ';
-        auto words = pack_json(text);
-        reinterpret_cast<char*>(words.data() + 2)[text.size()] = 'x';
-        CHECK_FALSE(restart::decode(words));
-        words = pack_json(text);
-        words[1] = UINT32_MAX;
-        CHECK_FALSE(restart::decode(words));
-        CHECK_FALSE(restart::decode(pack_json(text + "{}")));
+        CHECK_FALSE(restart::decode(text + "{}"));
+        CHECK_FALSE(restart::decode(text + "x"));
     }
 }
 
@@ -714,8 +676,9 @@ TEST_CASE("Graph restoration separates saved intent from live observations and n
     CHECK(target.require(5).workspace == 0);
     CHECK(target.monitors()[0].workspaces[2].windows == std::vector<xcb_window_t>{ 1, 2, 4 });
     CHECK_FALSE(target.find(3));
-    REQUIRE(target.fullscreen_claims().size() == 3);
-    CHECK(target.fullscreen_claims().front() == 1);
+    auto claimed = std::ranges::count_if(target.clients(), [](auto const& entry) { return entry.second.fullscreen(); });
+    CHECK(claimed == 3);
+    for (xcb_window_t id : { 2, 4 }) CHECK(target.require(1).fullscreen_claim < target.require(id).fullscreen_claim);
     CHECK_FALSE(invariants::validate(target));
 }
 

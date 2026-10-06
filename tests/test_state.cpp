@@ -29,6 +29,25 @@ TEST_CASE("Urgency tracks app and WM sources independently", "[state][urgency]")
     REQUIRE_FALSE(urgency.active());
 }
 
+TEST_CASE("The active client never becomes urgent", "[state][urgency]")
+{
+    auto state = test::state();
+    add(state, 1);
+    add(state, 2);
+    state.focus(2);
+    WindowStates attention;
+    attention.set(WindowState::DemandsAttention, true);
+    state.request_states(2, StateChange::Add, attention);
+    state.hint_urgency(2, true);
+    state.urgency(2, UrgencySource::WmInitiated, true);
+    CHECK_FALSE(state.require(2).urgency.active());
+    state.request_states(1, StateChange::Add, attention);
+    CHECK(state.require(1).urgency.has(UrgencySource::App));
+    state.focus(1);
+    state.settle();
+    CHECK_FALSE(state.require(1).urgency.active());
+}
+
 TEST_CASE("Registration attaches tiles and removal releases every membership", "[state][registry]")
 {
     auto state = test::state();
@@ -152,7 +171,7 @@ TEST_CASE("Type and transient updates change only default modes", "[state][mode]
     CHECK(state.require(3).tiled());
 }
 
-TEST_CASE("Visibility is derived from workspace, iconic, sticky and show-desktop state", "[state][visibility]")
+TEST_CASE("Visibility is derived from workspace, iconic and sticky state", "[state][visibility]")
 {
     auto state = test::state(2);
     add(state, 1);
@@ -316,23 +335,25 @@ TEST_CASE("Fullscreen assignments preserve history while requests renew it", "[s
     state.fullscreen(2, true);
     SECTION("Visible") { }
     SECTION("Off workspace") { state.switch_workspace(0, 1); }
-    SECTION("Minimized") { state.iconic(1, true); }
-    auto claims = state.fullscreen_claims();
+    SECTION("Hidden") { state.iconic(1, true); }
+    auto claims = [&] { return std::pair{ state.require(1).fullscreen_claim, state.require(2).fullscreen_claim }; };
+    auto before = claims();
+    CHECK(before.first < before.second);
     state.settle();
     auto revision = state.revision();
     state.fullscreen(2, true);
     state.fullscreen(1, true);
-    CHECK(state.fullscreen_claims() == claims);
+    CHECK(claims() == before);
     CHECK(state.revision() == revision);
     CHECK_FALSE(state.settle());
 
     state.request_fullscreen(1);
-    CHECK(state.fullscreen_claims() == std::vector<xcb_window_t>{ 2, 1 });
+    CHECK(claims().first > claims().second);
     CHECK(state.revision() > revision);
     state.settle();
     CHECK(state.active_window() == (state.focusable(state.require(1)) ? 1
                                   : state.focusable(state.require(2)) ? 2 : XCB_NONE));
-    // A request changes priority, not placement or minimization.
+    // A request changes priority, not placement or hiding.
     state.switch_workspace(0, 0);
     if (state.require(1).iconic)
         CHECK(state.fullscreen_owners().at(0) == 2);
@@ -357,7 +378,7 @@ TEST_CASE("Fullscreen admission establishes priority and excludes maximize", "[s
     state.request_fullscreen(1);
     Client client;
     client.id = 2;
-    client.fullscreen = true;
+    client.fullscreen_claim = 1;
     client.maximized_horz = client.maximized_vert = true;
     state.insert(client);
     CHECK(state.fullscreen_owners().at(0) == 2);
@@ -368,7 +389,7 @@ TEST_CASE("Fullscreen admission establishes priority and excludes maximize", "[s
     state.fullscreen(2, true);
     CHECK(state.revision() == revision);
     state.fullscreen(2, false);
-    CHECK(state.fullscreen_claims() == std::vector<xcb_window_t>{ 1 });
+    CHECK_FALSE(state.require(2).fullscreen());
     CHECK(state.fullscreen_owners().at(0) == 1);
 }
 
@@ -653,9 +674,9 @@ TEST_CASE("Admission derives roles and placement from observations alone", "[sta
         return states;
     }() };
     state.admit(hinted);
-    CHECK(state.require(6).fullscreen);
+    CHECK(state.require(6).fullscreen());
     CHECK_FALSE(state.require(6).iconic);
-    CHECK(state.fullscreen_claims().back() == 6);
+    for (auto const& [id, client] : state.clients()) CHECK(client.fullscreen_claim <= state.require(6).fullscreen_claim);
 }
 
 TEST_CASE("Button presses choose bindings before click focus and split gestures", "[state][drag][input]")

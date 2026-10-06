@@ -34,7 +34,7 @@ std::vector<xcb_window_t> State::tiled_participants(size_t monitor, FullscreenVi
     return workspace_tiles(
         monitor,
         monitors_[monitor].current_workspace,
-        [&](Client const& client) { return !client.fullscreen && visible(client, fullscreen); }
+        [&](Client const& client) { return !client.fullscreen() && visible(client, fullscreen); }
     );
 }
 
@@ -57,7 +57,7 @@ std::vector<State::Projected> State::project(FullscreenVisibility const& fullscr
     {
         if (!visible(client, fullscreen))
             result.push_back({ &client, std::nullopt });
-        else if (client.fullscreen || floating_mode(client))
+        else if (client.fullscreen() || floating_mode(client))
             result.push_back({ &client, presentation(client) });
     }
     std::ranges::sort(result, { }, [](auto const& projected) { return projected.client->order; });
@@ -68,7 +68,7 @@ State::Presentation State::presentation(Client const& client) const { return pre
 
 State::Presentation State::presentation(Client const& client, Geometry frame) const
 {
-    auto border = client.fullscreen ? 0 : this->border(client, frame);
+    auto border = client.fullscreen() ? 0 : this->border(client, frame);
     return { inset(frame, border), border };
 }
 
@@ -134,7 +134,7 @@ Geometry State::frame(Client const& client) const
 {
     if (auto preview = drag_preview(client))
         return *preview;
-    if (client.fullscreen)
+    if (client.fullscreen())
         return fullscreen_geometry(client);
     if (auto const* floating = floating_mode(client))
         return floating::presentation_geometry(

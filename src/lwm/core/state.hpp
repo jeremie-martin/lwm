@@ -120,10 +120,10 @@ public:
     void erase(xcb_window_t id);
 
     // Configuration and topology
-    // Layout, scratchpad slots and matching rules follow the installed
-    // configuration; the workspace count is fixed once monitors exist.
+    // Layout, scratchpad slots, matching rules and the workspace count follow
+    // the installed configuration.
     Config const& config() const { return config_; }
-    std::expected<void, std::string> configure(Config config);
+    void configure(Config config);
     // Rebind workspaces by output name and reassign clients. A changed topology
     // fits floating rectangles into the new workareas and clears monitor hints.
     void replace_topology(Topology topology);
@@ -137,8 +137,8 @@ public:
     // Monotonic bounds for registration and completed focus ranks.
     uint64_t next_order() const { return next_order_; }
     uint64_t next_recency() const { return next_recency_; }
+    uint64_t next_claim() const { return next_claim_; }
     bool in_view(Client const& client) const;
-    std::vector<xcb_window_t> const& fullscreen_claims() const { return fullscreen_claims_; }
     std::vector<xcb_window_t> fullscreen_owners() const;
     FullscreenVisibility fullscreen_visibility() const;
     bool visible(Client const& client) const;
@@ -204,8 +204,8 @@ public:
     // Move the active client to the adjacent monitor's current workspace.
     bool move_to_monitor(int direction);
     void floating(xcb_window_t id, bool enabled);
-    // The user's float toggle focuses the client; it leaves fullscreen, hidden
-    // and show-desktop presentation alone. Leaving floating also leaves maximize.
+    // The user's float toggle focuses the client; it leaves fullscreen and hidden
+    // clients alone. Leaving floating also leaves maximize.
     void toggle_floating(xcb_window_t id);
     void geometry(xcb_window_t id, Geometry rectangle);
     void swap_tiles(size_t monitor, size_t a, size_t b);
@@ -225,6 +225,7 @@ public:
     void layer(xcb_window_t id, LayerHint hint);
     void skip_taskbar(xcb_window_t id, bool enabled);
     void skip_pager(xcb_window_t id, bool enabled);
+    // Enabling is ignored for the active client, which already has attention.
     void urgency(xcb_window_t id, UrgencySource source, bool enabled);
     void fullscreen_monitors(xcb_window_t id, std::optional<FullscreenMonitors> value);
 
@@ -244,7 +245,7 @@ public:
     // A pager's _NET_MOVERESIZE_WINDOW changes the normal floating rectangle.
     void moveresize_request(xcb_window_t id, GeometryRequest request);
     // A WM_HINTS urgency that differs from the published urgency is the
-    // application's request; the active client has none.
+    // application's request.
     void hint_urgency(xcb_window_t id, bool urgent);
 
     // Metadata updates resolve classification defaults, parent placement,
@@ -324,7 +325,6 @@ private:
     std::vector<Monitor> monitors_;
     std::vector<NamedScratchpad> named_scratchpads_;
     std::vector<xcb_window_t> scratchpad_pool_;
-    std::vector<xcb_window_t> fullscreen_claims_;
     xcb_window_t active_window_ = XCB_NONE;
     size_t focused_monitor_ = 0;
     std::optional<FocusRequest> focus_request_;
@@ -333,6 +333,7 @@ private:
     std::optional<Drag> drag_;
     uint64_t next_order_ = 0;
     uint64_t next_recency_ = 1;
+    uint64_t next_claim_ = 1;
     uint64_t revision_ = 0;
     bool frozen_ = false;
 

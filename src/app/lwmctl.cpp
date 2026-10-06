@@ -76,15 +76,9 @@ public:
         free(error);
         return !error;
     }
-    // Complete UTF-8 text, optionally deleting it in the same request.
     std::optional<std::string> text(xcb_window_t window, xcb_atom_t property, bool remove = false) const
     {
-        auto reply = lwm::reply(xcb_get_property_reply(
-            conn(), xcb_get_property(conn(), remove, window, property, utf8, 0, UINT32_MAX / 4), nullptr
-        ));
-        if (!lwm::xproperty::complete(reply, utf8, 8))
-            return std::nullopt;
-        return std::string(static_cast<char const*>(xcb_get_property_value(reply.get())), xcb_get_property_value_length(reply.get()));
+        return lwm::xproperty::text(conn(), window, property, utf8, remove);
     }
 
     // Declared after the connection, which initializes first.

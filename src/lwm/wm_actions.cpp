@@ -23,19 +23,21 @@ Result WindowManager::execute(Action const& action, std::string_view source)
         operation();
         return { };
     };
-    auto restart = [&](std::string binary) -> Result
-    {
-        LWM_LOG_INFO("Restart requested: source={} binary={}", source, binary.empty() ? "current" : binary);
-        restart_binary_ = std::move(binary);
-        stop_ = RunResult::Restart;
-        return { };
-    };
     return std::visit(
         Overloaded{
             [&](Kill const&) { return on_active([&] { close_window(active); }); },
             [&](ReloadConfig const&) { return reload_config(source); },
-            [&](Restart const&) { return restart({ }); },
-            [&](Exec const& exec) { return restart(exec.binary); },
+            [&](Restart const& restart) -> Result
+            {
+                LWM_LOG_INFO(
+                    "Restart requested: source={} binary={}",
+                    source,
+                    restart.binary.empty() ? "current" : restart.binary
+                );
+                restart_binary_ = restart.binary;
+                stop_ = RunResult::Restart;
+                return { };
+            },
             [&](Spawn const& spawn) -> Result
             {
                 if (!launch_program(spawn.argv, source))
@@ -43,7 +45,7 @@ Result WindowManager::execute(Action const& action, std::string_view source)
                 return { };
             },
             [&](ToggleFullscreen const&)
-            { return on_active([&] { state_.fullscreen(active, !state_.require(active).fullscreen); }); },
+            { return on_active([&] { state_.fullscreen(active, !state_.require(active).fullscreen()); }); },
             [&](ToggleFloat const&) { return on_active([&] { state_.toggle_floating(active); }); },
             [&](FocusCycle const& cycle) -> Result
             {
@@ -153,13 +155,11 @@ Result WindowManager::execute(Action const& action, std::string_view source)
                 state_.scratchpad_pending(cancel.name, false);
                 return { };
             },
-            // The active window already has the user's attention.
             [&](NotifyAttention const& attention) -> Result
             {
                 if (!state_.find(attention.window))
                     return fail("unknown window");
-                if (attention.window != active)
-                    state_.urgency(attention.window, UrgencySource::WmInitiated, true);
+                state_.urgency(attention.window, UrgencySource::WmInitiated, true);
                 return { };
             },
         },

@@ -26,8 +26,7 @@ template <typename Edit> void configure(State& state, Edit edit)
 {
     auto config = state.config();
     edit(config);
-    if (!state.configure(std::move(config)))
-        throw std::logic_error("test configuration rejected");
+    state.configure(std::move(config));
 }
 
 inline Topology::Output output(std::string name, int16_t x = 0)
@@ -90,7 +89,7 @@ inline WindowObservation observe(Client const& client, std::optional<uint32_t> d
         .fullscreen_monitors = client.fullscreen_monitors,
         .size_hints = client.size_hints,
     };
-    window.states.set(WindowState::Fullscreen, client.fullscreen);
+    window.states.set(WindowState::Fullscreen, client.fullscreen());
     window.states.set(WindowState::Hidden, client.iconic);
     window.states.set(WindowState::Sticky, client.sticky);
     window.states.set(WindowState::MaximizedHorz, client.maximized_horz);

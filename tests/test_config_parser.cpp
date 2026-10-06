@@ -94,7 +94,7 @@ move = "super+shift"
 keys = ["F1", "F2", "F3"]
 [[rules]]
 match = { title = "dropdown" }
-apply = { floating = true, scratchpad = "term", center = true }
+apply = { floating = true, center = true }
 )");
 
     REQUIRE(loaded.has_value());
@@ -108,7 +108,6 @@ apply = { floating = true, scratchpad = "term", center = true }
     REQUIRE(scratchpad_action != nullptr);
     REQUIRE(scratchpad_action->name == "term");
     REQUIRE(cfg.rules.size() == 1);
-    REQUIRE(cfg.rules[0].actions.scratchpad == "term");
 }
 
 TEST_CASE("Config parser recognizes swap_next and swap_prev actions", "[config][keybind]")
@@ -175,17 +174,9 @@ names = ["1", "2", "3"]
     CHECK(loaded->appearance.border_width == Config{ }.appearance.border_width);
 }
 
-TEST_CASE("The built-in defaults are the example file and agree with omitted-setting defaults", "[config]")
+TEST_CASE("The built-in defaults are the example file", "[config]")
 {
     auto defaults = default_config();
-    CHECK(defaults.workspaces == Config{ }.workspaces);
-    CHECK(defaults.appearance.padding == Config{ }.appearance.padding);
-    CHECK(defaults.appearance.border_width == Config{ }.appearance.border_width);
-    CHECK(defaults.appearance.border_color == Config{ }.appearance.border_color);
-    CHECK(defaults.appearance.urgent_border_color == Config{ }.appearance.urgent_border_color);
-    CHECK(defaults.layout.default_ratio == Config{ }.layout.default_ratio);
-    CHECK(defaults.layout.min_ratio == Config{ }.layout.min_ratio);
-    CHECK(defaults.layout.resize_grab_threshold == Config{ }.layout.resize_grab_threshold);
     CHECK(defaults.mousebinds.size() == 3);
     CHECK(action_as<action::Spawn>(defaults.keybinds.at({ XCB_MOD_MASK_4, XK_Return })));
     CHECK(defaults.keybinds.at({ XCB_MOD_MASK_4, XK_1 }) == Action{ action::SwitchWorkspace{ 0 } });
@@ -466,7 +457,7 @@ match = { class = "Term" }
     CHECK(binds.at({ XCB_MOD_MASK_4, XK_m }) == Action{ action::SetLayout{ LayoutStrategy::Monocle } });
     CHECK(binds.at({ XCB_MOD_MASK_4, XK_r }) == Action{ action::SetRatio{ 0.4 } });
     CHECK(binds.at({ XCB_MOD_MASK_4, XK_l }) == Action{ action::AdjustRatio{ 0.05 } });
-    CHECK(binds.at({ XCB_MOD_MASK_4, XK_e }) == Action{ action::Exec{ "/usr/local/bin/lwm" } });
+    CHECK(binds.at({ XCB_MOD_MASK_4, XK_e }) == Action{ action::Restart{ "/usr/local/bin/lwm" } });
     CHECK(binds.at({ XCB_MOD_MASK_4, XK_c }) == Action{ action::ScratchpadCancelLaunch{ "term" } });
     CHECK(binds.at({ XCB_MOD_MASK_4, XK_n }) == Action{ action::CycleWorkspace{ 1 } });
 

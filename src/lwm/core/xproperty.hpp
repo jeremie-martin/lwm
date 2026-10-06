@@ -62,17 +62,19 @@ scalar(xcb_connection_t* connection, xcb_window_t window, xcb_atom_t property, x
     return scalar(connection, request(connection, window, property, type, 1), type);
 }
 
-inline std::vector<uint32_t> read_words(
-    xcb_connection_t* connection,
-    xcb_window_t window,
-    xcb_atom_t property,
-    xcb_atom_t type,
-    uint32_t limit = 65536
-)
+// Complete 8-bit text of one type, optionally deleted by the same request.
+inline std::optional<std::string>
+text(xcb_connection_t* connection, xcb_window_t window, xcb_atom_t property, xcb_atom_t type, bool remove = false)
 {
-    auto reply = read(connection, window, property, type, limit);
-    auto values = words(reply, type);
-    return { values.begin(), values.end() };
+    auto value = reply(xcb_get_property_reply(
+        connection, xcb_get_property(connection, remove, window, property, type, 0, UINT32_MAX / 4), nullptr
+    ));
+    if (!complete(value, type, 8))
+        return std::nullopt;
+    return std::string(
+        static_cast<char const*>(xcb_get_property_value(value.get())),
+        static_cast<size_t>(xcb_get_property_value_length(value.get()))
+    );
 }
 
 } // namespace lwm::xproperty

@@ -44,7 +44,7 @@ inline std::optional<Violation> validate(restart::Snapshot const& graph)
         if (!register_window(fixture))
             return Violation{ "Fixture identity or registration rank is invalid or duplicated", fixture.id };
     std::unordered_map<xcb_window_t, ClientIntent const*> clients;
-    std::unordered_set<uint64_t> recencies;
+    std::unordered_set<uint64_t> recencies, claims;
     for (auto const& client : graph.clients)
     {
         if (!register_window(client))
@@ -54,6 +54,8 @@ inline std::optional<Violation> validate(restart::Snapshot const& graph)
             return Violation{ "Client has invalid monitor or workspace placement", client.id };
         if (client.mru_order == UINT64_MAX || (client.mru_order && !recencies.insert(client.mru_order).second))
             return Violation{ "Client focus recency is invalid or duplicated", client.id };
+        if (client.fullscreen_claim == UINT64_MAX || (client.fullscreen() && !claims.insert(client.fullscreen_claim).second))
+            return Violation{ "Client fullscreen claim is invalid or duplicated", client.id };
         if (client.urgency.sources > (static_cast<uint8_t>(UrgencySource::WmInitiated) | static_cast<uint8_t>(UrgencySource::App)))
             return Violation{ "Client urgency sources are invalid", client.id };
         auto const* floating = std::get_if<FloatingMode>(&client.mode);
@@ -83,21 +85,17 @@ inline std::optional<Violation> validate(restart::Snapshot const& graph)
     for (auto const& client : graph.clients)
         if (std::holds_alternative<TiledMode>(client.mode) && !tiled.contains(client.id))
             return Violation{ "Tiled client is absent from workspace membership", client.id };
-    std::unordered_set<xcb_window_t> claims;
-    for (auto id : graph.fullscreen_claims)
-        if (!clients.contains(id) || !claims.insert(id).second)
-            return Violation{ "Fullscreen claim is missing or duplicated", id };
+    std::unordered_set<xcb_window_t> claimed;
     std::unordered_set<std::string> names;
-    claims.clear();
     for (auto const& slot : graph.named_scratchpads)
     {
         if (slot.name.empty() || !names.insert(slot.name).second)
             return Violation{ "Named scratchpad identity is missing or duplicated" };
-        if (slot.window && (!clients.contains(*slot.window) || !claims.insert(*slot.window).second))
+        if (slot.window && (!clients.contains(*slot.window) || !claimed.insert(*slot.window).second))
             return Violation{ "Named scratchpad ownership is missing or duplicated", *slot.window };
     }
     for (auto id : graph.pool)
-        if (!clients.contains(id) || !claims.insert(id).second)
+        if (!clients.contains(id) || !claimed.insert(id).second)
             return Violation{ "Scratchpad pool ownership is missing or duplicated", id };
     if (graph.active != XCB_NONE && !clients.contains(graph.active))
         return Violation{ "Active window is unmanaged", graph.active };
@@ -108,7 +106,6 @@ inline std::optional<Violation> validate(State const& state)
 {
     if (auto violation = validate(state.snapshot()))
         return violation;
-    std::unordered_set<xcb_window_t> claims(state.fullscreen_claims().begin(), state.fullscreen_claims().end());
     for (auto const& [id, client] : state.clients())
     {
         if (id != client.id)
@@ -117,9 +114,10 @@ inline std::optional<Violation> validate(State const& state)
             return Violation{ "Client registration order is invalid or duplicated", id };
         if (client.mru_order >= state.next_recency())
             return Violation{ "Client focus recency exceeds its bound", id };
-        if (client.fullscreen != claims.contains(id)
-            || (client.fullscreen && (client.maximized_horz || client.maximized_vert)))
-            return Violation{ "Fullscreen state disagrees with its claim or maximize state", id };
+        if (client.fullscreen_claim >= state.next_claim())
+            return Violation{ "Client fullscreen claim exceeds its bound", id };
+        if (client.fullscreen() && (client.maximized_horz || client.maximized_vert))
+            return Violation{ "Fullscreen client is maximized", id };
         if (client.iconic && state.monitors()[client.monitor].workspaces[client.workspace].preferred_tile == id)
             return Violation{ "Workspace tile preference is iconic", id };
     }

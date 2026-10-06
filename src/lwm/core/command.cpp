@@ -81,52 +81,52 @@ constexpr CommandSpec takes(std::string_view name, std::string_view help, std::s
              } };
 }
 
-template <auto Value>
+template <typename T, auto... Arguments>
 constexpr CommandSpec fixed(std::string_view name, std::string_view help, std::string_view description)
 {
     return { name, 0, help, description,
              [](std::string_view value, CommandSpec const& spec) -> std::expected<Request, std::string>
              {
                  if (!value.empty()) return usage(spec);
-                 return Request{ Value };
+                 return Request{ T{ Arguments... } };
              } };
 }
 
 // Spawn is the only action without an IPC spelling: IPC callers can start processes themselves.
 constexpr CommandSpec specs[] = {
-    fixed<Query::Ping>("ping", "ping", "check whether the WM is running"),
-    fixed<Query::Version>("version", "version", "show WM version"),
-    fixed<Query::State>("state", "state", "print one consistent state snapshot"),
-    fixed<ReloadConfig{ }>("reload-config", "reload-config", "reload configuration"),
-    fixed<Restart{ }>("restart", "restart", "restart the WM"),
-    takes<Exec, text>("exec", "exec PATH", "restart with another binary"),
+    fixed<Query, Query::Ping>("ping", "ping", "check whether the WM is running"),
+    fixed<Query, Query::Version>("version", "version", "show WM version"),
+    fixed<Query, Query::State>("state", "state", "print one consistent state snapshot"),
+    fixed<ReloadConfig>("reload-config", "reload-config", "reload configuration"),
+    fixed<Restart>("restart", "restart", "restart the WM"),
+    takes<Restart, text>("exec", "exec PATH", "restart with another binary"),
     takes<SetLayout, layout>("layout set", "layout set NAME", "select master-stack or monocle"),
     takes<SetRatio, number>("ratio set", "ratio set VALUE", "set the root split ratio"),
-    fixed<ResetRatios{ }>("ratio reset", "ratio reset", "reset workspace split ratios"),
+    fixed<ResetRatios>("ratio reset", "ratio reset", "reset workspace split ratios"),
     takes<AdjustRatio, number>("ratio adjust", "ratio adjust DELTA", "adjust the root split ratio"),
     takes<NotifyAttention, integer<true>>("notify-attention", "notify-attention window=<xid>", "mark an exact window urgent"),
     takes<SwitchWorkspace, integer<false>>("workspace switch", "workspace switch N", "switch workspace (zero-based)"),
-    fixed<CycleWorkspace{ 1 }>("workspace next", "workspace next", "switch to the next workspace"),
-    fixed<CycleWorkspace{ -1 }>("workspace prev", "workspace prev", "switch to the previous workspace"),
-    fixed<ToggleWorkspace{ }>("workspace toggle", "workspace toggle", "switch back to the previous workspace"),
-    fixed<Query::WorkspaceList>("workspace list", "workspace list", "print workspaces as JSON"),
+    fixed<CycleWorkspace, 1>("workspace next", "workspace next", "switch to the next workspace"),
+    fixed<CycleWorkspace, -1>("workspace prev", "workspace prev", "switch to the previous workspace"),
+    fixed<ToggleWorkspace>("workspace toggle", "workspace toggle", "switch back to the previous workspace"),
+    fixed<Query, Query::WorkspaceList>("workspace list", "workspace list", "print workspaces as JSON"),
     takes<FocusMonitor, direction>("monitor focus", "monitor focus left|right", "focus the adjacent monitor"),
-    fixed<FocusCycle{ true }>("focus next", "focus next", "focus the next MRU window"),
-    fixed<FocusCycle{ false }>("focus prev", "focus prev", "focus the previous MRU window"),
+    fixed<FocusCycle, true>("focus next", "focus next", "focus the next MRU window"),
+    fixed<FocusCycle, false>("focus prev", "focus prev", "focus the previous MRU window"),
     takes<FocusWindow, integer<true>>("focus", "focus window=<xid>", "focus an exact window"),
-    fixed<Query::WindowList>("window list", "window list", "print normal clients as JSON"),
-    fixed<Kill{ }>("window close", "window close", "close the active window"),
-    fixed<ToggleFullscreen{ }>("window fullscreen", "window fullscreen", "toggle fullscreen on the active window"),
-    fixed<ToggleFloat{ }>("window float", "window float", "toggle floating on the active window"),
-    fixed<SwapTile{ 1 }>("window swap next", "window swap next", "swap the active tile with the next one"),
-    fixed<SwapTile{ -1 }>("window swap prev", "window swap prev", "swap the active tile with the previous one"),
+    fixed<Query, Query::WindowList>("window list", "window list", "print normal clients as JSON"),
+    fixed<Kill>("window close", "window close", "close the active window"),
+    fixed<ToggleFullscreen>("window fullscreen", "window fullscreen", "toggle fullscreen on the active window"),
+    fixed<ToggleFloat>("window float", "window float", "toggle floating on the active window"),
+    fixed<SwapTile, 1>("window swap next", "window swap next", "swap the active tile with the next one"),
+    fixed<SwapTile, -1>("window swap prev", "window swap prev", "swap the active tile with the previous one"),
     takes<MoveToWorkspace, integer<false>>("window to-workspace", "window to-workspace N", "move the active window to workspace N"),
     takes<MoveToMonitor, direction>("window to-monitor", "window to-monitor left|right", "move the active window to the adjacent monitor"),
-    fixed<ScratchpadStash{ }>("scratchpad stash", "scratchpad stash", "stash the active window"),
-    fixed<ScratchpadCycle{ }>("scratchpad cycle", "scratchpad cycle", "cycle the scratchpad pool"),
+    fixed<ScratchpadStash>("scratchpad stash", "scratchpad stash", "stash the active window"),
+    fixed<ScratchpadCycle>("scratchpad cycle", "scratchpad cycle", "cycle the scratchpad pool"),
     takes<ScratchpadToggle, text>("scratchpad toggle", "scratchpad toggle NAME", "toggle a named scratchpad"),
     takes<ScratchpadCancelLaunch, text>("scratchpad cancel-launch", "scratchpad cancel-launch NAME", "cancel pending launch state"),
-    fixed<Query::ScratchpadList>("scratchpad list", "scratchpad list", "print scratchpads as JSON"),
+    fixed<Query, Query::ScratchpadList>("scratchpad list", "scratchpad list", "print scratchpads as JSON"),
 };
 
 std::string_view trim(std::string_view text)

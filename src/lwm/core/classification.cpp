@@ -41,7 +41,7 @@ WindowClassification defaults(Client const& client)
 
 LayerHint effective_layer(Client const& client)
 {
-    if (client.fullscreen)
+    if (client.fullscreen())
         return LayerHint::Normal;
     if (client.modal)
         return LayerHint::Above;
@@ -62,7 +62,7 @@ WindowStates published_states(Client const& client, bool focused)
 {
     auto layer = effective_layer(client);
     WindowStates states;
-    states.set(WindowState::Fullscreen, client.fullscreen);
+    states.set(WindowState::Fullscreen, client.fullscreen());
     states.set(WindowState::Above, layer == LayerHint::Above);
     states.set(WindowState::Below, layer == LayerHint::Below);
     states.set(WindowState::Sticky, client.sticky);

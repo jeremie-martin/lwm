@@ -111,33 +111,35 @@ TEST_CASE(
     REQUIRE(reload_ok.has_value());
     REQUIRE(reload_ok->exit_code == 0);
     REQUIRE(wait_for_desktop_names(env->conn, { "code", "chat" }));
-
-    // The workspace count cannot change live.
-    REQUIRE(env->wm.write_config("[workspaces]\nnames = [\"broken\", \"2\", \"3\"]\n"));
-    auto reload_bad = run_lwmctl(env->wm, { "reload-config" });
-    REQUIRE(reload_bad.has_value());
-    REQUIRE(reload_bad->exit_code != 0);
-    REQUIRE(wait_for_desktop_names(env->conn, { "code", "chat" }));
 }
 
-TEST_CASE("Integration: reload-config rejects workspace-count changes", "[integration][ipc][reload]")
+TEST_CASE("Integration: reload-config changes the workspace count and folds removed workspaces", "[integration][ipc][reload]")
 {
-    auto env = TestEnvironment::create(make_config({ "one", "two" }));
+    auto env = TestEnvironment::create(make_config({ "one", "two", "three" }));
     if (!env)
         SKIP("Test environment not available");
+    auto& conn = env->conn;
+    xcb_atom_t desktops = intern_atom(conn.get(), "_NET_NUMBER_OF_DESKTOPS");
+    xcb_atom_t desktop = intern_atom(conn.get(), "_NET_WM_DESKTOP");
+    REQUIRE(wait_for_property_cardinal(conn.get(), conn.root(), desktops, 3, kTimeout));
+    auto window = create_window(conn, 10, 10, 200, 150);
+    map_window(conn, window);
+    REQUIRE(wait_for_active_window(conn, window, kTimeout));
+    REQUIRE(send_ipc_command("window to-workspace 2") == "ok");
+    REQUIRE(wait_for_property_cardinal(conn.get(), window, desktop, 2, kTimeout));
 
+    REQUIRE(env->wm.write_config(make_config({ "one", "two" })));
+    REQUIRE(send_ipc_command("reload-config") == "ok");
+    REQUIRE(wait_for_property_cardinal(conn.get(), conn.root(), desktops, 2, kTimeout));
+    REQUIRE(wait_for_desktop_names(conn, { "one", "two" }));
+    CHECK(wait_for_property_cardinal(conn.get(), window, desktop, 1, kTimeout));
 
-    xcb_atom_t desktops_atom = intern_atom(env->conn.get(), "_NET_NUMBER_OF_DESKTOPS");
-    REQUIRE(desktops_atom != XCB_NONE);
-    REQUIRE(wait_for_property_cardinal(env->conn.get(), env->conn.root(), desktops_atom, 2, kTimeout));
-
-    REQUIRE(env->wm.write_config(make_config({ "one", "two", "3" })));
-    auto reload_result = run_lwmctl(env->wm, { "reload-config" });
-    REQUIRE(reload_result.has_value());
-    REQUIRE(reload_result->exit_code != 0);
-
-    REQUIRE(wait_for_property_cardinal(env->conn.get(), env->conn.root(), desktops_atom, 2, kTimeout));
-    REQUIRE(wait_for_desktop_names(env->conn, { "one", "two" }));
+    REQUIRE(env->wm.write_config(make_config({ "one", "two", "three", "four" })));
+    REQUIRE(send_ipc_command("reload-config") == "ok");
+    REQUIRE(wait_for_property_cardinal(conn.get(), conn.root(), desktops, 4, kTimeout));
+    CHECK(require_property_cardinal(conn.get(), window, desktop) == 1);
+    REQUIRE(send_ipc_command("workspace switch 3") == "ok");
+    destroy_window(conn, window);
 }
 
 TEST_CASE(

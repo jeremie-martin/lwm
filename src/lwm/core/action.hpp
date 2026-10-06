@@ -19,14 +19,11 @@ struct ReloadConfig
 {
     bool operator==(ReloadConfig const&) const = default;
 };
+// Exec-restarts the WM; an empty binary means the running one.
 struct Restart
 {
-    bool operator==(Restart const&) const = default;
-};
-struct Exec
-{
     std::string binary;
-    bool operator==(Exec const&) const = default;
+    bool operator==(Restart const&) const = default;
 };
 struct Spawn
 {
@@ -136,7 +133,6 @@ using Action = std::variant<
     action::Kill,
     action::ReloadConfig,
     action::Restart,
-    action::Exec,
     action::Spawn,
     action::ToggleFullscreen,
     action::ToggleFloat,

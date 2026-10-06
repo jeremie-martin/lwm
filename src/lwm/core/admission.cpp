@@ -93,7 +93,7 @@ std::optional<Client> State::classify(WindowObservation const& window, restart::
         client.preferences.skip_pager = true;
     client.sticky |= states.has(WindowState::Sticky);
     client.modal = states.has(WindowState::Modal);
-    client.fullscreen = states.has(WindowState::Fullscreen);
+    client.fullscreen_claim = states.has(WindowState::Fullscreen) ? next_claim_++ : 0;
     client.maximized_horz = states.has(WindowState::MaximizedHorz);
     client.maximized_vert = states.has(WindowState::MaximizedVert);
     // Applications cannot minimize themselves; only LWM hides windows, and adoption
@@ -148,9 +148,14 @@ void State::adopt(
     // windows. Surviving identities recover their ranks during graph restoration.
     if (handoff)
     {
-        for (auto const& client : handoff->clients) next_order_ = std::max(next_order_, client.order + 1);
+        for (auto const& client : handoff->clients)
+        {
+            next_order_ = std::max(next_order_, client.order + 1);
+            next_claim_ = std::max(next_claim_, client.fullscreen_claim + 1);
+        }
         for (auto const& fixture : handoff->fixtures) next_order_ = std::max(next_order_, fixture.order + 1);
     }
+    auto first_new_claim = next_claim_;
     std::vector<Client> candidates;
     std::unordered_map<xcb_window_t, WindowObservation const*> pending;
     for (auto const& window : windows)
@@ -187,17 +192,11 @@ void State::adopt(
             if (auto placement = prepare_placement((*it)->id))
                 placements.emplace_back(*it, *placement);
     }
-    // Claims are reconstructed once, after rules, in observation order rather
-    // than dependency order. Surviving handoff history precedes new claims.
-    fullscreen_claims_.clear();
-    if (handoff)
-        for (auto id : handoff->fullscreen_claims)
-            if (auto const* client = find(id); client && client->fullscreen)
-                fullscreen_claims_.push_back(id);
+    // Claims made during adoption, by applications or rules, rank in observation
+    // order rather than dependency order, after every surviving claim.
     for (auto const& window : windows)
-        if (auto const* client = find(window.id); client && client->fullscreen
-            && !std::ranges::contains(fullscreen_claims_, window.id))
-            fullscreen_claims_.push_back(window.id);
+        if (auto const* client = find(window.id); client && client->fullscreen_claim >= first_new_claim)
+            edit(window.id).fullscreen_claim = next_claim_++;
     for (auto const& [window, placement] : placements)
         finish_placement(window->id, placement, window->unmanaged_parent);
 
@@ -441,9 +440,14 @@ void State::restore_graph(restart::Snapshot const& snapshot, std::span<Client> o
         auto const* saved = snapshot.find(client.id);
         if (!saved)
             continue;
+        // The application's current state decides fullscreen; a surviving claim
+        // keeps its saved priority.
+        auto observed_claim = client.fullscreen_claim;
         static_cast<ClientIntent&>(client) = *saved;
+        if (!observed_claim || !client.fullscreen_claim)
+            client.fullscreen_claim = observed_claim;
         forget_missing_tile_slot(client);
-        if (client.fullscreen)
+        if (client.fullscreen())
             client.maximized_horz = client.maximized_vert = false;
         next_recency_ = std::max(next_recency_, client.mru_order + 1);
         clients_.emplace(client.id, std::move(client));

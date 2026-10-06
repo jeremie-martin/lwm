@@ -100,9 +100,10 @@ TEST_CASE("Effective values let preferences override defaults and state project 
     // Modal and fullscreen project the layer without erasing the preference.
     client.modal = true;
     CHECK(effective_layer(client) == LayerHint::Above);
-    client.fullscreen = true;
+    client.fullscreen_claim = 1;
     CHECK(effective_layer(client) == LayerHint::Normal);
-    client.modal = client.fullscreen = false;
+    client.modal = false;
+    client.fullscreen_claim = 0;
     CHECK(effective_layer(client) == LayerHint::Below);
 
     // Transients skip taskbar and pager by default, including dialogs.

@@ -14,10 +14,10 @@ void State::request_states(xcb_window_t id, StateChange change, WindowStates req
         return;
     auto enable = [change](bool current) { return change == StateChange::Toggle ? !current : change == StateChange::Add; };
     auto value = [&](WindowState state, bool current) { return requested.has(state) ? enable(current) : current; };
-    bool fullscreen = value(WindowState::Fullscreen, client->fullscreen);
+    bool fullscreen = value(WindowState::Fullscreen, client->fullscreen());
     bool horizontal = value(WindowState::MaximizedHorz, client->maximized_horz);
     bool vertical = value(WindowState::MaximizedVert, client->maximized_vert);
-    if (!fullscreen && client->fullscreen)
+    if (!fullscreen && client->fullscreen())
         this->fullscreen(id, false);
     bool above_requested = requested.has(WindowState::Above);
     bool below_requested = requested.has(WindowState::Below);
@@ -105,7 +105,7 @@ void State::switch_desktop(uint32_t desktop)
 // from it is the application's request, and the echo of LWM's own write is not.
 void State::hint_urgency(xcb_window_t id, bool urgent)
 {
-    if (id != active_window_ && urgent != require(id).urgency.active())
+    if (urgent != require(id).urgency.active())
         urgency(id, UrgencySource::App, urgent);
 }
 
@@ -113,7 +113,7 @@ void State::hint_urgency(xcb_window_t id, bool urgent)
 void State::configure_request(xcb_window_t id, GeometryRequest request)
 {
     auto const* client = find(id);
-    if (client && !client->fullscreen && (request.x || request.y || request.width || request.height))
+    if (client && !client->fullscreen() && (request.x || request.y || request.width || request.height))
         moveresize_request(id, request);
 }
 

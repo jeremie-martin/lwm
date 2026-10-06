@@ -76,7 +76,7 @@ void State::advance_scratchpad_pool()
 void State::stash(xcb_window_t id)
 {
     auto const& client = require(id);
-    if (scratchpad_claim(id) || pooled(id) || client.fullscreen || client.iconic || drag_)
+    if (scratchpad_claim(id) || pooled(id) || client.fullscreen() || client.iconic || drag_)
         return;
     LWM_LOG_DEBUG("Stashing window {:#x} to scratchpad pool", id);
     pool_scratchpad(id);
@@ -130,7 +130,7 @@ void State::scratchpad_pending(std::string_view name, bool pending)
 }
 
 
-// A rule naming a scratchpad takes precedence over matchers; claimed names cannot match.
+// The first unclaimed scratchpad whose matcher accepts the client claims it.
 ScratchpadConfig const* State::match_scratchpad(Client const& client) const
 {
     auto const& configs = config_.scratchpads;
@@ -139,10 +139,6 @@ ScratchpadConfig const* State::match_scratchpad(Client const& client) const
         auto const* slot = named_scratchpad(config.name);
         return slot && slot->claimed_window() == XCB_NONE;
     };
-    if (client.rule && client.rule->scratchpad)
-        for (auto const& config : configs)
-            if (config.name == *client.rule->scratchpad && matches(config))
-                return &config;
     for (auto const& config : configs)
         if (matches(config) && config.match.matches(client.wm_class, client.wm_class_name, client.name))
             return &config;

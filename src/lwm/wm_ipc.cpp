@@ -103,7 +103,7 @@ WindowList window_list(State const& state)
                                  c->wm_class_name,
                                  c->name,
                                  c->id == state.active_window(),
-                                 c->fullscreen,
+                                 c->fullscreen(),
                                  c->urgency.active(),
                                  c->sticky,
                                  c->iconic });

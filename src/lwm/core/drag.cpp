@@ -11,7 +11,7 @@ namespace lwm {
 bool State::can_drag(xcb_window_t id) const
 {
     auto const* client = find(id);
-    return !drag_ && client && visible(*client) && !client->fullscreen;
+    return !drag_ && client && visible(*client) && !client->fullscreen();
 }
 
 State::Press State::press(xcb_window_t window, int16_t x, int16_t y, uint8_t button, uint16_t modifiers, uint32_t time)
@@ -175,7 +175,7 @@ bool State::drag_valid() const
     if (auto const* window = std::get_if<WindowDrag>(&drag_->operation))
     {
         auto const* client = find(window->window);
-        return client && client->tiled() == window->tiled && visible(*client) && !client->fullscreen
+        return client && client->tiled() == window->tiled && visible(*client) && !client->fullscreen()
             && !presents_maximized(*client) && client->monitor == window->monitor && client->workspace == window->workspace;
     }
     auto const& split = std::get<SplitDrag>(drag_->operation);
@@ -225,7 +225,7 @@ void State::end_drag(bool commit)
 // A tiled move previews its rectangle without changing membership.
 std::optional<Geometry> State::drag_preview(Client const& client) const
 {
-    if (drag_ && client.tiled() && !client.fullscreen)
+    if (drag_ && client.tiled() && !client.fullscreen())
         if (auto const* move = std::get_if<WindowDrag>(&drag_->operation); move && move->window == client.id)
             return floating::drag_geometry(move->start_geometry, drag_->dx(), drag_->dy(), move->edges);
     return std::nullopt;

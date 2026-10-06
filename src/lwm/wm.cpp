@@ -23,7 +23,7 @@ WindowManager::WindowManager(Config config, std::string config_path)
     : ewmh_(conn_)
     , config_path_(std::move(config_path))
 {
-    (void)state_.configure(std::move(config));
+    state_.configure(std::move(config));
     intern_atoms();
     create_wm_window();
     setup_root();
@@ -388,17 +388,17 @@ void WindowManager::handle_timeouts()
 // the active configuration and runtime claims untouched. Every outcome is logged.
 std::expected<void, std::string> WindowManager::reload_config(std::string_view source)
 {
-    auto result =
-        load_config(config_path_, true).and_then([&](Config config) { return state_.configure(std::move(config)); });
-    if (result)
+    auto config = load_config(config_path_, true);
+    if (!config)
     {
-        grab_buttons();
-        grab_keys();
-        LWM_LOG_INFO("Config reloaded successfully ({})", source);
+        LWM_LOG_WARN_LIMIT(std::chrono::seconds(5), "Config reload failed ({}): {}", source, config.error());
+        return std::unexpected(config.error());
     }
-    else
-        LWM_LOG_WARN_LIMIT(std::chrono::seconds(5), "Config reload failed ({}): {}", source, result.error());
-    return result;
+    state_.configure(std::move(*config));
+    grab_buttons();
+    grab_keys();
+    LWM_LOG_INFO("Config reloaded successfully ({})", source);
+    return { };
 }
 
 // Processes and window lifetime

@@ -68,18 +68,6 @@ void Ewmh::advertise(xcb_window_t check, std::vector<xcb_atom_t> const& extra_su
         ewmh_._NET_DESKTOP_GEOMETRY,
         ewmh_._NET_WORKAREA,
         ewmh_._NET_WM_STATE,
-        ewmh_._NET_WM_STATE_DEMANDS_ATTENTION,
-        ewmh_._NET_WM_STATE_FULLSCREEN,
-        ewmh_._NET_WM_STATE_ABOVE,
-        ewmh_._NET_WM_STATE_BELOW,
-        ewmh_._NET_WM_STATE_HIDDEN,
-        ewmh_._NET_WM_STATE_STICKY,
-        ewmh_._NET_WM_STATE_MAXIMIZED_VERT,
-        ewmh_._NET_WM_STATE_MAXIMIZED_HORZ,
-
-        ewmh_._NET_WM_STATE_MODAL,
-        ewmh_._NET_WM_STATE_SKIP_TASKBAR,
-        ewmh_._NET_WM_STATE_SKIP_PAGER,
         ewmh_._NET_WM_PING,
         ewmh_._NET_CLOSE_WINDOW,
         ewmh_._NET_WM_FULLSCREEN_MONITORS,
@@ -94,7 +82,6 @@ void Ewmh::advertise(xcb_window_t check, std::vector<xcb_atom_t> const& extra_su
         ewmh_._NET_WM_ACTION_CHANGE_DESKTOP,
         ewmh_._NET_WM_ACTION_ABOVE,
         ewmh_._NET_WM_ACTION_BELOW,
-
         ewmh_._NET_WM_ACTION_STICK,
         ewmh_._NET_WM_ACTION_MAXIMIZE_VERT,
         ewmh_._NET_WM_ACTION_MAXIMIZE_HORZ,
@@ -107,7 +94,7 @@ void Ewmh::advertise(xcb_window_t check, std::vector<xcb_atom_t> const& extra_su
     };
 
     for (auto const& type : window_types) supported.push_back(ewmh_.*type.atom);
-    supported.push_back(state_atoms_[static_cast<size_t>(WindowState::Focused)]);
+    supported.insert(supported.end(), state_atoms_.begin(), state_atoms_.end());
     supported.insert(supported.end(), extra_supported.begin(), extra_supported.end());
     xcb_ewmh_set_supported(&ewmh_, 0, supported.size(), supported.data());
 }

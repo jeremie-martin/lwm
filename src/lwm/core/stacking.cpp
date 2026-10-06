@@ -44,7 +44,7 @@ std::vector<xcb_window_t> compute_order(State const& state, State::FullscreenVis
         bool suppressed = in_view && fullscreen.suppressed(client);
         auto layer = effective_layer(client);
         Tier tier = suppressed        ? Tier::Below
-            : client.fullscreen       ? Tier::Fullscreen
+            : client.fullscreen()       ? Tier::Fullscreen
             : layer == LayerHint::Above ? Tier::Above
             : layer == LayerHint::Below ? Tier::Below
                                         : Tier::Normal;

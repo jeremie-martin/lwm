@@ -120,6 +120,8 @@ void State::insert(Client client)
 {
     client.order = register_window(client.id);
     client.mru_order = 0;
+    if (client.fullscreen())
+        client.fullscreen_claim = next_claim_++;
     insert_registered(std::move(client));
 }
 
@@ -129,12 +131,12 @@ void State::insert_registered(Client client)
     assert(client.order < next_order_);
     mutated();
     forget_missing_tile_slot(client);
+    if (client.fullscreen())
+        client.maximized_horz = client.maximized_vert = false;
     auto [it, inserted] = clients_.emplace(client.id, std::move(client));
     assert(inserted);
     if (it->second.tiled())
         attach(it->second);
-    if (it->second.fullscreen)
-        request_fullscreen(it->first);
 }
 
 void State::insert_fixture(xcb_window_t id, Fixture::Role role, DockStrut strut)
@@ -170,7 +172,6 @@ void State::erase(xcb_window_t id)
         detach(*client);
     release_scratchpad(id);
     clients_.erase(id);
-    std::erase(fullscreen_claims_, id);
 }
 
 void State::attach(Client const& client, std::optional<size_t> index)
@@ -209,9 +210,13 @@ bool State::in_view(Client const& client) const
 std::vector<xcb_window_t> State::fullscreen_owners() const
 {
     std::vector<xcb_window_t> owners(monitors_.size(), XCB_NONE);
-    for (auto id : fullscreen_claims_)
-        if (auto const& client = require(id); in_view(client))
+    std::vector<uint64_t> claims(monitors_.size(), 0);
+    for (auto const& [id, client] : clients_)
+        if (client.fullscreen_claim > claims[client.monitor] && in_view(client))
+        {
+            claims[client.monitor] = client.fullscreen_claim;
             owners[client.monitor] = id;
+        }
     return owners;
 }
 
@@ -528,7 +533,7 @@ void State::floating(xcb_window_t id, bool enabled)
 void State::toggle_floating(xcb_window_t id)
 {
     auto const& client = require(id);
-    if (client.fullscreen || client.iconic)
+    if (client.fullscreen() || client.iconic)
         return;
     bool floating = !client.tiled();
     if (floating)
@@ -570,7 +575,7 @@ void State::swap_tile(int offset)
     auto fullscreen = fullscreen_visibility();
     std::vector<size_t> eligible;
     for (size_t i = 0; i < workspace.windows.size(); ++i)
-        if (auto const& client = require(workspace.windows[i]); !client.fullscreen && visible(client, fullscreen))
+        if (auto const& client = require(workspace.windows[i]); !client.fullscreen() && visible(client, fullscreen))
             eligible.push_back(i);
     auto tile = focus::tile(*this, focused_monitor_, fullscreen);
     auto it = std::ranges::find_if(eligible, [&](auto i) { return workspace.windows[i] == tile; });
@@ -595,7 +600,7 @@ void State::iconic(xcb_window_t id, bool enabled)
     if (enabled && workspace.preferred_tile == id)
         workspace.preferred_tile = XCB_NONE;
     // Restoring a fullscreen client makes it the preferred owner again.
-    if (!enabled && c.fullscreen)
+    if (!enabled && c.fullscreen())
         request_fullscreen(id);
 }
 
@@ -611,31 +616,28 @@ void State::sticky(xcb_window_t id, bool enabled)
 
 void State::fullscreen(xcb_window_t id, bool enabled)
 {
-    if (require(id).fullscreen == enabled)
+    if (require(id).fullscreen() == enabled)
         return;
     if (enabled)
         return request_fullscreen(id);
     auto& c = edit(id);
     LWM_LOG_DEBUG("Fullscreen changed: window={:#x} enabled={}", id, false);
-    c.fullscreen = false;
-    std::erase(fullscreen_claims_, id);
+    c.fullscreen_claim = 0;
 }
 
 void State::request_fullscreen(xcb_window_t id)
 {
     auto& c = edit(id);
-    if (!c.fullscreen)
+    if (!c.fullscreen())
         LWM_LOG_DEBUG("Fullscreen changed: window={:#x} enabled={}", id, true);
-    c.fullscreen = true;
+    c.fullscreen_claim = next_claim_++;
     c.maximized_horz = c.maximized_vert = false;
-    std::erase(fullscreen_claims_, id);
-    fullscreen_claims_.push_back(id);
 }
 
 void State::maximize(xcb_window_t id, bool horizontal, bool vertical)
 {
     auto const& current = require(id);
-    if (current.fullscreen)
+    if (current.fullscreen())
         horizontal = vertical = false;
     if (current.maximized_horz == horizontal && current.maximized_vert == vertical)
         return;
@@ -652,8 +654,11 @@ void State::skip_taskbar(xcb_window_t id, bool enabled) { prefer(id, &ClientPref
 
 void State::skip_pager(xcb_window_t id, bool enabled) { prefer(id, &ClientPreferences::skip_pager, enabled); }
 
+// The active window already has the user's attention.
 void State::urgency(xcb_window_t id, UrgencySource source, bool enabled)
 {
+    if (enabled && id == active_window_)
+        return;
     auto urgency = require(id).urgency;
     urgency.set(source, enabled);
     assign(id, &Client::urgency, urgency);
@@ -777,16 +782,21 @@ void State::reset_ratios(size_t monitor)
 
 // Configuration
 
-std::expected<void, std::string> State::configure(Config config)
+void State::configure(Config config)
 {
-    if (!monitors_.empty() && config.workspaces.size() != config_.workspaces.size())
-        return std::unexpected("changing the number of workspaces requires a restart");
     mutated();
     end_drag(false);
     config_ = std::move(config);
+    // A changed workspace count rebinds like a topology change: windows beyond
+    // the new count fold into the last workspace.
+    if (!monitors_.empty() && monitors_.front().workspaces.size() != config_.workspaces.size())
+    {
+        std::vector<Monitor> monitors;
+        for (auto const& monitor : monitors_) monitors.push_back(fresh_monitor(monitor.name, monitor.geometry));
+        rebind(std::move(monitors));
+    }
     reconcile_scratchpads();
     reapply_rules();
-    return { };
 }
 
 // Topology
@@ -912,7 +922,6 @@ restart::Snapshot State::snapshot() const
         if (slot.claimed_window() != XCB_NONE || slot.pending_launch())
             snapshot.named_scratchpads.push_back(slot);
     snapshot.pool = scratchpad_pool_;
-    snapshot.fullscreen_claims = fullscreen_claims_;
     return snapshot;
 }
 
