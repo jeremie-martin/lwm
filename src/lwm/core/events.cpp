@@ -1,5 +1,7 @@
 #include "events.hpp"
+#include <algorithm>
 #include <array>
+#include <ranges>
 #include <meta>
 #include <rfl/json/write.hpp>
 
@@ -18,24 +20,14 @@ uint32_t parse_event_filter(std::string_view filter)
     if (filter.empty())
         return all_events;
     uint32_t mask = 0;
-    size_t pos = 0;
-    while (pos < filter.size())
+    auto names = event_names();
+    for (auto part : std::views::split(filter, ','))
     {
-        size_t comma = filter.find(',', pos);
-        if (comma == std::string_view::npos)
-            comma = filter.size();
-        size_t start = pos;
-        while (start < comma && filter[start] == ' ')
-            ++start;
-        size_t end = comma;
-        while (end > start && filter[end - 1] == ' ')
-            --end;
-        auto token = filter.substr(start, end - start);
-        auto names = event_names();
-        for (size_t i = 0; i < names.size(); ++i)
-            if (names[i] == token)
-                mask |= uint32_t{ 1 } << i;
-        pos = comma + 1;
+        std::string_view token(part.begin(), part.end());
+        token.remove_prefix(std::min(token.find_first_not_of(' '), token.size()));
+        token.remove_suffix(token.size() - std::min(token.find_last_not_of(' ') + 1, token.size()));
+        if (auto it = std::ranges::find(names, token); it != names.end())
+            mask |= uint32_t{ 1 } << (it - names.begin());
     }
     return mask;
 }

@@ -51,7 +51,7 @@ std::string level_name(quill::LogLevel level)
 std::expected<ColorMode, std::string> parse_color_mode(std::string_view value)
 {
     if (value == "auto")
-        return ColorMode::Auto;
+        return ColorMode::Automatic;
     if (value == "always")
         return ColorMode::Always;
     if (value == "never")
@@ -85,12 +85,7 @@ std::expected<void, std::string> initialize(LogOptions config)
         {
             quill::ConsoleSinkConfig console;
             console.set_stream("stderr");
-            using Mode = quill::ConsoleSinkConfig::ColourMode;
-            console.set_colour_mode(
-                config.color == ColorMode::Always      ? Mode::Always
-                    : config.color == ColorMode::Never ? Mode::Never
-                                                       : Mode::Automatic
-            );
+            console.set_colour_mode(config.color);
             sink = Frontend::create_or_get_sink<quill::ConsoleSink>("stderr", console);
         }
         quill::BackendOptions backend;

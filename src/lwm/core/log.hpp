@@ -3,16 +3,12 @@
 #include <expected>
 #include <quill/Frontend.h>
 #include <quill/LogMacros.h>
+#include <quill/sinks/ConsoleSink.h>
 #include <string>
 #include <string_view>
 
 namespace lwm::log {
-enum class ColorMode
-{
-    Auto,
-    Always,
-    Never
-};
+using ColorMode = quill::ConsoleSinkConfig::ColourMode;
 enum class Target
 {
     Journal,
@@ -22,7 +18,7 @@ struct LogOptions
 {
     quill::LogLevel level = quill::LogLevel::Info;
     Target target = Target::Journal;
-    ColorMode color = ColorMode::Auto;
+    ColorMode color = ColorMode::Automatic;
 };
 struct FrontOptions : quill::FrontendOptions
 {

@@ -346,12 +346,6 @@ RunResult WindowManager::run()
                     return response;
                 }
             );
-            // A new subscriber compares later changes with the state it could query now.
-            if (std::exchange(root_.subscriptions, ipc_.subscriptions()) != ipc_.subscriptions())
-            {
-                root_.snapshot = state_json();
-                root_.snapshot_revision = state_.revision();
-            }
         }
 
         // Bounded batches keep IPC, signals and deadlines responsive under X load.

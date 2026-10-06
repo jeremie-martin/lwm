@@ -17,7 +17,6 @@ void WindowManager::scan_existing_windows(bool handoff)
     }
     // Only viewable, redirected windows are adopted.
     auto observed = observe(children, true);
-    std::erase_if(observed, [](auto const& window) { return !window.manageable; });
     std::vector<WindowObservation> windows;
     for (auto const& window : observed) windows.push_back(window.window);
 

@@ -152,8 +152,14 @@ std::string WindowManager::handle_request(command::Request const& request)
                 }
                 return "error unknown query";
             },
-            // The server answers subscriptions itself.
-            [&](command::Subscribe const&) -> std::string { return "error unexpected subscription"; },
+            // A new subscriber compares later changes with the state it could query
+            // now; the server acknowledges the subscription itself.
+            [&](command::Subscribe const&) -> std::string
+            {
+                root_.snapshot = state_json();
+                root_.snapshot_revision = state_.revision();
+                return "";
+            },
             [&](Action const& action) -> std::string
             {
                 auto result = execute(action, "ipc");

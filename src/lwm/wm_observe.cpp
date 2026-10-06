@@ -161,6 +161,7 @@ std::vector<WindowManager::Observed> WindowManager::observe(std::span<xcb_window
     struct Pending
     {
         Observed value;
+        bool manageable = false;
         xcb_get_window_attributes_cookie_t attributes;
         xcb_get_property_cookie_t type, transient;
         std::optional<Properties> properties;
@@ -182,7 +183,7 @@ std::vector<WindowManager::Observed> WindowManager::observe(std::span<xcb_window
         auto attr = reply(xcb_get_window_attributes_reply(c, reads.attributes, nullptr));
         if (!attr || attr->override_redirect || (adopting && attr->map_state != XCB_MAP_STATE_VIEWABLE))
             continue;
-        reads.value.manageable = true;
+        reads.manageable = true;
         uint32_t mask = attr->your_event_mask | kObservedWindowEventMask;
         xcb_change_window_attributes(c, w.id, XCB_CW_EVENT_MASK, &mask);
         reads.type = xcb_ewmh_get_wm_window_type(e, w.id);
@@ -190,7 +191,7 @@ std::vector<WindowManager::Observed> WindowManager::observe(std::span<xcb_window
     }
     for (auto& reads : pending)
     {
-        if (!reads.value.manageable)
+        if (!reads.manageable)
             continue;
         auto& w = reads.value.window;
         w.type = window_type(reads.type);
@@ -269,6 +270,8 @@ std::vector<WindowManager::Observed> WindowManager::observe(std::span<xcb_window
     result.reserve(pending.size());
     for (auto& reads : pending)
     {
+        if (!reads.manageable)
+            continue;
         auto& observed = reads.value;
         if (reads.time)
             observed.window.user_time = scalar(c, *reads.time, XCB_ATOM_CARDINAL).value_or(0);

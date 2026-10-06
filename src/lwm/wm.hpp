@@ -85,7 +85,6 @@ private:
         std::map<std::string, size_t> workspaces; ///< Current workspace per output name
         std::string snapshot;                     ///< State payload behind the last state_change
         uint64_t snapshot_revision = UINT64_MAX;  ///< Revision the snapshot was taken at
-        uint64_t subscriptions = 0;               ///< Subscriptions seen when the snapshot was taken
     };
 
     using StateUpdates = std::vector<std::pair<xcb_window_t, WindowStates>>;
@@ -161,10 +160,10 @@ private:
     struct Observed
     {
         WindowObservation window;
-        bool manageable = false; ///< Exists and is not override-redirect (and is viewable when adopting)
         uint32_t sync_counter = 0;
         uint64_t sync_value = 0;
     };
+    // Only windows that exist and are not override-redirect (and are viewable when adopting).
     std::vector<Observed> observe(std::span<xcb_window_t const> windows, bool adopting);
     WindowType window_type(xcb_get_property_cookie_t cookie) const;
     std::vector<xcb_atom_t> read_protocols(xcb_window_t window) const;

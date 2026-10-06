@@ -308,7 +308,8 @@ state differs from the last emitted snapshot.
 
 ## Restart and process lifetime
 
-`SignalPipe` owns SIGHUP/SIGCHLD handling through a close-on-exec self-pipe. Main
+`SignalPipe` owns SIGHUP through a close-on-exec self-pipe and lets the kernel reap
+children (`SA_NOCLDWAIT`, which exec clears for launched programs). Main
 creates it before logging and destroys it after logging shutdown; a failed exec
 reconstructs the WM with both process-level owners.
 

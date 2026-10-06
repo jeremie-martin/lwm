@@ -21,18 +21,6 @@ void reload(int)
     }
     errno = saved;
 }
-void reap(int)
-{
-    int saved = errno;
-    for (;;)
-    {
-        auto child = waitpid(-1, nullptr, WNOHANG);
-        if (child > 0 || (child < 0 && errno == EINTR))
-            continue;
-        break;
-    }
-    errno = saved;
-}
 }
 
 SignalPipe::SignalPipe()
@@ -52,10 +40,15 @@ SignalPipe::SignalPipe()
         if (sigaction(SIGHUP, &action, &previous_hup_) < 0)
             throw std::system_error(errno, std::generic_category(), "Install SIGHUP handler");
         hup_installed = true;
-        action.sa_handler = reap;
-        action.sa_flags = SA_RESTART | SA_NOCLDSTOP;
+        // The kernel reaps launched processes. Exec clears the flag, so launched
+        // programs and a restarted WM do not inherit it.
+        action.sa_handler = SIG_DFL;
+        action.sa_flags = SA_NOCLDWAIT;
         if (sigaction(SIGCHLD, &action, &previous_child_) < 0)
             throw std::system_error(errno, std::generic_category(), "Install SIGCHLD handler");
+        // Children that exited before installation, such as during exec, remain zombies.
+        while (waitpid(-1, nullptr, WNOHANG) > 0)
+        { }
     }
     catch (...)
     {

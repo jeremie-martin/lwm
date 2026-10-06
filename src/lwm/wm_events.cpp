@@ -157,11 +157,11 @@ void WindowManager::handle_map_request(xcb_map_request_event_t const& e)
     if (state_.find_fixture(e.window))
         return;
     xcb_window_t window = e.window;
-    auto observed = std::move(observe({ &window, 1 }, false).front());
-    if (!observed.manageable)
+    auto observed = observe({ &window, 1 }, false);
+    if (observed.empty())
         return;
-    state_.admit(observed.window);
-    manage(observed, false);
+    state_.admit(observed.front().window);
+    manage(observed.front(), false);
     if (!ipc_.has_subscribers(event_mask<event::window_map>))
         return;
     auto const* client = state_.find(e.window);
@@ -389,16 +389,11 @@ void WindowManager::handle_restack_message(xcb_client_message_event_t const& e)
     restack_requested_ = true;
     if (state_.find(e.window))
         return;
-    xcb_window_t sibling = e.data.data32[1];
-    uint32_t values[2] = { e.data.data32[2], 0 };
-    uint16_t mask = XCB_CONFIG_WINDOW_STACK_MODE;
-    if (sibling != XCB_NONE)
-    {
-        mask |= XCB_CONFIG_WINDOW_SIBLING;
-        values[0] = sibling;
-        values[1] = e.data.data32[2];
-    }
-    xcb_configure_window(conn_.get(), e.window, mask, values);
+    xcb_configure_window_value_list_t values{ };
+    values.sibling = e.data.data32[1];
+    values.stack_mode = e.data.data32[2];
+    uint16_t mask = XCB_CONFIG_WINDOW_STACK_MODE | (values.sibling != XCB_NONE ? XCB_CONFIG_WINDOW_SIBLING : 0);
+    xcb_configure_window_aux(conn_.get(), e.window, mask, &values);
 }
 
 void WindowManager::handle_wm_state_change(xcb_client_message_event_t const& e)
@@ -467,18 +462,8 @@ void WindowManager::handle_configure_request(xcb_configure_request_event_t const
     }
 
     // Unmanaged windows and fixtures are configured as requested.
-    uint32_t values[7];
-    size_t index = 0;
-    for (auto [bit, value] : { std::pair<uint16_t, uint32_t>{ XCB_CONFIG_WINDOW_X, static_cast<uint32_t>(e.x) },
-                               { XCB_CONFIG_WINDOW_Y, static_cast<uint32_t>(e.y) },
-                               { XCB_CONFIG_WINDOW_WIDTH, e.width },
-                               { XCB_CONFIG_WINDOW_HEIGHT, e.height },
-                               { XCB_CONFIG_WINDOW_BORDER_WIDTH, e.border_width },
-                               { XCB_CONFIG_WINDOW_SIBLING, e.sibling },
-                               { XCB_CONFIG_WINDOW_STACK_MODE, e.stack_mode } })
-        if (e.value_mask & bit)
-            values[index++] = value;
-    xcb_configure_window(conn_.get(), e.window, e.value_mask, values);
+    xcb_configure_window_value_list_t values{ e.x, e.y, e.width, e.height, e.border_width, e.sibling, e.stack_mode };
+    xcb_configure_window_aux(conn_.get(), e.window, e.value_mask, &values);
     if (e.value_mask & XCB_CONFIG_WINDOW_STACK_MODE)
         restack_requested_ = true;
 }

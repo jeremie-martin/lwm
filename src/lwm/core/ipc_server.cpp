@@ -79,7 +79,7 @@ void Server::append_poll_fds(std::vector<pollfd>& fds) const
     fds.push_back({ listener_, POLLIN, 0 });
     for (auto const& client : clients_)
     {
-        short events = client.reading ? POLLIN : client.output.empty() ? 0 : POLLOUT;
+        short events = client.reading() ? POLLIN : client.output.empty() ? 0 : POLLOUT;
         fds.push_back({ client.fd, events, 0 });
     }
 }
@@ -95,7 +95,7 @@ void Server::dispatch(std::span<pollfd const> fds, Handler const& handler)
             continue;
         if (ready.revents & (POLLERR | POLLNVAL))
             close_fd(client.fd);
-        else if (client.reading && (ready.revents & (POLLIN | POLLHUP)))
+        else if (client.reading() && (ready.revents & (POLLIN | POLLHUP)))
             read_request(client, handler);
         else if (ready.revents & POLLOUT)
             write_response(client);
@@ -192,9 +192,10 @@ void Server::execute(Client& client, Handler const& handler)
             respond(client, "error max subscribers reached");
         else
         {
-            // Register before acknowledgement. Subsequent events queue behind it.
+            // Register before acknowledgement, so subsequent events queue behind
+            // it; the handler takes the baseline later changes compare with.
             client.mask = subscribe->mask;
-            ++subscriptions_;
+            handler(*request);
             respond(client, "ok subscribed");
         }
     }
@@ -208,7 +209,6 @@ void Server::respond(Client& client, std::string response)
         response = "error response too large";
     response.push_back('\n');
     client.input.clear();
-    client.reading = false;
     client.output = std::move(response);
     client.deadline = Clock::now() + timeout;
     write_response(client);

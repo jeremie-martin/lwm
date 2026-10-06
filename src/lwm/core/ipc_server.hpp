@@ -36,8 +36,6 @@ public:
     void expire();
     void emit(Event const& event);
     uint64_t sequence() const { return sequence_; }
-    // Counts accepted subscriptions, so the owner can take a baseline for new subscribers.
-    uint64_t subscriptions() const { return subscriptions_; }
     std::string const& instance() const { return instance_; }
 
 private:
@@ -49,13 +47,13 @@ private:
         std::string output;
         size_t sent = 0;
         uint32_t mask = 0;
-        bool reading = true;
+        // A client sends one request; only a subscriber outlives its reply.
+        bool reading() const { return !mask && output.empty(); }
     };
     std::string path_;
     int listener_ = -1;
     std::vector<Client> clients_;
     uint64_t sequence_ = 0;
-    uint64_t subscriptions_ = 0;
     std::string instance_;
 
     void accept_clients();

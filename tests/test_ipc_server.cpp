@@ -195,7 +195,7 @@ TEST_CASE("IPC queues filtered events behind a pending subscription acknowledgem
     f.pump(); // Register and attempt the acknowledgement, without reading it.
     REQUIRE(f.server.has_subscribers(lwm::event_mask<lwm::event::focus_change>));
     CHECK_FALSE(f.server.has_subscribers(lwm::event_mask<lwm::event::window_map>));
-    CHECK(f.requests.empty());
+    CHECK(f.requests == std::vector<lwm::command::Request>{ lwm::command::Subscribe{ lwm::event_mask<lwm::event::focus_change> } });
     f.server.emit(lwm::event::window_map{ 2, "", "popup", {} });
     CHECK(f.server.sequence() == 0);
     f.server.emit(lwm::event::focus_change{ 1, "", "" });
