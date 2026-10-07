@@ -1055,3 +1055,91 @@ TEST_CASE("Integration: fresh adoption ignores a previous manager's hidden state
     CHECK(get_wm_state(conn, window, intern_atom(conn.get(), "WM_STATE")) == XCB_ICCCM_WM_STATE_NORMAL);
     destroy_window(conn, window);
 }
+
+TEST_CASE(
+    "Integration: hiding large clients preserves normal geometry across restart and withdrawal",
+    "[integration][ewmh][restart][visibility]"
+)
+{
+    auto env =
+        TestEnvironment::create("[workspaces]\nnames = ['one', 'two']\n[[rules]]\napply = { floating = true }\n");
+    if (!env)
+        SKIP("X11 unavailable");
+    auto& conn = env->conn;
+    auto window = create_window(conn, 10, 10, 65535, 150);
+    map_window(conn, window);
+    REQUIRE(wait_for_active_window(conn, window, kTimeout));
+    auto normal = require_window_geometry(conn, window);
+    auto border = get_window_border_width(conn, window);
+    REQUIRE(normal.width > 20000);
+    SECTION("Workspace visibility") { ipc_ok("workspace switch 1"); }
+    SECTION("Scratchpad visibility") { ipc_ok("scratchpad stash"); }
+    REQUIRE(is_hidden_offscreen(conn, window));
+    auto attributes =
+        lwm::reply(xcb_get_window_attributes_reply(conn.get(), xcb_get_window_attributes(conn.get(), window), nullptr));
+    REQUIRE(attributes);
+    CHECK(attributes->map_state == XCB_MAP_STATE_VIEWABLE);
+    auto previous = wm_instance(conn);
+    REQUIRE(previous);
+    ipc_ok("restart");
+    REQUIRE(wait_for_wm_restart(conn, kTimeout, *previous));
+    REQUIRE(is_hidden_offscreen(conn, window));
+    ipc_ok("window focus " + std::to_string(window));
+    CHECK(require_window_geometry(conn, window) == normal);
+    CHECK(get_window_border_width(conn, window) == border);
+    // A genuine application unmap still withdraws the mapped hidden client.
+    ipc_ok("scratchpad stash");
+    // A recalled pool member is already pooled; cycle hides its active target.
+    if (!is_hidden_offscreen(conn, window))
+        ipc_ok("scratchpad cycle");
+    REQUIRE(is_hidden_offscreen(conn, window));
+    xcb_unmap_window(conn.get(), window);
+    xcb_flush(conn.get());
+    REQUIRE(wait_for_condition([&] { return ipc_json("window list").at("windows").empty(); }, kTimeout));
+    destroy_window(conn, window);
+}
+
+TEST_CASE(
+    "Integration: malformed hidden ownership recovers full geometry on fresh adoption",
+    "[integration][restart][malformed][visibility]"
+)
+{
+    auto env = TestEnvironment::create("[workspaces]\nnames = ['one']\n[[rules]]\napply = { floating = true }\n");
+    REQUIRE(env);
+    auto& conn = env->conn;
+    auto window = create_window(conn, 10, 10, 65535, 150);
+    map_window(conn, window);
+    REQUIRE(wait_for_active_window(conn, window, kTimeout));
+    auto normal = require_window_geometry(conn, window);
+    ipc_ok("scratchpad stash");
+    REQUIRE(is_hidden_offscreen(conn, window));
+    auto previous = wm_instance(conn);
+    REQUIRE(previous);
+    PausedRestart restart(env->wm);
+    CHECK(require_window_geometry(conn, window) == normal);
+    auto property = intern_atom(conn.get(), "_LWM_RESTART");
+    auto utf8 = intern_atom(conn.get(), "UTF8_STRING");
+    auto snapshot = lwm::xproperty::text(conn.get(), conn.root(), property, utf8);
+    REQUIRE(snapshot);
+    auto graph = JsonValue::parse(*snapshot);
+    REQUIRE(graph.at("clients").at(0).at("iconic") == true);
+    graph["pool"] = JsonValue::array();
+    auto damaged = graph.dump();
+    xcb_change_property(
+        conn.get(),
+        XCB_PROP_MODE_REPLACE,
+        conn.root(),
+        property,
+        utf8,
+        8,
+        damaged.size(),
+        damaged.data()
+    );
+    REQUIRE(get_window_geometry(conn, window)); // Damage reaches the server before resume.
+    restart.resume();
+    REQUIRE(wait_for_wm_restart(conn, kTimeout, *previous));
+    REQUIRE(wait_for_active_window(conn, window, kTimeout));
+    CHECK(require_window_geometry(conn, window) == normal);
+    CHECK_FALSE(ipc_json("window list").at("windows").at(0).at("iconic").get<bool>());
+    destroy_window(conn, window);
+}

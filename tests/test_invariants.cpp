@@ -18,7 +18,7 @@ TEST_CASE("Model validation accepts reachable states with independent fullscreen
     state.insert_fixture(4, Fixture::Role::Dock);
     state.insert_fixture(5, Fixture::Role::Desktop);
     state.fullscreen(1, true);
-    state.iconic(1, true);
+    test::iconic(state, 1, true);
     state.fullscreen(2, true);
     state.pool_scratchpad(3);
     state.focus(2);
@@ -95,7 +95,7 @@ TEST_CASE("Generated State operation sequences preserve model invariants", "[inv
                 trace.push_back("floating");
                 break;
             case 4:
-                state.iconic(window, pick(2) == 0);
+                test::iconic(state, window, pick(2) == 0);
                 trace.push_back("iconic");
                 break;
             case 5:

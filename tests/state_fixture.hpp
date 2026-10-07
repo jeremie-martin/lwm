@@ -70,6 +70,15 @@ inline void focus(State& state, xcb_window_t id)
     state.settle();
 }
 
+// Hiding is reachable only through scratchpad ownership, including fullscreen
+// clients that the generic stash interaction deliberately does not accept.
+inline void iconic(State& state, xcb_window_t id, bool enabled)
+{
+    if (enabled)
+        state.pool_scratchpad(id);
+    state.iconic(id, enabled);
+}
+
 // Application observations for restart tests carry no private WM intent.
 inline WindowObservation observe(Client const& client, std::optional<uint32_t> desktop = std::nullopt)
 {

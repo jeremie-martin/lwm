@@ -55,7 +55,7 @@ TEST_CASE("Hidden clients precede visible clients and do not constrain visible t
     scene.state.fullscreen(2, true);
     scene.state.modal(3, true);
     SECTION("Off workspace") { scene.state.relocate(2, 0, 1); }
-    SECTION("Iconic") { scene.state.iconic(2, true); }
+    SECTION("Iconic") { test::iconic(scene.state, 2, true); }
     REQUIRE(scene.order() == std::vector<xcb_window_t>{ 2, 1, 3 });
 }
 

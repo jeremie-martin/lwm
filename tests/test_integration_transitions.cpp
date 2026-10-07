@@ -92,8 +92,7 @@ apply = { floating = false }
         REQUIRE(wait_for_condition(
             [&]
             {
-                auto rectangle = get_window_geometry(conn, window);
-                return rectangle && rectangle->x < -10000;
+                return is_hidden_offscreen(conn, window);
             },
             timeout
         ));
@@ -158,8 +157,8 @@ TEST_CASE(
     auto has_visibility = [&](bool visible)
     {
         auto rect = get_window_geometry(conn, dialog);
-        return rect && rect->width == 320 && rect->height == 240
-            && (visible ? rect->x >= 0 && rect->y >= 0 : rect->x < -10000);
+        return visible ? rect && rect->width == 320 && rect->height == 240 && rect->x >= 0 && rect->y >= 0
+                       : is_hidden_offscreen(conn, dialog);
     };
     REQUIRE(wait_for_condition([&] { return has_visibility(initially_transient); }, timeout));
 
@@ -291,7 +290,7 @@ apply = { fullscreen = true }
         for (auto window : { shown.root, shown.dialog, shown.child })
             CHECK(require_window_geometry(conn, window).x >= 0);
         for (auto window : { hidden.root, hidden.dialog, hidden.child })
-            CHECK(require_window_geometry(conn, window).x < -10000);
+            CHECK(is_hidden_offscreen(conn, window));
         CHECK(is_stacked_above(conn, shown.child, shown.dialog));
         CHECK(is_stacked_above(conn, shown.dialog, shown.root));
     };
@@ -351,7 +350,7 @@ TEST_CASE(
     observe_title_after_events(conn, window);
     REQUIRE(require_property_cardinal(conn.get(), window, desktop) == 1);
     REQUIRE(get_window_geometry(conn, window));
-    REQUIRE(get_window_geometry(conn, window)->x < -10000);
+    REQUIRE(is_hidden_offscreen(conn, window));
 
     SECTION("Window type changes to dialog")
     {
@@ -424,7 +423,7 @@ apply = { floating = true, workspace = 0, sticky = true, fullscreen = false, geo
                 [&]
                 {
                     auto rect = get_window_geometry(conn, window);
-                    return rect && (hidden ? rect->x < -10000 : *rect == WindowGeometry{ 60, 70, 310, 210 });
+                    return rect && (hidden ? is_hidden_offscreen(conn, window) : *rect == WindowGeometry{ 60, 70, 310, 210 });
                 },
                 timeout
             ));
@@ -612,7 +611,7 @@ TEST_CASE("Integration: focusing a window on another workspace settles focus and
     REQUIRE(first_geometry);
     REQUIRE(second_geometry);
     CHECK(first_geometry->x >= 0);
-    CHECK(second_geometry->x < -10000);
+    CHECK(is_hidden_offscreen(conn, second));
     auto reply = send_ipc_command("window list");
     REQUIRE(reply);
     CHECK(nlohmann::json::parse(reply->substr(3)).at("focused") == first);
@@ -1134,7 +1133,7 @@ TEST_CASE(
         REQUIRE(active);
         REQUIRE(hidden);
         CHECK(active->x == 0);
-        CHECK(hidden->x < -10000);
+        CHECK(is_hidden_offscreen(conn, owner == first ? second : first));
     }
     destroy_window(conn, first);
     destroy_window(conn, second);
@@ -1296,7 +1295,7 @@ TEST_CASE(
         REQUIRE(parked);
         CHECK(shown->x == 0);
         CHECK(shown->width == conn.screen()->width_in_pixels);
-        CHECK(parked->x < -1000);
+        CHECK(is_hidden_offscreen(conn, suppressed));
         CHECK(has_state(conn, owner, fullscreen));
         CHECK(has_state(conn, suppressed, fullscreen));
     };

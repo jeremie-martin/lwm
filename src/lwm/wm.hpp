@@ -66,11 +66,14 @@ private:
     struct Output
     {
         bool mapped = false;
-        bool hidden = false;
-        std::optional<State::Presentation> presentation; ///< Last on-screen rectangle and border
+        std::optional<State::Presentation> presentation; ///< Last submitted server rectangle and border
         std::optional<uint32_t> border_color;
         std::optional<bool> urgent; ///< Urgency mirrored into the application's WM_HINTS
     };
+
+    // Root coordinates start at zero. This borderless mapped pixel is outside
+    // the root regardless of the client's normal size or monitor topology.
+    static constexpr State::Presentation hidden_presentation{ { -1, -1, 1, 1 }, 0 };
 
     using StateUpdates = std::vector<std::pair<xcb_window_t, WindowStates>>;
 

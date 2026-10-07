@@ -770,3 +770,51 @@ TEST_CASE("Rule window types name the types that become clients", "[config][rule
         CHECK_FALSE(load_from_string("[[rules]]\nmatch = {type = " + invalid + "}\napply = {floating = true}\n"));
     }
 }
+
+TEST_CASE("Scratchpad declarations are addressable by the command grammar", "[config][scratchpad]")
+{
+    for (auto name : { "", " terminal", "terminal ", "terminal\n", "terminal\r", "terminal\t" })
+    {
+        CAPTURE(name);
+        CHECK_FALSE(command::valid_scratchpad_name(name));
+    }
+    CHECK_FALSE(command::valid_scratchpad_name(std::string("term\0inal", 9)));
+    constexpr auto prefix = std::string_view("scratchpad cancel-launch ");
+    std::string longest(command::max_request_bytes - prefix.size() - 1, 'a');
+    CHECK(command::valid_scratchpad_name(longest));
+    CHECK_FALSE(command::valid_scratchpad_name(longest + 'a'));
+    CHECK(command::valid_scratchpad_name("terminal with spaces €"));
+    for (auto escaped : { "terminal\\n", "terminal\\r", "terminal\\u0000", " terminal", "terminal " })
+        CHECK_FALSE(load_from_string(
+            "[[scratchpads]]\nname = \"" + std::string(escaped) + "\"\nspawn = ['true']\nmatch = { class = 'term' }\n"
+        ));
+}
+
+TEST_CASE("Letter binding case is canonical and matching ignores non-keyboard state", "[config][keyboard]")
+{
+    auto loaded = load_from_string("[binds]\n'shift+F' = 'workspace switch 0'\n");
+    REQUIRE(loaded);
+    CHECK(loaded->keybinds.contains(KeyBinding{ XCB_MOD_MASK_SHIFT, XK_f }));
+    CHECK_FALSE(load_from_string("[binds]\n'shift+F' = 'workspace switch 0'\n'shift+f' = 'workspace switch 1'\n"));
+    CHECK(
+        binding_modifiers(
+            XCB_MOD_MASK_SHIFT | XCB_MOD_MASK_CONTROL | XCB_MOD_MASK_LOCK | XCB_MOD_MASK_2 | XCB_BUTTON_MASK_1
+            | XCB_BUTTON_MASK_3
+        )
+        == (XCB_MOD_MASK_SHIFT | XCB_MOD_MASK_CONTROL)
+    );
+}
+
+TEST_CASE("Configuration rejects embedded C string and EWMH name separators", "[config][encoding]")
+{
+    for (auto config :
+         { "[binds]\n\"F1\\u0000suffix\" = 'workspace switch 1'\n",
+           "[workspaces]\nnames = ['one']\n[[workspace_keys]]\nswitch = 'super'\nkeys = [\"F1\\u0000suffix\"]\n",
+           "[workspaces]\nnames = [\"one\\u0000two\"]\n" })
+    {
+        auto rejected = load_from_string(config);
+        REQUIRE_FALSE(rejected);
+        CHECK(rejected.error().find("NUL") != std::string::npos);
+    }
+    CHECK(load_from_string("[workspaces]\nnames = ['café €']\n[[workspace_keys]]\nswitch = 'super'\nkeys = ['F1']\n"));
+}

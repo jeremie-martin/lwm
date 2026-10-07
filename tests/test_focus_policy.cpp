@@ -21,11 +21,11 @@ TEST_CASE(
     state.sticky(5, true);
     for (xcb_window_t id : { 2, 1, 3 }) test::focus(state, id);
     REQUIRE(focus::fallback(state, 0) == 3);
-    state.iconic(3, true);
+    test::iconic(state, 3, true);
     REQUIRE(focus::fallback(state, 0) == 1);
-    state.iconic(1, true);
+    test::iconic(state, 1, true);
     REQUIRE(focus::fallback(state, 0) == 2);
-    state.iconic(2, true);
+    test::iconic(state, 2, true);
     // Sticky tiles follow reverse workspace order.
     REQUIRE(focus::fallback(state, 0) == 5);
     state.erase(5);
@@ -35,8 +35,8 @@ TEST_CASE(
     REQUIRE(focus::fallback(state, 0) == 7);
     test::focus(state, 6);
     REQUIRE(focus::fallback(state, 0) == 6);
-    state.iconic(6, true);
-    state.iconic(7, true);
+    test::iconic(state, 6, true);
+    test::iconic(state, 7, true);
     REQUIRE(focus::fallback(state, 0) == XCB_NONE);
 }
 
@@ -45,7 +45,7 @@ TEST_CASE("Automatic focus excludes clients that cannot hold focus", "[focus][po
     auto state = test::state(2);
     add(state, 1);
     REQUIRE(focus::fallback(state, 0) == 1);
-    SECTION("Iconic") { state.iconic(1, true); }
+    SECTION("Iconic") { test::iconic(state, 1, true); }
     SECTION("Other monitor")
     {
         state.relocate(1, 1, 0);
@@ -100,9 +100,9 @@ TEST_CASE("MRU traversal keeps its order but reads eligibility and lifetime live
     }
     REQUIRE(focus::cycle_target(order, state, 0, 4, false) == 1);
     state.erase(3);
-    state.iconic(2, true);
+    test::iconic(state, 2, true);
     REQUIRE(focus::cycle_target(order, state, 0, 4, true) == 1);
-    state.iconic(2, false);
+    test::iconic(state, 2, false);
     REQUIRE(focus::cycle_target(order, state, 0, 4, true) == 2);
     REQUIRE(focus::cycle_target(order, state, 0, 999, true) == 4);
     REQUIRE(focus::cycle_target(order, state, 0, 999, false) == 1);
@@ -140,7 +140,7 @@ TEST_CASE("Only completed focus contributes to recency", "[focus][state]")
     CHECK(state.require(2).mru_order == 1);
 
     state.focus(3);
-    state.iconic(3, true);
+    test::iconic(state, 3, true);
     state.settle();
     CHECK(state.active_window() == 1);
     CHECK(state.require(1).mru_order == 2);
@@ -157,7 +157,7 @@ TEST_CASE("Activation owns restoration and placement and refuses ineligible clie
     add(state, 1);
     add(state, 2, { .monitor = 1, .workspace = 2 });
     test::focus(state, 1);
-    state.iconic(2, true);
+    test::iconic(state, 2, true);
     state.focus(2, 42);
     CHECK_FALSE(state.require(2).iconic);
     CHECK(state.focused_monitor() == 1);
@@ -185,7 +185,7 @@ TEST_CASE("Settling repairs focus after domain operations without caller cleanup
     test::focus(state, 2);
     SECTION("Minimize")
     {
-        state.iconic(2, true);
+        test::iconic(state, 2, true);
         state.settle();
         CHECK(state.active_window() == 1);
     }
@@ -226,7 +226,7 @@ TEST_CASE("Tile destination preference does not manufacture focus history", "[fo
     CHECK(state.require(2).mru_order == 0);
     SECTION("An actual tiled focus supersedes the preference") { test::focus(state, 3); }
     SECTION("Removing the preferred client clears its preference") { state.erase(2); }
-    SECTION("Minimizing the preferred client clears its preference") { state.iconic(2, true); }
+    SECTION("Minimizing the preferred client clears its preference") { test::iconic(state, 2, true); }
     CHECK(state.monitors()[0].current().preferred_tile == XCB_NONE);
     state.settle();
     CHECK(focus::fallback(state, 0) == state.active_window());
@@ -249,9 +249,9 @@ TEST_CASE("Focus history survives restart without a capacity or synthetic entrie
     CHECK(focus::recent_order(restored) == focus::recent_order(source));
     for (auto* state : { &source, &restored })
     {
-        for (xcb_window_t id = 3; id <= 20; ++id) state->iconic(id, true);
+        for (xcb_window_t id = 3; id <= 20; ++id) test::iconic(*state, id, true);
         CHECK(focus::fallback(*state, 0) == 1);
-        state->iconic(1, true);
+        test::iconic(*state, 1, true);
         CHECK(focus::fallback(*state, 0) == 2);
     }
 }

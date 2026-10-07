@@ -144,6 +144,12 @@ CommandSpec const* find_spec(std::string_view text)
 
 std::span<CommandSpec const> command_specs() { return specs; }
 
+bool valid_scratchpad_name(std::string_view name)
+{
+    auto request = parse_command("scratchpad cancel-launch " + std::string(name));
+    return request && std::get<ScratchpadCancelLaunch>(std::get<Action>(*request)).name == name;
+}
+
 std::expected<Request, std::string> parse_command(std::string_view text)
 {
     if (text.size() >= max_request_bytes)

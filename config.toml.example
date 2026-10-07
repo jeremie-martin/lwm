@@ -33,7 +33,7 @@
 # window fills the workspace; stacking determines what is on top).
 # strategy = "master-stack"
 # min_ratio must be 0.05..0.45. default_ratio must be within
-# [min_ratio, 1 - min_ratio].
+# [min_ratio, 1 - min_ratio]. Reload/restart clamp stored ratios to these bounds.
 # default_ratio = 0.5
 # min_ratio = 0.1
 # Pointer distance in pixels for grabbing an internal tiled split (1..100).
@@ -42,6 +42,7 @@
 [focus]
 # warp_cursor_on_monitor_change = false
 
+# Workspace labels must not contain NUL (the EWMH name separator).
 # [workspaces]
 # Display labels of each monitor's workspaces; their number (1..65535) is the
 # workspace count. Rules, bindings, and IPC use zero-based workspace indices
@@ -60,8 +61,10 @@
 "super+3" = "resize"
 "super+2" = "window float"
 
-# Key bindings: "modifiers+key" = action. Keys use X11 keysym names; a
-# modifier/keysym pair may be bound once, whatever the modifier order.
+# Key bindings: "modifiers+key" = action. Key names must not contain NUL.
+# Use base (unshifted) X11 keysyms and explicit modifiers. Letter case is folded: shift+F equals shift+f. A
+# modifier/keysym pair may be bound once, whatever the modifier order. Matching
+# ignores Caps Lock, Num Lock, mouse buttons and keyboard group state.
 # An action is either command text, exactly as `lwmctl` takes it (see
 # `lwmctl --help` and IPC.md; queries cannot be bound), or the argv list of a
 # program to launch, executed without a shell. Use ["sh", "-c", "..."] for shell
@@ -156,6 +159,8 @@ keys = ["1", "2", "3", "4", "5", "6", "7", "8", "9", "0"]
 # apply = { monitor = "HDMI-1", workspace = "2" }
 
 # Named scratchpads
+# Names must be unchanged by command parsing: no surrounding whitespace, line
+# breaks or NUL, and at most 4071 bytes, so every named command fits a request.
 # Each entry requires a unique name, a spawn command, and at least one
 # class/instance/title regex. Size values are fractions from 0.1 through 1.0
 # of the focused monitor's working area (defaults: width=0.8, height=0.7).

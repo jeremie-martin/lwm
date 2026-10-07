@@ -199,7 +199,7 @@ TEST_CASE("Restart restores claim history independently of focus and adoption or
     auto source = test::state();
     for (xcb_window_t id : { 1, 2, 3 }) add(source, id);
     for (xcb_window_t id : { 2, 3, 1 }) source.fullscreen(id, true);
-    source.iconic(3, true);
+    test::iconic(source, 3, true);
     test::focus(source, 2); // Focus recency is deliberately not fullscreen claim order.
     source.switch_workspace(0, 1);
     auto snapshot = source.snapshot();
@@ -218,7 +218,7 @@ TEST_CASE("Restart restores claim history independently of focus and adoption or
         CHECK(target.fullscreen_owners().at(0) == 1);
         target.fullscreen(1, false);
         CHECK(target.fullscreen_owners().at(0) == 2);
-        target.iconic(3, false);
+        test::iconic(target, 3, false);
         CHECK(target.fullscreen_owners().at(0) == 3);
         target.request_fullscreen(2);
         CHECK(target.fullscreen_owners().at(0) == 2);
@@ -724,7 +724,7 @@ TEST_CASE("Valid ownership survives changed observations and filters vanished cl
     source.scratchpad_pending("pending", true);
     source.pool_scratchpad(2);
     source.pool_scratchpad(3);
-    source.iconic(2, true);
+    test::iconic(source, 2, true);
     source.window_type(4, WindowType::Dialog);
     auto graph = restart::decode(restart::encode(source.snapshot()));
     REQUIRE(graph);
@@ -851,7 +851,7 @@ TEST_CASE("Restart releases hiding when a named scratchpad is removed", "[restar
     test::configure(source, [](Config& config) { config.scratchpads = { { .name = "removed" } }; });
     add(source, 1);
     source.claim_scratchpad(1, ScratchpadConfig{ .name = "removed" });
-    source.iconic(1, true);
+    test::iconic(source, 1, true);
     auto snapshot = restart::decode(restart::encode(source.snapshot()));
     REQUIRE(snapshot);
     auto target = test::state();
@@ -860,5 +860,34 @@ TEST_CASE("Restart releases hiding when a named scratchpad is removed", "[restar
     CHECK_FALSE(target.scratchpad_claim(1));
     CHECK_FALSE(target.require(1).iconic);
     CHECK(target.visible(target.require(1)));
+    CHECK_FALSE(invariants::validate(target));
+}
+
+TEST_CASE("Restart rejects hidden clients without addressable ownership", "[restart][codec][scratchpad]")
+{
+    auto saved = sample();
+    REQUIRE(restart::decode(restart::encode(saved)));
+    SECTION("Removed named claim") { saved.named_scratchpads[1].window.reset(); }
+    SECTION("Removed pool membership")
+    {
+        saved.clients[2].iconic = true;
+        saved.pool.clear();
+    }
+    SECTION("Unaddressable named claim") { saved.named_scratchpads[1].name = "tile\n"; }
+    CHECK_FALSE(restart::decode(restart::encode(saved)));
+}
+
+TEST_CASE("Restart reconciles stored ratios with the successor configuration", "[restart][state][layout]")
+{
+    auto source = test::state();
+    source.ratio(0, SplitAddress{ 0 }, 0.2);
+    source.switch_workspace(0, 1);
+    source.ratio(0, SplitAddress{ 0 }, 0.8);
+    auto saved = source.snapshot();
+    auto target = test::state();
+    test::configure(target, [](Config& config) { config.layout.min_ratio = 0.4; });
+    target.adopt({}, &saved);
+    CHECK(target.monitors()[0].workspaces[0].split_ratios.at(SplitAddress{ 0 }) == 0.4);
+    CHECK(target.monitors()[0].workspaces[1].split_ratios.at(SplitAddress{ 0 }) == 0.6);
     CHECK_FALSE(invariants::validate(target));
 }

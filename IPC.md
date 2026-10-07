@@ -100,6 +100,7 @@ Cycling fails when no window is eligible.
 | `scratchpad cancel-launch NAME` | clear pending launch state without terminating a process |
 | `scratchpad list` | named and generic scratchpad state as JSON |
 
+Reload and restart clamp stored ratios on every workspace to the current bounds.
 Ratio values must be finite numbers with no trailing characters. `ratio set` rejects
 values outside `[min_ratio, 1 - min_ratio]` from the active configuration; `ratio
 adjust` clamps to that range.
@@ -109,8 +110,14 @@ retryable. Successful exec does not guarantee a matching window: `scratchpad can
 clears a pending launch so the user can retry. It is a no-op for an empty or already
 claimed slot and rejects unknown names. It does not terminate a process; a late matching
 window can still be claimed. Both named scratchpad commands reject unknown names.
+Declared names must survive command parsing unchanged: no leading/trailing whitespace, line breaks or NUL, and
+the longest name-bearing command must remain shorter than 4096 bytes.
 
 ## JSON results
+
+Public JSON always contains valid text: Unicode is escaped, and invalid bytes in
+X metadata (including legacy STRING titles or a truncated UTF-8 sequence) become
+U+FFFD. This display conversion does not alter the model or private restart data.
 
 `workspace list` returns:
 

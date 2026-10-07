@@ -81,13 +81,8 @@ bool WindowManager::publish_clients(std::vector<State::Projected> const& clients
     for (auto const& [client, presentation] : clients)
     {
         auto& output = outputs_[client->id];
-        if (presentation || output.hidden)
-            continue;
-        output.hidden = true;
-        output.presentation.reset();
-        uint32_t x = static_cast<uint32_t>(OFF_SCREEN_X);
-        xcb_configure_window(conn_.get(), client->id, XCB_CONFIG_WINDOW_X, &x);
-        moved = true;
+        if (!presentation)
+            moved |= write_geometry(client->id, output, hidden_presentation);
     }
     // Keep a split resize's configure requests together on the server.
     auto const& drag = state_.drag();
@@ -101,6 +96,7 @@ bool WindowManager::publish_clients(std::vector<State::Projected> const& clients
         if (write_geometry(client->id, outputs_.at(client->id), *presentation))
         {
             moved = true;
+            send_configure_notify(client->id, *presentation);
             configure_replies_.erase(client->id);
         }
     }
@@ -115,11 +111,11 @@ bool WindowManager::publish_clients(std::vector<State::Projected> const& clients
     return moved;
 }
 
-// Owns WM-driven configure requests and synthetic ConfigureNotify replies.
+// Owns submitted server rectangles; completion acknowledges visible geometry.
 // An unchanged rectangle and border are skipped.
 bool WindowManager::write_geometry(xcb_window_t window, Output& output, State::Presentation const& presentation)
 {
-    if (!output.hidden && output.presentation == presentation)
+    if (output.presentation == presentation)
         return false;
     auto [geometry, border] = presentation;
     LWM_LOG_TRACE(
@@ -131,7 +127,6 @@ bool WindowManager::write_geometry(xcb_window_t window, Output& output, State::P
         geometry.height,
         border
     );
-    output.hidden = false;
     output.presentation = presentation;
     uint32_t values[] = { static_cast<uint32_t>(geometry.x),
                           static_cast<uint32_t>(geometry.y),
@@ -145,7 +140,6 @@ bool WindowManager::write_geometry(xcb_window_t window, Output& output, State::P
             | XCB_CONFIG_WINDOW_BORDER_WIDTH,
         values
     );
-    send_configure_notify(window, presentation);
     return true;
 }
 

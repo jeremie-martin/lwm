@@ -227,3 +227,71 @@ TEST_CASE("Integration: a state too large for one X request is withheld rather t
     CHECK(env->wm.running());
     for (auto window : windows) destroy_window(conn, window);
 }
+
+TEST_CASE(
+    "Integration: public JSON replaces invalid metadata and preserves valid Unicode",
+    "[integration][watch][ipc][encoding]"
+)
+{
+    auto env = TestEnvironment::create();
+    if (!env)
+        SKIP("X11 unavailable");
+    auto& conn = env->conn;
+    auto window = create_window(conn, 10, 10, 200, 150);
+    map_window(conn, window);
+    REQUIRE(wait_for_active_window(conn, window, kTimeout));
+    Watcher watcher;
+    watcher.state();
+    std::string title, expected;
+    bool legacy = false;
+    SECTION("Valid Unicode") { title = expected = "café €"; }
+    SECTION("Invalid modern title")
+    {
+        title = "broken\xff";
+        expected = "broken�";
+    }
+    SECTION("UTF-8 cut at the read boundary")
+    {
+        title = std::string(4095, 'a') + "€";
+        expected = std::string(4095, 'a') + "�";
+    }
+    SECTION("Opaque legacy title")
+    {
+        legacy = true;
+        title = "caf\xe9";
+        expected = "caf�";
+    }
+    auto name = intern_atom(conn.get(), "_NET_WM_NAME");
+    if (legacy)
+        xcb_delete_property(conn.get(), window, name);
+    xcb_change_property(
+        conn.get(),
+        XCB_PROP_MODE_REPLACE,
+        window,
+        legacy ? XCB_ATOM_WM_NAME : name,
+        legacy ? XCB_ATOM_STRING : intern_atom(conn.get(), "UTF8_STRING"),
+        8,
+        title.size(),
+        title.data()
+    );
+    set_window_wm_class(conn, window, "opaque\xff", "valid-class");
+    xcb_flush(conn.get());
+    nlohmann::json watched;
+    REQUIRE(wait_for_condition(
+        [&]
+        {
+            if (auto line = watcher.line(std::chrono::milliseconds(100)))
+                watched = nlohmann::json::parse(*line);
+            return !watched.is_null() && only_window(watched).at("title") == expected
+                && only_window(watched).at("instance") == "opaque�";
+        },
+        kTimeout
+    ));
+    CHECK(only_window(watched).at("title") == expected);
+    CHECK(only_window(watched).at("instance") == "opaque�");
+    auto query = nlohmann::json::parse(ipc_ok("state").substr(3));
+    CHECK(query == watched);
+    auto list = nlohmann::json::parse(ipc_ok("window list").substr(3));
+    CHECK(list.at("windows").at(0).at("title") == expected);
+    destroy_window(conn, window);
+}

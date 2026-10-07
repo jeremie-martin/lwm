@@ -177,9 +177,9 @@ TEST_CASE("Visibility is derived from workspace, iconic and sticky state", "[sta
     add(state, 1);
     auto const& client = state.require(1);
     CHECK(state.visible(client));
-    state.iconic(1, true);
+    test::iconic(state, 1, true);
     CHECK_FALSE(state.visible(client));
-    state.iconic(1, false);
+    test::iconic(state, 1, false);
     state.relocate(1, 0, 1);
     CHECK_FALSE(state.visible(client));
     state.sticky(1, true);
@@ -204,10 +204,10 @@ TEST_CASE("The most recent fullscreen claim in view owns its monitor", "[state][
     // Re-entering fullscreen or restoring a minimized fullscreen client reclaims.
     state.request_fullscreen(1);
     CHECK(state.fullscreen_owners().at(0) == 1);
-    state.iconic(2, true);
-    state.iconic(2, false);
+    test::iconic(state, 2, true);
+    test::iconic(state, 2, false);
     CHECK(state.fullscreen_owners().at(0) == 2);
-    state.iconic(2, true);
+    test::iconic(state, 2, true);
     CHECK(state.fullscreen_owners().at(0) == 1);
     state.relocate(1, 0, 1);
     CHECK(state.fullscreen_owners().at(0) == XCB_NONE);
@@ -241,9 +241,9 @@ TEST_CASE(
 
     SECTION("Minimized descendants stay hidden")
     {
-        state.iconic(3, true);
+        test::iconic(state, 3, true);
         CHECK_FALSE(state.visible(state.require(3)));
-        state.iconic(3, false);
+        test::iconic(state, 3, false);
         CHECK(state.visible(state.require(3)));
     }
     SECTION("Off-workspace descendants need their own sticky preference")
@@ -255,7 +255,7 @@ TEST_CASE(
     }
     SECTION("Intermediate visibility does not rewrite ancestry")
     {
-        state.iconic(2, true);
+        test::iconic(state, 2, true);
         CHECK(state.visible(state.require(3)));
         state.relocate(2, 1, 1);
         CHECK(state.visible(state.require(3)));
@@ -335,7 +335,7 @@ TEST_CASE("Fullscreen assignments preserve history while requests renew it", "[s
     state.fullscreen(2, true);
     SECTION("Visible") { }
     SECTION("Off workspace") { state.switch_workspace(0, 1); }
-    SECTION("Hidden") { state.iconic(1, true); }
+    SECTION("Hidden") { test::iconic(state, 1, true); }
     auto claims = [&] { return std::pair{ state.require(1).fullscreen_claim, state.require(2).fullscreen_claim }; };
     auto before = claims();
     CHECK(before.first < before.second);
@@ -357,7 +357,7 @@ TEST_CASE("Fullscreen assignments preserve history while requests renew it", "[s
     state.switch_workspace(0, 0);
     if (state.require(1).iconic)
         CHECK(state.fullscreen_owners().at(0) == 2);
-    state.iconic(1, false);
+    test::iconic(state, 1, false);
     CHECK(state.fullscreen_owners().at(0) == 1);
 
     state.fullscreen(1, false);
@@ -409,7 +409,7 @@ TEST_CASE("Scratchpad names and the pool are the only membership records", "[sta
     CHECK_FALSE(state.pooled(1));
     // Surviving names keep claims; removed names release and deiconify windows.
     state.claim_scratchpad(2, ScratchpadConfig{ .name = "b" });
-    state.iconic(2, true);
+    test::iconic(state, 2, true);
     test::configure(state, [](Config& config) { config.scratchpads = { { .name = "a" } }; });
     CHECK(state.scratchpad_claim(1));
     CHECK_FALSE(state.scratchpad_claim(2));
@@ -473,7 +473,7 @@ TEST_CASE("Tile geometry is a current projection independent of publication", "[
     test::configure(state, [](Config& config) { config.appearance = { .padding = 0, .border_width = 0 }; });
     for (xcb_window_t id : { 1, 2, 3 }) add(state, id);
     CHECK(state.normal_geometry(state.require(2)) == Geometry{ 500, 0, 500, 400 });
-    state.iconic(3, true);
+    test::iconic(state, 3, true);
     CHECK(state.normal_geometry(state.require(2)) == Geometry{ 500, 0, 500, 800 });
     state.ratio(0, SplitAddress{ 0 }, 0.25);
     CHECK(state.normal_geometry(state.require(2)) == Geometry{ 250, 0, 750, 800 });
@@ -481,7 +481,7 @@ TEST_CASE("Tile geometry is a current projection independent of publication", "[
     CHECK(state.normal_geometry(state.require(2)) == Geometry{ 250, 100, 750, 700 });
     auto expected = state.normal_geometry(state.require(2));
     SECTION("Hidden") { state.switch_workspace(0, 1); }
-    SECTION("Minimized") { state.iconic(2, true); }
+    SECTION("Minimized") { test::iconic(state, 2, true); }
     SECTION("Fullscreen") { state.fullscreen(2, true); }
     SECTION("Shown")
     {
@@ -580,7 +580,7 @@ TEST_CASE("A projection contains every client once with its final visible rectan
     add(state, 4);
     add(state, 8, { .monitor = 1 });
     add(state, 6, { .workspace = 1 });
-    state.iconic(4, true);
+    test::iconic(state, 4, true);
     state.sticky(6, true);
     state.maximize(2, true, false);
     bool fullscreen = false;
@@ -726,7 +726,7 @@ TEST_CASE("Button presses choose bindings before click focus and split gestures"
     state.focus_hints(1, true, false);
     state.focus(1);
     // Hidden clients swallow clicks without focusing.
-    state.iconic(2, true);
+    test::iconic(state, 2, true);
     CHECK(state.press(2, 700, 100, 1, 0, 6000).consumed);
     CHECK(state.active_window() == 1);
 }
@@ -900,4 +900,29 @@ TEST_CASE("Initial geometry rules override hints after monitor relocation in bot
             state.settle();
             CHECK_FALSE(invariants::validate(state));
         }
+}
+
+TEST_CASE("Ratio bounds apply to writes and every workspace after reload", "[state][reload][layout]")
+{
+    auto state = test::state(2);
+    for (size_t monitor = 0; monitor < 2; ++monitor)
+    {
+        state.ratio(monitor, SplitAddress{ 0 }, 0.2);
+        state.switch_workspace(monitor, 1);
+        state.ratio(monitor, SplitAddress{ 0 }, 0.8);
+    }
+    test::configure(state, [](Config& config) { config.layout.min_ratio = 0.4; });
+    for (auto const& monitor : state.monitors())
+    {
+        CHECK(monitor.workspaces[0].split_ratios.at(SplitAddress{ 0 }) == 0.4);
+        CHECK(monitor.workspaces[1].split_ratios.at(SplitAddress{ 0 }) == 0.6);
+    }
+    state.ratio(0, SplitAddress{ 1 }, 0.1);
+    CHECK(state.monitors()[0].current().split_ratios.at(SplitAddress{ 1 }) == 0.4);
+    CHECK_FALSE(invariants::validate(state));
+    // An outward adjustment at an implicit default must remain a no-op.
+    state.reset_ratios(0);
+    test::configure(state, [](Config& config) { config.layout.default_ratio = 0.4; });
+    state.adjust_ratio(-0.1);
+    CHECK(state.monitors()[0].current().split_ratios.empty());
 }

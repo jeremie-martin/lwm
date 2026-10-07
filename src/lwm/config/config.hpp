@@ -43,7 +43,11 @@ struct WindowRuleConfig
 // grabs cover each combination of them.
 constexpr uint16_t kIgnoredModifiers = XCB_MOD_MASK_2 | XCB_MOD_MASK_LOCK;
 constexpr uint16_t kIgnoredModifierCombinations[] = { 0, XCB_MOD_MASK_2, XCB_MOD_MASK_LOCK, kIgnoredModifiers };
-constexpr uint16_t binding_modifiers(uint16_t state) { return state & ~kIgnoredModifiers; }
+constexpr uint16_t binding_modifiers(uint16_t state)
+{
+    return state & (XCB_MOD_MASK_SHIFT | XCB_MOD_MASK_CONTROL | XCB_MOD_MASK_1
+                    | XCB_MOD_MASK_3 | XCB_MOD_MASK_4 | XCB_MOD_MASK_5);
+}
 
 struct KeyBinding
 {

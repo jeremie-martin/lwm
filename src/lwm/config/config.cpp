@@ -2,6 +2,7 @@
 #include "lwm/core/command.hpp"
 #include "lwm/core/overloaded.hpp"
 #include <X11/Xlib.h>
+#include <X11/Xutil.h>
 // Xlib defines stacking-mode macros that collide with LayerHint enumerators.
 #undef Above
 #undef Below
@@ -182,10 +183,14 @@ uint16_t parse_modifiers(std::string_view text, std::string const& context)
 
 xcb_keysym_t parse_keysym(std::string const& key, std::string const& context)
 {
+    if (key.contains('\0'))
+        throw std::runtime_error("Key names must not contain NUL");
     auto symbol = XStringToKeysym(key.c_str());
     if (symbol == NoSymbol)
         throw std::runtime_error(context + " has unknown key '" + key + "'");
-    return static_cast<xcb_keysym_t>(symbol);
+    KeySym lower, upper;
+    XConvertCase(symbol, &lower, &upper);
+    return static_cast<xcb_keysym_t>(lower);
 }
 
 // "mod+mod+KEY": the modifiers and the final component.
@@ -279,8 +284,8 @@ Action parse_binding(schema::BindAction const& input, std::string const& context
 
 void parse_scratchpad(schema::Scratchpad const& input, std::string const& context, Config& config)
 {
-    if (input.name.empty())
-        throw std::runtime_error(context + ".name must not be empty");
+    if (!command::valid_scratchpad_name(input.name))
+        throw std::runtime_error(context + ".name must be addressable by scratchpad commands");
     if (std::ranges::any_of(config.scratchpads, [&](auto const& s) { return s.name == input.name; }))
         throw std::runtime_error(context + ".name duplicates scratchpad '" + input.name + "'");
     ScratchpadConfig scratchpad;
@@ -406,6 +411,8 @@ ConfigLoadResult parse_config(std::string_view text, std::string const& source)
         {
             if (input.workspaces->names.empty() || input.workspaces->names.size() > 65535)
                 throw std::runtime_error("[workspaces].names must contain 1..65535 entries");
+            if (std::ranges::any_of(input.workspaces->names, [](auto const& name) { return name.contains('\0'); }))
+                throw std::runtime_error("[workspaces].names must not contain NUL");
             config.workspaces = input.workspaces->names;
         }
         // Resolve declarations before their use sites. No unresolved input escapes this load.

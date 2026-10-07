@@ -729,7 +729,8 @@ inline std::optional<uint16_t> get_window_border_width(X11Connection& conn, xcb_
 inline bool is_hidden_offscreen(X11Connection& conn, xcb_window_t window)
 {
     auto geometry = get_window_geometry(conn, window);
-    return geometry.has_value() && geometry->x < 0;
+    return geometry.has_value() && geometry->x == -1 && geometry->y == -1
+        && geometry->width == 1 && geometry->height == 1 && get_window_border_width(conn, window) == 0;
 }
 
 inline bool wait_for_window_geometry(

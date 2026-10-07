@@ -86,6 +86,10 @@ termination. Use the CLI only when its process or output behavior is the contrac
 Tests use private log destinations, never the host journal. Direct
 Catch runs lack CTest's outer timeout, so fixture waits must remain bounded.
 
+Use `is_hidden_offscreen()` to assert the complete hidden server rectangle; a
+negative x coordinate alone does not establish invisibility. Check normal geometry
+after showing and before restart handoff, including malformed-snapshot fallback.
+
 ### Displays and generated sequences
 
 For nested Xephyr, set `LWM_TEST_XSERVER=Xephyr`; `DISPLAY` must name a parent X

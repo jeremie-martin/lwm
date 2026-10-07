@@ -47,15 +47,10 @@ void WindowManager::prepare_restart()
     else
         LWM_LOG_WARN("Restart state not saved: bytes={} exceeds the request limit", text.size());
 
-    // Hidden windows return on-screen so they stay recoverable if exec fails;
-    // the successor publishes their visibility again.
+    // Restore normal server rectangles before handoff, including hidden clients,
+    // so fresh adoption remains recoverable if a snapshot or exec is refused.
     for (auto const& [window, client] : state_.clients())
-        if (auto it = outputs_.find(window); it != outputs_.end() && it->second.hidden)
-        {
-            int16_t x = state_.frame(client).x;
-            uint32_t value = static_cast<uint16_t>(x <= OFF_SCREEN_X / 2 ? 0 : x);
-            xcb_configure_window(conn_.get(), window, XCB_CONFIG_WINDOW_X, &value);
-        }
+        write_geometry(window, outputs_.at(window), state_.presentation(client));
 
     xcb_ungrab_key(conn_.get(), XCB_GRAB_ANY, root, XCB_MOD_MASK_ANY);
     xcb_ungrab_button(conn_.get(), XCB_BUTTON_INDEX_ANY, root, XCB_MOD_MASK_ANY);

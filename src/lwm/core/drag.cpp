@@ -169,7 +169,7 @@ void State::drag_to(int16_t x, int16_t y)
         return;
     int32_t delta = split.direction == SplitDirection::Horizontal ? drag_->dx() : drag_->dy();
     // Validation guarantees the resized workspace is still current.
-    ratio(resize.monitor, split.address, config_.layout.clamp_ratio(split.ratio + static_cast<double>(delta) / split.available_extent));
+    ratio(resize.monitor, split.address, split.ratio + static_cast<double>(delta) / split.available_extent);
 }
 
 bool State::drag_valid() const

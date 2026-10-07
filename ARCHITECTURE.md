@@ -233,8 +233,9 @@ divide stack slots from the remainder. Monocle has no resize boundaries. Partici
 are eligible tiles of the current workspace, then sticky tiles of others; fullscreen
 clients take no slot.
 
-`write_geometry()` owns WM-driven configure requests and synthetic ConfigureNotify. An unchanged rectangle is skipped, but an outstanding ConfigureRequest
-still receives its acknowledgement.
+`write_geometry()` owns submitted server rectangles and skips unchanged geometry.
+Completion sends synthetic ConfigureNotify for visible changes and acknowledges every
+outstanding ConfigureRequest using the model rectangle, including hidden clients.
 
 ## Visibility, focus and stacking
 
@@ -243,9 +244,15 @@ workspace. The newest fullscreen claim in view owns its monitor and suppresses o
 clients except its managed transient descendants. `FullscreenVisibility` computes
 owners and exemptions once per pass, bounding cyclic parent hints.
 
-Keep three concepts distinct: `iconic` is an explicit hide by LWM, visibility is
-derived, and `Output::hidden` means LWM moved the window off-screen. Normal clients
-are mapped once; workspace hiding does not unmap them.
+`iconic` is an explicit hide owned by a named scratchpad or the generic pool;
+visibility is derived. Hidden clients remain mapped with a borderless 1×1 server
+rectangle at (-1, -1), entirely outside the root. State retains normal geometry;
+the output cache records the submitted rectangle without a separate hidden flag.
+Restart restores model rectangles before handoff so fresh adoption can recover them.
+
+Stored split ratios obey the current configuration bounds. State bounds writes and
+reconciles every workspace during reload and restart topology rebinding, including
+the unchanged-topology path.
 
 `fullscreen()` is idempotent and used by rules; `request_fullscreen()` renews the
 claim rank and is used by interactions and restoration. Entering fullscreen clears

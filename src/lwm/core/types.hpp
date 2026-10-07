@@ -34,9 +34,6 @@ enum class WindowType
     Normal
 };
 
-/// X coordinate used when hiding a window off-screen.
-constexpr int16_t OFF_SCREEN_X = -20000;
-
 /// _NET_WM_DESKTOP value of a window shown on every desktop.
 constexpr uint32_t STICKY_DESKTOP = 0xFFFFFFFF;
 

@@ -32,6 +32,8 @@ struct CommandSpec
 };
 
 inline constexpr size_t max_request_bytes = 4096;
+// A declared name must survive the longest name-bearing command unchanged.
+bool valid_scratchpad_name(std::string_view name);
 std::span<CommandSpec const> command_specs();
 std::expected<Request, std::string> parse_command(std::string_view text);
 std::expected<std::string, std::string> encode_command(std::span<std::string const> arguments);

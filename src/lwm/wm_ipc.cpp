@@ -64,8 +64,12 @@ struct StateView
     WindowList windows;
     ScratchpadList scratchpads;
 };
-// X metadata can contain opaque bytes; preserve them.
-template <typename T> std::string json(T const& value) { return rfl::json::write(value, YYJSON_WRITE_ALLOW_INVALID_UNICODE); }
+// Public JSON is ASCII: valid Unicode is escaped, invalid bytes become U+FFFD.
+// Private snapshots retain opaque X metadata independently of this display view.
+template <typename T> std::string json(T const& value)
+{
+    return rfl::json::write(value, YYJSON_WRITE_ALLOW_INVALID_UNICODE | YYJSON_WRITE_ESCAPE_UNICODE);
+}
 
 WorkspaceList workspace_list(State const& state)
 {

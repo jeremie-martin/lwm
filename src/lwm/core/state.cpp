@@ -603,6 +603,7 @@ void State::iconic(xcb_window_t id, bool enabled)
 {
     if (require(id).iconic == enabled)
         return;
+    assert(!enabled || scratchpad_claim(id) || pooled(id));
     auto& c = edit(id);
     c.iconic = enabled;
     auto& workspace = monitors_[c.monitor].workspaces[c.workspace];
@@ -755,6 +756,7 @@ void State::layout(size_t monitor, LayoutStrategy strategy)
 
 void State::ratio(size_t monitor, SplitAddress address, double value)
 {
+    value = config_.layout.clamp_ratio(value);
     auto const& ratios = monitors_.at(monitor).current().split_ratios;
     if (auto it = ratios.find(address); it == ratios.end() || it->second != value)
         edit_workspace(monitor, monitors_[monitor].current_workspace).split_ratios[address] = value;
@@ -798,7 +800,7 @@ void State::configure(Config config)
     config_ = std::move(config);
     // A changed workspace count rebinds like a topology change: windows beyond
     // the new count fold into the last workspace.
-    if (!monitors_.empty() && monitors_.front().workspaces.size() != config_.workspaces.size())
+    if (!monitors_.empty())
     {
         std::vector<Monitor> monitors;
         for (auto const& monitor : monitors_) monitors.push_back(fresh_monitor(monitor.name, monitor.geometry));
@@ -853,6 +855,16 @@ Geometry State::working_area(Monitor const& monitor) const
 void State::rebind(std::vector<Monitor> monitors)
 {
     assert(!monitors.empty());
+    // Configuration changes and restoration share reconciliation before the
+    // unchanged-topology fast path; inactive workspaces obey the same bounds.
+    for (auto& monitor : monitors_)
+        for (auto& workspace : monitor.workspaces)
+            for (auto& [address, ratio] : workspace.split_ratios)
+                if (auto bounded = config_.layout.clamp_ratio(ratio); bounded != ratio)
+                {
+                    mutated();
+                    ratio = bounded;
+                }
     bool topology_changed = monitors_.size() != monitors.size()
         || !std::ranges::equal(monitors_,
                                monitors,

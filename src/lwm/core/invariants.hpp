@@ -1,5 +1,6 @@
 #pragma once
 
+#include "command.hpp"
 #include "log.hpp"
 #include "state.hpp"
 #include <cstdlib>
@@ -89,14 +90,17 @@ inline std::optional<Violation> validate(restart::Snapshot const& graph, uint64_
     std::unordered_set<std::string> names;
     for (auto const& slot : graph.named_scratchpads)
     {
-        if (slot.name.empty() || !names.insert(slot.name).second)
-            return Violation{ "Named scratchpad identity is missing or duplicated" };
+        if (!command::valid_scratchpad_name(slot.name) || !names.insert(slot.name).second)
+            return Violation{ "Named scratchpad identity is unaddressable or duplicated" };
         if (slot.window && (!clients.contains(*slot.window) || !claimed.insert(*slot.window).second))
             return Violation{ "Named scratchpad ownership is missing or duplicated", *slot.window };
     }
     for (auto id : graph.pool)
         if (!clients.contains(id) || !claimed.insert(id).second)
             return Violation{ "Scratchpad pool ownership is missing or duplicated", id };
+    for (auto const& client : graph.clients)
+        if (client.iconic && !claimed.contains(client.id))
+            return Violation{ "Hidden client has no scratchpad owner", client.id };
     if (graph.active != XCB_NONE && !clients.contains(graph.active))
         return Violation{ "Active window is unmanaged", graph.active };
     return std::nullopt;
@@ -106,6 +110,11 @@ inline std::optional<Violation> validate(State const& state)
 {
     if (auto violation = validate(state.snapshot()))
         return violation;
+    for (auto const& monitor : state.monitors())
+        for (auto const& workspace : monitor.workspaces)
+            for (auto const& [address, ratio] : workspace.split_ratios)
+                if (!state.config().layout.accepts_ratio(ratio))
+                    return Violation{ "Workspace ratio exceeds configured bounds" };
     for (auto const& [id, client] : state.clients())
     {
         if (id != client.id)

@@ -219,6 +219,27 @@ Removing each would save 25–40 lines, but it would remove behaviour users rely
 - Giving runtime `Config` reflect-cpp types would remove the duplicated input schema
   but leak the parsing library past the input boundary.
 
+## Visibility and boundary contracts (2026-10-07)
+
+A fixed negative x coordinate cannot hide every legal X window: a wide client can
+extend back into the root. Hidden clients now use a borderless 1×1 rectangle at
+(-1, -1), while State retains normal geometry and restart restores model rectangles
+before releasing the screen. This removes the separate output hidden flag. Unmapping
+was rejected because it would require distinguishing WM unmaps from real withdrawal
+and changing the existing mapping/adoption contract.
+
+Public JSON uses the JSON library's Unicode escaping and invalid-byte replacement;
+a custom UTF-8 codec and legacy-text conversion are unnecessary for the display
+contract. Private restart data retains its existing byte-preserving codec.
+
+Scratchpad declarations and snapshot identities use the command parser to establish
+addressability, rather than duplicating its whitespace and request-length rules.
+Keysym names reject NUL before Xlib can truncate them; workspace labels reject the
+NUL separator used by the EWMH name list. Hidden intent requires scratchpad ownership.
+Split ratios are reconciled against the
+active configuration in the existing reload/restoration rebinding path, rather than
+maintaining separate reload and restart correction mechanisms.
+
 ## Open opportunities (2026-10-06)
 
 Candidates for subsystem-level simplification, not yet decided. Move an entry to a

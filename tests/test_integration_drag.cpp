@@ -210,7 +210,7 @@ TEST_CASE("Integration: tiled drops translate visible slots past iconic members"
     send_pointer_event(conn, XCB_BUTTON_RELEASE, right.x + right.width / 2, right.y + right.height / 4);
     observe_title_after_events(conn, windows[0]);
     CHECK(require_window_geometry(conn, windows[2]).x < require_window_geometry(conn, windows[0]).x);
-    CHECK(require_window_geometry(conn, hidden).x == lwm::OFF_SCREEN_X);
+    CHECK(is_hidden_offscreen(conn, hidden));
     expect_released(conn);
 }
 

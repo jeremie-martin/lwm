@@ -1,5 +1,6 @@
 #include "x11_test_harness.hpp"
 #include <X11/keysym.h>
+#include <xcb/xtest.h>
 #include <catch2/catch_test_macros.hpp>
 #include <cerrno>
 #include <chrono>
@@ -480,4 +481,53 @@ TEST_CASE("Integration: an invalid file at startup falls back to the default con
         [&] { return env->wm.diagnostics().find("using the default configuration") != std::string::npos; }, kTimeout
     ));
     CHECK(send_ipc_command("version").value_or("").starts_with("ok "));
+}
+
+TEST_CASE(
+    "Integration: letter bindings ignore mouse button state and survive reload",
+    "[integration][config][keyboard]"
+)
+{
+    auto env =
+        TestEnvironment::create("[workspaces]\nnames = ['one', 'two']\n[binds]\n'shift+F' = 'workspace switch 1'\n");
+    REQUIRE(env);
+    auto& conn = env->conn;
+    if (!extension_available(conn, &xcb_test_id))
+        SKIP("XTEST unavailable");
+    auto desktop = intern_atom(conn.get(), "_NET_CURRENT_DESKTOP");
+    for (bool held : { false, true })
+    {
+        if (held)
+            xcb_test_fake_input(conn.get(), XCB_BUTTON_PRESS, 1, XCB_CURRENT_TIME, conn.root(), 0, 0, 0);
+        REQUIRE(send_key_chord(conn, XK_Shift_L, XK_F));
+        REQUIRE(wait_for_property_cardinal(conn.get(), conn.root(), desktop, 1, kTimeout));
+        if (held)
+            xcb_test_fake_input(conn.get(), XCB_BUTTON_RELEASE, 1, XCB_CURRENT_TIME, conn.root(), 0, 0, 0);
+        xcb_flush(conn.get());
+        auto reset = send_ipc_command("workspace switch 0");
+        REQUIRE(reset == "ok");
+    }
+    REQUIRE(env->wm.write_config("[workspaces]\nnames = ['one', 'two']\n[binds]\n'shift+f' = 'workspace switch 1'\n"));
+    REQUIRE(send_ipc_command("config reload") == "ok");
+    REQUIRE(send_key_chord(conn, XK_Shift_L, XK_f));
+    REQUIRE(wait_for_property_cardinal(conn.get(), conn.root(), desktop, 1, kTimeout));
+}
+
+TEST_CASE("Integration: reload publishes bounded ratios on inactive workspaces", "[integration][config][layout]")
+{
+    auto env = TestEnvironment::create("[workspaces]\nnames = ['one', 'two']\n");
+    REQUIRE(env);
+    REQUIRE(send_ipc_command("ratio set 0.2") == "ok");
+    REQUIRE(send_ipc_command("workspace switch 1") == "ok");
+    REQUIRE(send_ipc_command("ratio set 0.8") == "ok");
+    REQUIRE(env->wm.write_config("[workspaces]\nnames = ['one', 'two']\n[layout]\nmin_ratio = 0.4\n"));
+    REQUIRE(send_ipc_command("config reload") == "ok");
+    auto reply = send_ipc_command("workspace list");
+    REQUIRE(reply);
+    auto workspaces = nlohmann::json::parse(reply->substr(3)).at("monitors").at(0).at("workspaces");
+    CHECK(workspaces.at(0).at("ratio") == 0.4);
+    CHECK(workspaces.at(1).at("ratio") == 0.6);
+    auto rejected = send_ipc_command("ratio set 0.2");
+    REQUIRE(rejected);
+    CHECK(rejected->starts_with("error"));
 }
