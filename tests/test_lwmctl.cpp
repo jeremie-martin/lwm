@@ -232,3 +232,27 @@ TEST_CASE("lwmctl watch waits through foreign ownership and attaches to the next
     destroy_window(conn, foreign);
     destroy_window(conn, successor);
 }
+
+TEST_CASE("LWM and lwmctl reject nonzero X screens without touching screen zero", "[ipc][lwmctl][screen]")
+{
+    if (!display_available())
+        SKIP("X11 unavailable");
+    X11Connection conn;
+    REQUIRE(conn.ok());
+    if (xcb_setup_roots_length(xcb_get_setup(conn.get())) < 2)
+        SKIP("The test server has only one X screen");
+    FakeWm wm("ok screen zero");
+    auto display = X11TestEnvironment::instance().display() + ".1";
+    for (auto const& executable : { lwmctl_executable_path(), find_test_executable_path("lwm") })
+    {
+        auto args = executable == lwmctl_executable_path()
+            ? std::vector<std::string>{ "version" } : std::vector<std::string>{ "--log-target", "stderr" };
+        auto result = run_command(executable, args, { { "DISPLAY", display } });
+        REQUIRE(result);
+        CHECK(result->exit_code != 0);
+        CHECK(result->stderr_text.find("supports X screen 0 only") != std::string::npos);
+    }
+    CHECK(wm_owner(conn) == wm.window);
+    std::lock_guard lock(wm.mutex);
+    CHECK(wm.requests.empty());
+}

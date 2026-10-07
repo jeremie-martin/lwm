@@ -1,5 +1,6 @@
 #include "lwm/core/command.hpp"
 #include "lwm/core/xproperty.hpp"
+#include "lwm/core/xconnection.hpp"
 #include <charconv>
 #include <chrono>
 #include <csignal>
@@ -37,14 +38,12 @@ bool print_usage(std::ostream& out, std::string_view group = {})
 // commands and carries the published state, so both die with the WM.
 class Display
 {
-    std::unique_ptr<xcb_connection_t, decltype(&xcb_disconnect)> connection_{ xcb_connect(nullptr, nullptr), xcb_disconnect };
+    decltype(lwm::connect_display()) connection_ = lwm::connect_display();
     xcb_window_t root_ = XCB_NONE;
 
 public:
     Display()
     {
-        if (xcb_connection_has_error(conn()))
-            throw std::runtime_error("cannot connect to the X display");
         root_ = xcb_setup_roots_iterator(xcb_get_setup(conn())).data->root;
     }
 

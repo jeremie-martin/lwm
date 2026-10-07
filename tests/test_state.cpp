@@ -926,3 +926,34 @@ TEST_CASE("Ratio bounds apply to writes and every workspace after reload", "[sta
     state.adjust_ratio(-0.1);
     CHECK(state.monitors()[0].current().split_ratios.empty());
 }
+
+TEST_CASE("Split double clicks identify their output and workspace", "[state][drag][input]")
+{
+    auto state = test::state(1, 2);
+    add(state, 1);
+    add(state, 2);
+    add(state, 3, { .workspace = 1 });
+    add(state, 4, { .workspace = 1 });
+    state.ratio(0, SplitAddress{ 0 }, 0.3);
+    auto first = state.press(XCB_NONE, 310, 400, 1, 0, 1000);
+    REQUIRE(first.interaction);
+    state.begin_drag(*first.interaction, 310, 400, 1);
+    state.end_drag(true);
+    state.settle();
+    SECTION("A different workspace has its own split")
+    {
+        state.switch_workspace(0, 1);
+    }
+    SECTION("A replacement output can reuse the monitor index")
+    {
+        test::outputs(state, { test::output("replacement") });
+    }
+    state.ratio(0, SplitAddress{ 0 }, 0.3);
+    state.settle();
+    auto second = state.press(XCB_NONE, 310, 400, 1, 0, 1100);
+    REQUIRE(second.interaction);
+    CHECK(std::holds_alternative<State::SplitHit>(*second.interaction));
+    CHECK(state.monitors()[0].current().split_ratios.at(SplitAddress{ 0 }) == 0.3);
+    CHECK_FALSE(state.press(XCB_NONE, 310, 400, 1, 0, 1200).interaction);
+    CHECK_FALSE(state.monitors()[0].current().split_ratios.contains(SplitAddress{ 0 }));
+}

@@ -1,19 +1,15 @@
 #include "xproperty.hpp"
 #include "connection.hpp"
+#include "xconnection.hpp"
 #include <stdexcept>
 
 namespace lwm {
 
 Connection::Connection()
-    : conn_(xcb_connect(nullptr, nullptr), xcb_disconnect)
+    : conn_(connect_display())
     , screen_(nullptr)
     , keysyms_(nullptr, xcb_key_symbols_free)
 {
-    if (xcb_connection_has_error(conn_.get()))
-    {
-        throw std::runtime_error("Failed to connect to X server");
-    }
-
     screen_ = xcb_setup_roots_iterator(xcb_get_setup(conn_.get())).data;
     if (!screen_)
     {

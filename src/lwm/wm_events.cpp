@@ -100,8 +100,13 @@ void WindowManager::handle_event(xcb_generic_event_t const& event)
             break;
         // LWM never unmaps managed windows, so any UnmapNotify is a client withdrawal.
         case XCB_UNMAP_NOTIFY:
-            state_.erase(reinterpret_cast<xcb_unmap_notify_event_t const&>(event).window);
+        {
+            auto window = reinterpret_cast<xcb_unmap_notify_event_t const&>(event).window;
+            if (auto const* client = state_.find(window))
+                write_geometry(window, outputs_[window], state_.presentation(*client));
+            state_.erase(window);
             break;
+        }
         case XCB_DESTROY_NOTIFY:
             state_.erase(reinterpret_cast<xcb_destroy_notify_event_t const&>(event).window);
             break;

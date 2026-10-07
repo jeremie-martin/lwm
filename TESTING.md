@@ -88,7 +88,10 @@ Catch runs lack CTest's outer timeout, so fixture waits must remain bounded.
 
 Use `is_hidden_offscreen()` to assert the complete hidden server rectangle; a
 negative x coordinate alone does not establish invisibility. Check normal geometry
-after showing and before restart handoff, including malformed-snapshot fallback.
+after showing, withdrawal/remapping and cooperative ownership transfer, as well as
+restart handoff including malformed-snapshot fallback. The private Xvfb has two
+X screens so `[screen]` tests can verify that nonzero selectors fail without touching
+screen 0. RandR multi-output tests remain a separate Xorg fixture.
 
 ### Displays and generated sequences
 

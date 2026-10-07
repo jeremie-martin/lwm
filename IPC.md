@@ -12,7 +12,8 @@ lwmctl watch | jq --unbuffered -r '.windows.focused'   # the state now and on ch
 
 ## Transport
 
-IPC runs over the X display named by `DISPLAY`; there is no separate socket. Anything
+IPC runs over X screen 0 of the display named by `DISPLAY`; nonzero screen selectors
+are rejected by both LWM and `lwmctl`. There is no separate socket. Anything
 that can open the display can command LWM, which matches what such a client can
 already do through EWMH and XTEST.
 

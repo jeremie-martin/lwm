@@ -313,6 +313,11 @@ RunResult WindowManager::run()
             return RunResult::Failed;
         }
     }
+    if (*stop_ == RunResult::Exit)
+    {
+        restore_client_geometry();
+        conn_.sync();
+    }
     return *stop_;
 }
 

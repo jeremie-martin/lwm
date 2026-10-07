@@ -433,7 +433,8 @@ private:
     {
         uint32_t time;
         SplitAddress address;
-        size_t monitor;
+        std::string output;
+        size_t workspace;
     };
     std::optional<GapClick> gap_click_; ///< The last gap click, for double clicks
     bool can_drag(xcb_window_t id) const;

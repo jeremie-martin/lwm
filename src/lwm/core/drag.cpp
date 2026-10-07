@@ -66,10 +66,12 @@ State::Press State::press(xcb_window_t window, int16_t x, int16_t y, uint8_t but
         hover(window, x, y);
         return { false };
     }
-    auto previous = std::exchange(gap_click_, GapClick{ time, hit->hit.address, hit->monitor });
+    auto const& monitor = monitors_[hit->monitor];
+    auto previous = std::exchange(gap_click_, GapClick{ time, hit->hit.address, monitor.name, monitor.current_workspace });
     auto elapsed = previous ? static_cast<int32_t>(time - previous->time) : 0;
     bool double_click =
-        elapsed > 0 && elapsed < 400 && previous->address == hit->hit.address && previous->monitor == hit->monitor;
+        elapsed > 0 && elapsed < 400 && previous->address == hit->hit.address && previous->output == monitor.name
+        && previous->workspace == monitor.current_workspace;
     if (!double_click && !(modifiers & XCB_MOD_MASK_CONTROL))
         return { true, *hit };
     erase_ratio(hit->monitor, hit->hit.address);

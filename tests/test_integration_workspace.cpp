@@ -1096,6 +1096,12 @@ TEST_CASE(
     xcb_unmap_window(conn.get(), window);
     xcb_flush(conn.get());
     REQUIRE(wait_for_condition([&] { return ipc_json("window list").at("windows").empty(); }, kTimeout));
+    CHECK(require_window_geometry(conn, window) == normal);
+    CHECK(get_window_border_width(conn, window) == border);
+    map_window(conn, window);
+    REQUIRE(wait_for_active_window(conn, window, kTimeout));
+    CHECK(require_window_geometry(conn, window) == normal);
+    CHECK(get_window_border_width(conn, window) == border);
     destroy_window(conn, window);
 }
 
@@ -1142,4 +1148,29 @@ TEST_CASE(
     CHECK(require_window_geometry(conn, window) == normal);
     CHECK_FALSE(ipc_json("window list").at("windows").at(0).at("iconic").get<bool>());
     destroy_window(conn, window);
+}
+
+TEST_CASE("Integration: transferring WM ownership restores hidden client geometry", "[integration][visibility][ownership]")
+{
+    auto env = TestEnvironment::create("[workspaces]\nnames = ['one']\n[[rules]]\napply = { floating = true }\n");
+    REQUIRE(env);
+    auto& conn = env->conn;
+    auto window = create_window(conn, 20, 30, 400, 300);
+    map_window(conn, window);
+    REQUIRE(wait_for_active_window(conn, window, kTimeout));
+    auto normal = require_window_geometry(conn, window);
+    auto border = get_window_border_width(conn, window);
+    ipc_ok("scratchpad stash");
+    REQUIRE(is_hidden_offscreen(conn, window));
+    auto successor = create_window(conn, 0, 0, 1, 1);
+    xcb_set_selection_owner(conn.get(), successor, intern_atom(conn.get(), "WM_S0"), XCB_CURRENT_TIME);
+    xcb_flush(conn.get());
+    auto status = env->wm.wait_for_exit(kTimeout);
+    REQUIRE(status);
+    REQUIRE(WIFEXITED(*status));
+    CHECK(WEXITSTATUS(*status) == 0);
+    CHECK(require_window_geometry(conn, window) == normal);
+    CHECK(get_window_border_width(conn, window) == border);
+    destroy_window(conn, window);
+    destroy_window(conn, successor);
 }

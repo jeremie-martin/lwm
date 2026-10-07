@@ -240,6 +240,26 @@ Split ratios are reconciled against the
 active configuration in the existing reload/restoration rebinding path, rather than
 maintaining separate reload and restart correction mechanisms.
 
+## Restore geometry when ownership ends (2026-10-07)
+
+The off-root rectangle is a temporary server presentation, not client geometry.
+Withdrawal must restore the model rectangle before State drops the client. Restart
+and cooperative WM ownership transfer share the same restoration path. A separate
+normal-geometry cache was rejected: State already owns that value.
+
+Gap double clicks identify a split by output name, workspace and address rather than
+monitor index. This avoids scattered history invalidation when workspace or topology
+changes reuse an index for a different target.
+
+## Reject nonzero X screens explicitly (2026-10-07)
+
+LWM manages one X screen with RandR outputs; its ownership selection and EWMH setup
+use screen 0. A shared connection boundary rejects nonzero DISPLAY screen selectors
+for both WM and CLI before issuing screen requests. Silently addressing screen 0 was
+incorrect. Supporting additional legacy X screens was rejected because RandR outputs
+are the existing monitor contract; it would broaden ownership and IPC contracts
+without simplifying them. This restriction does not limit the number of RandR outputs.
+
 ## Open opportunities (2026-10-06)
 
 Candidates for subsystem-level simplification, not yet decided. Move an entry to a

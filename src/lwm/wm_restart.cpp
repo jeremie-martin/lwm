@@ -25,8 +25,7 @@ void WindowManager::read_handoff()
 
 void WindowManager::prepare_restart()
 {
-    state_.end_drag(false);
-    release_pointer();
+    restore_client_geometry();
     auto root = conn_.screen()->root;
     // A snapshot the server would refuse is dropped; the successor adopts windows afresh.
     auto text = restart::encode(state_.snapshot());
@@ -46,11 +45,6 @@ void WindowManager::prepare_restart()
     }
     else
         LWM_LOG_WARN("Restart state not saved: bytes={} exceeds the request limit", text.size());
-
-    // Restore normal server rectangles before handoff, including hidden clients,
-    // so fresh adoption remains recoverable if a snapshot or exec is refused.
-    for (auto const& [window, client] : state_.clients())
-        write_geometry(window, outputs_.at(window), state_.presentation(client));
 
     xcb_ungrab_key(conn_.get(), XCB_GRAB_ANY, root, XCB_MOD_MASK_ANY);
     xcb_ungrab_button(conn_.get(), XCB_BUTTON_INDEX_ANY, root, XCB_MOD_MASK_ANY);

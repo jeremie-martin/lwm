@@ -151,6 +151,7 @@ private:
     // wm_transition.cpp: operation completion and publication
     void complete_transition();
     bool publish_clients(std::vector<State::Projected> const& clients);
+    void restore_client_geometry();
     bool write_geometry(xcb_window_t window, Output& output, State::Presentation const& presentation);
     void send_configure_notify(xcb_window_t window, State::Presentation const& presentation);
     bool publish(

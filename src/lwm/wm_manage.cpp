@@ -7,6 +7,14 @@
 
 namespace lwm {
 
+void WindowManager::restore_client_geometry()
+{
+    state_.end_drag(false);
+    release_pointer();
+    for (auto const& [window, client] : state_.clients())
+        write_geometry(window, outputs_[window], state_.presentation(client));
+}
+
 void WindowManager::scan_existing_windows(bool handoff)
 {
     std::vector<xcb_window_t> children;

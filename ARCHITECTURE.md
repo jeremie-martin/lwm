@@ -30,11 +30,11 @@ Paths are relative to `src/`.
 | Named scratchpads and the pool | `lwm/core/scratchpad.cpp` |
 | Pure derivations used by the model | `classification.*`, `focus.*`, `stacking.*`, `window_rules.*`, `workarea.*` |
 | Command grammar and actions | `action.hpp`, `command.*` |
-| X connection, EWMH resources, property reads | `connection.*`, `ewmh.*`, `xproperty.hpp` |
+| X connection, EWMH resources, property reads | `xconnection.hpp`, `connection.*`, `ewmh.*`, `xproperty.hpp` |
 | Logging, snapshot codec, invariants | `log.*`, `restart.*`, `invariants.hpp` |
 | Event loop, setup, topology discovery, reload, processes | `lwm/wm.cpp` |
 | Window observation (pipelined X reads) | `lwm/wm_observe.cpp` |
-| Admission adapters: scan and X resources per role | `lwm/wm_manage.cpp` |
+| Client lifecycle adapters: scan, resources and ownership release | `lwm/wm_manage.cpp` |
 | X event translation | `lwm/wm_events.cpp` |
 | Action execution: dispatch, effects, replies | `lwm/wm_actions.cpp` |
 | Completion and publication | `lwm/wm_transition.cpp` |
@@ -248,7 +248,8 @@ owners and exemptions once per pass, bounding cyclic parent hints.
 visibility is derived. Hidden clients remain mapped with a borderless 1×1 server
 rectangle at (-1, -1), entirely outside the root. State retains normal geometry;
 the output cache records the submitted rectangle without a separate hidden flag.
-Restart restores model rectangles before handoff so fresh adoption can recover them.
+The shell restores model rectangles before client withdrawal, cooperative ownership
+transfer and restart handoff, while State still owns their geometry.
 
 Stored split ratios obey the current configuration bounds. State bounds writes and
 reconciles every workspace during reload and restart topology rebinding, including
@@ -279,7 +280,8 @@ siblings.
 ## Pointer interactions and scratchpads
 
 `press()` interprets a button press: mouse bindings, click-to-focus, and gap clicks
-that resize a split or, on a double or Ctrl click, reset it. It reports whether the
+that resize a split or, on a double or Ctrl click, reset it. Double-click identity
+includes the output name, workspace and split address. It reports whether the
 client still receives the click and which interaction to begin; `moveresize()` does the
 same for `_NET_WM_MOVERESIZE`. A drag is either a window move/resize or a split resize.
 Domain changes (focus, floating conversion, leaving maximize) start in `begin_drag()`,
