@@ -57,6 +57,7 @@ add_dependencies(lwm_restart_gate lwm)
 
 add_executable(lwm_tests
   test_config_parser.cpp
+  test_connection.cpp
   test_invariants.cpp
   test_state.cpp
   test_ewmh_classification.cpp
