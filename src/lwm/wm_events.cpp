@@ -102,9 +102,8 @@ void WindowManager::handle_event(xcb_generic_event_t const& event)
         case XCB_UNMAP_NOTIFY:
         {
             auto window = reinterpret_cast<xcb_unmap_notify_event_t const&>(event).window;
-            if (auto const* client = state_.find(window))
-                write_geometry(window, outputs_[window], state_.presentation(*client));
-            state_.erase(window);
+            if (auto geometry = state_.withdraw(window))
+                write_geometry(window, outputs_[window], *geometry);
             break;
         }
         case XCB_DESTROY_NOTIFY:

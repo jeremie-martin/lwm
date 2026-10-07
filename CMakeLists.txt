@@ -67,6 +67,7 @@ add_subdirectory(src/lwm)
 add_subdirectory(src/app)
 
 install(TARGETS lwm lwmctl DESTINATION ${CMAKE_INSTALL_BINDIR})
+install(PROGRAMS scripts/lwm-status DESTINATION ${CMAKE_INSTALL_BINDIR})
 install(PROGRAMS scripts/lwm-notify.sh DESTINATION ${CMAKE_INSTALL_BINDIR} RENAME lwm-notify)
 install(PROGRAMS scripts/lwm-notify-bridge.sh DESTINATION ${CMAKE_INSTALL_BINDIR} RENAME lwm-notify-bridge)
 

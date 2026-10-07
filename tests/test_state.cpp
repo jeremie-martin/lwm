@@ -77,6 +77,48 @@ TEST_CASE("Registration attaches tiles and removal releases every membership", "
     CHECK_FALSE(state.find_fixture(4));
 }
 
+TEST_CASE("Withdrawal returns geometry after discarding only the withdrawn client's preview", "[state][registry][drag]")
+{
+    auto state = test::state();
+    add(state, 1);
+    add(state, 2);
+    auto normal = state.presentation(state.require(1));
+    state.begin_drag(State::Grip{ 1, floating::ResizeEdge::None }, 100, 100, 1);
+    state.drag_to(140, 150);
+    REQUIRE(state.presentation(state.require(1)) != normal);
+
+    SECTION("The withdrawn tile relinquishes its preview and membership")
+    {
+        CHECK(state.withdraw(1) == normal);
+        CHECK_FALSE(state.drag());
+        CHECK_FALSE(state.find(1));
+        CHECK(state.monitors()[0].current().windows == std::vector<xcb_window_t>{ 2 });
+    }
+    SECTION("Withdrawing another client leaves the drag intact")
+    {
+        REQUIRE(state.withdraw(2));
+        REQUIRE(state.drag());
+        CHECK(std::get<State::WindowDrag>(state.drag()->operation).window == 1);
+        state.end_drag(false);
+    }
+    SECTION("Unknown windows have no withdrawal effect")
+    {
+        CHECK_FALSE(state.withdraw(3));
+        REQUIRE(state.drag());
+        state.end_drag(false);
+    }
+    SECTION("Fixtures relinquish ownership without a client rectangle")
+    {
+        state.insert_fixture(3, Fixture::Role::Dock);
+        CHECK_FALSE(state.withdraw(3));
+        CHECK_FALSE(state.find_fixture(3));
+        REQUIRE(state.drag());
+        state.end_drag(false);
+    }
+    state.settle();
+    CHECK_FALSE(invariants::validate(state));
+}
+
 TEST_CASE("Mode changes keep tile slots and one normal floating rectangle", "[state][mode]")
 {
     auto state = test::state();
@@ -95,7 +137,7 @@ TEST_CASE("Mode changes keep tile slots and one normal floating rectangle", "[st
 
     SECTION("A slot is honored only on the same workspace")
     {
-        state.relocate(2, 0, 1);
+        state.relocate(2, 0, 1).value();
         state.floating(2, false);
         CHECK(state.monitors()[0].workspaces[1].windows == std::vector<xcb_window_t>{ 2 });
     }
@@ -130,21 +172,21 @@ TEST_CASE("Tile return slots follow output identity and expire with their worksp
     }
     SECTION("A slot expires even while its client lives on another output")
     {
-        state.relocate(2, 1, 0);
+        state.relocate(2, 1, 0).value();
         test::outputs(state, { test::output("M1") });
         CHECK_FALSE(floating_mode(state.require(2))->tile_slot);
         test::outputs(state, { test::output("M1"), test::output("M0", 1000) });
         add(state, 4, { .monitor = 1 });
         add(state, 5, { .monitor = 1 });
-        state.relocate(2, 1, 0);
+        state.relocate(2, 1, 0).value();
         state.floating(2, false);
         CHECK(state.monitors()[1].current().windows == std::vector<xcb_window_t>{ 4, 5, 2 });
     }
     SECTION("Visiting another workspace does not erase the original identity")
     {
-        state.relocate(2, 1, 1);
+        state.relocate(2, 1, 1).value();
         test::outputs(state, { test::output("M1"), test::output("M0", 1000) });
-        state.relocate(2, 1, 0);
+        state.relocate(2, 1, 0).value();
         state.floating(2, false);
         CHECK(state.monitors()[1].current().windows == std::vector<xcb_window_t>{ 1, 2, 3 });
     }
@@ -180,7 +222,7 @@ TEST_CASE("Visibility is derived from workspace, iconic and sticky state", "[sta
     test::iconic(state, 1, true);
     CHECK_FALSE(state.visible(client));
     test::iconic(state, 1, false);
-    state.relocate(1, 0, 1);
+    state.relocate(1, 0, 1).value();
     CHECK_FALSE(state.visible(client));
     state.sticky(1, true);
     CHECK(state.visible(client));
@@ -209,7 +251,7 @@ TEST_CASE("The most recent fullscreen claim in view owns its monitor", "[state][
     CHECK(state.fullscreen_owners().at(0) == 2);
     test::iconic(state, 2, true);
     CHECK(state.fullscreen_owners().at(0) == 1);
-    state.relocate(1, 0, 1);
+    state.relocate(1, 0, 1).value();
     CHECK(state.fullscreen_owners().at(0) == XCB_NONE);
     state.sticky(1, true);
     CHECK(state.fullscreen_owners().at(0) == 1);
@@ -248,7 +290,7 @@ TEST_CASE(
     }
     SECTION("Off-workspace descendants need their own sticky preference")
     {
-        state.relocate(3, 0, 1);
+        state.relocate(3, 0, 1).value();
         CHECK_FALSE(state.visible(state.require(3)));
         state.sticky(3, true);
         CHECK(state.visible(state.require(3)));
@@ -257,14 +299,14 @@ TEST_CASE(
     {
         test::iconic(state, 2, true);
         CHECK(state.visible(state.require(3)));
-        state.relocate(2, 1, 1);
+        state.relocate(2, 1, 1).value();
         CHECK(state.visible(state.require(3)));
     }
     SECTION("Each monitor applies its own owner")
     {
-        state.relocate(4, 1, 0);
+        state.relocate(4, 1, 0).value();
         state.fullscreen(4, true);
-        state.relocate(3, 1, 0);
+        state.relocate(3, 1, 0).value();
         CHECK_FALSE(state.visible(state.require(3)));
         state.transient(2, 4);
         CHECK(state.visible(state.require(3)));
@@ -334,7 +376,7 @@ TEST_CASE("Fullscreen assignments preserve history while requests renew it", "[s
     state.fullscreen(1, true);
     state.fullscreen(2, true);
     SECTION("Visible") { }
-    SECTION("Off workspace") { state.switch_workspace(0, 1); }
+    SECTION("Off workspace") { state.switch_workspace(0, 1).value(); }
     SECTION("Hidden") { test::iconic(state, 1, true); }
     auto claims = [&] { return std::pair{ state.require(1).fullscreen_claim, state.require(2).fullscreen_claim }; };
     auto before = claims();
@@ -354,7 +396,7 @@ TEST_CASE("Fullscreen assignments preserve history while requests renew it", "[s
     CHECK(state.active_window() == (state.focusable(state.require(1)) ? 1
                                   : state.focusable(state.require(2)) ? 2 : XCB_NONE));
     // A request changes priority, not placement or hiding.
-    state.switch_workspace(0, 0);
+    state.switch_workspace(0, 0).value();
     if (state.require(1).iconic)
         CHECK(state.fullscreen_owners().at(0) == 2);
     test::iconic(state, 1, false);
@@ -452,8 +494,8 @@ TEST_CASE("Geometry derivation does not mutate the domain", "[state]")
     // Repeating the current placement or mode is not a mutation.
     state.floating(1, false);
     revision = state.revision();
-    state.relocate(1, 0, 0);
-    state.relocate(1, 0, 0, State::RelocationGeometry::Preserve, 0);
+    state.relocate(1, 0, 0).value();
+    state.relocate(1, 0, 0, State::RelocationGeometry::Preserve, 0).value();
     state.floating(1, false);
     CHECK(state.revision() == revision);
 }
@@ -480,7 +522,7 @@ TEST_CASE("Tile geometry is a current projection independent of publication", "[
     state.insert_fixture(99, Fixture::Role::Dock, DockStrut{ .top = { 100 } });
     CHECK(state.normal_geometry(state.require(2)) == Geometry{ 250, 100, 750, 700 });
     auto expected = state.normal_geometry(state.require(2));
-    SECTION("Hidden") { state.switch_workspace(0, 1); }
+    SECTION("Hidden") { state.switch_workspace(0, 1).value(); }
     SECTION("Minimized") { test::iconic(state, 2, true); }
     SECTION("Fullscreen") { state.fullscreen(2, true); }
     SECTION("Shown")
@@ -850,7 +892,7 @@ TEST_CASE("Reload with fewer workspaces folds clients, claims and focus into the
     add(state, 4, { .workspace = 2 });
     state.fullscreen(2, true);
     state.fullscreen(4, true);
-    state.switch_workspace(0, 1);
+    state.switch_workspace(0, 1).value();
     test::focus(state, 2);
     REQUIRE(state.active_window() == 2);
     test::configure(state, [](Config& config) { config.workspaces = test::names(1); });
@@ -908,7 +950,7 @@ TEST_CASE("Ratio bounds apply to writes and every workspace after reload", "[sta
     for (size_t monitor = 0; monitor < 2; ++monitor)
     {
         state.ratio(monitor, SplitAddress{ 0 }, 0.2);
-        state.switch_workspace(monitor, 1);
+        state.switch_workspace(monitor, 1).value();
         state.ratio(monitor, SplitAddress{ 0 }, 0.8);
     }
     test::configure(state, [](Config& config) { config.layout.min_ratio = 0.4; });
@@ -942,7 +984,7 @@ TEST_CASE("Split double clicks identify their output and workspace", "[state][dr
     state.settle();
     SECTION("A different workspace has its own split")
     {
-        state.switch_workspace(0, 1);
+        state.switch_workspace(0, 1).value();
     }
     SECTION("A replacement output can reuse the monitor index")
     {

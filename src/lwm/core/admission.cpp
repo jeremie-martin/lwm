@@ -215,7 +215,7 @@ void State::adopt(
 std::optional<State::PlacementGeometry> State::prepare_placement(xcb_window_t id)
 {
     if (auto const* parent = find(require(id).transient_for))
-        relocate(id, parent->monitor, parent->workspace);
+        relocate(id, parent->monitor, parent->workspace).value();
     auto placement = size_hint_geometry(id, true);
     if (auto const& rule = require(id).rule)
     {
@@ -263,7 +263,7 @@ std::optional<State::PlacementGeometry> State::size_hint_geometry(xcb_window_t i
         {
             rectangle = hinted;
             if (initial && target.monitor != client.monitor)
-                relocate(id, target.monitor, monitors_[target.monitor].current_workspace);
+                relocate(id, target.monitor, monitors_[target.monitor].current_workspace).value();
         }
     }
     if (center)
@@ -317,7 +317,7 @@ void State::apply_rule_state(xcb_window_t window, RuleActions const& rule)
     {
         size_t target = monitor.value_or(client.monitor);
         size_t workspace = std::min(rule.workspace.value_or(client.workspace), monitors()[target].workspaces.size() - 1);
-        relocate(window, target, workspace, RelocationGeometry::Center);
+        relocate(window, target, workspace, RelocationGeometry::Center).value();
     }
 
     if (rule.borderless)

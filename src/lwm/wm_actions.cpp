@@ -1,7 +1,7 @@
 #include "lwm/core/overloaded.hpp"
 #include "lwm/core/log.hpp"
 #include "wm.hpp"
-#include <algorithm>
+#include <type_traits>
 
 namespace lwm {
 
@@ -14,14 +14,18 @@ Result WindowManager::execute(Action const& action, std::string_view source)
     using namespace lwm::action;
     xcb_window_t active = state_.active_window();
     size_t monitor = state_.focused_monitor();
-    auto const& focused = state_.monitors()[monitor];
     auto fail = [](std::string message) -> Result { return std::unexpected(std::move(message)); };
     auto on_active = [&](auto operation) -> Result
     {
         if (!state_.find(active))
             return fail("no active window");
-        operation();
-        return { };
+        if constexpr (std::is_void_v<decltype(operation())>)
+        {
+            operation();
+            return { };
+        }
+        else
+            return operation();
     };
     return std::visit(
         Overloaded{
@@ -77,10 +81,7 @@ Result WindowManager::execute(Action const& action, std::string_view source)
             },
             [&](SwitchWorkspace const& target) -> Result
             {
-                if (target.workspace >= focused.workspaces.size())
-                    return fail("workspace out of range");
-                state_.switch_workspace(monitor, target.workspace);
-                return { };
+                return state_.switch_workspace(monitor, target.workspace).transform([](bool) { });
             },
             [&](ToggleWorkspace const&) -> Result
             {
@@ -94,9 +95,7 @@ Result WindowManager::execute(Action const& action, std::string_view source)
             },
             [&](MoveToWorkspace const& target) -> Result
             {
-                if (target.workspace >= focused.workspaces.size())
-                    return fail("workspace out of range");
-                return on_active([&] { state_.relocate(active, state_.require(active).monitor, target.workspace); });
+                return on_active([&] { return state_.relocate(active, state_.require(active).monitor, target.workspace); });
             },
             [&](SwapTile const& swap) -> Result
             {

@@ -164,6 +164,9 @@ public:
         uint32_t border;
         bool operator==(Presentation const&) const = default;
     };
+    // End this client's preview, derive its withdrawal geometry, then relinquish
+    // ownership. Destruction uses erase() and needs no geometry restoration.
+    std::optional<Presentation> withdraw(xcb_window_t id);
     // One immutable per-pass view per managed client, in registration order.
     // A presentation means visible; absence means hidden.
     struct Projected
@@ -201,7 +204,7 @@ public:
     // Placement and mode
     // Moving the active client follows a shown destination or chooses replacement
     // focus on the source monitor. Hidden destinations remember tile preference.
-    bool relocate(
+    std::expected<void, std::string> relocate(
         xcb_window_t id,
         size_t monitor,
         size_t workspace,
@@ -268,7 +271,8 @@ public:
     void user_time_window(xcb_window_t id, xcb_window_t window, uint32_t time);
 
     // Workspaces
-    bool switch_workspace(size_t monitor, size_t workspace);
+    // Valid no-ops succeed with false; invalid destinations leave State untouched.
+    std::expected<bool, std::string> switch_workspace(size_t monitor, size_t workspace);
     // Focused-monitor workspace navigation.
     void cycle_workspace(int step);
     void toggle_workspace();

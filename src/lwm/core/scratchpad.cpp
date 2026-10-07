@@ -116,7 +116,7 @@ void State::cycle_scratchpad_pool()
 void State::show_pooled_scratchpad(xcb_window_t id)
 {
     LWM_LOG_DEBUG("Showing pool scratchpad window {:#x}", id);
-    relocate(id, focused_monitor_, monitors_[focused_monitor_].current_workspace, RelocationGeometry::Translate);
+    relocate(id, focused_monitor_, monitors_[focused_monitor_].current_workspace, RelocationGeometry::Translate).value();
     restore(id);
 }
 
@@ -197,7 +197,7 @@ void State::show_named_scratchpad(xcb_window_t window, ScratchpadConfig const& c
     auto width = geometry_extent(static_cast<int64_t>(area.width * config.width));
     auto height = geometry_extent(static_cast<int64_t>(area.height * config.height));
     geometry(window, floating::place_floating(area, width, height, std::nullopt));
-    relocate(window, monitor, workspace);
+    relocate(window, monitor, workspace).value();
     restore(window);
 }
 

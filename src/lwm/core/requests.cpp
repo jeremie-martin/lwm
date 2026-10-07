@@ -82,7 +82,7 @@ void State::request_desktop(xcb_window_t id, uint32_t desktop)
     if (auto placement = desktop_placement(desktop))
     {
         sticky(id, false);
-        relocate(id, placement->first, placement->second, RelocationGeometry::Center);
+        relocate(id, placement->first, placement->second, RelocationGeometry::Center).value();
         pin_desktop(id, true);
     }
 }
@@ -97,7 +97,7 @@ void State::switch_desktop(uint32_t desktop)
         return;
     focus_monitor(monitor);
     // A switch on the now focused monitor chooses its own focus.
-    if (!switch_workspace(monitor, workspace))
+    if (!switch_workspace(monitor, workspace).value())
         focus_fallback(monitor);
 }
 

@@ -260,6 +260,22 @@ incorrect. Supporting additional legacy X screens was rejected because RandR out
 are the existing monitor contract; it would broaden ownership and IPC contracts
 without simplifying them. This restriction does not limit the number of RandR outputs.
 
+## Keep withdrawal preparation in State (2026-10-07)
+
+Restoring server geometry before a shell-side erase could restore a tiled drag's
+temporary preview. `withdraw()` now ends that client's interaction, derives the
+rectangle before membership is lost, and releases ownership together. Returning the
+effect removes the shell's sequencing decision; a second normal-geometry cache or
+shell drag check would duplicate State. Destruction still needs only `erase()`.
+
+Workspace mutations return standard `expected` results, so commands forward the
+model's rejection instead of repeating destination bounds. A successful no-op is
+distinct from rejection and remains silent command success.
+
+The bar status helper is installed as `lwm-status`, beside `lwmctl`; bars call that
+command directly. Preview puts its build and script directories on `PATH`. Per-host
+helper copies and the `LWM_SCRIPTS` environment variable no longer own discovery.
+
 ## Open opportunities (2026-10-06)
 
 Candidates for subsystem-level simplification, not yet decided. Move an entry to a
@@ -284,4 +300,3 @@ The same question applied to the remaining subsystems:
 
 - **Logging.** Asynchronous Quill logging exists so that a slow log reader cannot
   stall the WM. Probably essential, but unquestioned.
-

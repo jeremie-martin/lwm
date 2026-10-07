@@ -19,10 +19,10 @@ TEST_CASE("Output reconciliation preserves complete surviving workspace state", 
     auto state = test::state(2);
     test::outputs(state, { test::output("A"), test::output("B", 1000) });
     test::add(state, 10);
-    state.relocate(10, 0, 2); // A hidden destination remembers the tile preference.
+    state.relocate(10, 0, 2).value(); // A hidden destination remembers the tile preference.
     test::add(state, 20, { .workspace = 2 });
-    state.switch_workspace(0, 1);
-    state.switch_workspace(0, 2);
+    state.switch_workspace(0, 1).value();
+    state.switch_workspace(0, 2).value();
     state.layout(0, LayoutStrategy::Monocle);
     state.ratio(0, SplitAddress{ 1 }, 0.3);
     test::outputs(state, { test::output("B"), test::output("A", -1000), test::output("C", 1000) });
@@ -43,24 +43,24 @@ TEST_CASE("Removed outputs merge tiled membership without replacing surviving po
 {
     auto state = test::state(2);
     test::outputs(state, { test::output("gone"), test::output("kept", 1000) });
-    state.switch_workspace(0, 1);
+    state.switch_workspace(0, 1).value();
     state.ratio(0, SplitAddress{ 0 }, 0.8);
-    state.switch_workspace(0, 0);
-    state.switch_workspace(1, 1);
+    state.switch_workspace(0, 0).value();
+    state.switch_workspace(1, 1).value();
     state.ratio(1, SplitAddress{ 0 }, 0.4);
-    state.switch_workspace(1, 0);
+    state.switch_workspace(1, 0).value();
     xcb_window_t expected = 20;
     SECTION("surviving focus takes precedence")
     {
         test::add(state, 30, { .monitor = 1 });
-        state.relocate(30, 1, 1);
+        state.relocate(30, 1, 1).value();
         expected = 30;
     }
     SECTION("empty destination inherits incoming focus") { }
     for (xcb_window_t id : { 10, 20 })
     {
         test::add(state, id);
-        state.relocate(id, 0, 1);
+        state.relocate(id, 0, 1).value();
     }
     REQUIRE(state.monitors()[0].workspaces[1].preferred_tile == 20);
     test::outputs(state, { test::output("kept") });

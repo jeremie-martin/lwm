@@ -198,15 +198,29 @@ TEST_CASE("find_window on empty workspace returns end", "[workspace][edge]")
     REQUIRE(ws.find_window(0x1000) == ws.windows.end());
 }
 
-TEST_CASE("Workspace switches reject the current and out-of-range workspaces", "[workspace][policy]")
+TEST_CASE("Workspace switches distinguish valid no-ops from invalid destinations", "[workspace][policy]")
 {
     auto state = test::state(1, 3);
-    REQUIRE(state.switch_workspace(0, 1));
+    REQUIRE(state.switch_workspace(0, 1).value());
     auto revision = state.revision();
-    CHECK_FALSE(state.switch_workspace(0, 1));
-    CHECK_FALSE(state.switch_workspace(0, 5));
-    CHECK_FALSE(state.switch_workspace(4, 0));
+    CHECK_FALSE(state.switch_workspace(0, 1).value());
+    CHECK(state.switch_workspace(0, 5).error() == "workspace out of range");
+    CHECK(state.switch_workspace(4, 0).error() == "monitor out of range");
     CHECK(state.revision() == revision);
     CHECK(state.monitors()[0].current_workspace == 1);
     CHECK(state.monitors()[0].previous_workspace == 0);
+}
+
+TEST_CASE("Relocation validates destinations before changing membership or focus", "[workspace][policy]")
+{
+    auto state = test::state(1, 3);
+    test::add(state, 1);
+    test::focus(state, 1);
+    auto before = state.snapshot();
+    auto revision = state.revision();
+    REQUIRE(state.relocate(1, 0, 0));
+    CHECK(state.relocate(1, 0, 3).error() == "workspace out of range");
+    CHECK(state.relocate(1, 1, 0).error() == "monitor out of range");
+    CHECK(state.snapshot() == before);
+    CHECK(state.revision() == revision);
 }

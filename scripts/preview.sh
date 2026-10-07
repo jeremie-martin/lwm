@@ -6,11 +6,11 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PROJECT_DIR="$(dirname "$SCRIPT_DIR")"
 BUILD_DIR="$PROJECT_DIR/build"
 CONFIG_DIR="$PROJECT_DIR/config"
-export LWM_SCRIPTS="$SCRIPT_DIR"
 
 echo "Building LWM..."
 cmake -S "$PROJECT_DIR" -B "$BUILD_DIR" -DCMAKE_BUILD_TYPE=Debug
 cmake --build "$BUILD_DIR" --parallel "$(nproc)"
+export PATH="$BUILD_DIR/src/app:$SCRIPT_DIR:$PATH"
 
 WM_PID=""
 POLYBAR_PID=""
@@ -42,7 +42,7 @@ sleep 0.5
 
 if command -v polybar &> /dev/null; then
     echo "Launching Polybar..."
-    DISPLAY=:100 polybar --config="$CONFIG_DIR/polybar.ini" main &
+    MONITOR= DISPLAY=:100 polybar --config="$CONFIG_DIR/polybar.ini" main &
     POLYBAR_PID=$!
 fi
 

@@ -1,6 +1,7 @@
 #include "lwm/core/types.hpp"
 #include "wm_observations.hpp"
 #include <catch2/catch_test_macros.hpp>
+#include <catch2/generators/catch_generators.hpp>
 #include <xcb/xtest.h>
 
 using namespace lwm::test;
@@ -44,6 +45,37 @@ xcb_window_t floating_window(X11Connection& conn)
     REQUIRE(wait_for_active_window(conn, window, timeout));
     return window;
 }
+}
+
+TEST_CASE("Integration: withdrawal discards tile previews and retains applied floating moves", "[integration][drag][geometry]")
+{
+    bool floating = GENERATE(false, true);
+    auto env = TestEnvironment::create();
+    REQUIRE(env);
+    auto& conn = env->conn;
+    auto peer = create_window(conn, 10, 10, 200, 200);
+    map_window(conn, peer);
+    REQUIRE(wait_for_active_window(conn, peer, timeout));
+    auto window = create_window(conn, 10, 10, 200, 200);
+    if (floating)
+        set_window_type(conn, window, intern_atom(conn.get(), "_NET_WM_WINDOW_TYPE_DIALOG"));
+    map_window(conn, window);
+    REQUIRE(wait_for_active_window(conn, window, timeout));
+    auto normal = require_window_geometry(conn, window);
+    send_pointer_event(conn, XCB_BUTTON_PRESS, 100, 100, 1, window, XCB_MOD_MASK_4);
+    observe_title_after_events(conn, peer);
+    REQUIRE(grab(conn) == XCB_GRAB_STATUS_ALREADY_GRABBED);
+    send_pointer_event(conn, XCB_MOTION_NOTIFY, 140, 150);
+    observe_title_after_events(conn, peer);
+    auto moved = require_window_geometry(conn, window);
+    REQUIRE(moved.x == normal.x + 40);
+    REQUIRE(moved.y == normal.y + 50);
+    xcb_unmap_window(conn.get(), window);
+    observe_title_after_events(conn, peer);
+    CHECK(get_wm_state(conn, window, intern_atom(conn.get(), "WM_STATE")) == XCB_ICCCM_WM_STATE_WITHDRAWN);
+    CHECK(require_window_geometry(conn, window) == (floating ? moved : normal));
+    expect_released(conn);
+    REQUIRE(wait_for_active_window(conn, peer, timeout));
 }
 
 TEST_CASE("Integration: EWMH resize preserves the opposite edges in every direction", "[integration][drag]")

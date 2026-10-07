@@ -183,6 +183,15 @@ void State::erase(xcb_window_t id)
     clients_.erase(id);
 }
 
+std::optional<State::Presentation> State::withdraw(xcb_window_t id)
+{
+    cancel_moveresize(id);
+    auto const* client = find(id);
+    auto geometry = client ? std::optional{ presentation(*client) } : std::nullopt;
+    erase(id);
+    return geometry;
+}
+
 void State::attach(Client const& client, std::optional<size_t> index)
 {
     auto& windows = monitors_[client.monitor].workspaces[client.workspace].windows;
@@ -299,7 +308,7 @@ void State::focus(xcb_window_t id, uint32_t time, bool record_user_time)
         iconic(id, false);
         focus_monitor(client->monitor);
         if (!client->sticky)
-            switch_workspace(client->monitor, client->workspace);
+            switch_workspace(client->monitor, client->workspace).value();
         if (!visible(*client))
             return focus_fallback(client->monitor, false);
     }
@@ -425,7 +434,7 @@ bool State::focus_adjacent_monitor(int direction)
 
 // Placement and mode
 
-bool State::relocate(
+std::expected<void, std::string> State::relocate(
     xcb_window_t id,
     size_t monitor,
     size_t workspace,
@@ -433,15 +442,17 @@ bool State::relocate(
     std::optional<size_t> tile_index
 )
 {
-    if (monitor >= monitors_.size() || workspace >= monitors_[monitor].workspaces.size())
-        return false;
+    if (monitor >= monitors_.size())
+        return std::unexpected("monitor out of range");
+    if (workspace >= monitors_[monitor].workspaces.size())
+        return std::unexpected("workspace out of range");
     auto& client = clients_.at(id);
     bool tiled = client.tiled();
     size_t source = client.monitor;
     if (source == monitor && client.workspace == workspace)
     {
         if (!tiled || !tile_index)
-            return true;
+            return { };
         auto& windows = monitors_[monitor].workspaces[workspace].windows;
         auto from = std::ranges::find(windows, client.id);
         auto target = windows.begin() + static_cast<std::ptrdiff_t>(std::min(*tile_index, windows.size() - 1));
@@ -452,7 +463,7 @@ bool State::relocate(
             std::rotate(from, from + 1, target + 1);
         else if (target < from)
             std::rotate(target, from, from + 1);
-        return true;
+        return { };
     }
     mutated();
     if (tiled)
@@ -483,7 +494,7 @@ bool State::relocate(
         edit_workspace(monitor, workspace).preferred_tile = id;
     if (active && in_view(client))
         focus_monitor(monitor);
-    return true;
+    return { };
 }
 
 // Slots refer to the original workspace, even while the client lives elsewhere.
@@ -557,8 +568,7 @@ bool State::move_to_monitor(int direction)
     if (!client || monitors_.size() <= 1)
         return false;
     size_t target = wrap(static_cast<int>(client->monitor) + direction, monitors_.size());
-    if (!relocate(client->id, target, monitors_[target].current_workspace, RelocationGeometry::Center))
-        return false;
+    relocate(client->id, target, monitors_[target].current_workspace, RelocationGeometry::Center).value();
     focus(client->id);
     return true;
 }
@@ -724,12 +734,14 @@ std::optional<std::pair<size_t, size_t>> State::desktop_placement(uint32_t deskt
     return std::pair<size_t, size_t>{ desktop / count, desktop % count };
 }
 
-bool State::switch_workspace(size_t monitor, size_t workspace)
+std::expected<bool, std::string> State::switch_workspace(size_t monitor, size_t workspace)
 {
     if (monitor >= monitors_.size())
-        return false;
+        return std::unexpected("monitor out of range");
     auto& m = monitors_[monitor];
-    if (workspace >= m.workspaces.size() || workspace == m.current_workspace)
+    if (workspace >= m.workspaces.size())
+        return std::unexpected("workspace out of range");
+    if (workspace == m.current_workspace)
         return false;
     mutated();
     LWM_LOG_DEBUG("Workspace changed: monitor={} workspace={} -> {}", monitor, m.current_workspace, workspace);
@@ -743,10 +755,10 @@ bool State::switch_workspace(size_t monitor, size_t workspace)
 void State::cycle_workspace(int step)
 {
     auto const& monitor = monitors_[focused_monitor_];
-    switch_workspace(focused_monitor_, wrap(static_cast<int>(monitor.current_workspace) + step, monitor.workspaces.size()));
+    switch_workspace(focused_monitor_, wrap(static_cast<int>(monitor.current_workspace) + step, monitor.workspaces.size())).value();
 }
 
-void State::toggle_workspace() { switch_workspace(focused_monitor_, monitors_[focused_monitor_].previous_workspace); }
+void State::toggle_workspace() { switch_workspace(focused_monitor_, monitors_[focused_monitor_].previous_workspace).value(); }
 
 void State::layout(size_t monitor, LayoutStrategy strategy)
 {

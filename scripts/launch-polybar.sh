@@ -4,7 +4,6 @@
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PROJECT_DIR="$(dirname "$SCRIPT_DIR")"
 CONFIG_FILE="$PROJECT_DIR/config/polybar.ini"
-export LWM_SCRIPTS="$SCRIPT_DIR"
 
 killall -q polybar
 

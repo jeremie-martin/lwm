@@ -59,6 +59,9 @@ reads the published state directly (see [Watching state](#watching-state)). Bind
 launch processes from argv lists; IPC callers can launch processes themselves. Commands concerning the active window return
 `error no active window` when none is selected. Relative monitor/workspace commands
 target the focused monitor; indices are zero-based.
+Switching to the current workspace and moving a window to its current placement
+succeed without changing focus or workspace history. Invalid destinations return
+an error without changing state.
 
 Commands name their object first: `window`, `workspace`, `monitor`, `layout`,
 `ratio`, `scratchpad`, `config`. `next` and `prev` step through monitors, workspaces,

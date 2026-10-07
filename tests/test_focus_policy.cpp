@@ -48,10 +48,10 @@ TEST_CASE("Automatic focus excludes clients that cannot hold focus", "[focus][po
     SECTION("Iconic") { test::iconic(state, 1, true); }
     SECTION("Other monitor")
     {
-        state.relocate(1, 1, 0);
+        state.relocate(1, 1, 0).value();
         REQUIRE(focus::fallback(state, 1) == 1);
     }
-    SECTION("Hidden workspace") { state.relocate(1, 0, 1); }
+    SECTION("Hidden workspace") { state.relocate(1, 0, 1).value(); }
     SECTION("Neither input protocol") { state.focus_hints(1, false, false); }
     SECTION("Fullscreen suppression")
     {
@@ -191,22 +191,22 @@ TEST_CASE("Settling repairs focus after domain operations without caller cleanup
     }
     SECTION("Switch workspace")
     {
-        state.switch_workspace(0, 1);
+        state.switch_workspace(0, 1).value();
         CHECK(state.active_window() == 3);
     }
     SECTION("Move to hidden workspace keeps the source monitor focused")
     {
-        state.relocate(2, 1, 1);
+        state.relocate(2, 1, 1).value();
         state.settle();
         CHECK(state.active_window() == 1);
         CHECK(state.focused_monitor() == 0);
         state.focus_monitor(1);
-        state.switch_workspace(1, 1);
+        state.switch_workspace(1, 1).value();
         CHECK(state.active_window() == 2);
     }
     SECTION("Move to a shown workspace follows the active client")
     {
-        state.relocate(2, 1, 0);
+        state.relocate(2, 1, 0).value();
         CHECK(state.active_window() == 2);
         CHECK(state.focused_monitor() == 1);
     }
@@ -219,9 +219,9 @@ TEST_CASE("Tile destination preference does not manufacture focus history", "[fo
     add(state, 2);
     add(state, 3, { .workspace = 1 });
     test::focus(state, 1);
-    state.switch_workspace(0, 0);
-    state.relocate(2, 0, 1);
-    state.switch_workspace(0, 1);
+    state.switch_workspace(0, 0).value();
+    state.relocate(2, 0, 1).value();
+    state.switch_workspace(0, 1).value();
     CHECK(focus::fallback(state, 0) == 2);
     CHECK(state.require(2).mru_order == 0);
     SECTION("An actual tiled focus supersedes the preference") { test::focus(state, 3); }

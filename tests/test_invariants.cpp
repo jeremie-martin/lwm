@@ -87,7 +87,7 @@ TEST_CASE("Generated State operation sequences preserve model invariants", "[inv
                 trace.push_back("erase");
                 break;
             case 2:
-                state.relocate(window, monitor, workspace, State::RelocationGeometry(pick(3)), pick(4));
+                state.relocate(window, monitor, workspace, State::RelocationGeometry(pick(3)), pick(4)).value();
                 trace.push_back("relocate");
                 break;
             case 3:
@@ -107,7 +107,7 @@ TEST_CASE("Generated State operation sequences preserve model invariants", "[inv
                 trace.push_back("fullscreen");
                 break;
             case 7:
-                state.switch_workspace(monitor, workspace);
+                state.switch_workspace(monitor, workspace).value();
                 trace.push_back("switch");
                 break;
             case 8:

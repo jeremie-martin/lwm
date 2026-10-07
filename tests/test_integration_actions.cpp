@@ -127,6 +127,28 @@ TEST_CASE("Integration: IPC window actions execute the key-binding operations", 
     destroy_window(conn, a);
 }
 
+TEST_CASE("Integration: workspace commands preserve no-op success and model rejections", "[integration][ipc][actions][workspace]")
+{
+    auto env = TestEnvironment::create("[workspaces]\nnames = [\"1\", \"2\"]\n");
+    REQUIRE(env);
+    auto& conn = env->conn;
+    CHECK(send_ipc_command("window to-workspace 0") == "error no active window");
+    auto window = create_window(conn, 10, 10, 200, 150);
+    map_window(conn, window);
+    REQUIRE(wait_for_active_window(conn, window, kTimeout));
+    ipc_ok("workspace switch 1");
+    ipc_ok("workspace switch 0");
+    auto before = ipc_json("state");
+    ipc_ok("workspace switch 0");
+    ipc_ok("window to-workspace 0");
+    CHECK(send_ipc_command("workspace switch 2") == "error workspace out of range");
+    CHECK(send_ipc_command("window to-workspace 2") == "error workspace out of range");
+    CHECK(ipc_json("state") == before);
+    // Neither a rejected destination nor a successful no-op changes toggle history.
+    ipc_ok("workspace toggle");
+    CHECK(ipc_json("workspace list")["monitors"][0]["current_workspace"] == 1);
+}
+
 TEST_CASE("Integration: window close reaches clients without the delete protocol", "[integration][ipc][actions]")
 {
     auto env = TestEnvironment::create();
@@ -259,4 +281,3 @@ TEST_CASE("Integration: pooled tiles stay tiled and consistent while hidden", "[
     destroy_window(conn, pooled);
     destroy_window(conn, keep);
 }
-

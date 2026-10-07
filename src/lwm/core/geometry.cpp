@@ -149,7 +149,7 @@ void State::request_geometry(xcb_window_t id, Geometry rectangle)
     auto const& client = require(id);
     if (auto const* floating = floating_mode(client))
         if (auto monitor = monitor_at(monitors_, floating->geometry); monitor && *monitor != client.monitor)
-            relocate(id, *monitor, monitors_[*monitor].current_workspace);
+            relocate(id, *monitor, monitors_[*monitor].current_workspace).value();
 }
 
 } // namespace lwm

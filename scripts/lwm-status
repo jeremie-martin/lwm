@@ -1,5 +1,5 @@
 #!/bin/sh
-# LWM state that EWMH cannot carry, for this bar's monitor: a monocle layout
+# LWM state for this bar's monitor: a monocle layout
 # marker and the number of windows stashed in the scratchpad pool.
 # `lwm-status toggle` switches the focused workspace between master-stack and monocle.
 if [ "$1" = toggle ]; then

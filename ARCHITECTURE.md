@@ -200,12 +200,18 @@ if it became ineligible.
 
 ## Placement and geometry
 
-`insert()`, `erase()`, `relocate()` and `floating()` own membership and focus
+`insert()`, `erase()`, `withdraw()`, `relocate()` and `floating()` own membership and focus
 consequences. Relocating the active client follows a shown destination or chooses
 replacement focus on the source monitor; hidden destinations remember a tile
 preference. A floating rectangle may be preserved, centered or translated when the
 monitor changes. Application and user floating geometry joins the monitor under its
 center.
+
+Workspace operations validate destinations in State and return their results to the
+shell. A workspace switch distinguishes a successful no-op from a changed selection;
+both succeed for commands. Withdrawal discards only the departing client's drag
+preview, derives its restoration rectangle while membership still exists, and erases
+ownership in one model operation. The shell applies the returned rectangle.
 
 Tile-to-float conversion restores a remembered floating rectangle or derives the tile
 slot; wholly off-workarea rectangles are centered. Float-to-tile conversion restores

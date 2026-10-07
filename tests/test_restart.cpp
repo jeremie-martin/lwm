@@ -141,7 +141,7 @@ TEST_CASE("State snapshots restore workspaces, order, recency and scratchpads", 
     source.swap_tiles(0, 0, 2);
     source.layout(0, LayoutStrategy::Monocle);
     source.ratio(0, SplitAddress{ 0 }, 0.3);
-    source.switch_workspace(1, 2);
+    source.switch_workspace(1, 2).value();
     test::focus(source, 1);
     test::focus(source, 4);
     source.claim_scratchpad(2, ScratchpadConfig{ .name = "term" });
@@ -201,7 +201,7 @@ TEST_CASE("Restart restores claim history independently of focus and adoption or
     for (xcb_window_t id : { 2, 3, 1 }) source.fullscreen(id, true);
     test::iconic(source, 3, true);
     test::focus(source, 2); // Focus recency is deliberately not fullscreen claim order.
-    source.switch_workspace(0, 1);
+    source.switch_workspace(0, 1).value();
     auto snapshot = source.snapshot();
     auto claim = [&](xcb_window_t id) { return snapshot.find(id)->fullscreen_claim; };
     CHECK((claim(2) < claim(3) && claim(3) < claim(1)));
@@ -214,7 +214,7 @@ TEST_CASE("Restart restores claim history independently of focus and adoption or
     {
         target.adopt(observed, &snapshot);
         CHECK(target.fullscreen_owners().at(0) == XCB_NONE);
-        target.switch_workspace(0, 0);
+        target.switch_workspace(0, 0).value();
         CHECK(target.fullscreen_owners().at(0) == 1);
         target.fullscreen(1, false);
         CHECK(target.fullscreen_owners().at(0) == 2);
@@ -233,7 +233,7 @@ TEST_CASE("Restart restores claim history independently of focus and adoption or
         CHECK(target.require(2).fullscreen());
         add(target, 4);
         target.fullscreen(4, true);
-        target.switch_workspace(0, 0);
+        target.switch_workspace(0, 0).value();
         CHECK(target.fullscreen_owners().at(0) == 4);
         target.fullscreen(4, false);
         CHECK(target.fullscreen_owners().at(0) == 2);
@@ -245,10 +245,10 @@ TEST_CASE("Restart restores claim history independently of focus and adoption or
 TEST_CASE("Restart rebinding matches live output reconciliation", "[restart][state][hotplug]")
 {
     auto source = test::state(3);
-    source.switch_workspace(0, 1);
+    source.switch_workspace(0, 1).value();
     source.layout(0, LayoutStrategy::Monocle);
     source.ratio(0, SplitAddress{ 0 }, 0.3);
-    source.switch_workspace(1, 2);
+    source.switch_workspace(1, 2).value();
     source.ratio(1, SplitAddress{ 0 }, 0.7);
     for (xcb_window_t id : { 1, 2, 3 }) add(source, id, { .workspace = 1 });
     add(source, 4, { .monitor = 1, .workspace = 2 });
@@ -624,7 +624,7 @@ TEST_CASE("Graph restoration separates saved intent from live observations and n
     add(source, 1, { .monitor = 1, .workspace = 2 });
     add(source, 2, { .monitor = 1, .workspace = 2 });
     add(source, 3, { .monitor = 1, .workspace = 2 });
-    source.switch_workspace(1, 2);
+    source.switch_workspace(1, 2).value();
     source.focus_monitor(1);
     source.fullscreen(1, true);
     test::configure(source, [](Config& config) {
@@ -881,7 +881,7 @@ TEST_CASE("Restart reconciles stored ratios with the successor configuration", "
 {
     auto source = test::state();
     source.ratio(0, SplitAddress{ 0 }, 0.2);
-    source.switch_workspace(0, 1);
+    source.switch_workspace(0, 1).value();
     source.ratio(0, SplitAddress{ 0 }, 0.8);
     auto saved = source.snapshot();
     auto target = test::state();

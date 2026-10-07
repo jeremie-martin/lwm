@@ -88,7 +88,8 @@ Catch runs lack CTest's outer timeout, so fixture waits must remain bounded.
 
 Use `is_hidden_offscreen()` to assert the complete hidden server rectangle; a
 negative x coordinate alone does not establish invisibility. Check normal geometry
-after showing, withdrawal/remapping and cooperative ownership transfer, as well as
+after showing, withdrawal/remapping (including a tiled drag preview versus an applied
+floating move) and cooperative ownership transfer, as well as
 restart handoff including malformed-snapshot fallback. The private Xvfb has two
 X screens so `[screen]` tests can verify that nonzero selectors fail without touching
 screen 0. RandR multi-output tests remain a separate Xorg fixture.
@@ -149,7 +150,7 @@ python3 tests/performance/logging_bench.py --binary build/release/src/app/lwm
   `--switches` control placement and workload.
 
 Request counts, latency, CPU, and memory answer different questions. Repeat timing
-runs and report log overflow/output errors alongside latency. These probes and test
+runs under the same log level and destination. These probes and test
 timeouts establish regression evidence, not hard real-time or hardware guarantees.
 
 ## Nested preview
@@ -167,6 +168,7 @@ stop, and everything the script started exits with it.
 Start applications with `DISPLAY=:100 <program>`.
 
 When available, Polybar uses [config/polybar.ini](config/polybar.ini), whose `lwm`
-module follows `lwmctl watch` through `scripts/lwm-status.sh` (requires `jq`). Adjust
+module follows the freshly built `lwmctl watch` through `scripts/lwm-status`
+(requires `jq`); the preview puts its build binaries and scripts first on `PATH`. Adjust
 its PulseAudio and battery settings (`BAT0`/`ACA0`). `scripts/launch-polybar.sh` is for
 your desktop session: it replaces existing bars and starts one per output.

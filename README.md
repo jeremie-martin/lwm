@@ -77,7 +77,8 @@ such as `setxkbmap`. `lwm --help` lists startup options; value options accept
 `--option VALUE` or `--option=VALUE`.
 
 Installation defaults to `/usr/local/bin` and includes `lwm`, `lwmctl`,
-`lwm-notify`, and `lwm-notify-bridge`. Set `CMAKE_INSTALL_PREFIX` and
+`lwm-status`, `lwm-notify`, and `lwm-notify-bridge`. The sample Polybar configuration
+uses `lwm-status` (requires `jq`). Set `CMAKE_INSTALL_PREFIX` and
 `CMAKE_INSTALL_BINDIR` through `CMAKE_OPTIONS` to change it. `sudo make uninstall`
 removes the files in that build's install manifest. Keep the build directory;
 use the same `BUILD_DIR` and, for staged installations, `DESTDIR`. Missing files
