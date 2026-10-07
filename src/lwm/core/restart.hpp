@@ -10,7 +10,7 @@
 // incompatible formats are rejected rather than migrated.
 namespace lwm::restart {
 
-inline constexpr uint32_t format = 16; // Bump when the snapshot schema changes.
+inline constexpr uint32_t format = 17; // Bump when the snapshot schema changes.
 
 struct Snapshot
 {

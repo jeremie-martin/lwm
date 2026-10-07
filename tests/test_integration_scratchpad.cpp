@@ -1,4 +1,5 @@
 #include "restart_handoff.hpp"
+#include "lwm/core/xproperty.hpp"
 #include <X11/Xlib.h>
 #include <catch2/catch_test_macros.hpp>
 #include <catch2/generators/catch_generators.hpp>
@@ -713,4 +714,69 @@ TEST_CASE(
     REQUIRE(wait_for_active_window(conn, window, kTimeout));
     destroy_window(conn, window);
     destroy_window(conn, other);
+}
+
+TEST_CASE("Integration: restart hiding comes from the accepted snapshot alone", "[integration][scratchpad][restart]")
+{
+    auto env = TestEnvironment::create();
+    if (!env)
+        SKIP("X11 unavailable");
+    auto& conn = env->conn;
+    auto saved = create_window(conn, 10, 10, 200, 150);
+    map_window(conn, saved);
+    REQUIRE(wait_for_active_window(conn, saved, kTimeout));
+    ipc_ok("scratchpad stash");
+    REQUIRE(is_hidden_offscreen(conn, saved));
+    auto previous = wm_instance(conn);
+    REQUIRE(previous);
+    PausedRestart restart(env->wm);
+    auto property = intern_atom(conn.get(), "_LWM_RESTART");
+    auto utf8 = intern_atom(conn.get(), "UTF8_STRING");
+    auto text = lwm::xproperty::text(conn.get(), conn.root(), property, utf8);
+    REQUIRE(text);
+    auto graph = nlohmann::json::parse(*text);
+    bool accepted = true;
+    SECTION("Saved intent survives a removed HIDDEN atom") { }
+    SECTION("A rejected snapshot cannot hide windows")
+    {
+        accepted = false;
+        graph["clients"][0]["iconic"] = "invalid";
+    }
+    SECTION("A rank without restoration headroom rejects the whole snapshot")
+    {
+        accepted = false;
+        graph["clients"][0]["fullscreen_claim"] = UINT64_MAX - 1;
+    }
+    if (!accepted)
+    {
+        auto invalid = graph.dump();
+        xcb_change_property(
+            conn.get(),
+            XCB_PROP_MODE_REPLACE,
+            conn.root(),
+            property,
+            utf8,
+            8,
+            invalid.size(),
+            invalid.data()
+        );
+    }
+    auto state = intern_atom(conn.get(), "_NET_WM_STATE");
+    if (accepted)
+        xcb_delete_property(conn.get(), saved, state);
+    auto newcomer = create_window(conn, 20, 20, 200, 150);
+    auto hidden = intern_atom(conn.get(), "_NET_WM_STATE_HIDDEN");
+    xcb_change_property(conn.get(), XCB_PROP_MODE_REPLACE, newcomer, state, XCB_ATOM_ATOM, 32, 1, &hidden);
+    map_window(conn, newcomer);
+    REQUIRE(get_window_geometry(conn, newcomer));
+    restart.resume();
+    REQUIRE(wait_for_wm_restart(conn, kTimeout, *previous));
+    auto windows = ipc_json("window list").at("windows");
+    for (auto const& window : windows) CHECK(window.at("iconic") == (accepted && window.at("id") == saved));
+    CHECK(is_hidden_offscreen(conn, saved) == accepted);
+    CHECK_FALSE(is_hidden_offscreen(conn, newcomer));
+    CHECK_FALSE(property_has_atom(conn.get(), newcomer, state, hidden));
+    CHECK(ipc_json("scratchpad list").at("pool").size() == (accepted ? 1 : 0));
+    destroy_window(conn, newcomer);
+    destroy_window(conn, saved);
 }

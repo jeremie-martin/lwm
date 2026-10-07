@@ -330,6 +330,7 @@ struct ClientIntent
     // Fullscreen claim rank; zero means not fullscreen. The newest claim in view
     // owns its monitor (_NET_WM_STATE_FULLSCREEN).
     uint64_t fullscreen_claim = 0;
+    bool iconic = false; ///< Hidden by LWM; application HIDDEN atoms are only output
 
     bool fullscreen() const { return fullscreen_claim != 0; }
     bool operator==(ClientIntent const&) const = default;
@@ -359,7 +360,6 @@ struct Client : ClientIntent
     WindowType ewmh_type = WindowType::Normal;
     xcb_window_t transient_for = XCB_NONE;
 
-    bool iconic = false;         ///< hidden by LWM (_NET_WM_STATE_HIDDEN)
     bool sticky = false;         ///< _NET_WM_STATE_STICKY
     bool maximized_horz = false; ///< Retained for any mode; only floating presentation honors it
     bool maximized_vert = false;

@@ -297,6 +297,10 @@ void WindowManager::handle_property_notify(xcb_property_notify_event_t const& ev
     auto const* client = state_.find(window);
     if (!client)
         return;
+    // A refused shared-property write remains unpublished. A later external
+    // change can make it fit; successful writes' own notifications cost nothing.
+    if (atom == e->_NET_WM_STATE && !states_current(*client))
+        presentation_dirty_ = true;
     if (atom == e->_NET_WM_NAME || atom == XCB_ATOM_WM_NAME)
     {
         // Title updates are frequent; the legacy name is read only when needed.

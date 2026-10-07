@@ -46,6 +46,7 @@ restart::Snapshot sample()
     snapshot.clients[2].order = 1;
     snapshot.fixtures = { { 0x400, Fixture::Role::Dock, 3 } };
     snapshot.clients[1].fullscreen_claim = 1;
+    snapshot.clients[0].iconic = true;
     snapshot.clients[0].fullscreen_claim = (uint64_t{ 1 } << 40) + 2;
     return snapshot;
 }
@@ -183,7 +184,7 @@ TEST_CASE("Restart wire schema directly represents domain values", "[restart][co
         "clients": [{"id": 7, "monitor": 0, "workspace": 0,
             "mode": {"TiledMode": {"floating": null}},
             "preferences": {"floating": null, "skip_taskbar": null, "skip_pager": null, "layer": null},
-            "urgency": {"sources": 0}, "borderless": false, "desktop_pinned": false, "fullscreen_monitors": null, "mru_order": 0, "order": 0, "fullscreen_claim": 4}],
+            "urgency": {"sources": 0}, "borderless": false, "desktop_pinned": false, "fullscreen_monitors": null, "mru_order": 0, "order": 0, "fullscreen_claim": 4, "iconic": false}],
         "fixtures": [], "named_scratchpads": [], "pool": []
     })");
     document["format"] = restart::format;
@@ -598,7 +599,7 @@ TEST_CASE("Restart decoder rejects malformed typed values before narrowing or de
 TEST_CASE("Restart preserves full-width recency and opaque output names", "[restart][codec]")
 {
     auto source = sample();
-    source.clients[0].mru_order = UINT64_MAX - 1;
+    source.clients[0].mru_order = (uint64_t{ 1 } << 63) + 7;
     source.monitors[0].name = std::string("output\0", 7) + char(0xff);
     CHECK(restart::decode(restart::encode(source)) == source);
 }
@@ -769,5 +770,95 @@ TEST_CASE("Restoration invalidates orphaned tile return slots even with identica
     auto target = test::state();
     target.adopt({ test::observe(source.require(1)) }, &snapshot);
     CHECK_FALSE(floating_mode(target.require(1))->tile_slot);
+    CHECK_FALSE(invariants::validate(target));
+}
+
+TEST_CASE("Restart ranks leave room for adoption and subsequent interactions", "[restart][codec][state]")
+{
+    auto source = test::state();
+    add(source, 1);
+    source.fullscreen(1, true);
+    source.settle();
+    auto snapshot = source.snapshot();
+    // Independent boundary: observation, released scratchpads and final claim
+    // ordering each visit at most one X11 window-ID space.
+    constexpr uint64_t limit = UINT64_MAX - 3 * uint64_t{ UINT32_MAX };
+    for (auto field : { &ClientIntent::order, &ClientIntent::mru_order, &ClientIntent::fullscreen_claim })
+    {
+        for (auto value : { limit, UINT64_MAX - 1, UINT64_MAX })
+        {
+            auto invalid = snapshot;
+            invalid.clients[0].*field = value;
+            CHECK_FALSE(restart::decode(restart::encode(invalid)));
+        }
+        snapshot.clients[0].*field = limit - 1;
+    }
+    auto accepted = restart::decode(restart::encode(snapshot));
+    REQUIRE(accepted);
+    auto target = test::state();
+    auto old = test::observe(source.require(1));
+    auto newcomer = old;
+    newcomer.id = 2;
+    target.adopt({ old, newcomer }, &*accepted);
+    target.settle();
+    CHECK(target.fullscreen_owners() == std::vector<xcb_window_t>{ 2 });
+    CHECK(target.require(2).order > target.require(1).order);
+    CHECK(target.require(2).mru_order > target.require(1).mru_order);
+    target.request_fullscreen(1);
+    target.focus(1);
+    target.settle();
+    CHECK(target.fullscreen_owners() == std::vector<xcb_window_t>{ 1 });
+    CHECK_FALSE(invariants::validate(target));
+}
+
+TEST_CASE("Only saved LWM intent restores hiding during adoption", "[restart][state][scratchpad]")
+{
+    auto source = test::state();
+    add(source, 1);
+    add(source, 2);
+    source.stash(2);
+    source.settle();
+    auto snapshot = restart::decode(restart::encode(source.snapshot()));
+    REQUIRE(snapshot);
+    REQUIRE(snapshot->find(2)->iconic);
+    auto visible = test::observe(source.require(1));
+    auto hidden = test::observe(source.require(2));
+    // Applications cannot create or withdraw LWM's hidden intent through atoms.
+    visible.states.set(WindowState::Hidden);
+    hidden.states.set(WindowState::Hidden, false);
+    auto newcomer = visible;
+    newcomer.id = 3;
+    auto target = test::state();
+    target.adopt({ visible, hidden, newcomer }, &*snapshot);
+    target.settle();
+    CHECK_FALSE(target.require(1).iconic);
+    CHECK(target.require(2).iconic);
+    CHECK(target.pooled(2));
+    CHECK_FALSE(target.require(3).iconic);
+    CHECK(target.visible(target.require(3)));
+    CHECK_FALSE(invariants::validate(target));
+
+    auto cold = test::state();
+    cold.adopt({ visible, hidden, newcomer }, nullptr);
+    cold.settle();
+    for (auto const& [id, client] : cold.clients()) CHECK_FALSE(client.iconic);
+    CHECK_FALSE(invariants::validate(cold));
+}
+
+TEST_CASE("Restart releases hiding when a named scratchpad is removed", "[restart][state][scratchpad]")
+{
+    auto source = test::state();
+    test::configure(source, [](Config& config) { config.scratchpads = { { .name = "removed" } }; });
+    add(source, 1);
+    source.claim_scratchpad(1, ScratchpadConfig{ .name = "removed" });
+    source.iconic(1, true);
+    auto snapshot = restart::decode(restart::encode(source.snapshot()));
+    REQUIRE(snapshot);
+    auto target = test::state();
+    target.adopt({ test::observe(source.require(1)) }, &*snapshot);
+    target.settle();
+    CHECK_FALSE(target.scratchpad_claim(1));
+    CHECK_FALSE(target.require(1).iconic);
+    CHECK(target.visible(target.require(1)));
     CHECK_FALSE(invariants::validate(target));
 }

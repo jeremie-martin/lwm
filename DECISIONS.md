@@ -101,6 +101,26 @@ them from, so a client that minimized itself simply disappeared. `WM_CHANGE_STAT
 `_NET_WM_STATE_HIDDEN` requests and iconic `WM_HINTS.initial_state` are ignored and
 `_NET_WM_ACTION_MINIMIZE` is not advertised; LWM hides windows only through scratchpads.
 
+## Restore hiding only from private intent (2026-10-07)
+
+Once application minimize was removed, accepting `HIDDEN` during cold adoption was
+another route for applications or an unrelated predecessor to make windows vanish.
+Hiding now belongs to `ClientIntent` and the versioned restart snapshot. Only an
+accepted snapshot restores it; fresh adoption and rejected-snapshot fallback show
+windows according to their workspace/fullscreen eligibility. There is no property
+fallback for hiding, and no migration of older snapshots. Restoration uses the
+same scratchpad reconciliation as reload, so removing a named slot releases its
+window and its hiding on both paths.
+
+## Give property publication one owner (2026-10-07)
+
+EWMH merging used a separate write path while completion cached its desired state
+before the write could be refused. Completion now owns reads, size validation,
+submission and one property cache; EWMH only converts atoms. The cache stores owned
+state values for shared properties, so foreign atoms neither consume cache memory
+nor drive model decisions. A refused write remains pending by comparison with the
+model; a later external property change retries it without a retry flag or timer.
+
 ## Drop SIGHUP reload (2026-10-06)
 
 `lwmctl config reload` and bindings already reload; the signal added a self-pipe, a

@@ -96,7 +96,7 @@ Authoritative state:
 
 | Record | Meaning |
 | --- | --- |
-| Client placement, mode, requested flags, preferences | User, application and rule intent; effective classification is derived |
+| Client placement, mode, hiding, requested flags, preferences | User, application and rule intent; effective classification is derived |
 | `Workspace::windows` | Tiled membership and layout order; each tiled client occurs exactly once |
 | `Workspace::preferred_tile` | Destination intent after relocation; actual tiled focus clears it |
 | `Client::order` / `Fixture::order` | Registration order across both registries |
@@ -107,22 +107,25 @@ Authoritative state:
 | `drag_` | The current pointer interaction, if any |
 
 Use `find()` where a window may be unmanaged; use `require()` once ownership is
-established. Mutations maintain membership, claims and workareas, and advance a
-revision counter only when a value actually changes. User-time bookkeeping is not
+established. Mutations maintain membership and claims; workareas are derived.
+A revision counter advances when intent changes or an explicit effect is requested. User-time bookkeeping is not
 published and does not advance it.
 
 Visibility, fullscreen ownership, effective layer/skip values, published
-`_NET_WM_STATE` values and tiled rectangles are derived. Completion writes every
-published window and root property through one cache of the bytes last written per
-window and property, so unchanged values cost nothing and a fresh WM rewrites stale
-ones. Per-window `Output` records cover what is not a plain property: geometry and
-mapping, border, `_NET_WM_STATE` merged with other parties' atoms, and urgency
+`_NET_WM_STATE` values and tiled rectangles are derived. Completion owns one property
+cache: submitted bytes for plain properties, and successfully merged owned values
+for `_NET_WM_STATE`. Refused writes never advance it. Shared-state reads are batched;
+EWMH only converts atoms, and the same size-checked writer submits every property.
+A later external change retries a refused shared-state write; successful writes'
+notifications require no read. Registration order across clients and fixtures is a
+single `State` derivation. Per-window `Output` records cover geometry and
+mapping, border, and urgency
 mirrored into the application's `WM_HINTS`. Caches never drive domain decisions.
 
 ## Operations and completion
 
 An operation is one dispatched X event (including an IPC request),
-timeout or topology pass, or the startup scan. Handlers call `State` and retain only
+a topology pass, or the startup scan. Handlers call `State` and retain only
 obligations the model cannot express: ConfigureRequest replies, forwarded restacks,
 crossing-event drains after a pointer release, and outputs forgotten after an
 external write.
@@ -330,7 +333,7 @@ Restart retains the predecessor's X resources so closing its connection cannot r
 an otherwise empty server. `_LWM_RESTART_OWNER` marks the retained window; the
 successor validates the marker and kills that client after claiming the screen.
 
-`State::snapshot()` stores private intent in `_LWM_RESTART`: placements, modes,
+`State::snapshot()` stores private intent in `_LWM_RESTART`: placements, modes, hiding,
 preferences, urgency, focus ranks, workspace graphs, scratchpad claims, pending
 launches, pool order, fullscreen claims and fixture roles with registration ranks.
 Application properties are observed afresh; derived rectangles, dock reservations
@@ -338,8 +341,11 @@ and publication caches are not saved. The live value types are the snapshot sche
 encoded with reflect-cpp over yyjson as `UTF8_STRING` JSON whose `format` field names
 the schema. Decoding rejects duplicate or extra fields, ambiguous variant tags and
 narrowing, then validates the persistent graph with the same validator Debug builds
-use. Any malformed or incompatible snapshot is rejected whole and windows are adopted
-afresh, as they are when a snapshot too large for one X request is not saved. Schema changes bump `restart::format`; there is no migration.
+use. Incoming registration, focus and fullscreen ranks must also leave headroom for
+all adoption passes before they become live counters. Any malformed or incompatible snapshot is rejected whole and windows are adopted
+afresh, as they are when a snapshot too large for one X request is not saved. Fresh
+adoption ignores application `HIDDEN` atoms; only accepted private intent restores
+LWM's hiding. Schema changes bump `restart::format`; there is no migration.
 
 Restoration overlays saved intent on surviving observations, installs the saved
 graph, rebinds it to discovered outputs through the live topology code (folding fewer

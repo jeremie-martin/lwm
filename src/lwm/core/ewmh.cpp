@@ -1,6 +1,5 @@
 #include "xproperty.hpp"
 #include "ewmh.hpp"
-#include "log.hpp"
 #include <algorithm>
 #include <cstring>
 
@@ -106,43 +105,22 @@ WindowStates Ewmh::states(std::span<xcb_atom_t const> atoms) const
     return states;
 }
 
-void Ewmh::update_window_states(std::span<std::pair<xcb_window_t, WindowStates> const> updates, WindowStates owned)
+std::vector<xcb_atom_t>
+Ewmh::merge_states(std::span<xcb_atom_t const> observed, WindowStates enabled, WindowStates owned) const
 {
-    std::vector<xcb_get_property_cookie_t> cookies;
-    cookies.reserve(updates.size());
-    for (auto const& [window, enabled] : updates) cookies.push_back(xcb_ewmh_get_wm_state(&ewmh_, window));
-    for (size_t i = 0; i < updates.size(); ++i)
-    {
-        auto const& [window, enabled] = updates[i];
-        std::vector<xcb_atom_t> atoms;
-        xcb_ewmh_get_atoms_reply_t reply{ };
-        if (xcb_ewmh_get_wm_state_reply(&ewmh_, cookies[i], &reply, nullptr))
+    std::vector<xcb_atom_t> atoms(observed.begin(), observed.end());
+    std::erase_if(
+        atoms,
+        [&](xcb_atom_t atom)
         {
-            atoms.assign(reply.atoms, reply.atoms + reply.atoms_len);
-            xcb_ewmh_get_atoms_reply_wipe(&reply);
+            auto it = std::ranges::find(state_atoms_, atom);
+            return it != state_atoms_.end() && owned.has(static_cast<WindowState>(it - state_atoms_.begin()));
         }
-        auto previous = atoms;
-        std::erase_if(
-            atoms,
-            [&](xcb_atom_t atom)
-            {
-                auto it = std::ranges::find(state_atoms_, atom);
-                return it != state_atoms_.end() && owned.has(static_cast<WindowState>(it - state_atoms_.begin()));
-            }
-        );
-        for (size_t i = 0; i < state_atoms_.size(); ++i)
-            if (enabled.has(static_cast<WindowState>(i)))
-                atoms.push_back(state_atoms_[i]);
-        if (atoms == previous)
-            continue;
-        // Other parties' atoms are kept, but never into a request the server would refuse.
-        if (atoms.empty())
-            xcb_delete_property(conn_.get(), window, ewmh_._NET_WM_STATE);
-        else if (conn_.fits_property(atoms.size() * sizeof(xcb_atom_t)))
-            xcb_ewmh_set_wm_state(&ewmh_, window, atoms.size(), atoms.data());
-        else
-            LWM_LOG_WARN("Not publishing _NET_WM_STATE: window={:#x} atoms={} exceeds the request limit", window, atoms.size());
-    }
+    );
+    for (size_t i = 0; i < state_atoms_.size(); ++i)
+        if (enabled.has(static_cast<WindowState>(i)))
+            atoms.push_back(state_atoms_[i]);
+    return atoms;
 }
 
 WindowType Ewmh::window_type(std::span<xcb_atom_t const> atoms) const

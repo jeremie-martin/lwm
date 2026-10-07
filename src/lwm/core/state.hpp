@@ -100,6 +100,7 @@ public:
     Client const& require(xcb_window_t id) const;
     Fixture const* find_fixture(xcb_window_t id) const;
     std::vector<Client const*> clients_by_order() const;
+    std::vector<xcb_window_t> registered_windows() const;
     // Established identity wins: saved fixtures keep their role and saved
     // clients stay clients. Only newcomers choose a role from current metadata.
     static WindowRole role(xcb_window_t id, WindowType type, bool transient, restart::Snapshot const* handoff);
@@ -365,7 +366,7 @@ private:
     std::optional<TileSlot> detach(Client const& client);
 
     // Admission, rules and metadata
-    std::optional<Client> classify(WindowObservation const& window, restart::Snapshot const* handoff, bool adopting);
+    std::optional<Client> classify(WindowObservation const& window, restart::Snapshot const* handoff);
     // An initial frame is either positioned or awaits the completed parent's presentation.
     struct CenteredSize
     {

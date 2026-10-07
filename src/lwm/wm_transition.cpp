@@ -48,16 +48,15 @@ void WindowManager::complete_transition()
     {
         commit_focus(*focus_request);
         // Explicit focus reasserts the focused state even if a client rewrote it.
-        if (auto it = outputs_.find(state_.active_window()); it != outputs_.end())
-            it->second.states.reset();
+        properties_.erase({ state_.active_window(), ewmh_.get()->_NET_WM_STATE });
     }
     bool urgency_changed = false;
     StateUpdates states;
     for (auto const& projected : clients)
         urgency_changed |= publish_properties(*projected.client, outputs_.at(projected.client->id), states);
-    ewmh_.update_window_states(states, WindowStates{ UINT16_MAX }); // LWM owns every value it publishes
+    publish_states(states, WindowStates{ UINT16_MAX }); // LWM owns every value it publishes
     publish_fixtures();
-    publish_root(clients, urgency_changed);
+    publish_root(urgency_changed);
     reconcile_stacking(fullscreen, focus_request.has_value());
     withdraw_removed();
     if (drain_requested_ || (moved && !state_.drag()))
@@ -171,13 +170,36 @@ bool WindowManager::publish(
 )
 {
     auto [it, inserted] = properties_.try_emplace({ window, property });
-    if (!inserted && (it->second && bytes ? *it->second == *bytes : !it->second && !bytes))
+    auto const& previous = std::get<std::optional<std::string>>(it->second);
+    if (!inserted && (previous && bytes ? *previous == *bytes : !previous && !bytes))
         return false;
-    if (bytes && !conn_.fits_property(bytes->size()))
+    if (!write_property(window, property, type, format, bytes))
     {
-        LWM_LOG_WARN_LIMIT(std::chrono::seconds(5), "Property too large to publish: window={:#x} bytes={}", window, bytes->size());
         if (inserted)
             properties_.erase(it);
+        return false;
+    }
+    it->second = bytes ? std::optional<std::string>{ *bytes } : std::nullopt;
+    return true;
+}
+
+// Size validation and submission have one owner for plain and shared properties.
+bool WindowManager::write_property(
+    xcb_window_t window,
+    xcb_atom_t property,
+    xcb_atom_t type,
+    uint8_t format,
+    std::optional<std::string_view> bytes
+)
+{
+    if (bytes && !conn_.fits_property(bytes->size()))
+    {
+        LWM_LOG_WARN_LIMIT(
+            std::chrono::seconds(5),
+            "Property too large to publish: window={:#x} bytes={}",
+            window,
+            bytes->size()
+        );
         return false;
     }
     if (bytes)
@@ -186,13 +208,49 @@ bool WindowManager::publish(
         );
     else
         xcb_delete_property(conn_.get(), window, property);
-    it->second = bytes;
     return true;
 }
 
 bool WindowManager::publish(xcb_window_t window, xcb_atom_t property, xcb_atom_t type, std::span<uint32_t const> words)
 {
-    return publish(window, property, type, 32, std::string_view(reinterpret_cast<char const*>(words.data()), words.size_bytes()));
+    return publish(
+        window,
+        property,
+        type,
+        32,
+        std::string_view(reinterpret_cast<char const*>(words.data()), words.size_bytes())
+    );
+}
+
+bool WindowManager::states_current(Client const& client) const
+{
+    auto it = properties_.find({ client.id, ewmh_.get()->_NET_WM_STATE });
+    auto* cached = it == properties_.end() ? nullptr : std::get_if<WindowStates>(&it->second);
+    return cached && *cached == published_states(client, client.id == state_.active_window());
+}
+
+// Shared properties are read in a batch. Cache only owned values, after observing
+// the desired value or submitting it; foreign atoms never enter the cache.
+void WindowManager::publish_states(StateUpdates const& updates, WindowStates owned)
+{
+    auto property = ewmh_.get()->_NET_WM_STATE;
+    std::vector<xcb_get_property_cookie_t> cookies;
+    for (auto const& [window, enabled] : updates)
+        cookies.push_back(xproperty::request(conn_.get(), window, property, XCB_ATOM_ATOM, UINT32_MAX));
+    for (size_t i = 0; i < updates.size(); ++i)
+    {
+        auto [window, enabled] = updates[i];
+        auto reply = xproperty::receive(conn_.get(), cookies[i]);
+        auto previous = xproperty::words(reply, XCB_ATOM_ATOM);
+        auto atoms = ewmh_.merge_states(previous, enabled, owned);
+        auto bytes = atoms.empty()
+            ? std::nullopt
+            : std::optional<std::string_view>{
+                  { reinterpret_cast<char const*>(atoms.data()), atoms.size() * sizeof(xcb_atom_t) }
+        };
+        if (std::ranges::equal(atoms, previous) || write_property(window, property, XCB_ATOM_ATOM, 32, bytes))
+            properties_[{ window, property }] = ewmh_.states(atoms);
+    }
 }
 
 // Per-window properties. Returns whether published urgency changed, which
@@ -229,11 +287,8 @@ bool WindowManager::publish_properties(Client const& client, Output& output, Sta
     }
     else
         publish(id, e->_NET_WM_FULLSCREEN_MONITORS, XCB_ATOM_CARDINAL, 32, std::nullopt);
-    if (auto states = published_states(client, id == state_.active_window()); output.states != states)
-    {
-        updates.emplace_back(id, states);
-        output.states = states;
-    }
+    if (!states_current(client))
+        updates.emplace_back(id, published_states(client, id == state_.active_window()));
     return urgency_changed;
 }
 
@@ -284,27 +339,14 @@ void WindowManager::commit_focus(uint32_t time)
 
 // Root publication
 
-void WindowManager::publish_root(std::vector<State::Projected> const& clients, bool urgency_changed)
+void WindowManager::publish_root(bool urgency_changed)
 {
     auto* e = ewmh_.get();
     xcb_window_t root = conn_.screen()->root;
-    // Clients arrive in registration order; fixtures merge into it.
-    std::vector<Fixture const*> fixtures;
-    for (auto const& [id, fixture] : state_.fixtures()) fixtures.push_back(&fixture);
-    std::ranges::sort(fixtures, { }, &Fixture::order);
-    std::vector<xcb_window_t> client_list;
-    auto fixture = fixtures.begin();
-    for (auto const& projected : clients)
-    {
-        for (; fixture != fixtures.end() && (*fixture)->order < projected.client->order; ++fixture)
-            client_list.push_back((*fixture)->id);
-        client_list.push_back(projected.client->id);
-    }
-    for (; fixture != fixtures.end(); ++fixture) client_list.push_back((*fixture)->id);
     // Panels use client-list changes to refresh urgency.
     if (urgency_changed)
         properties_.erase({ root, e->_NET_CLIENT_LIST });
-    publish(root, e->_NET_CLIENT_LIST, XCB_ATOM_WINDOW, client_list);
+    publish(root, e->_NET_CLIENT_LIST, XCB_ATOM_WINDOW, state_.registered_windows());
 
     // Monitor-major flat desktops. Workareas and viewports are relative to the
     // origin of the combined monitor bounds.
@@ -385,14 +427,14 @@ void WindowManager::withdraw_removed()
         }
         uint32_t const withdrawn[] = { XCB_ICCCM_WM_STATE_WITHDRAWN, 0 };
         publish(it->first, atoms_.wm_state, atoms_.wm_state, withdrawn);
-        properties_.erase(properties_.lower_bound({ it->first, 0 }), properties_.lower_bound({ it->first + 1, 0 }));
-        if (it->second.states)
-            unfocused.emplace_back(it->first, WindowStates{ });
+        unfocused.emplace_back(it->first, WindowStates{});
         it = outputs_.erase(it);
     }
     WindowStates focused;
     focused.set(WindowState::Focused);
-    ewmh_.update_window_states(unfocused, focused);
+    publish_states(unfocused, focused);
+    for (auto const& [window, states] : unfocused)
+        properties_.erase(properties_.lower_bound({ window, 0 }), properties_.upper_bound({ window, UINT32_MAX }));
 }
 
 // A round trip makes the server generate crossing events for what LWM just

@@ -170,7 +170,7 @@ int watch()
         attach = (type == XCB_DESTROY_NOTIFY && destroyed.window == wm)
             || (type == XCB_CLIENT_MESSAGE && message.type == manager && message.data.data32[1] == x.selection);
         if (attach)
-            wm = x.owner();
+            wm = x.lwm_owner();
     }
 }
 } // namespace

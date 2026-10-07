@@ -69,8 +69,7 @@ private:
         bool hidden = false;
         std::optional<State::Presentation> presentation; ///< Last on-screen rectangle and border
         std::optional<uint32_t> border_color;
-        std::optional<WindowStates> states; ///< Owned _NET_WM_STATE values, merged with other parties' atoms
-        std::optional<bool> urgent;         ///< Urgency mirrored into the application's WM_HINTS
+        std::optional<bool> urgent; ///< Urgency mirrored into the application's WM_HINTS
     };
 
     using StateUpdates = std::vector<std::pair<xcb_window_t, WindowStates>>;
@@ -80,9 +79,10 @@ private:
     Atoms atoms_{ };
     State state_;
     std::unordered_map<xcb_window_t, Output> outputs_;
-    // Last written bytes of every published property; nullopt records a deletion.
+    // Last submitted bytes (nullopt records deletion), or the owned EWMH states
+    // successfully merged into a shared property. Neither records refused writes.
     // An unknown property is always written, so a fresh WM replaces stale values.
-    std::map<std::pair<xcb_window_t, xcb_atom_t>, std::optional<std::string>> properties_;
+    std::map<std::pair<xcb_window_t, xcb_atom_t>, std::variant<std::optional<std::string>, WindowStates>> properties_;
     std::vector<xcb_window_t> fullscreen_owners_; ///< Logged ownership per monitor
     std::string config_path_;
     xcb_window_t wm_window_ = XCB_NONE; ///< Owns WM_S0, the EWMH supporting check, IPC and the restart marker
@@ -154,10 +154,19 @@ private:
         xcb_window_t window, xcb_atom_t property, xcb_atom_t type, uint8_t format, std::optional<std::string_view> bytes
     );
     bool publish(xcb_window_t window, xcb_atom_t property, xcb_atom_t type, std::span<uint32_t const> words);
+    bool write_property(
+        xcb_window_t window,
+        xcb_atom_t property,
+        xcb_atom_t type,
+        uint8_t format,
+        std::optional<std::string_view> bytes
+    );
+    bool states_current(Client const& client) const;
+    void publish_states(StateUpdates const& updates, WindowStates owned);
     bool publish_properties(Client const& client, Output& output, StateUpdates& updates);
     void publish_urgency(Client const& client, Output& output);
     void publish_fixtures();
-    void publish_root(std::vector<State::Projected> const& clients, bool urgency_changed);
+    void publish_root(bool urgency_changed);
     void reconcile_stacking(State::FullscreenVisibility const& fullscreen, bool reassert);
     void withdraw_removed();
     void commit_focus(uint32_t time);

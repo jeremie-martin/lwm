@@ -91,7 +91,10 @@ std::optional<Snapshot> decode(std::string_view text)
         Reader{},
         Reader::InputVarType(yyjson_doc_get_root(document.get()))
     );
-    if (!snapshot || snapshot->format != format || invariants::validate(*snapshot).has_value())
+    // Observation, released scratchpads and final fullscreen ordering can each
+    // rank the X11 window-ID space. Bound incoming ranks before any mutation.
+    constexpr uint64_t rank_limit = UINT64_MAX - 3 * uint64_t{ UINT32_MAX };
+    if (!snapshot || snapshot->format != format || invariants::validate(*snapshot, rank_limit).has_value())
         return std::nullopt;
     return std::move(*snapshot);
 }

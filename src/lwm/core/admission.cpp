@@ -32,7 +32,7 @@ WindowRole State::role(xcb_window_t id, WindowType type, bool transient, restart
 
 // Registration order is reserved in observation order, before placement or
 // restoration can reorder clients. Fixtures are installed immediately.
-std::optional<Client> State::classify(WindowObservation const& window, restart::Snapshot const* handoff, bool adopting)
+std::optional<Client> State::classify(WindowObservation const& window, restart::Snapshot const* handoff)
 {
     switch (role(window.id, window.type, window.transient_for != XCB_NONE, handoff))
     {
@@ -96,9 +96,6 @@ std::optional<Client> State::classify(WindowObservation const& window, restart::
     client.fullscreen_claim = states.has(WindowState::Fullscreen) ? next_claim_++ : 0;
     client.maximized_horz = states.has(WindowState::MaximizedHorz);
     client.maximized_vert = states.has(WindowState::MaximizedVert);
-    // Applications cannot minimize themselves; only LWM hides windows, and adoption
-    // restores what a predecessor published.
-    client.iconic = adopting && states.has(WindowState::Hidden);
     client.urgency.set(UrgencySource::App, states.has(WindowState::DemandsAttention) || window.urgent);
     client.accepts_input = window.accepts_input;
     client.supports_take_focus = window.supports_take_focus;
@@ -114,7 +111,7 @@ std::optional<Client> State::classify(WindowObservation const& window, restart::
 // focus before its claim.
 void State::admit(WindowObservation const& window)
 {
-    auto candidate = classify(window, nullptr, false);
+    auto candidate = classify(window, nullptr);
     if (!candidate)
         return;
     auto const* scratchpad = match_scratchpad(*candidate);
@@ -159,7 +156,7 @@ void State::adopt(
     std::vector<Client> candidates;
     std::unordered_map<xcb_window_t, WindowObservation const*> pending;
     for (auto const& window : windows)
-        if (auto candidate = classify(window, handoff, true))
+        if (auto candidate = classify(window, handoff))
         {
             candidates.push_back(std::move(*candidate));
             if (!handoff || !handoff->find(window.id))
@@ -467,12 +464,11 @@ void State::restore_graph(restart::Snapshot const& snapshot, std::span<Client> o
             if (!preferred || preferred->iconic)
                 workspace.preferred_tile = XCB_NONE;
         }
+    named_scratchpads_ = snapshot.named_scratchpads;
     for (auto& slot : named_scratchpads_)
-    {
-        auto saved = std::ranges::find(snapshot.named_scratchpads, slot.name, &NamedScratchpad::name);
-        if (saved != snapshot.named_scratchpads.end() && (!saved->window || find(*saved->window)))
-            slot.window = saved->window;
-    }
+        if (slot.window && !find(*slot.window))
+            slot.window = XCB_NONE;
+    reconcile_scratchpads();
     for (auto window : snapshot.pool)
         if (find(window))
             pool_scratchpad(window);

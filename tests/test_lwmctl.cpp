@@ -1,4 +1,4 @@
-#include "x11_test_harness.hpp"
+#include "state_watch.hpp"
 #include <catch2/catch_test_macros.hpp>
 #include <mutex>
 #include <thread>
@@ -7,8 +7,7 @@ using namespace lwm::test;
 
 namespace {
 // Owns WM_S0 on a display without a WM and answers each command with a scripted
-// reply, exercising the real CLI's protocol independently of LWM. A foreign WM
-// publishes no state.
+// reply, exercising the real CLI's protocol independently of LWM.
 struct FakeWm
 {
     enum class Answer
@@ -173,3 +172,63 @@ TEST_CASE("lwmctl offers local help and preserves option-like names after double
     CHECK(wm.received() == std::vector<std::string>{ "scratchpad toggle --help" });
 }
 
+TEST_CASE("lwmctl watch waits through foreign ownership and attaches to the next LWM", "[ipc][lwmctl][watch]")
+{
+    if (!display_available())
+        SKIP("X11 unavailable");
+    FakeWm wm("ok");
+    auto& conn = wm.conn;
+    auto utf8 = intern_atom(conn.get(), "UTF8_STRING");
+    auto state = intern_atom(conn.get(), "_LWM_STATE");
+    auto name = intern_atom(conn.get(), "_NET_WM_NAME");
+    auto selection = intern_atom(conn.get(), "WM_S0");
+    auto publish = [&](xcb_window_t window, char const* text)
+    {
+        xcb_change_property(conn.get(), XCB_PROP_MODE_REPLACE, window, state, utf8, 8, std::strlen(text), text);
+        xcb_flush(conn.get());
+    };
+    auto announce = [&](xcb_window_t window, bool message = true)
+    {
+        xcb_set_selection_owner(conn.get(), window, selection, XCB_CURRENT_TIME);
+        if (!message)
+            return;
+        xcb_client_message_event_t event{};
+        event.response_type = XCB_CLIENT_MESSAGE;
+        event.format = 32;
+        event.window = conn.root();
+        event.type = intern_atom(conn.get(), "MANAGER");
+        event.data.data32[1] = selection;
+        event.data.data32[2] = window;
+        xcb_send_event(
+            conn.get(),
+            0,
+            conn.root(),
+            XCB_EVENT_MASK_STRUCTURE_NOTIFY,
+            reinterpret_cast<char const*>(&event)
+        );
+        xcb_flush(conn.get());
+    };
+    publish(wm.window, "{\"lifetime\":1}");
+    Watcher watcher;
+    CHECK(watcher.state().at("lifetime") == 1);
+    auto foreign = create_window(conn, 0, 0, 1, 1);
+    xcb_change_property(conn.get(), XCB_PROP_MODE_REPLACE, foreign, name, utf8, 8, 7, "foreign");
+    publish(foreign, "{\"lifetime\":2}");
+    SECTION("MANAGER announcement") { announce(foreign); }
+    SECTION("Old owner destruction")
+    {
+        announce(foreign, false);
+        xcb_destroy_window(conn.get(), wm.window);
+        xcb_flush(conn.get());
+    }
+    CHECK_FALSE(watcher.line(std::chrono::milliseconds(200)));
+    publish(foreign, "{\"lifetime\":3}");
+    CHECK_FALSE(watcher.line(std::chrono::milliseconds(200)));
+    auto successor = create_window(conn, 0, 0, 1, 1);
+    xcb_change_property(conn.get(), XCB_PROP_MODE_REPLACE, successor, name, utf8, 8, 3, "lwm");
+    publish(successor, "{\"lifetime\":4}");
+    announce(successor);
+    CHECK(watcher.state().at("lifetime") == 4);
+    destroy_window(conn, foreign);
+    destroy_window(conn, successor);
+}

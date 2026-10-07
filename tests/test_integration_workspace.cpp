@@ -1033,3 +1033,25 @@ TEST_CASE("Integration: startup replaces client lists left by a previous manager
         free(reply);
     }
 }
+
+TEST_CASE("Integration: fresh adoption ignores a previous manager's hidden state", "[integration][ewmh][adoption]")
+{
+    auto& x11 = X11TestEnvironment::instance();
+    if (!x11.available())
+        SKIP("X11 unavailable");
+    X11Connection conn;
+    REQUIRE(conn.ok());
+    auto window = create_window(conn, 10, 10, 200, 150);
+    auto hidden = intern_atom(conn.get(), "_NET_WM_STATE_HIDDEN");
+    auto state = intern_atom(conn.get(), "_NET_WM_STATE");
+    xcb_change_property(conn.get(), XCB_PROP_MODE_REPLACE, window, state, XCB_ATOM_ATOM, 32, 1, &hidden);
+    map_window(conn, window);
+    REQUIRE(get_window_geometry(conn, window)); // Mapping precedes startup.
+    LwmProcess wm(x11.display(), "[workspaces]\nnames = ['1']\n");
+    REQUIRE(wait_for_wm_ready(conn, kTimeout));
+    REQUIRE(wait_for_active_window(conn, window, kTimeout));
+    CHECK_FALSE(is_hidden_offscreen(conn, window));
+    CHECK_FALSE(property_has_atom(conn.get(), window, state, hidden));
+    CHECK(get_wm_state(conn, window, intern_atom(conn.get(), "WM_STATE")) == XCB_ICCCM_WM_STATE_NORMAL);
+    destroy_window(conn, window);
+}

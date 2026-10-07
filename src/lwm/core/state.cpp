@@ -89,6 +89,17 @@ Fixture const* State::find_fixture(xcb_window_t id) const
     return it == fixtures_.end() ? nullptr : &it->second;
 }
 
+std::vector<xcb_window_t> State::registered_windows() const
+{
+    std::vector<std::pair<uint64_t, xcb_window_t>> ranked;
+    for (auto const& [id, client] : clients_) ranked.emplace_back(client.order, id);
+    for (auto const& [id, fixture] : fixtures_) ranked.emplace_back(fixture.order, id);
+    std::ranges::sort(ranked);
+    std::vector<xcb_window_t> windows;
+    for (auto const& [order, id] : ranked) windows.push_back(id);
+    return windows;
+}
+
 void State::mutated()
 {
     assert(!frozen_);

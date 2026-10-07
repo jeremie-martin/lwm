@@ -144,8 +144,7 @@ by the host; use stderr redirection for a file.
 Logging is asynchronous and best effort. A full queue drops new records so a slow
 sink does not block ordinary WM operations. **Normal shutdown drains the worker
 and can wait for a stalled output destination.** Exec restart does not drain and
-may lose queued messages. The [status schema](IPC.md#logging-status) explains what
-backend notifications measure.
+may lose queued messages.
 
 `lwm-notify [notify-send arguments...]` shows a notification and, when `WINDOWID`
 is numeric, marks that managed source window urgent. The optional

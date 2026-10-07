@@ -161,7 +161,10 @@ TEST_CASE("Integration: client message to invalid window ID is ignored", "[integ
     destroy_window(conn, w1);
 }
 
-TEST_CASE("Integration: a _NET_WM_STATE too large for one request is not rewritten", "[integration][client_message][ewmh]")
+TEST_CASE(
+    "Integration: refused shared state publication recovers when foreign atoms shrink",
+    "[integration][client_message][ewmh]"
+)
 {
     auto test_env = TestEnvironment::create();
     if (!test_env)
@@ -188,6 +191,42 @@ TEST_CASE("Integration: a _NET_WM_STATE too large for one request is not rewritt
     auto alive = run_lwmctl(test_env->wm, { "version" });
     REQUIRE(alive);
     CHECK(alive->exit_code == 0);
+    auto sticky = intern_atom(conn.get(), "_NET_WM_STATE_STICKY");
+    send_client_message(conn, window, net_wm_state, 1, sticky);
+    observe_title_after_events(conn, window);
+    REQUIRE(property_has_atom(conn.get(), window, net_wm_state, foreign.front()));
+    CHECK_FALSE(property_has_atom(conn.get(), window, net_wm_state, sticky));
+    // Keep a foreign atom but remove the oversized portion. No focus or state
+    // command reasserts the missing sticky value: the property change retries it.
+    xcb_change_property(conn.get(), XCB_PROP_MODE_REPLACE, window, net_wm_state, XCB_ATOM_ATOM, 32, 1, foreign.data());
+    xcb_flush(conn.get());
+    REQUIRE(wait_for_condition([&] { return property_has_atom(conn.get(), window, net_wm_state, sticky); }, kTimeout));
+    CHECK(property_has_atom(conn.get(), window, net_wm_state, foreign.front()));
+    CHECK(property_has_atom(conn.get(), window, net_wm_state, intern_atom(conn.get(), "_NET_WM_STATE_FOCUSED")));
+    // Withdrawal retains other state, clears focus, and forgets its publication;
+    // remapping publishes fresh state for the same window ID.
+    xcb_unmap_window(conn.get(), window);
+    xcb_flush(conn.get());
+    REQUIRE(wait_for_condition(
+        [&] { return get_wm_state(conn, window, intern_atom(conn.get(), "WM_STATE")) == XCB_ICCCM_WM_STATE_WITHDRAWN; },
+        kTimeout
+    ));
+    REQUIRE(wait_for_condition(
+        [&] {
+            return !property_has_atom(
+                conn.get(),
+                window,
+                net_wm_state,
+                intern_atom(conn.get(), "_NET_WM_STATE_FOCUSED")
+            );
+        },
+        kTimeout
+    ));
+    CHECK(property_has_atom(conn.get(), window, net_wm_state, sticky));
+    CHECK(property_has_atom(conn.get(), window, net_wm_state, foreign.front()));
+    map_window(conn, window);
+    REQUIRE(wait_for_active_window(conn, window, kTimeout));
+    CHECK(property_has_atom(conn.get(), window, net_wm_state, sticky));
     destroy_window(conn, other);
     destroy_window(conn, window);
 }

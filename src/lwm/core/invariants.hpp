@@ -16,7 +16,7 @@ struct Violation
 
 // Persistent ownership is checked before external observations can filter or
 // normalize it. Runtime checks use this same graph, then add live-only facts.
-inline std::optional<Violation> validate(restart::Snapshot const& graph)
+inline std::optional<Violation> validate(restart::Snapshot const& graph, uint64_t rank_limit = UINT64_MAX)
 {
     auto valid_geometry = [](Geometry rectangle) { return rectangle.width && rectangle.height; };
     std::unordered_set<std::string> outputs;
@@ -34,11 +34,10 @@ inline std::optional<Violation> validate(restart::Snapshot const& graph)
         return Violation{ "Focused monitor is invalid" };
     std::unordered_set<xcb_window_t> registered;
     std::unordered_set<uint64_t> ranks;
-    // Leave rank headroom for a whole X11 window-ID space during adoption.
     auto register_window = [&](auto const& window)
     {
-        return window.id != XCB_NONE && registered.insert(window.id).second
-            && window.order < UINT64_MAX - UINT32_MAX && ranks.insert(window.order).second;
+        return window.id != XCB_NONE && registered.insert(window.id).second && window.order < rank_limit
+            && ranks.insert(window.order).second;
     };
     for (auto const& fixture : graph.fixtures)
         if (!register_window(fixture))
@@ -52,9 +51,10 @@ inline std::optional<Violation> validate(restart::Snapshot const& graph)
         if (client.monitor >= graph.monitors.size()
             || client.workspace >= graph.monitors[client.monitor].workspaces.size())
             return Violation{ "Client has invalid monitor or workspace placement", client.id };
-        if (client.mru_order == UINT64_MAX || (client.mru_order && !recencies.insert(client.mru_order).second))
+        if (client.mru_order >= rank_limit || (client.mru_order && !recencies.insert(client.mru_order).second))
             return Violation{ "Client focus recency is invalid or duplicated", client.id };
-        if (client.fullscreen_claim == UINT64_MAX || (client.fullscreen() && !claims.insert(client.fullscreen_claim).second))
+        if (client.fullscreen_claim >= rank_limit
+            || (client.fullscreen() && !claims.insert(client.fullscreen_claim).second))
             return Violation{ "Client fullscreen claim is invalid or duplicated", client.id };
         if (client.urgency.sources > (static_cast<uint8_t>(UrgencySource::WmInitiated) | static_cast<uint8_t>(UrgencySource::App)))
             return Violation{ "Client urgency sources are invalid", client.id };

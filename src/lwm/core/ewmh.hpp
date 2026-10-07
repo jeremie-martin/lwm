@@ -26,9 +26,9 @@ public:
 
     // Decode the _NET_WM_STATE atoms LWM understands.
     WindowStates states(std::span<xcb_atom_t const> atoms) const;
-    // Replace the owned values in each window's _NET_WM_STATE, preserving atoms
-    // of other parties. Reads are pipelined across windows.
-    void update_window_states(std::span<std::pair<xcb_window_t, WindowStates> const> updates, WindowStates owned);
+    // Replace owned values in observed atoms, preserving other parties' atoms.
+    std::vector<xcb_atom_t>
+    merge_states(std::span<xcb_atom_t const> observed, WindowStates enabled, WindowStates owned) const;
 
     // First recognized _NET_WM_WINDOW_TYPE atom, or Normal.
     WindowType window_type(std::span<xcb_atom_t const> atoms) const;

@@ -355,7 +355,7 @@ inline xcb_atom_t intern_atom(xcb_connection_t* conn, char const* name)
 inline std::optional<std::vector<uint32_t>>
 read_property32(xcb_connection_t* conn, xcb_window_t window, xcb_atom_t atom, xcb_atom_t type)
 {
-    auto cookie = xcb_get_property(conn, 0, window, atom, XCB_GET_PROPERTY_TYPE_ANY, 0, 65536);
+    auto cookie = xcb_get_property(conn, 0, window, atom, XCB_GET_PROPERTY_TYPE_ANY, 0, UINT32_MAX);
     std::unique_ptr<xcb_get_property_reply_t, decltype(&free)> reply(
         xcb_get_property_reply(conn, cookie, nullptr),
         &free

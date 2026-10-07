@@ -197,5 +197,6 @@ always answers with the current state.
 
 The property dies with the WM's X connection. `watch` follows exec restart and failed-exec
 recovery to the successor, which announces itself with the ICCCM `MANAGER` message, and
-waits while no WM owns the screen. It fails only if no WM runs when it starts or the X
+checks the owner's LWM identity on every attachment, and waits while no LWM owns
+the screen, including while a foreign WM runs. It fails only if no LWM runs when it starts or the X
 connection closes. A closed stdout pipe ends it normally.
