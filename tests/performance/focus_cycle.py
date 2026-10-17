@@ -12,7 +12,7 @@ import subprocess
 import tempfile
 import time
 
-from transition_counts import X, WINDOW, ipc, stop, wait
+from transition_counts import X, WINDOW, ipc, published_state, stop, wait
 
 
 def measure(binary, count, operations, direction, transients, take_focus=False):
@@ -72,18 +72,19 @@ def measure(binary, count, operations, direction, transients, take_focus=False):
                              for w in json.loads(ipc(display_name, "window list"))["windows"]), wm, log_path)
         windows = set(windows)
         def step():
+            start = time.perf_counter_ns()
             ipc(display_name, "window focus " + direction)
-            target = json.loads(ipc(display_name, "window list"))["focused"]
+            duration = (time.perf_counter_ns() - start) / 1000
+            target = published_state(display)["windows"]["focused"]
             if target not in windows:
                 raise AssertionError("Focus returned a non-client")
-            return target
+            return duration, target
         for _ in range(count):
             step()
         durations, visited = [], set()
         for _ in range(operations):
-            start = time.perf_counter_ns()
-            target = step()
-            durations.append((time.perf_counter_ns() - start) / 1000)
+            duration, target = step()
+            durations.append(duration)
             visited.add(target)
         durations.sort()
         return dict(clients=count, operations=operations, direction=direction, transients=transients, take_focus=take_focus, distinct_targets=len(visited),

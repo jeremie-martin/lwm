@@ -2,6 +2,7 @@
 #include "wm_observations.hpp"
 #include "lwm/core/xproperty.hpp"
 #include <X11/Xlib.h>
+#include <catch2/generators/catch_generators.hpp>
 #include <xcb/xtest.h>
 
 using namespace lwm::test;
@@ -89,13 +90,12 @@ TEST_CASE("Integration: watch reports layout changes from bindings, IPC and spli
     ipc_ok("ratio reset");
     CHECK(near(workspace().at("ratio"), 0.5));
 
-    if (extension_available(conn, &xcb_test_id))
-    {
+    bool use_key = GENERATE(false, true);
+    if (use_key && extension_available(conn, &xcb_test_id))
         REQUIRE(send_key_chord(conn, XStringToKeysym("Super_L"), XStringToKeysym("l")));
-        CHECK(near(workspace().at("ratio"), 0.55));
-    }
     else
         ipc_ok("ratio adjust 0.05");
+    CHECK(near(workspace().at("ratio"), 0.55));
     ipc_ok("ratio adjust 0.05");
     CHECK(near(workspace().at("ratio"), 0.6));
     ipc_ok("ratio set 0.6123456789");

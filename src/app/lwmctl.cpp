@@ -160,16 +160,25 @@ int watch()
         }
         if (!std::cout)
             return 0; // A closed pipe ends watching normally.
-        auto event = lwm::reply(xcb_wait_for_event(x.conn()));
-        if (!event)
-            throw std::runtime_error("X connection closed");
-        uint8_t type = event->response_type & ~0x80;
-        auto const& destroyed = reinterpret_cast<xcb_destroy_notify_event_t const&>(*event);
-        auto const& message = reinterpret_cast<xcb_client_message_event_t const&>(*event);
-        attach = (type == XCB_DESTROY_NOTIFY && destroyed.window == wm)
-            || (type == XCB_CLIENT_MESSAGE && message.type == manager && message.data.data32[1] == x.selection);
-        if (attach)
-            wm = x.lwm_owner();
+        for (;;)
+        {
+            auto event = lwm::reply(xcb_wait_for_event(x.conn()));
+            if (!event)
+                throw std::runtime_error("X connection closed");
+            uint8_t type = event->response_type & ~0x80;
+            auto const& destroyed = reinterpret_cast<xcb_destroy_notify_event_t const&>(*event);
+            auto const& message = reinterpret_cast<xcb_client_message_event_t const&>(*event);
+            attach = (type == XCB_DESTROY_NOTIFY && destroyed.window == wm)
+                || (type == XCB_CLIENT_MESSAGE && message.type == manager && message.data.data32[1] == x.selection);
+            if (attach)
+            {
+                wm = x.lwm_owner();
+                break;
+            }
+            auto const& property = reinterpret_cast<xcb_property_notify_event_t const&>(*event);
+            if (type == XCB_PROPERTY_NOTIFY && property.window == wm && property.atom == x.state)
+                break;
+        }
     }
 }
 } // namespace
