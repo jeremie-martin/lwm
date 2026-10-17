@@ -276,6 +276,37 @@ The bar status helper is installed as `lwm-status`, beside `lwmctl`; bars call t
 command directly. Preview puts its build and script directories on `PATH`. Per-host
 helper copies and the `LWM_SCRIPTS` environment variable no longer own discovery.
 
+## Hide by mapping, without temporary geometry (2026-10-08)
+
+The 1×1 off-root presentation introduced on October 7 causes GTK 4 to answer the
+resize with a minimum-size request. That request can become the floating client's
+normal geometry, shrinking it when another window leaves fullscreen. A private
+GTK probe reproduced an 800×600 window returning as 122×38 after hide/show.
+Ignoring requests while hidden would only mask feedback: the toolkit can answer
+after showing, and applications legitimately update geometry while hidden.
+
+Use X unmapping to express visibility directly. This supersedes the earlier rejection
+of unmapping under “Visibility and boundary contracts.” Completion derives mapping
+from State's projection, and the existing output cache records submitted mapping.
+A shell-owned set of window/request sequences consumes acknowledgements of WM
+unmaps, including multiple queued hide/show cycles; it owns no visibility policy.
+Application unmaps and ICCCM synthetic withdrawal still release ownership. No
+saved-normal-geometry cache, temporary size, coordinate sentinel or request filter
+is needed. Ownership transfer maps clients again, and startup recognizes unmapped
+managed WM_STATE windows so a crashed predecessor cannot strand them.
+
+## Preserve direct focus with usable protocol timestamps (2026-10-08)
+
+Directly focusing clients that also support `WM_TAKE_FOCUS` is deliberate: March 26
+commit `d78347b` repaired keyboard input stranded by slow or buggy clients. Keep that
+behavior rather than changing focus policy during cleanup. A separate defect was
+sending timestamp zero at startup/restart, and pairing cached protocol time with a
+newer direct focus time. A responsive child-focusing client reproduced both missing
+and stale protocol times. Timestamp-less focus now observes fresh X server time and
+uses it for both requests, so the client's response is accepted. The observation
+uses the supporting window's existing name property and deferred event queue, at the
+cost of one synchronous round trip only for `WM_TAKE_FOCUS` clients.
+
 ## Open opportunities (2026-10-06)
 
 Candidates for subsystem-level simplification, not yet decided. Move an entry to a

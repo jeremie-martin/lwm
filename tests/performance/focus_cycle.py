@@ -15,7 +15,7 @@ import time
 from transition_counts import X, WINDOW, ipc, stop, wait
 
 
-def measure(binary, count, operations, direction, transients):
+def measure(binary, count, operations, direction, transients, take_focus=False):
     with tempfile.TemporaryDirectory(prefix="lwm-focus-") as temporary, ExitStack() as cleanup:
         directory = Path(temporary)
         read_fd, write_fd = os.pipe()
@@ -51,6 +51,10 @@ def measure(binary, count, operations, direction, transients):
             window = X.XCreateSimpleWindow(display, root, 20, 20, 300, 200, 0, 0, 0)
             value = WINDOW(atom("_NET_WM_WINDOW_TYPE_DIALOG"))
             X.XChangeProperty(display, window, atom("_NET_WM_WINDOW_TYPE"), atom("ATOM"), 32, 0, c.byref(value), 1)
+            if take_focus:
+                protocol = WINDOW(atom("WM_TAKE_FOCUS"))
+                X.XChangeProperty(display, window, atom("WM_PROTOCOLS"), atom("ATOM"),
+                                  32, 0, c.byref(protocol), 1)
             X.XMapWindow(display, window)
             windows.append(window)
         X.XSync(display, 0)
@@ -82,7 +86,7 @@ def measure(binary, count, operations, direction, transients):
             durations.append((time.perf_counter_ns() - start) / 1000)
             visited.add(target)
         durations.sort()
-        return dict(clients=count, operations=operations, direction=direction, transients=transients, distinct_targets=len(visited),
+        return dict(clients=count, operations=operations, direction=direction, transients=transients, take_focus=take_focus, distinct_targets=len(visited),
                     median_us=statistics.median(durations), p95_us=durations[int(.95 * (len(durations)-1))],
                     p99_us=durations[int(.99 * (len(durations)-1))])
 
@@ -92,10 +96,11 @@ if __name__ == "__main__":
     parser.add_argument("binary", type=Path)
     parser.add_argument("--clients", type=int, nargs="+", default=[10, 100, 500])
     parser.add_argument("--transients", choices=["none", "chain", "cycle"], default="none")
+    parser.add_argument("--take-focus", action="store_true", help="include WM_TAKE_FOCUS timestamp observation")
     parser.add_argument("--direction", choices=["next", "prev"], default="prev")
     parser.add_argument("--operations", type=int, default=2000)
     args = parser.parse_args()
     if min(args.clients) < 1 or args.operations < 1:
         parser.error("clients and operations must be positive")
     for count in args.clients:
-        print(json.dumps(measure(args.binary.resolve(strict=True), count, args.operations, args.direction, args.transients)), flush=True)
+        print(json.dumps(measure(args.binary.resolve(strict=True), count, args.operations, args.direction, args.transients, args.take_focus)), flush=True)

@@ -7,12 +7,20 @@
 
 namespace lwm {
 
-void WindowManager::restore_client_geometry()
+void WindowManager::restore_clients()
 {
     state_.end_drag(false);
     release_pointer();
     for (auto const& [window, client] : state_.clients())
-        write_geometry(window, outputs_[window], state_.presentation(client));
+    {
+        auto& output = outputs_[window];
+        write_geometry(window, output, state_.presentation(client));
+        if (!output.mapped)
+        {
+            xcb_map_window(conn_.get(), window);
+            output.mapped = true;
+        }
+    }
 }
 
 void WindowManager::scan_existing_windows(bool handoff)
@@ -23,7 +31,7 @@ void WindowManager::scan_existing_windows(bool handoff)
         auto* first = xcb_query_tree_children(tree.get());
         children.assign(first, first + xcb_query_tree_children_length(tree.get()));
     }
-    // Only viewable, redirected windows are adopted.
+    // Adopt redirected windows that are viewable or carry a managed WM_STATE.
     auto windows = observe(children, true);
 
     std::optional<std::pair<int16_t, int16_t>> pointer;
@@ -36,7 +44,7 @@ void WindowManager::scan_existing_windows(bool handoff)
 }
 
 // X resources follow the role State chose; observation already selected its
-// events. Adopted windows are already mapped; live popups are mapped directly.
+// events. Mapping is observed, not inferred from the admission path.
 void WindowManager::manage(WindowObservation const& observed, bool adopting)
 {
     auto window = observed.id;
@@ -48,7 +56,7 @@ void WindowManager::manage(WindowObservation const& observed, bool adopting)
             uint32_t below = XCB_STACK_MODE_BELOW;
             xcb_configure_window(conn_.get(), window, XCB_CONFIG_WINDOW_STACK_MODE, &below);
         }
-        outputs_[window].mapped = adopting;
+        outputs_[window].mapped = observed.mapped;
         return;
     }
     if (!state_.find(window))
@@ -59,7 +67,7 @@ void WindowManager::manage(WindowObservation const& observed, bool adopting)
     }
     // Seed publication with what the window already carries.
     auto& output = outputs_[window];
-    output.mapped = adopting;
+    output.mapped = observed.mapped;
     output.urgent = observed.urgent;
     xcb_grab_button(
         conn_.get(),

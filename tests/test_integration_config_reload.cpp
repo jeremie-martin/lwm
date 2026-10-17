@@ -211,7 +211,7 @@ apply = { workspace = 1 }
     REQUIRE(reload_result->exit_code == 0);
     REQUIRE(wait_for_property_cardinal(env->conn.get(), window, net_wm_desktop, 1, kTimeout));
     REQUIRE(wait_for_property_cardinal(env->conn.get(), env->conn.root(), net_current_desktop, 0, kTimeout));
-    REQUIRE(wait_for_condition([&]() { return is_hidden_offscreen(env->conn, window); }, kTimeout));
+    REQUIRE(wait_for_condition([&]() { return is_unmapped(env->conn, window); }, kTimeout));
     REQUIRE(wait_for_active_window(env->conn, fallback, kTimeout));
 
     destroy_window(env->conn, window);
@@ -248,7 +248,7 @@ size = { width = 0.8, height = 0.6 }
     set_window_wm_class(env->conn, scratchpad_window, "scratchpad-instance", "ScratchpadClass");
     map_window(env->conn, scratchpad_window);
     REQUIRE(wait_for_active_window(env->conn, scratchpad_window, kTimeout));
-    REQUIRE(wait_for_condition([&]() { return !is_hidden_offscreen(env->conn, scratchpad_window); }, kTimeout));
+    REQUIRE(wait_for_condition([&]() { return !is_unmapped(env->conn, scratchpad_window); }, kTimeout));
 
     auto saved_center = window_center(env->conn, scratchpad_window);
     REQUIRE(saved_center.has_value());
@@ -256,7 +256,7 @@ size = { width = 0.8, height = 0.6 }
     auto hide_result = send_ipc_command("scratchpad toggle scratchpad");
     REQUIRE(hide_result.has_value());
     REQUIRE(*hide_result == "ok");
-    REQUIRE(wait_for_condition([&]() { return is_hidden_offscreen(env->conn, scratchpad_window); }, kTimeout));
+    REQUIRE(wait_for_condition([&]() { return is_unmapped(env->conn, scratchpad_window); }, kTimeout));
     REQUIRE(wait_for_active_window(env->conn, fallback, kTimeout));
 
     xcb_warp_pointer(
@@ -277,7 +277,7 @@ size = { width = 0.8, height = 0.6 }
     auto reload_result = run_lwmctl(env->wm, { "config", "reload" });
     REQUIRE(reload_result.has_value());
     REQUIRE(reload_result->exit_code == 0);
-    REQUIRE(wait_for_condition([&]() { return !is_hidden_offscreen(env->conn, scratchpad_window); }, kTimeout));
+    REQUIRE(wait_for_condition([&]() { return !is_unmapped(env->conn, scratchpad_window); }, kTimeout));
     REQUIRE(wait_for_active_window(env->conn, fallback, kTimeout));
 
     destroy_window(env->conn, scratchpad_window);

@@ -729,11 +729,13 @@ inline std::optional<uint16_t> get_window_border_width(X11Connection& conn, xcb_
     return result;
 }
 
-inline bool is_hidden_offscreen(X11Connection& conn, xcb_window_t window)
+inline bool is_unmapped(X11Connection& conn, xcb_window_t window)
 {
-    auto geometry = get_window_geometry(conn, window);
-    return geometry.has_value() && geometry->x == -1 && geometry->y == -1
-        && geometry->width == 1 && geometry->height == 1 && get_window_border_width(conn, window) == 0;
+    auto* attributes = xcb_get_window_attributes_reply(
+        conn.get(), xcb_get_window_attributes(conn.get(), window), nullptr);
+    bool unmapped = attributes && attributes->map_state == XCB_MAP_STATE_UNMAPPED;
+    free(attributes);
+    return unmapped;
 }
 
 inline bool wait_for_window_geometry(

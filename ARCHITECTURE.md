@@ -147,6 +147,13 @@ This orders effects; it is not an atomic X transaction. Publication must not mut
 the frozen model. A ConfigureNotify mismatch forgets cached geometry without forcing
 completion; a conflicting urgency hint forces reconciliation. Explicit focus reasserts
 X focus, focused state and stacking even when the selected window is unchanged.
+For clients supporting `WM_TAKE_FOCUS`, the message and direct X focus use the same
+nonzero timestamp. A timestamp-less request observes a fresh server time by rewriting
+the supporting window's name and matching its property notification by request
+sequence. Property events on that private window are selected only during observation,
+so subsequent publication does not echo back into the event loop. The observation
+costs one round trip and defers other queued events without dispatching them; passive
+clients need no timestamp observation.
 
 The event loop polls the X connection, its only event source. X batches stop after 64 events or
 2 ms; pointer motion is coalesced up to the next non-motion event. Crossing drains only
@@ -251,11 +258,15 @@ clients except its managed transient descendants. `FullscreenVisibility` compute
 owners and exemptions once per pass, bounding cyclic parent hints.
 
 `iconic` is an explicit hide owned by a named scratchpad or the generic pool;
-visibility is derived. Hidden clients remain mapped with a borderless 1×1 server
-rectangle at (-1, -1), entirely outside the root. State retains normal geometry;
-the output cache records the submitted rectangle without a separate hidden flag.
-The shell restores model rectangles before client withdrawal, cooperative ownership
-transfer and restart handoff, while State still owns their geometry.
+visibility is derived. Completion unmaps hidden clients without changing their
+server geometry, and configures visible clients before mapping them. The output
+cache records submitted mapping and geometry; State owns visibility and normal
+geometry. The shell matches its own unmap acknowledgements by window and X request
+sequence, while application unmaps and synthetic withdrawal release ownership.
+Startup also observes unmapped windows with a managed `WM_STATE`, recovering clients
+after an interrupted predecessor. The shell restores model rectangles before client
+withdrawal and restores rectangles and mapping before cooperative ownership transfer
+or restart handoff, while State still owns their geometry.
 
 Stored split ratios obey the current configuration bounds. State bounds writes and
 reconciles every workspace during reload and restart topology rebinding, including

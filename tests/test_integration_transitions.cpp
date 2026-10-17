@@ -1,4 +1,5 @@
 #include "state_watch.hpp"
+#include "lwm/core/xproperty.hpp"
 #include "wm_observations.hpp"
 #include <catch2/catch_test_macros.hpp>
 #include <catch2/generators/catch_generators.hpp>
@@ -92,7 +93,7 @@ apply = { floating = false }
         REQUIRE(wait_for_condition(
             [&]
             {
-                return is_hidden_offscreen(conn, window);
+                return is_unmapped(conn, window);
             },
             timeout
         ));
@@ -157,8 +158,8 @@ TEST_CASE(
     auto has_visibility = [&](bool visible)
     {
         auto rect = get_window_geometry(conn, dialog);
-        return visible ? rect && rect->width == 320 && rect->height == 240 && rect->x >= 0 && rect->y >= 0
-                       : is_hidden_offscreen(conn, dialog);
+        return visible ? !is_unmapped(conn, dialog) && rect && rect->width == 320 && rect->height == 240 && rect->x >= 0 && rect->y >= 0
+                       : is_unmapped(conn, dialog);
     };
     REQUIRE(wait_for_condition([&] { return has_visibility(initially_transient); }, timeout));
 
@@ -203,8 +204,8 @@ TEST_CASE(
     map_window(conn, child);
     REQUIRE(wait_for_active_window(conn, child, timeout));
     REQUIRE(wait_for_x_input_focus(conn, child, timeout));
-    REQUIRE_FALSE(is_hidden_offscreen(conn, child));
-    REQUIRE(is_hidden_offscreen(conn, unrelated));
+    REQUIRE_FALSE(is_unmapped(conn, child));
+    REQUIRE(is_unmapped(conn, unrelated));
     REQUIRE(is_stacked_above(conn, child, dialog));
     REQUIRE(is_stacked_above(conn, dialog, owner));
 
@@ -216,33 +217,33 @@ TEST_CASE(
     send_client_message(conn, unrelated, activate, 2);
     observe_title_after_events(conn, child);
     REQUIRE(wait_for_active_window(conn, child, timeout));
-    REQUIRE(is_hidden_offscreen(conn, unrelated));
+    REQUIRE(is_unmapped(conn, unrelated));
 
     // Ancestry exempts suppression; it does not prevent stashing. An
     // explicit activation must also recognize the ancestry before restoring.
     ipc_ok("scratchpad stash");
     observe_title_after_events(conn, child);
-    REQUIRE(is_hidden_offscreen(conn, child));
+    REQUIRE(is_unmapped(conn, child));
     send_client_message(conn, child, activate, 2);
     REQUIRE(wait_for_active_window(conn, child, timeout));
-    REQUIRE_FALSE(is_hidden_offscreen(conn, child));
+    REQUIRE_FALSE(is_unmapped(conn, child));
 
     // Changing an intermediate link updates the whole chain without changing
     // the child's hint, and focus repairs when that child becomes suppressed.
     xcb_delete_property(conn.get(), dialog, XCB_ATOM_WM_TRANSIENT_FOR);
     observe_title_after_events(conn, dialog);
-    REQUIRE(is_hidden_offscreen(conn, dialog));
-    REQUIRE(is_hidden_offscreen(conn, child));
+    REQUIRE(is_unmapped(conn, dialog));
+    REQUIRE(is_unmapped(conn, child));
     REQUIRE(wait_for_active_window(conn, owner, timeout));
     set_transient_for(conn, dialog, owner);
     observe_title_after_events(conn, dialog);
-    REQUIRE_FALSE(is_hidden_offscreen(conn, child));
+    REQUIRE_FALSE(is_unmapped(conn, child));
     REQUIRE(is_stacked_above(conn, child, dialog));
     REQUIRE(is_stacked_above(conn, dialog, owner));
 
     destroy_window(conn, dialog);
     observe_title_after_events(conn, child);
-    REQUIRE(is_hidden_offscreen(conn, child));
+    REQUIRE(is_unmapped(conn, child));
     destroy_window(conn, child);
     destroy_window(conn, unrelated);
     destroy_window(conn, owner);
@@ -288,9 +289,9 @@ apply = { fullscreen = true }
     auto expect_families = [&](Family const& shown, Family const& hidden)
     {
         for (auto window : { shown.root, shown.dialog, shown.child })
-            CHECK(require_window_geometry(conn, window).x >= 0);
+            CHECK_FALSE(is_unmapped(conn, window));
         for (auto window : { hidden.root, hidden.dialog, hidden.child })
-            CHECK(is_hidden_offscreen(conn, window));
+            CHECK(is_unmapped(conn, window));
         CHECK(is_stacked_above(conn, shown.child, shown.dialog));
         CHECK(is_stacked_above(conn, shown.dialog, shown.root));
     };
@@ -350,7 +351,7 @@ TEST_CASE(
     observe_title_after_events(conn, window);
     REQUIRE(require_property_cardinal(conn.get(), window, desktop) == 1);
     REQUIRE(get_window_geometry(conn, window));
-    REQUIRE(is_hidden_offscreen(conn, window));
+    REQUIRE(is_unmapped(conn, window));
 
     SECTION("Window type changes to dialog")
     {
@@ -423,7 +424,8 @@ apply = { floating = true, workspace = 0, sticky = true, fullscreen = false, geo
                 [&]
                 {
                     auto rect = get_window_geometry(conn, window);
-                    return rect && (hidden ? is_hidden_offscreen(conn, window) : *rect == WindowGeometry{ 60, 70, 310, 210 });
+                    return rect && (hidden ? is_unmapped(conn, window)
+                        : !is_unmapped(conn, window) && *rect == WindowGeometry{ 60, 70, 310, 210 });
                 },
                 timeout
             ));
@@ -610,8 +612,8 @@ TEST_CASE("Integration: focusing a window on another workspace settles focus and
     auto second_geometry = get_window_geometry(conn, second);
     REQUIRE(first_geometry);
     REQUIRE(second_geometry);
-    CHECK(first_geometry->x >= 0);
-    CHECK(is_hidden_offscreen(conn, second));
+    CHECK_FALSE(is_unmapped(conn, first));
+    CHECK(is_unmapped(conn, second));
     auto reply = send_ipc_command("window list");
     REQUIRE(reply);
     CHECK(nlohmann::json::parse(reply->substr(3)).at("focused") == first);
@@ -1133,7 +1135,8 @@ TEST_CASE(
         REQUIRE(active);
         REQUIRE(hidden);
         CHECK(active->x == 0);
-        CHECK(is_hidden_offscreen(conn, owner == first ? second : first));
+        CHECK_FALSE(is_unmapped(conn, owner));
+        CHECK(is_unmapped(conn, owner == first ? second : first));
     }
     destroy_window(conn, first);
     destroy_window(conn, second);
@@ -1216,7 +1219,8 @@ apply = { fullscreen = false }
         REQUIRE(rectangle);
         CHECK(rectangle->x == 0);
         CHECK(rectangle->width == conn.screen()->width_in_pixels);
-        CHECK(is_hidden_offscreen(conn, suppressed));
+        CHECK(is_unmapped(conn, suppressed));
+        CHECK_FALSE(is_unmapped(conn, owner));
         CHECK(has_state(conn, owner, fullscreen));
         CHECK(get_window_property_window(conn.get(), conn.root(), intern_atom(conn.get(), "_NET_ACTIVE_WINDOW")) == owner);
     };
@@ -1295,7 +1299,8 @@ TEST_CASE(
         REQUIRE(parked);
         CHECK(shown->x == 0);
         CHECK(shown->width == conn.screen()->width_in_pixels);
-        CHECK(is_hidden_offscreen(conn, suppressed));
+        CHECK(is_unmapped(conn, suppressed));
+        CHECK_FALSE(is_unmapped(conn, owner));
         CHECK(has_state(conn, owner, fullscreen));
         CHECK(has_state(conn, suppressed, fullscreen));
     };
@@ -1385,5 +1390,117 @@ apply = { floating = true, geometry = { )";
         180
     );
     REQUIRE(wait_for_window_geometry(conn, window, 200, 150, 280, 180));
+    destroy_window(conn, window);
+}
+
+TEST_CASE(
+    "Integration: hiding a floating application never changes its size or position",
+    "[integration][transition][geometry][visibility][fullscreen]"
+)
+{
+    auto reason = GENERATE("workspace", "scratchpad", "fullscreen", "initial-fullscreen");
+    CAPTURE(reason);
+    auto env = TestEnvironment::create(R"(
+[workspaces]
+names = ['one', 'two']
+[[rules]]
+match = { class = '^stc$' }
+apply = { floating = true, geometry = { width = 640, height = 480 } }
+)");
+    REQUIRE(env);
+    auto& conn = env->conn;
+    auto floating = create_window(conn, 40, 50, 310, 210);
+    set_window_wm_class(conn, floating, "stc", "stc");
+    uint32_t interest = XCB_EVENT_MASK_STRUCTURE_NOTIFY;
+    xcb_change_window_attributes(conn.get(), floating, XCB_CW_EVENT_MASK, &interest);
+    map_window(conn, floating);
+    REQUIRE(wait_for_active_window(conn, floating, timeout));
+    // Preserve a user-chosen position as well as the rule's initial size.
+    uint32_t position[] = { 123, 87 };
+    xcb_configure_window(conn.get(), floating, XCB_CONFIG_WINDOW_X | XCB_CONFIG_WINDOW_Y, position);
+    REQUIRE(wait_for_window_geometry(conn, floating, 123, 87, 640, 480));
+    auto normal = require_window_geometry(conn, floating);
+    auto border = get_window_border_width(conn, floating);
+    while (auto event = lwm::reply(xcb_poll_for_event(conn.get()))) { }
+    auto state = intern_atom(conn.get(), "_NET_WM_STATE");
+    auto fullscreen = intern_atom(conn.get(), "_NET_WM_STATE_FULLSCREEN");
+    xcb_window_t peer = XCB_NONE;
+    if (std::string_view(reason).find("fullscreen") != std::string_view::npos)
+    {
+        peer = create_window(conn, 20, 30, 400, 300);
+        if (std::string_view(reason) == "initial-fullscreen")
+            xcb_change_property(conn.get(), XCB_PROP_MODE_REPLACE, peer, state, XCB_ATOM_ATOM, 32, 1, &fullscreen);
+        map_window(conn, peer);
+        REQUIRE(wait_for_active_window(conn, peer, timeout));
+        if (std::string_view(reason) == "fullscreen")
+            send_client_message(conn, peer, state, 1, fullscreen);
+        REQUIRE(wait_for_condition([&] { return has_state(conn, peer, fullscreen); }, timeout));
+    }
+    else if (std::string_view(reason) == "workspace")
+        ipc_ok("workspace switch 1");
+    else
+        ipc_ok("scratchpad stash");
+    REQUIRE(wait_for_condition([&] { return is_unmapped(conn, floating); }, timeout));
+    observe_title_after_events(conn, floating);
+    CHECK(require_window_geometry(conn, floating) == normal);
+    CHECK(get_window_border_width(conn, floating) == border);
+    REQUIRE(ipc_json("window list").at("windows").at(0).at("kind") == "floating");
+    if (peer != XCB_NONE)
+        send_client_message(conn, peer, state, 0, fullscreen);
+    else if (std::string_view(reason) == "workspace")
+        ipc_ok("workspace switch 0");
+    else
+        ipc_ok("scratchpad cycle");
+    REQUIRE(wait_for_condition([&] { return !is_unmapped(conn, floating); }, timeout));
+    observe_title_after_events(conn, floating);
+    CHECK(require_window_geometry(conn, floating) == normal);
+    CHECK(get_window_border_width(conn, floating) == border);
+    // A toolkit must never receive a temporary resize it could answer with a
+    // minimum-size request or copy into WM_NORMAL_HINTS.
+    while (auto event = lwm::reply(xcb_poll_for_event(conn.get())))
+        if ((event->response_type & 0x7f) == XCB_CONFIGURE_NOTIFY)
+        {
+            auto const& configure = reinterpret_cast<xcb_configure_notify_event_t const&>(*event);
+            if (configure.window == floating)
+            {
+                CHECK(configure.x == normal.x);
+                CHECK(configure.y == normal.y);
+                CHECK(configure.width == normal.width);
+                CHECK(configure.height == normal.height);
+            }
+        }
+    destroy_window(conn, floating);
+    if (peer != XCB_NONE)
+        destroy_window(conn, peer);
+}
+
+TEST_CASE(
+    "Integration: queued WM unmaps preserve ownership while synthetic withdrawal releases it",
+    "[integration][transition][visibility]"
+)
+{
+    auto env = TestEnvironment::create("[workspaces]\nnames = ['one', 'two']\n");
+    REQUIRE(env);
+    auto& conn = env->conn;
+    auto window = create_window(conn, 40, 50, 310, 210);
+    map_window(conn, window);
+    REQUIRE(wait_for_active_window(conn, window, timeout));
+    auto desktop = intern_atom(conn.get(), "_NET_CURRENT_DESKTOP");
+    for (int i = 0; i < 32; ++i)
+        send_client_message(conn, conn.root(), desktop, i % 2 == 0 ? 1 : 0);
+    observe_title_after_events(conn, window);
+    CHECK_FALSE(is_unmapped(conn, window));
+    REQUIRE(ipc_json("window list").at("windows").at(0).at("id") == window);
+    ipc_ok("workspace switch 1");
+    REQUIRE(is_unmapped(conn, window));
+    xcb_unmap_notify_event_t withdrawal{ };
+    withdrawal.response_type = XCB_UNMAP_NOTIFY;
+    withdrawal.event = conn.root();
+    withdrawal.window = window;
+    xcb_send_event(conn.get(), false, conn.root(),
+        XCB_EVENT_MASK_SUBSTRUCTURE_NOTIFY | XCB_EVENT_MASK_SUBSTRUCTURE_REDIRECT,
+        reinterpret_cast<char const*>(&withdrawal));
+    xcb_flush(conn.get());
+    REQUIRE(wait_for_condition([&] { return ipc_json("window list").at("windows").empty(); }, timeout));
     destroy_window(conn, window);
 }

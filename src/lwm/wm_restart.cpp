@@ -25,7 +25,7 @@ void WindowManager::read_handoff()
 
 void WindowManager::prepare_restart()
 {
-    restore_client_geometry();
+    restore_clients();
     auto root = conn_.screen()->root;
     // A snapshot the server would refuse is dropped; the successor adopts windows afresh.
     auto text = restart::encode(state_.snapshot());

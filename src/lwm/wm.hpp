@@ -71,10 +71,6 @@ private:
         std::optional<bool> urgent; ///< Urgency mirrored into the application's WM_HINTS
     };
 
-    // Root coordinates start at zero. This borderless mapped pixel is outside
-    // the root regardless of the client's normal size or monitor topology.
-    static constexpr State::Presentation hidden_presentation{ { -1, -1, 1, 1 }, 0 };
-
     using StateUpdates = std::vector<std::pair<xcb_window_t, WindowStates>>;
 
     Connection conn_;
@@ -82,6 +78,8 @@ private:
     Atoms atoms_{ };
     State state_;
     std::unordered_map<xcb_window_t, Output> outputs_;
+    // X acknowledgements of our own unmaps are not application withdrawals.
+    std::set<std::pair<xcb_window_t, uint32_t>> unmap_replies_;
     // Last submitted bytes (nullopt records deletion), or the owned EWMH states
     // successfully merged into a shared property. Neither records refused writes.
     // An unknown property is always written, so a fresh WM replaces stale values.
@@ -132,6 +130,7 @@ private:
     std::expected<void, std::string> reload_config(std::string_view source);
     bool launch_program(std::vector<std::string> const& command, std::string_view source);
     void close_window(xcb_window_t window);
+    uint32_t server_time();
     void send_protocol_message(xcb_window_t window, xcb_atom_t protocol, uint32_t timestamp);
     void set_root_cursor(xcb_cursor_t cursor);
 
@@ -151,7 +150,7 @@ private:
     // wm_transition.cpp: operation completion and publication
     void complete_transition();
     bool publish_clients(std::vector<State::Projected> const& clients);
-    void restore_client_geometry();
+    void restore_clients();
     bool write_geometry(xcb_window_t window, Output& output, State::Presentation const& presentation);
     void send_configure_notify(xcb_window_t window, State::Presentation const& presentation);
     bool publish(

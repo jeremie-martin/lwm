@@ -250,6 +250,7 @@ struct WindowObservation
     uint32_t user_time = 0;
     xcb_window_t user_time_window = XCB_NONE;
     std::optional<FullscreenMonitors> fullscreen_monitors;
+    bool mapped = false;            ///< Observed X mapping for shell publication
     std::optional<Geometry> geometry; ///< Current server rectangle
     SizeHints size_hints;
     DockStrut strut;

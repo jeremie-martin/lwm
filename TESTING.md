@@ -86,13 +86,28 @@ termination. Use the CLI only when its process or output behavior is the contrac
 Tests use private log destinations, never the host journal. Direct
 Catch runs lack CTest's outer timeout, so fixture waits must remain bounded.
 
-Use `is_hidden_offscreen()` to assert the complete hidden server rectangle; a
-negative x coordinate alone does not establish invisibility. Check normal geometry
+Use `is_unmapped()` to assert hidden server mapping, and check that hiding does
+not change a floating client's position, size or border. Check normal geometry
 after showing, withdrawal/remapping (including a tiled drag preview versus an applied
 floating move) and cooperative ownership transfer, as well as
 restart handoff including malformed-snapshot fallback. The private Xvfb has two
 X screens so `[screen]` tests can verify that nonzero selectors fail without touching
 screen 0. RandR multi-output tests remain a separate Xorg fixture.
+
+### Application feedback
+
+Passive XCB windows verify submitted effects, but do not answer them as toolkits do.
+`test_integration_feedback.cpp` supplies a responsive client that answers undersized
+configurations with minimum-size requests and size hints, including feedback delayed
+until after reveal. Its control case verifies legitimate hidden requests still work.
+The regression must fail when hiding is mutated back to a 1×1 resize; ignoring
+requests while hidden cannot satisfy the delayed-feedback case.
+
+A geometry assertion does not prove visibility: pair restoration checks with mapping
+checks. Likewise, `_NET_ACTIVE_WINDOW` alone does not prove keyboard delivery. The
+focus-input fixture responds to `WM_TAKE_FOCUS` by focusing its child using the supplied
+timestamp, across cold start, restart and IPC focus after an external focus change.
+These consumer responses complement graph invariants and protocol-value assertions.
 
 ### Displays and generated sequences
 
@@ -140,7 +155,8 @@ python3 tests/performance/logging_bench.py --binary build/release/src/app/lwm
   command it counts costs exactly the read of its request. Synthetic
   motion controls batching; XTEST integration tests cover real grabs.
 - `focus_cycle.py` measures completed IPC focus calls and distinct targets. Keep
-  direction and client count fixed; `--transients chain|cycle` adds ancestry work.
+  direction and client count fixed; `--transients chain|cycle` adds ancestry work, and
+  `--take-focus` includes fresh server-time observation for timestamp-less focus.
 - `restart_resources.py` uses libXRes to check that repeated restart and failed-exec
   recovery release predecessor X clients, including an empty-display restart.
 - `logging_bench.py` measures workspace transitions, idle cost, blocked output, and

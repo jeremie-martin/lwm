@@ -598,7 +598,7 @@ TEST_CASE(
         CHECK(gb.x < ga.x);
     CHECK(ga.y < gn.y);
     ipc_ok("workspace switch 0");
-    REQUIRE(wait_for_condition([&] { return is_hidden_offscreen(conn, b); }, timeout));
+    REQUIRE(wait_for_condition([&] { return is_unmapped(conn, b); }, timeout));
     ipc_ok("workspace toggle");
     REQUIRE(wait_for_active_window(conn, b, timeout));
     if (removed)
@@ -646,7 +646,7 @@ match = { class = "RecallNamed" }
         set_window_wm_class(conn, window, "recall", "RecallNamed");
     map_window(conn, window);
     if (named)
-        REQUIRE(wait_for_condition([&] { return is_hidden_offscreen(conn, window); }, timeout));
+        REQUIRE(wait_for_condition([&] { return is_unmapped(conn, window); }, timeout));
     else
     {
         REQUIRE(wait_for_active_window(conn, window, timeout));
@@ -659,7 +659,7 @@ match = { class = "RecallNamed" }
     REQUIRE(wait_for_active_window(conn, window, timeout));
     ipc_ok("monitor focus next");
     ipc_ok("workspace switch 1");
-    REQUIRE_FALSE(is_hidden_offscreen(conn, window));
+    REQUIRE_FALSE(is_unmapped(conn, window));
     ipc_ok(recall);
     INFO(ipc_ok("state"));
     REQUIRE(wait_for_active_window(conn, window, timeout));

@@ -81,8 +81,13 @@ bool WindowManager::publish_clients(std::vector<State::Projected> const& clients
     for (auto const& [client, presentation] : clients)
     {
         auto& output = outputs_[client->id];
-        if (!presentation)
-            moved |= write_geometry(client->id, output, hidden_presentation);
+        if (!presentation && output.mapped)
+        {
+            auto cookie = xcb_unmap_window(conn_.get(), client->id);
+            unmap_replies_.emplace(client->id, cookie.sequence);
+            output.mapped = false;
+            moved = true;
+        }
     }
     // Keep a split resize's configure requests together on the server.
     auto const& drag = state_.drag();
@@ -103,10 +108,11 @@ bool WindowManager::publish_clients(std::vector<State::Projected> const& clients
     if (resizing_tiles)
         xcb_ungrab_server(conn_.get());
     for (auto const& projected : clients)
-        if (auto& output = outputs_.at(projected.client->id); !output.mapped)
+        if (auto& output = outputs_.at(projected.client->id); projected.presentation && !output.mapped)
         {
             xcb_map_window(conn_.get(), projected.client->id);
             output.mapped = true;
+            moved = true;
         }
     return moved;
 }
@@ -324,7 +330,11 @@ void WindowManager::commit_focus(uint32_t time)
     if (auto const* client = state_.find(state_.active_window()))
     {
         if (client->supports_take_focus)
-            send_protocol_message(client->id, atoms_.wm_take_focus, time ? time : last_event_time_);
+        {
+            if (time == XCB_CURRENT_TIME)
+                time = server_time();
+            send_protocol_message(client->id, atoms_.wm_take_focus, time);
+        }
         xcb_set_input_focus(conn_.get(), XCB_INPUT_FOCUS_POINTER_ROOT, client->id, time);
     }
     else
@@ -422,6 +432,8 @@ void WindowManager::withdraw_removed()
         uint32_t const withdrawn[] = { XCB_ICCCM_WM_STATE_WITHDRAWN, 0 };
         publish(it->first, atoms_.wm_state, atoms_.wm_state, withdrawn);
         unfocused.emplace_back(it->first, WindowStates{});
+        unmap_replies_.erase(unmap_replies_.lower_bound({ it->first, 0 }),
+            unmap_replies_.upper_bound({ it->first, UINT32_MAX }));
         it = outputs_.erase(it);
     }
     WindowStates focused;

@@ -40,7 +40,7 @@ TEST_CASE("Integration: tile swaps skip stashed windows", "[integration][ipc][ac
     REQUIRE(wait_for_active_window(conn, hidden, kTimeout));
     ipc_ok("scratchpad stash");
     REQUIRE(wait_for_active_window(conn, first, kTimeout));
-    REQUIRE(is_hidden_offscreen(conn, hidden));
+    REQUIRE(is_unmapped(conn, hidden));
 
     xcb_window_t active = first;
     if (extra_tile)
@@ -56,7 +56,7 @@ TEST_CASE("Integration: tile swaps skip stashed windows", "[integration][ipc][ac
     {
         ipc_ok(std::string("window swap ") + direction);
         CHECK(window_entry(hidden).at("iconic") == true);
-        CHECK(is_hidden_offscreen(conn, hidden));
+        CHECK(is_unmapped(conn, hidden));
         auto expected = extra_tile && std::string_view(layout) == "monocle" && i == 0 ? first : active;
         REQUIRE(wait_for_active_window(conn, expected, kTimeout));
         if (extra_tile && std::string_view(layout) == "master-stack")
@@ -261,7 +261,7 @@ TEST_CASE("Integration: pooled tiles stay tiled and consistent while hidden", "[
     auto hidden = window_entry(pooled);
     CHECK(hidden.at("kind") == "tiled");
     CHECK(hidden.at("iconic") == true);
-    CHECK(is_hidden_offscreen(conn, pooled));
+    CHECK(is_unmapped(conn, pooled));
 
     // Activation by a pager shows the tile in place; it stays in the pool.
     auto active = intern_atom(conn.get(), "_NET_ACTIVE_WINDOW");

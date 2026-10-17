@@ -17,7 +17,7 @@ __attribute__((constructor)) static void initialize(void)
     int fd = open(path, O_RDWR | O_CLOEXEC);
     if (fd < 0)
         abort();
-    void* mapping = mmap(NULL, 6 * sizeof(uint64_t), PROT_READ | PROT_WRITE, MAP_SHARED, fd, 0);
+    void* mapping = mmap(NULL, 7 * sizeof(uint64_t), PROT_READ | PROT_WRITE, MAP_SHARED, fd, 0);
     close(fd);
     if (mapping == MAP_FAILED)
         abort();
@@ -81,4 +81,18 @@ xcb_get_geometry_cookie_t xcb_get_geometry(xcb_connection_t* connection, xcb_dra
     REAL(xcb_get_geometry);
     COUNT(5);
     return real(connection, drawable);
+}
+
+xcb_void_cookie_t xcb_map_window(xcb_connection_t* connection, xcb_window_t window)
+{
+    REAL(xcb_map_window);
+    COUNT(6);
+    return real(connection, window);
+}
+
+xcb_void_cookie_t xcb_unmap_window(xcb_connection_t* connection, xcb_window_t window)
+{
+    REAL(xcb_unmap_window);
+    COUNT(6);
+    return real(connection, window);
 }

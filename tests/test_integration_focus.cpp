@@ -318,7 +318,7 @@ TEST_CASE("Integration: floating window grabs focus and yields on destroy", "[in
 }
 
 TEST_CASE(
-    "Integration: floating workspace rule does not focus a hidden mapped window",
+    "Integration: floating workspace rule does not focus a hidden window",
     "[integration][focus][floating][rules][workspace]"
 )
 {
@@ -343,7 +343,7 @@ TEST_CASE(
 
     REQUIRE(wait_for_property_cardinal(conn.get(), floating, net_wm_desktop, 1, kTimeout));
     REQUIRE(wait_for_property_cardinal(conn.get(), conn.root(), net_current_desktop, 0, kTimeout));
-    REQUIRE(wait_for_condition([&]() { return is_hidden_offscreen(conn, floating); }, kTimeout));
+    REQUIRE(wait_for_condition([&]() { return is_unmapped(conn, floating); }, kTimeout));
     REQUIRE(wait_for_active_window(conn, fallback, kTimeout));
 
     destroy_window(conn, floating);
@@ -351,7 +351,7 @@ TEST_CASE(
 }
 
 TEST_CASE(
-    "Integration: hidden floating configure request stays off-screen until shown",
+    "Integration: hidden floating configure request stays unmapped until shown",
     "[integration][focus][floating][rules][workspace][configure]"
 )
 {
@@ -375,7 +375,7 @@ TEST_CASE(
     map_window(conn, floating);
 
     REQUIRE(wait_for_property_cardinal(conn.get(), floating, net_wm_desktop, 1, kTimeout));
-    REQUIRE(wait_for_condition([&]() { return is_hidden_offscreen(conn, floating); }, kTimeout));
+    REQUIRE(wait_for_condition([&]() { return is_unmapped(conn, floating); }, kTimeout));
 
     uint32_t values[] = { 100, 110, 260, 180 };
     xcb_configure_window(
@@ -387,7 +387,7 @@ TEST_CASE(
     xcb_flush(conn.get());
 
     observe_title_after_events(conn, floating);
-    REQUIRE(is_hidden_offscreen(conn, floating));
+    REQUIRE(is_unmapped(conn, floating));
     REQUIRE(wait_for_active_window(conn, fallback, kTimeout));
 
     send_client_message(conn, conn.root(), net_current_desktop, 1);
@@ -396,8 +396,8 @@ TEST_CASE(
         [&]()
         {
             auto geometry = get_window_geometry(conn, floating);
-            return geometry.has_value() && geometry->x == 100 && geometry->y == 110 && geometry->width == 260
-                && geometry->height == 180;
+            return !is_unmapped(conn, floating) && geometry.has_value() && geometry->x == 100
+                && geometry->y == 110 && geometry->width == 260 && geometry->height == 180;
         },
         kTimeout
     ));
@@ -1030,7 +1030,7 @@ TEST_CASE(
     send_client_message(conn, sticky, net_wm_state, 0, net_wm_state_sticky, 0, 0, 0);
 
     REQUIRE(wait_for_condition([&]() { return !has_state(conn, sticky, net_wm_state_sticky); }, kTimeout));
-    REQUIRE(wait_for_condition([&]() { return is_hidden_offscreen(conn, sticky); }, kTimeout));
+    REQUIRE(wait_for_condition([&]() { return is_unmapped(conn, sticky); }, kTimeout));
     REQUIRE(wait_for_active_window(conn, fallback, kTimeout));
 
     destroy_window(conn, sticky);
@@ -1038,7 +1038,7 @@ TEST_CASE(
 }
 
 TEST_CASE(
-    "Integration: suppressed sibling is moved off-screen while fullscreen owner is active",
+    "Integration: suppressed sibling is unmapped while fullscreen owner is active",
     "[integration][focus][fullscreen][visibility]"
 )
 {
@@ -1063,7 +1063,7 @@ TEST_CASE(
     map_window(conn, w2);
 
     REQUIRE(wait_for_active_window(conn, w1, kTimeout));
-    REQUIRE(wait_for_condition([&]() { return is_hidden_offscreen(conn, w2); }, kTimeout));
+    REQUIRE(wait_for_condition([&]() { return is_unmapped(conn, w2); }, kTimeout));
 
     destroy_window(conn, w2);
     destroy_window(conn, w1);
@@ -1108,7 +1108,7 @@ TEST_CASE(
 }
 
 TEST_CASE(
-    "Integration: transient of suppressed sibling stays off-screen under fullscreen owner",
+    "Integration: transient of suppressed sibling stays unmapped under fullscreen owner",
     "[integration][focus][fullscreen][transient]"
 )
 {
@@ -1141,7 +1141,7 @@ TEST_CASE(
     map_window(conn, w3);
 
     REQUIRE(wait_for_active_window(conn, w1, kTimeout));
-    REQUIRE(wait_for_condition([&]() { return is_hidden_offscreen(conn, w3); }, kTimeout));
+    REQUIRE(wait_for_condition([&]() { return is_unmapped(conn, w3); }, kTimeout));
     REQUIRE(wait_for_condition([&]() { return is_stacked_above(conn, w1, w2); }, kTimeout));
 
     destroy_window(conn, w3);
@@ -1150,7 +1150,7 @@ TEST_CASE(
 }
 
 TEST_CASE(
-    "Integration: fullscreen loser is moved off-screen when a new owner takes over",
+    "Integration: fullscreen loser is unmapped when a new owner takes over",
     "[integration][focus][fullscreen][handoff]"
 )
 {
@@ -1177,9 +1177,9 @@ TEST_CASE(
     send_client_message(conn, w2, net_wm_state, 1, net_wm_state_fullscreen, 0, 0, 0);
 
     REQUIRE(wait_for_condition([&]() { return has_state(conn, w2, net_wm_state_fullscreen); }, kTimeout));
-    // Old fullscreen window keeps state but is hidden off-screen (suppressed)
+    // Old fullscreen window keeps state but is unmapped (suppressed)
     REQUIRE(wait_for_condition([&]() { return has_state(conn, w1, net_wm_state_fullscreen); }, kTimeout));
-    REQUIRE(wait_for_condition([&]() { return is_hidden_offscreen(conn, w1); }, kTimeout));
+    REQUIRE(wait_for_condition([&]() { return is_unmapped(conn, w1); }, kTimeout));
 
     destroy_window(conn, w2);
     destroy_window(conn, w1);
@@ -1219,13 +1219,13 @@ TEST_CASE(
     REQUIRE(wait_for_condition([&]() { return has_state(conn, w2, net_wm_state_fullscreen); }, kTimeout));
     // Old fullscreen window keeps state but is suppressed
     REQUIRE(wait_for_condition([&]() { return has_state(conn, w1, net_wm_state_fullscreen); }, kTimeout));
-    REQUIRE(wait_for_condition([&]() { return is_hidden_offscreen(conn, w1); }, kTimeout));
+    REQUIRE(wait_for_condition([&]() { return is_unmapped(conn, w1); }, kTimeout));
 
     // After destroying the owner, the suppressed fullscreen window regains ownership
     destroy_window(conn, w2);
     REQUIRE(wait_for_active_window(conn, w1, kTimeout));
     REQUIRE(wait_for_condition([&]() { return has_state(conn, w1, net_wm_state_fullscreen); }, kTimeout));
-    REQUIRE(wait_for_condition([&]() { return !is_hidden_offscreen(conn, w1); }, kTimeout));
+    REQUIRE(wait_for_condition([&]() { return !is_unmapped(conn, w1); }, kTimeout));
 
     destroy_window(conn, w1);
 }
@@ -1282,7 +1282,7 @@ TEST_CASE("Integration: applications cannot minimize themselves", "[integration]
     observe_title_after_events(conn, w1);
     CHECK(get_wm_state(conn, w1, wm_state) == XCB_ICCCM_WM_STATE_NORMAL);
     CHECK_FALSE(has_state(conn, w1, hidden));
-    CHECK_FALSE(is_hidden_offscreen(conn, w1));
+    CHECK_FALSE(is_unmapped(conn, w1));
     CHECK(wait_for_active_window(conn, w1, kTimeout));
     destroy_window(conn, w1);
 }
@@ -1326,7 +1326,7 @@ TEST_CASE(
     xcb_window_t w2 = create_window(conn, 80, 80, 320, 180);
     map_window(conn, w2);
     REQUIRE(wait_for_active_window(conn, w1, kTimeout));
-    REQUIRE(wait_for_condition([&]() { return is_hidden_offscreen(conn, w2); }, kTimeout));
+    REQUIRE(wait_for_condition([&]() { return is_unmapped(conn, w2); }, kTimeout));
 
     uint16_t const target_width = static_cast<uint16_t>(original_geometry->width - 1);
     if (!set_randr_screen_size(conn, target_width, original_geometry->height))
@@ -1345,8 +1345,8 @@ TEST_CASE(
     REQUIRE(wait_for_condition(
         [&]()
         {
-            return has_state(conn, w1, net_wm_state_fullscreen) && !is_hidden_offscreen(conn, w1)
-                && is_hidden_offscreen(conn, w2);
+            return has_state(conn, w1, net_wm_state_fullscreen) && !is_unmapped(conn, w1)
+                && is_unmapped(conn, w2);
         },
         kTimeout
     ));
@@ -1424,17 +1424,17 @@ TEST_CASE(
     send_client_message(conn, conn.root(), net_current_desktop, 1);
     REQUIRE(wait_for_property_cardinal(conn.get(), conn.root(), net_current_desktop, 1, kTimeout));
 
-    // Both parent and transient should be hidden off-screen.
-    REQUIRE(wait_for_condition([&]() { return is_hidden_offscreen(conn, parent); }, kTimeout));
-    REQUIRE(wait_for_condition([&]() { return is_hidden_offscreen(conn, transient); }, kTimeout));
+    // Both parent and transient should be unmapped.
+    REQUIRE(wait_for_condition([&]() { return is_unmapped(conn, parent); }, kTimeout));
+    REQUIRE(wait_for_condition([&]() { return is_unmapped(conn, transient); }, kTimeout));
 
     // Switch back to workspace 0.
     send_client_message(conn, conn.root(), net_current_desktop, 0);
     REQUIRE(wait_for_property_cardinal(conn.get(), conn.root(), net_current_desktop, 0, kTimeout));
 
-    // Both parent and transient should be visible (not off-screen).
-    REQUIRE(wait_for_condition([&]() { return !is_hidden_offscreen(conn, parent); }, kTimeout));
-    REQUIRE(wait_for_condition([&]() { return !is_hidden_offscreen(conn, transient); }, kTimeout));
+    // Both parent and transient should be mapped.
+    REQUIRE(wait_for_condition([&]() { return !is_unmapped(conn, parent); }, kTimeout));
+    REQUIRE(wait_for_condition([&]() { return !is_unmapped(conn, transient); }, kTimeout));
 
     destroy_window(conn, transient);
     destroy_window(conn, parent);
@@ -1791,7 +1791,7 @@ TEST_CASE(
         intern_atom(conn.get(), "_NET_WM_STATE_FULLSCREEN")
     );
     observe_title_after_events(conn, owner);
-    REQUIRE(is_hidden_offscreen(conn, suppressed));
+    REQUIRE(is_unmapped(conn, suppressed));
     auto order =
         get_window_property_windows(conn.get(), conn.root(), intern_atom(conn.get(), "_NET_CLIENT_LIST_STACKING"));
     REQUIRE(order == std::vector<xcb_window_t>{ suppressed, desktop, owner });
@@ -1800,7 +1800,7 @@ TEST_CASE(
     auto current_desktop = intern_atom(conn.get(), "_NET_CURRENT_DESKTOP");
     send_client_message(conn, conn.root(), current_desktop, 1);
     observe_title_after_events(conn, owner);
-    REQUIRE(is_hidden_offscreen(conn, owner));
+    REQUIRE(is_unmapped(conn, owner));
     REQUIRE(
         get_window_property_windows(conn.get(), conn.root(), intern_atom(conn.get(), "_NET_CLIENT_LIST_STACKING"))
         == std::vector<xcb_window_t>{ suppressed, owner, desktop }
@@ -1809,7 +1809,7 @@ TEST_CASE(
     REQUIRE(is_stacked_above(conn, owner, suppressed));
     send_client_message(conn, conn.root(), current_desktop, 0);
     observe_title_after_events(conn, owner);
-    REQUIRE_FALSE(is_hidden_offscreen(conn, owner));
+    REQUIRE_FALSE(is_unmapped(conn, owner));
     REQUIRE(is_stacked_above(conn, owner, desktop));
     for (auto w : { owner, suppressed, desktop }) destroy_window(conn, w);
 }

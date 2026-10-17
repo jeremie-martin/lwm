@@ -315,7 +315,7 @@ RunResult WindowManager::run()
     }
     if (*stop_ == RunResult::Exit)
     {
-        restore_client_geometry();
+        restore_clients();
         conn_.sync();
     }
     return *stop_;
@@ -428,6 +428,38 @@ void WindowManager::close_window(xcb_window_t window)
 }
 
 // Protocol messages
+
+// A timestamp-less focus request needs an actual server time for WM_TAKE_FOCUS.
+// Rewriting our supporting window's name yields a timestamp without a new atom.
+// Keep other events ordered for the event loop; observation never dispatches them.
+uint32_t WindowManager::server_time()
+{
+    uint32_t events = XCB_EVENT_MASK_PROPERTY_CHANGE;
+    xcb_change_window_attributes(conn_.get(), wm_window_, XCB_CW_EVENT_MASK, &events);
+    std::optional<uint32_t> timestamp;
+    do
+    {
+        timestamp.reset();
+        auto cookie = xcb_ewmh_set_wm_name(ewmh_.get(), wm_window_, 3, "lwm");
+        conn_.sync();
+        while (auto event = reply(xcb_poll_for_queued_event(conn_.get())))
+        {
+            auto const& property = reinterpret_cast<xcb_property_notify_event_t const&>(*event);
+            if (event->response_type == XCB_PROPERTY_NOTIFY && event->full_sequence == cookie.sequence
+                && property.window == wm_window_ && property.atom == ewmh_.get()->_NET_WM_NAME)
+            {
+                timestamp = property.time;
+                break;
+            }
+            deferred_events_.push_back(*event);
+        }
+        if (!timestamp)
+            throw std::runtime_error("Failed to observe X server time");
+    } while (*timestamp == XCB_CURRENT_TIME); // The millisecond at timestamp wrap is not a usable protocol time.
+    events = XCB_EVENT_MASK_NO_EVENT;
+    xcb_change_window_attributes(conn_.get(), wm_window_, XCB_CW_EVENT_MASK, &events);
+    return *timestamp;
+}
 
 void WindowManager::send_protocol_message(xcb_window_t window, xcb_atom_t protocol, uint32_t timestamp)
 {

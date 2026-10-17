@@ -206,7 +206,7 @@ def measure(binary, library, scenario, operations):
         config_path = directory / "config.toml"
         config_path.write_text(config)
         counts_path = directory / "counts"
-        counts_path.write_bytes(bytes(48))
+        counts_path.write_bytes(bytes(56))
         log_path = directory / "wm.log"
         log = cleanup.enter_context(log_path.open("wb"))
         environment = dict(os.environ, DISPLAY=display_name, LD_PRELOAD=str(library),
@@ -229,9 +229,9 @@ def measure(binary, library, scenario, operations):
         wait(lambda: bool(ipc(display_name, "version")), wm, log_path)
         if scenario == "dock_startup":
             # The successful query follows startup completion, including adoption.
-            counts = struct.unpack("=6Q", counts_path.read_bytes())
+            counts = struct.unpack("=7Q", counts_path.read_bytes())
             return dict(scenario=scenario, operations=operations,
-                        counts=dict(zip(("get_property", "geometry_configure", "visibility_barrier", "query_tree", "flush", "get_geometry"), counts)))
+                        counts=dict(zip(("get_property", "geometry_configure", "visibility_barrier", "query_tree", "flush", "get_geometry", "mapping"), counts)))
         window_type, dialog, atom_type = atom("_NET_WM_WINDOW_TYPE"), atom("_NET_WM_WINDOW_TYPE_DIALOG"), atom("ATOM")
         windows = []
         client_count = 200 if scenario == "workspace" else 10
@@ -260,7 +260,7 @@ def measure(binary, library, scenario, operations):
         time.sleep(0.05)
         start_position = position(display, target) if dragging else None
         ratio_position = position(display, windows[1]) if scenario == "tiled_ratio" else None
-        before = struct.unpack("=6Q", counts_path.read_bytes())
+        before = struct.unpack("=7Q", counts_path.read_bytes())
         for index in range(operations):
             if scenario == "tiled_ratio":
                 ipc(display_name, f"ratio set {0.45 if index % 2 == 0 else 0.55}")
@@ -318,8 +318,8 @@ def measure(binary, library, scenario, operations):
             wait(lambda: any(client["id"] == target and client["title"] == "drag-finished"
                              for client in json.loads(ipc(display_name, "window list"))["windows"]), wm, log_path)
         time.sleep(0.05)
-        after = struct.unpack("=6Q", counts_path.read_bytes())
-        names = ("get_property", "geometry_configure", "visibility_barrier", "query_tree", "flush", "get_geometry")
+        after = struct.unpack("=7Q", counts_path.read_bytes())
+        names = ("get_property", "geometry_configure", "visibility_barrier", "query_tree", "flush", "get_geometry", "mapping")
         return dict(scenario=scenario, operations=operations,
                     counts=dict(zip(names, (end - start for start, end in zip(before, after)))))
 
@@ -367,9 +367,13 @@ def main():
                 if "relocation" in scenario:
                     if counts["get_geometry"]:
                         raise AssertionError("Relocation must use known geometry: " + json.dumps(result))
-                    geometry_budget = operations * (10 if scenario.startswith("tiled_") else 1)
-                    if not operations <= counts["geometry_configure"] <= geometry_budget:
-                        raise AssertionError("Inactive or excessive relocation geometry: " + json.dumps(result))
+                    if scenario.startswith("tiled_"):
+                        if not operations <= counts["geometry_configure"] <= operations * 10:
+                            raise AssertionError("Inactive or excessive relocation geometry: " + json.dumps(result))
+                    elif counts["geometry_configure"]:
+                        raise AssertionError("Floating relocation must preserve geometry: " + json.dumps(result))
+                    if counts["mapping"] != operations:
+                        raise AssertionError("Relocation must change mapping exactly once: " + json.dumps(result))
                 operations_flush_budget = result["operations"] * 20
                 # A workspace switch is an IPC command, which reads its request property.
                 reads = result["operations"] * (1 if scenario == "metadata" else 3 if scenario == "workspace" else 2)
@@ -380,8 +384,11 @@ def main():
                     raise AssertionError("Repeated reconciliation: " + json.dumps(result))
                 if scenario in ("metadata", "sticky") and counts["geometry_configure"]:
                     raise AssertionError("Unnecessary geometry writes: " + json.dumps(result))
-                if scenario == "workspace" and counts["flush"] > operations_flush_budget:
-                    raise AssertionError("Notification-driven flush overhead: " + json.dumps(result))
+                if scenario == "workspace":
+                    if counts["geometry_configure"] or counts["mapping"] != (operations - 1) * 200:
+                        raise AssertionError("Workspace visibility must only change mapping: " + json.dumps(result))
+                    if counts["flush"] > operations_flush_budget:
+                        raise AssertionError("Notification-driven flush overhead: " + json.dumps(result))
 
 
 if __name__ == "__main__":

@@ -67,6 +67,7 @@ add_executable(lwm_tests
   test_integration_client_message.cpp
   test_integration_focus.cpp
   test_integration_focus_input.cpp
+  test_integration_feedback.cpp
   test_integration_lwm_window_class.cpp
   test_integration_notify_attention.cpp
   test_integration_property_notify.cpp
