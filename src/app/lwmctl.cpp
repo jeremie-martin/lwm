@@ -66,11 +66,16 @@ public:
         auto reply = lwm::reply(xcb_get_selection_owner_reply(conn(), xcb_get_selection_owner(conn(), selection), nullptr));
         return reply ? reply->owner : XCB_NONE;
     }
-    // The screen's WM, if it is LWM, which names its owner window "lwm".
-    xcb_window_t lwm_owner() const
+    // Subscribe before reading identity; its reply also settles the checked request.
+    xcb_window_t lwm_owner(uint32_t events) const
     {
         auto window = owner();
-        return window != XCB_NONE && text(window, name) == "lwm" ? window : XCB_NONE;
+        if (window == XCB_NONE)
+            return XCB_NONE;
+        auto selected = xcb_change_window_attributes_checked(conn(), window, XCB_CW_EVENT_MASK, &events);
+        auto identity = text(window, name);
+        auto error = lwm::reply(xcb_request_check(conn(), selected));
+        return !error && identity == "lwm" ? window : XCB_NONE;
     }
     // Selects events on a window; false if it no longer exists.
     bool select(xcb_window_t window, uint32_t events) const
@@ -94,8 +99,8 @@ int run(std::string const& request, std::chrono::milliseconds timeout)
 {
     Display x;
     auto* conn = x.conn();
-    auto wm = x.lwm_owner();
-    if (wm == XCB_NONE || !x.select(wm, XCB_EVENT_MASK_STRUCTURE_NOTIFY))
+    auto wm = x.lwm_owner(XCB_EVENT_MASK_STRUCTURE_NOTIFY);
+    if (wm == XCB_NONE)
         throw std::runtime_error("lwm is not running");
     xcb_window_t requester = xcb_generate_id(conn);
     uint32_t events = XCB_EVENT_MASK_PROPERTY_CHANGE;
@@ -174,15 +179,13 @@ int watch()
 {
     Display x;
     x.select(x.root(), XCB_EVENT_MASK_STRUCTURE_NOTIFY);
-    auto wm = x.lwm_owner();
+    constexpr uint32_t events = XCB_EVENT_MASK_PROPERTY_CHANGE | XCB_EVENT_MASK_STRUCTURE_NOTIFY;
+    auto wm = x.lwm_owner(events);
     if (wm == XCB_NONE)
         throw std::runtime_error("lwm is not running");
     std::string printed;
-    for (bool attach = true;;)
+    for (;;)
     {
-        // Select before reading, so no change can fall between them.
-        if (attach && wm != XCB_NONE && !x.select(wm, XCB_EVENT_MASK_PROPERTY_CHANGE | XCB_EVENT_MASK_STRUCTURE_NOTIFY))
-            wm = XCB_NONE;
         if (auto text = wm != XCB_NONE ? x.text(wm, x.state) : std::nullopt; text && !text->empty() && *text != printed)
         {
             printed = std::move(*text);
@@ -190,7 +193,7 @@ int watch()
         }
         if (!std::cout)
             return 0; // A closed pipe ends watching normally.
-        attach = false;
+        bool attach = false;
         for (bool changed = false; !attach && !changed;)
         {
             auto event = lwm::reply(xcb_wait_for_event(x.conn()));
@@ -211,7 +214,7 @@ int watch()
                 throw std::runtime_error("X connection closed");
         }
         if (attach)
-            wm = x.lwm_owner();
+            wm = x.lwm_owner(events);
     }
 }
 } // namespace

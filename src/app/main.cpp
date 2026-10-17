@@ -16,7 +16,6 @@
 #include <string_view>
 #include <sys/wait.h>
 #include <unistd.h>
-#include <vector>
 
 std::string default_config_path()
 {
@@ -72,11 +71,6 @@ int main(int argc, char* argv[])
     std::string_view phase = "Startup";
     try
     {
-        std::vector<char*> restart_argv;
-        restart_argv.reserve(parsed->restart_argv.size() + 1);
-        for (std::string& argument : parsed->restart_argv) restart_argv.push_back(argument.data());
-        restart_argv.push_back(nullptr);
-
         LWM_LOG_INFO(
             "Starting LWM: version={} display={}",
             LWM_VERSION,
@@ -117,11 +111,11 @@ int main(int argc, char* argv[])
                 restart_binary = wm.restart_binary();
                 wm.prepare_restart();
             }
-            std::string binary = restart_binary.empty() ? parsed->restart_argv.front() : restart_binary;
+            char const* binary = restart_binary.empty() ? argv[0] : restart_binary.c_str();
             LWM_LOG_INFO("Restarting: {}", binary);
             // Exec replaces the worker on success; on failure it remains usable.
             // Do not wait for a stalled log destination before restarting.
-            execvp(binary.c_str(), restart_argv.data());
+            execvp(binary, argv);
             int exec_errno = errno;
 
             LWM_LOG_CRITICAL("exec '{}' failed: {}, recovering", binary, std::strerror(exec_errno));

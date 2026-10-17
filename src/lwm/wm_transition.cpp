@@ -20,10 +20,9 @@ void WindowManager::complete_transition()
         return;
 
     // Inputs and domain resolution; State may still change.
-    auto focus_request = state_.settle(last_input_time_);
+    auto [focus_request, fullscreen] = state_.settle(last_input_time_);
     if (!state_.drag())
         release_pointer();
-    auto fullscreen = state_.fullscreen_visibility();
     auto const& owners = fullscreen.owners;
     published_revision_ = state_.revision();
 
@@ -39,11 +38,6 @@ void WindowManager::complete_transition()
     fullscreen_owners_ = owners;
     auto clients = state_.project(fullscreen);
     bool moved = publish_clients(clients);
-    // ConfigureRequests that no geometry write acknowledged, including those of
-    // hidden clients, are answered with the presentation they would have.
-    for (auto window : configure_replies_)
-        if (auto const* client = state_.find(window))
-            send_configure_notify(window, state_.presentation(*client));
     if (focus_request)
     {
         commit_focus(*focus_request);
@@ -96,14 +90,14 @@ bool WindowManager::publish_clients(std::vector<State::Projected> const& clients
         xcb_grab_server(conn_.get());
     for (auto const& [client, presentation] : clients)
     {
-        if (!presentation)
-            continue;
-        if (write_geometry(client->id, outputs_.at(client->id), *presentation))
+        if (presentation && write_geometry(client->id, outputs_.at(client->id), *presentation))
         {
             moved = true;
             send_configure_notify(client->id, *presentation);
             configure_replies_.erase(client->id);
         }
+        else if (configure_replies_.erase(client->id))
+            send_configure_notify(client->id, presentation ? *presentation : state_.presentation(*client));
     }
     if (resizing_tiles)
         xcb_ungrab_server(conn_.get());

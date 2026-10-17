@@ -196,10 +196,15 @@ public:
     // Outside drags, focus follows the pointer into visible clients; elsewhere
     // the pointer selects the monitor under it and releases focus there.
     void hover(xcb_window_t window, int16_t x, int16_t y);
+    struct Settled
+    {
+        std::optional<uint32_t> focus_request;
+        FullscreenVisibility fullscreen;
+    };
     // Settle one operation: end a drag whose context changed, then resolve
     // eligibility, recency and user time for the final focus. input_time is the
-    // latest observed input timestamp. Returns the explicit focus request's time.
-    std::optional<uint32_t> settle(uint32_t input_time = 0);
+    // latest observed input timestamp. Share the derived visibility with publication.
+    Settled settle(uint32_t input_time = 0);
 
     // Placement and mode
     // Moving the active client follows a shown destination or chooses replacement
@@ -417,7 +422,6 @@ private:
     // Focus and client state
     void select_focus(xcb_window_t id, uint32_t time = 0, bool record_user_time = true);
     void focus_fallback(size_t monitor, bool record_user_time = true);
-    std::optional<uint32_t> complete_focus(uint32_t input_time);
     void clear_urgency(xcb_window_t id);
     void pin_desktop(xcb_window_t id, bool pinned);
 
@@ -442,7 +446,7 @@ private:
     };
     std::optional<GapClick> gap_click_; ///< The last gap click, for double clicks
     bool can_drag(xcb_window_t id) const;
-    bool drag_valid() const;
+    bool drag_valid(FullscreenVisibility const& fullscreen) const;
     std::optional<Geometry> drag_preview(Client const& client) const;
 };
 

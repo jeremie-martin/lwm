@@ -136,20 +136,21 @@ TEST_CASE("Recurring warnings include Quill's suppression count", "[logging]")
     REQUIRE(probe({ "rate-limit" }).stderr_text.find("(19x)") != std::string::npos);
 }
 
-TEST_CASE("CLI preserves explicit configuration and restart arguments", "[logging][cli]")
+TEST_CASE("CLI preserves explicit configuration without changing its arguments", "[logging][cli]")
 {
     for (auto values : std::vector<std::vector<std::string>>{
              { "lwm", "--log-level", "debug", "--config", "config with spaces.toml", "--log-color=never" },
              { "lwm", "--log-level=debug", "--config=config with spaces.toml", "--log-color", "never" }
     })
     {
+        auto original = values;
         auto argv = mutable_argv(values);
         auto parsed = lwm::cli::parse(static_cast<int>(argv.size()), argv.data());
         REQUIRE(parsed);
         CHECK(parsed->log.level == quill::LogLevel::Debug);
         CHECK(parsed->log.color == lwm::log::ColorMode::Never);
         CHECK(parsed->config_path == "config with spaces.toml");
-        CHECK(parsed->restart_argv == values);
+        CHECK(values == original);
     }
     // An explicit option value is literal, including option-like paths and '='.
     for (std::string const& path : { "--help", "--log-level", "a=b.toml", "-config.toml" })
@@ -158,12 +159,13 @@ TEST_CASE("CLI preserves explicit configuration and restart arguments", "[loggin
             std::vector<std::string> values = attached
                 ? std::vector<std::string>{ "lwm", "--config=" + path }
                 : std::vector<std::string>{ "lwm", "--config", path };
+            auto original = values;
             auto argv = mutable_argv(values);
             auto parsed = lwm::cli::parse(static_cast<int>(argv.size()), argv.data());
             REQUIRE(parsed);
             CHECK(parsed->config_path == path);
             CHECK_FALSE(parsed->help);
-            CHECK(parsed->restart_argv == values);
+            CHECK(values == original);
         }
 }
 

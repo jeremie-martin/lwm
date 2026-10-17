@@ -4,7 +4,6 @@
 #include <optional>
 #include <string>
 #include <string_view>
-#include <vector>
 
 #include "lwm/core/log.hpp"
 
@@ -14,7 +13,6 @@ struct Options
 {
     lwm::log::LogOptions log;
     std::optional<std::string> config_path;
-    std::vector<std::string> restart_argv;
     bool help = false;
     bool version = false;
     bool check_config = false;

@@ -133,9 +133,10 @@ external write.
 `complete_transition()` orders completion:
 
 1. Return if neither the revision nor any obligation changed.
-2. `State::settle()` ends a drag whose context changed and resolves final focus,
-   recency, user time and urgency. Release the pointer if no drag remains.
-3. Freeze `State`. Derive fullscreen visibility and one projection per client,
+2. `State::settle()` derives fullscreen visibility once, ends a drag whose context changed,
+   and resolves final focus, recency, user time and urgency using that view. It returns
+   the view with any focus request for publication. Release the pointer if no drag remains.
+3. Freeze `State`. Derive one projection per client using the settled visibility,
    including a tiled drag preview.
 4. Hide, configure and map clients; acknowledge ConfigureRequests; commit explicit
    focus; publish client, fixture and root properties and stacking; withdraw removed

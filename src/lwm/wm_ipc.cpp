@@ -140,9 +140,8 @@ void WindowManager::handle_command(xcb_window_t requester)
         : handle_request({ static_cast<char const*>(xcb_get_property_value(request.get())),
                            static_cast<size_t>(xcb_get_property_value_length(request.get())) });
     complete_transition();
-    if (!conn_.fits_property(response.size()))
-        response = "error response too large";
-    xcb_change_property(c, XCB_PROP_MODE_REPLACE, requester, atoms_.lwm_reply, utf8, 8, response.size(), response.data());
+    if (!write_property(requester, atoms_.lwm_reply, utf8, 8, response))
+        write_property(requester, atoms_.lwm_reply, utf8, 8, "error response too large");
     if (!stopping && stop_ == RunResult::Restart)
         restart_requester_ = requester;
 }

@@ -47,10 +47,14 @@ xcb_window_t tile(State const& state, size_t monitor, State::FullscreenVisibilit
 
 xcb_window_t fallback(State const& state, size_t monitor)
 {
+    return fallback(state, monitor, state.fullscreen_visibility());
+}
+
+xcb_window_t fallback(State const& state, size_t monitor, State::FullscreenVisibility const& fullscreen)
+{
     auto const& monitors = state.monitors();
     if (monitor >= monitors.size())
         return XCB_NONE;
-    auto fullscreen = state.fullscreen_visibility();
     Eligibility eligible{ state, monitor, fullscreen };
     if (auto window = tile(state, monitor, eligible.fullscreen); window != XCB_NONE)
         return window;

@@ -11,10 +11,6 @@ std::expected<Options, std::string> parse(int argc, char* const argv[])
         return std::unexpected("invalid argument vector");
 
     Options options;
-    options.restart_argv.reserve(static_cast<size_t>(argc));
-    for (int i = 0; i < argc; ++i)
-        options.restart_argv.emplace_back(argv[i] ? argv[i] : "");
-
     std::set<std::string_view> seen;
     for (int i = 1; i < argc; ++i)
     {

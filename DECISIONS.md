@@ -314,6 +314,14 @@ input can contain owned duplicate atoms that merging removes, leaving a valid ou
 Keep the merged-output limit. Reducing repeated oversized reads without changing that
 behavior would require chunk scanning and counting retained foreign atoms.
 
+## Keep matched-rule actions on clients (2026-10-18)
+
+Metadata updates compare new matching actions with the previous match, applying only
+changed actions and leaving earlier effects when a match is lost. Recomputing both
+sides around each metadata mutation would remove the retained action copy but double
+regex matching on title/class updates. Keep the cache unless measurements show that
+removing it improves the tradeoff; reload deliberately refreshes and reapplies it.
+
 ## Open opportunities (2026-10-06)
 
 Candidates for subsystem-level simplification, not yet decided. Move an entry to a

@@ -387,7 +387,7 @@ TEST_CASE("Fullscreen assignments preserve history while requests renew it", "[s
     state.fullscreen(1, true);
     CHECK(claims() == before);
     CHECK(state.revision() == revision);
-    CHECK_FALSE(state.settle());
+    CHECK_FALSE(state.settle().focus_request);
 
     state.request_fullscreen(1);
     CHECK(claims().first > claims().second);
@@ -408,7 +408,7 @@ TEST_CASE("Fullscreen assignments preserve history while requests renew it", "[s
     revision = state.revision();
     state.fullscreen(1, false);
     CHECK(state.revision() == revision);
-    CHECK_FALSE(state.settle());
+    CHECK_FALSE(state.settle().focus_request);
     state.fullscreen(1, true);
     CHECK(state.fullscreen_owners().at(0) == 1);
 }

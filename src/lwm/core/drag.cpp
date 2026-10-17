@@ -174,12 +174,12 @@ void State::drag_to(int16_t x, int16_t y)
     ratio(resize.monitor, split.address, split.ratio + static_cast<double>(delta) / split.available_extent);
 }
 
-bool State::drag_valid() const
+bool State::drag_valid(FullscreenVisibility const& fullscreen) const
 {
     if (auto const* window = std::get_if<WindowDrag>(&drag_->operation))
     {
         auto const* client = find(window->window);
-        return client && client->tiled() == window->tiled && visible(*client) && !client->fullscreen()
+        return client && client->tiled() == window->tiled && visible(*client, fullscreen) && !client->fullscreen()
             && !presents_maximized(*client) && client->monitor == window->monitor && client->workspace == window->workspace;
     }
     auto const& split = std::get<SplitDrag>(drag_->operation);
@@ -188,7 +188,7 @@ bool State::drag_valid() const
     auto const& monitor = monitors_[split.monitor];
     return monitor.current_workspace == split.workspace && working_area(monitor) == split.area
         && monitor.current().layout_strategy == split.strategy
-        && tiled_participants(split.monitor, fullscreen_visibility()) == split.participants;
+        && tiled_participants(split.monitor, fullscreen) == split.participants;
 }
 
 void State::end_drag(bool commit)
