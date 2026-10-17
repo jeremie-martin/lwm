@@ -307,6 +307,13 @@ uses it for both requests, so the client's response is accepted. The observation
 uses the supporting window's existing name property and deferred event queue, at the
 cost of one synchronous round trip only for `WM_TAKE_FOCUS` clients.
 
+## Bound shared-state output, not raw input (2026-10-18)
+
+Rejecting `_NET_WM_STATE` from its raw size before merging was rejected: an oversized
+input can contain owned duplicate atoms that merging removes, leaving a valid output.
+Keep the merged-output limit. Reducing repeated oversized reads without changing that
+behavior would require chunk scanning and counting retained foreign atoms.
+
 ## Open opportunities (2026-10-06)
 
 Candidates for subsystem-level simplification, not yet decided. Move an entry to a

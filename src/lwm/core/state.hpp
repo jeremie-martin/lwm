@@ -378,8 +378,8 @@ private:
         xcb_window_t parent = XCB_NONE;
     };
     using PlacementGeometry = std::variant<Geometry, CenteredSize>;
-    std::optional<PlacementGeometry> prepare_placement(xcb_window_t id);
-    std::optional<PlacementGeometry> size_hint_geometry(xcb_window_t id, bool initial);
+    std::optional<PlacementGeometry> prepare_placement(xcb_window_t id, SizeHints const& hints);
+    std::optional<PlacementGeometry> size_hint_geometry(xcb_window_t id, SizeHints const& hints, bool initial);
     Geometry resolve_geometry(xcb_window_t id, PlacementGeometry const& placement, std::optional<Geometry> unmanaged_parent) const;
     void finish_placement(xcb_window_t id, PlacementGeometry const& placement, std::optional<Geometry> unmanaged_parent);
     void apply_rule_state(xcb_window_t id, RuleActions const& rule);

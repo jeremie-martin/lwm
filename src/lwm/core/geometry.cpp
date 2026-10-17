@@ -137,9 +137,13 @@ Geometry State::frame(Client const& client) const
     if (client.fullscreen())
         return fullscreen_geometry(client);
     if (auto const* floating = floating_mode(client))
+    {
+        if (!client.maximized_horz && !client.maximized_vert)
+            return floating->geometry;
         return floating::presentation_geometry(
             floating->geometry, working_area(monitors_[client.monitor]), client.maximized_horz, client.maximized_vert
         );
+    }
     return normal_geometry(client);
 }
 

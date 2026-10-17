@@ -143,7 +143,7 @@ xcb_get_property_cookie_t request_user_time(xcb_connection_t* conn, xcb_ewmh_con
 
 // Attributes gate admission, subscription precedes identity, and identity
 // chooses the remaining reads. Each stage is pipelined across the batch.
-std::vector<WindowObservation> WindowManager::observe(std::span<xcb_window_t const> windows, bool adopting)
+std::vector<WindowObservation> WindowManager::observe(std::span<xcb_window_t const> windows, bool adopting, bool cold_recovery)
 {
     auto* c = conn_.get();
     auto* e = ewmh_.get();
@@ -173,7 +173,7 @@ std::vector<WindowObservation> WindowManager::observe(std::span<xcb_window_t con
     {
         pending[i].window.id = windows[i];
         pending[i].attributes = xcb_get_window_attributes(c, windows[i]);
-        if (adopting)
+        if (cold_recovery)
             pending[i].wm_state = request(c, windows[i], atoms_.wm_state, atoms_.wm_state, 2);
     }
     for (auto& reads : pending)

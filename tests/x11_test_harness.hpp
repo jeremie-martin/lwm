@@ -1,5 +1,6 @@
 #pragma once
 
+#include "lwm/core/xproperty.hpp"
 #include <algorithm>
 #include <array>
 #include <catch2/catch_test_macros.hpp>
@@ -981,10 +982,7 @@ inline std::optional<std::string> send_ipc_command(
                 if ((event->response_type & ~0x80) == XCB_PROPERTY_NOTIFY && property->atom == reply
                     && property->state == XCB_PROPERTY_NEW_VALUE)
                 {
-                    // Query replies can exceed the bounded read of other test helpers.
-                    auto* value = xcb_get_property_reply(conn.get(), xcb_get_property(conn.get(), 0, requester, reply, utf8, 0, UINT32_MAX / 4), nullptr);
-                    response = value ? std::string(static_cast<char const*>(xcb_get_property_value(value)), xcb_get_property_value_length(value)) : "";
-                    free(value);
+                    response = xproperty::text(conn.get(), requester, reply, utf8);
                 }
                 free(event);
             }

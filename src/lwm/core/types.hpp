@@ -367,7 +367,6 @@ struct Client : ClientIntent
     bool supports_take_focus = false; ///< WM_PROTOCOLS contains WM_TAKE_FOCUS
     uint32_t user_time = 0;
     xcb_window_t user_time_window = XCB_NONE;
-    SizeHints size_hints;
 
     /// Actions of the rule matched at the last manage, metadata change, or
     /// reload. Metadata changes apply a rule only when this result changes.

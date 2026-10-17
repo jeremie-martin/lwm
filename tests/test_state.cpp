@@ -509,6 +509,28 @@ TEST_CASE("Maximize presentation preserves normal placement", "[state][floating]
     CHECK(floating::presentation_geometry(normal, area, true, true) == area);
 }
 
+TEST_CASE("Floating frames use workareas only for maximized axes", "[state][geometry][floating]")
+{
+    auto state = test::state();
+    Geometry normal{ 100, 120, 500, 360 };
+    add(state, 1, { .floating = true, .geometry = normal });
+    state.insert_fixture(99, Fixture::Role::Dock, DockStrut{ .top = { 40 } });
+    for (bool horizontal : { false, true })
+        for (bool vertical : { false, true })
+        {
+            CAPTURE(horizontal, vertical);
+            state.maximize(1, horizontal, vertical);
+            CHECK(state.frame(state.require(1)) == Geometry{
+                static_cast<int16_t>(horizontal ? 0 : normal.x),
+                static_cast<int16_t>(vertical ? 40 : normal.y),
+                static_cast<uint16_t>(horizontal ? 1000 : normal.width),
+                static_cast<uint16_t>(vertical ? 760 : normal.height) });
+            CHECK(state.normal_geometry(state.require(1)) == normal);
+        }
+    state.fullscreen(1, true);
+    CHECK(state.frame(state.require(1)) == Geometry{ 0, 0, 1000, 800 });
+}
+
 TEST_CASE("Tile geometry is a current projection independent of publication", "[state][geometry][layout]")
 {
     auto state = test::state();
@@ -638,7 +660,12 @@ TEST_CASE("A projection contains every client once with its final visible rectan
     auto clients = state.project(state.fullscreen_visibility());
     state.thaw();
     std::vector<xcb_window_t> order;
-    for (auto const& projected : clients) order.push_back(projected.client->id);
+    for (auto const& projected : clients)
+    {
+        order.push_back(projected.client->id);
+        if (projected.presentation)
+            CHECK(*projected.presentation == state.presentation(*projected.client));
+    }
     REQUIRE(order == std::vector<xcb_window_t>{ 9, 2, 7, 4, 8, 6 });
     CHECK(shown(clients[0]) == Geometry{ 0, 0, static_cast<uint16_t>(fullscreen ? 1000 : 500), 800 });
     CHECK(shown(clients[1]) == Geometry{ 0, 10, 1000, 100 });

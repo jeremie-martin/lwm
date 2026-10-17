@@ -11,10 +11,11 @@ void WindowManager::restore_clients()
 {
     state_.end_drag(false);
     release_pointer();
-    for (auto const& [window, client] : state_.clients())
+    for (auto const& projected : state_.project(state_.fullscreen_visibility()))
     {
+        auto window = projected.client->id;
         auto& output = outputs_[window];
-        write_geometry(window, output, state_.presentation(client));
+        write_geometry(window, output, projected.presentation ? *projected.presentation : state_.presentation(*projected.client));
         if (!output.mapped)
         {
             xcb_map_window(conn_.get(), window);
@@ -31,8 +32,9 @@ void WindowManager::scan_existing_windows(bool handoff)
         auto* first = xcb_query_tree_children(tree.get());
         children.assign(first, first + xcb_query_tree_children_length(tree.get()));
     }
-    // Adopt redirected windows that are viewable or carry a managed WM_STATE.
-    auto windows = observe(children, true);
+    // A cooperative predecessor restored mapping before release, so an unmapped
+    // client has since withdrawn. Only cold recovery needs managed WM_STATE.
+    auto windows = observe(children, true, !handoff);
 
     std::optional<std::pair<int16_t, int16_t>> pointer;
     if (!handoff)

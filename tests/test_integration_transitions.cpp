@@ -1,3 +1,4 @@
+#include "restart_handoff.hpp"
 #include "state_watch.hpp"
 #include "lwm/core/xproperty.hpp"
 #include "wm_observations.hpp"
@@ -744,6 +745,68 @@ TEST_CASE("Integration: state requests leave dock and desktop windows alone", "[
     CHECK(get_window_geometry(conn, window) == before);
     destroy_window(conn, marker);
     destroy_window(conn, window);
+}
+
+TEST_CASE(
+    "Integration: restart does not resurrect clients withdrawn during handoff",
+    "[integration][transition][adoption][restart][visibility]"
+)
+{
+    auto snapshot_kind = GENERATE("valid", "malformed", "missing");
+    CAPTURE(snapshot_kind);
+    auto env = TestEnvironment::create();
+    REQUIRE(env);
+    auto& conn = env->conn;
+    auto retained = create_window(conn, 10, 10, 200, 200);
+    map_window(conn, retained);
+    REQUIRE(wait_for_active_window(conn, retained, timeout));
+    ipc_ok("scratchpad stash");
+    REQUIRE(is_unmapped(conn, retained));
+    auto withdrawn = create_window(conn, 30, 30, 250, 200);
+    map_window(conn, withdrawn);
+    REQUIRE(wait_for_active_window(conn, withdrawn, timeout));
+    auto previous = wm_instance(conn);
+    REQUIRE(previous);
+
+    PausedRestart restart(env->wm);
+    // The predecessor has restored even its hidden clients before releasing X.
+    REQUIRE_FALSE(is_unmapped(conn, retained));
+    REQUIRE_FALSE(is_unmapped(conn, withdrawn));
+    auto property = intern_atom(conn.get(), "_LWM_RESTART");
+    auto utf8 = intern_atom(conn.get(), "UTF8_STRING");
+    auto snapshot = lwm::xproperty::text(conn.get(), conn.root(), property, utf8);
+    REQUIRE(snapshot);
+    if (std::string_view(snapshot_kind) == "malformed")
+    {
+        // Damage the current format, rather than testing an obsolete version.
+        snapshot->pop_back();
+        xcb_change_property(conn.get(), XCB_PROP_MODE_REPLACE, conn.root(), property, utf8, 8,
+            static_cast<uint32_t>(snapshot->size()), snapshot->data());
+    }
+    else if (std::string_view(snapshot_kind) == "missing")
+        // An oversized outgoing snapshot is likewise not saved at all.
+        xcb_delete_property(conn.get(), conn.root(), property);
+    xcb_unmap_window(conn.get(), withdrawn);
+    REQUIRE(is_unmapped(conn, withdrawn)); // Round trip orders withdrawal before resume.
+    auto wm_state = intern_atom(conn.get(), "WM_STATE");
+    auto state_reply = lwm::xproperty::receive(conn.get(), lwm::xproperty::request(conn.get(), withdrawn, wm_state, wm_state, 2));
+    auto state = lwm::xproperty::words(state_reply, wm_state);
+    REQUIRE(state.size() == 2);
+    REQUIRE(state[0] == XCB_ICCCM_WM_STATE_NORMAL);
+
+    restart.resume();
+    REQUIRE(wait_for_wm_restart(conn, timeout, *previous));
+    auto windows = ipc_json("window list").at("windows");
+    REQUIRE(windows.size() == 1);
+    CHECK(windows.at(0).at("id") == retained);
+    CHECK(is_unmapped(conn, withdrawn));
+    CHECK(is_unmapped(conn, retained) == (std::string_view(snapshot_kind) == "valid"));
+    // An actual subsequent MapRequest remains ordinary application admission.
+    map_window(conn, withdrawn);
+    REQUIRE(wait_for_active_window(conn, withdrawn, timeout));
+    CHECK(ipc_json("window list").at("windows").size() == 2);
+    destroy_window(conn, withdrawn);
+    destroy_window(conn, retained);
 }
 
 TEST_CASE(

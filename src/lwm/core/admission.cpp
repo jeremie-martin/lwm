@@ -102,7 +102,6 @@ std::optional<Client> State::classify(WindowObservation const& window, restart::
     client.user_time_window = window.user_time_window;
     client.user_time = window.user_time;
     client.fullscreen_monitors = window.fullscreen_monitors;
-    client.size_hints = window.size_hints;
     return client;
 }
 
@@ -122,7 +121,7 @@ void State::admit(WindowObservation const& window)
             candidate->mode = FloatingMode{ observed_frame(window, border(*candidate)) };
     }
     insert_registered(std::move(*candidate));
-    if (auto placement = prepare_placement(window.id))
+    if (auto placement = prepare_placement(window.id, window.size_hints))
         finish_placement(window.id, *placement, window.unmanaged_parent);
     if (auto const& admitted = require(window.id); admitted.monitor == focused_monitor_ && focusable(admitted))
         focus(window.id);
@@ -186,7 +185,7 @@ void State::adopt(
         for (auto next = window.id; auto node = pending.extract(next); next = node.mapped()->transient_for)
             chain.push_back(node.mapped());
         for (auto it = chain.rbegin(); it != chain.rend(); ++it)
-            if (auto placement = prepare_placement((*it)->id))
+            if (auto placement = prepare_placement((*it)->id, (*it)->size_hints))
                 placements.emplace_back(*it, *placement);
     }
     // Claims made during adoption, by applications or rules, rank in observation
@@ -212,11 +211,11 @@ void State::adopt(
 }
 
 // Live admission and batch adoption share preparation and geometry resolution.
-std::optional<State::PlacementGeometry> State::prepare_placement(xcb_window_t id)
+std::optional<State::PlacementGeometry> State::prepare_placement(xcb_window_t id, SizeHints const& hints)
 {
     if (auto const* parent = find(require(id).transient_for))
         relocate(id, parent->monitor, parent->workspace).value();
-    auto placement = size_hint_geometry(id, true);
+    auto placement = size_hint_geometry(id, hints, true);
     if (auto const& rule = require(id).rule)
     {
         auto monitor = require(id).monitor;
@@ -236,21 +235,19 @@ std::optional<State::PlacementGeometry> State::prepare_placement(xcb_window_t id
 
 void State::size_hints(xcb_window_t id, SizeHints hints, std::optional<Geometry> unmanaged_parent)
 {
-    clients_.at(id).size_hints = hints;
-    if (auto placement = size_hint_geometry(id, false))
+    if (auto placement = size_hint_geometry(id, hints, false))
         request_geometry(id, resolve_geometry(id, *placement, unmanaged_parent));
 }
 
 // Initial hints choose a monitor and an origin or anchor. Later size-only
 // updates keep the origin. Transients accept only user-supplied positions.
-std::optional<State::PlacementGeometry> State::size_hint_geometry(xcb_window_t id, bool initial)
+std::optional<State::PlacementGeometry> State::size_hint_geometry(xcb_window_t id, SizeHints const& hints, bool initial)
 {
     auto const& client = require(id);
     auto const* floating = floating_mode(client);
     if (!floating)
         return std::nullopt;
     bool anchored = client.transient_for != XCB_NONE;
-    auto const& hints = client.size_hints;
     auto rectangle = resize_frame(client, floating->geometry, hints.width, hints.height);
     auto position = hints.user_position ? hints.user_position : anchored ? std::nullopt : hints.program_position;
     bool center = initial;

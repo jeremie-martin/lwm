@@ -13,6 +13,10 @@ struct FakeWm
     enum class Answer
     {
         Reply,
+        GrabReply,
+        ReplyThenExit,
+        WrongType,
+        WrongFormat,
         Silence,
         Exit,
         Foreign
@@ -57,14 +61,26 @@ struct FakeWm
                             std::lock_guard lock(mutex);
                             requests.push_back(get_window_property_string(conn.get(), requester, command).value_or(""));
                         }
-                        if (answer == Answer::Reply)
-                            xcb_change_property(conn.get(), XCB_PROP_MODE_REPLACE, requester, response, utf8, 8, reply.size(), reply.data());
-                        if (answer == Answer::Exit)
+                        // Grab before publishing: the notification is delivered, but
+                        // the requester's subsequent GetProperty cannot be served.
+                        if (answer == Answer::GrabReply)
+                            xcb_grab_server(conn.get());
+                        if (answer == Answer::Reply || answer == Answer::GrabReply || answer == Answer::ReplyThenExit
+                            || answer == Answer::WrongType || answer == Answer::WrongFormat)
+                        {
+                            auto type = answer == Answer::WrongType ? XCB_ATOM_STRING : utf8;
+                            uint8_t format = answer == Answer::WrongFormat ? 16 : 8;
+                            xcb_change_property(conn.get(), XCB_PROP_MODE_REPLACE, requester, response, type, format,
+                                                reply.size() / (format / 8), reply.data());
+                        }
+                        if (answer == Answer::Exit || answer == Answer::ReplyThenExit)
                             xcb_destroy_window(conn.get(), window);
                         xcb_flush(conn.get());
                     }
                     free(event);
                 }
+                xcb_ungrab_server(conn.get());
+                xcb_flush(conn.get());
             }
         );
     }
@@ -143,6 +159,27 @@ TEST_CASE("lwmctl distinguishes a missing, silent and exiting WM", "[ipc][lwmctl
         CHECK(result->stderr_text.find("may have run") != std::string::npos);
         CHECK(std::chrono::steady_clock::now() - started < std::chrono::seconds(1));
     }
+    SECTION("reply retrieval also obeys the timeout when the server is grabbed")
+    {
+        FakeWm wm("ok", FakeWm::Answer::GrabReply);
+        auto started = std::chrono::steady_clock::now();
+        auto result = run_command(lwmctl_executable_path(), { "--timeout", "100", "version" });
+        REQUIRE(result);
+        CHECK(result->exit_code == 1);
+        CHECK(result->stdout_text.empty());
+        CHECK(result->stderr_text == "lwmctl: timed out waiting for lwm; the command may have run\n");
+        CHECK(std::chrono::steady_clock::now() - started < std::chrono::seconds(1));
+        CHECK(wm.received() == std::vector<std::string>{ "version" });
+    }
+    SECTION("a reply announced before WM destruction is still returned")
+    {
+        FakeWm wm("ok finished", FakeWm::Answer::ReplyThenExit);
+        auto result = run_command(lwmctl_executable_path(), { "version" });
+        REQUIRE(result);
+        CHECK(result->exit_code == 0);
+        CHECK(result->stdout_text == "finished\n");
+        CHECK(result->stderr_text.empty());
+    }
     SECTION("a WM that exits before replying is reported at once")
     {
         FakeWm wm("", FakeWm::Answer::Exit);
@@ -153,6 +190,22 @@ TEST_CASE("lwmctl distinguishes a missing, silent and exiting WM", "[ipc][lwmctl
         CHECK(result->stderr_text == "lwmctl: lwm exited before replying\n");
         CHECK(std::chrono::steady_clock::now() - started < std::chrono::seconds(2));
     }
+}
+
+TEST_CASE("IPC clients reject replies with a non-text type or format", "[ipc][lwmctl]")
+{
+    if (!display_available())
+        SKIP("X11 unavailable");
+    auto answer = FakeWm::Answer::WrongType;
+    SECTION("wrong type") { }
+    SECTION("wrong format") { answer = FakeWm::Answer::WrongFormat; }
+    FakeWm wm("ok 1", answer);
+    auto result = run_command(lwmctl_executable_path(), { "version" });
+    REQUIRE(result);
+    CHECK(result->exit_code == 1);
+    CHECK(result->stdout_text.empty());
+    CHECK(result->stderr_text == "lwmctl: invalid reply\n");
+    CHECK_FALSE(send_ipc_command("version", std::chrono::milliseconds(100)));
 }
 
 TEST_CASE("lwmctl offers local help and preserves option-like names after double dash", "[ipc][lwmctl]")
@@ -214,6 +267,14 @@ TEST_CASE("lwmctl watch waits through foreign ownership and attaches to the next
     auto foreign = create_window(conn, 0, 0, 1, 1);
     xcb_change_property(conn.get(), XCB_PROP_MODE_REPLACE, foreign, name, utf8, 8, 7, "foreign");
     publish(foreign, "{\"lifetime\":2}");
+    // Queue state changes together with the lifetime event. Draining a burst
+    // must neither publish stale state nor swallow the successor announcement.
+    REQUIRE(kill(watcher.pid, SIGSTOP) == 0);
+    REQUIRE(wait_for_condition(
+        [&] { return waitpid(watcher.pid, nullptr, WUNTRACED | WNOHANG) == watcher.pid; },
+        std::chrono::seconds(1)));
+    for (int i = 0; i < 100; ++i)
+        publish(wm.window, "{\"lifetime\":99}");
     SECTION("MANAGER announcement") { announce(foreign); }
     SECTION("Old owner destruction")
     {
@@ -221,6 +282,8 @@ TEST_CASE("lwmctl watch waits through foreign ownership and attaches to the next
         xcb_destroy_window(conn.get(), wm.window);
         xcb_flush(conn.get());
     }
+    REQUIRE(wm_owner(conn) == foreign);
+    REQUIRE(kill(watcher.pid, SIGCONT) == 0);
     CHECK_FALSE(watcher.line(std::chrono::milliseconds(200)));
     publish(foreign, "{\"lifetime\":3}");
     CHECK_FALSE(watcher.line(std::chrono::milliseconds(200)));

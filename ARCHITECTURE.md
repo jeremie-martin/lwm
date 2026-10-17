@@ -263,8 +263,10 @@ server geometry, and configures visible clients before mapping them. The output
 cache records submitted mapping and geometry; State owns visibility and normal
 geometry. The shell matches its own unmap acknowledgements by window and X request
 sequence, while application unmaps and synthetic withdrawal release ownership.
-Startup also observes unmapped windows with a managed `WM_STATE`, recovering clients
-after an interrupted predecessor. The shell restores model rectangles before client
+Cold startup also observes unmapped windows with a managed `WM_STATE`, recovering clients
+after an interrupted predecessor. Cooperative handoff observes only viewable windows,
+since the predecessor mapped its clients before releasing ownership; later application
+unmaps are withdrawals. The shell restores model rectangles before client
 withdrawal and restores rectangles and mapping before cooperative ownership transfer
 or restart handoff, while State still owns their geometry.
 

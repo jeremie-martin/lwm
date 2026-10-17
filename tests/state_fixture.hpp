@@ -96,7 +96,6 @@ inline WindowObservation observe(Client const& client, std::optional<uint32_t> d
         .user_time = client.user_time,
         .user_time_window = client.user_time_window,
         .fullscreen_monitors = client.fullscreen_monitors,
-        .size_hints = client.size_hints,
     };
     window.states.set(WindowState::Fullscreen, client.fullscreen());
     window.states.set(WindowState::Hidden, client.iconic);

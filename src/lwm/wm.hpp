@@ -136,8 +136,8 @@ private:
 
     // wm_observe.cpp: X reads. Requests are pipelined; decoders are shared by
     // batch admission and single-property updates.
-    // Only windows that exist and are not override-redirect (and are viewable when adopting).
-    std::vector<WindowObservation> observe(std::span<xcb_window_t const> windows, bool adopting);
+    // Adoption requires viewability, except managed unmapped windows during cold recovery.
+    std::vector<WindowObservation> observe(std::span<xcb_window_t const> windows, bool adopting, bool cold_recovery = false);
     WindowType window_type(xcb_get_property_cookie_t cookie) const;
     std::vector<xcb_atom_t> read_protocols(xcb_window_t window) const;
     xcb_get_property_cookie_t observe_user_time(xcb_window_t window, xcb_get_window_attributes_cookie_t cookie);
