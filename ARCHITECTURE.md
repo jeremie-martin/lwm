@@ -201,7 +201,9 @@ output name: survivors keep complete graphs, removed outputs' clients move to ou
 after surviving tiles, and returning outputs start fresh. A changed topology fits
 floating rectangles (clamping survivors, centering displaced clients) and clears
 index-based fullscreen-monitor hints. Identical outputs and workspace counts preserve
-revision, drags and focus traversal. A root-extent-only change recomputes dock workareas;
+revision, drags and focus traversal. Rebinding takes output identities and geometry;
+replacement workspace graphs are allocated only after detecting a topology or count
+change. A root-extent-only change recomputes dock workareas;
 settlement cancels only interactions whose captured context became invalid. Restart
 rebinding uses the same code, including workspace-count folding. Focus is repaired only
 if it became ineligible.

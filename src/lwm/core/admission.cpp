@@ -428,8 +428,8 @@ void State::restore_graph(restart::Snapshot const& snapshot, std::span<Client> o
     for (auto& [id, fixture] : fixtures_)
         if (auto const* saved = snapshot.find_fixture(id))
             fixture.order = saved->order;
-    std::vector<Monitor> discovered;
-    for (auto const& monitor : monitors_) discovered.push_back(fresh_monitor(monitor.name, monitor.geometry));
+    std::vector<Topology::Output> discovered;
+    for (auto const& monitor : monitors_) discovered.push_back({ monitor.name, monitor.geometry });
     monitors_.clear();
     for (auto const& monitor : snapshot.monitors) monitors_.push_back(monitor);
     focused_monitor_ = snapshot.focused_monitor;

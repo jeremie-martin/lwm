@@ -398,8 +398,7 @@ private:
     void reconcile_metadata(xcb_window_t id);
 
     // Configuration and topology
-    Monitor fresh_monitor(std::string name, Geometry geometry) const;
-    void rebind(std::vector<Monitor> monitors);
+    void rebind(std::vector<Topology::Output> outputs);
     void forget_missing_tile_slot(Client& client) const;
 
     void erase_ratio(size_t monitor, SplitAddress address);

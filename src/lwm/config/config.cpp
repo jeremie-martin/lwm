@@ -323,9 +323,6 @@ void parse_rule(schema::Rule const& input, std::string const& context, Config& c
     }
     auto const& in = input.apply;
     auto& out = rule.actions;
-    if (!in.floating && !in.fullscreen && !in.layer && !in.sticky && !in.skip_taskbar && !in.skip_pager
-        && !in.borderless && !in.workspace && !in.monitor && !in.geometry)
-        throw std::runtime_error(context + ".apply must define at least one action");
     if (in.workspace)
     {
         if (auto name = std::get_if<std::string>(&*in.workspace))
@@ -367,6 +364,8 @@ void parse_rule(schema::Rule const& input, std::string const& context, Config& c
         assign(geometry->width, frame.width);
         assign(geometry->height, frame.height);
     }
+    if (out == RuleActions{ })
+        throw std::runtime_error(context + ".apply must define at least one action");
     config.rules.push_back(std::move(rule));
 }
 

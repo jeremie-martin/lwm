@@ -810,9 +810,9 @@ void State::configure(Config config)
     // the new count fold into the last workspace.
     if (!monitors_.empty())
     {
-        std::vector<Monitor> monitors;
-        for (auto const& monitor : monitors_) monitors.push_back(fresh_monitor(monitor.name, monitor.geometry));
-        rebind(std::move(monitors));
+        std::vector<Topology::Output> outputs;
+        for (auto const& monitor : monitors_) outputs.push_back({ monitor.name, monitor.geometry });
+        rebind(std::move(outputs));
     }
     reconcile_scratchpads();
     reapply_rules();
@@ -820,27 +820,14 @@ void State::configure(Config config)
 
 // Topology
 
-Monitor State::fresh_monitor(std::string name, Geometry geometry) const
-{
-    Monitor monitor;
-    monitor.name = std::move(name);
-    monitor.geometry = geometry;
-    Workspace workspace;
-    workspace.layout_strategy = config_.layout.strategy;
-    monitor.workspaces.assign(config_.workspaces.size(), workspace);
-    return monitor;
-}
-
 void State::replace_topology(Topology topology)
 {
     assert(!topology.outputs.empty());
-    std::vector<Monitor> monitors;
-    for (auto& output : topology.outputs) monitors.push_back(fresh_monitor(std::move(output.name), output.geometry));
     // The root extent shapes dock projections even when the outputs are unchanged.
     if (!(screen_ == topology.screen))
         mutated();
     screen_ = topology.screen;
-    rebind(std::move(monitors));
+    rebind(std::move(topology.outputs));
 }
 
 // Each monitor reserves the deepest projection of any dock on each edge.
@@ -860,9 +847,9 @@ Geometry State::working_area(Monitor const& monitor) const
     return lwm::working_area(monitor.geometry, strut);
 }
 
-void State::rebind(std::vector<Monitor> monitors)
+void State::rebind(std::vector<Topology::Output> outputs)
 {
-    assert(!monitors.empty());
+    assert(!outputs.empty());
     // Configuration changes and restoration share reconciliation before the
     // unchanged-topology fast path; inactive workspaces obey the same bounds.
     for (auto& monitor : monitors_)
@@ -873,17 +860,25 @@ void State::rebind(std::vector<Monitor> monitors)
                     mutated();
                     ratio = bounded;
                 }
-    bool topology_changed = monitors_.size() != monitors.size()
+    bool topology_changed = monitors_.size() != outputs.size()
         || !std::ranges::equal(monitors_,
-                               monitors,
+                               outputs,
                                [](auto const& a, auto const& b)
                                { return a.name == b.name && a.geometry == b.geometry; });
-    if (!topology_changed && std::ranges::equal(monitors_, monitors, [](auto const& a, auto const& b)
-        { return a.workspaces.size() == b.workspaces.size(); }))
+    if (!topology_changed && std::ranges::all_of(monitors_, [&](auto const& monitor)
+        { return monitor.workspaces.size() == config_.workspaces.size(); }))
     {
         // The root extent can change without changing the outputs; its only
         // domain consequence is the derived dock projection. Settle validates drags.
         return;
+    }
+    std::vector<Monitor> monitors;
+    for (auto& output : outputs)
+    {
+        Workspace workspace;
+        workspace.layout_strategy = config_.layout.strategy;
+        monitors.push_back({ std::move(output.name), output.geometry,
+                             std::vector<Workspace>(config_.workspaces.size(), workspace) });
     }
     mutated();
     end_drag(false);

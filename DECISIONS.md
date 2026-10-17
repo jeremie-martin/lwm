@@ -322,6 +322,15 @@ sides around each metadata mutation would remove the retained action copy but do
 regex matching on title/class updates. Keep the cache unless measurements show that
 removing it improves the tradeoff; reload deliberately refreshes and reapplies it.
 
+## Allocate workspace graphs only when rebinding changes them (2026-10-18)
+
+Reload, topology updates and restart restoration pass output identities and geometry
+into the same rebinding path. That path reconciles ratios and checks the configured
+workspace count before allocating replacement graphs. Eager `fresh_monitor` graphs
+were discarded on unchanged reloads; a separate reload-only gate would duplicate the
+shared decision. Rule emptiness likewise derives from the resolved `RuleActions`
+value instead of maintaining another inventory of action fields.
+
 ## Open opportunities (2026-10-06)
 
 Candidates for subsystem-level simplification, not yet decided. Move an entry to a

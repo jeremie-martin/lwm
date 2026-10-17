@@ -579,6 +579,23 @@ apply = { geometry = { } }
     REQUIRE_FALSE(half);
     CHECK(half.error().find("must set both x and y") != std::string::npos);
 }
+TEST_CASE("Each rule action makes an otherwise empty rule meaningful", "[config][rules]")
+{
+    for (std::string action : { "floating = false", "fullscreen = false", "sticky = false",
+                               "skip_taskbar = false", "skip_pager = false", "borderless = false",
+                               "workspace = 0", "monitor = 0", "layer = 'normal'", "geometry = {}" })
+    {
+        CAPTURE(action);
+        auto loaded = load_from_string("[[rules]]\napply = { " + action + " }\n");
+        REQUIRE(loaded);
+        REQUIRE(loaded->rules.size() == 1);
+        CHECK_FALSE(loaded->rules.front().actions == RuleActions{ });
+    }
+    auto empty = load_from_string("[[rules]]\napply = {}\n");
+    REQUIRE_FALSE(empty);
+    CHECK(empty.error().find("must define at least one action") != std::string::npos);
+}
+
 TEST_CASE("Configuration rejects malformed nested values at their owning field", "[config]")
 {
     for (auto const& [text, field] : std::initializer_list<std::pair<std::string, std::string>>{
