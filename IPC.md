@@ -56,7 +56,7 @@ Queries read current state. Mutating commands are also accepted verbatim in a
 key binding, for example `"super+f" = "window fullscreen"`; both use one parser and
 executor. Queries cannot be bound. `lwmctl watch` is not a command sent to LWM; it
 reads the published state directly (see [Watching state](#watching-state)). Bindings
-launch processes from argv lists; IPC callers can launch processes themselves. Commands concerning the active window return
+launch processes from argv lists; IPC callers can launch processes themselves. Commands requiring an active window return
 `error no active window` when none is selected. Relative monitor/workspace commands
 target the focused monitor; indices are zero-based.
 Switching to the current workspace and moving a window to its current placement
@@ -95,7 +95,7 @@ Cycling fails when no window is eligible.
 | `window list` | tiled and floating client state as JSON |
 | `window close` | ask the active window to close; closing it again while it is still open kills its client |
 | `window fullscreen` / `window float` | toggle fullscreen or floating on the active window |
-| `window swap next` / `window swap prev` | swap the active tile with its neighbor |
+| `window swap next` / `window swap prev` | swap the selected workspace tile with its neighbor; in monocle, focus the neighbor instead; no-op if unavailable |
 | `window to-workspace N` | move the active window to workspace `N` of its monitor |
 | `window to-monitor next` / `window to-monitor prev` | move the active window to the adjacent monitor |
 | `scratchpad stash` | move the active window to the generic pool |
