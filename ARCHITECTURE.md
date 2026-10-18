@@ -192,9 +192,9 @@ centering is an unresolved frame size and parent anchor until every client's pla
 and rule effects are established; it is never stored in the live client or snapshot.
 
 Metadata updates resolve classification defaults, parent placement, changed rule
-actions and pending scratchpad claims. A rule applies on metadata only when its
-resulting actions change; losing a match leaves earlier actions. Pending claims take
-precedence. Reload reapplies every matching rule without claiming pending launches.
+actions and pending scratchpad claims. Each client retains its matched actions for
+comparison with the new match; pending claims take precedence. Reload reapplies
+matching actions without claiming pending launches.
 
 Topology notifications are coalesced. `replace_topology()` rebinds workspace graphs by
 output name: survivors keep complete graphs, removed outputs' clients move to output 0
@@ -266,12 +266,6 @@ server geometry, and configures visible clients before mapping them. The output
 cache records submitted mapping and geometry; State owns visibility and normal
 geometry. The shell matches its own unmap acknowledgements by window and X request
 sequence, while application unmaps and synthetic withdrawal release ownership.
-Cold startup also observes unmapped windows with a managed `WM_STATE`, recovering clients
-after an interrupted predecessor. Cooperative handoff observes only viewable windows,
-since the predecessor mapped its clients before releasing ownership; later application
-unmaps are withdrawals. The shell restores model rectangles before client
-withdrawal and restores rectangles and mapping before cooperative ownership transfer
-or restart handoff, while State still owns their geometry.
 
 Stored split ratios obey the current configuration bounds. State bounds writes and
 reconciles every workspace during reload and restart topology rebinding, including
@@ -315,14 +309,9 @@ context changes, and on reload, topology change and restart.
 
 Named scratchpad slots are empty, launch-pending or claimed; the pool is an ordered
 list whose last entry is the recall target. Both hold ordinary clients and hide them
-with iconic state. Recall relocates to the focused monitor's current workspace; named
-clients float at their configured size and pooled clients keep their mode and offset.
-Cycling recalls an invisible or remote pool target and focuses an inactive local one;
-an active local target is hidden and rotated to the front before the next is
-recalled, so a one-window pool toggles. Removing members preserves the remaining
-order. A toggle can ask the shell to launch; the slot becomes pending only after process
-creation succeeds. Claims and pending launches survive reload and restart while their
-names survive.
+with iconic state. Removing members preserves the remaining order. A toggle can ask
+the shell to launch; the slot becomes pending only after process creation succeeds.
+Claims and pending launches survive reload and restart while their names survive.
 
 ## Configuration and IPC
 
@@ -334,11 +323,9 @@ embedded with `#embed` and parsed by the same loader; it binds keys and leaves s
 at their initializers. Binding command text and IPC requests share one
 command parser; bindings reject queries.
 Actions succeed silently; their outcome is the published state. Execution copies a
-binding's action because reload can replace the configuration that owns it. Startup
-and exec restart fall back to the defaults when the file is missing or invalid, since
-LWM usually leads the session; reload keeps the active configuration. A
-MappingNotify refreshes the key symbols and regrabs bindings. Startup options own
-logging policy; reload does not.
+binding's action because reload can replace the configuration that owns it. A
+MappingNotify refreshes the key symbols and regrabs bindings. Startup options, not
+`Config`, own logging policy.
 
 IPC needs no transport of its own: a request is a `_LWM_COMMAND` ClientMessage naming
 the caller's window, handled like any other X event. The handler reads and deletes

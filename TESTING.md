@@ -168,23 +168,3 @@ python3 tests/performance/logging_bench.py --binary build/release/src/app/lwm
 Request counts, latency, CPU, and memory answer different questions. Repeat timing
 runs under the same log level and destination. These probes and test
 timeouts establish regression evidence, not hard real-time or hardware guarantees.
-
-## Nested preview
-
-Install Xephyr and run from an existing X session:
-
-```sh
-./scripts/preview.sh
-```
-
-The script builds Debug in `build`, starts display `:100` (which must be free),
-and seeds `~/.cache/lwm-preview/config.toml` from the example if absent. Edit its
-commands for installed applications. Diagnostics go to the terminal; press Enter to
-stop, and everything the script started exits with it.
-Start applications with `DISPLAY=:100 <program>`.
-
-When available, Polybar uses [config/polybar.ini](config/polybar.ini), whose `lwm`
-module follows the freshly built `lwmctl watch` through `scripts/lwm-status`
-(requires `jq`); the preview puts its build binaries and scripts first on `PATH`. Adjust
-its PulseAudio and battery settings (`BAT0`/`ACA0`). `scripts/launch-polybar.sh` is for
-your desktop session: it replaces existing bars and starts one per output.

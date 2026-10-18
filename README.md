@@ -65,7 +65,7 @@ or an X11 display-manager session:
 ```
 
 LWM refuses to start alongside another window manager. To try it inside an
-existing desktop, use the [nested preview](TESTING.md#nested-preview).
+existing desktop, use the [nested preview](#nested-preview).
 
 Without `--config`, LWM reads `${XDG_CONFIG_HOME:-$HOME/.config}/lwm/config.toml`;
 an absent implicit file means built-in defaults. A missing explicit file or an
@@ -77,12 +77,34 @@ such as `setxkbmap`. `lwm --help` lists startup options; value options accept
 `--option VALUE` or `--option=VALUE`.
 
 Installation defaults to `/usr/local/bin` and includes `lwm`, `lwmctl`,
-`lwm-status`, `lwm-notify`, and `lwm-notify-bridge`. The sample Polybar configuration
-uses `lwm-status` (requires `jq`). Set `CMAKE_INSTALL_PREFIX` and
-`CMAKE_INSTALL_BINDIR` through `CMAKE_OPTIONS` to change it. `sudo make uninstall`
-removes the files in that build's install manifest. Keep the build directory;
-use the same `BUILD_DIR` and, for staged installations, `DESTDIR`. Missing files
-are harmless and directories are left in place.
+`lwm-status`, `lwm-notify`, and `lwm-notify-bridge`. Set `CMAKE_INSTALL_PREFIX` and
+`CMAKE_INSTALL_BINDIR` through `CMAKE_OPTIONS` to change the installation location.
+`sudo make uninstall` removes the files in that build's install manifest. Keep the
+build directory; use the same `BUILD_DIR` and, for staged installations, `DESTDIR`.
+Missing files are harmless and directories are left in place.
+
+The sample Polybar configuration uses `lwm-status` (requires `jq`).
+`scripts/launch-polybar.sh` is for your desktop session: it replaces existing bars
+and starts one per output.
+
+## Nested preview
+
+Install Xephyr and run from an existing X session:
+
+```sh
+./scripts/preview.sh
+```
+
+The script builds Debug in `build`, starts display `:100` (which must be free),
+and seeds `~/.cache/lwm-preview/config.toml` from the example if absent. Edit its
+commands for installed applications. Diagnostics go to the terminal; press Enter to
+stop, and everything the script started exits with it.
+Start applications with `DISPLAY=:100 <program>`.
+
+When available, Polybar uses [config/polybar.ini](config/polybar.ini), whose `lwm`
+module follows the freshly built `lwmctl watch` through `scripts/lwm-status`
+(requires `jq`); the preview puts its build binaries and scripts first on `PATH`. Adjust
+its PulseAudio and battery settings (`BAT0`/`ACA0`).
 
 ## Configure and control
 
@@ -90,13 +112,8 @@ are harmless and directories are left in place.
 file and built-in default. A file is the whole configuration: only what it binds is
 bound. Key bindings map a combo to the command text `lwmctl` takes, as in
 `"super+f" = "window fullscreen"`, or to the argv list of a program to launch, as in
-`"super+Return" = ["ghostty"]`. Workspace names define the workspace count, and a
-`[[workspace_keys]]` group binds one keyboard layout's keys to switch and move. Rule
-placement uses `workspace` and `monitor`, each accepting an index or
-a name; rule layers use `layer = "normal"`, `"above"`, or `"below"`; rule window types
-are the lowercase names of types that become clients, e.g. `dialog`. Mouse bindings
-take `move`, `resize`, or what a key binding takes. Invalid
-reloads keep the active configuration.
+`"super+Return" = ["ghostty"]`. The reference also covers workspace keys, rules,
+and mouse bindings.
 
 Each monitor has its own workspaces. Commands target the focused monitor and use
 zero-based indices.

@@ -13,18 +13,13 @@ it gives a decision one home. Report the net production-line change for simplifi
 work; deleting tests, comments or documentation does not count toward it. Prefer
 deletion, consolidation, derivation and established libraries over new layers.
 
-Line-level review reaches diminishing returns quickly; the largest simplifications
-come from asking whether a whole subsystem needs to exist in its current form, from
-the user's side of its contract. DECISIONS.md records how the IPC redesign was found
-that way and lists open candidates; use the same process for them.
-
 Window-management behavior has been refined through many iterations. Preserve geometry,
 focus, placement and fullscreen semantics unless a behavior change is requested.
 Configuration and parsing conventions can be challenged when they cause
 disproportionate complexity; describe any user-facing change in X11.md or IPC.md.
 
 [ARCHITECTURE.md](ARCHITECTURE.md) describes the current design only; keep it that way.
-[DECISIONS.md](DECISIONS.md) records removed features and rejected proposals with their
-reasons; check it before proposing one again, and add an entry for each new such decision.
+[DECISIONS.md](DECISIONS.md) records significant design choices and rejected alternatives;
+check it before revisiting one. Routine refactors do not need decision entries.
 [TESTING.md](TESTING.md) documents isolated displays, synchronization, restart fixtures
 and performance probes. Never run WM tests against a live desktop.

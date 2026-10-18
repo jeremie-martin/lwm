@@ -117,6 +117,12 @@ window can still be claimed. Both named scratchpad commands reject unknown names
 Declared names must survive command parsing unchanged: no leading/trailing whitespace, line breaks or NUL, and
 the longest name-bearing command must remain shorter than 4096 bytes.
 
+Recall relocates to the focused monitor's current workspace; named clients float at
+their configured size and pooled clients keep their mode and offset. Cycling recalls
+an invisible or remote pool target and focuses an inactive local one; an active local
+target is hidden and rotated to the front before the next is recalled, so a
+one-window pool toggles.
+
 ## JSON results
 
 Public JSON always contains valid text: Unicode is escaped, and invalid bytes in
@@ -178,8 +184,7 @@ windows.
 ```
 
 A named entry uses `window: 0` when it has not claimed a window. The pool array is
-ordered by recall rotation, with its current target last; see
-[Scratchpads](ARCHITECTURE.md#pointer-interactions-and-scratchpads) for cycle behavior.
+ordered by recall rotation, with its current target last.
 
 All window values are X11 window IDs. Monitor and workspace indices are zero-based
 runtime indices; none of these identifiers are persistent.

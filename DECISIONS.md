@@ -1,8 +1,7 @@
 # Decisions
 
-Settled design and product choices, with the reason and what would reopen them. Record
-removed features and rejected proposals here; [ARCHITECTURE.md](ARCHITECTURE.md)
-describes only the current design. Keep each entry to a few lines.
+Significant design and product choices, with their tradeoffs and reasons. Routine
+implementation changes belong in git history, not here.
 
 ## Drop `_NET_WM_SYNC_REQUEST` (2026-10-06)
 
@@ -207,50 +206,6 @@ Removing each would save 25–40 lines, but it would remove behaviour users rely
 - unmodified gap-click split resizing, with double-click and Ctrl-click reset
 - `_NET_WM_FULLSCREEN_MONITORS`
 
-## Rejected simplifications (2026-10-06)
-
-- A shared properties base for `WindowObservation` and `Client` breaks
-  designated-initializer construction in tests.
-- Modeling `WindowRole` as `Fixture::Role` weakens the type.
-- Dropping `drag_to`'s client re-check lets completion skip settling.
-- Dropping `WindowManager::fullscreen_owners_` loses the owner-change log line that
-  integration tests assert.
-- Removing the defaulted `operator==` on actions removes syntax, not knowledge.
-- Giving runtime `Config` reflect-cpp types would remove the duplicated input schema
-  but leak the parsing library past the input boundary.
-
-## Visibility and boundary contracts (2026-10-07)
-
-A fixed negative x coordinate cannot hide every legal X window: a wide client can
-extend back into the root. Hidden clients now use a borderless 1×1 rectangle at
-(-1, -1), while State retains normal geometry and restart restores model rectangles
-before releasing the screen. This removes the separate output hidden flag. Unmapping
-was rejected because it would require distinguishing WM unmaps from real withdrawal
-and changing the existing mapping/adoption contract.
-
-Public JSON uses the JSON library's Unicode escaping and invalid-byte replacement;
-a custom UTF-8 codec and legacy-text conversion are unnecessary for the display
-contract. Private restart data retains its existing byte-preserving codec.
-
-Scratchpad declarations and snapshot identities use the command parser to establish
-addressability, rather than duplicating its whitespace and request-length rules.
-Keysym names reject NUL before Xlib can truncate them; workspace labels reject the
-NUL separator used by the EWMH name list. Hidden intent requires scratchpad ownership.
-Split ratios are reconciled against the
-active configuration in the existing reload/restoration rebinding path, rather than
-maintaining separate reload and restart correction mechanisms.
-
-## Restore geometry when ownership ends (2026-10-07)
-
-The off-root rectangle is a temporary server presentation, not client geometry.
-Withdrawal must restore the model rectangle before State drops the client. Restart
-and cooperative WM ownership transfer share the same restoration path. A separate
-normal-geometry cache was rejected: State already owns that value.
-
-Gap double clicks identify a split by output name, workspace and address rather than
-monitor index. This avoids scattered history invalidation when workspace or topology
-changes reuse an index for a different target.
-
 ## Reject nonzero X screens explicitly (2026-10-07)
 
 LWM manages one X screen with RandR outputs; its ownership selection and EWMH setup
@@ -259,22 +214,6 @@ for both WM and CLI before issuing screen requests. Silently addressing screen 0
 incorrect. Supporting additional legacy X screens was rejected because RandR outputs
 are the existing monitor contract; it would broaden ownership and IPC contracts
 without simplifying them. This restriction does not limit the number of RandR outputs.
-
-## Keep withdrawal preparation in State (2026-10-07)
-
-Restoring server geometry before a shell-side erase could restore a tiled drag's
-temporary preview. `withdraw()` now ends that client's interaction, derives the
-rectangle before membership is lost, and releases ownership together. Returning the
-effect removes the shell's sequencing decision; a second normal-geometry cache or
-shell drag check would duplicate State. Destruction still needs only `erase()`.
-
-Workspace mutations return standard `expected` results, so commands forward the
-model's rejection instead of repeating destination bounds. A successful no-op is
-distinct from rejection and remains silent command success.
-
-The bar status helper is installed as `lwm-status`, beside `lwmctl`; bars call that
-command directly. Preview puts its build and script directories on `PATH`. Per-host
-helper copies and the `LWM_SCRIPTS` environment variable no longer own discovery.
 
 ## Hide by mapping, without temporary geometry (2026-10-08)
 
@@ -285,8 +224,8 @@ GTK probe reproduced an 800×600 window returning as 122×38 after hide/show.
 Ignoring requests while hidden would only mask feedback: the toolkit can answer
 after showing, and applications legitimately update geometry while hidden.
 
-Use X unmapping to express visibility directly. This supersedes the earlier rejection
-of unmapping under “Visibility and boundary contracts.” Completion derives mapping
+Use X unmapping to express visibility instead of moving or shrinking windows
+off-screen. Completion derives mapping
 from State's projection, and the existing output cache records submitted mapping.
 A shell-owned set of window/request sequences consumes acknowledgements of WM
 unmaps, including multiple queued hide/show cycles; it owns no visibility policy.
@@ -321,44 +260,3 @@ changed actions and leaving earlier effects when a match is lost. Recomputing bo
 sides around each metadata mutation would remove the retained action copy but double
 regex matching on title/class updates. Keep the cache unless measurements show that
 removing it improves the tradeoff; reload deliberately refreshes and reapplies it.
-
-## Allocate workspace graphs only when rebinding changes them (2026-10-18)
-
-Reload, topology updates and restart restoration pass output identities and geometry
-into the same rebinding path. That path reconciles ratios and checks the configured
-workspace count before allocating replacement graphs. Eager `fresh_monitor` graphs
-were discarded on unchanged reloads; a separate reload-only gate would duplicate the
-shared decision. Rule emptiness likewise derives from the resolved `RuleActions`
-value instead of maintaining another inventory of action fields.
-
-## Derive fixed-command usage and index panel state (2026-10-18)
-
-A fixed command's usage is its name; command declarations no longer repeat that
-spelling. The status helper toggles layout through `workspace list`, not the full
-state query, and indexes snapshot windows once when counting pooled hidden clients
-instead of scanning every window for each pool member. The IPC contract is unchanged.
-
-## Open opportunities (2026-10-06)
-
-Candidates for subsystem-level simplification, not yet decided. Move an entry to a
-decision above once it is adopted or rejected.
-
-How these were found: two exhaustive line-level reviews found only about 70 lines of
-genuine mechanism removal, and concluded the code was near its structural minimum.
-Asking instead whether the IPC subsystem needed to exist in its current form led to
-the X-carried IPC and watched state above: about 770 fewer production lines, a
-simpler `lwmctl` (silent actions, `state`, `watch` that follows restarts), and replies
-that follow their effects. The process that got there:
-
-1. State the subsystem's purpose from the user's side, ignoring its implementation.
-2. Have independent agents with code access design it from scratch and attack the
-   leading proposal; weigh their disagreements against the code, not their claims.
-3. Measure what the proposal moves onto hot paths before adopting it (here, state
-   serialization: about 13 µs per change at 50 windows, skipped during drags).
-4. Implement in commits that keep every suite green, then have an independent review
-   look for defects (it found a real one: oversized state could close the connection).
-
-The same question applied to the remaining subsystems:
-
-- **Logging.** Asynchronous Quill logging exists so that a slow log reader cannot
-  stall the WM. Probably essential, but unquestioned.
