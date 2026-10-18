@@ -9,7 +9,6 @@
 #include <algorithm>
 #include <array>
 #include <charconv>
-#include <cmath>
 #include <rfl/Literal.hpp>
 #include <rfl/NoExtraFields.hpp>
 #include <rfl/Rename.hpp>
@@ -34,18 +33,6 @@ template <int64_t Min, int64_t Max> using OptionalInteger = std::optional<Intege
 using Text = std::optional<std::string>;
 using Flag = std::optional<bool>;
 
-struct Number
-{
-    using ReflectionType = std::variant<int64_t, double>;
-    double value;
-    explicit Number(ReflectionType const& input)
-        : value(std::visit([](auto v) { return static_cast<double>(v); }, input))
-    {
-        if (!std::isfinite(value))
-            throw std::runtime_error("must be a finite number");
-    }
-};
-
 struct Appearance
 {
     OptionalInteger<0, 65535> padding, border_width;
@@ -54,7 +41,7 @@ struct Appearance
 struct Layout
 {
     Text strategy;
-    std::optional<Number> default_ratio, min_ratio;
+    std::optional<double> default_ratio, min_ratio;
     OptionalInteger<1, 100> resize_grab_threshold;
 };
 struct Focus
@@ -81,7 +68,7 @@ struct RuleMatch
 };
 struct Size
 {
-    std::optional<Number> width, height;
+    std::optional<double> width, height;
 };
 struct Scratchpad
 {
@@ -136,13 +123,6 @@ template <typename T, typename Value> void assign(std::optional<Value> const& in
 {
     if (input)
         output = static_cast<T>(input->value());
-}
-
-// Number is also used for settings that accept either TOML integer or float syntax.
-void assign(std::optional<schema::Number> const& input, double& output)
-{
-    if (input)
-        output = input->value;
 }
 
 template <typename T, typename Handler>
@@ -296,9 +276,9 @@ void parse_scratchpad(schema::Scratchpad const& input, std::string const& contex
         throw std::runtime_error(context + ".match must define at least one matcher");
     if (input.size)
     {
-        assign(input.size->width, scratchpad.width);
-        assign(input.size->height, scratchpad.height);
-        if (scratchpad.width < 0.1 || scratchpad.width > 1.0 || scratchpad.height < 0.1 || scratchpad.height > 1.0)
+        scratchpad.width = input.size->width.value_or(scratchpad.width);
+        scratchpad.height = input.size->height.value_or(scratchpad.height);
+        if (!(scratchpad.width >= 0.1 && scratchpad.width <= 1.0 && scratchpad.height >= 0.1 && scratchpad.height <= 1.0))
             throw std::runtime_error(context + ".size fractions must be in range 0.1..1.0");
     }
     config.scratchpads.push_back(std::move(scratchpad));
@@ -396,12 +376,12 @@ ConfigLoadResult parse_config(std::string_view text, std::string const& source)
                     throw std::runtime_error("[layout].strategy has unknown value '" + *layout->strategy + "'");
                 config.layout.strategy = *strategy;
             }
-            assign(layout->min_ratio, config.layout.min_ratio);
-            if (config.layout.min_ratio < 0.05 || config.layout.min_ratio > 0.45)
+            config.layout.min_ratio = layout->min_ratio.value_or(config.layout.min_ratio);
+            if (!(config.layout.min_ratio >= 0.05 && config.layout.min_ratio <= 0.45))
                 throw std::runtime_error("[layout].min_ratio must be in range 0.05..0.45");
             if (layout->default_ratio)
                 config.layout.default_ratio =
-                    parse_ratio(layout->default_ratio->value, "[layout].default_ratio", config.layout);
+                    parse_ratio(*layout->default_ratio, "[layout].default_ratio", config.layout);
             assign(layout->resize_grab_threshold, config.layout.resize_grab_threshold);
         }
         if (input.focus)

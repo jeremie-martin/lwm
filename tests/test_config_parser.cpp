@@ -389,14 +389,68 @@ TEST_CASE("Config parser rejects rule geometry outside X11 ranges", "[config][ru
     }
 }
 
-TEST_CASE("Numeric configuration rejects non-finite values before range checks", "[config]")
+TEST_CASE("Numeric configuration rejects non-finite values and nonnumeric types at their owning bounds", "[config]")
 {
-    for (std::string value : { "nan", "+nan", "-nan", "inf", "+inf", "-inf" })
+    std::string scratchpad = "[[scratchpads]]\nname = 'term'\nspawn = ['true']\nmatch = { class = 'Term' }\nsize.";
+    for (auto const& [prefix, field] : std::initializer_list<std::pair<std::string, std::string>>{
+             { "[layout]\n", "default_ratio" }, { "[layout]\n", "min_ratio" },
+             { scratchpad, "width" }, { scratchpad, "height" },
+         })
     {
-        CAPTURE(value);
-        CHECK_FALSE(load_from_string("[layout]\ndefault_ratio = " + value + "\n"));
-        CHECK_FALSE(load_from_string("[layout]\nmin_ratio = " + value + "\n"));
+        for (std::string value : { "nan", "+nan", "-nan", "inf", "+inf", "-inf", "true", "'0.5'", "[]", "{}" })
+        {
+            CAPTURE(field, value);
+            auto rejected = load_from_string(prefix + field + " = " + value + "\n");
+            REQUIRE_FALSE(rejected);
+            auto owner = prefix == scratchpad ? "size" : field;
+            CHECK(rejected.error().find(owner) != std::string::npos);
+        }
     }
+}
+
+TEST_CASE("Numeric configuration preserves defaults and inclusive bounds", "[config][bounds]")
+{
+    auto loaded = load_from_string(R"(
+[layout]
+min_ratio = 0.05
+default_ratio = 0.95
+[[scratchpads]]
+name = 'term'
+spawn = ['true']
+match = { class = 'Term' }
+size = { width = 0.1, height = 1 }
+)");
+    REQUIRE(loaded);
+    CHECK(loaded->layout.min_ratio == 0.05);
+    CHECK(loaded->layout.default_ratio == 0.95);
+    CHECK(loaded->scratchpads.front().width == 0.1);
+    CHECK(loaded->scratchpads.front().height == 1.0);
+    CHECK(load_from_string("[layout]\nmin_ratio = 0.45\ndefault_ratio = 0.45\n"));
+
+    auto defaults = load_from_string(R"(
+[layout]
+[[scratchpads]]
+name = 'term'
+spawn = ['true']
+match = { class = 'Term' }
+size = {}
+)");
+    REQUIRE(defaults);
+    CHECK(defaults->layout.min_ratio == Config{ }.layout.min_ratio);
+    CHECK(defaults->layout.default_ratio == Config{ }.layout.default_ratio);
+    CHECK(defaults->scratchpads.front().width == ScratchpadConfig{ }.width);
+    CHECK(defaults->scratchpads.front().height == ScratchpadConfig{ }.height);
+
+    for (std::string value : { "-1", "0", "0.049", "0.451", "1" })
+        CHECK_FALSE(load_from_string("[layout]\nmin_ratio = " + value));
+    for (std::string field : { "width", "height" })
+        for (std::string value : { "-1", "0", "0.099", "1.001", "2" })
+        {
+            CAPTURE(field, value);
+            CHECK_FALSE(load_from_string(
+                "[[scratchpads]]\nname = 'term'\nspawn = ['true']\nmatch = { class = 'Term' }\nsize."
+                + field + " = " + value));
+        }
 }
 
 TEST_CASE("Config rejects numeric narrowing and excessive workspace allocation", "[config][bounds]")
