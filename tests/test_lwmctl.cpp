@@ -128,6 +128,66 @@ TEST_CASE("lwmctl prints query values, stays silent for actions and reports erro
     CHECK(wm.received() == std::vector<std::string>{ "version" });
 }
 
+TEST_CASE("lwmctl joins command arguments without changing their text", "[ipc][lwmctl]")
+{
+    if (!display_available())
+        SKIP("X11 unavailable");
+    FakeWm wm("ok");
+    std::vector<std::string> expected;
+    for (auto const& [arguments, wire] : std::vector<std::pair<std::vector<std::string>, std::string>>{
+             { { "window", "fullscreen" }, "window fullscreen" },
+             { { "window fullscreen" }, "window fullscreen" },
+             { { "exec", "a path with spaces" }, "exec a path with spaces" },
+             { { "exec", "a", "path" }, "exec a path" },
+             { { "scratchpad", "toggle", "a  name" }, "scratchpad toggle a  name" },
+             { { "scratchpad toggle a  name" }, "scratchpad toggle a  name" },
+             { { "", "", "version" }, "version" },
+             { { "version", "", "" }, "version  " },
+         })
+    {
+        CAPTURE(arguments);
+        auto result = run_command(lwmctl_executable_path(), arguments);
+        REQUIRE(result);
+        CHECK(result->exit_code == 0);
+        CHECK(result->stdout_text.empty());
+        CHECK(result->stderr_text.empty());
+        expected.push_back(wire);
+        CHECK(wm.received() == expected);
+    }
+}
+
+TEST_CASE("lwmctl validates commands and offers help without a display", "[ipc][lwmctl]")
+{
+    for (auto const& [arguments, error] : std::vector<std::pair<std::vector<std::string>, std::string>>{
+             { { "version", "extra" }, "usage: version" },
+             { { "" }, "empty command" },
+             { { "", "watch" }, "unknown command" },
+             { { "watch", "" }, "unknown command" },
+             { { "scratchpad", "toggle", "bad\nname" }, "argument contains a line break or NUL" },
+             { { "version\n" }, "argument contains a line break or NUL" },
+             { { "\rversion" }, "argument contains a line break or NUL" },
+             { { std::string(4096, 'x') }, "request too large" },
+         })
+    {
+        CAPTURE(arguments);
+        auto result = run_command(lwmctl_executable_path(), arguments, { { "DISPLAY", "invalid-display" } });
+        REQUIRE(result);
+        CHECK(result->exit_code == 1);
+        CHECK(result->stdout_text.empty());
+        CHECK(result->stderr_text == "lwmctl: " + error + '\n');
+    }
+    for (auto const& arguments : std::vector<std::vector<std::string>>{
+             { "workspace", "switch", "--help" }, { "workspace switch", "--help" } })
+    {
+        auto result = run_command(lwmctl_executable_path(), arguments, { { "DISPLAY", "invalid-display" } });
+        REQUIRE(result);
+        CHECK(result->exit_code == 0);
+        CHECK(result->stderr_text.empty());
+        CHECK(result->stdout_text.find("workspace switch N") != std::string::npos);
+        CHECK(result->stdout_text.find("scratchpad stash") == std::string::npos);
+    }
+}
+
 TEST_CASE("lwmctl distinguishes a missing, silent and exiting WM", "[ipc][lwmctl]")
 {
     if (!display_available())

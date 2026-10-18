@@ -36,6 +36,5 @@ inline constexpr size_t max_request_bytes = 4096;
 bool valid_scratchpad_name(std::string_view name);
 std::span<CommandSpec const> command_specs();
 std::expected<Request, std::string> parse_command(std::string_view text);
-std::expected<std::string, std::string> encode_command(std::span<std::string const> arguments);
 
 } // namespace lwm::command

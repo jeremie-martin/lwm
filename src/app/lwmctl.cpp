@@ -12,7 +12,6 @@
 #include <poll.h>
 #include <stdexcept>
 #include <string>
-#include <vector>
 #include <xcb/xcbext.h>
 
 namespace {
@@ -225,7 +224,8 @@ int main(int argc, char* argv[])
     try
     {
         std::chrono::milliseconds timeout{ 2000 };
-        std::vector<std::string> arguments;
+        std::string request;
+        size_t argument_count = 0;
         bool options = true;
         bool help = false;
         for (int i = 1; i < argc; ++i)
@@ -253,30 +253,25 @@ int main(int argc, char* argv[])
                 timeout = std::chrono::milliseconds(value);
                 continue;
             }
-            arguments.emplace_back(arg);
+            ++argument_count;
+            if (!request.empty())
+                request += ' ';
+            request += arg;
         }
         if (help)
-        {
-            std::string group;
-            for (auto const& arg : arguments)
-            {
-                if (!group.empty())
-                    group += ' ';
-                group += arg;
-            }
-            return print_usage(std::cout, group) ? 0 : 1;
-        }
-        if (arguments.empty())
+            return print_usage(std::cout, request) ? 0 : 1;
+        if (argument_count == 0)
         {
             print_usage(std::cerr);
             return 1;
         }
-        if (arguments == std::vector<std::string>{ "watch" })
+        if (argument_count == 1 && request == "watch")
             return watch();
-        auto request = lwm::command::encode_command(arguments);
-        if (!request)
-            throw std::runtime_error(request.error());
-        return run(*request, timeout);
+        if (request.find_first_of(std::string_view("\n\r\0", 3)) != request.npos)
+            throw std::runtime_error("argument contains a line break or NUL");
+        if (auto parsed = lwm::command::parse_command(request); !parsed)
+            throw std::runtime_error(parsed.error());
+        return run(request, timeout);
     }
     catch (std::exception const& error)
     {

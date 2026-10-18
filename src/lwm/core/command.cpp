@@ -165,20 +165,4 @@ std::expected<Request, std::string> parse_command(std::string_view text)
     return spec->parse(trim(text.substr(spec->name.size())), *spec);
 }
 
-std::expected<std::string, std::string> encode_command(std::span<std::string const> arguments)
-{
-    std::string text;
-    for (auto const& argument : arguments)
-    {
-        if (argument.find_first_of(std::string_view("\n\r\0", 3)) != argument.npos)
-            return std::unexpected("argument contains a line break or NUL");
-        if (!text.empty())
-            text += ' ';
-        text += argument;
-    }
-    if (auto parsed = parse_command(text); !parsed)
-        return std::unexpected(parsed.error());
-    return text;
-}
-
 } // namespace lwm::command

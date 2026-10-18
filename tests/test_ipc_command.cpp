@@ -8,27 +8,22 @@ using namespace lwm::command;
 TEST_CASE("IPC grammar preserves public command spellings and typed requests", "[ipc][command]")
 {
     // Literal public inputs are independent of the production command inventory.
-    auto check = [](std::vector<std::string> const& argv, std::string const& wire, Request const& expected)
+    auto check = [](std::string const& wire, Request const& expected)
     {
         CAPTURE(wire);
-        REQUIRE(encode_command(argv) == wire);
         auto decoded = parse_command(wire);
         REQUIRE(decoded);
         CHECK(*decoded == expected);
     };
-    check({ "version" }, "version", Query::Version);
-    check({ "state" }, "state", Query::State);
-    check({ "exec", "/tmp/a wm" }, "exec /tmp/a wm", Action{ action::Restart{ "/tmp/a wm" } });
-    check({ "layout", "set", "monocle" }, "layout set monocle", Action{ action::SetLayout{ LayoutStrategy::Monocle } });
-    check(
-        { "scratchpad", "toggle", "a name with spaces" },
-        "scratchpad toggle a name with spaces",
-        Action{ action::ScratchpadToggle{ "a name with spaces" } }
-    );
-    check({ "ratio", "adjust", "+0.25" }, "ratio adjust +0.25", Action{ action::AdjustRatio{ 0.25 } });
-    check({ "workspace", "switch", "2" }, "workspace switch 2", Action{ action::SwitchWorkspace{ 2 } });
-    check({ "window", "focus", "0x123" }, "window focus 0x123", Action{ action::FocusWindow{ 291 } });
-    check({ "window", "attention", "42" }, "window attention 42", Action{ action::NotifyAttention{ 42 } });
+    check("version", Query::Version);
+    check("state", Query::State);
+    check("exec /tmp/a wm", Action{ action::Restart{ "/tmp/a wm" } });
+    check("layout set monocle", Action{ action::SetLayout{ LayoutStrategy::Monocle } });
+    check("scratchpad toggle a name with spaces", Action{ action::ScratchpadToggle{ "a name with spaces" } });
+    check("ratio adjust +0.25", Action{ action::AdjustRatio{ 0.25 } });
+    check("workspace switch 2", Action{ action::SwitchWorkspace{ 2 } });
+    check("window focus 0x123", Action{ action::FocusWindow{ 291 } });
+    check("window attention 42", Action{ action::NotifyAttention{ 42 } });
 }
 
 TEST_CASE("IPC exposes every key-binding action except process launch", "[ipc][command]")
@@ -73,7 +68,7 @@ TEST_CASE("IPC grammar rejects invalid arguments before execution", "[ipc][comma
         CAPTURE(command);
         CHECK_FALSE(parse_command(command));
     }
-    CHECK_FALSE(encode_command(std::vector<std::string>{ "scratchpad", "toggle", "bad\nname" }));
+    CHECK_FALSE(parse_command(std::string("version\0", 8)));
     CHECK(parse_command("  version  "));
     CHECK(*parse_command("window focus 0X123") == Request{ Action{ action::FocusWindow{ 0x123 } } });
 }
@@ -101,11 +96,6 @@ TEST_CASE("Command diagnostics preserve the public grammar", "[ipc][command]")
         REQUIRE_FALSE(parsed);
         CHECK(parsed.error() == message);
     }
-    // lwmctl joins its arguments, so the command text is the contract however it is split.
-    CHECK(encode_command(std::vector<std::string>{ "exec", "a path with spaces" }) == "exec a path with spaces");
-    CHECK(encode_command(std::vector<std::string>{ "exec", "a", "path" }) == "exec a path");
-    CHECK(encode_command(std::vector<std::string>{ "window fullscreen" }) == "window fullscreen");
-    CHECK(encode_command(std::vector<std::string>{ "version", "extra" }).error() == "usage: version");
     CHECK(*parse_command("workspace switch 4294967295")
           == Request{ Action{ action::SwitchWorkspace{ 4294967295U } } });
     CHECK(*parse_command("window focus 0xffffffff") == Request{ Action{ action::FocusWindow{ 4294967295U } } });
