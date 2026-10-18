@@ -166,10 +166,10 @@ private:
     );
     bool states_current(Client const& client) const;
     void publish_states(StateUpdates const& updates, WindowStates owned);
-    bool publish_properties(Client const& client, Output& output, StateUpdates& updates);
+    void publish_properties(Client const& client, Output& output, StateUpdates& updates);
     void publish_urgency(Client const& client, Output& output);
     void publish_fixtures();
-    void publish_root(bool urgency_changed);
+    void publish_root();
     void reconcile_stacking(State::FullscreenVisibility const& fullscreen, bool reassert);
     void withdraw_removed();
     void commit_focus(uint32_t time);

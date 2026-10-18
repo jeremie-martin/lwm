@@ -590,6 +590,63 @@ TEST_CASE(
     destroy_window(conn, w1);
 }
 
+TEST_CASE("Integration: mirrored urgency refreshes panels without changing the client list", "[integration][notify_attention]")
+{
+    auto test_env = TestEnvironment::create();
+    if (!test_env)
+        SKIP("Test environment not available");
+    auto& conn = test_env->conn;
+    auto first = create_window(conn, 10, 10, 200, 150);
+    map_window(conn, first);
+    REQUIRE(wait_for_active_window(conn, first, kTimeout));
+    auto second = create_window(conn, 40, 40, 200, 150);
+    map_window(conn, second);
+    REQUIRE(wait_for_active_window(conn, second, kTimeout));
+    observe_title_after_events(conn, second);
+
+    auto client_list = intern_atom(conn.get(), "_NET_CLIENT_LIST");
+    auto windows = get_window_property_windows(conn.get(), conn.root(), client_list);
+    uint32_t mask = XCB_EVENT_MASK_PROPERTY_CHANGE;
+    xcb_change_window_attributes(conn.get(), conn.root(), XCB_CW_EVENT_MASK, &mask);
+    auto notifications = [&]
+    {
+        // The round trip collects events after the already-completed WM operation.
+        REQUIRE(get_window_property_windows(conn.get(), conn.root(), client_list) == windows);
+        size_t count = 0;
+        while (auto* event = xcb_poll_for_event(conn.get()))
+        {
+            if ((event->response_type & ~0x80) == XCB_PROPERTY_NOTIFY)
+            {
+                auto const* property = reinterpret_cast<xcb_property_notify_event_t const*>(event);
+                if (property->window == conn.root() && property->atom == client_list)
+                    ++count;
+            }
+            free(event);
+        }
+        return count;
+    };
+    notifications();
+
+    auto attention = "window attention " + std::to_string(first);
+    REQUIRE(send_ipc_command(attention) == "ok");
+    CHECK(notifications() == 1);
+    CHECK(has_wm_hints_urgency(conn.get(), first));
+    REQUIRE(send_ipc_command(attention) == "ok");
+    CHECK(notifications() == 0);
+
+    // Restoring a withdrawn mirror also refreshes panels, without changing intent.
+    set_wm_hints_urgency(conn.get(), first, false);
+    observe_title_after_events(conn, first);
+    CHECK(notifications() == 1);
+    CHECK(has_wm_hints_urgency(conn.get(), first));
+
+    REQUIRE(send_ipc_command("window focus " + std::to_string(first)) == "ok");
+    CHECK(notifications() == 1);
+    CHECK_FALSE(has_wm_hints_urgency(conn.get(), first));
+    destroy_window(conn, second);
+    destroy_window(conn, first);
+}
+
 TEST_CASE("Integration: active window rejects app urgency hints", "[integration][notify_attention][wm_hints]")
 {
     auto test_env = TestEnvironment::create();

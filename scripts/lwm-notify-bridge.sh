@@ -11,12 +11,11 @@ done
 busctl --user monitor \
     --match "interface='org.freedesktop.Notifications',member='Notify'" \
     --json=short |
-while IFS= read -r line; do
-    window=$(printf '%s\n' "$line" | jq -er '
-        .payload.data[6]["x-window-id"].data // empty |
-        tostring | select(test("^(0[xX][0-9a-fA-F]+|[0-9]+)$"))
-    ') || continue
-    [ "$window" != 0 ] || continue
+jq --unbuffered -Rr '
+    fromjson? | try (.payload.data[6]["x-window-id"].data // empty |
+        tostring | select(. != "0" and test("^(0[xX][0-9a-fA-F]+|[0-9]+)$")))
+' |
+while IFS= read -r window; do
     # Serialize this producer; errors remain visible to its service/terminal.
     lwmctl window attention "$window" >/dev/null || true
 done

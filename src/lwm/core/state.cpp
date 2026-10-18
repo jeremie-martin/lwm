@@ -395,7 +395,7 @@ State::Settled State::settle(uint32_t input_time)
             client.user_time = time;
         if (client.tiled())
             edit_workspace(client.monitor, client.workspace).preferred_tile = XCB_NONE;
-        clear_urgency(client.id);
+        client.urgency = { };
     }
     return { request ? std::optional{ request->time } : std::nullopt, std::move(fullscreen) };
 }
@@ -679,8 +679,6 @@ void State::urgency(xcb_window_t id, UrgencySource source, bool enabled)
     urgency.set(source, enabled);
     assign(id, &Client::urgency, urgency);
 }
-
-void State::clear_urgency(xcb_window_t id) { assign(id, &Client::urgency, Urgency{ }); }
 
 void State::fullscreen_monitors(xcb_window_t id, std::optional<FullscreenMonitors> value)
 {

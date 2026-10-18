@@ -44,13 +44,12 @@ void WindowManager::complete_transition()
         // Explicit focus reasserts the focused state even if a client rewrote it.
         properties_.erase({ state_.active_window(), ewmh_.get()->_NET_WM_STATE });
     }
-    bool urgency_changed = false;
     StateUpdates states;
     for (auto const& projected : clients)
-        urgency_changed |= publish_properties(*projected.client, outputs_.at(projected.client->id), states);
+        publish_properties(*projected.client, outputs_.at(projected.client->id), states);
     publish_states(states, WindowStates{ UINT16_MAX }); // LWM owns every value it publishes
     publish_fixtures();
-    publish_root(urgency_changed);
+    publish_root();
     reconcile_stacking(fullscreen, focus_request.has_value());
     withdraw_removed();
     if (drain_requested_ || (moved && !state_.drag()))
@@ -247,9 +246,8 @@ void WindowManager::publish_states(StateUpdates const& updates, WindowStates own
     }
 }
 
-// Per-window properties. Returns whether published urgency changed, which
-// panels observe through a client-list notification.
-bool WindowManager::publish_properties(Client const& client, Output& output, StateUpdates& updates)
+// Per-window properties.
+void WindowManager::publish_properties(Client const& client, Output& output, StateUpdates& updates)
 {
     auto* e = ewmh_.get();
     xcb_window_t id = client.id;
@@ -258,8 +256,7 @@ bool WindowManager::publish_properties(Client const& client, Output& output, Sta
         xcb_change_window_attributes(conn_.get(), id, XCB_CW_BORDER_PIXEL, &color);
         output.border_color = color;
     }
-    bool urgency_changed = output.urgent != client.urgency.active();
-    if (urgency_changed)
+    if (output.urgent != client.urgency.active())
         publish_urgency(client, output);
     uint32_t const desktop[] = { client.sticky ? STICKY_DESKTOP : state_.desktop_index(client.monitor, client.workspace) };
     publish(id, e->_NET_WM_DESKTOP, XCB_ATOM_CARDINAL, desktop);
@@ -283,12 +280,13 @@ bool WindowManager::publish_properties(Client const& client, Output& output, Sta
         publish(id, e->_NET_WM_FULLSCREEN_MONITORS, XCB_ATOM_CARDINAL, 32, std::nullopt);
     if (!states_current(client))
         updates.emplace_back(id, published_states(client, id == state_.active_window()));
-    return urgency_changed;
 }
 
 // Mirrors urgency into ICCCM WM_HINTS for panels that read it.
 void WindowManager::publish_urgency(Client const& client, Output& output)
 {
+    // Panels use client-list changes to refresh urgency, even when the hint already matches.
+    properties_.erase({ conn_.screen()->root, ewmh_.get()->_NET_CLIENT_LIST });
     bool urgent = client.urgency.active();
     output.urgent = urgent;
     xcb_icccm_wm_hints_t hints{ };
@@ -337,13 +335,10 @@ void WindowManager::commit_focus(uint32_t time)
 
 // Root publication
 
-void WindowManager::publish_root(bool urgency_changed)
+void WindowManager::publish_root()
 {
     auto* e = ewmh_.get();
     xcb_window_t root = conn_.screen()->root;
-    // Panels use client-list changes to refresh urgency.
-    if (urgency_changed)
-        properties_.erase({ root, e->_NET_CLIENT_LIST });
     publish(root, e->_NET_CLIENT_LIST, XCB_ATOM_WINDOW, state_.registered_windows());
 
     // Monitor-major flat desktops. Workareas and viewports are relative to the

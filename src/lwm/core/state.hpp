@@ -259,7 +259,7 @@ public:
     void configure_request(xcb_window_t id, GeometryRequest request);
     // A pager's _NET_MOVERESIZE_WINDOW changes the normal floating rectangle.
     void moveresize_request(xcb_window_t id, GeometryRequest request);
-    // A WM_HINTS urgency that differs from the published urgency is the
+    // A WM_HINTS urgency that differs from combined urgency is the
     // application's request.
     void hint_urgency(xcb_window_t id, bool urgent);
 
@@ -421,7 +421,6 @@ private:
     // Focus and client state
     void select_focus(xcb_window_t id, uint32_t time = 0, bool record_user_time = true);
     void focus_fallback(size_t monitor, bool record_user_time = true);
-    void clear_urgency(xcb_window_t id);
     void pin_desktop(xcb_window_t id, bool pinned);
 
     // Scratchpads

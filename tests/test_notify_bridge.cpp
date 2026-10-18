@@ -17,6 +17,8 @@ TEST_CASE("Notification bridge forwards only exact window hints", "[ipc][notify]
     REQUIRE(write_text_file(directory / "busctl", R"(#!/bin/sh
 cat <<'DATA'
 {"payload":{"data":["app",0,"","","",[],{"x-window-id":{"data":123}},0]}}
+not-json
+{"payload":{"data":false}}
 {"payload":{"data":["app",0,"","","",[],{"x-window-id":{"data":"0x2a"}},0]}}
 {"payload":{"data":["app",0,"","","",[],{"x-window-id":{"data":0}},0]}}
 {"payload":{"data":["app",0,"","","",[],{"desktop-entry":{"data":"app"}},0]}}
