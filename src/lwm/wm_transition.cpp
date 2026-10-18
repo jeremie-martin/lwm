@@ -440,11 +440,15 @@ void WindowManager::flush_and_drain_crossing()
     conn_.sync();
     while (auto* event = xcb_poll_for_queued_event(conn_.get()))
     {
-        uint8_t type = event->response_type & ~0x80;
-        if (type != XCB_ENTER_NOTIFY && type != XCB_LEAVE_NOTIFY && type != XCB_MOTION_NOTIFY)
-            deferred_events_.push_back(*event);
+        deferred_events_.push_back(*event);
         free(event);
     }
+    // Synchronous observations may already have moved crossings out of XCB.
+    std::erase_if(deferred_events_, [](auto const& event)
+    {
+        uint8_t type = event.response_type & ~0x80;
+        return type == XCB_ENTER_NOTIFY || type == XCB_LEAVE_NOTIFY || type == XCB_MOTION_NOTIFY;
+    });
 }
 
 } // namespace lwm

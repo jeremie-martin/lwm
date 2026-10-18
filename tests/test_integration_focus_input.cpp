@@ -52,6 +52,33 @@ void set_wm_protocols(X11Connection& conn, xcb_window_t window, std::initializer
     xcb_flush(conn.get());
 }
 
+uint32_t observe_server_time(X11Connection& conn)
+{
+    auto clock_window = create_window(conn, 0, 0, 1, 1);
+    auto marker = intern_atom(conn.get(), "_LWM_TEST_FOCUS_TIME");
+    uint32_t value = 1;
+    xcb_change_property(conn.get(), XCB_PROP_MODE_REPLACE, clock_window, marker, XCB_ATOM_CARDINAL, 32, 1, &value);
+    xcb_flush(conn.get());
+    std::optional<uint32_t> timestamp;
+    REQUIRE(wait_for_condition([&]
+    {
+        while (auto* event = xcb_poll_for_event(conn.get()))
+        {
+            if ((event->response_type & ~0x80) == XCB_PROPERTY_NOTIFY)
+            {
+                auto const& property = *reinterpret_cast<xcb_property_notify_event_t*>(event);
+                if (property.window == clock_window && property.atom == marker)
+                    timestamp = property.time;
+            }
+            free(event);
+        }
+        return timestamp.has_value();
+    }, kTimeout));
+    REQUIRE(*timestamp != XCB_CURRENT_TIME);
+    destroy_window(conn, clock_window);
+    return *timestamp;
+}
+
 } // namespace
 
 // =============================================================================
@@ -130,36 +157,12 @@ TEST_CASE("Integration: focus delivers WM_TAKE_FOCUS and reasserts keyboard focu
 
     // Use real server timestamps from an unmapped client-owned window. Invented
     // future/stale values can make X reject SetInputFocus for an unrelated reason.
-    auto clock_window = create_window(conn, 0, 0, 1, 1);
-    auto marker = intern_atom(conn.get(), "_LWM_TEST_FOCUS_TIME");
-    for (uint32_t iteration : { 1, 2 })
+    for (int iteration = 0; iteration < 2; ++iteration)
     {
         xcb_set_input_focus(conn.get(), XCB_INPUT_FOCUS_POINTER_ROOT, conn.root(), XCB_CURRENT_TIME);
         REQUIRE(wait_for_x_input_focus(conn, conn.root(), kTimeout));
-        xcb_change_property(
-            conn.get(), XCB_PROP_MODE_REPLACE, clock_window, marker, XCB_ATOM_CARDINAL, 32, 1, &iteration
-        );
-        xcb_flush(conn.get());
-        std::optional<uint32_t> timestamp;
-        REQUIRE(wait_for_condition(
-            [&]
-            {
-                while (auto* event = xcb_poll_for_event(conn.get()))
-                {
-                    if ((event->response_type & ~0x80) == XCB_PROPERTY_NOTIFY)
-                    {
-                        auto const& property = *reinterpret_cast<xcb_property_notify_event_t*>(event);
-                        if (property.window == clock_window && property.atom == marker)
-                            timestamp = property.time;
-                    }
-                    free(event);
-                }
-                return timestamp.has_value();
-            },
-            kTimeout
-        ));
-        REQUIRE(*timestamp != XCB_CURRENT_TIME);
-        send_client_message(conn, window, active, 1, *timestamp);
+        auto timestamp = observe_server_time(conn);
+        send_client_message(conn, window, active, 1, timestamp);
         require_delivery(timestamp);
         CHECK(wait_for_active_window(conn, window, kTimeout));
     }
@@ -177,7 +180,6 @@ TEST_CASE("Integration: focus delivers WM_TAKE_FOCUS and reasserts keyboard focu
         REQUIRE(wait_for_x_input_focus(conn, window, kTimeout));
     }
     CHECK(messages().empty());
-    destroy_window(conn, clock_window);
     destroy_window(conn, window);
 }
 
@@ -259,32 +261,50 @@ TEST_CASE("Integration: startup and restart give a child-focusing client a valid
     // The unmanaged clock window observes server time without notifying LWM.
     xcb_set_input_focus(conn.get(), XCB_INPUT_FOCUS_POINTER_ROOT, conn.root(), XCB_CURRENT_TIME);
     REQUIRE(wait_for_x_input_focus(conn, conn.root(), kTimeout));
-    auto clock_window = create_window(conn, 0, 0, 1, 1);
-    auto marker = intern_atom(conn.get(), "_LWM_TEST_FOCUS_TIME");
-    uint32_t value = 1;
-    xcb_change_property(conn.get(), XCB_PROP_MODE_REPLACE, clock_window, marker, XCB_ATOM_CARDINAL, 32, 1, &value);
-    xcb_flush(conn.get());
-    std::optional<uint32_t> server_time;
-    REQUIRE(wait_for_condition([&]
-    {
-        while (auto* event = xcb_poll_for_event(conn.get()))
-        {
-            if ((event->response_type & ~0x80) == XCB_PROPERTY_NOTIFY)
-            {
-                auto const& property = *reinterpret_cast<xcb_property_notify_event_t*>(event);
-                if (property.window == clock_window && property.atom == marker)
-                    server_time = property.time;
-            }
-            free(event);
-        }
-        return server_time.has_value();
-    }, kTimeout));
+    auto server_time = observe_server_time(conn);
     ipc_ok("window focus " + std::to_string(window));
     timestamp = receive_focus();
-    CHECK(static_cast<int32_t>(timestamp - *server_time) >= 0);
+    CHECK(static_cast<int32_t>(timestamp - server_time) >= 0);
     focus_child(timestamp);
-    destroy_window(conn, clock_window);
     destroy_window(conn, window);
+}
+
+TEST_CASE("Integration: revealing a workspace preserves explicit focus under a stationary pointer", "[integration][focus][input][workspace]")
+{
+    bool take_focus = GENERATE(false, true);
+    CAPTURE(take_focus);
+    auto env = TestEnvironment::create("[workspaces]\nnames = ['one', 'two']\n");
+    if (!env)
+        SKIP("X11 unavailable");
+    auto& conn = env->conn;
+    xcb_warp_pointer(conn.get(), XCB_NONE, conn.root(), 0, 0, 0, 0, 0, 0);
+    auto first = create_window(conn, 10, 10, 200, 150);
+    auto target = create_window(conn, 40, 40, 200, 150);
+    if (take_focus)
+        set_wm_protocols(conn, target, { intern_atom(conn.get(), "WM_TAKE_FOCUS") });
+    map_window(conn, first);
+    REQUIRE(wait_for_active_window(conn, first, kTimeout));
+    map_window(conn, target);
+    REQUIRE(wait_for_active_window(conn, target, kTimeout));
+    auto tile = require_window_geometry(conn, first);
+
+    ipc_ok("workspace switch 1");
+    REQUIRE(is_unmapped(conn, first));
+    REQUIRE(is_unmapped(conn, target));
+    xcb_warp_pointer(conn.get(), XCB_NONE, conn.root(), 0, 0, 0, 0,
+                     tile.x + tile.width / 2, tile.y + tile.height / 2);
+    observe_title_after_events(conn, target);
+
+    ipc_ok("window focus " + std::to_string(target));
+    // Order the assertion after any crossings generated by the reveal, including
+    // events deferred while observing the WM_TAKE_FOCUS timestamp.
+    observe_title_after_events(conn, target);
+    CHECK_FALSE(is_unmapped(conn, first));
+    CHECK_FALSE(is_unmapped(conn, target));
+    CHECK(ipc_json("window list").at("focused") == target);
+    CHECK(wait_for_x_input_focus(conn, target, kTimeout));
+    destroy_window(conn, target);
+    destroy_window(conn, first);
 }
 
 TEST_CASE("Integration: _NET_ACTIVE_WINDOW request produces matching X input focus", "[integration][focus][input]")
