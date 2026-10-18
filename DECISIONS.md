@@ -331,6 +331,13 @@ were discarded on unchanged reloads; a separate reload-only gate would duplicate
 shared decision. Rule emptiness likewise derives from the resolved `RuleActions`
 value instead of maintaining another inventory of action fields.
 
+## Derive fixed-command usage and index panel state (2026-10-18)
+
+A fixed command's usage is its name; command declarations no longer repeat that
+spelling. The status helper toggles layout through `workspace list`, not the full
+state query, and indexes snapshot windows once when counting pooled hidden clients
+instead of scanning every window for each pool member. The IPC contract is unchanged.
+
 ## Open opportunities (2026-10-06)
 
 Candidates for subsystem-level simplification, not yet decided. Move an entry to a

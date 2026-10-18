@@ -1,4 +1,5 @@
 #include "x11_test_harness.hpp"
+#include "wm_observations.hpp"
 #include <X11/keysym.h>
 #include <xcb/xtest.h>
 #include <catch2/catch_test_macros.hpp>
@@ -353,13 +354,7 @@ match = { class = "Pending" }
     auto env = TestEnvironment::create(config(true, "Original"));
     REQUIRE(env);
     auto& conn = env->conn;
-    auto snapshot = [&]
-    {
-        auto reply = send_ipc_command("scratchpad list");
-        REQUIRE(reply);
-        REQUIRE(reply->starts_with("ok "));
-        return nlohmann::json::parse(reply->substr(3));
-    };
+    auto snapshot = [&] { return ipc_json("scratchpad list"); };
     REQUIRE(send_ipc_command("scratchpad toggle pending") == "ok");
     auto window = create_window(conn, 10, 10, 200, 150);
     set_window_wm_class(conn, window, "instance", "Original");

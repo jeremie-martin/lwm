@@ -822,13 +822,7 @@ TEST_CASE(
     map_window(conn, first);
     REQUIRE(wait_for_active_window(conn, first, timeout));
     ipc_ok("scratchpad stash");
-    auto clients = [&]
-    {
-        auto reply = send_ipc_command("window list");
-        REQUIRE(reply);
-        REQUIRE(reply->starts_with("ok "));
-        return nlohmann::json::parse(reply->substr(3));
-    };
+    auto clients = [&] { return ipc_json("window list"); };
     REQUIRE(wait_for_condition([&] { return clients().at("windows").size() == 1; }, timeout));
     CHECK(clients().at("windows").at(0).at("iconic") == true);
     auto focused = send_ipc_command("window focus " + std::to_string(first));

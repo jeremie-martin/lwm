@@ -28,7 +28,7 @@ TEST_CASE("Integration: watch prints the attached state, then only changed state
     REQUIRE(wait_for_active_window(conn, window, kTimeout));
     Watcher watcher;
     auto attached = watcher.state();
-    CHECK(attached == nlohmann::json::parse(ipc_ok("state").substr(3)));
+    CHECK(attached == ipc_json("state"));
     CHECK(attached.at("windows").at("focused") == window);
     CHECK(only_window(attached).at("class") == "escaped-class");
     CHECK(only_window(attached).at("title") == title);
@@ -289,9 +289,9 @@ TEST_CASE(
     ));
     CHECK(only_window(watched).at("title") == expected);
     CHECK(only_window(watched).at("instance") == "opaque�");
-    auto query = nlohmann::json::parse(ipc_ok("state").substr(3));
+    auto query = ipc_json("state");
     CHECK(query == watched);
-    auto list = nlohmann::json::parse(ipc_ok("window list").substr(3));
+    auto list = ipc_json("window list");
     CHECK(list.at("windows").at(0).at("title") == expected);
     destroy_window(conn, window);
 }
