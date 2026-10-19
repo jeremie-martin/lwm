@@ -156,7 +156,7 @@ python3 tests/performance/logging_bench.py --binary build/release/src/app/lwm
   motion controls batching; XTEST integration tests cover real grabs.
 - `focus_cycle.py` measures completed IPC focus calls and distinct targets. Keep
   direction and client count fixed; `--transients chain|cycle` adds ancestry work, and
-  `--take-focus` includes fresh server-time observation for timestamp-less focus.
+  `--take-focus` includes the fresh server-time observation each such focus costs.
 - `restart_resources.py` uses libXRes to check that repeated restart and failed-exec
   recovery release predecessor X clients, and that a restart on an otherwise empty
   server does not reset it. CTest runs it as `restart_resources` when libXRes exists.
