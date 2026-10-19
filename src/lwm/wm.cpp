@@ -133,7 +133,9 @@ void WindowManager::claim_wm_ownership()
         throw std::runtime_error("Failed to query WM selection owner");
     if (current->owner != XCB_NONE)
         throw std::runtime_error("Another window manager already owns WM_S0");
-    xcb_set_selection_owner(conn_.get(), wm_window_, atoms_.wm_s0, XCB_CURRENT_TIME);
+    // ICCCM requires a real timestamp to acquire a manager selection and announce it.
+    auto time = server_time();
+    xcb_set_selection_owner(conn_.get(), wm_window_, atoms_.wm_s0, time);
     current = owner();
     if (!current || current->owner != wm_window_)
         throw std::runtime_error("Failed to acquire WM_S0 selection");
@@ -143,7 +145,7 @@ void WindowManager::claim_wm_ownership()
     event.format = 32;
     event.window = conn_.screen()->root;
     event.type = ewmh_.get()->MANAGER;
-    event.data.data32[0] = XCB_CURRENT_TIME;
+    event.data.data32[0] = time;
     event.data.data32[1] = atoms_.wm_s0;
     event.data.data32[2] = wm_window_;
     xcb_send_event(conn_.get(), 0, conn_.screen()->root, XCB_EVENT_MASK_STRUCTURE_NOTIFY, reinterpret_cast<char const*>(&event));
