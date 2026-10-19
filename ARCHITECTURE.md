@@ -145,9 +145,8 @@ external write.
    release, flush X, thaw, and check Debug invariants.
 
 This orders effects; it is not an atomic X transaction. Publication must not mutate
-the frozen model. Under SubstructureRedirect only LWM configures managed windows, so
-the geometry cache needs no ConfigureNotify feedback; a conflicting urgency hint
-forces reconciliation. Explicit focus reasserts
+the frozen model. A ConfigureNotify mismatch forgets cached geometry without forcing
+completion; a conflicting urgency hint forces reconciliation. Explicit focus reasserts
 X focus, focused state and stacking even when the selected window is unchanged.
 Request timestamps only arbitrate in State; X focus uses `CurrentTime`. For clients
 supporting `WM_TAKE_FOCUS`, the message and direct X focus share a fresh server time,
