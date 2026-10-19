@@ -234,6 +234,13 @@ saved-normal-geometry cache, temporary size, coordinate sentinel or request filt
 is needed. Ownership transfer maps clients again, and startup recognizes unmapped
 managed WM_STATE windows so a crashed predecessor cannot strand them.
 
+Mapping before restart makes hidden clients flash until the successor hides them.
+This is accepted. Keeping them unmapped would require the successor to adopt
+unmapped windows across a handoff, and a visible window an application withdrew
+during the exec gap would then be resurrected; telling the two apart needs a new
+handoff protocol. Revisit only with a design that removes, rather than adds, such
+special cases.
+
 ## Preserve direct focus with usable protocol timestamps (2026-10-08)
 
 Directly focusing clients that also support `WM_TAKE_FOCUS` is deliberate: March 26
