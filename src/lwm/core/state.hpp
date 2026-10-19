@@ -243,9 +243,10 @@ public:
     // _NET_WM_STATE: read the complete request first; fullscreen dominates maximize.
     void request_states(xcb_window_t id, StateChange change, WindowStates requested);
     // _NET_ACTIVE_WINDOW. Application requests against another active client need a
-    // timestamp no older than its user time; refusals demand attention. No request
-    // surfaces a window suppressed by the fullscreen owner of its placement.
-    void request_activation(xcb_window_t id, bool application, uint32_t timestamp);
+    // timestamp no older than its user time: the newer of its recorded focus and its
+    // observed _NET_WM_USER_TIME. Refusals demand attention. No request surfaces a
+    // window suppressed by the fullscreen owner of its placement.
+    void request_activation(xcb_window_t id, bool application, uint32_t timestamp, uint32_t active_user_time = 0);
     // _NET_WM_DESKTOP: a concrete desktop pins the placement; the sticky value sticks.
     void request_desktop(xcb_window_t id, uint32_t desktop);
     // _NET_CURRENT_DESKTOP names a monitor and one of its workspaces.
@@ -266,9 +267,6 @@ public:
     void transient(xcb_window_t id, xcb_window_t parent);
     void size_hints(xcb_window_t id, SizeHints hints, std::optional<Geometry> unmanaged_parent = std::nullopt);
     void focus_hints(xcb_window_t id, bool input, bool take_focus);
-    // Activation-time bookkeeping is neither published nor a revision.
-    void user_time(xcb_window_t source, uint32_t time);
-    void user_time_window(xcb_window_t id, xcb_window_t window, uint32_t time);
 
     // Workspaces
     // Valid no-ops succeed with false; invalid destinations leave State untouched.

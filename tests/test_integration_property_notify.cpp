@@ -520,7 +520,8 @@ TEST_CASE(
     REQUIRE(wait_for_active_window(conn, w1, kTimeout));
 
     xcb_window_t helper1 = create_window(conn, -1000, -1000, 1, 1);
-    xcb_window_t helper2 = create_window(conn, -1001, -1001, 1, 1);
+    // The root may also hold an application's user time.
+    xcb_window_t helper2 = GENERATE(true, false) ? create_window(conn, -1001, -1001, 1, 1) : conn.root();
 
     uint32_t initial_user_time = 100;
     xcb_change_property(
@@ -585,7 +586,10 @@ TEST_CASE(
 
     destroy_window(conn, w2);
     destroy_window(conn, w1);
-    destroy_window(conn, helper2);
+    if (helper2 != conn.root())
+        destroy_window(conn, helper2);
+    else
+        xcb_delete_property(conn.get(), helper2, net_wm_user_time);
     destroy_window(conn, helper1);
 }
 
@@ -1375,17 +1379,10 @@ TEST_CASE("Integration: admission subscribes before identity and dependent prope
     REQUIRE(conn.ok());
     auto parent = create_window(conn, 10, 10, 200, 150);
     auto child = create_window(conn, 20, 20, 200, 150);
-    auto helper = create_window(conn, -1000, -1000, 1, 1);
-    auto time = intern_atom(conn.get(), "_NET_WM_USER_TIME");
-    auto time_window = intern_atom(conn.get(), "_NET_WM_USER_TIME_WINDOW");
     auto type = intern_atom(conn.get(), "_NET_WM_WINDOW_TYPE");
-    uint32_t initial_time = 100;
-    xcb_change_property(conn.get(), XCB_PROP_MODE_REPLACE, helper, time, XCB_ATOM_CARDINAL, 32, 1, &initial_time);
-    xcb_change_property(conn.get(), XCB_PROP_MODE_REPLACE, child, time_window, XCB_ATOM_WINDOW, 32, 1, &helper);
     xcb_atom_t property = XCB_ATOM_WM_TRANSIENT_FOR, property_type = XCB_ATOM_WINDOW;
     xcb_window_t target = child;
     uint32_t value = parent;
-    bool identity = true;
     SECTION("Transient identity") { }
     SECTION("Type identity")
     {
@@ -1393,25 +1390,7 @@ TEST_CASE("Integration: admission subscribes before identity and dependent prope
         property_type = XCB_ATOM_ATOM;
         value = intern_atom(conn.get(), "_NET_WM_WINDOW_TYPE_DIALOG");
     }
-    SECTION("Separate user-time window")
-    {
-        property = time;
-        property_type = XCB_ATOM_CARDINAL;
-        target = helper;
-        value = 2000;
-        identity = false;
-    }
-    SECTION("Root user-time window preserves redirection")
-    {
-        property = time;
-        property_type = XCB_ATOM_CARDINAL;
-        target = conn.root();
-        value = 2000;
-        identity = false;
-        xcb_change_property(conn.get(), XCB_PROP_MODE_REPLACE, target, time, XCB_ATOM_CARDINAL, 32, 1, &initial_time);
-        xcb_change_property(conn.get(), XCB_PROP_MODE_REPLACE, child, time_window, XCB_ATOM_WINDOW, 32, 1, &target);
-    }
-    // Keep the pointer outside all tile frames so crossing focus cannot alter user time.
+    // Keep the pointer outside all tile frames so crossing focus cannot alter focus.
     xcb_warp_pointer(conn.get(), XCB_NONE, conn.root(), 0, 0, 0, 0,
                      conn.screen()->width_in_pixels - 1, conn.screen()->height_in_pixels - 1);
     if (adopting)
@@ -1435,24 +1414,7 @@ TEST_CASE("Integration: admission subscribes before identity and dependent prope
     REQUIRE(wait_for_active_window(conn, child, kTimeout));
     observe_title_after_events(conn, child);
     REQUIRE(read_property32(conn.get(), target, property, property_type) == std::optional{ std::vector<uint32_t>{ value } });
-    if (identity)
-        CHECK(ipc_json("window list").at("windows").at(1).at("kind") == "floating");
-    else
-    {
-        auto active = intern_atom(conn.get(), "_NET_ACTIVE_WINDOW");
-        auto attention = intern_atom(conn.get(), "_NET_WM_STATE_DEMANDS_ATTENTION");
-        send_client_message(conn, parent, active, 1, 1500, 0, 0, 0);
-        REQUIRE(wait_for_condition([&] { return has_state(conn, parent, attention); }, kTimeout));
-        CHECK(is_active_window(conn, child));
-        send_client_message(conn, parent, active, 1, 2500, 0, 0, 0);
-        REQUIRE(wait_for_active_window(conn, parent, kTimeout));
-        // A helper subscription must preserve root redirect and managed-window interest.
-        auto newcomer = create_window(conn, 30, 30, 100, 100);
-        map_window(conn, newcomer);
-        REQUIRE(wait_for_active_window(conn, newcomer, kTimeout));
-        destroy_window(conn, newcomer);
-    }
+    CHECK(ipc_json("window list").at("windows").at(1).at("kind") == "floating");
     destroy_window(conn, child);
     destroy_window(conn, parent);
-    destroy_window(conn, helper);
 }

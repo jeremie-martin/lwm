@@ -695,24 +695,6 @@ void State::focus_hints(xcb_window_t id, bool input, bool take_focus)
     assign(id, &Client::supports_take_focus, take_focus);
 }
 
-// Activation-time bookkeeping is not exposed or published, so it is not a revision.
-// _NET_WM_USER_TIME lives on a client's user-time window when it names one.
-void State::user_time(xcb_window_t source, uint32_t time)
-{
-    assert(!frozen_);
-    for (auto& [id, client] : clients_)
-        if ((client.user_time_window != XCB_NONE ? client.user_time_window : id) == source)
-            client.user_time = time;
-}
-
-void State::user_time_window(xcb_window_t id, xcb_window_t window, uint32_t time)
-{
-    assert(!frozen_);
-    auto& client = clients_.at(id);
-    client.user_time_window = window;
-    client.user_time = time;
-}
-
 // Workspaces and monitors
 
 uint32_t State::desktop_index(size_t monitor, size_t workspace) const

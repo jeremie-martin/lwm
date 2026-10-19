@@ -93,8 +93,6 @@ inline WindowObservation observe(Client const& client, std::optional<uint32_t> d
         .accepts_input = client.accepts_input,
         .urgent = client.urgency.has(UrgencySource::App),
         .supports_take_focus = client.supports_take_focus,
-        .user_time = client.user_time,
-        .user_time_window = client.user_time_window,
         .fullscreen_monitors = client.fullscreen_monitors,
     };
     window.states.set(WindowState::Fullscreen, client.fullscreen());

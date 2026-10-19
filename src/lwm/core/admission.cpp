@@ -101,8 +101,6 @@ std::optional<Client> State::classify(WindowObservation const& window, restart::
     client.urgency.set(UrgencySource::App, states.has(WindowState::DemandsAttention) || window.urgent);
     client.accepts_input = window.accepts_input;
     client.supports_take_focus = window.supports_take_focus;
-    client.user_time_window = window.user_time_window;
-    client.user_time = window.user_time;
     client.fullscreen_monitors = window.fullscreen_monitors;
     return client;
 }

@@ -487,9 +487,6 @@ TEST_CASE("Geometry derivation does not mutate the domain", "[state]")
     CHECK(state.revision() == revision);
     state.title(1, "changed");
     CHECK(state.revision() > revision);
-    revision = state.revision();
-    state.user_time(1, 0);
-    CHECK(state.revision() == revision);
     // Repeating the current placement or mode is not a mutation.
     state.floating(1, false);
     revision = state.revision();

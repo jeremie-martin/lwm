@@ -46,13 +46,14 @@ The shell never decides; it translates. Each X input becomes a call that carries
 everything the model needs:
 
 - Admission passes a `WindowObservation`: type, transient parent, class, title,
-  desktop hint, `_NET_WM_STATE`, `WM_HINTS`, size hints, user time, dock reservation
+  desktop hint, `_NET_WM_STATE`, `WM_HINTS`, size hints, dock reservation
   and, for parents LWM does not manage, their server rectangle.
 - Protocol requests arrive decoded: `_NET_WM_STATE` as a `StateChange` and a set of
   `WindowState` values, ConfigureRequest and `_NET_MOVERESIZE_WINDOW` as a
-  `GeometryRequest`, activation as its source and timestamp.
+  `GeometryRequest`, activation as its source and timestamp with the active client's
+  `_NET_WM_USER_TIME`, read only for application requests that compete with it.
 - Property changes arrive as new values (`title`, `window_class`, `window_type`,
-  `transient`, `size_hints`, `focus_hints`, `reserve`, `user_time`).
+  `transient`, `size_hints`, `focus_hints`, `reserve`).
 - Topology arrives as a `Topology`: output names, rectangles and the screen extent.
 - Button presses arrive as the window, position, button, modifiers and time.
 - Bindings and IPC commands share one `Action` type. `execute()` maps each action to
@@ -62,8 +63,7 @@ everything the model needs:
 
 Observation is pipelined. `observe()` checks attributes, subscribes every manageable
 window before reading identity, then lets `State::role()` choose the remaining reads.
-Separate user-time windows likewise subscribe before their first timestamp read,
-preserving existing event interest. Each stage costs a fixed number of round trips
+Each stage costs a fixed number of round trips
 per batch. Property notifications use the same decoders. No X-reading callback enters
 the model, and the shell does not retain a role alongside the observation.
 

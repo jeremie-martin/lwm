@@ -247,8 +247,6 @@ struct WindowObservation
     bool accepts_input = true;                ///< WM_HINTS input (ICCCM default: true)
     bool urgent = false;                      ///< WM_HINTS urgency
     bool supports_take_focus = false;
-    uint32_t user_time = 0;
-    xcb_window_t user_time_window = XCB_NONE;
     std::optional<FullscreenMonitors> fullscreen_monitors;
     bool mapped = false;            ///< Observed X mapping for shell publication
     std::optional<Geometry> geometry; ///< Current server rectangle
@@ -366,8 +364,7 @@ struct Client : ClientIntent
 
     bool accepts_input = true;        ///< WM_HINTS input field (ICCCM default: true)
     bool supports_take_focus = false; ///< WM_PROTOCOLS contains WM_TAKE_FOCUS
-    uint32_t user_time = 0;
-    xcb_window_t user_time_window = XCB_NONE;
+    uint32_t user_time = 0; ///< Latest explicit focus time LWM recorded
 
     /// Actions of the rule matched at the last manage, metadata change, or
     /// reload. Metadata changes apply a rule only when this result changes.

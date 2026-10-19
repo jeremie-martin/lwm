@@ -138,7 +138,7 @@ private:
     std::vector<WindowObservation> observe(std::span<xcb_window_t const> windows, bool adopting, bool cold_recovery = false);
     WindowType window_type(xcb_get_property_cookie_t cookie) const;
     std::vector<xcb_atom_t> read_protocols(xcb_window_t window) const;
-    xcb_get_property_cookie_t observe_user_time(xcb_window_t window, xcb_get_window_attributes_cookie_t cookie);
+    uint32_t read_user_time(xcb_window_t window) const;
     std::optional<Geometry> read_window_geometry(xcb_window_t window) const;
 
     // wm_manage.cpp: admission adapters

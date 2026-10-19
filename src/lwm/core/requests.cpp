@@ -48,7 +48,7 @@ void State::request_states(xcb_window_t id, StateChange change, WindowStates req
         request_fullscreen(id);
 }
 
-void State::request_activation(xcb_window_t id, bool application, uint32_t timestamp)
+void State::request_activation(xcb_window_t id, bool application, uint32_t timestamp, uint32_t active_user_time)
 {
     auto const* client = find(id);
     if (!client)
@@ -63,8 +63,11 @@ void State::request_activation(xcb_window_t id, bool application, uint32_t times
     {
         if (timestamp == 0)
             return deny("missing-timestamp");
-        auto const* current = find(active_window_);
-        if (current && current->user_time != 0 && timestamp_is_before(timestamp, current->user_time))
+        // The active client's interaction is the newer of its focus and its property.
+        auto known = find(active_window_) ? require(active_window_).user_time : 0;
+        if (active_user_time && (!known || timestamp_is_before(known, active_user_time)))
+            known = active_user_time;
+        if (known && timestamp_is_before(timestamp, known))
             return deny("stale-timestamp");
     }
     bool shown = client->sticky || shows(client->monitor, client->workspace);
