@@ -155,8 +155,10 @@ only around the rewrite, so publication does not echo
 back into the event loop. The observation costs one round trip and defers other
 queued events without dispatching them; passive clients need no timestamp observation.
 
-The event loop polls the X connection, its only event source. X batches stop after 64 events or
-2 ms; pointer motion is coalesced up to the next non-motion event. Crossing drains only
+The event loop polls the X connection, its only event source. Each event completes its
+operation; batches stop after 64 events or 2 ms so topology refreshes and connection
+checks still run under load. Already-read pointer motion is coalesced up to the next
+non-motion event. Crossing drains only
 consume events already queued and defer unrelated ones; handlers never re-enter.
 
 ## Admission and topology

@@ -266,7 +266,8 @@ RunResult WindowManager::run()
         pollfd fd{ .fd = xfd, .events = POLLIN, .revents = 0 };
         poll(&fd, 1, deferred_events_.empty() ? -1 : 0);
 
-        // Bounded batches keep completion responsive under X load.
+        // Each event completes its own operation; bounded batches keep topology
+        // refreshes and connection checks running under X load.
         size_t remaining = 64;
         auto batch_deadline = std::chrono::steady_clock::now() + std::chrono::milliseconds(2);
         // The first stop wins: a later restart cannot override losing the screen.
@@ -277,13 +278,13 @@ RunResult WindowManager::run()
                 auto event = deferred_events_.front();
                 deferred_events_.pop_front();
                 --remaining;
-                dispatch_event(event, remaining, batch_deadline);
+                dispatch_event(event);
             }
             else if (auto* event = xcb_poll_for_event(conn_.get()))
             {
                 auto owned = reply(event);
                 --remaining;
-                dispatch_event(*owned, remaining, batch_deadline);
+                dispatch_event(*owned);
             }
             else
                 break;
@@ -316,27 +317,19 @@ void WindowManager::defer_queued_events()
         deferred_events_.push_back(*event);
 }
 
-void WindowManager::dispatch_event(
-    xcb_generic_event_t const& event,
-    size_t& remaining,
-    std::chrono::steady_clock::time_point deadline
-)
+void WindowManager::dispatch_event(xcb_generic_event_t const& event)
 {
-    // Compress queued motion up to the first non-motion event; only the latest
-    // position matters, and crossings arrive as their own events.
+    // Compress already-read motion up to the first non-motion event; only the
+    // latest position matters, and crossings arrive as their own events.
     auto current = event;
-    if ((event.response_type & ~0x80) == XCB_MOTION_NOTIFY)
+    while ((current.response_type & ~0x80) == XCB_MOTION_NOTIFY)
     {
-        while (remaining && std::chrono::steady_clock::now() < deadline)
-        {
-            if (deferred_events_.empty())
-                defer_queued_events();
-            if (deferred_events_.empty() || (deferred_events_.front().response_type & ~0x80) != XCB_MOTION_NOTIFY)
-                break;
-            --remaining;
-            current = deferred_events_.front();
-            deferred_events_.pop_front();
-        }
+        if (deferred_events_.empty())
+            defer_queued_events();
+        if (deferred_events_.empty() || (deferred_events_.front().response_type & ~0x80) != XCB_MOTION_NOTIFY)
+            break;
+        current = deferred_events_.front();
+        deferred_events_.pop_front();
     }
     handle_event(current);
     complete_transition();
@@ -412,7 +405,7 @@ void WindowManager::close_window(xcb_window_t window)
         xcb_kill_client(conn_.get(), window);
         return;
     }
-    send_protocol_message(window, atoms_.wm_delete_window, last_event_time_);
+    send_protocol_message(window, atoms_.wm_delete_window, last_input_time_);
     LWM_LOG_DEBUG("Close requested: window={:#x} protocol=WM_DELETE_WINDOW", window);
 }
 

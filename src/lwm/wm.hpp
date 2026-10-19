@@ -91,10 +91,9 @@ private:
     // Obligations of the current operation that are not projections of state.
     std::set<xcb_window_t> configure_replies_;
     bool restack_requested_ = false;
-    bool drain_requested_ = false;
     bool monitors_dirty_ = false;
-    // Projection inputs outside State (outputs forgotten after an external
-    // change). State changes are tracked by revision.
+    // Republish window properties a client rewrote (urgency hints, shared
+    // _NET_WM_STATE). State changes are tracked by revision.
     bool presentation_dirty_ = false;
     uint64_t published_revision_ = UINT64_MAX;
 
@@ -104,10 +103,8 @@ private:
     std::optional<RunResult> stop_; ///< Set when the event loop should end
     xcb_window_t restart_requester_ = XCB_NONE; ///< IPC caller of a restart, awaited before exec
     std::string restart_binary_;
-    uint32_t last_event_time_ = XCB_CURRENT_TIME;
-    // Latest timestamp from an actual input event (key/button/motion/crossing).
-    // Unlike last_event_time_, never fed by PropertyNotify: user_time stamping
-    // must reflect user interaction, not property churn.
+    // Latest key, button, motion or crossing time. User time reflects interaction,
+    // never property churn.
     uint32_t last_input_time_ = XCB_CURRENT_TIME;
     xcb_cursor_t cursor_default_ = XCB_NONE;
     xcb_cursor_t cursor_resize_h_ = XCB_NONE;
@@ -127,7 +124,7 @@ private:
     Topology discover_topology();
     void refresh_topology();
     void defer_queued_events();
-    void dispatch_event(xcb_generic_event_t const& event, size_t& remaining, std::chrono::steady_clock::time_point deadline);
+    void dispatch_event(xcb_generic_event_t const& event);
     std::expected<void, std::string> reload_config(std::string_view source);
     bool launch_program(std::vector<std::string> const& command, std::string_view source);
     void close_window(xcb_window_t window);
@@ -147,11 +144,11 @@ private:
     // wm_manage.cpp: admission adapters
     void scan_existing_windows(bool handoff);
     void manage(WindowObservation const& observed, bool adopting);
+    void restore_clients(); ///< Show every client at its normal geometry before releasing X
 
     // wm_transition.cpp: operation completion and publication
     void complete_transition();
     bool publish_clients(std::vector<State::Projected> const& clients);
-    void restore_clients();
     bool write_geometry(xcb_window_t window, Output& output, State::Presentation const& presentation);
     void send_configure_notify(xcb_window_t window, State::Presentation const& presentation);
     bool publish(
@@ -192,7 +189,7 @@ private:
     void handle_configure_request(xcb_configure_request_event_t const& e);
     void handle_property_notify(xcb_property_notify_event_t const& event);
     bool grab_pointer(xcb_cursor_t cursor = XCB_NONE);
-    void release_pointer();
+    bool release_pointer(); ///< Whether a grab ended, generating crossings to drain
     void begin_interaction(State::Interaction const& interaction, int16_t x, int16_t y, uint8_t button);
     xcb_cursor_t split_cursor(State::SplitHit const& split) const;
 

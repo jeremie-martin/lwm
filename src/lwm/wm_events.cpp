@@ -24,8 +24,6 @@ uint32_t event_time(uint8_t type, xcb_generic_event_t const& event)
         case XCB_ENTER_NOTIFY:
         case XCB_LEAVE_NOTIFY:
             return reinterpret_cast<xcb_enter_notify_event_t const&>(event).time;
-        case XCB_PROPERTY_NOTIFY:
-            return reinterpret_cast<xcb_property_notify_event_t const&>(event).time;
         default:
             return 0;
     }
@@ -64,11 +62,7 @@ void WindowManager::handle_event(xcb_generic_event_t const& event)
         return;
     }
     if (uint32_t time = event_time(type, event))
-    {
-        last_event_time_ = time;
-        if (type != XCB_PROPERTY_NOTIFY)
-            last_input_time_ = time;
-    }
+        last_input_time_ = time;
     if (type == conn_.randr_event_base() + XCB_RANDR_SCREEN_CHANGE_NOTIFY)
     {
         monitors_dirty_ = true;
@@ -262,13 +256,13 @@ bool WindowManager::grab_pointer(xcb_cursor_t cursor)
     return pointer_grabbed_;
 }
 
-void WindowManager::release_pointer()
+bool WindowManager::release_pointer()
 {
     if (!std::exchange(pointer_grabbed_, false))
-        return;
+        return false;
     xcb_ungrab_pointer(conn_.get(), XCB_CURRENT_TIME);
     set_root_cursor(cursor_default_);
-    drain_requested_ = true;
+    return true;
 }
 
 // Domain changes start only after the grab succeeds; completion releases it

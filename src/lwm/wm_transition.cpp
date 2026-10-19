@@ -14,15 +14,13 @@ namespace lwm {
 // Compare complete projections with prior output, so mutations need no change lists.
 void WindowManager::complete_transition()
 {
-    bool obligations = !configure_replies_.empty() || restack_requested_
-        || drain_requested_ || presentation_dirty_;
+    bool obligations = !configure_replies_.empty() || restack_requested_ || presentation_dirty_;
     if (!obligations && state_.revision() == published_revision_)
         return;
 
     // Inputs and domain resolution; State may still change.
     auto focus_request = state_.settle(last_input_time_);
-    if (!state_.drag())
-        release_pointer();
+    bool released = !state_.drag() && release_pointer();
     auto fullscreen = state_.fullscreen_visibility();
     auto const& owners = fullscreen.owners;
     published_revision_ = state_.revision();
@@ -53,14 +51,13 @@ void WindowManager::complete_transition()
     publish_root();
     reconcile_stacking(fullscreen, focus_request);
     withdraw_removed();
-    if (drain_requested_ || (moved && !state_.drag()))
+    if (released || (moved && !state_.drag()))
         flush_and_drain_crossing();
     conn_.flush();
     state_.thaw();
 
     configure_replies_.clear();
     restack_requested_ = false;
-    drain_requested_ = false;
     presentation_dirty_ = false;
     LWM_ASSERT_INVARIANTS(state_);
 }
