@@ -78,17 +78,6 @@ void WindowManager::handle_event(xcb_generic_event_t const& event)
 
     switch (type)
     {
-        case XCB_CONFIGURE_NOTIFY:
-        {
-            // A mismatch is usually LWM's own superseded configure, but may be an
-            // external change: forget the written geometry so the next publication
-            // rewrites it, without forcing one now.
-            auto const& e = reinterpret_cast<xcb_configure_notify_event_t const&>(event);
-            State::Presentation observed{ { e.x, e.y, e.width, e.height }, e.border_width };
-            if (auto it = outputs_.find(e.window); it != outputs_.end() && it->second.presentation != observed)
-                it->second.presentation.reset();
-            break;
-        }
         case XCB_MAP_REQUEST:
             handle_map_request(reinterpret_cast<xcb_map_request_event_t const&>(event));
             break;
