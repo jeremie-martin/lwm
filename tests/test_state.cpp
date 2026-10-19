@@ -418,11 +418,10 @@ TEST_CASE("Fullscreen admission establishes priority and excludes maximize", "[s
     auto state = test::state();
     add(state, 1);
     state.request_fullscreen(1);
-    Client client;
-    client.id = 2;
-    client.fullscreen_claim = 1;
-    client.maximized_horz = client.maximized_vert = true;
-    state.insert(client);
+    WindowObservation window{ .id = 2 };
+    for (auto atom : { WindowState::Fullscreen, WindowState::MaximizedHorz, WindowState::MaximizedVert })
+        window.states.set(atom);
+    state.admit(window);
     CHECK(state.fullscreen_owners().at(0) == 2);
     CHECK_FALSE(state.require(2).maximized_horz);
     CHECK_FALSE(state.require(2).maximized_vert);

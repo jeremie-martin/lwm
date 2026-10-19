@@ -93,9 +93,11 @@ std::optional<Client> State::classify(WindowObservation const& window, restart::
         client.preferences.skip_pager = true;
     client.sticky |= states.has(WindowState::Sticky);
     client.modal = states.has(WindowState::Modal);
-    client.fullscreen_claim = states.has(WindowState::Fullscreen) ? next_claim_++ : 0;
-    client.maximized_horz = states.has(WindowState::MaximizedHorz);
-    client.maximized_vert = states.has(WindowState::MaximizedVert);
+    // Fullscreen supersedes remembered maximize; observation is its only source.
+    bool fullscreen = states.has(WindowState::Fullscreen);
+    client.fullscreen_claim = fullscreen ? next_claim_++ : 0;
+    client.maximized_horz = !fullscreen && states.has(WindowState::MaximizedHorz);
+    client.maximized_vert = !fullscreen && states.has(WindowState::MaximizedVert);
     client.urgency.set(UrgencySource::App, states.has(WindowState::DemandsAttention) || window.urgent);
     client.accepts_input = window.accepts_input;
     client.supports_take_focus = window.supports_take_focus;
@@ -450,8 +452,6 @@ void State::restore_graph(restart::Snapshot const& snapshot, std::span<Client> o
         if (!observed_claim || !client.fullscreen_claim)
             client.fullscreen_claim = observed_claim;
         forget_missing_tile_slot(client);
-        if (client.fullscreen())
-            client.maximized_horz = client.maximized_vert = false;
         next_recency_ = std::max(next_recency_, client.mru_order + 1);
         clients_.emplace(client.id, std::move(client));
     }

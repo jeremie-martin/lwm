@@ -35,11 +35,11 @@ void merge_membership(Workspace& target, Workspace& source)
 
 // Transfer complete workspace state for surviving outputs; discovery supplies
 // fresh geometry. A smaller count folds removed workspaces into the last one;
-// additional workspaces keep defaults. Removed outputs fall back to output 0
-// after surviving members, keeping their relative order.
-std::vector<size_t> preserve_workspaces(std::span<Monitor> previous, std::span<Monitor> discovered)
+// additional workspaces keep defaults. Removed outputs, which have no destination,
+// fall back to output 0 after surviving members, keeping their relative order.
+std::vector<std::optional<size_t>> preserve_workspaces(std::span<Monitor> previous, std::span<Monitor> discovered)
 {
-    std::vector<size_t> destinations(previous.size(), 0);
+    std::vector<std::optional<size_t>> destinations(previous.size());
     for (size_t old = 0; old < previous.size(); ++old)
     {
         auto target = std::ranges::find(discovered, previous[old].name, &Monitor::name);
@@ -122,7 +122,6 @@ Workspace& State::edit_workspace(size_t monitor, size_t workspace)
 
 uint64_t State::register_window(xcb_window_t id)
 {
-    focus_cycle_.clear();
     assert(id != XCB_NONE && !find(id) && !find_fixture(id));
     return next_order_++;
 }
@@ -141,9 +140,6 @@ void State::insert_registered(Client client)
     assert(client.monitor < monitors_.size() && client.workspace < monitors_[client.monitor].workspaces.size());
     assert(client.order < next_order_);
     mutated();
-    forget_missing_tile_slot(client);
-    if (client.fullscreen())
-        client.maximized_horz = client.maximized_vert = false;
     auto [it, inserted] = clients_.emplace(client.id, std::move(client));
     assert(inserted);
     if (it->second.tiled())
@@ -337,8 +333,8 @@ void State::restore(xcb_window_t id)
         focus(id);
 }
 
-// Traversal retains one MRU order. Operations that change its context discard it;
-// eligibility is still evaluated on every step.
+// Traversal retains one MRU order. Focus and topology changes discard it; windows
+// mapped meanwhile join the next traversal. Eligibility is evaluated on every step.
 bool State::cycle_focus(bool forward)
 {
     if (focus_cycle_.empty())
@@ -904,17 +900,12 @@ void State::rebind(std::vector<Topology::Output> outputs)
     }
     auto previous = std::move(monitors_);
     auto destinations = preserve_workspaces(previous, monitors);
-    focused_monitor_ = focused_monitor_ < destinations.size() ? destinations[focused_monitor_] : 0;
+    focused_monitor_ = focused_monitor_ < destinations.size() ? destinations[focused_monitor_].value_or(0) : 0;
     monitors_ = std::move(monitors);
-    auto survives = [&](size_t index)
-    {
-        return index < previous.size()
-            && std::ranges::any_of(monitors_, [&](auto const& m) { return m.name == previous[index].name; });
-    };
     for (auto& [id, c] : clients_)
     {
-        bool displaced = !survives(c.monitor);
-        c.monitor = c.monitor < destinations.size() ? destinations[c.monitor] : 0;
+        bool displaced = !destinations[c.monitor];
+        c.monitor = destinations[c.monitor].value_or(0);
         c.workspace = std::min(c.workspace, monitors_[c.monitor].workspaces.size() - 1);
         forget_missing_tile_slot(c);
         // An unchanged topology preserves intentional off-workarea geometry

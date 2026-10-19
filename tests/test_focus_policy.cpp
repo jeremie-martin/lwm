@@ -282,3 +282,21 @@ TEST_CASE("Focus history survives restart without a capacity or synthetic entrie
         CHECK(focus::fallback(*state, 0) == 2);
     }
 }
+
+TEST_CASE("Focus traversal continues when an unrelated window maps", "[focus][state]")
+{
+    auto state = test::state();
+    for (xcb_window_t id : { 1, 2, 3 })
+    {
+        add(state, id);
+        test::focus(state, id);
+    }
+    REQUIRE(state.cycle_focus(true));
+    state.settle();
+    REQUIRE(state.active_window() == 2);
+    add(state, 4, { .workspace = 1 }); // Hidden: it takes no focus.
+    state.settle();
+    REQUIRE(state.active_window() == 2);
+    REQUIRE(state.cycle_focus(true));
+    CHECK(state.active_window() == 1);
+}
