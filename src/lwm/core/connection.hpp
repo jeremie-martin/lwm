@@ -1,6 +1,7 @@
 #pragma once
 
 #include <cstdlib>
+#include <fcntl.h>
 #include <memory>
 #include <xcb/randr.h>
 #include <xcb/xcb.h>
@@ -30,6 +31,15 @@ public:
     bool fits_property(size_t bytes) const
     {
         return bytes / 4 + (bytes % 4 != 0) + 7 <= xcb_get_maximum_request_length(conn_.get());
+    }
+    // Keeps this connection open across exec and returns its descriptor. It is never
+    // shut down: xcb_disconnect would end the connection for the successor as well.
+    int detach()
+    {
+        int fd = xcb_get_file_descriptor(conn_.get());
+        fcntl(fd, F_SETFD, fcntl(fd, F_GETFD) & ~FD_CLOEXEC);
+        conn_.release();
+        return fd;
     }
     // Flush and wait until the server has processed every earlier request.
     void sync()

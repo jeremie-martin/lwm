@@ -53,7 +53,6 @@ void WindowManager::intern_atoms()
         { "_LWM_WINDOW_CLASS", &atoms_.lwm_window_class },
         { command::state_atom, &atoms_.lwm_state },
         { "_LWM_RESTART", &atoms_.lwm_restart },
-        { "_LWM_RESTART_OWNER", &atoms_.lwm_restart_owner },
     };
     if (!lwm::intern_atoms(conn_.get(), names))
         throw std::runtime_error("Failed to intern atoms");
@@ -149,22 +148,6 @@ void WindowManager::claim_wm_ownership()
     event.data.data32[1] = atoms_.wm_s0;
     event.data.data32[2] = wm_window_;
     xcb_send_event(conn_.get(), 0, conn_.screen()->root, XCB_EVENT_MASK_STRUCTURE_NOTIFY, reinterpret_cast<char const*>(&event));
-}
-
-// Root ownership is established. Release a marked predecessor only now, after
-// opening our connection, so an otherwise empty X server cannot reset. Returns
-// whether this start continues an exec restart.
-bool WindowManager::release_predecessor()
-{
-    auto root = conn_.screen()->root;
-    auto predecessor = xproperty::scalar(conn_.get(), root, atoms_.lwm_restart_owner, XCB_ATOM_WINDOW);
-    bool handoff = predecessor && *predecessor != XCB_NONE && *predecessor != wm_window_
-        && xproperty::scalar(conn_.get(), *predecessor, atoms_.lwm_restart_owner, XCB_ATOM_WINDOW) == predecessor;
-    if (handoff)
-        xcb_kill_client(conn_.get(), *predecessor);
-    xcb_delete_property(conn_.get(), root, atoms_.lwm_restart_owner);
-    read_handoff();
-    return handoff;
 }
 
 void WindowManager::grab_buttons()

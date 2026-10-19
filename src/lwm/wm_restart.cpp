@@ -1,12 +1,34 @@
-// Exec handoff: the outgoing WM stores one snapshot on the root window and
-// retains its X resources until the replacement claims the screen.
+// Exec handoff: the outgoing WM stores one snapshot on the root window and passes
+// its open X connection, so the server always has a live client, until the
+// replacement claims the screen.
 
 #include "lwm/core/log.hpp"
 #include "lwm/core/xproperty.hpp"
 #include "wm.hpp"
-#include <poll.h>
+#include <cstdlib>
+#include <string>
+#include <unistd.h>
 
 namespace lwm {
+
+namespace {
+constexpr char const* kPredecessorConnection = "LWM_RESTART_FD";
+} // namespace
+
+// The screen is owned now; closing the predecessor's connection frees its
+// resources. Returns whether this start continues an exec restart.
+bool WindowManager::release_predecessor()
+{
+    auto const* predecessor = std::getenv(kPredecessorConnection);
+    bool handoff = predecessor != nullptr;
+    if (handoff)
+    {
+        close(std::atoi(predecessor));
+        unsetenv(kPredecessorConnection);
+    }
+    read_handoff();
+    return handoff;
+}
 
 void WindowManager::read_handoff()
 {
@@ -43,32 +65,11 @@ void WindowManager::prepare_restart()
     xcb_change_window_attributes(conn_.get(), root, XCB_CW_EVENT_MASK, &no_events);
     xcb_set_selection_owner(conn_.get(), XCB_NONE, atoms_.wm_s0, XCB_CURRENT_TIME);
 
-    // Keep one identifiable predecessor until a replacement connection exists:
-    // DestroyAll here would reset an X server whose only client is the WM.
-    xcb_change_property(conn_.get(), XCB_PROP_MODE_REPLACE, wm_window_, atoms_.lwm_restart_owner, XCB_ATOM_WINDOW, 32, 1, &wm_window_);
-    xcb_change_property(conn_.get(), XCB_PROP_MODE_REPLACE, root, atoms_.lwm_restart_owner, XCB_ATOM_WINDOW, 32, 1, &wm_window_);
-    xcb_set_close_down_mode(conn_.get(), XCB_CLOSE_DOWN_RETAIN_PERMANENT);
-
-    // An IPC caller disconnecting after the exec could be the last client of an
-    // otherwise empty server, which then resets. Let it leave first, briefly.
-    uint32_t structure = XCB_EVENT_MASK_STRUCTURE_NOTIFY;
-    auto* gone = restart_requester_ == XCB_NONE ? nullptr : xcb_request_check(conn_.get(),
-        xcb_change_window_attributes_checked(conn_.get(), restart_requester_, XCB_CW_EVENT_MASK, &structure));
-    bool waiting = restart_requester_ != XCB_NONE && !gone;
-    free(gone);
-    for (auto deadline = std::chrono::steady_clock::now() + std::chrono::milliseconds(250);
-         waiting && std::chrono::steady_clock::now() < deadline;)
-        if (auto event = reply(xcb_poll_for_event(conn_.get())))
-            waiting = (event->response_type & ~0x80) != XCB_DESTROY_NOTIFY
-                || reinterpret_cast<xcb_destroy_notify_event_t const&>(*event).window != restart_requester_;
-        else
-        {
-            pollfd descriptor{ xcb_get_file_descriptor(conn_.get()), POLLIN, 0 };
-            poll(&descriptor, 1, 10);
-        }
-
-    // A round trip guarantees the server processed the release before exec.
+    // A round trip guarantees the server processed the release before exec. The
+    // connection stays open through exec, for the successor or a failed-exec
+    // recovery to close.
     conn_.sync();
+    setenv(kPredecessorConnection, std::to_string(conn_.detach()).c_str(), 1);
 }
 
 } // namespace lwm

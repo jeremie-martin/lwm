@@ -58,7 +58,6 @@ private:
         xcb_atom_t lwm_window_class;
         xcb_atom_t lwm_state;
         xcb_atom_t lwm_restart;
-        xcb_atom_t lwm_restart_owner;
     };
 
     // Last published window state outside plain properties; forget an externally
@@ -101,7 +100,6 @@ private:
     std::deque<xcb_generic_event_t> deferred_events_;
     bool pointer_grabbed_ = false; ///< Held exactly while State has a drag
     std::optional<RunResult> stop_; ///< Set when the event loop should end
-    xcb_window_t restart_requester_ = XCB_NONE; ///< IPC caller of a restart, awaited before exec
     std::string restart_binary_;
     // Latest key, button, motion or crossing time. User time reflects interaction,
     // never property churn.
@@ -117,7 +115,6 @@ private:
     void create_cursors();
     void setup_root();
     void claim_wm_ownership();
-    bool release_predecessor();
     void grab_buttons();
     void grab_keys();
     Config const& config() const { return state_.config(); }
@@ -203,6 +200,7 @@ private:
     std::string state_json() const;
 
     // wm_restart.cpp
+    bool release_predecessor();
     void read_handoff();
 };
 

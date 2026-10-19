@@ -31,8 +31,8 @@ caps, partial writes, backpressure), socket discovery (`--socket`, `LWM_SOCKET`,
 buffering, ordering and client lifetimes, and the reply now follows every effect.
 Lost: IPC without X access to the display. Considered and rejected: keeping the
 socket for commands plus a snapshot stream (about 300 lines more, same user
-surface). A restart waits up to 250 ms for its requester to disconnect, or an
-otherwise empty server could reset during the handoff.
+surface). An otherwise empty server must not reset during the handoff; see
+"Hand the X connection across exec".
 
 ## Keep the exec-restart snapshot (2026-10-06)
 
@@ -278,3 +278,16 @@ so LWM reads that client's value, through its user-time window, when such a requ
 arrives. Eager tracking subscribed to foreign windows, including the root, and cost a
 synchronous read for every keystroke in toolkits that update the property per input.
 The comparison uses the newer of the observed value and LWM's recorded focus time.
+
+## Hand the X connection across exec (2026-10-19)
+
+The server resets when its last live client disconnects, and retained resources do
+not count. Restart previously combined RetainPermanent, a self-identifying owner
+window the successor killed, and a wait of up to 250 ms for the IPC requester to
+disconnect. Keeping the predecessor's connection open through exec gives the same
+guarantee directly: its descriptor survives without close-on-exec, it is never shut
+down, and the successor closes it after claiming the screen. A failed exec recovers
+the same way. Exec into a binary that does not know `LWM_RESTART_FD` keeps the old
+connection until that process exits. The `restart_resources` CTest probe guards the
+empty-server case.
+

@@ -141,8 +141,6 @@ void WindowManager::handle_command(xcb_window_t requester)
     complete_transition();
     if (!write_property(requester, atoms_.lwm_reply, utf8, 8, response))
         write_property(requester, atoms_.lwm_reply, utf8, 8, "error response too large");
-    if (stop_ == RunResult::Restart)
-        restart_requester_ = requester;
 }
 
 std::string WindowManager::handle_request(std::string_view text)
