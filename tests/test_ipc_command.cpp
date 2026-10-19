@@ -63,7 +63,9 @@ TEST_CASE("IPC grammar rejects invalid arguments before execution", "[ipc][comma
                                       "monitor focus up",
                                       "window to-monitor",
                                       "scratchpad toggle",
-                                      "exec /bin/lwm\nstate" })
+                                      "exec /bin/lwm\nstate",
+                                      "window fullscreen\n",
+                                      "\rversion" })
     {
         CAPTURE(command);
         CHECK_FALSE(parse_command(command));

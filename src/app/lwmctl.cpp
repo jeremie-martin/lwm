@@ -235,8 +235,6 @@ int main(int argc, char* argv[])
         }
         if (argument_count == 1 && request == "watch")
             return watch();
-        if (request.find_first_of(std::string_view("\n\r\0", 3)) != request.npos)
-            throw std::runtime_error("argument contains a line break or NUL");
         if (auto parsed = lwm::command::parse_command(request); !parsed)
             throw std::runtime_error(parsed.error());
         return run(request, timeout);

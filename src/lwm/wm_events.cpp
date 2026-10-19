@@ -113,6 +113,13 @@ void WindowManager::handle_event(xcb_generic_event_t const& event)
         case XCB_DESTROY_NOTIFY:
             state_.erase(reinterpret_cast<xcb_destroy_notify_event_t const&>(event).window);
             break;
+        // A hidden client reparented away sends no UnmapNotify, and the root would
+        // not see its destruction: it has left management like a destroyed window.
+        case XCB_REPARENT_NOTIFY:
+            if (auto const& reparent = reinterpret_cast<xcb_reparent_notify_event_t const&>(event);
+                reparent.parent != conn_.screen()->root)
+                state_.erase(reparent.window);
+            break;
         case XCB_ENTER_NOTIFY:
             handle_enter_notify(reinterpret_cast<xcb_enter_notify_event_t const&>(event));
             break;

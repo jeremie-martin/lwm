@@ -154,9 +154,9 @@ std::expected<Request, std::string> parse_command(std::string_view text)
 {
     if (text.size() >= max_request_bytes)
         return std::unexpected("request too large");
-    text = trim(text);
     if (text.find_first_of(std::string_view("\n\r\0", 3)) != text.npos)
         return std::unexpected("command contains a line break or NUL");
+    text = trim(text);
     if (text.empty())
         return std::unexpected("empty command");
     auto const* spec = find_spec(text);

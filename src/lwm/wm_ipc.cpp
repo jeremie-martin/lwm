@@ -134,7 +134,6 @@ void WindowManager::handle_command(xcb_window_t requester)
     ));
     if (!request || request->type == XCB_NONE)
         return; // Not a request: the property is missing or the window is gone.
-    bool stopping = stop_.has_value();
     // A longer request is read truncated at the limit, which the parser rejects as too large.
     std::string response = request->type != utf8 || request->format != 8 ? "error request must be UTF-8 text"
         : handle_request({ static_cast<char const*>(xcb_get_property_value(request.get())),
@@ -142,7 +141,7 @@ void WindowManager::handle_command(xcb_window_t requester)
     complete_transition();
     if (!write_property(requester, atoms_.lwm_reply, utf8, 8, response))
         write_property(requester, atoms_.lwm_reply, utf8, 8, "error response too large");
-    if (!stopping && stop_ == RunResult::Restart)
+    if (stop_ == RunResult::Restart)
         restart_requester_ = requester;
 }
 

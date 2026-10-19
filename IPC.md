@@ -57,7 +57,8 @@ Queries read current state. Mutating commands are also accepted verbatim in a
 key binding, for example `"super+f" = "window fullscreen"`; both use one parser and
 executor. Queries cannot be bound. `lwmctl watch` is not a command sent to LWM; it
 reads the published state directly (see [Watching state](#watching-state)). Bindings
-launch processes from argv lists; IPC callers can launch processes themselves. Commands requiring an active window return
+launch processes from argv lists; IPC callers can launch processes themselves. Command
+text may not contain line breaks or NUL, even at its ends. Commands requiring an active window return
 `error no active window` when none is selected. Relative monitor/workspace commands
 target the focused monitor; indices are zero-based.
 Switching to the current workspace and moving a window to its current placement

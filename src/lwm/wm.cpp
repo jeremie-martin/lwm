@@ -277,7 +277,8 @@ RunResult WindowManager::run()
         // Bounded batches keep completion responsive under X load.
         size_t remaining = 64;
         auto batch_deadline = std::chrono::steady_clock::now() + std::chrono::milliseconds(2);
-        while (remaining && std::chrono::steady_clock::now() < batch_deadline)
+        // The first stop wins: a later restart cannot override losing the screen.
+        while (!stop_ && remaining && std::chrono::steady_clock::now() < batch_deadline)
         {
             if (!deferred_events_.empty())
             {

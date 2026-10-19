@@ -79,6 +79,7 @@ int main(int argc, char* argv[])
 
         std::string config_path = parsed->config_path.value_or(default_config_path());
         bool explicit_config = parsed->config_path.has_value();
+        char* const self = argv[0];
 
         while (true)
         {
@@ -111,7 +112,9 @@ int main(int argc, char* argv[])
                 restart_binary = wm.restart_binary();
                 wm.prepare_restart();
             }
-            char const* binary = restart_binary.empty() ? argv[0] : restart_binary.c_str();
+            // A successor restarts from its argv[0], so that names the binary exec'd.
+            argv[0] = restart_binary.empty() ? self : restart_binary.data();
+            char const* binary = argv[0];
             LWM_LOG_INFO("Restarting: {}", binary);
             // Exec replaces the worker on success; on failure it remains usable.
             // Do not wait for a stalled log destination before restarting.

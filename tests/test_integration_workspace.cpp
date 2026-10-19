@@ -1243,3 +1243,35 @@ TEST_CASE("Integration: crash recovery shows clients left unmapped by the predec
     CHECK(get_wm_state(conn, window, intern_atom(conn.get(), "WM_STATE")) == XCB_ICCCM_WM_STATE_NORMAL);
     destroy_window(conn, window);
 }
+
+TEST_CASE("Integration: a hidden client reparented away leaves management", "[integration][workspace][visibility]")
+{
+    auto test_env = TestEnvironment::create("[workspaces]\nnames = [\"1\", \"2\"]\n");
+    if (!test_env)
+        SKIP("Test environment not available");
+    auto& conn = test_env->conn;
+    xcb_atom_t net_wm_desktop = intern_atom(conn.get(), "_NET_WM_DESKTOP");
+    xcb_atom_t net_client_list = intern_atom(conn.get(), "_NET_CLIENT_LIST");
+
+    xcb_window_t window = create_window(conn, 10, 10, 200, 150);
+    map_window(conn, window);
+    REQUIRE(wait_for_active_window(conn, window, kTimeout));
+    send_client_message(conn, window, net_wm_desktop, 1);
+    REQUIRE(wait_for_condition([&] { return is_unmapped(conn, window); }, kTimeout));
+
+    // An override-redirect host, like a tray, is not managed itself.
+    xcb_window_t host = xcb_generate_id(conn.get());
+    uint32_t override_redirect = 1;
+    xcb_create_window(conn.get(), XCB_COPY_FROM_PARENT, host, conn.root(), 0, 0, 50, 50, 0,
+                      XCB_WINDOW_CLASS_INPUT_OUTPUT, XCB_COPY_FROM_PARENT, XCB_CW_OVERRIDE_REDIRECT, &override_redirect);
+    xcb_reparent_window(conn.get(), window, host, 0, 0);
+    xcb_flush(conn.get());
+    REQUIRE(wait_for_condition(
+        [&]
+        {
+            auto list = get_client_list(conn, net_client_list);
+            return list && !std::ranges::contains(*list, window);
+        },
+        kTimeout
+    ));
+}

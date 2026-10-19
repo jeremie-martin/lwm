@@ -156,9 +156,9 @@ TEST_CASE("lwmctl validates commands and offers help without a display", "[ipc][
              { { "" }, "empty command" },
              { { "", "watch" }, "unknown command" },
              { { "watch", "" }, "unknown command" },
-             { { "scratchpad", "toggle", "bad\nname" }, "argument contains a line break or NUL" },
-             { { "version\n" }, "argument contains a line break or NUL" },
-             { { "\rversion" }, "argument contains a line break or NUL" },
+             { { "scratchpad", "toggle", "bad\nname" }, "command contains a line break or NUL" },
+             { { "version\n" }, "command contains a line break or NUL" },
+             { { "\rversion" }, "command contains a line break or NUL" },
              { { std::string(4096, 'x') }, "request too large" },
          })
     {
