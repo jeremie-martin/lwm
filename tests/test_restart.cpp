@@ -516,7 +516,7 @@ TEST_CASE("Restart rejects empty frames before they reach geometry projection", 
     CHECK_FALSE(restart::decode(restart::encode(snapshot)));
 }
 
-TEST_CASE("Restart decoder rejects malformed typed values before narrowing or defaulting", "[restart][codec]")
+TEST_CASE("Restart decoder rejects malformed records instead of defaulting", "[restart][codec]")
 {
     auto original = nlohmann::json::parse(restart::encode(sample()));
     REQUIRE(restart::decode(original.dump()) == sample());
@@ -527,11 +527,8 @@ TEST_CASE("Restart decoder rejects malformed typed values before narrowing or de
              {                 "/clients/0/id",                                uint64_t{ 1 } << 32 },
              {                "/clients/0/monitor",                                                 -1 },
              {              "/clients/0/mru_order",                                                 -1 },
-             {                "/clients/0/urgency/sources",                                                256 },
              {                "/clients/0/urgency/sources",                                                  4 },
              {             "/clients/0/borderless",                                                  1 },
-             {            "/monitors/0/geometry/x",                                              32768 },
-             {            "/monitors/0/geometry/y",                                             -32769 },
              {        "/monitors/0/geometry/width",                                              65536 },
              {       "/monitors/0/geometry/height",                                                 -1 },
              {        "/monitors/0/geometry/width",                                                1.0 },

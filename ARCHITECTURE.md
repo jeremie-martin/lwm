@@ -359,9 +359,10 @@ launches, pool order, fullscreen claims and fixture roles with registration rank
 Application properties are observed afresh; derived rectangles, dock reservations
 and publication caches are not saved. The live value types are the snapshot schema,
 encoded with reflect-cpp over yyjson as `UTF8_STRING` JSON whose `format` field names
-the schema. Decoding rejects duplicate or extra fields, ambiguous variant tags and
-narrowing, then validates the persistent graph with the same validator Debug builds
-use. Incoming registration, focus and fullscreen ranks must also leave headroom for
+the schema. The library reader rejects missing or extra fields and unknown variant
+tags; the predecessor wrote the text from the same schema, so it is not hardened
+against forgery. The persistent graph is then validated with the same validator
+Debug builds use. Incoming registration, focus and fullscreen ranks must also leave headroom for
 all adoption passes before they become live counters. Any malformed or incompatible snapshot is rejected whole and windows are adopted
 afresh, as they are when a snapshot too large for one X request is not saved. Fresh
 adoption ignores application `HIDDEN` atoms; only accepted private intent restores
