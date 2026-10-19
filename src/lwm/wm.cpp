@@ -26,7 +26,7 @@ WindowManager::WindowManager(Config config, std::string config_path)
     create_cursors();
     grab_buttons();
     refresh_topology();
-    ewmh_.advertise(wm_window_, { ewmh_.get()->_NET_WM_USER_TIME_WINDOW, atoms_.lwm_window_class });
+    ewmh_.advertise(wm_window_, atoms_.lwm_window_class);
     scan_existing_windows(handoff);
     grab_keys();
     complete_transition();

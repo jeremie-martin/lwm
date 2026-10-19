@@ -48,7 +48,7 @@ Ewmh::Ewmh(Connection& conn)
 Ewmh::~Ewmh() { xcb_ewmh_connection_wipe(&ewmh_); }
 
 // Keep advertised atoms aligned with the implemented contract in X11.md.
-void Ewmh::advertise(xcb_window_t check, std::vector<xcb_atom_t> const& extra_supported)
+void Ewmh::advertise(xcb_window_t check, xcb_atom_t window_class)
 {
     xcb_ewmh_set_supporting_wm_check(&ewmh_, conn_.screen()->root, check);
     xcb_ewmh_set_supporting_wm_check(&ewmh_, check, check);
@@ -89,11 +89,12 @@ void Ewmh::advertise(xcb_window_t check, std::vector<xcb_atom_t> const& extra_su
         ewmh_._NET_WM_MOVERESIZE,
         ewmh_._NET_RESTACK_WINDOW,
         ewmh_._NET_WM_USER_TIME,
+        ewmh_._NET_WM_USER_TIME_WINDOW,
     };
 
     for (auto const& type : window_types) supported.push_back(ewmh_.*type.atom);
     supported.insert(supported.end(), state_atoms_.begin(), state_atoms_.end());
-    supported.insert(supported.end(), extra_supported.begin(), extra_supported.end());
+    supported.push_back(window_class);
     xcb_ewmh_set_supported(&ewmh_, 0, supported.size(), supported.data());
 }
 

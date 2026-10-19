@@ -22,7 +22,7 @@ public:
 
     // Name the WM's window as the supporting window and advertise the supported
     // atoms, including LWM's extensions.
-    void advertise(xcb_window_t check, std::vector<xcb_atom_t> const& extra_supported);
+    void advertise(xcb_window_t check, xcb_atom_t window_class);
 
     // Decode the _NET_WM_STATE atoms LWM understands.
     WindowStates states(std::span<xcb_atom_t const> atoms) const;

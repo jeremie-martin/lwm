@@ -60,7 +60,6 @@ std::expected<Target, std::string> parse_target(std::string_view value)
 }
 std::expected<void, std::string> initialize(LogOptions config)
 {
-    shutdown();
     try
     {
         if (config.level == quill::LogLevel::None)
@@ -82,24 +81,17 @@ std::expected<void, std::string> initialize(LogOptions config)
         backend.transit_event_buffer_initial_capacity = 256;
         backend.transit_events_soft_limit = 128;
         backend.transit_events_hard_limit = 256;
-        backend.backend_worker_on_poll_begin = []
-        {
-            // A closed diagnostic pipe must not kill the WM. Do not change the
-            // signal disposition inherited by applications launched from it.
-            static thread_local bool configured = false;
-            if (!configured)
-            {
-                sigset_t mask;
-                sigemptyset(&mask);
-                sigaddset(&mask, SIGPIPE);
-                pthread_sigmask(SIG_BLOCK, &mask, nullptr);
-                configured = true;
-            }
-        };
         // Backend errors and overflow summaries are dropped: reporting them could
         // block on the stalled destination they describe.
         backend.error_notifier = [](std::string const&) { };
+        // A closed diagnostic pipe must not kill the WM. The backend thread inherits
+        // the blocked SIGPIPE; applications launched by the WM thread do not.
+        sigset_t pipe, previous;
+        sigemptyset(&pipe);
+        sigaddset(&pipe, SIGPIPE);
+        pthread_sigmask(SIG_BLOCK, &pipe, &previous);
         quill::Backend::start(backend);
+        pthread_sigmask(SIG_SETMASK, &previous, nullptr);
         Frontend::preallocate();
         logger = Frontend::create_or_get_logger(
             "lwm",

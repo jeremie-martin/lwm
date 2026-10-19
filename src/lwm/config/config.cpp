@@ -223,11 +223,10 @@ size_t parse_workspace_index(int64_t index, std::string const& context, size_t c
     return static_cast<size_t>(index);
 }
 
-std::string parse_scratchpad_name(std::string const& name, std::string const& context, Config const& config)
+void require_scratchpad(std::string const& name, std::string const& context, Config const& config)
 {
     if (std::ranges::none_of(config.scratchpads, [&](auto const& scratchpad) { return scratchpad.name == name; }))
         throw std::runtime_error(context + " points to unknown scratchpad '" + name + "'");
-    return name;
 }
 
 double parse_ratio(double value, std::string const& context, LayoutConfig const& layout)
@@ -253,8 +252,8 @@ Action parse_binding(schema::BindAction const& input, std::string const& context
             [&](action::SwitchWorkspace const& a) { parse_workspace_index(a.workspace, context, config.workspaces.size()); },
             [&](action::MoveToWorkspace const& a) { parse_workspace_index(a.workspace, context, config.workspaces.size()); },
             [&](action::SetRatio const& a) { parse_ratio(a.value, context, config.layout); },
-            [&](action::ScratchpadToggle const& a) { parse_scratchpad_name(a.name, context, config); },
-            [&](action::ScratchpadCancelLaunch const& a) { parse_scratchpad_name(a.name, context, config); },
+            [&](action::ScratchpadToggle const& a) { require_scratchpad(a.name, context, config); },
+            [&](action::ScratchpadCancelLaunch const& a) { require_scratchpad(a.name, context, config); },
             [](auto const&) { }
         },
         *operation
@@ -385,7 +384,7 @@ ConfigLoadResult parse_config(std::string_view text, std::string const& source)
             assign(layout->resize_grab_threshold, config.layout.resize_grab_threshold);
         }
         if (input.focus)
-            config.focus.warp_cursor_on_monitor_change = input.focus->warp_cursor_on_monitor_change.value_or(false);
+            config.focus.warp_cursor_on_monitor_change = input.focus->warp_cursor_on_monitor_change.value_or(config.focus.warp_cursor_on_monitor_change);
         if (input.workspaces)
         {
             if (input.workspaces->names.empty() || input.workspaces->names.size() > 65535)

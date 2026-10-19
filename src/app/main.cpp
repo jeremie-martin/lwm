@@ -41,9 +41,10 @@ int main(int argc, char* argv[])
         std::cout << LWM_VERSION << '\n';
         return 0;
     }
+    std::string config_path = parsed->config_path.value_or(default_config_path());
     if (parsed->check_config)
     {
-        auto config = lwm::load_config(parsed->config_path.value_or(default_config_path()), true);
+        auto config = lwm::load_config(config_path, true);
         if (!config)
             std::cerr << "lwm: " << config.error() << '\n';
         return config ? 0 : 1;
@@ -77,7 +78,6 @@ int main(int argc, char* argv[])
             std::getenv("DISPLAY") ? std::getenv("DISPLAY") : "default"
         );
 
-        std::string config_path = parsed->config_path.value_or(default_config_path());
         bool explicit_config = parsed->config_path.has_value();
         char* const self = argv[0];
 
