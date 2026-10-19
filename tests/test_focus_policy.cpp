@@ -131,7 +131,7 @@ TEST_CASE("Only completed focus contributes to recency", "[focus][state]")
     state.focus(1, 10);
     state.focus(2, 20);
     CHECK(state.require(1).mru_order == 0);
-    CHECK(state.settle() == 20);
+    CHECK(state.settle());
     CHECK(state.require(1).mru_order == 0);
     CHECK(state.require(1).user_time == 0);
     CHECK(state.require(2).mru_order == 1);
@@ -163,7 +163,8 @@ TEST_CASE("Activation owns restoration and placement and refuses ineligible clie
     CHECK(state.focused_monitor() == 1);
     CHECK(state.monitors()[1].current_workspace == 2);
     CHECK(state.active_window() == 2);
-    CHECK(state.settle() == 42);
+    CHECK(state.settle());
+    CHECK(state.require(2).user_time == 42);
 
     SECTION("Unknown ID") { state.focus(99); }
     SECTION("No input protocol")
@@ -234,7 +235,7 @@ TEST_CASE("Settling cancels an invalidated drag and repairs focus", "[focus][sta
     state.fullscreen(2, true);
     auto settled = state.settle();
     CHECK_FALSE(state.drag());
-    CHECK(settled == 0);
+    CHECK(settled);
     CHECK(state.active_window() == 2);
 }
 

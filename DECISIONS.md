@@ -241,8 +241,10 @@ commit `d78347b` repaired keyboard input stranded by slow or buggy clients. Keep
 behavior rather than changing focus policy during cleanup. A separate defect was
 sending timestamp zero at startup/restart, and pairing cached protocol time with a
 newer direct focus time. A responsive child-focusing client reproduced both missing
-and stale protocol times. Timestamp-less focus now observes fresh X server time and
-uses it for both requests, so the client's response is accepted. The observation
+and stale protocol times. Focus of such a client now observes fresh X server time and
+uses it for both requests, so the client's response is accepted. A request's own
+timestamp is not reused: X ignores focus older than its last focus change, so an
+accepted activation could otherwise be published without moving keyboard focus. The observation
 rewrites the supporting window's unchanged name and keeps other events in the
 deferred queue, at the
 cost of one synchronous round trip only for `WM_TAKE_FOCUS` clients.

@@ -629,3 +629,28 @@ TEST_CASE(
     destroy_window(conn, suppressed);
     destroy_window(conn, owner);
 }
+
+TEST_CASE(
+    "Integration: an accepted activation moves keyboard focus despite an old request time",
+    "[integration][client_message][focus][user_time]"
+)
+{
+    auto test_env = TestEnvironment::create("[workspaces]\nnames = [\"1\", \"2\"]\n");
+    if (!test_env)
+        SKIP("Test environment not available");
+    auto& conn = test_env->conn;
+    xcb_atom_t net_active_window = intern_atom(conn.get(), "_NET_ACTIVE_WINDOW");
+
+    xcb_window_t w1 = create_window(conn, 10, 10, 220, 160);
+    map_window(conn, w1);
+    REQUIRE(wait_for_x_input_focus(conn, w1, kTimeout));
+    xcb_window_t w2 = create_window(conn, 60, 60, 220, 160);
+    map_window(conn, w2);
+    REQUIRE(wait_for_x_input_focus(conn, w2, kTimeout));
+
+    // No user interaction is known for w2, so any request time is accepted, but
+    // this one precedes the server's last focus change.
+    send_client_message(conn, w1, net_active_window, 1, 1, 0, 0, 0);
+    REQUIRE(wait_for_active_window(conn, w1, kTimeout));
+    CHECK(wait_for_x_input_focus(conn, w1, kTimeout));
+}

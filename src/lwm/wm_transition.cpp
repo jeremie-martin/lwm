@@ -41,7 +41,7 @@ void WindowManager::complete_transition()
     bool moved = publish_clients(clients);
     if (focus_request)
     {
-        commit_focus(*focus_request);
+        commit_focus();
         // Explicit focus reasserts the focused state even if a client rewrote it.
         properties_.erase({ state_.active_window(), ewmh_.get()->_NET_WM_STATE });
     }
@@ -51,7 +51,7 @@ void WindowManager::complete_transition()
     publish_states(states, WindowStates{ UINT16_MAX }); // LWM owns every value it publishes
     publish_fixtures();
     publish_root();
-    reconcile_stacking(fullscreen, focus_request.has_value());
+    reconcile_stacking(fullscreen, focus_request);
     withdraw_removed();
     if (drain_requested_ || (moved && !state_.drag()))
         flush_and_drain_crossing();
@@ -316,21 +316,17 @@ void WindowManager::publish_fixtures()
     }
 }
 
-void WindowManager::commit_focus(uint32_t time)
+// Request timestamps arbitrate in State; X ignores focus older than its last focus
+// change, so execution uses the current time. A WM_TAKE_FOCUS client redirects focus
+// with the time it receives, which must match the direct focus.
+void WindowManager::commit_focus()
 {
     // Explicit same-window focus still reasserts input focus and WM_TAKE_FOCUS.
-    if (auto const* client = state_.find(state_.active_window()))
-    {
-        if (client->supports_take_focus)
-        {
-            if (time == XCB_CURRENT_TIME)
-                time = server_time();
-            send_protocol_message(client->id, atoms_.wm_take_focus, time);
-        }
-        xcb_set_input_focus(conn_.get(), XCB_INPUT_FOCUS_POINTER_ROOT, client->id, time);
-    }
-    else
-        xcb_set_input_focus(conn_.get(), XCB_INPUT_FOCUS_POINTER_ROOT, conn_.screen()->root, XCB_CURRENT_TIME);
+    auto const* client = state_.find(state_.active_window());
+    auto time = client && client->supports_take_focus ? server_time() : XCB_CURRENT_TIME;
+    if (time != XCB_CURRENT_TIME)
+        send_protocol_message(client->id, atoms_.wm_take_focus, time);
+    xcb_set_input_focus(conn_.get(), XCB_INPUT_FOCUS_POINTER_ROOT, client ? client->id : conn_.screen()->root, time);
 }
 
 // Root publication

@@ -148,8 +148,9 @@ TEST_CASE("Integration: focus delivers WM_TAKE_FOCUS and reasserts keyboard focu
         CHECK(received[0].type == protocols);
         CHECK(received[0].format == 32);
         CHECK(received[0].data.data32[0] == take_focus);
+        // A fresh server time, never older than the request that caused it.
         if (timestamp)
-            CHECK(received[0].data.data32[1] == *timestamp);
+            CHECK(static_cast<int32_t>(received[0].data.data32[1] - *timestamp) >= 0);
     };
     map_window(conn, window);
     REQUIRE(wait_for_active_window(conn, window, kTimeout));

@@ -173,7 +173,7 @@ private:
     void publish_root();
     void reconcile_stacking(State::FullscreenVisibility const& fullscreen, bool reassert);
     void withdraw_removed();
-    void commit_focus(uint32_t time);
+    void commit_focus();
     void flush_and_drain_crossing();
 
     // wm_events.cpp: X event handlers

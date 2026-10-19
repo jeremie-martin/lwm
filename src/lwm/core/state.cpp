@@ -378,7 +378,7 @@ void State::focus_monitor(size_t monitor)
     }
 }
 
-std::optional<uint32_t> State::settle(uint32_t input_time)
+bool State::settle(uint32_t input_time)
 {
     if (drag_ && !drag_valid())
         end_drag(false);
@@ -401,7 +401,7 @@ std::optional<uint32_t> State::settle(uint32_t input_time)
             edit_workspace(client.monitor, client.workspace).preferred_tile = XCB_NONE;
         client.urgency = { };
     }
-    return request ? std::optional{ request->time } : std::nullopt;
+    return request.has_value();
 }
 
 void State::hover(xcb_window_t window, int16_t x, int16_t y)

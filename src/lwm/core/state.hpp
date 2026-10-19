@@ -198,8 +198,8 @@ public:
     void hover(xcb_window_t window, int16_t x, int16_t y);
     // Settle one operation: end a drag whose context changed, then resolve
     // eligibility, recency and user time for the final focus. input_time is the
-    // latest observed input timestamp. Returns the explicit focus request's time.
-    std::optional<uint32_t> settle(uint32_t input_time = 0);
+    // latest observed input timestamp. Returns whether focus was explicitly requested.
+    bool settle(uint32_t input_time = 0);
 
     // Placement and mode
     // Moving the active client follows a shown destination or chooses replacement
