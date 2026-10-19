@@ -20,9 +20,10 @@ void WindowManager::complete_transition()
         return;
 
     // Inputs and domain resolution; State may still change.
-    auto [focus_request, fullscreen] = state_.settle(last_input_time_);
+    auto focus_request = state_.settle(last_input_time_);
     if (!state_.drag())
         release_pointer();
+    auto fullscreen = state_.fullscreen_visibility();
     auto const& owners = fullscreen.owners;
     published_revision_ = state_.revision();
 
@@ -76,8 +77,7 @@ bool WindowManager::publish_clients(std::vector<State::Projected> const& clients
         auto& output = outputs_[client->id];
         if (!presentation && output.mapped)
         {
-            auto cookie = xcb_unmap_window(conn_.get(), client->id);
-            unmap_replies_.emplace(client->id, cookie.sequence);
+            output.unmaps.push_back(xcb_unmap_window(conn_.get(), client->id).sequence);
             output.mapped = false;
             moved = true;
         }
@@ -421,8 +421,6 @@ void WindowManager::withdraw_removed()
         uint32_t const withdrawn[] = { XCB_ICCCM_WM_STATE_WITHDRAWN, 0 };
         publish(it->first, atoms_.wm_state, atoms_.wm_state, withdrawn);
         unfocused.emplace_back(it->first, WindowStates{});
-        unmap_replies_.erase(unmap_replies_.lower_bound({ it->first, 0 }),
-            unmap_replies_.upper_bound({ it->first, UINT32_MAX }));
         it = outputs_.erase(it);
     }
     WindowStates focused;

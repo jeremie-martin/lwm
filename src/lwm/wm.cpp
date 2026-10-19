@@ -429,36 +429,27 @@ void WindowManager::close_window(xcb_window_t window)
 
 // Protocol messages
 
-// A timestamp-less focus request needs an actual server time for WM_TAKE_FOCUS.
-// Rewriting our supporting window's name yields a timestamp without a new atom.
-// Keep other events ordered for the event loop; observation never dispatches them.
+// ICCCM obtains server time from a zero-length append to a property. Only this
+// request selects events on our supporting window. Other events read meanwhile
+// stay ordered for the event loop.
 uint32_t WindowManager::server_time()
 {
-    uint32_t events = XCB_EVENT_MASK_PROPERTY_CHANGE;
-    xcb_change_window_attributes(conn_.get(), wm_window_, XCB_CW_EVENT_MASK, &events);
-    std::optional<uint32_t> timestamp;
-    do
+    auto* c = conn_.get();
+    uint32_t const selected = XCB_EVENT_MASK_PROPERTY_CHANGE, unselected = XCB_EVENT_MASK_NO_EVENT;
+    xcb_change_window_attributes(c, wm_window_, XCB_CW_EVENT_MASK, &selected);
+    xcb_change_property(c, XCB_PROP_MODE_APPEND, wm_window_, ewmh_.get()->_NET_WM_NAME, ewmh_.get()->UTF8_STRING, 8, 0, nullptr);
+    xcb_change_window_attributes(c, wm_window_, XCB_CW_EVENT_MASK, &unselected);
+    conn_.sync();
+    uint32_t time = XCB_CURRENT_TIME;
+    while (auto event = reply(xcb_poll_for_queued_event(c)))
     {
-        timestamp.reset();
-        auto cookie = xcb_ewmh_set_wm_name(ewmh_.get(), wm_window_, 3, "lwm");
-        conn_.sync();
-        while (auto event = reply(xcb_poll_for_queued_event(conn_.get())))
-        {
-            auto const& property = reinterpret_cast<xcb_property_notify_event_t const&>(*event);
-            if (event->response_type == XCB_PROPERTY_NOTIFY && event->full_sequence == cookie.sequence
-                && property.window == wm_window_ && property.atom == ewmh_.get()->_NET_WM_NAME)
-            {
-                timestamp = property.time;
-                break;
-            }
+        auto const& property = reinterpret_cast<xcb_property_notify_event_t const&>(*event);
+        if (event->response_type == XCB_PROPERTY_NOTIFY && property.window == wm_window_)
+            time = property.time;
+        else
             deferred_events_.push_back(*event);
-        }
-        if (!timestamp)
-            throw std::runtime_error("Failed to observe X server time");
-    } while (*timestamp == XCB_CURRENT_TIME); // The millisecond at timestamp wrap is not a usable protocol time.
-    events = XCB_EVENT_MASK_NO_EVENT;
-    xcb_change_window_attributes(conn_.get(), wm_window_, XCB_CW_EVENT_MASK, &events);
-    return *timestamp;
+    }
+    return time;
 }
 
 void WindowManager::send_protocol_message(xcb_window_t window, xcb_atom_t protocol, uint32_t timestamp)

@@ -149,12 +149,11 @@ the frozen model. A ConfigureNotify mismatch forgets cached geometry without for
 completion; a conflicting urgency hint forces reconciliation. Explicit focus reasserts
 X focus, focused state and stacking even when the selected window is unchanged.
 For clients supporting `WM_TAKE_FOCUS`, the message and direct X focus use the same
-nonzero timestamp. A timestamp-less request observes a fresh server time by rewriting
-the supporting window's name and matching its property notification by request
-sequence. Property events on that private window are selected only during observation,
-so subsequent publication does not echo back into the event loop. The observation
-costs one round trip and defers other queued events without dispatching them; passive
-clients need no timestamp observation.
+nonzero timestamp. A timestamp-less request observes a fresh server time with the
+ICCCM zero-length append to the supporting window's name. Property events on that
+private window are selected only around the append, so publication does not echo
+back into the event loop. The observation costs one round trip and defers other
+queued events without dispatching them; passive clients need no timestamp observation.
 
 The event loop polls the X connection, its only event source. X batches stop after 64 events or
 2 ms; pointer motion is coalesced up to the next non-motion event. Crossing drains only

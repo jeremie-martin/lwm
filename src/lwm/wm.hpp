@@ -66,6 +66,7 @@ private:
     struct Output
     {
         bool mapped = false;
+        std::vector<uint32_t> unmaps; ///< Requests of WM unmaps whose UnmapNotify is pending
         std::optional<State::Presentation> presentation; ///< Last submitted server rectangle and border
         std::optional<uint32_t> border_color;
         std::optional<bool> urgent; ///< Urgency mirrored into the application's WM_HINTS
@@ -78,8 +79,6 @@ private:
     Atoms atoms_{ };
     State state_;
     std::unordered_map<xcb_window_t, Output> outputs_;
-    // X acknowledgements of our own unmaps are not application withdrawals.
-    std::set<std::pair<xcb_window_t, uint32_t>> unmap_replies_;
     // Last submitted bytes (nullopt records deletion), or the owned EWMH states
     // successfully merged into a shared property. Neither records refused writes.
     // An unknown property is always written, so a fresh WM replaces stale values.

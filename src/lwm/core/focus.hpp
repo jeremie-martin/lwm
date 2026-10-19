@@ -12,7 +12,6 @@ xcb_window_t tile(State const& state, size_t monitor, State::FullscreenVisibilit
 
 // Automatic focus: current tile, sticky tiles, then floating clients by recency.
 xcb_window_t fallback(State const& state, size_t monitor);
-xcb_window_t fallback(State const& state, size_t monitor, State::FullscreenVisibility const& fullscreen);
 
 // All clients by descending recency. Eligibility is checked per step, so the
 // order can outlive changes in visibility or input hints.

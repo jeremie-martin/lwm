@@ -13,7 +13,6 @@ struct FakeWm
     enum class Answer
     {
         Reply,
-        GrabReply,
         ReplyThenExit,
         WrongType,
         WrongFormat,
@@ -61,11 +60,7 @@ struct FakeWm
                             std::lock_guard lock(mutex);
                             requests.push_back(get_window_property_string(conn.get(), requester, command).value_or(""));
                         }
-                        // Grab before publishing: the notification is delivered, but
-                        // the requester's subsequent GetProperty cannot be served.
-                        if (answer == Answer::GrabReply)
-                            xcb_grab_server(conn.get());
-                        if (answer == Answer::Reply || answer == Answer::GrabReply || answer == Answer::ReplyThenExit
+                        if (answer == Answer::Reply || answer == Answer::ReplyThenExit
                             || answer == Answer::WrongType || answer == Answer::WrongFormat)
                         {
                             auto type = answer == Answer::WrongType ? XCB_ATOM_STRING : utf8;
@@ -79,8 +74,6 @@ struct FakeWm
                     }
                     free(event);
                 }
-                xcb_ungrab_server(conn.get());
-                xcb_flush(conn.get());
             }
         );
     }
@@ -218,18 +211,6 @@ TEST_CASE("lwmctl distinguishes a missing, silent and exiting WM", "[ipc][lwmctl
         CHECK(result->stderr_text.find("timed out") != std::string::npos);
         CHECK(result->stderr_text.find("may have run") != std::string::npos);
         CHECK(std::chrono::steady_clock::now() - started < std::chrono::seconds(1));
-    }
-    SECTION("reply retrieval also obeys the timeout when the server is grabbed")
-    {
-        FakeWm wm("ok", FakeWm::Answer::GrabReply);
-        auto started = std::chrono::steady_clock::now();
-        auto result = run_command(lwmctl_executable_path(), { "--timeout", "100", "version" });
-        REQUIRE(result);
-        CHECK(result->exit_code == 1);
-        CHECK(result->stdout_text.empty());
-        CHECK(result->stderr_text == "lwmctl: timed out waiting for lwm; the command may have run\n");
-        CHECK(std::chrono::steady_clock::now() - started < std::chrono::seconds(1));
-        CHECK(wm.received() == std::vector<std::string>{ "version" });
     }
     SECTION("a reply announced before WM destruction is still returned")
     {

@@ -12,7 +12,6 @@
 #include <poll.h>
 #include <stdexcept>
 #include <string>
-#include <xcb/xcbext.h>
 
 namespace {
 bool print_usage(std::ostream& out, std::string_view group = {})
@@ -115,41 +114,18 @@ int run(std::string const& request, std::chrono::milliseconds timeout)
     xcb_send_event(conn, 0, wm, XCB_EVENT_MASK_NO_EVENT, reinterpret_cast<char const*>(&message));
     xcb_flush(conn);
     auto deadline = std::chrono::steady_clock::now() + timeout;
-    std::optional<xcb_get_property_cookie_t> pending;
-    auto remaining = [&]
-    {
-        auto milliseconds = std::chrono::ceil<std::chrono::milliseconds>(deadline - std::chrono::steady_clock::now()).count();
-        if (milliseconds <= 0)
-            throw std::runtime_error("timed out waiting for lwm; the command may have run");
-        return static_cast<int>(milliseconds);
-    };
-    auto observe = [&](xcb_generic_event_t const& event)
-    {
-        remaining();
-        uint8_t type = event.response_type & ~0x80;
-        auto const& property = reinterpret_cast<xcb_property_notify_event_t const&>(event);
-        if (!pending && type == XCB_DESTROY_NOTIFY && reinterpret_cast<xcb_destroy_notify_event_t const&>(event).window == wm)
-            throw std::runtime_error("lwm exited before replying");
-        if (!pending && type == XCB_PROPERTY_NOTIFY && property.window == requester && property.atom == x.response
-            && property.state == XCB_PROPERTY_NEW_VALUE)
-        {
-            pending = xcb_get_property(conn, true, requester, x.response, x.utf8, 0, UINT32_MAX / 4);
-            xcb_flush(conn);
-        }
-    };
     for (;;)
     {
-        remaining();
         while (auto event = lwm::reply(xcb_poll_for_event(conn)))
-            observe(*event);
-        void* value = nullptr;
-        if (pending && xcb_poll_for_reply(conn, pending->sequence, &value, nullptr))
         {
-            auto property = lwm::reply(static_cast<xcb_get_property_reply_t*>(value));
-            if (!lwm::xproperty::complete(property, x.utf8, 8))
-                throw std::runtime_error("invalid reply");
-            std::string response(static_cast<char const*>(xcb_get_property_value(property.get())),
-                                 static_cast<size_t>(xcb_get_property_value_length(property.get())));
+            uint8_t type = event->response_type & ~0x80;
+            auto const& property = reinterpret_cast<xcb_property_notify_event_t const&>(*event);
+            if (type == XCB_DESTROY_NOTIFY && reinterpret_cast<xcb_destroy_notify_event_t const&>(*event).window == wm)
+                throw std::runtime_error("lwm exited before replying");
+            if (type != XCB_PROPERTY_NOTIFY || property.window != requester || property.atom != x.response
+                || property.state != XCB_PROPERTY_NEW_VALUE)
+                continue;
+            auto response = x.text(requester, x.response, true).value_or("");
             if (response.starts_with("error "))
                 throw std::runtime_error(response.substr(6));
             if (response != "ok" && !response.starts_with("ok "))
@@ -159,16 +135,13 @@ int run(std::string const& request, std::chrono::milliseconds timeout)
             std::cout.flush();
             return std::cout ? 0 : 1;
         }
-        // Reply polling can read lifecycle events into XCB's queue as well.
-        if (auto event = lwm::reply(xcb_poll_for_queued_event(conn)))
-        {
-            observe(*event);
-            continue;
-        }
         if (xcb_connection_has_error(conn))
             throw std::runtime_error("X connection closed");
+        auto remaining = std::chrono::ceil<std::chrono::milliseconds>(deadline - std::chrono::steady_clock::now()).count();
+        if (remaining <= 0)
+            throw std::runtime_error("timed out waiting for lwm; the command may have run");
         pollfd descriptor{ xcb_get_file_descriptor(conn), POLLIN, 0 };
-        poll(&descriptor, 1, remaining());
+        poll(&descriptor, 1, static_cast<int>(remaining));
     }
 }
 
@@ -192,26 +165,18 @@ int watch()
         }
         if (!std::cout)
             return 0; // A closed pipe ends watching normally.
+        // One read covers a burst: every event already queued is consumed with it.
         bool attach = false;
-        for (bool changed = false; !attach && !changed;)
+        for (auto event = lwm::reply(xcb_wait_for_event(x.conn())); event; event = lwm::reply(xcb_poll_for_queued_event(x.conn())))
         {
-            auto event = lwm::reply(xcb_wait_for_event(x.conn()));
-            if (!event)
-                throw std::runtime_error("X connection closed");
-            do
-            {
-                uint8_t type = event->response_type & ~0x80;
-                auto const& destroyed = reinterpret_cast<xcb_destroy_notify_event_t const&>(*event);
-                auto const& message = reinterpret_cast<xcb_client_message_event_t const&>(*event);
-                attach |= (type == XCB_DESTROY_NOTIFY && destroyed.window == wm)
-                    || (type == XCB_CLIENT_MESSAGE && message.type == x.manager && message.data.data32[1] == x.selection);
-                auto const& property = reinterpret_cast<xcb_property_notify_event_t const&>(*event);
-                changed |= type == XCB_PROPERTY_NOTIFY && property.window == wm && property.atom == x.state;
-                event = lwm::reply(xcb_poll_for_queued_event(x.conn()));
-            } while (event);
-            if (xcb_connection_has_error(x.conn()))
-                throw std::runtime_error("X connection closed");
+            uint8_t type = event->response_type & ~0x80;
+            auto const& destroyed = reinterpret_cast<xcb_destroy_notify_event_t const&>(*event);
+            auto const& message = reinterpret_cast<xcb_client_message_event_t const&>(*event);
+            attach |= (type == XCB_DESTROY_NOTIFY && destroyed.window == wm)
+                || (type == XCB_CLIENT_MESSAGE && message.type == x.manager && message.data.data32[1] == x.selection);
         }
+        if (xcb_connection_has_error(x.conn()))
+            throw std::runtime_error("X connection closed");
         if (attach)
             wm = x.lwm_owner(events);
     }

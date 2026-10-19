@@ -373,16 +373,15 @@ void State::focus_monitor(size_t monitor)
     }
 }
 
-State::Settled State::settle(uint32_t input_time)
+std::optional<uint32_t> State::settle(uint32_t input_time)
 {
-    auto fullscreen = fullscreen_visibility();
-    if (drag_ && !drag_valid(fullscreen))
+    if (drag_ && !drag_valid())
         end_drag(false);
     // Repair a selection that lost its client or eligibility, and fill an empty
     // one unless the user released focus.
     auto const* active = find(active_window_);
-    if (active ? !focusable(*active, fullscreen) : active_window_ != XCB_NONE || !focus_released_)
-        if (auto target = focus::fallback(*this, focused_monitor_, fullscreen); target != active_window_)
+    if (active ? !focusable(*active) : active_window_ != XCB_NONE || !focus_released_)
+        if (auto target = focus::fallback(*this, focused_monitor_); target != active_window_)
             select_focus(target, 0, false);
     auto request = std::exchange(focus_request_, std::nullopt);
     if (request && find(active_window_))
@@ -397,7 +396,7 @@ State::Settled State::settle(uint32_t input_time)
             edit_workspace(client.monitor, client.workspace).preferred_tile = XCB_NONE;
         client.urgency = { };
     }
-    return { request ? std::optional{ request->time } : std::nullopt, std::move(fullscreen) };
+    return request ? std::optional{ request->time } : std::nullopt;
 }
 
 void State::hover(xcb_window_t window, int16_t x, int16_t y)

@@ -98,12 +98,13 @@ void WindowManager::handle_event(xcb_generic_event_t const& event)
         case XCB_MAP_REQUEST:
             handle_map_request(reinterpret_cast<xcb_map_request_event_t const&>(event));
             break;
-        // Match server acknowledgements to effects, including rapid hide/show/hide.
+        // A notification of LWM's own unmap carries that request's sequence, even
+        // across rapid hide/show/hide; anything else is a client withdrawal.
         case XCB_UNMAP_NOTIFY:
         {
-            auto const& unmap = reinterpret_cast<xcb_unmap_notify_event_t const&>(event);
-            auto window = unmap.window;
-            if (!(event.response_type & 0x80) && unmap_replies_.erase({ window, event.full_sequence }))
+            auto window = reinterpret_cast<xcb_unmap_notify_event_t const&>(event).window;
+            if (auto output = outputs_.find(window); !(event.response_type & 0x80) && output != outputs_.end()
+                && std::erase(output->second.unmaps, event.full_sequence))
                 break;
             if (auto geometry = state_.withdraw(window))
                 write_geometry(window, outputs_[window], *geometry);
