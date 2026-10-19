@@ -40,7 +40,8 @@ too large`) or left unpublished, with a warning in the log.
 nothing; queries reply `ok VALUE` and print `VALUE`. Errors print to stderr with exit
 status 1: `lwm is not running` when no WM, or a WM other than LWM, owns the screen, `lwm exited before replying`
 when the owner window disappears while waiting, and a timeout after `--timeout MS`
-(1–600000, default 2000). A timeout or exit leaves the outcome unknown, because LWM
+(1–600000, default 2000). The timeout bounds waiting for LWM; like any X client,
+`lwmctl` also waits while another client grabs the server. A timeout or exit leaves the outcome unknown, because LWM
 may have executed the command; do not retry toggles blindly.
 
 `lwmctl --help` and command-specific help (for example `lwmctl workspace --help`) print

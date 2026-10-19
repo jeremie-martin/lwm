@@ -243,8 +243,8 @@ sending timestamp zero at startup/restart, and pairing cached protocol time with
 newer direct focus time. A responsive child-focusing client reproduced both missing
 and stale protocol times. Timestamp-less focus now observes fresh X server time and
 uses it for both requests, so the client's response is accepted. The observation
-appends nothing to the supporting window's name, as ICCCM suggests, and keeps other
-events in the deferred queue, at the
+rewrites the supporting window's unchanged name and keeps other events in the
+deferred queue, at the
 cost of one synchronous round trip only for `WM_TAKE_FOCUS` clients.
 
 ## Bound shared-state output, not raw input (2026-10-18)

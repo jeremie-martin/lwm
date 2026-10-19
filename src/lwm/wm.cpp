@@ -425,14 +425,15 @@ void WindowManager::close_window(xcb_window_t window)
 
 // Protocol messages
 
-// ICCCM obtains server time from a zero-length append to a property. Only this
-// request selects events on our supporting window.
+// A property change yields server time. Rewriting the supporting window's name
+// keeps its value and repairs any foreign type; only this request selects
+// events on that window.
 uint32_t WindowManager::server_time()
 {
     auto* c = conn_.get();
     uint32_t const selected = XCB_EVENT_MASK_PROPERTY_CHANGE, unselected = XCB_EVENT_MASK_NO_EVENT;
     xcb_change_window_attributes(c, wm_window_, XCB_CW_EVENT_MASK, &selected);
-    xcb_change_property(c, XCB_PROP_MODE_APPEND, wm_window_, ewmh_.get()->_NET_WM_NAME, ewmh_.get()->UTF8_STRING, 8, 0, nullptr);
+    xcb_ewmh_set_wm_name(ewmh_.get(), wm_window_, 3, "lwm");
     xcb_change_window_attributes(c, wm_window_, XCB_CW_EVENT_MASK, &unselected);
     conn_.sync();
     defer_queued_events();

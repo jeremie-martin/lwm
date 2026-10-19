@@ -29,7 +29,7 @@ bool print_usage(std::ostream& out, std::string_view group = {})
         out << "  watch\n      print the state as JSON now and after every change\n";
         found = true;
     }
-    out << "\nThe timeout bounds a command's reply (default 2000 ms). Use -- before arguments\n"
+    out << "\nThe timeout bounds waiting for LWM's reply (default 2000 ms). Use -- before arguments\n"
            "that resemble options.\n";
     return found;
 }
@@ -116,32 +116,35 @@ int run(std::string const& request, std::chrono::milliseconds timeout)
     auto deadline = std::chrono::steady_clock::now() + timeout;
     for (;;)
     {
-        while (auto event = lwm::reply(xcb_poll_for_event(conn)))
-        {
-            uint8_t type = event->response_type & ~0x80;
-            auto const& property = reinterpret_cast<xcb_property_notify_event_t const&>(*event);
-            if (type == XCB_DESTROY_NOTIFY && reinterpret_cast<xcb_destroy_notify_event_t const&>(*event).window == wm)
-                throw std::runtime_error("lwm exited before replying");
-            if (type != XCB_PROPERTY_NOTIFY || property.window != requester || property.atom != x.response
-                || property.state != XCB_PROPERTY_NEW_VALUE)
-                continue;
-            auto response = x.text(requester, x.response, true).value_or("");
-            if (response.starts_with("error "))
-                throw std::runtime_error(response.substr(6));
-            if (response != "ok" && !response.starts_with("ok "))
-                throw std::runtime_error("invalid reply");
-            if (response.starts_with("ok "))
-                std::cout << response.substr(3) << '\n';
-            std::cout.flush();
-            return std::cout ? 0 : 1;
-        }
-        if (xcb_connection_has_error(conn))
-            throw std::runtime_error("X connection closed");
+        // Checked per event, so unrelated traffic cannot extend the wait.
         auto remaining = std::chrono::ceil<std::chrono::milliseconds>(deadline - std::chrono::steady_clock::now()).count();
         if (remaining <= 0)
             throw std::runtime_error("timed out waiting for lwm; the command may have run");
-        pollfd descriptor{ xcb_get_file_descriptor(conn), POLLIN, 0 };
-        poll(&descriptor, 1, static_cast<int>(remaining));
+        auto event = lwm::reply(xcb_poll_for_event(conn));
+        if (!event)
+        {
+            if (xcb_connection_has_error(conn))
+                throw std::runtime_error("X connection closed");
+            pollfd descriptor{ xcb_get_file_descriptor(conn), POLLIN, 0 };
+            poll(&descriptor, 1, static_cast<int>(remaining));
+            continue;
+        }
+        uint8_t type = event->response_type & ~0x80;
+        auto const& property = reinterpret_cast<xcb_property_notify_event_t const&>(*event);
+        if (type == XCB_DESTROY_NOTIFY && reinterpret_cast<xcb_destroy_notify_event_t const&>(*event).window == wm)
+            throw std::runtime_error("lwm exited before replying");
+        if (type != XCB_PROPERTY_NOTIFY || property.window != requester || property.atom != x.response
+            || property.state != XCB_PROPERTY_NEW_VALUE)
+            continue;
+        auto response = x.text(requester, x.response, true).value_or("");
+        if (response.starts_with("error "))
+            throw std::runtime_error(response.substr(6));
+        if (response != "ok" && !response.starts_with("ok "))
+            throw std::runtime_error("invalid reply");
+        if (response.starts_with("ok "))
+            std::cout << response.substr(3) << '\n';
+        std::cout.flush();
+        return std::cout ? 0 : 1;
     }
 }
 

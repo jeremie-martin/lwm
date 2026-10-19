@@ -133,10 +133,10 @@ external write.
 `complete_transition()` orders completion:
 
 1. Return if neither the revision nor any obligation changed.
-2. `State::settle()` derives fullscreen visibility once, ends a drag whose context changed,
-   and resolves final focus, recency, user time and urgency using that view. It returns
-   the view with any focus request for publication. Release the pointer if no drag remains.
-3. Freeze `State`. Derive one projection per client using the settled visibility,
+2. `State::settle()` ends a drag whose context changed and resolves final focus,
+   recency, user time and urgency. It returns any focus request for publication.
+   Release the pointer if no drag remains.
+3. Freeze `State`. Derive fullscreen visibility and one projection per client from it,
    including a tiled drag preview.
 4. Hide, configure and map clients; acknowledge ConfigureRequests; commit explicit
    focus; publish client, fixture and root properties and stacking; withdraw removed
@@ -149,9 +149,9 @@ the frozen model. A ConfigureNotify mismatch forgets cached geometry without for
 completion; a conflicting urgency hint forces reconciliation. Explicit focus reasserts
 X focus, focused state and stacking even when the selected window is unchanged.
 For clients supporting `WM_TAKE_FOCUS`, the message and direct X focus use the same
-nonzero timestamp. A timestamp-less request observes a fresh server time with the
-ICCCM zero-length append to the supporting window's name. Property events on that
-private window are selected only around the append, so publication does not echo
+nonzero timestamp. A timestamp-less request observes a fresh server time by rewriting
+the supporting window's name. Property events on that private window are selected
+only around the rewrite, so publication does not echo
 back into the event loop. The observation costs one round trip and defers other
 queued events without dispatching them; passive clients need no timestamp observation.
 
