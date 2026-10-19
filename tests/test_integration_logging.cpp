@@ -1,4 +1,4 @@
-#include "x11_test_harness.hpp"
+#include "wm_observations.hpp"
 #include <X11/keysym.h>
 #include <nlohmann/json.hpp>
 
@@ -100,6 +100,75 @@ TEST_CASE("Integration: standard logging survives failed exec and real restart",
     REQUIRE(WIFEXITED(*status));
     REQUIRE(WEXITSTATUS(*status) == 0);
     REQUIRE(wm.diagnostics().find("WM_S0 ownership transferred") != std::string::npos);
+}
+
+TEST_CASE("Integration: restart stays on the binary exec selected", "[integration][logging][restart]")
+{
+    auto& environment = X11TestEnvironment::instance();
+    if (!environment.available())
+        SKIP("Xvfb not available");
+    X11Connection connection;
+    REQUIRE(connection.ok());
+    LwmProcess wm(environment.display(), { }, { "--log-level", "info" });
+    REQUIRE(wait_for_wm_ready(connection, std::chrono::seconds(2)));
+    auto link = std::filesystem::temp_directory_path() / ("lwm-exec-" + std::to_string(getpid()));
+    std::filesystem::remove(link);
+    std::filesystem::create_symlink(LWM_BINARY_PATH, link);
+    auto program = [&]
+    {
+        std::ifstream cmdline("/proc/" + std::to_string(wm.pid()) + "/cmdline");
+        std::string argv0;
+        std::getline(cmdline, argv0, '\0');
+        return argv0;
+    };
+    auto restart = [&](std::vector<std::string> args)
+    {
+        auto previous = wm_instance(connection);
+        REQUIRE(previous);
+        REQUIRE(run_lwmctl(wm, args));
+        REQUIRE(wait_for_wm_restart(connection, std::chrono::seconds(3), *previous));
+    };
+    restart({ "exec", link.string() });
+    CHECK(program() == link.string());
+    restart({ "restart" });
+    CHECK(program() == link.string());
+    std::filesystem::remove(link);
+}
+
+TEST_CASE("Integration: a restart queued behind losing the screen does not exec", "[integration][logging][restart]")
+{
+    auto& environment = X11TestEnvironment::instance();
+    if (!environment.available())
+        SKIP("Xvfb not available");
+    X11Connection connection;
+    REQUIRE(connection.ok());
+    LwmProcess wm(environment.display(), { }, { "--log-level", "info" });
+    REQUIRE(wait_for_wm_ready(connection, std::chrono::seconds(2)));
+    auto* c = connection.get();
+    auto selection = intern_atom(c, "WM_S0");
+    auto command = intern_atom(c, "_LWM_COMMAND");
+    auto owner = xcb_get_selection_owner_reply(c, xcb_get_selection_owner(c, selection), nullptr);
+    REQUIRE(owner);
+    auto wm_window = owner->owner;
+    free(owner);
+    auto requester = create_window(connection, 0, 0, 1, 1);
+    xcb_change_property(c, XCB_PROP_MODE_REPLACE, requester, command, intern_atom(c, "UTF8_STRING"), 8, 7, "restart");
+    auto replacement = create_window(connection, 0, 0, 1, 1);
+    // Both reach LWM in one read: the takeover, then a restart request.
+    xcb_client_message_event_t message{ };
+    message.response_type = XCB_CLIENT_MESSAGE;
+    message.format = 32;
+    message.window = wm_window;
+    message.type = command;
+    message.data.data32[0] = requester;
+    xcb_set_selection_owner(c, replacement, selection, XCB_CURRENT_TIME);
+    xcb_send_event(c, 0, wm_window, XCB_EVENT_MASK_NO_EVENT, reinterpret_cast<char const*>(&message));
+    xcb_flush(c);
+    auto status = wm.wait_for_exit(std::chrono::seconds(2));
+    REQUIRE(status);
+    REQUIRE(WIFEXITED(*status));
+    CHECK(WEXITSTATUS(*status) == 0);
+    CHECK(wm.diagnostics().find("Restarting") == std::string::npos);
 }
 
 TEST_CASE(

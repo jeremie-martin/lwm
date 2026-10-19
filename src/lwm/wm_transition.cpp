@@ -399,8 +399,9 @@ void WindowManager::reconcile_stacking(State::FullscreenVisibility const& fullsc
     }
 }
 
-// Unmanaged windows are withdrawn: WM_STATE says so and the focused state no
-// longer applies. Other state atoms stay for a later remap.
+// Unmanaged windows are withdrawn: WM_STATE says so, the focused state no longer
+// applies, and click-to-focus releases the window to a new parent's owner. Other
+// state atoms stay for a later remap.
 void WindowManager::withdraw_removed()
 {
     StateUpdates unfocused;
@@ -413,6 +414,7 @@ void WindowManager::withdraw_removed()
         }
         uint32_t const withdrawn[] = { XCB_ICCCM_WM_STATE_WITHDRAWN, 0 };
         publish(it->first, atoms_.wm_state, atoms_.wm_state, withdrawn);
+        xcb_ungrab_button(conn_.get(), XCB_BUTTON_INDEX_ANY, it->first, XCB_MOD_MASK_ANY);
         unfocused.emplace_back(it->first, WindowStates{});
         it = outputs_.erase(it);
     }

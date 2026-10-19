@@ -407,7 +407,8 @@ void WindowManager::close_window(xcb_window_t window)
         xcb_kill_client(conn_.get(), window);
         return;
     }
-    send_protocol_message(window, atoms_.wm_delete_window, last_input_time_);
+    // Like WM_TAKE_FOCUS, a client may focus a confirmation child with this time.
+    send_protocol_message(window, atoms_.wm_delete_window, server_time());
     LWM_LOG_DEBUG("Close requested: window={:#x} protocol=WM_DELETE_WINDOW", window);
 }
 
