@@ -120,3 +120,14 @@ add_test(NAME uninstall_manifest
     COMMAND "${CMAKE_COMMAND}" "-DTEST_DIR=${CMAKE_CURRENT_BINARY_DIR}"
             "-DUNINSTALL_SCRIPT=${PROJECT_SOURCE_DIR}/cmake/uninstall.cmake"
             -P "${CMAKE_CURRENT_SOURCE_DIR}/test_uninstall.cmake")
+
+# Restart must neither leak X clients nor let an otherwise empty server reset
+# during exec. This private-Xvfb probe is the only check of the latter.
+find_package(Python3 COMPONENTS Interpreter)
+find_library(LWM_XRES_LIBRARY NAMES XRes libXRes.so.1) # The probe loads it at runtime.
+if(Python3_Interpreter_FOUND AND LWM_XRES_LIBRARY)
+    add_test(NAME restart_resources
+        COMMAND Python3::Interpreter "${CMAKE_CURRENT_SOURCE_DIR}/performance/restart_resources.py"
+                "$<TARGET_FILE:lwm>" --check)
+    set_tests_properties(restart_resources PROPERTIES TIMEOUT 120)
+endif()
