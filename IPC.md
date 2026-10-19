@@ -21,7 +21,8 @@ The running LWM owns the ICCCM `WM_S0` selection with a window whose `_NET_WM_NA
 `lwm`, set before it claims the screen. A command is UTF-8 text in the
 `_LWM_COMMAND` property of a window the caller owns, announced to the selection owner
 window by a `_LWM_COMMAND` ClientMessage (format 32, `data.l[0]` = that window, sent
-with an empty event mask). LWM reads and deletes the property, executes the command,
+with an empty event mask). LWM reads the property, deleting it when it has the
+expected `UTF8_STRING` type and size, executes the command,
 completes the operation, and then writes one UTF-8 reply into `_LWM_REPLY` on the same
 window:
 

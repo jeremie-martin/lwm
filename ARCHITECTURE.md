@@ -346,9 +346,10 @@ Main lets the kernel reap children (`SA_NOCLDWAIT`, which exec clears for launch
 programs) and owns logging across WM lifetimes; a failed exec reconstructs the WM under
 the same logger. The X connection is the only event source.
 
-Restart retains the predecessor's X resources so closing its connection cannot reset
-an otherwise empty server. `_LWM_RESTART_OWNER` marks the retained window; the
-successor validates the marker and kills that client after claiming the screen.
+Restart retains the predecessor's X resources, and waits up to 250 ms for an IPC
+requester to disconnect, so that the server is never left without a live client to
+reset on. `_LWM_RESTART_OWNER` marks the retained window; the successor validates the
+marker and kills that client after claiming the screen.
 
 `State::snapshot()` stores private intent in `_LWM_RESTART`: placements, modes, hiding,
 preferences, urgency, focus ranks, workspace graphs, scratchpad claims, pending

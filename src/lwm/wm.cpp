@@ -48,23 +48,15 @@ void WindowManager::intern_atoms()
         { "WM_DELETE_WINDOW", &atoms_.wm_delete_window },
         { "WM_TAKE_FOCUS", &atoms_.wm_take_focus },
         { "WM_S0", &atoms_.wm_s0 },
-        { "_LWM_COMMAND", &atoms_.lwm_command },
-        { "_LWM_REPLY", &atoms_.lwm_reply },
+        { command::command_atom, &atoms_.lwm_command },
+        { command::reply_atom, &atoms_.lwm_reply },
         { "_LWM_WINDOW_CLASS", &atoms_.lwm_window_class },
-        { "_LWM_STATE", &atoms_.lwm_state },
+        { command::state_atom, &atoms_.lwm_state },
         { "_LWM_RESTART", &atoms_.lwm_restart },
         { "_LWM_RESTART_OWNER", &atoms_.lwm_restart_owner },
     };
-    std::vector<xcb_intern_atom_cookie_t> cookies;
-    for (auto const& [name, atom] : names)
-        cookies.push_back(xcb_intern_atom(conn_.get(), 0, static_cast<uint16_t>(std::strlen(name)), name));
-    for (size_t i = 0; i < cookies.size(); ++i)
-    {
-        auto atom = reply(xcb_intern_atom_reply(conn_.get(), cookies[i], nullptr));
-        if (!atom)
-            throw std::runtime_error(std::string("Failed to intern ") + names[i].first);
-        *names[i].second = atom->atom;
-    }
+    if (!lwm::intern_atoms(conn_.get(), names))
+        throw std::runtime_error("Failed to intern atoms");
 }
 
 void WindowManager::create_wm_window()
@@ -86,7 +78,7 @@ void WindowManager::create_wm_window()
         nullptr
     );
     // The name identifies LWM to lwmctl from the moment it owns the screen.
-    xcb_ewmh_set_wm_name(ewmh_.get(), wm_window_, 3, "lwm");
+    xcb_ewmh_set_wm_name(ewmh_.get(), wm_window_, command::identity.size(), command::identity.data());
 }
 
 void WindowManager::create_cursors()
@@ -434,7 +426,7 @@ uint32_t WindowManager::server_time()
     auto* c = conn_.get();
     uint32_t const selected = XCB_EVENT_MASK_PROPERTY_CHANGE, unselected = XCB_EVENT_MASK_NO_EVENT;
     xcb_change_window_attributes(c, wm_window_, XCB_CW_EVENT_MASK, &selected);
-    xcb_ewmh_set_wm_name(ewmh_.get(), wm_window_, 3, "lwm");
+    xcb_ewmh_set_wm_name(ewmh_.get(), wm_window_, command::identity.size(), command::identity.data());
     xcb_change_window_attributes(c, wm_window_, XCB_CW_EVENT_MASK, &unselected);
     conn_.sync();
     defer_queued_events();

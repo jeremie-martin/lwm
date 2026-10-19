@@ -31,6 +31,10 @@ struct CommandSpec
     std::expected<Request, std::string> (*parse)(std::string_view, CommandSpec const&);
 };
 
+// The X-carried protocol: the WM_S0 owner window, named `identity`, takes requests
+// in `command_atom`, answers in `reply_atom` and publishes `state_atom`.
+inline constexpr std::string_view identity = "lwm";
+inline constexpr char const *command_atom = "_LWM_COMMAND", *reply_atom = "_LWM_REPLY", *state_atom = "_LWM_STATE";
 inline constexpr size_t max_request_bytes = 4096;
 // A declared name must survive the longest name-bearing command unchanged.
 bool valid_scratchpad_name(std::string_view name);

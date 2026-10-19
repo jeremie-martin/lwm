@@ -1,11 +1,9 @@
 #include "lwm/core/command.hpp"
 #include "lwm/core/xproperty.hpp"
 #include "lwm/core/xconnection.hpp"
-#include <array>
 #include <charconv>
 #include <chrono>
 #include <csignal>
-#include <cstring>
 #include <iostream>
 #include <memory>
 #include <optional>
@@ -44,43 +42,27 @@ class Display
 public:
     Display()
     {
+        using namespace lwm::command;
         root_ = xcb_setup_roots_iterator(xcb_get_setup(conn())).data->root;
-        constexpr std::array names{ "WM_S0", "UTF8_STRING", "_LWM_STATE", "_NET_WM_NAME", "_LWM_COMMAND", "_LWM_REPLY", "MANAGER" };
-        std::array atoms{ &selection, &utf8, &state, &name, &command, &response, &manager };
-        std::array<xcb_intern_atom_cookie_t, names.size()> cookies;
-        for (size_t i = 0; i < names.size(); ++i)
-            cookies[i] = xcb_intern_atom(conn(), 0, std::strlen(names[i]), names[i]);
-        for (size_t i = 0; i < names.size(); ++i)
-        {
-            auto reply = lwm::reply(xcb_intern_atom_reply(conn(), cookies[i], nullptr));
-            *atoms[i] = reply ? reply->atom : XCB_NONE;
-        }
+        std::pair<char const*, xcb_atom_t*> const names[] = { { "WM_S0", &selection }, { "UTF8_STRING", &utf8 },
+            { state_atom, &state }, { "_NET_WM_NAME", &name }, { command_atom, &command }, { reply_atom, &response },
+            { "MANAGER", &manager } };
+        lwm::intern_atoms(conn(), names);
     }
 
     xcb_connection_t* conn() const { return connection_.get(); }
     xcb_window_t root() const { return root_; }
-    xcb_window_t owner() const
-    {
-        auto reply = lwm::reply(xcb_get_selection_owner_reply(conn(), xcb_get_selection_owner(conn(), selection), nullptr));
-        return reply ? reply->owner : XCB_NONE;
-    }
     // Subscribe before reading identity; its reply also settles the checked request.
     xcb_window_t lwm_owner(uint32_t events) const
     {
-        auto window = owner();
+        auto owner = lwm::reply(xcb_get_selection_owner_reply(conn(), xcb_get_selection_owner(conn(), selection), nullptr));
+        auto window = owner ? owner->owner : XCB_NONE;
         if (window == XCB_NONE)
             return XCB_NONE;
         auto selected = xcb_change_window_attributes_checked(conn(), window, XCB_CW_EVENT_MASK, &events);
         auto identity = text(window, name);
         auto error = lwm::reply(xcb_request_check(conn(), selected));
-        return !error && identity == "lwm" ? window : XCB_NONE;
-    }
-    // Selects events on a window; false if it no longer exists.
-    bool select(xcb_window_t window, uint32_t events) const
-    {
-        auto* error = xcb_request_check(conn(), xcb_change_window_attributes_checked(conn(), window, XCB_CW_EVENT_MASK, &events));
-        free(error);
-        return !error;
+        return !error && identity == lwm::command::identity ? window : XCB_NONE;
     }
     std::optional<std::string> text(xcb_window_t window, xcb_atom_t property, bool remove = false) const
     {
@@ -153,7 +135,8 @@ int run(std::string const& request, std::chrono::milliseconds timeout)
 int watch()
 {
     Display x;
-    x.select(x.root(), XCB_EVENT_MASK_STRUCTURE_NOTIFY);
+    uint32_t const root_events = XCB_EVENT_MASK_STRUCTURE_NOTIFY;
+    xcb_change_window_attributes(x.conn(), x.root(), XCB_CW_EVENT_MASK, &root_events);
     constexpr uint32_t events = XCB_EVENT_MASK_PROPERTY_CHANGE | XCB_EVENT_MASK_STRUCTURE_NOTIFY;
     auto wm = x.lwm_owner(events);
     if (wm == XCB_NONE)

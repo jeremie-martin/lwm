@@ -6,13 +6,7 @@
 #include <span>
 #include <string>
 #include <vector>
-#include <xcb/xcb.h>
-
-namespace lwm {
-// Owns one reply that XCB allocated with malloc.
-template <typename T> using Reply = std::unique_ptr<T, decltype(&std::free)>;
-template <typename T> Reply<T> reply(T* value) { return { value, &std::free }; }
-} // namespace lwm
+#include "xconnection.hpp"
 
 namespace lwm::xproperty {
 using Reply = lwm::Reply<xcb_get_property_reply_t>;
@@ -26,12 +20,6 @@ request(xcb_connection_t* connection, xcb_window_t window, xcb_atom_t property, 
 inline Reply receive(xcb_connection_t* connection, xcb_get_property_cookie_t cookie)
 {
     return reply(xcb_get_property_reply(connection, cookie, nullptr));
-}
-
-inline Reply
-read(xcb_connection_t* connection, xcb_window_t window, xcb_atom_t property, xcb_atom_t type, uint32_t limit)
-{
-    return receive(connection, request(connection, window, property, type, limit));
 }
 
 // Callers decide the fallback; malformed, missing and incomplete numeric data

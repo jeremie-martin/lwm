@@ -1,5 +1,5 @@
 #!/bin/bash
-# Replace this session's Polybar processes with one bar per connected output.
+# Replace this user's Polybar processes, on every display, with one bar per connected output.
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PROJECT_DIR="$(dirname "$SCRIPT_DIR")"
