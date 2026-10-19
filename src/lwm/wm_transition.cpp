@@ -432,16 +432,11 @@ void WindowManager::withdraw_removed()
 
 // A round trip makes the server generate crossing events for what LWM just
 // moved; they are dropped so stale pointer focus cannot override the result.
-// Other events are deferred to the outer loop, which never re-enters handlers.
+// Synchronous observations may already have deferred some of them.
 void WindowManager::flush_and_drain_crossing()
 {
     conn_.sync();
-    while (auto* event = xcb_poll_for_queued_event(conn_.get()))
-    {
-        deferred_events_.push_back(*event);
-        free(event);
-    }
-    // Synchronous observations may already have moved crossings out of XCB.
+    defer_queued_events();
     std::erase_if(deferred_events_, [](auto const& event)
     {
         uint8_t type = event.response_type & ~0x80;

@@ -98,6 +98,7 @@ private:
     bool presentation_dirty_ = false;
     uint64_t published_revision_ = UINT64_MAX;
 
+    // Events read during synchronous requests, dispatched in order by the event loop.
     std::deque<xcb_generic_event_t> deferred_events_;
     bool pointer_grabbed_ = false; ///< Held exactly while State has a drag
     std::optional<RunResult> stop_; ///< Set when the event loop should end
@@ -125,6 +126,7 @@ private:
     Config const& config() const { return state_.config(); }
     Topology discover_topology();
     void refresh_topology();
+    void defer_queued_events();
     void dispatch_event(xcb_generic_event_t const& event, size_t& remaining, std::chrono::steady_clock::time_point deadline);
     std::expected<void, std::string> reload_config(std::string_view source);
     bool launch_program(std::vector<std::string> const& command, std::string_view source);

@@ -270,12 +270,7 @@ RunResult WindowManager::run()
     int xfd = xcb_get_file_descriptor(conn_.get());
     while (!stop_)
     {
-        // Replies can pull events into XCB's queue without leaving the fd readable.
-        while (auto* event = xcb_poll_for_queued_event(conn_.get()))
-        {
-            deferred_events_.push_back(*event);
-            free(event);
-        }
+        defer_queued_events();
         pollfd fd{ .fd = xfd, .events = POLLIN, .revents = 0 };
         poll(&fd, 1, deferred_events_.empty() ? -1 : 0);
 
@@ -321,6 +316,13 @@ RunResult WindowManager::run()
     return *stop_;
 }
 
+// Replies can pull events into XCB's queue without leaving the fd readable.
+void WindowManager::defer_queued_events()
+{
+    while (auto event = reply(xcb_poll_for_queued_event(conn_.get())))
+        deferred_events_.push_back(*event);
+}
+
 void WindowManager::dispatch_event(
     xcb_generic_event_t const& event,
     size_t& remaining,
@@ -335,14 +337,8 @@ void WindowManager::dispatch_event(
         while (remaining && std::chrono::steady_clock::now() < deadline)
         {
             if (deferred_events_.empty())
-            {
-                auto* next = xcb_poll_for_queued_event(conn_.get());
-                if (!next)
-                    break;
-                deferred_events_.push_back(*next);
-                free(next);
-            }
-            if ((deferred_events_.front().response_type & ~0x80) != XCB_MOTION_NOTIFY)
+                defer_queued_events();
+            if (deferred_events_.empty() || (deferred_events_.front().response_type & ~0x80) != XCB_MOTION_NOTIFY)
                 break;
             --remaining;
             current = deferred_events_.front();
@@ -430,8 +426,7 @@ void WindowManager::close_window(xcb_window_t window)
 // Protocol messages
 
 // ICCCM obtains server time from a zero-length append to a property. Only this
-// request selects events on our supporting window. Other events read meanwhile
-// stay ordered for the event loop.
+// request selects events on our supporting window.
 uint32_t WindowManager::server_time()
 {
     auto* c = conn_.get();
@@ -440,15 +435,16 @@ uint32_t WindowManager::server_time()
     xcb_change_property(c, XCB_PROP_MODE_APPEND, wm_window_, ewmh_.get()->_NET_WM_NAME, ewmh_.get()->UTF8_STRING, 8, 0, nullptr);
     xcb_change_window_attributes(c, wm_window_, XCB_CW_EVENT_MASK, &unselected);
     conn_.sync();
-    uint32_t time = XCB_CURRENT_TIME;
-    while (auto event = reply(xcb_poll_for_queued_event(c)))
+    defer_queued_events();
+    auto notify = std::ranges::find_if(deferred_events_, [&](auto const& event)
     {
-        auto const& property = reinterpret_cast<xcb_property_notify_event_t const&>(*event);
-        if (event->response_type == XCB_PROPERTY_NOTIFY && property.window == wm_window_)
-            time = property.time;
-        else
-            deferred_events_.push_back(*event);
-    }
+        return event.response_type == XCB_PROPERTY_NOTIFY
+            && reinterpret_cast<xcb_property_notify_event_t const&>(event).window == wm_window_;
+    });
+    if (notify == deferred_events_.end())
+        return XCB_CURRENT_TIME;
+    auto time = reinterpret_cast<xcb_property_notify_event_t const&>(*notify).time;
+    deferred_events_.erase(notify);
     return time;
 }
 
