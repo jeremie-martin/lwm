@@ -1,5 +1,6 @@
 #pragma once
 
+#include <chrono>
 #include <expected>
 #include <quill/Frontend.h>
 #include <quill/LogMacros.h>
@@ -36,6 +37,9 @@ std::expected<Target, std::string> parse_target(std::string_view);
 std::string level_name(quill::LogLevel);
 std::expected<void, std::string> initialize(LogOptions options = { });
 void shutdown();
+// Waits at most `limit` for pending lines before exec replaces the process; a
+// stalled destination is abandoned with the process image.
+void flush_before_exec(std::chrono::milliseconds limit);
 } // namespace lwm::log
 
 // The null guard covers startup, shutdown and failed initialization. Quill owns

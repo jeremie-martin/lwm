@@ -132,6 +132,9 @@ TEST_CASE("Integration: restart stays on the binary exec selected", "[integratio
     CHECK(program() == link.string());
     restart({ "restart" });
     CHECK(program() == link.string());
+    // At the default level the backend drains slowly; the predecessor's last
+    // lines are still written before exec replaces it.
+    CHECK(wm.diagnostics().find("Restart state serialized") != std::string::npos);
     std::filesystem::remove(link);
 }
 

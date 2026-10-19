@@ -1,9 +1,12 @@
 #include "log.hpp"
 #include <chrono>
+#include <future>
+#include <memory>
 #include <csignal>
 #include <quill/Backend.h>
 #include <quill/sinks/ConsoleSink.h>
 #include <quill/sinks/SystemdSink.h>
+#include <thread>
 #include <unistd.h>
 
 namespace lwm::log {
@@ -108,6 +111,16 @@ std::expected<void, std::string> initialize(LogOptions config)
         shutdown();
         return std::unexpected(std::string(e.what()));
     }
+}
+void flush_before_exec(std::chrono::milliseconds limit)
+{
+    if (!logger)
+        return;
+    auto flushed = std::make_shared<std::promise<void>>();
+    auto done = flushed->get_future();
+    std::thread([flushed, target = logger] { target->flush_log(); flushed->set_value(); }).detach();
+    quill::Backend::notify(); // The idle backend would otherwise sleep through the limit.
+    done.wait_for(limit);
 }
 void shutdown()
 {

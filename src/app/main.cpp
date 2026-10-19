@@ -117,7 +117,8 @@ int main(int argc, char* argv[])
             char const* binary = argv[0];
             LWM_LOG_INFO("Restarting: {}", binary);
             // Exec replaces the worker on success; on failure it remains usable.
-            // Do not wait for a stalled log destination before restarting.
+            // A stalled log destination delays restart only briefly.
+            lwm::log::flush_before_exec(std::chrono::milliseconds(100));
             execvp(binary, argv);
             int exec_errno = errno;
 
