@@ -203,8 +203,8 @@ TEST_CASE(
     REQUIRE(wait_for_condition([&] { return property_has_atom(conn.get(), window, net_wm_state, sticky); }, kTimeout));
     CHECK(property_has_atom(conn.get(), window, net_wm_state, foreign.front()));
     CHECK(property_has_atom(conn.get(), window, net_wm_state, intern_atom(conn.get(), "_NET_WM_STATE_FOCUSED")));
-    // Withdrawal retains other state, clears focus, and forgets its publication;
-    // remapping publishes fresh state for the same window ID.
+    // Withdrawal deletes the published state and desktop, as EWMH requires, and
+    // forgets its publication; remapping starts from the application's own state.
     xcb_unmap_window(conn.get(), window);
     xcb_flush(conn.get());
     REQUIRE(wait_for_condition(
@@ -222,11 +222,13 @@ TEST_CASE(
         },
         kTimeout
     ));
-    CHECK(property_has_atom(conn.get(), window, net_wm_state, sticky));
-    CHECK(property_has_atom(conn.get(), window, net_wm_state, foreign.front()));
+    CHECK_FALSE(property_has_atom(conn.get(), window, net_wm_state, sticky));
+    CHECK_FALSE(property_has_atom(conn.get(), window, net_wm_state, foreign.front()));
+    CHECK_FALSE(get_window_property_cardinal(conn.get(), window, intern_atom(conn.get(), "_NET_WM_DESKTOP")));
     map_window(conn, window);
     REQUIRE(wait_for_active_window(conn, window, kTimeout));
-    CHECK(property_has_atom(conn.get(), window, net_wm_state, sticky));
+    CHECK_FALSE(property_has_atom(conn.get(), window, net_wm_state, sticky));
+    CHECK(property_has_atom(conn.get(), window, net_wm_state, intern_atom(conn.get(), "_NET_WM_STATE_FOCUSED")));
     destroy_window(conn, other);
     destroy_window(conn, window);
 }

@@ -163,7 +163,7 @@ private:
         std::optional<std::string_view> bytes
     );
     bool states_current(Client const& client) const;
-    void publish_states(StateUpdates const& updates, WindowStates owned);
+    void publish_states(StateUpdates const& updates);
     void publish_properties(Client const& client, Output& output, StateUpdates& updates);
     void publish_urgency(Client const& client, Output& output);
     void publish_fixtures();

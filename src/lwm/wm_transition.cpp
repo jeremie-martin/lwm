@@ -46,7 +46,7 @@ void WindowManager::complete_transition()
     StateUpdates states;
     for (auto const& projected : clients)
         publish_properties(*projected.client, outputs_.at(projected.client->id), states);
-    publish_states(states, WindowStates{ UINT16_MAX }); // LWM owns every value it publishes
+    publish_states(states);
     publish_fixtures();
     publish_root();
     reconcile_stacking(fullscreen, focus_request);
@@ -221,7 +221,7 @@ bool WindowManager::states_current(Client const& client) const
 
 // Shared properties are read in a batch. Cache only owned values, after observing
 // the desired value or submitting it; foreign atoms never enter the cache.
-void WindowManager::publish_states(StateUpdates const& updates, WindowStates owned)
+void WindowManager::publish_states(StateUpdates const& updates)
 {
     auto property = ewmh_.get()->_NET_WM_STATE;
     std::vector<xcb_get_property_cookie_t> cookies;
@@ -232,7 +232,7 @@ void WindowManager::publish_states(StateUpdates const& updates, WindowStates own
         auto [window, enabled] = updates[i];
         auto reply = xproperty::receive(conn_.get(), cookies[i]);
         auto previous = xproperty::words(reply, XCB_ATOM_ATOM);
-        auto atoms = ewmh_.merge_states(previous, enabled, owned);
+        auto atoms = ewmh_.merge_states(previous, enabled);
         auto bytes = atoms.empty()
             ? std::nullopt
             : std::optional<std::string_view>{
@@ -399,12 +399,11 @@ void WindowManager::reconcile_stacking(State::FullscreenVisibility const& fullsc
     }
 }
 
-// Unmanaged windows are withdrawn: WM_STATE says so, the focused state no longer
-// applies, and click-to-focus releases the window to a new parent's owner. Other
-// state atoms stay for a later remap.
+// Unmanaged windows are withdrawn: WM_STATE says so, LWM deletes the EWMH state and
+// desktop it published, and click-to-focus releases the window to a new parent's owner.
 void WindowManager::withdraw_removed()
 {
-    StateUpdates unfocused;
+    auto* e = ewmh_.get();
     for (auto it = outputs_.begin(); it != outputs_.end();)
     {
         if (state_.find(it->first) || state_.find_fixture(it->first))
@@ -415,14 +414,12 @@ void WindowManager::withdraw_removed()
         uint32_t const withdrawn[] = { XCB_ICCCM_WM_STATE_WITHDRAWN, 0 };
         publish(it->first, atoms_.wm_state, atoms_.wm_state, withdrawn);
         xcb_ungrab_button(conn_.get(), XCB_BUTTON_INDEX_ANY, it->first, XCB_MOD_MASK_ANY);
-        unfocused.emplace_back(it->first, WindowStates{});
+        for (auto atom : { e->_NET_WM_STATE, e->_NET_WM_DESKTOP })
+            if (properties_.contains({ it->first, atom }))
+                xcb_delete_property(conn_.get(), it->first, atom);
+        properties_.erase(properties_.lower_bound({ it->first, 0 }), properties_.upper_bound({ it->first, UINT32_MAX }));
         it = outputs_.erase(it);
     }
-    WindowStates focused;
-    focused.set(WindowState::Focused);
-    publish_states(unfocused, focused);
-    for (auto const& [window, states] : unfocused)
-        properties_.erase(properties_.lower_bound({ window, 0 }), properties_.upper_bound({ window, UINT32_MAX }));
 }
 
 // A round trip makes the server generate crossing events for what LWM just

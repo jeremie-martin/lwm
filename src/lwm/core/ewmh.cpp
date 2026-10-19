@@ -107,17 +107,10 @@ WindowStates Ewmh::states(std::span<xcb_atom_t const> atoms) const
 }
 
 std::vector<xcb_atom_t>
-Ewmh::merge_states(std::span<xcb_atom_t const> observed, WindowStates enabled, WindowStates owned) const
+Ewmh::merge_states(std::span<xcb_atom_t const> observed, WindowStates enabled) const
 {
     std::vector<xcb_atom_t> atoms(observed.begin(), observed.end());
-    std::erase_if(
-        atoms,
-        [&](xcb_atom_t atom)
-        {
-            auto it = std::ranges::find(state_atoms_, atom);
-            return it != state_atoms_.end() && owned.has(static_cast<WindowState>(it - state_atoms_.begin()));
-        }
-    );
+    std::erase_if(atoms, [&](xcb_atom_t atom) { return std::ranges::contains(state_atoms_, atom); });
     for (size_t i = 0; i < state_atoms_.size(); ++i)
         if (enabled.has(static_cast<WindowState>(i)))
             atoms.push_back(state_atoms_[i]);
