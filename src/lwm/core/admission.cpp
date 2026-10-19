@@ -202,6 +202,8 @@ void State::adopt(
     auto const* active = handoff ? find(handoff->active) : nullptr;
     if (active && focusable(*active))
         focus(active->id, 0, false);
+    else if (handoff && handoff->focus_released)
+        focus(XCB_NONE);
     else
         focus_fallback(focused_monitor_, false);
     // Saved claims precede pending launches that mapped while the WM was absent.
@@ -427,7 +429,10 @@ void State::restore_graph(restart::Snapshot const& snapshot, std::span<Client> o
     mutated();
     for (auto& [id, fixture] : fixtures_)
         if (auto const* saved = snapshot.find_fixture(id))
+        {
             fixture.order = saved->order;
+            fixture.close_requested = saved->close_requested;
+        }
     std::vector<Topology::Output> discovered;
     for (auto const& monitor : monitors_) discovered.push_back({ monitor.name, monitor.geometry });
     monitors_.clear();

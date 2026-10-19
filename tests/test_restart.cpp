@@ -44,7 +44,8 @@ restart::Snapshot sample()
     snapshot.clients[0].order = 2;
     snapshot.clients[1].order = 0;
     snapshot.clients[2].order = 1;
-    snapshot.fixtures = { { 0x400, Fixture::Role::Dock, 3 } };
+    snapshot.fixtures = { { 0x400, Fixture::Role::Dock, 3, true } };
+    snapshot.clients[2].close_requested = true;
     snapshot.clients[1].fullscreen_claim = 1;
     snapshot.clients[0].iconic = true;
     snapshot.clients[0].fullscreen_claim = (uint64_t{ 1 } << 40) + 2;
@@ -177,14 +178,14 @@ TEST_CASE("Restart wire schema directly represents domain values", "[restart][co
 {
     // Independent literal input: no production encoder constructs this fixture.
     auto document = nlohmann::json::parse(R"({
-        "focused_monitor": 0, "active": 0,
+        "focused_monitor": 0, "active": 0, "focus_released": false,
         "monitors": [{"name": "M", "geometry": {"x": 0, "y": 0, "width": 100, "height": 80},
             "current_workspace": 0, "previous_workspace": 0, "workspaces": [{"layout_strategy": "MasterStack", "split_ratios": [],
             "windows": [7], "preferred_tile": 0}]}],
         "clients": [{"id": 7, "monitor": 0, "workspace": 0,
             "mode": {"TiledMode": {"floating": null}},
             "preferences": {"floating": null, "skip_taskbar": null, "skip_pager": null, "layer": null},
-            "urgency": {"sources": 0}, "borderless": false, "desktop_pinned": false, "fullscreen_monitors": null, "mru_order": 0, "order": 0, "fullscreen_claim": 4, "iconic": false}],
+            "urgency": {"sources": 0}, "borderless": false, "desktop_pinned": false, "fullscreen_monitors": null, "mru_order": 0, "order": 0, "fullscreen_claim": 4, "iconic": false, "close_requested": false}],
         "fixtures": [], "named_scratchpads": [], "pool": []
     })");
     document["format"] = restart::format;
@@ -809,6 +810,35 @@ TEST_CASE("Restart ranks leave room for adoption and subsequent interactions", "
     target.settle();
     CHECK(target.fullscreen_owners() == std::vector<xcb_window_t>{ 1 });
     CHECK_FALSE(invariants::validate(target));
+}
+
+TEST_CASE("Restart preserves released focus and pending close requests", "[restart][state][focus]")
+{
+    auto source = test::state();
+    add(source, 1);
+    source.insert_fixture(2, Fixture::Role::Dock);
+    source.settle();
+    CHECK_FALSE(source.close(1, true));
+    CHECK_FALSE(source.close(2, true));
+    source.focus(XCB_NONE);
+    source.settle();
+    REQUIRE(source.active_window() == XCB_NONE);
+    auto snapshot = restart::decode(restart::encode(source.snapshot()));
+    REQUIRE(snapshot);
+    auto target = test::state();
+    target.adopt({ test::observe(source.require(1)), { .id = 2, .type = WindowType::Dock } }, &*snapshot);
+    target.settle();
+    CHECK(target.active_window() == XCB_NONE);
+    CHECK(target.close(1, true));
+    CHECK(target.close(2, true));
+    CHECK_FALSE(invariants::validate(target));
+
+    // Without a saved release, an empty selection is repaired.
+    snapshot->focus_released = false;
+    auto repaired = test::state();
+    repaired.adopt({ test::observe(source.require(1)) }, &*snapshot);
+    repaired.settle();
+    CHECK(repaired.active_window() == 1);
 }
 
 TEST_CASE("Only saved LWM intent restores hiding during adoption", "[restart][state][scratchpad]")

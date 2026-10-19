@@ -329,6 +329,7 @@ struct ClientIntent
     // owns its monitor (_NET_WM_STATE_FULLSCREEN).
     uint64_t fullscreen_claim = 0;
     bool iconic = false; ///< Hidden by LWM; application HIDDEN atoms are only output
+    bool close_requested = false; ///< Asked to close; closing again kills the client
 
     bool fullscreen() const { return fullscreen_claim != 0; }
     bool operator==(ClientIntent const&) const = default;
@@ -400,6 +401,7 @@ struct FixtureIntent
     xcb_window_t id = XCB_NONE;
     Role role = Role::Dock;
     uint64_t order = 0;
+    bool close_requested = false; ///< Asked to close; closing again kills the client
     bool operator==(FixtureIntent const&) const = default;
 };
 

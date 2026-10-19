@@ -165,9 +165,14 @@ void State::reserve(xcb_window_t id, DockStrut strut)
     it->second.strut = strut;
 }
 
+bool State::close(xcb_window_t id, bool deletable)
+{
+    auto& requested = clients_.contains(id) ? clients_.at(id).close_requested : fixtures_.at(id).close_requested;
+    return std::exchange(requested, true) || !deletable;
+}
+
 void State::erase(xcb_window_t id)
 {
-    closing_.erase(id);
     if (fixtures_.erase(id))
     {
         mutated();
@@ -932,6 +937,7 @@ restart::Snapshot State::snapshot() const
     std::ranges::sort(snapshot.fixtures, {}, &Fixture::order);
     snapshot.focused_monitor = focused_monitor_;
     snapshot.active = active_window_;
+    snapshot.focus_released = focus_released_;
     for (auto const& monitor : monitors_) snapshot.monitors.push_back(monitor);
     for (auto const* client : clients_by_order()) snapshot.clients.push_back(*client);
     for (auto const& slot : named_scratchpads_)

@@ -10,13 +10,14 @@
 // incompatible formats are rejected rather than migrated.
 namespace lwm::restart {
 
-inline constexpr uint32_t format = 17; // Bump when the snapshot schema changes.
+inline constexpr uint32_t format = 18; // Bump when the snapshot schema changes.
 
 struct Snapshot
 {
     uint32_t format = restart::format;
     size_t focused_monitor = 0;
     xcb_window_t active = XCB_NONE;
+    bool focus_released = false; ///< An empty selection was chosen, not left to repair
     std::vector<Monitor> monitors;
     std::vector<ClientIntent> clients; ///< Registration order
     std::vector<FixtureIntent> fixtures; ///< Established roles and registration ranks

@@ -122,7 +122,7 @@ public:
     void erase(xcb_window_t id);
     // Records a close request and returns whether to kill the client: it cannot be
     // asked to close, or was asked already. Otherwise the shell asks it.
-    bool close(xcb_window_t id, bool deletable) { return !closing_.insert(id).second || !deletable; }
+    bool close(xcb_window_t id, bool deletable);
 
     // Configuration and topology
     // Layout, scratchpad slots, matching rules and the workspace count follow
@@ -332,7 +332,6 @@ private:
     Config config_;
     Geometry screen_;
     Clients clients_;
-    std::unordered_set<xcb_window_t> closing_; ///< Managed windows already asked to close
     Fixtures fixtures_;
     std::vector<Monitor> monitors_;
     std::vector<NamedScratchpad> named_scratchpads_;
