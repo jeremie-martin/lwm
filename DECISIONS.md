@@ -263,3 +263,11 @@ changed actions and leaving earlier effects when a match is lost. Recomputing bo
 sides around each metadata mutation would remove the retained action copy but double
 regex matching on title/class updates. Keep the cache unless measurements show that
 removing it improves the tradeoff; reload deliberately refreshes and reapplies it.
+
+## Read user time on demand (2026-10-19)
+
+`_NET_WM_USER_TIME` only arbitrates application activation against the active client,
+so LWM reads that client's value, through its user-time window, when such a request
+arrives. Eager tracking subscribed to foreign windows, including the root, and cost a
+synchronous read for every keystroke in toolkits that update the property per input.
+The comparison uses the newer of the observed value and LWM's recorded focus time.
