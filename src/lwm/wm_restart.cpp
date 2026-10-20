@@ -17,13 +17,14 @@ constexpr char const* kPredecessorConnection = "LWM_RESTART_FD";
 
 // The screen is owned now; closing the predecessor's connection frees its
 // resources. Returns whether this start continues an exec restart.
-bool WindowManager::release_predecessor()
+bool WindowManager::release_predecessor(std::optional<Connection> predecessor)
 {
-    auto const* predecessor = std::getenv(kPredecessorConnection);
-    bool handoff = predecessor != nullptr;
+    auto const* fd = std::getenv(kPredecessorConnection);
+    bool handoff = fd != nullptr;
     if (handoff)
     {
-        close(std::atoi(predecessor));
+        if (!predecessor)
+            close(std::atoi(fd));
         unsetenv(kPredecessorConnection);
     }
     read_handoff();
@@ -45,7 +46,7 @@ void WindowManager::read_handoff()
                      handoff_->monitors.size(), handoff_->clients.size(), handoff_->focused_monitor, handoff_->active);
 }
 
-void WindowManager::prepare_restart()
+Connection WindowManager::prepare_restart()
 {
     restore_clients();
     auto root = conn_.screen()->root;
@@ -69,7 +70,8 @@ void WindowManager::prepare_restart()
     // connection stays open through exec, for the successor or a failed-exec
     // recovery to close.
     conn_.sync();
-    setenv(kPredecessorConnection, std::to_string(conn_.detach()).c_str(), 1);
+    setenv(kPredecessorConnection, std::to_string(conn_.inherit_fd()).c_str(), 1);
+    return std::move(conn_);
 }
 
 } // namespace lwm

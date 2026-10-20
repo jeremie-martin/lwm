@@ -39,11 +39,11 @@ enum class RunResult
 class WindowManager
 {
 public:
-    WindowManager(Config config, std::string config_path);
+    WindowManager(Config config, std::string config_path, std::optional<Connection> predecessor = {});
 
     RunResult run();
     std::string const& restart_binary() const { return restart_binary_; }
-    void prepare_restart();
+    Connection prepare_restart();
 
 private:
     // Atoms outside xcb-ewmh's set, interned once at startup.
@@ -200,7 +200,7 @@ private:
     std::string state_json() const;
 
     // wm_restart.cpp
-    bool release_predecessor();
+    bool release_predecessor(std::optional<Connection> predecessor);
     void read_handoff();
 };
 

@@ -32,13 +32,11 @@ public:
     {
         return bytes / 4 + (bytes % 4 != 0) + 7 <= xcb_get_maximum_request_length(conn_.get());
     }
-    // Keeps this connection open across exec and returns its descriptor. It is never
-    // shut down: xcb_disconnect would end the connection for the successor as well.
-    int detach()
+    // Allows exec to inherit the descriptor while this object retains ownership.
+    int inherit_fd()
     {
         int fd = xcb_get_file_descriptor(conn_.get());
         fcntl(fd, F_SETFD, fcntl(fd, F_GETFD) & ~FD_CLOEXEC);
-        conn_.release();
         return fd;
     }
     // Flush and wait until the server has processed every earlier request.

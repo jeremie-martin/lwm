@@ -211,29 +211,56 @@ TEST_CASE(
         REQUIRE(std::chrono::steady_clock::now() - started < std::chrono::seconds(1));
         return result->stdout_text;
     };
-    auto before = wm_owner(connection);
+    auto threads = [&]
+    {
+        auto tasks = std::filesystem::directory_iterator("/proc/" + std::to_string(wm.pid()) + "/task");
+        return std::distance(tasks, std::filesystem::directory_iterator{ });
+    };
+    REQUIRE(threads() == 2);
     for (int i = 0; i < 200; ++i) command({ "workspace", "switch", std::to_string(i % 2) });
     REQUIRE(!command({ "version" }).empty());
-    command({ "exec", "/definitely/missing/lwm-binary" });
-    REQUIRE(wait_for_condition(
-        [&]
-        {
-            auto owner = wm_owner(connection);
-            return owner != XCB_NONE && owner != before && run_lwmctl(wm, { "version" })->exit_code == 0;
-        },
-        std::chrono::seconds(2)
-    ));
-    before = wm_owner(connection);
-    command({ "restart" });
-    REQUIRE(wait_for_condition(
-        [&]
-        {
-            auto owner = wm_owner(connection);
-            return owner != XCB_NONE && owner != before && run_lwmctl(wm, { "version" })->exit_code == 0;
-        },
-        std::chrono::seconds(2)
-    ));
+    auto restart = [&](std::vector<std::string> args)
+    {
+        auto before = wm_owner(connection);
+        command(std::move(args));
+        REQUIRE(wait_for_condition(
+            [&]
+            {
+                auto owner = wm_owner(connection);
+                if (owner == XCB_NONE || owner == before)
+                    return false;
+                auto reply = run_lwmctl(wm, { "version" });
+                return reply && reply->exit_code == 0;
+            },
+            std::chrono::seconds(2)
+        ));
+    };
+    for (int i = 0; i < 20; ++i)
+    {
+        CAPTURE(i);
+        restart({ "exec", "/definitely/missing/lwm-binary" });
+        REQUIRE(threads() == 3); // Main, backend, and one outstanding flush.
+    }
+    restart({ "restart" });
+    REQUIRE(threads() == 2);
+    restart({ "exec", "/definitely/missing/lwm-binary" });
+    REQUIRE(threads() == 3);
     REQUIRE(!command({ "version" }).empty());
+    auto shutdown = [&]
+    {
+        auto replacement = create_window(connection, 0, 0, 1, 1);
+        xcb_set_selection_owner(connection.get(), replacement, intern_atom(connection.get(), "WM_S0"), XCB_CURRENT_TIME);
+        xcb_flush(connection.get());
+    };
+    bool shutting_down = false;
+    SECTION("delivery resumes before shutdown") { }
+    SECTION("shutdown owns the outstanding flush")
+    {
+        shutdown();
+        shutting_down = true;
+        // The destination remains blocked, so orderly shutdown must still wait.
+        REQUIRE_FALSE(wm.wait_for_exit(std::chrono::milliseconds(100)));
+    }
     // Only normal shutdown drains the logger. Resume the reader for that step.
     std::jthread reader(
         [&](std::stop_token stop)
@@ -247,7 +274,15 @@ TEST_CASE(
             }
         }
     );
-    wm.stop();
+    if (!shutting_down)
+    {
+        REQUIRE(wait_for_condition([&] { return threads() == 2; }, std::chrono::seconds(2)));
+        shutdown();
+    }
+    auto status = wm.wait_for_exit(std::chrono::seconds(2));
+    REQUIRE(status);
+    REQUIRE(WIFEXITED(*status));
+    REQUIRE(WEXITSTATUS(*status) == 0);
 }
 
 TEST_CASE("Integration: launch failures identify the command without disclosing arguments", "[integration][logging]")

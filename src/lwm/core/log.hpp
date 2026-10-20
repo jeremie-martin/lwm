@@ -38,7 +38,7 @@ std::string level_name(quill::LogLevel);
 std::expected<void, std::string> initialize(LogOptions options = { });
 void shutdown();
 // Waits at most `limit` for pending lines before exec replaces the process; a
-// stalled destination is abandoned with the process image.
+// stalled destination leaves at most one flush task pending across failed execs.
 void flush_before_exec(std::chrono::milliseconds limit);
 } // namespace lwm::log
 

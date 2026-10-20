@@ -38,7 +38,7 @@ Use a separate sanitizer build:
 ```sh
 cmake -S . -B build/sanitize -DBUILD_TESTING=ON -DCMAKE_BUILD_TYPE=Debug -DLWM_SANITIZERS=ON
 cmake --build build/sanitize --parallel
-LWM_TEST_REQUIRE_X11=1 ctest --test-dir build/sanitize --output-on-failure --no-tests=error
+ASAN_OPTIONS=detect_leaks=1 LWM_TEST_REQUIRE_X11=1 ctest --test-dir build/sanitize --output-on-failure --no-tests=error
 ```
 
 There is no GitHub Actions pipeline; validation runs locally.
@@ -160,6 +160,10 @@ python3 tests/performance/logging_bench.py --binary build/release/src/app/lwm
 - `restart_resources.py` uses libXRes to check that repeated restart and failed-exec
   recovery release predecessor X clients, and that a restart on an otherwise empty
   server does not reset it. CTest runs it as `restart_resources` when libXRes exists.
+- The blocked-console integration test repeats failed execs without replacing the
+  process, bounds outstanding flush threads, and resumes delivery before orderly
+  shutdown. Orderly exit also allows LeakSanitizer to check predecessor heap cleanup
+  where supported.
 - `logging_bench.py` measures workspace transitions, idle cost, blocked output, and
   exec. `--baseline PATH` compares another binary. It defaults to stderr redirected
   to `/dev/null`; `--target journal` writes to the host journal, so use a disposable

@@ -6,12 +6,12 @@
 #include <quill/Backend.h>
 #include <quill/sinks/ConsoleSink.h>
 #include <quill/sinks/SystemdSink.h>
-#include <thread>
 #include <unistd.h>
 
 namespace lwm::log {
 namespace {
 Logger* logger = nullptr;
+std::future<void> pending_flush;
 }
 Logger* active_logger() noexcept { return logger; }
 std::expected<quill::LogLevel, std::string> parse_level(std::string_view value)
@@ -116,15 +116,18 @@ void flush_before_exec(std::chrono::milliseconds limit)
 {
     if (!logger)
         return;
-    auto flushed = std::make_shared<std::promise<void>>();
-    auto done = flushed->get_future();
-    std::thread([flushed, target = logger] { target->flush_log(); flushed->set_value(); }).detach();
+    auto deadline = std::chrono::steady_clock::now() + limit;
+    if (pending_flush.valid() && pending_flush.wait_until(deadline) != std::future_status::ready)
+        return;
+    pending_flush = std::async(std::launch::async, [target = logger] { target->flush_log(); });
     quill::Backend::notify(); // The idle backend would otherwise sleep through the limit.
-    done.wait_for(limit);
+    pending_flush.wait_until(deadline);
 }
 void shutdown()
 {
     logger = nullptr;
+    // Releasing an async future joins its task, while the backend is still running.
+    pending_flush = {};
     // Standard sinks may wait for the destination. The WM thread stops submitting
     // before joining the worker; normal event handling never flushes or waits.
     quill::Backend::stop();

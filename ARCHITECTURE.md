@@ -346,13 +346,16 @@ guarantees.
 
 Main lets the kernel reap children (`SA_NOCLDWAIT`, which exec clears for launched
 programs) and owns logging across WM lifetimes; a failed exec reconstructs the WM under
-the same logger. The X connection is the only event source.
+the same logger. Automatic child reaping ends before main returns, so exit-time
+helpers can wait for their children. The X connection is the only event source.
 
 Restart keeps the predecessor's X connection open through exec, passing its
 descriptor in `LWM_RESTART_FD`, so the server always has a live client and cannot
 reset. The successor, or a failed-exec recovery in the same process, closes it after
 claiming the screen; the server then frees the predecessor's resources. A binary that
 ignores the variable keeps that connection until it exits.
+Across failed exec, main retains the owning `Connection` and moves it into recovery;
+it is destroyed after the replacement claims the screen, before adopting windows.
 
 `State::snapshot()` stores private intent in `_LWM_RESTART`: placements, modes, hiding,
 preferences, urgency, focus ranks, workspace graphs, scratchpad claims, pending
@@ -379,8 +382,10 @@ monitor only when no predecessor handed over.
 ## Logging
 
 `core/log` owns Quill's journal/stderr sinks, one worker and a bounded dropping queue.
-The WM thread submits and never waits for delivery; normal shutdown joins the worker.
-Invariant failures abort without draining. Exec neither flushes nor stops logging.
+Normal event handling submits without waiting for delivery; shutdown joins the worker.
+Before exec, one owned asynchronous flush gets at most 100 ms, including any pending
+flush from an earlier failed exec. Shutdown joins that flush before stopping Quill.
+Invariant failures abort without draining.
 INFO reports lifecycle, configuration and topology outcomes; DEBUG explains domain
 decisions; TRACE records bindings and submitted geometry. Launch failures name the
 executable and failing stage, never arguments. Asynchronous X errors are rate limited;

@@ -50,6 +50,13 @@ int main(int argc, char* argv[])
         return config ? 0 : 1;
     }
 
+    // Logging survives failed-exec recovery.
+    if (auto log = lwm::log::initialize(parsed->log); !log)
+    {
+        std::cerr << "lwm: process initialization failed: " << log.error() << '\n';
+        return 1;
+    }
+
     // The kernel reaps launched processes; exec clears the flag, so neither launched
     // programs nor a restarted WM inherit it. Children that exited before this, such as
     // during an exec restart, are reaped now.
@@ -60,13 +67,6 @@ int main(int argc, char* argv[])
     sigaction(SIGCHLD, &reap, nullptr);
     while (waitpid(-1, nullptr, WNOHANG) > 0)
     { }
-
-    // Logging survives failed-exec recovery.
-    if (auto log = lwm::log::initialize(parsed->log); !log)
-    {
-        std::cerr << "lwm: process initialization failed: " << log.error() << '\n';
-        return 1;
-    }
 
     int exit_code = 0;
     std::string_view phase = "Startup";
@@ -80,6 +80,7 @@ int main(int argc, char* argv[])
 
         bool explicit_config = parsed->config_path.has_value();
         char* const self = argv[0];
+        std::optional<lwm::Connection> predecessor;
 
         while (true)
         {
@@ -97,7 +98,7 @@ int main(int argc, char* argv[])
             std::string restart_binary;
             {
                 phase = "WM initialization";
-                lwm::WindowManager wm(std::move(*config), config_path);
+                lwm::WindowManager wm(std::move(*config), config_path, std::move(predecessor));
                 phase = "WM event loop";
                 auto result = wm.run();
                 if (result == lwm::RunResult::Failed)
@@ -110,7 +111,7 @@ int main(int argc, char* argv[])
 
                 phase = "Restart preparation";
                 restart_binary = wm.restart_binary();
-                wm.prepare_restart();
+                predecessor = wm.prepare_restart();
             }
             // A successor restarts from its argv[0], so that names the binary exec'd.
             argv[0] = restart_binary.empty() ? self : restart_binary.data();
@@ -134,5 +135,8 @@ int main(int argc, char* argv[])
     if (exit_code == 0)
         LWM_LOG_INFO("LWM exiting");
     lwm::log::shutdown();
+    // Exit-time helpers, including LeakSanitizer's, must be able to wait for children.
+    reap.sa_flags = 0;
+    sigaction(SIGCHLD, &reap, nullptr);
     return exit_code;
 }
