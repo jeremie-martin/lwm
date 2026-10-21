@@ -270,7 +270,9 @@ visibility is derived. Completion unmaps hidden clients without changing their
 server geometry, and configures visible clients before mapping them. The output
 cache records submitted mapping and geometry; State owns visibility and normal
 geometry. The shell matches its own unmap acknowledgements by window and X request
-sequence, while application unmaps and synthetic withdrawal release ownership.
+sequence, while application unmaps and synthetic withdrawal release ownership. A
+synthetic withdrawal can follow LWM showing the client, so the shell unmaps it again
+and consumes that acknowledgement at once.
 
 Stored split ratios obey the current configuration bounds. State bounds writes and
 reconciles every workspace during reload and restart topology rebinding, including

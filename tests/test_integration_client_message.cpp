@@ -233,6 +233,34 @@ TEST_CASE(
     destroy_window(conn, window);
 }
 
+TEST_CASE("Integration: state a withdrawn client wrote for its next map survives", "[integration][client_message][ewmh]")
+{
+    auto test_env = TestEnvironment::create();
+    if (!test_env)
+        SKIP("Test environment not available");
+    auto& conn = test_env->conn;
+    auto net_wm_state = intern_atom(conn.get(), "_NET_WM_STATE");
+    auto above = intern_atom(conn.get(), "_NET_WM_STATE_ABOVE");
+    xcb_window_t window = create_window(conn, 10, 10, 200, 150);
+    map_window(conn, window);
+    REQUIRE(wait_for_active_window(conn, window, kTimeout));
+    // A toolkit's hide() and show() in one burst: withdraw, write the next initial
+    // state on the withdrawn window, and map it again.
+    xcb_unmap_window(conn.get(), window);
+    xcb_unmap_notify_event_t withdrawal{ };
+    withdrawal.response_type = XCB_UNMAP_NOTIFY;
+    withdrawal.event = conn.root();
+    withdrawal.window = window;
+    xcb_send_event(conn.get(), 0, conn.root(), XCB_EVENT_MASK_SUBSTRUCTURE_REDIRECT | XCB_EVENT_MASK_SUBSTRUCTURE_NOTIFY,
+                   reinterpret_cast<char const*>(&withdrawal));
+    xcb_change_property(conn.get(), XCB_PROP_MODE_REPLACE, window, net_wm_state, XCB_ATOM_ATOM, 32, 1, &above);
+    xcb_map_window(conn.get(), window);
+    xcb_flush(conn.get());
+    observe_title_after_events(conn, window);
+    CHECK(property_has_atom(conn.get(), window, net_wm_state, above));
+    destroy_window(conn, window);
+}
+
 TEST_CASE("Integration: close requests for LWM's own windows are ignored", "[integration][client_message][edge]")
 {
     auto test_env = TestEnvironment::create();

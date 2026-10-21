@@ -37,12 +37,12 @@ void WindowManager::scan_existing_windows(bool handoff)
             pointer = { query->root_x, query->root_y };
     state_.adopt(windows, handoff_ ? &*handoff_ : nullptr, pointer);
     handoff_.reset();
-    for (auto const& window : windows) manage(window, true);
+    for (auto const& window : windows) manage(window);
 }
 
 // X resources follow the role State chose; observation already selected its
 // events. Mapping is observed, not inferred from the admission path.
-void WindowManager::manage(WindowObservation const& observed, bool adopting)
+void WindowManager::manage(WindowObservation const& observed)
 {
     auto window = observed.id;
     if (auto const* fixture = state_.find_fixture(window))
@@ -58,7 +58,7 @@ void WindowManager::manage(WindowObservation const& observed, bool adopting)
     }
     if (!state_.find(window))
     {
-        if (!adopting)
+        if (!observed.mapped)
             xcb_map_window(conn_.get(), window);
         return;
     }

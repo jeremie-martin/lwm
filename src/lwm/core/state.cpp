@@ -322,15 +322,11 @@ void State::focus_fallback(size_t monitor, bool record_user_time)
     select_focus(focus::fallback(*this, monitor), 0, record_user_time);
 }
 
-// Shows a hidden client and focuses it when it is in view on the focused monitor.
+// Shows a hidden client in place and focuses it if it accepts focus.
 void State::restore(xcb_window_t id)
 {
-    auto const* client = find(id);
-    if (!client)
-        return;
     iconic(id, false);
-    if (client->monitor == focused_monitor_ && in_view(*client))
-        focus(id);
+    focus(id);
 }
 
 // Traversal retains one MRU order. Focus and topology changes discard it; windows

@@ -401,23 +401,32 @@ void WindowManager::reconcile_stacking(State::FullscreenVisibility const& fullsc
 
 // Unmanaged windows are withdrawn: WM_STATE says so, LWM deletes the EWMH state and
 // desktop it published, and click-to-focus releases the window to a new parent's owner.
+// A client may already have rewritten either property for its next map, as toolkits do
+// when hiding and showing at once; the round trip reads that change, which keeps it.
 void WindowManager::withdraw_removed()
 {
     auto* e = ewmh_.get();
     for (auto it = outputs_.begin(); it != outputs_.end();)
     {
-        if (state_.find(it->first) || state_.find_fixture(it->first))
+        auto window = it->first;
+        if (state_.find(window) || state_.find_fixture(window))
         {
             ++it;
             continue;
         }
         uint32_t const withdrawn[] = { XCB_ICCCM_WM_STATE_WITHDRAWN, 0 };
-        publish(it->first, atoms_.wm_state, atoms_.wm_state, withdrawn);
-        xcb_ungrab_button(conn_.get(), XCB_BUTTON_INDEX_ANY, it->first, XCB_MOD_MASK_ANY);
+        publish(window, atoms_.wm_state, atoms_.wm_state, withdrawn);
+        xcb_ungrab_button(conn_.get(), XCB_BUTTON_INDEX_ANY, window, XCB_MOD_MASK_ANY);
+        conn_.sync();
+        defer_queued_events();
         for (auto atom : { e->_NET_WM_STATE, e->_NET_WM_DESKTOP })
-            if (properties_.contains({ it->first, atom }))
-                xcb_delete_property(conn_.get(), it->first, atom);
-        properties_.erase(properties_.lower_bound({ it->first, 0 }), properties_.upper_bound({ it->first, UINT32_MAX }));
+            if (properties_.contains({ window, atom }) && std::ranges::none_of(deferred_events_, [&](auto const& event)
+                {
+                    auto const& notify = reinterpret_cast<xcb_property_notify_event_t const&>(event);
+                    return event.response_type == XCB_PROPERTY_NOTIFY && notify.window == window && notify.atom == atom;
+                }))
+                xcb_delete_property(conn_.get(), window, atom);
+        properties_.erase(properties_.lower_bound({ window, 0 }), properties_.upper_bound({ window, UINT32_MAX }));
         it = outputs_.erase(it);
     }
 }

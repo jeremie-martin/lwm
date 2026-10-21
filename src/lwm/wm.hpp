@@ -140,7 +140,7 @@ private:
 
     // wm_manage.cpp: admission adapters
     void scan_existing_windows(bool handoff);
-    void manage(WindowObservation const& observed, bool adopting);
+    void manage(WindowObservation const& observed);
     void restore_clients(); ///< Show every client at its normal geometry before releasing X
 
     // wm_transition.cpp: operation completion and publication

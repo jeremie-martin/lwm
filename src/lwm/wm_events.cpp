@@ -93,13 +93,24 @@ void WindowManager::handle_event(xcb_generic_event_t const& event)
             handle_map_request(reinterpret_cast<xcb_map_request_event_t const&>(event));
             break;
         // A notification of LWM's own unmap carries that request's sequence, even
-        // across rapid hide/show/hide; anything else is a client withdrawal.
+        // across rapid hide/show/hide; anything else is a client withdrawal. A hidden
+        // client withdraws by the synthetic notification alone, which can follow LWM
+        // showing it, so LWM unmaps it again and consumes that unmap's notification.
         case XCB_UNMAP_NOTIFY:
         {
             auto window = reinterpret_cast<xcb_unmap_notify_event_t const&>(event).window;
-            if (auto output = outputs_.find(window); !(event.response_type & 0x80) && output != outputs_.end()
-                && std::erase(output->second.unmaps, event.full_sequence))
+            auto output = outputs_.find(window);
+            bool synthetic = event.response_type & 0x80;
+            if (output != outputs_.end() && !synthetic && std::erase(output->second.unmaps, event.full_sequence))
                 break;
+            if (output != outputs_.end() && synthetic && output->second.mapped)
+            {
+                auto unmap = xcb_unmap_window(conn_.get(), window).sequence;
+                conn_.sync();
+                defer_queued_events();
+                std::erase_if(deferred_events_, [&](auto const& queued)
+                    { return queued.response_type == XCB_UNMAP_NOTIFY && queued.full_sequence == unmap; });
+            }
             if (auto geometry = state_.withdraw(window))
                 write_geometry(window, outputs_[window], *geometry);
             break;
@@ -159,21 +170,17 @@ void WindowManager::handle_event(xcb_generic_event_t const& event)
 
 // Window lifetime
 
+// Showing a managed window is LWM's decision; an application asks by activation.
 void WindowManager::handle_map_request(xcb_map_request_event_t const& e)
 {
-    if (state_.find(e.window))
-    {
-        state_.restore(e.window);
-        return;
-    }
-    if (state_.find_fixture(e.window))
+    if (state_.find(e.window) || state_.find_fixture(e.window))
         return;
     xcb_window_t window = e.window;
     auto observed = observe({ &window, 1 }, false);
     if (observed.empty())
         return;
     state_.admit(observed.front());
-    manage(observed.front(), false);
+    manage(observed.front());
 }
 
 

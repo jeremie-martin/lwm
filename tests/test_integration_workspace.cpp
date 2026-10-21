@@ -1323,3 +1323,68 @@ TEST_CASE("Integration: window requests queued behind a restart reach the succes
     destroy_window(conn, withdrawn);
     destroy_window(conn, requester);
 }
+
+TEST_CASE("Integration: an application's map request does not show a stashed client", "[integration][scratchpad][focus]")
+{
+    auto env = TestEnvironment::create();
+    REQUIRE(env);
+    auto& conn = env->conn;
+    auto stashed = create_window(conn, 10, 10, 200, 150);
+    map_window(conn, stashed);
+    REQUIRE(wait_for_active_window(conn, stashed, kTimeout));
+    auto other = create_window(conn, 20, 20, 200, 150);
+    map_window(conn, other);
+    REQUIRE(wait_for_active_window(conn, other, kTimeout));
+    stash(stashed);
+    REQUIRE(is_unmapped(conn, stashed));
+    // Showing it takes an activation, which the focus-stealing rules govern.
+    map_window(conn, stashed);
+    observe_title_after_events(conn, other);
+    CHECK(is_unmapped(conn, stashed));
+    CHECK(ipc_json("window list").at("focused") == other);
+    destroy_window(conn, other);
+    destroy_window(conn, stashed);
+}
+
+TEST_CASE("Integration: a hidden client's withdrawal undoes LWM showing it meanwhile", "[integration][workspace][visibility]")
+{
+    auto env = TestEnvironment::create("[workspaces]\nnames = [\"1\", \"2\"]\n");
+    REQUIRE(env);
+    auto& conn = env->conn;
+    auto* c = conn.get();
+    auto window = create_window(conn, 10, 10, 200, 150);
+    map_window(conn, window);
+    REQUIRE(wait_for_active_window(conn, window, kTimeout));
+    ipc_ok("window to-workspace 1");
+    REQUIRE(is_unmapped(conn, window));
+    // One read carries the switch that shows the window and the ICCCM withdrawal the
+    // already unmapped client sends.
+    auto command = intern_atom(c, "_LWM_COMMAND");
+    auto requester = create_window(conn, 0, 0, 1, 1);
+    std::string_view text = "workspace switch 1";
+    xcb_change_property(c, XCB_PROP_MODE_REPLACE, requester, command, intern_atom(c, "UTF8_STRING"), 8, text.size(), text.data());
+    xcb_client_message_event_t request{ };
+    request.response_type = XCB_CLIENT_MESSAGE;
+    request.format = 32;
+    request.window = wm_owner(conn);
+    request.type = command;
+    request.data.data32[0] = requester;
+    xcb_send_event(c, 0, request.window, XCB_EVENT_MASK_NO_EVENT, reinterpret_cast<char const*>(&request));
+    xcb_unmap_window(c, window);
+    xcb_unmap_notify_event_t withdrawal{ };
+    withdrawal.response_type = XCB_UNMAP_NOTIFY;
+    withdrawal.event = conn.root();
+    withdrawal.window = window;
+    xcb_send_event(c, 0, conn.root(), XCB_EVENT_MASK_SUBSTRUCTURE_REDIRECT | XCB_EVENT_MASK_SUBSTRUCTURE_NOTIFY,
+                   reinterpret_cast<char const*>(&withdrawal));
+    xcb_flush(c);
+    REQUIRE(wait_for_condition(
+        [&] { return get_wm_state(conn, window, intern_atom(c, "WM_STATE")) == XCB_ICCCM_WM_STATE_WITHDRAWN; }, kTimeout));
+    CHECK(is_unmapped(conn, window));
+    // The application can map it again.
+    map_window(conn, window);
+    REQUIRE(wait_for_active_window(conn, window, kTimeout));
+    CHECK_FALSE(is_unmapped(conn, window));
+    destroy_window(conn, requester);
+    destroy_window(conn, window);
+}
