@@ -109,7 +109,8 @@ void WindowManager::setup_root()
 {
     uint32_t values[] = { XCB_EVENT_MASK_SUBSTRUCTURE_REDIRECT | XCB_EVENT_MASK_SUBSTRUCTURE_NOTIFY
                           | XCB_EVENT_MASK_ENTER_WINDOW | XCB_EVENT_MASK_LEAVE_WINDOW | XCB_EVENT_MASK_POINTER_MOTION
-                          | XCB_EVENT_MASK_STRUCTURE_NOTIFY | XCB_EVENT_MASK_BUTTON_PRESS | XCB_EVENT_MASK_BUTTON_RELEASE };
+                          | XCB_EVENT_MASK_STRUCTURE_NOTIFY | XCB_EVENT_MASK_BUTTON_PRESS
+                          | XCB_EVENT_MASK_BUTTON_RELEASE };
     auto cookie = xcb_change_window_attributes_checked(conn_.get(), conn_.screen()->root, XCB_CW_EVENT_MASK, values);
     if (auto* err = xcb_request_check(conn_.get(), cookie))
     {
@@ -244,8 +245,8 @@ RunResult WindowManager::run()
 
         // Each event completes its own operation; bounded batches keep topology
         // refreshes and connection checks running under X load.
-        auto batch_deadline = std::chrono::steady_clock::now() + std::chrono::milliseconds(2);
-        for (size_t remaining = 64; !stop_ && remaining && std::chrono::steady_clock::now() < batch_deadline; --remaining)
+        auto deadline = std::chrono::steady_clock::now() + std::chrono::milliseconds(2);
+        for (size_t remaining = 64; !stop_ && remaining && std::chrono::steady_clock::now() < deadline; --remaining)
         {
             if (deferred_events_.empty())
                 if (auto event = reply(xcb_poll_for_event(conn_.get())))

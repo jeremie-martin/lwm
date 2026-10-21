@@ -137,7 +137,8 @@ int watch()
     std::string printed;
     for (bool changed = true, attach = false;;)
     {
-        if (auto text = (changed || attach) && wm != XCB_NONE ? x.text(wm, x.state) : std::nullopt; text && !text->empty() && *text != printed)
+        auto text = (changed || attach) && wm != XCB_NONE ? x.text(wm, x.state) : std::nullopt;
+        if (text && !text->empty() && *text != printed)
         {
             printed = std::move(*text);
             std::cout << printed << '\n' << std::flush;

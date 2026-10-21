@@ -36,7 +36,7 @@ inline bool intern_atoms(xcb_connection_t* connection, std::span<std::pair<char 
 inline void send_message(xcb_connection_t* connection, xcb_window_t window, xcb_atom_t type, uint32_t mask,
                          xcb_client_message_data_t data)
 {
-    xcb_client_message_event_t event{ .response_type = XCB_CLIENT_MESSAGE, .format = 32, .window = window, .type = type, .data = data };
+    xcb_client_message_event_t event{ XCB_CLIENT_MESSAGE, 32, 0, window, type, data };
     xcb_send_event(connection, 0, window, mask, reinterpret_cast<char const*>(&event));
 }
 

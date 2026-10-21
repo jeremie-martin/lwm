@@ -399,7 +399,8 @@ std::optional<uint32_t> WindowManager::reconcile_stacking(State::FullscreenVisib
     for (auto const& move : moves)
     {
         uint32_t values[] = { move.sibling, move.mode };
-        auto request = xcb_configure_window(conn_.get(), move.window, XCB_CONFIG_WINDOW_SIBLING | XCB_CONFIG_WINDOW_STACK_MODE, values);
+        auto request = xcb_configure_window(
+            conn_.get(), move.window, XCB_CONFIG_WINDOW_SIBLING | XCB_CONFIG_WINDOW_STACK_MODE, values);
         first = first.value_or(request.sequence);
     }
     return first;
