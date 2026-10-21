@@ -139,7 +139,7 @@ void State::insert_registered(Client client)
         attach(it->second);
 }
 
-void State::insert_fixture(xcb_window_t id, Fixture::Role role, DockStrut strut)
+void State::insert_fixture(xcb_window_t id, WindowRole role, DockStrut strut)
 {
     mutated();
     fixtures_.emplace(id, Fixture{ { id, role, register_window(id) }, strut });
@@ -660,12 +660,12 @@ void State::skip_taskbar(xcb_window_t id, bool enabled) { prefer(id, &ClientPref
 void State::skip_pager(xcb_window_t id, bool enabled) { prefer(id, &ClientPreferences::skip_pager, enabled); }
 
 // The active window already has the user's attention.
-void State::urgency(xcb_window_t id, UrgencySource source, bool enabled)
+void State::urgency(xcb_window_t id, bool Urgency::* source, bool enabled)
 {
     if (enabled && id == active_window_)
         return;
     auto urgency = require(id).urgency;
-    urgency.set(source, enabled);
+    urgency.*source = enabled;
     assign(id, &Client::urgency, urgency);
 }
 
@@ -804,7 +804,7 @@ Geometry State::working_area(Monitor const& monitor) const
     Strut strut;
     for (auto const& [id, fixture] : fixtures_)
     {
-        if (fixture.role != Fixture::Role::Dock)
+        if (fixture.role != WindowRole::Dock)
             continue;
         auto projected = monitor_strut(fixture.strut, screen_, monitor.geometry);
         strut.left = std::max(strut.left, projected.left);

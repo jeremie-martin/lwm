@@ -27,7 +27,7 @@ restart::Snapshot sample()
          0, 0,
          TiledMode{ Geometry{ -5, -6, 70, 80 } },
          { true, false, std::nullopt, LayerHint::Below },
-         3,  true,
+         { true, true },  true,
          false                                                                            },
         { 0x200, 1, 0, FloatingMode{ { -32768, 32767, 65535, 1 } },     {}, 0, false, true }
     };
@@ -44,7 +44,7 @@ restart::Snapshot sample()
     snapshot.clients[0].order = 2;
     snapshot.clients[1].order = 0;
     snapshot.clients[2].order = 1;
-    snapshot.fixtures = { { 0x400, Fixture::Role::Dock, 3, true } };
+    snapshot.fixtures = { { 0x400, WindowRole::Dock, 3, true } };
     snapshot.clients[2].close_requested = true;
     snapshot.clients[1].fullscreen_claim = 1;
     snapshot.clients[0].iconic = true;
@@ -185,7 +185,7 @@ TEST_CASE("Restart wire schema directly represents domain values", "[restart][co
         "clients": [{"id": 7, "monitor": 0, "workspace": 0,
             "mode": {"TiledMode": {"floating": null}},
             "preferences": {"floating": null, "skip_taskbar": null, "skip_pager": null, "layer": null},
-            "urgency": {"sources": 0}, "borderless": false, "desktop_pinned": false, "fullscreen_monitors": null, "mru_order": 0, "order": 0, "fullscreen_claim": 4, "iconic": false, "close_requested": false}],
+            "urgency": {"app": false, "wm": false}, "borderless": false, "desktop_pinned": false, "fullscreen_monitors": null, "mru_order": 0, "order": 0, "fullscreen_claim": 4, "iconic": false, "close_requested": false}],
         "fixtures": [], "named_scratchpads": [], "pool": []
     })");
     document["format"] = restart::format;
@@ -304,7 +304,7 @@ TEST_CASE("Restart rebinding matches live output reconciliation", "[restart][sta
         test::outputs(state, discovered);
     };
     // Live reconciliation uses the saved count.
-    source.insert_fixture(99, Fixture::Role::Dock, DockStrut{ .top = { 40 } });
+    source.insert_fixture(99, WindowRole::Dock, DockStrut{ .top = { 40 } });
     prepare(source, 3);
 
     State restored;
@@ -454,15 +454,15 @@ TEST_CASE("Admission preserves shared registration ranks independently of scan o
 {
     auto source = test::state();
     add(source, 1);
-    source.insert_fixture(2, Fixture::Role::Dock);
+    source.insert_fixture(2, WindowRole::Dock);
     add(source, 3);
-    source.insert_fixture(4, Fixture::Role::Desktop);
+    source.insert_fixture(4, WindowRole::Desktop);
     test::focus(source, 1);
     source.swap_tiles(0, 0, 1);
     auto snapshot = restart::decode(restart::encode(source.snapshot()));
     REQUIRE(snapshot);
     REQUIRE(snapshot->find(3)->order == 2);
-    REQUIRE(snapshot->find_fixture(2)->role == Fixture::Role::Dock);
+    REQUIRE(snapshot->find_fixture(2)->role == WindowRole::Dock);
 
     auto target = test::state();
     // Fixture observations precede client restoration; newcomer 5 arrives first.
@@ -527,7 +527,7 @@ TEST_CASE("Restart decoder rejects malformed records instead of defaulting", "[r
              {                 "/clients/0/id",                                uint64_t{ 1 } << 32 },
              {                "/clients/0/monitor",                                                 -1 },
              {              "/clients/0/mru_order",                                                 -1 },
-             {                "/clients/0/urgency/sources",                                                  4 },
+             {                "/clients/0/urgency/app",                                                  1 },
              {             "/clients/0/borderless",                                                  1 },
              {        "/monitors/0/geometry/width",                                              65536 },
              {       "/monitors/0/geometry/height",                                                 -1 },
@@ -813,7 +813,7 @@ TEST_CASE("Restart preserves released focus and pending close requests", "[resta
 {
     auto source = test::state();
     add(source, 1);
-    source.insert_fixture(2, Fixture::Role::Dock);
+    source.insert_fixture(2, WindowRole::Dock);
     source.settle();
     CHECK_FALSE(source.close(1, true));
     CHECK_FALSE(source.close(2, true));

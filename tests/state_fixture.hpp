@@ -91,7 +91,7 @@ inline WindowObservation observe(Client const& client, std::optional<uint32_t> d
         .transient_for = client.transient_for,
         .desktop = desktop,
         .accepts_input = client.accepts_input,
-        .urgent = client.urgency.has(UrgencySource::App),
+        .urgent = client.urgency.app,
         .supports_take_focus = client.supports_take_focus,
         .fullscreen_monitors = client.fullscreen_monitors,
     };

@@ -40,7 +40,7 @@ void WindowManager::manage(WindowObservation const& observed)
     auto window = observed.id;
     if (auto const* fixture = state_.find_fixture(window))
     {
-        if (fixture->role == Fixture::Role::Desktop)
+        if (fixture->role == WindowRole::Desktop)
         {
             // Desktops start below every sibling, not just below managed clients.
             uint32_t below = XCB_STACK_MODE_BELOW;

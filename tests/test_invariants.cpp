@@ -15,8 +15,8 @@ TEST_CASE("Model validation accepts reachable states with independent fullscreen
     add(state, 1);
     add_floating(state, 2);
     add(state, 3, { .monitor = 1, .workspace = 2 });
-    state.insert_fixture(4, Fixture::Role::Dock);
-    state.insert_fixture(5, Fixture::Role::Desktop);
+    state.insert_fixture(4, WindowRole::Dock);
+    state.insert_fixture(5, WindowRole::Desktop);
     state.fullscreen(1, true);
     test::iconic(state, 1, true);
     state.fullscreen(2, true);
@@ -190,7 +190,7 @@ TEST_CASE("Live ownership uses the same persistent graph validation as restart",
     auto state = test::state();
     test::configure(state, [](Config& config) { config.scratchpads = { { .name = "named" } }; });
     add(state, 1);
-    state.insert_fixture(2, Fixture::Role::Dock);
+    state.insert_fixture(2, WindowRole::Dock);
     REQUIRE_FALSE(invariants::validate(state));
     SECTION("Pool cannot own a fixture") { state.pool_scratchpad(2); }
     SECTION("Named claim refuses an unmanaged ID; malformed snapshots still reject it")

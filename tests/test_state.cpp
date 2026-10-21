@@ -15,20 +15,6 @@ std::optional<Geometry> shown(State::Projected const& projected)
 }
 }
 
-TEST_CASE("Urgency tracks app and WM sources independently", "[state][urgency]")
-{
-    Urgency urgency;
-    REQUIRE_FALSE(urgency.active());
-    urgency.set(UrgencySource::App, true);
-    urgency.set(UrgencySource::WmInitiated, true);
-    urgency.set(UrgencySource::App, false);
-    REQUIRE_FALSE(urgency.has(UrgencySource::App));
-    REQUIRE(urgency.has(UrgencySource::WmInitiated));
-    REQUIRE(urgency.active());
-    urgency.set(UrgencySource::WmInitiated, false);
-    REQUIRE_FALSE(urgency.active());
-}
-
 TEST_CASE("The active client never becomes urgent", "[state][urgency]")
 {
     auto state = test::state();
@@ -39,10 +25,10 @@ TEST_CASE("The active client never becomes urgent", "[state][urgency]")
     attention.set(WindowState::DemandsAttention, true);
     state.request_states(2, StateChange::Add, attention);
     state.hint_urgency(2, true);
-    state.urgency(2, UrgencySource::WmInitiated, true);
+    state.urgency(2, &Urgency::wm, true);
     CHECK_FALSE(state.require(2).urgency.active());
     state.request_states(1, StateChange::Add, attention);
-    CHECK(state.require(1).urgency.has(UrgencySource::App));
+    CHECK(state.require(1).urgency.app);
     state.focus(1);
     state.settle();
     CHECK_FALSE(state.require(1).urgency.active());
@@ -70,7 +56,7 @@ TEST_CASE("Registration attaches tiles and removal releases every membership", "
     CHECK(state.scratchpad_pool().empty());
 
     // Fixtures are listed and stacked but never join workspaces.
-    state.insert_fixture(4, Fixture::Role::Dock);
+    state.insert_fixture(4, WindowRole::Dock);
     CHECK_FALSE(state.find(4));
     CHECK(state.find_fixture(4));
     state.erase(4);
@@ -109,7 +95,7 @@ TEST_CASE("Withdrawal returns geometry after discarding only the withdrawn clien
     }
     SECTION("Fixtures relinquish ownership without a client rectangle")
     {
-        state.insert_fixture(3, Fixture::Role::Dock);
+        state.insert_fixture(3, WindowRole::Dock);
         CHECK_FALSE(state.withdraw(3));
         CHECK_FALSE(state.find_fixture(3));
         REQUIRE(state.drag());
@@ -510,7 +496,7 @@ TEST_CASE("Floating frames use workareas only for maximized axes", "[state][geom
     auto state = test::state();
     Geometry normal{ 100, 120, 500, 360 };
     add(state, 1, { .floating = true, .geometry = normal });
-    state.insert_fixture(99, Fixture::Role::Dock, DockStrut{ .top = { 40 } });
+    state.insert_fixture(99, WindowRole::Dock, DockStrut{ .top = { 40 } });
     for (bool horizontal : { false, true })
         for (bool vertical : { false, true })
         {
@@ -537,7 +523,7 @@ TEST_CASE("Tile geometry is a current projection independent of publication", "[
     CHECK(state.normal_geometry(state.require(2)) == Geometry{ 500, 0, 500, 800 });
     state.ratio(0, SplitAddress{ 0 }, 0.25);
     CHECK(state.normal_geometry(state.require(2)) == Geometry{ 250, 0, 750, 800 });
-    state.insert_fixture(99, Fixture::Role::Dock, DockStrut{ .top = { 100 } });
+    state.insert_fixture(99, WindowRole::Dock, DockStrut{ .top = { 100 } });
     CHECK(state.normal_geometry(state.require(2)) == Geometry{ 250, 100, 750, 700 });
     auto expected = state.normal_geometry(state.require(2));
     SECTION("Hidden") { state.switch_workspace(0, 1).value(); }
@@ -653,7 +639,7 @@ TEST_CASE("A projection contains every client once with its final visible rectan
     test::configure(state, [](Config& config) { config.appearance = { .padding = 0, .border_width = 0 }; });
     add(state, 9);
     add_floating(state, 2);
-    state.insert_fixture(99, Fixture::Role::Dock);
+    state.insert_fixture(99, WindowRole::Dock);
     add(state, 7, { .workspace = 1 });
     add(state, 4);
     add(state, 8, { .monitor = 1 });
@@ -694,13 +680,13 @@ TEST_CASE("Workareas follow dock reservations and unchanged topology preserves i
     auto state = test::state(2);
     add(state, 1, { .floating = true, .geometry = { -100, -100, 1500, 1000 } });
     state.fullscreen_monitors(1, FullscreenMonitors{ 0, 0, 0, 1 });
-    state.insert_fixture(9, Fixture::Role::Dock, DockStrut{ .top = { 40 } });
+    state.insert_fixture(9, WindowRole::Dock, DockStrut{ .top = { 40 } });
     CHECK(state.working_area(state.monitors()[0]) == Geometry{ 0, 40, 1000, 760 });
     CHECK(state.working_area(state.monitors()[1]) == Geometry{ 1000, 40, 1000, 760 });
     state.reserve(9, DockStrut{ .top = { 60 } });
     CHECK(state.working_area(state.monitors()[1]) == Geometry{ 1000, 60, 1000, 740 });
     // Desktop windows never reserve space.
-    state.insert_fixture(10, Fixture::Role::Desktop, DockStrut{ .left = { 300 } });
+    state.insert_fixture(10, WindowRole::Desktop, DockStrut{ .left = { 300 } });
     CHECK(state.working_area(state.monitors()[0]).x == 0);
     state.erase(9);
     CHECK(state.working_area(state.monitors()[0]) == state.monitors()[0].geometry);
@@ -907,7 +893,7 @@ TEST_CASE("Rule sizes use the same frame sizing as application requests", "[stat
 TEST_CASE("Rule positions are relative to the dock-reduced workarea", "[state][rules][geometry][workarea]")
 {
     auto state = test::state(2);
-    state.insert_fixture(9, Fixture::Role::Dock, DockStrut{ .top = { 40 } });
+    state.insert_fixture(9, WindowRole::Dock, DockStrut{ .top = { 40 } });
     test::configure(state, [](Config& config) {
         config.appearance.border_width = 0;
         config.rules = { { .match = { .title_regex = std::regex("placed") },

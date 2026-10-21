@@ -41,7 +41,7 @@ void State::request_states(xcb_window_t id, StateChange change, WindowStates req
     if (requested.has(WindowState::Modal))
         modal(id, enable(client->modal));
     if (requested.has(WindowState::DemandsAttention))
-        urgency(id, UrgencySource::App, enable(client->urgency.has(UrgencySource::App)));
+        urgency(id, &Urgency::app, enable(client->urgency.app));
     if (requested.has(WindowState::MaximizedHorz) || requested.has(WindowState::MaximizedVert))
         maximize(id, horizontal, vertical);
     if (fullscreen && requested.has(WindowState::Fullscreen))
@@ -57,7 +57,7 @@ void State::request_activation(xcb_window_t id, bool application, uint32_t times
     {
         LWM_LOG_DEBUG("Activation rejected: window={:#x} reason={}", id, reason);
         if (application)
-            urgency(id, UrgencySource::WmInitiated, true);
+            urgency(id, &Urgency::wm, true);
     };
     if (application && active_window_ != XCB_NONE && active_window_ != id)
     {
@@ -109,7 +109,7 @@ void State::switch_desktop(uint32_t desktop)
 void State::hint_urgency(xcb_window_t id, bool urgent)
 {
     if (urgent != require(id).urgency.active())
-        urgency(id, UrgencySource::App, urgent);
+        urgency(id, &Urgency::app, urgent);
 }
 
 // Requests name the X window rectangle inside the client's normal frame.

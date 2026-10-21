@@ -147,7 +147,7 @@ TEST_CASE("Root extent changes reconcile only the workarea-dependent interaction
     auto state = test::state();
     test::add(state, 1);
     test::add(state, 2);
-    state.insert_fixture(9, Fixture::Role::Dock, DockStrut{ .right = { 100 } });
+    state.insert_fixture(9, WindowRole::Dock, DockStrut{ .right = { 100 } });
     REQUIRE(state.working_area(state.monitors()[0]).width == 900);
     bool split = true;
     SECTION("split drag depends on its captured workarea")

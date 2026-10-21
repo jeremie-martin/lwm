@@ -144,25 +144,13 @@ struct ClientPreferences
     bool operator==(ClientPreferences const&) const = default;
 };
 
-enum class UrgencySource : uint8_t
-{
-    WmInitiated = 1U << 0,
-    App = 1U << 1,
-};
-
+/// The application's and LWM's requests for attention, tracked separately.
 struct Urgency
 {
-    uint8_t sources = 0;
+    bool app = false;
+    bool wm = false;
+    bool active() const { return app || wm; }
     bool operator==(Urgency const&) const = default;
-
-    bool active() const { return sources != 0; }
-
-    bool has(UrgencySource source) const { return (sources & static_cast<uint8_t>(source)) != 0; }
-    void set(UrgencySource source, bool enabled)
-    {
-        auto bit = static_cast<uint8_t>(source);
-        sources = enabled ? sources | bit : sources & static_cast<uint8_t>(~bit);
-    }
 };
 
 /// How LWM manages an observed window. Popups are mapped but never registered.
@@ -389,14 +377,8 @@ inline bool presents_maximized(Client const& client)
 /// workspaces, layout, and focus. Role and registration rank survive exec.
 struct FixtureIntent
 {
-    enum class Role
-    {
-        Dock,
-        Desktop
-    };
-
     xcb_window_t id = XCB_NONE;
-    Role role = Role::Dock;
+    WindowRole role = WindowRole::Dock; ///< Dock or Desktop
     uint64_t order = 0;
     bool close_requested = false; ///< Asked to close; closing again kills the client
     bool operator==(FixtureIntent const&) const = default;
@@ -407,7 +389,7 @@ struct Fixture : FixtureIntent
     DockStrut strut; ///< Observed reservation; only docks reserve workarea
 };
 
-inline char const* fixture_role_str(Fixture::Role role) { return role == Fixture::Role::Dock ? "dock" : "desktop"; }
+inline char const* fixture_role_str(WindowRole role) { return role == WindowRole::Dock ? "dock" : "desktop"; }
 
 /// Split 0 divides master and stack; split i > 0 divides stack slot i
 /// from the remaining slots. Identity is stable when the window count changes.

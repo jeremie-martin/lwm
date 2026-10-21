@@ -41,8 +41,8 @@ inline std::optional<Violation> validate(restart::Snapshot const& graph, uint64_
             && ranks.insert(window.order).second;
     };
     for (auto const& fixture : graph.fixtures)
-        if (!register_window(fixture))
-            return Violation{ "Fixture identity or registration rank is invalid or duplicated", fixture.id };
+        if (!register_window(fixture) || (fixture.role != WindowRole::Dock && fixture.role != WindowRole::Desktop))
+            return Violation{ "Fixture identity, role or registration rank is invalid", fixture.id };
     std::unordered_map<xcb_window_t, ClientIntent const*> clients;
     std::unordered_set<uint64_t> recencies, claims;
     for (auto const& client : graph.clients)
@@ -57,8 +57,6 @@ inline std::optional<Violation> validate(restart::Snapshot const& graph, uint64_
         if (client.fullscreen_claim >= rank_limit
             || (client.fullscreen() && !claims.insert(client.fullscreen_claim).second))
             return Violation{ "Client fullscreen claim is invalid or duplicated", client.id };
-        if (client.urgency.sources > (static_cast<uint8_t>(UrgencySource::WmInitiated) | static_cast<uint8_t>(UrgencySource::App)))
-            return Violation{ "Client urgency sources are invalid", client.id };
         auto const* floating = std::get_if<FloatingMode>(&client.mode);
         auto const* tiled = std::get_if<TiledMode>(&client.mode);
         if ((floating && !valid_geometry(floating->geometry))

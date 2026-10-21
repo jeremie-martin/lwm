@@ -36,8 +36,8 @@ TEST_CASE("Global stacking ranks kinds, focus, layers, fixtures and fullscreen v
     scene.state.layer(3, LayerHint::Below);
     scene.state.layer(2, LayerHint::Above);
     REQUIRE(scene.order() == std::vector<xcb_window_t>{ 3, 1, 4, 2 });
-    scene.state.insert_fixture(5, Fixture::Role::Dock);
-    scene.state.insert_fixture(6, Fixture::Role::Desktop);
+    scene.state.insert_fixture(5, WindowRole::Dock);
+    scene.state.insert_fixture(6, WindowRole::Desktop);
     REQUIRE(scene.order() == std::vector<xcb_window_t>{ 6, 3, 1, 4, 2, 5 });
     scene.state.fullscreen(2, true);
     REQUIRE(scene.order() == std::vector<xcb_window_t>{ 4, 6, 3, 1, 5, 2 });

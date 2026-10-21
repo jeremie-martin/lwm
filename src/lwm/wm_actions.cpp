@@ -125,7 +125,7 @@ Result WindowManager::execute(Action const& action, std::string_view source)
             {
                 if (!state_.find(attention.window))
                     return fail("unknown window");
-                state_.urgency(attention.window, UrgencySource::WmInitiated, true);
+                state_.urgency(attention.window, &Urgency::wm, true);
                 return { };
             },
     };

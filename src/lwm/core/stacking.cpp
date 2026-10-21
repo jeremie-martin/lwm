@@ -36,7 +36,7 @@ std::vector<xcb_window_t> compute_order(State const& state, State::FullscreenVis
     result.reserve(ranked.capacity());
     for (auto const& [id, fixture] : state.fixtures())
         ranked.push_back(
-            { id, true, fixture.role == Fixture::Role::Desktop ? Tier::Below : Tier::Above, false, fixture.order, XCB_NONE }
+            { id, true, fixture.role == WindowRole::Desktop ? Tier::Below : Tier::Above, false, fixture.order, XCB_NONE }
         );
     bool has_transients = false;
     for (auto const& [id, client] : state.clients())

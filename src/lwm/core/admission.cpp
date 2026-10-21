@@ -24,7 +24,7 @@ Geometry observed_frame(WindowObservation const& window, uint32_t border)
 WindowRole State::role(xcb_window_t id, WindowType type, bool transient, restart::Snapshot const* handoff)
 {
     if (auto const* fixture = handoff ? handoff->find_fixture(id) : nullptr)
-        return fixture->role == Fixture::Role::Dock ? WindowRole::Dock : WindowRole::Desktop;
+        return fixture->role;
     if (handoff && handoff->find(id))
         return WindowRole::Client;
     return classify_window_type(type, transient).role;
@@ -34,13 +34,12 @@ WindowRole State::role(xcb_window_t id, WindowType type, bool transient, restart
 // restoration can reorder clients. Fixtures are installed immediately.
 std::optional<Client> State::classify(WindowObservation const& window, restart::Snapshot const* handoff)
 {
-    switch (role(window.id, window.type, window.transient_for != XCB_NONE, handoff))
+    // Only docks are observed with a reservation.
+    switch (auto role = this->role(window.id, window.type, window.transient_for != XCB_NONE, handoff))
     {
         case WindowRole::Dock:
-            insert_fixture(window.id, Fixture::Role::Dock, window.strut);
-            return std::nullopt;
         case WindowRole::Desktop:
-            insert_fixture(window.id, Fixture::Role::Desktop);
+            insert_fixture(window.id, role, window.strut);
             return std::nullopt;
         case WindowRole::Popup:
             return std::nullopt;
@@ -98,7 +97,7 @@ std::optional<Client> State::classify(WindowObservation const& window, restart::
     client.fullscreen_claim = fullscreen ? next_claim_++ : 0;
     client.maximized_horz = !fullscreen && states.has(WindowState::MaximizedHorz);
     client.maximized_vert = !fullscreen && states.has(WindowState::MaximizedVert);
-    client.urgency.set(UrgencySource::App, states.has(WindowState::DemandsAttention) || window.urgent);
+    client.urgency.app = states.has(WindowState::DemandsAttention) || window.urgent;
     client.accepts_input = window.accepts_input;
     client.supports_take_focus = window.supports_take_focus;
     client.fullscreen_monitors = window.fullscreen_monitors;

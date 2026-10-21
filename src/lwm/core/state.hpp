@@ -117,7 +117,7 @@ public:
     // The candidate's placement must be valid; tiled clients join their workspace.
     void insert(Client client);
     // Dock reservations shape every monitor's workarea while the dock is registered.
-    void insert_fixture(xcb_window_t id, Fixture::Role role, DockStrut strut = { });
+    void insert_fixture(xcb_window_t id, WindowRole role, DockStrut strut = { });
     void reserve(xcb_window_t id, DockStrut strut);
     void erase(xcb_window_t id);
     // Records a close request and returns whether to kill the client: it cannot be
@@ -236,7 +236,7 @@ public:
     void skip_taskbar(xcb_window_t id, bool enabled);
     void skip_pager(xcb_window_t id, bool enabled);
     // Enabling is ignored for the active client, which already has attention.
-    void urgency(xcb_window_t id, UrgencySource source, bool enabled);
+    void urgency(xcb_window_t id, bool Urgency::* source, bool enabled);
     void fullscreen_monitors(xcb_window_t id, std::optional<FullscreenMonitors> value);
 
     // Application and pager requests, already decoded by the shell
