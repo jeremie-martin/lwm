@@ -7,21 +7,16 @@
 
 namespace lwm {
 
+// Hidden clients are published like visible ones, at their normal presentation.
 void WindowManager::restore_clients()
 {
     state_.end_drag(false);
     release_pointer();
-    for (auto const& projected : state_.project(state_.fullscreen_visibility()))
-    {
-        auto window = projected.client->id;
-        auto& output = outputs_[window];
-        write_geometry(window, output, projected.presentation ? *projected.presentation : state_.presentation(*projected.client));
-        if (!output.mapped)
-        {
-            xcb_map_window(conn_.get(), window);
-            output.mapped = true;
-        }
-    }
+    auto clients = state_.project(state_.fullscreen_visibility());
+    for (auto& [client, presentation] : clients)
+        if (!presentation)
+            presentation = state_.presentation(*client);
+    publish_clients(clients);
 }
 
 void WindowManager::scan_existing_windows(bool handoff)

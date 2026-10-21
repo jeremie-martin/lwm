@@ -160,6 +160,10 @@ operation; batches stop after 64 events or 2 ms so topology refreshes and connec
 checks still run under load. Already-read pointer motion is coalesced up to the next
 non-motion event. Crossing drains only
 consume events already queued and defer unrelated ones; handlers never re-enter.
+Once the loop stops, events already queued are still dispatched, with the server
+grabbed until X is released, so the next manager sees every pending map and
+withdrawal. Losing the screen then still turns a restart into an exit; a restart
+never overrides another stop.
 
 ## Admission and topology
 

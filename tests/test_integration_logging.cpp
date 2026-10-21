@@ -3,6 +3,7 @@
 #include <nlohmann/json.hpp>
 
 #include <catch2/catch_test_macros.hpp>
+#include <catch2/generators/catch_generators.hpp>
 
 #include <cerrno>
 #include <chrono>
@@ -138,8 +139,10 @@ TEST_CASE("Integration: restart stays on the binary exec selected", "[integratio
     std::filesystem::remove(link);
 }
 
-TEST_CASE("Integration: a restart queued behind losing the screen does not exec", "[integration][logging][restart]")
+TEST_CASE("Integration: losing the screen wins over a restart queued in either order", "[integration][logging][restart]")
 {
+    bool restart_first = GENERATE(false, true);
+    CAPTURE(restart_first);
     auto& environment = X11TestEnvironment::instance();
     if (!environment.available())
         SKIP("Xvfb not available");
@@ -157,21 +160,25 @@ TEST_CASE("Integration: a restart queued behind losing the screen does not exec"
     auto requester = create_window(connection, 0, 0, 1, 1);
     xcb_change_property(c, XCB_PROP_MODE_REPLACE, requester, command, intern_atom(c, "UTF8_STRING"), 8, 7, "restart");
     auto replacement = create_window(connection, 0, 0, 1, 1);
-    // Both reach LWM in one read: the takeover, then a restart request.
+    // Both reach LWM in one read: the takeover and a restart request.
     xcb_client_message_event_t message{ };
     message.response_type = XCB_CLIENT_MESSAGE;
     message.format = 32;
     message.window = wm_window;
     message.type = command;
     message.data.data32[0] = requester;
+    if (restart_first)
+        xcb_send_event(c, 0, wm_window, XCB_EVENT_MASK_NO_EVENT, reinterpret_cast<char const*>(&message));
     xcb_set_selection_owner(c, replacement, selection, XCB_CURRENT_TIME);
-    xcb_send_event(c, 0, wm_window, XCB_EVENT_MASK_NO_EVENT, reinterpret_cast<char const*>(&message));
+    if (!restart_first)
+        xcb_send_event(c, 0, wm_window, XCB_EVENT_MASK_NO_EVENT, reinterpret_cast<char const*>(&message));
     xcb_flush(c);
     auto status = wm.wait_for_exit(std::chrono::seconds(2));
     REQUIRE(status);
     REQUIRE(WIFEXITED(*status));
     CHECK(WEXITSTATUS(*status) == 0);
     CHECK(wm.diagnostics().find("Restarting") == std::string::npos);
+    CHECK(wm_owner(connection) == replacement);
 }
 
 TEST_CASE(

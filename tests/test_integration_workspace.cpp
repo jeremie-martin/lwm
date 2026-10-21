@@ -1275,3 +1275,51 @@ TEST_CASE("Integration: a hidden client reparented away leaves management", "[in
         kTimeout
     ));
 }
+
+TEST_CASE("Integration: window requests queued behind a restart reach the successor", "[integration][restart][adoption]")
+{
+    auto env = TestEnvironment::create();
+    REQUIRE(env);
+    auto& conn = env->conn;
+    auto* c = conn.get();
+    auto withdrawn = create_window(conn, 10, 10, 200, 150);
+    map_window(conn, withdrawn);
+    REQUIRE(wait_for_active_window(conn, withdrawn, kTimeout));
+    stash(withdrawn);
+    REQUIRE(is_unmapped(conn, withdrawn));
+    auto previous = wm_instance(conn);
+    REQUIRE(previous);
+
+    // One read carries the restart request, a hidden client's ICCCM withdrawal and a
+    // new window's map request; the predecessor must honor both window requests.
+    auto command = intern_atom(c, "_LWM_COMMAND");
+    auto requester = create_window(conn, 0, 0, 1, 1);
+    xcb_change_property(c, XCB_PROP_MODE_REPLACE, requester, command, intern_atom(c, "UTF8_STRING"), 8, 7, "restart");
+    auto fresh = create_window(conn, 20, 20, 200, 150);
+    xcb_client_message_event_t request{ };
+    request.response_type = XCB_CLIENT_MESSAGE;
+    request.format = 32;
+    request.window = wm_owner(conn);
+    request.type = command;
+    request.data.data32[0] = requester;
+    xcb_send_event(c, 0, request.window, XCB_EVENT_MASK_NO_EVENT, reinterpret_cast<char const*>(&request));
+    xcb_unmap_notify_event_t withdrawal{ };
+    withdrawal.response_type = XCB_UNMAP_NOTIFY;
+    withdrawal.event = conn.root();
+    withdrawal.window = withdrawn;
+    xcb_send_event(c, 0, conn.root(), XCB_EVENT_MASK_SUBSTRUCTURE_REDIRECT | XCB_EVENT_MASK_SUBSTRUCTURE_NOTIFY,
+                   reinterpret_cast<char const*>(&withdrawal));
+    xcb_map_window(c, fresh);
+    xcb_flush(c);
+
+    REQUIRE(wait_for_wm_restart(conn, kTimeout, *previous));
+    REQUIRE(wait_for_active_window(conn, fresh, kTimeout));
+    CHECK_FALSE(is_unmapped(conn, fresh));
+    CHECK(is_unmapped(conn, withdrawn));
+    CHECK(get_wm_state(conn, withdrawn, intern_atom(c, "WM_STATE")) == XCB_ICCCM_WM_STATE_WITHDRAWN);
+    auto windows = ipc_json("window list").at("windows");
+    CHECK(std::ranges::none_of(windows, [&](auto const& window) { return window.at("id") == withdrawn; }));
+    destroy_window(conn, fresh);
+    destroy_window(conn, withdrawn);
+    destroy_window(conn, requester);
+}

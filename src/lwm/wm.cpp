@@ -253,26 +253,17 @@ RunResult WindowManager::run()
 
         // Each event completes its own operation; bounded batches keep topology
         // refreshes and connection checks running under X load.
-        size_t remaining = 64;
         auto batch_deadline = std::chrono::steady_clock::now() + std::chrono::milliseconds(2);
-        // The first stop wins: a later restart cannot override losing the screen.
-        while (!stop_ && remaining && std::chrono::steady_clock::now() < batch_deadline)
+        for (size_t remaining = 64; !stop_ && remaining && std::chrono::steady_clock::now() < batch_deadline; --remaining)
         {
-            if (!deferred_events_.empty())
-            {
-                auto event = deferred_events_.front();
-                deferred_events_.pop_front();
-                --remaining;
-                dispatch_event(event);
-            }
-            else if (auto* event = xcb_poll_for_event(conn_.get()))
-            {
-                auto owned = reply(event);
-                --remaining;
-                dispatch_event(*owned);
-            }
-            else
+            if (deferred_events_.empty())
+                if (auto event = reply(xcb_poll_for_event(conn_.get())))
+                    deferred_events_.push_back(*event);
+            if (deferred_events_.empty())
                 break;
+            auto event = deferred_events_.front();
+            deferred_events_.pop_front();
+            dispatch_event(event);
         }
 
         if (std::exchange(monitors_dirty_, false))
@@ -287,9 +278,18 @@ RunResult WindowManager::run()
             return RunResult::Failed;
         }
     }
+    // Requests already queued are still handled, with the server grabbed so that no
+    // new one arrives before X is released: the next manager sees every pending map
+    // and withdrawal, and losing the selection still turns a restart into an exit.
+    xcb_grab_server(conn_.get());
+    conn_.sync();
+    defer_queued_events();
+    for (auto const& event : std::exchange(deferred_events_, { }))
+        dispatch_event(event);
+    restore_clients();
     if (*stop_ == RunResult::Exit)
     {
-        restore_clients();
+        xcb_ungrab_server(conn_.get());
         conn_.sync();
     }
     return *stop_;

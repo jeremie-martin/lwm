@@ -33,6 +33,9 @@ Result WindowManager::execute(Action const& action, std::string_view source)
             [&](ReloadConfig const&) { return reload_config(source); },
             [&](Restart const& restart) -> Result
             {
+                // A restart never overrides another stop; losing the screen overrides it.
+                if (stop_)
+                    return fail("lwm is stopping");
                 LWM_LOG_INFO(
                     "Restart requested: source={} binary={}",
                     source,

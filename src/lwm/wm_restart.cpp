@@ -48,7 +48,6 @@ void WindowManager::read_handoff()
 
 Connection WindowManager::prepare_restart()
 {
-    restore_clients();
     auto root = conn_.screen()->root;
     // A snapshot the server would refuse is dropped; the successor adopts windows afresh.
     auto text = restart::encode(state_.snapshot());
@@ -65,6 +64,7 @@ Connection WindowManager::prepare_restart()
     uint32_t no_events = XCB_EVENT_MASK_NO_EVENT;
     xcb_change_window_attributes(conn_.get(), root, XCB_CW_EVENT_MASK, &no_events);
     xcb_set_selection_owner(conn_.get(), XCB_NONE, atoms_.wm_s0, XCB_CURRENT_TIME);
+    xcb_ungrab_server(conn_.get());
 
     // A round trip guarantees the server processed the release before exec. The
     // connection stays open through exec, for the successor or a failed-exec

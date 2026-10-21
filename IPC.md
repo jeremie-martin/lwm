@@ -107,6 +107,8 @@ Cycling fails when no window is eligible.
 | `scratchpad cancel-launch NAME` | clear pending launch state without terminating a process |
 | `scratchpad list` | named and generic scratchpad state as JSON |
 
+A restart requested while LWM is already stopping fails with `lwm is stopping`;
+losing the screen to another window manager turns a pending restart into an exit.
 Reload and restart clamp stored ratios on every workspace to the current bounds.
 Ratio values must be finite numbers with no trailing characters. `ratio set` rejects
 values outside `[min_ratio, 1 - min_ratio]` from the active configuration; `ratio
