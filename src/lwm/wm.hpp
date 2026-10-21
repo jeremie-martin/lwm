@@ -5,8 +5,6 @@
 #include "lwm/core/ewmh.hpp"
 #include "lwm/core/command.hpp"
 #include "lwm/core/state.hpp"
-#include <array>
-#include <chrono>
 #include <deque>
 #include <expected>
 #include <map>
@@ -126,7 +124,6 @@ private:
     bool launch_program(std::vector<std::string> const& command, std::string_view source);
     void close_window(xcb_window_t window);
     uint32_t server_time();
-    void send_protocol_message(xcb_window_t window, xcb_atom_t protocol, uint32_t timestamp);
     void set_root_cursor(xcb_cursor_t cursor);
 
     // wm_observe.cpp: X reads. Requests are pipelined; decoders are shared by

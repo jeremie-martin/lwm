@@ -129,9 +129,8 @@ void WindowManager::handle_command(xcb_window_t requester)
 {
     auto* c = conn_.get();
     auto utf8 = ewmh_.get()->UTF8_STRING;
-    auto request = reply(xcb_get_property_reply(
-        c, xcb_get_property(c, 1, requester, atoms_.lwm_command, utf8, 0, command::max_request_bytes / 4), nullptr
-    ));
+    auto request = xproperty::receive(
+        c, xcb_get_property(c, 1, requester, atoms_.lwm_command, utf8, 0, command::max_request_bytes / 4));
     if (!request || request->type == XCB_NONE)
         return; // Not a request: the property is missing or the window is gone.
     // A longer request is read truncated at the limit, which the parser rejects as too large.

@@ -125,7 +125,8 @@ add_test(NAME uninstall_manifest
 # during exec. This private-Xvfb probe is the only check of the latter.
 find_package(Python3 COMPONENTS Interpreter)
 find_library(LWM_XRES_LIBRARY NAMES XRes libXRes.so.1) # The probe loads it at runtime.
-if(Python3_Interpreter_FOUND AND LWM_XRES_LIBRARY)
+find_program(LWM_XVFB Xvfb)
+if(Python3_Interpreter_FOUND AND LWM_XRES_LIBRARY AND LWM_XVFB)
     add_test(NAME restart_resources
         COMMAND Python3::Interpreter "${CMAKE_CURRENT_SOURCE_DIR}/performance/restart_resources.py"
                 "$<TARGET_FILE:lwm>" --check)

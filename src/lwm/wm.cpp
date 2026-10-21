@@ -137,16 +137,8 @@ void WindowManager::claim_wm_ownership()
     current = owner();
     if (!current || current->owner != wm_window_)
         throw std::runtime_error("Failed to acquire WM_S0 selection");
-
-    xcb_client_message_event_t event{ };
-    event.response_type = XCB_CLIENT_MESSAGE;
-    event.format = 32;
-    event.window = conn_.screen()->root;
-    event.type = ewmh_.get()->MANAGER;
-    event.data.data32[0] = time;
-    event.data.data32[1] = atoms_.wm_s0;
-    event.data.data32[2] = wm_window_;
-    xcb_send_event(conn_.get(), 0, conn_.screen()->root, XCB_EVENT_MASK_STRUCTURE_NOTIFY, reinterpret_cast<char const*>(&event));
+    send_message(conn_.get(), conn_.screen()->root, ewmh_.get()->MANAGER, XCB_EVENT_MASK_STRUCTURE_NOTIFY,
+                 { .data32 = { time, atoms_.wm_s0, wm_window_ } });
 }
 
 void WindowManager::grab_buttons()
@@ -390,7 +382,8 @@ void WindowManager::close_window(xcb_window_t window)
         return;
     }
     // Like WM_TAKE_FOCUS, a client may focus a confirmation child with this time.
-    send_protocol_message(window, atoms_.wm_delete_window, server_time());
+    send_message(conn_.get(), window, ewmh_.get()->WM_PROTOCOLS, XCB_EVENT_MASK_NO_EVENT,
+                 { .data32 = { atoms_.wm_delete_window, server_time() } });
     LWM_LOG_DEBUG("Close requested: window={:#x} protocol=WM_DELETE_WINDOW", window);
 }
 
@@ -418,18 +411,6 @@ uint32_t WindowManager::server_time()
     auto time = reinterpret_cast<xcb_property_notify_event_t const&>(*notify).time;
     deferred_events_.erase(notify);
     return time;
-}
-
-void WindowManager::send_protocol_message(xcb_window_t window, xcb_atom_t protocol, uint32_t timestamp)
-{
-    xcb_client_message_event_t event{ };
-    event.response_type = XCB_CLIENT_MESSAGE;
-    event.window = window;
-    event.type = ewmh_.get()->WM_PROTOCOLS;
-    event.format = 32;
-    event.data.data32[0] = protocol;
-    event.data.data32[1] = timestamp ? timestamp : XCB_CURRENT_TIME;
-    xcb_send_event(conn_.get(), 0, window, XCB_EVENT_MASK_NO_EVENT, reinterpret_cast<char*>(&event));
 }
 
 } // namespace lwm

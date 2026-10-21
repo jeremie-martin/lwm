@@ -1,11 +1,8 @@
 #pragma once
 
-#include <cstdlib>
-#include <memory>
 #include <optional>
 #include <span>
 #include <string>
-#include <vector>
 #include "xconnection.hpp"
 
 namespace lwm::xproperty {
@@ -44,19 +41,11 @@ inline std::optional<uint32_t> scalar(xcb_connection_t* connection, xcb_get_prop
     return values.size() == 1 ? std::optional{ values.front() } : std::nullopt;
 }
 
-inline std::optional<uint32_t>
-scalar(xcb_connection_t* connection, xcb_window_t window, xcb_atom_t property, xcb_atom_t type)
-{
-    return scalar(connection, request(connection, window, property, type, 1), type);
-}
-
 // Complete 8-bit text of one type, optionally deleted by the same request.
 inline std::optional<std::string>
 text(xcb_connection_t* connection, xcb_window_t window, xcb_atom_t property, xcb_atom_t type, bool remove = false)
 {
-    auto value = reply(xcb_get_property_reply(
-        connection, xcb_get_property(connection, remove, window, property, type, 0, UINT32_MAX / 4), nullptr
-    ));
+    auto value = receive(connection, xcb_get_property(connection, remove, window, property, type, 0, UINT32_MAX / 4));
     if (!complete(value, type, 8))
         return std::nullopt;
     return std::string(

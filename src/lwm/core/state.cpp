@@ -836,11 +836,8 @@ void State::rebind(std::vector<Topology::Output> outputs)
                     mutated();
                     ratio = bounded;
                 }
-    bool topology_changed = monitors_.size() != outputs.size()
-        || !std::ranges::equal(monitors_,
-                               outputs,
-                               [](auto const& a, auto const& b)
-                               { return a.name == b.name && a.geometry == b.geometry; });
+    bool topology_changed = !std::ranges::equal(monitors_, outputs, [](auto const& a, auto const& b)
+        { return a.name == b.name && a.geometry == b.geometry; });
     if (!topology_changed && std::ranges::all_of(monitors_, [&](auto const& monitor)
         { return monitor.workspaces.size() == config_.workspaces.size(); }))
     {

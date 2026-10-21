@@ -86,14 +86,7 @@ int run(std::string const& request, std::chrono::milliseconds timeout)
     uint32_t events = XCB_EVENT_MASK_PROPERTY_CHANGE;
     xcb_create_window(conn, 0, requester, x.root(), -1, -1, 1, 1, 0, XCB_WINDOW_CLASS_INPUT_ONLY, XCB_COPY_FROM_PARENT, XCB_CW_EVENT_MASK, &events);
     xcb_change_property(conn, XCB_PROP_MODE_REPLACE, requester, x.command, x.utf8, 8, request.size(), request.data());
-    xcb_client_message_event_t message{ };
-    message.response_type = XCB_CLIENT_MESSAGE;
-    message.format = 32;
-    message.window = wm;
-    message.type = x.command;
-    message.data.data32[0] = requester;
-    // An empty mask delivers the message to the owner window's creator, the WM.
-    xcb_send_event(conn, 0, wm, XCB_EVENT_MASK_NO_EVENT, reinterpret_cast<char const*>(&message));
+    lwm::send_message(conn, wm, x.command, XCB_EVENT_MASK_NO_EVENT, { .data32 = { requester } });
     xcb_flush(conn);
     auto deadline = std::chrono::steady_clock::now() + timeout;
     for (;;)

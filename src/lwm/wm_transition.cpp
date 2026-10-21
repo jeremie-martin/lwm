@@ -320,11 +320,12 @@ void WindowManager::commit_focus()
 {
     // Explicit same-window focus still reasserts input focus and WM_TAKE_FOCUS.
     auto const* client = state_.find(state_.active_window());
-    auto time = client && client->supports_take_focus ? server_time() : XCB_CURRENT_TIME;
+    uint32_t time = client && client->supports_take_focus ? server_time() : XCB_CURRENT_TIME;
     // Direct focus first, so the client's answer to WM_TAKE_FOCUS comes after it.
     xcb_set_input_focus(conn_.get(), XCB_INPUT_FOCUS_POINTER_ROOT, client ? client->id : conn_.screen()->root, time);
     if (time != XCB_CURRENT_TIME)
-        send_protocol_message(client->id, atoms_.wm_take_focus, time);
+        send_message(conn_.get(), client->id, ewmh_.get()->WM_PROTOCOLS, XCB_EVENT_MASK_NO_EVENT,
+                     { .data32 = { atoms_.wm_take_focus, time } });
 }
 
 // Root publication
