@@ -282,7 +282,7 @@ TEST_CASE(
 
     REQUIRE(wait_for_property_cardinal(conn.get(), window, net_wm_desktop, 1, kTimeout));
     REQUIRE(wait_for_property_cardinal(conn.get(), conn.root(), net_current_desktop, 0, kTimeout));
-    REQUIRE(wait_for_condition([&]() { return is_unmapped(conn, window); }, kTimeout));
+    REQUIRE(wait_for_condition([&]() { return is_hidden(conn, window); }, kTimeout));
     REQUIRE(wait_for_active_window(conn, fallback, kTimeout));
 
     destroy_window(conn, window);
@@ -647,7 +647,7 @@ TEST_CASE(
         {
             return get_wm_state(conn, window, wm_state) == XCB_ICCCM_WM_STATE_ICONIC
                 && property_has_atom(conn.get(), window, net_wm_state, net_wm_state_hidden)
-                && is_unmapped(conn, window);
+                && is_hidden(conn, window);
         },
         kTimeout
     ));
@@ -659,7 +659,7 @@ TEST_CASE(
         {
             return get_wm_state(conn, window, wm_state) == XCB_ICCCM_WM_STATE_ICONIC
                 && property_has_atom(conn.get(), window, net_wm_state, net_wm_state_hidden)
-                && is_unmapped(conn, window);
+                && is_hidden(conn, window);
         },
         kTimeout
     ));
@@ -928,7 +928,7 @@ TEST_CASE(
 
     REQUIRE(wait_for_property_cardinal(conn.get(), window, net_wm_desktop, 1, kTimeout));
     REQUIRE(wait_for_property_cardinal(conn.get(), conn.root(), net_current_desktop, 0, kTimeout));
-    REQUIRE(wait_for_condition([&]() { return is_unmapped(conn, window); }, kTimeout));
+    REQUIRE(wait_for_condition([&]() { return is_hidden(conn, window); }, kTimeout));
     REQUIRE(wait_for_active_window(conn, fallback, kTimeout));
 
     destroy_window(conn, window);

@@ -115,7 +115,7 @@ TEST_CASE("Integration: hiding does not provoke delayed application resize feedb
     CAPTURE(original->x, original->y, original->width, original->height,
             restored->x, restored->y, restored->width, restored->height,
             application.undersized_configurations);
-    CHECK_FALSE(is_unmapped(connection, window));
+    CHECK_FALSE(is_hidden(connection, window));
     CHECK(restored == original);
     CHECK(application.undersized_configurations == 0);
     destroy_window(connection, window);
@@ -143,7 +143,7 @@ TEST_CASE("Integration: legitimate application size feedback while hidden surviv
     ipc_ok("workspace switch 0");
     auto resized = get_window_geometry(connection, window);
     REQUIRE(resized);
-    CHECK_FALSE(is_unmapped(connection, window));
+    CHECK_FALSE(is_hidden(connection, window));
     CHECK(resized->x == original->x);
     CHECK(resized->y == original->y);
     CHECK(resized->width == ResponsiveClient::minimum_width);

@@ -60,7 +60,7 @@ TEST_CASE(
     set_window_wm_class(conn, window, "scratchpad-instance", "ScratchpadClass");
     map_window(conn, window);
 
-    REQUIRE(wait_for_condition([&]() { return is_unmapped(conn, window); }, kTimeout));
+    REQUIRE(wait_for_condition([&]() { return is_hidden(conn, window); }, kTimeout));
 
     destroy_window(conn, window);
 }
@@ -222,34 +222,34 @@ TEST_CASE("Integration: scratchpad cycle keeps pooled windows in rotation", "[in
     auto stash_second = send_ipc_command("scratchpad stash");
     REQUIRE(stash_second.has_value());
     REQUIRE(*stash_second == "ok");
-    REQUIRE(wait_for_condition([&]() { return is_unmapped(conn, second); }, kTimeout));
+    REQUIRE(wait_for_condition([&]() { return is_hidden(conn, second); }, kTimeout));
     REQUIRE(wait_for_active_window(conn, first, kTimeout));
 
     auto stash_first = send_ipc_command("scratchpad stash");
     REQUIRE(stash_first.has_value());
     REQUIRE(*stash_first == "ok");
-    REQUIRE(wait_for_condition([&]() { return is_unmapped(conn, first); }, kTimeout));
+    REQUIRE(wait_for_condition([&]() { return is_hidden(conn, first); }, kTimeout));
 
     auto first_cycle = send_ipc_command("scratchpad cycle");
     REQUIRE(first_cycle.has_value());
     REQUIRE(*first_cycle == "ok");
     REQUIRE(wait_for_active_window(conn, first, kTimeout));
-    REQUIRE(wait_for_condition([&]() { return !is_unmapped(conn, first); }, kTimeout));
-    REQUIRE(wait_for_condition([&]() { return is_unmapped(conn, second); }, kTimeout));
+    REQUIRE(wait_for_condition([&]() { return !is_hidden(conn, first); }, kTimeout));
+    REQUIRE(wait_for_condition([&]() { return is_hidden(conn, second); }, kTimeout));
 
     auto second_cycle = send_ipc_command("scratchpad cycle");
     REQUIRE(second_cycle.has_value());
     REQUIRE(*second_cycle == "ok");
     REQUIRE(wait_for_active_window(conn, second, kTimeout));
-    REQUIRE(wait_for_condition([&]() { return is_unmapped(conn, first); }, kTimeout));
-    REQUIRE(wait_for_condition([&]() { return !is_unmapped(conn, second); }, kTimeout));
+    REQUIRE(wait_for_condition([&]() { return is_hidden(conn, first); }, kTimeout));
+    REQUIRE(wait_for_condition([&]() { return !is_hidden(conn, second); }, kTimeout));
 
     auto third_cycle = send_ipc_command("scratchpad cycle");
     REQUIRE(third_cycle.has_value());
     REQUIRE(*third_cycle == "ok");
     REQUIRE(wait_for_active_window(conn, first, kTimeout));
-    REQUIRE(wait_for_condition([&]() { return !is_unmapped(conn, first); }, kTimeout));
-    REQUIRE(wait_for_condition([&]() { return is_unmapped(conn, second); }, kTimeout));
+    REQUIRE(wait_for_condition([&]() { return !is_hidden(conn, first); }, kTimeout));
+    REQUIRE(wait_for_condition([&]() { return is_hidden(conn, second); }, kTimeout));
 
     destroy_window(conn, second);
     destroy_window(conn, first);
@@ -314,13 +314,13 @@ TEST_CASE("Integration: tiled scratchpad pool preserves prior floating geometry"
     auto stash = send_ipc_command("scratchpad stash");
     REQUIRE(stash.has_value());
     REQUIRE(*stash == "ok");
-    REQUIRE(wait_for_condition([&]() { return is_unmapped(conn, window); }, kTimeout));
+    REQUIRE(wait_for_condition([&]() { return is_hidden(conn, window); }, kTimeout));
 
     auto show = send_ipc_command("scratchpad cycle");
     REQUIRE(show.has_value());
     REQUIRE(*show == "ok");
     REQUIRE(wait_for_active_window(conn, window, kTimeout));
-    REQUIRE(wait_for_condition([&]() { return !is_unmapped(conn, window); }, kTimeout));
+    REQUIRE(wait_for_condition([&]() { return !is_hidden(conn, window); }, kTimeout));
 
     REQUIRE(toggle_float_at_window_center());
     WindowGeometry final_geometry{};
@@ -360,13 +360,13 @@ TEST_CASE("Integration: visible scratchpad pool window keeps cycling after resta
     auto stash = send_ipc_command("scratchpad stash");
     REQUIRE(stash.has_value());
     REQUIRE(*stash == "ok");
-    REQUIRE(wait_for_condition([&]() { return is_unmapped(conn, pooled); }, kTimeout));
+    REQUIRE(wait_for_condition([&]() { return is_hidden(conn, pooled); }, kTimeout));
 
     auto show = send_ipc_command("scratchpad cycle");
     REQUIRE(show.has_value());
     REQUIRE(*show == "ok");
     REQUIRE(wait_for_active_window(conn, pooled, kTimeout));
-    REQUIRE(wait_for_condition([&]() { return !is_unmapped(conn, pooled); }, kTimeout));
+    REQUIRE(wait_for_condition([&]() { return !is_hidden(conn, pooled); }, kTimeout));
 
     auto previous_wm = wm_instance(conn);
     REQUIRE(previous_wm.has_value());
@@ -374,12 +374,12 @@ TEST_CASE("Integration: visible scratchpad pool window keeps cycling after resta
     (void)restart_result;
     REQUIRE(wait_for_wm_restart(conn, std::chrono::seconds(5), *previous_wm));
     REQUIRE(wait_for_active_window(conn, pooled, kTimeout));
-    REQUIRE(wait_for_condition([&]() { return !is_unmapped(conn, pooled); }, kTimeout));
+    REQUIRE(wait_for_condition([&]() { return !is_hidden(conn, pooled); }, kTimeout));
 
     auto hide = send_ipc_command("scratchpad cycle");
     REQUIRE(hide.has_value());
     REQUIRE(*hide == "ok");
-    REQUIRE(wait_for_condition([&]() { return is_unmapped(conn, pooled); }, kTimeout));
+    REQUIRE(wait_for_condition([&]() { return is_hidden(conn, pooled); }, kTimeout));
 
     destroy_window(conn, pooled);
 }
@@ -405,12 +405,12 @@ TEST_CASE("Integration: hidden scratchpad stays hidden across restart", "[integr
     set_window_wm_class(conn, sp, "scratchpad-instance", "ScratchpadClass");
     map_window(conn, sp);
     REQUIRE(wait_for_active_window(conn, sp, kTimeout));
-    REQUIRE(wait_for_condition([&]() { return !is_unmapped(conn, sp); }, kTimeout));
+    REQUIRE(wait_for_condition([&]() { return !is_hidden(conn, sp); }, kTimeout));
 
     auto second_toggle = send_ipc_command("scratchpad toggle terminal");
     REQUIRE(second_toggle.has_value());
     REQUIRE(*second_toggle == "ok");
-    REQUIRE(wait_for_condition([&]() { return is_unmapped(conn, sp); }, kTimeout));
+    REQUIRE(wait_for_condition([&]() { return is_hidden(conn, sp); }, kTimeout));
     REQUIRE(wait_for_active_window(conn, tiled, kTimeout));
 
     auto previous_wm = wm_instance(conn);
@@ -418,7 +418,7 @@ TEST_CASE("Integration: hidden scratchpad stays hidden across restart", "[integr
     auto restart_result = send_ipc_command("restart");
     (void)restart_result;
     REQUIRE(wait_for_wm_restart(conn, std::chrono::seconds(5), *previous_wm));
-    REQUIRE(wait_for_condition([&]() { return is_unmapped(conn, sp); }, kTimeout));
+    REQUIRE(wait_for_condition([&]() { return is_hidden(conn, sp); }, kTimeout));
     REQUIRE(wait_for_active_window(conn, tiled, kTimeout));
 
     destroy_window(conn, sp);
@@ -489,7 +489,7 @@ match = { class = "LaunchTest" }
         kTimeout
     ));
     REQUIRE(send_ipc_command("scratchpad toggle late") == "ok");
-    REQUIRE(wait_for_condition([&] { return !is_unmapped(env->conn, window); }, kTimeout));
+    REQUIRE(wait_for_condition([&] { return !is_hidden(env->conn, window); }, kTimeout));
     destroy_window(env->conn, window);
 }
 
@@ -569,11 +569,11 @@ match = { class = "LaunchTest", title = "ready" }
     REQUIRE(wait_for_condition([&] { return scratchpads()["named"][0]["window"] == window; }, kTimeout));
     CHECK(scratchpads()["named"][0]["pending"] == false);
     if (cancelled)
-        REQUIRE(wait_for_condition([&] { return is_unmapped(conn, window); }, kTimeout));
+        REQUIRE(wait_for_condition([&] { return is_hidden(conn, window); }, kTimeout));
     else
     {
         REQUIRE(wait_for_active_window(conn, window, kTimeout));
-        CHECK_FALSE(is_unmapped(conn, window));
+        CHECK_FALSE(is_hidden(conn, window));
     }
     destroy_window(conn, window);
 }
@@ -595,7 +595,7 @@ size = { width = 0.8, height = 0.6 }
     set_window_wm_class(conn, claimed, "scratchpad-instance", "ScratchpadClass");
     set_window_title(conn, claimed, "dropdown");
     map_window(conn, claimed);
-    REQUIRE(wait_for_condition([&] { return is_unmapped(conn, claimed); }, kTimeout));
+    REQUIRE(wait_for_condition([&] { return is_hidden(conn, claimed); }, kTimeout));
     ipc_ok("scratchpad toggle second");
     auto previous = wm_instance(conn);
     REQUIRE(previous);
@@ -610,15 +610,15 @@ size = { width = 0.8, height = 0.6 }
     auto slots = ipc_json("scratchpad list")["named"];
     REQUIRE(slots.size() == 2);
     CHECK(slots[0]["window"] == claimed);
-    CHECK(is_unmapped(conn, claimed));
+    CHECK(is_hidden(conn, claimed));
     auto slot = slots[1];
     CHECK(slot["window"] == window);
     CHECK(slot["pending"] == false);
     REQUIRE(wait_for_active_window(conn, window, kTimeout));
     REQUIRE(wait_for_window_geometry(conn, window, 128, 144, 1020, 428));
-    CHECK_FALSE(is_unmapped(conn, window));
+    CHECK_FALSE(is_hidden(conn, window));
     ipc_ok("scratchpad toggle second");
-    REQUIRE(wait_for_condition([&] { return is_unmapped(conn, window); }, kTimeout));
+    REQUIRE(wait_for_condition([&] { return is_hidden(conn, window); }, kTimeout));
     destroy_window(conn, window);
     destroy_window(conn, claimed);
 }
@@ -646,7 +646,7 @@ TEST_CASE(
     {
         ipc_ok("scratchpad cycle");
         REQUIRE(wait_for_active_window(conn, windows[index], kTimeout));
-        for (size_t i = 0; i < windows.size(); ++i) REQUIRE(is_unmapped(conn, windows[i]) == (i != index));
+        for (size_t i = 0; i < windows.size(); ++i) REQUIRE(is_hidden(conn, windows[i]) == (i != index));
     };
     cycle_to(2);
     cycle_to(1);
@@ -690,10 +690,10 @@ TEST_CASE(
         ipc_ok("workspace switch 1");
     else
         ipc_ok("scratchpad cycle");
-    REQUIRE(wait_for_condition([&] { return is_unmapped(conn, window); }, kTimeout));
+    REQUIRE(wait_for_condition([&] { return is_hidden(conn, window); }, kTimeout));
     ipc_ok("scratchpad cycle");
     REQUIRE(wait_for_active_window(conn, window, kTimeout));
-    REQUIRE_FALSE(is_unmapped(conn, window));
+    REQUIRE_FALSE(is_hidden(conn, window));
     auto desktop = intern_atom(conn.get(), "_NET_WM_DESKTOP");
     REQUIRE(wait_for_property_cardinal(
         conn.get(),
@@ -710,7 +710,7 @@ TEST_CASE(
     ipc_ok("scratchpad cycle");
     REQUIRE(wait_for_active_window(conn, window, kTimeout));
     ipc_ok("scratchpad cycle");
-    REQUIRE(wait_for_condition([&] { return is_unmapped(conn, window); }, kTimeout));
+    REQUIRE(wait_for_condition([&] { return is_hidden(conn, window); }, kTimeout));
     ipc_ok("scratchpad cycle");
     REQUIRE(wait_for_active_window(conn, window, kTimeout));
     destroy_window(conn, window);
@@ -727,7 +727,7 @@ TEST_CASE("Integration: restart hiding comes from the accepted snapshot alone", 
     map_window(conn, saved);
     REQUIRE(wait_for_active_window(conn, saved, kTimeout));
     ipc_ok("scratchpad stash");
-    REQUIRE(is_unmapped(conn, saved));
+    REQUIRE(is_hidden(conn, saved));
     auto previous = wm_instance(conn);
     REQUIRE(previous);
     PausedRestart restart(env->wm);
@@ -774,8 +774,8 @@ TEST_CASE("Integration: restart hiding comes from the accepted snapshot alone", 
     REQUIRE(wait_for_wm_restart(conn, kTimeout, *previous));
     auto windows = ipc_json("window list").at("windows");
     for (auto const& window : windows) CHECK(window.at("iconic") == (accepted && window.at("id") == saved));
-    CHECK(is_unmapped(conn, saved) == accepted);
-    CHECK_FALSE(is_unmapped(conn, newcomer));
+    CHECK(is_hidden(conn, saved) == accepted);
+    CHECK_FALSE(is_hidden(conn, newcomer));
     CHECK_FALSE(property_has_atom(conn.get(), newcomer, state, hidden));
     CHECK(ipc_json("scratchpad list").at("pool").size() == (accepted ? 1 : 0));
     destroy_window(conn, newcomer);

@@ -138,7 +138,7 @@ std::optional<Geometry> geometry(xcb_connection_t* conn, xcb_get_geometry_cookie
 
 // Attributes gate admission, subscription precedes identity, and identity
 // chooses the remaining reads. Each stage is pipelined across the batch.
-std::vector<WindowObservation> WindowManager::observe(std::span<xcb_window_t const> windows, bool adopting, bool cold_recovery)
+std::vector<WindowObservation> WindowManager::observe(std::span<xcb_window_t const> windows, bool adopting)
 {
     auto* c = conn_.get();
     auto* e = ewmh_.get();
@@ -154,7 +154,6 @@ std::vector<WindowObservation> WindowManager::observe(std::span<xcb_window_t con
         WindowObservation window;
         bool manageable = false;
         xcb_get_window_attributes_cookie_t attributes;
-        std::optional<xcb_get_property_cookie_t> wm_state;
         xcb_get_property_cookie_t type, transient;
         std::optional<Properties> properties;
         std::optional<StrutCookies> strut;
@@ -165,18 +164,12 @@ std::vector<WindowObservation> WindowManager::observe(std::span<xcb_window_t con
     {
         pending[i].window.id = windows[i];
         pending[i].attributes = xcb_get_window_attributes(c, windows[i]);
-        if (cold_recovery)
-            pending[i].wm_state = request(c, windows[i], atoms_.wm_state, atoms_.wm_state, 2);
     }
     for (auto& reads : pending)
     {
         auto& w = reads.window;
         auto attr = reply(xcb_get_window_attributes_reply(c, reads.attributes, nullptr));
-        auto wm_state = reads.wm_state ? xproperty::receive(c, *reads.wm_state) : xproperty::Reply{ nullptr, &std::free };
-        auto values = xproperty::words(wm_state, atoms_.wm_state);
-        bool managed = values.size() == 2
-            && (values[0] == XCB_ICCCM_WM_STATE_NORMAL || values[0] == XCB_ICCCM_WM_STATE_ICONIC);
-        if (!attr || attr->override_redirect || (adopting && attr->map_state != XCB_MAP_STATE_VIEWABLE && !managed))
+        if (!attr || attr->override_redirect || (adopting && attr->map_state != XCB_MAP_STATE_VIEWABLE))
             continue;
         w.mapped = attr->map_state != XCB_MAP_STATE_UNMAPPED;
         reads.manageable = true;

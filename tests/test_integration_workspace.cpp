@@ -192,17 +192,6 @@ std::optional<std::array<uint32_t, 4>> get_frame_extents(X11Connection& conn, xc
     return result;
 }
 
-bool window_is_viewable(X11Connection& conn, xcb_window_t window)
-{
-    auto cookie = xcb_get_window_attributes(conn.get(), window);
-    auto* reply = xcb_get_window_attributes_reply(conn.get(), cookie, nullptr);
-    if (!reply)
-        return false;
-    bool const result = reply->map_state == XCB_MAP_STATE_VIEWABLE;
-    free(reply);
-    return result;
-}
-
 std::optional<xcb_window_t> get_input_focus(X11Connection& conn)
 {
     auto cookie = xcb_get_input_focus(conn.get());
@@ -516,7 +505,7 @@ TEST_CASE(
         [&]()
         {
             auto current = get_window_property_cardinal(conn.get(), conn.root(), net_current_desktop);
-            return current && *current == 0 && is_unmapped(conn, w2);
+            return current && *current == 0 && is_hidden(conn, w2);
         },
         kTimeout
     ));
@@ -528,21 +517,21 @@ TEST_CASE(
             auto client_list = get_client_list(conn, net_client_list);
             auto active = get_window_property_window(conn.get(), conn.root(), net_active_window);
             auto focus = get_input_focus(conn);
-            return is_unmapped(conn, w2) && state && *state == XCB_ICCCM_WM_STATE_NORMAL && hidden && !*hidden
+            return is_hidden(conn, w2) && state && *state == XCB_ICCCM_WM_STATE_NORMAL && hidden && !*hidden
                 && client_list && *client_list == *client_list_before && active && *active == w1 && focus
                 && *focus == w1;
         },
         kTimeout
     ));
     synchronize_x_server(conn);
-    CHECK(drain_window_visibility_events(conn, w2));
+    CHECK_FALSE(drain_window_visibility_events(conn, w2));
 
     send_client_message(conn, conn.root(), net_current_desktop, 1);
     REQUIRE(wait_for_property_cardinal(conn.get(), conn.root(), net_current_desktop, 1, kTimeout));
     REQUIRE(wait_for_condition(
         [&]()
         {
-            return window_is_viewable(conn, w2);
+            return !is_hidden(conn, w2);
         },
         kTimeout
     ));
@@ -554,14 +543,14 @@ TEST_CASE(
             auto client_list = get_client_list(conn, net_client_list);
             auto active = get_window_property_window(conn.get(), conn.root(), net_active_window);
             auto focus = get_input_focus(conn);
-            return window_is_viewable(conn, w2) && state && *state == XCB_ICCCM_WM_STATE_NORMAL && hidden && !*hidden
+            return !is_hidden(conn, w2) && state && *state == XCB_ICCCM_WM_STATE_NORMAL && hidden && !*hidden
                 && client_list && *client_list == *client_list_before && active && *active == w2 && focus
                 && *focus == w2;
         },
         kTimeout
     ));
     synchronize_x_server(conn);
-    CHECK(drain_window_visibility_events(conn, w2));
+    CHECK_FALSE(drain_window_visibility_events(conn, w2));
 
     destroy_window(conn, w2);
     destroy_window(conn, w1);
@@ -761,7 +750,7 @@ TEST_CASE("Integration: workspace, fullscreen, scratchpad and restart transition
     auto desktop = intern_atom(conn.get(), "_NET_WM_DESKTOP");
     auto visible = [&](xcb_window_t w)
     {
-        return window_is_viewable(conn, w);
+        return !is_hidden(conn, w);
     };
     for (int iteration = 0; iteration < 3; ++iteration)
     {
@@ -897,7 +886,7 @@ TEST_CASE("Integration: restart consumes its handoff and rejects damaged snapsho
     {
         CHECK(require_property_cardinal(conn.get(), window, desktop) == 1);
         CHECK(get_window_border_width(conn, window) == 2);
-        CHECK_FALSE(is_unmapped(conn, window));
+        CHECK_FALSE(is_hidden(conn, window));
     }
     CHECK((require_window_geometry(conn, first) == require_window_geometry(conn, second)) == intact);
     destroy_window(conn, second);
@@ -1039,7 +1028,7 @@ TEST_CASE("Integration: fresh adoption ignores a previous manager's hidden state
     LwmProcess wm(x11.display(), "[workspaces]\nnames = ['1']\n");
     REQUIRE(wait_for_wm_ready(conn, kTimeout));
     REQUIRE(wait_for_active_window(conn, window, kTimeout));
-    CHECK_FALSE(is_unmapped(conn, window));
+    CHECK_FALSE(is_hidden(conn, window));
     CHECK_FALSE(property_has_atom(conn.get(), window, state, hidden));
     CHECK(get_wm_state(conn, window, intern_atom(conn.get(), "WM_STATE")) == XCB_ICCCM_WM_STATE_NORMAL);
     destroy_window(conn, window);
@@ -1063,26 +1052,26 @@ TEST_CASE(
     REQUIRE(normal.width > 20000);
     SECTION("Workspace visibility") { ipc_ok("workspace switch 1"); }
     SECTION("Scratchpad visibility") { ipc_ok("scratchpad stash"); }
-    REQUIRE(is_unmapped(conn, window));
+    REQUIRE(is_hidden(conn, window));
     auto attributes =
         lwm::reply(xcb_get_window_attributes_reply(conn.get(), xcb_get_window_attributes(conn.get(), window), nullptr));
     REQUIRE(attributes);
-    CHECK(attributes->map_state == XCB_MAP_STATE_UNMAPPED);
+    CHECK(attributes->map_state == XCB_MAP_STATE_VIEWABLE);
     auto previous = wm_instance(conn);
     REQUIRE(previous);
     ipc_ok("restart");
     REQUIRE(wait_for_wm_restart(conn, kTimeout, *previous));
-    REQUIRE(is_unmapped(conn, window));
+    REQUIRE(is_hidden(conn, window));
     ipc_ok("window focus " + std::to_string(window));
-    CHECK_FALSE(is_unmapped(conn, window));
+    CHECK_FALSE(is_hidden(conn, window));
     CHECK(require_window_geometry(conn, window) == normal);
     CHECK(get_window_border_width(conn, window) == border);
-    // ICCCM synthetic withdrawal works even when the WM already unmapped it.
+    // ICCCM synthetic withdrawal alone withdraws a hidden client.
     ipc_ok("scratchpad stash");
     // A recalled pool member is already pooled; cycle hides its active target.
-    if (!is_unmapped(conn, window))
+    if (!is_hidden(conn, window))
         ipc_ok("scratchpad cycle");
-    REQUIRE(is_unmapped(conn, window));
+    REQUIRE(is_hidden(conn, window));
     xcb_unmap_notify_event_t withdrawal{ };
     withdrawal.response_type = XCB_UNMAP_NOTIFY;
     withdrawal.event = conn.root();
@@ -1096,7 +1085,7 @@ TEST_CASE(
     CHECK(get_window_border_width(conn, window) == border);
     map_window(conn, window);
     REQUIRE(wait_for_active_window(conn, window, kTimeout));
-    CHECK_FALSE(is_unmapped(conn, window));
+    CHECK_FALSE(is_hidden(conn, window));
     CHECK(require_window_geometry(conn, window) == normal);
     CHECK(get_window_border_width(conn, window) == border);
     destroy_window(conn, window);
@@ -1115,11 +1104,11 @@ TEST_CASE(
     REQUIRE(wait_for_active_window(conn, window, kTimeout));
     auto normal = require_window_geometry(conn, window);
     ipc_ok("scratchpad stash");
-    REQUIRE(is_unmapped(conn, window));
+    REQUIRE(is_hidden(conn, window));
     auto previous = wm_instance(conn);
     REQUIRE(previous);
     PausedRestart restart(env->wm);
-    CHECK_FALSE(is_unmapped(conn, window));
+    CHECK_FALSE(is_hidden(conn, window));
     CHECK(require_window_geometry(conn, window) == normal);
     auto property = intern_atom(conn.get(), "_LWM_RESTART");
     auto utf8 = intern_atom(conn.get(), "UTF8_STRING");
@@ -1143,7 +1132,7 @@ TEST_CASE(
     restart.resume();
     REQUIRE(wait_for_wm_restart(conn, kTimeout, *previous));
     REQUIRE(wait_for_active_window(conn, window, kTimeout));
-    CHECK_FALSE(is_unmapped(conn, window));
+    CHECK_FALSE(is_hidden(conn, window));
     CHECK(require_window_geometry(conn, window) == normal);
     CHECK_FALSE(ipc_json("window list").at("windows").at(0).at("iconic").get<bool>());
     destroy_window(conn, window);
@@ -1160,7 +1149,7 @@ TEST_CASE("Integration: transferring WM ownership restores hidden client geometr
     auto normal = require_window_geometry(conn, window);
     auto border = get_window_border_width(conn, window);
     ipc_ok("scratchpad stash");
-    REQUIRE(is_unmapped(conn, window));
+    REQUIRE(is_hidden(conn, window));
     auto successor = create_window(conn, 0, 0, 1, 1);
     xcb_set_selection_owner(conn.get(), successor, intern_atom(conn.get(), "WM_S0"), XCB_CURRENT_TIME);
     xcb_flush(conn.get());
@@ -1168,50 +1157,14 @@ TEST_CASE("Integration: transferring WM ownership restores hidden client geometr
     REQUIRE(status);
     REQUIRE(WIFEXITED(*status));
     CHECK(WEXITSTATUS(*status) == 0);
-    CHECK_FALSE(is_unmapped(conn, window));
+    CHECK_FALSE(is_hidden(conn, window));
     CHECK(require_window_geometry(conn, window) == normal);
     CHECK(get_window_border_width(conn, window) == border);
     destroy_window(conn, window);
     destroy_window(conn, successor);
 }
 
-TEST_CASE(
-    "Integration: fresh adoption recovers unmapped managed clients without adopting withdrawn windows",
-    "[integration][adoption][visibility]"
-)
-{
-    auto state = GENERATE(XCB_ICCCM_WM_STATE_NORMAL, XCB_ICCCM_WM_STATE_ICONIC);
-    CAPTURE(state);
-    auto& x11 = X11TestEnvironment::instance();
-    REQUIRE(x11.available());
-    X11Connection conn;
-    REQUIRE(conn.ok());
-    auto window = create_window(conn, 100, 90, 320, 220);
-    auto withdrawn = create_window(conn, 20, 30, 200, 150);
-    auto fresh = create_window(conn, 40, 50, 210, 160);
-    auto wm_state = intern_atom(conn.get(), "WM_STATE");
-    uint32_t managed_state[] = { static_cast<uint32_t>(state), XCB_NONE };
-    uint32_t withdrawn_state[] = { XCB_ICCCM_WM_STATE_WITHDRAWN, XCB_NONE };
-    xcb_change_property(conn.get(), XCB_PROP_MODE_REPLACE, window, wm_state, wm_state, 32, 2, managed_state);
-    xcb_change_property(conn.get(), XCB_PROP_MODE_REPLACE, withdrawn, wm_state, wm_state, 32, 2, withdrawn_state);
-    xcb_flush(conn.get());
-    REQUIRE(is_unmapped(conn, window));
-    LwmProcess wm(x11.display(), "[[rules]]\napply = { floating = true }\n");
-    REQUIRE(wait_for_wm_ready(conn, kTimeout));
-    REQUIRE(wait_for_active_window(conn, window, kTimeout));
-    CHECK_FALSE(is_unmapped(conn, window));
-    CHECK(require_window_geometry(conn, window).width == 320);
-    CHECK(require_window_geometry(conn, window).height == 220);
-    CHECK(get_wm_state(conn, window, wm_state) == XCB_ICCCM_WM_STATE_NORMAL);
-    CHECK(is_unmapped(conn, withdrawn));
-    CHECK(is_unmapped(conn, fresh));
-    CHECK(ipc_json("window list").at("windows").size() == 1);
-    destroy_window(conn, window);
-    destroy_window(conn, withdrawn);
-    destroy_window(conn, fresh);
-}
-
-TEST_CASE("Integration: crash recovery shows clients left unmapped by the predecessor", "[integration][adoption][visibility]")
+TEST_CASE("Integration: crash recovery shows clients the predecessor hid", "[integration][adoption][visibility]")
 {
     std::string config = "[workspaces]\nnames = ['one', 'two']\n[[rules]]\napply = { floating = true }\n";
     auto env = TestEnvironment::create(config);
@@ -1224,23 +1177,53 @@ TEST_CASE("Integration: crash recovery shows clients left unmapped by the predec
     auto border = get_window_border_width(conn, window);
     SECTION("NormalState client on an inactive workspace") { ipc_ok("workspace switch 1"); }
     SECTION("IconicState scratchpad client") { ipc_ok("scratchpad stash"); }
-    REQUIRE(is_unmapped(conn, window));
+    REQUIRE(is_hidden(conn, window));
     REQUIRE(kill(env->wm.pid(), SIGKILL) == 0);
     auto status = env->wm.wait_for_exit(kTimeout);
     REQUIRE(status);
     REQUIRE(WIFSIGNALED(*status));
     CHECK(WTERMSIG(*status) == SIGKILL);
-    // No cooperative handoff ran: recovery must discover the real unmapped client.
-    REQUIRE(is_unmapped(conn, window));
-    CHECK(require_window_geometry(conn, window) == normal);
+    // No cooperative handoff ran: the client is still mapped right of the root, and
+    // fresh adoption places it back on a monitor at its own size.
+    REQUIRE(is_hidden(conn, window));
     REQUIRE(wait_for_condition([&] { return wm_owner(conn) == XCB_NONE; }, kTimeout));
     LwmProcess successor(env->x11_env.display(), config);
     REQUIRE(wait_for_wm_ready(conn, kTimeout));
     REQUIRE(wait_for_active_window(conn, window, kTimeout));
-    CHECK_FALSE(is_unmapped(conn, window));
-    CHECK(require_window_geometry(conn, window) == normal);
+    CHECK_FALSE(is_hidden(conn, window));
+    CHECK(require_window_geometry(conn, window).width == normal.width);
+    CHECK(require_window_geometry(conn, window).height == normal.height);
     CHECK(get_window_border_width(conn, window) == border);
     CHECK(get_wm_state(conn, window, intern_atom(conn.get(), "WM_STATE")) == XCB_ICCCM_WM_STATE_NORMAL);
+    destroy_window(conn, window);
+}
+
+TEST_CASE("Integration: synthetic destruction and reparenting leave a client managed", "[integration][workspace]")
+{
+    auto env = TestEnvironment::create();
+    REQUIRE(env);
+    auto& conn = env->conn;
+    auto window = create_window(conn, 10, 10, 200, 150);
+    map_window(conn, window);
+    REQUIRE(wait_for_active_window(conn, window, kTimeout));
+    // Any client can send these to the root; only the server's own notifications count.
+    alignas(4) char event[32]{ };
+    SECTION("DestroyNotify")
+    {
+        *reinterpret_cast<xcb_destroy_notify_event_t*>(event) = {
+            .response_type = XCB_DESTROY_NOTIFY, .event = conn.root(), .window = window };
+    }
+    SECTION("ReparentNotify")
+    {
+        *reinterpret_cast<xcb_reparent_notify_event_t*>(event) = {
+            .response_type = XCB_REPARENT_NOTIFY, .event = conn.root(), .window = window,
+            .parent = create_window(conn, 0, 0, 1, 1) };
+    }
+    xcb_send_event(conn.get(), 0, conn.root(),
+        XCB_EVENT_MASK_SUBSTRUCTURE_NOTIFY | XCB_EVENT_MASK_SUBSTRUCTURE_REDIRECT, event);
+    // After this round trip, the IPC request reaches LWM behind the forged notification.
+    synchronize_x_server(conn);
+    CHECK(ipc_json("window list").at("windows").size() == 1);
     destroy_window(conn, window);
 }
 
@@ -1257,7 +1240,7 @@ TEST_CASE("Integration: a hidden client reparented away leaves management", "[in
     map_window(conn, window);
     REQUIRE(wait_for_active_window(conn, window, kTimeout));
     send_client_message(conn, window, net_wm_desktop, 1);
-    REQUIRE(wait_for_condition([&] { return is_unmapped(conn, window); }, kTimeout));
+    REQUIRE(wait_for_condition([&] { return is_hidden(conn, window); }, kTimeout));
 
     // An override-redirect host, like a tray, is not managed itself.
     xcb_window_t host = xcb_generate_id(conn.get());
@@ -1286,7 +1269,7 @@ TEST_CASE("Integration: window requests queued behind a restart reach the succes
     map_window(conn, withdrawn);
     REQUIRE(wait_for_active_window(conn, withdrawn, kTimeout));
     stash(withdrawn);
-    REQUIRE(is_unmapped(conn, withdrawn));
+    REQUIRE(is_hidden(conn, withdrawn));
     auto previous = wm_instance(conn);
     REQUIRE(previous);
 
@@ -1314,8 +1297,8 @@ TEST_CASE("Integration: window requests queued behind a restart reach the succes
 
     REQUIRE(wait_for_wm_restart(conn, kTimeout, *previous));
     REQUIRE(wait_for_active_window(conn, fresh, kTimeout));
-    CHECK_FALSE(is_unmapped(conn, fresh));
-    CHECK(is_unmapped(conn, withdrawn));
+    CHECK_FALSE(is_hidden(conn, fresh));
+    CHECK(is_hidden(conn, withdrawn));
     CHECK(get_wm_state(conn, withdrawn, intern_atom(c, "WM_STATE")) == XCB_ICCCM_WM_STATE_WITHDRAWN);
     auto windows = ipc_json("window list").at("windows");
     CHECK(std::ranges::none_of(windows, [&](auto const& window) { return window.at("id") == withdrawn; }));
@@ -1336,40 +1319,26 @@ TEST_CASE("Integration: an application's map request does not show a stashed cli
     map_window(conn, other);
     REQUIRE(wait_for_active_window(conn, other, kTimeout));
     stash(stashed);
-    REQUIRE(is_unmapped(conn, stashed));
+    REQUIRE(is_hidden(conn, stashed));
     // Showing it takes an activation, which the focus-stealing rules govern.
     map_window(conn, stashed);
     observe_title_after_events(conn, other);
-    CHECK(is_unmapped(conn, stashed));
+    CHECK(is_hidden(conn, stashed));
     CHECK(ipc_json("window list").at("focused") == other);
     destroy_window(conn, other);
     destroy_window(conn, stashed);
 }
 
-TEST_CASE("Integration: a hidden client's withdrawal undoes LWM showing it meanwhile", "[integration][workspace][visibility]")
+TEST_CASE("Integration: a withdrawal before LWM maps a window undoes LWM mapping it", "[integration][visibility]")
 {
-    auto env = TestEnvironment::create("[workspaces]\nnames = [\"1\", \"2\"]\n");
+    auto env = TestEnvironment::create();
     REQUIRE(env);
     auto& conn = env->conn;
     auto* c = conn.get();
     auto window = create_window(conn, 10, 10, 200, 150);
-    map_window(conn, window);
-    REQUIRE(wait_for_active_window(conn, window, kTimeout));
-    ipc_ok("window to-workspace 1");
-    REQUIRE(is_unmapped(conn, window));
-    // One read carries the switch that shows the window and the ICCCM withdrawal the
-    // already unmapped client sends.
-    auto command = intern_atom(c, "_LWM_COMMAND");
-    auto requester = create_window(conn, 0, 0, 1, 1);
-    std::string_view text = "workspace switch 1";
-    xcb_change_property(c, XCB_PROP_MODE_REPLACE, requester, command, intern_atom(c, "UTF8_STRING"), 8, text.size(), text.data());
-    xcb_client_message_event_t request{ };
-    request.response_type = XCB_CLIENT_MESSAGE;
-    request.format = 32;
-    request.window = wm_owner(conn);
-    request.type = command;
-    request.data.data32[0] = requester;
-    xcb_send_event(c, 0, request.window, XCB_EVENT_MASK_NO_EVENT, reinterpret_cast<char const*>(&request));
+    // One read carries the map request and the ICCCM withdrawal of the still
+    // unmapped window, which only the synthetic notification reports.
+    xcb_map_window(c, window);
     xcb_unmap_window(c, window);
     xcb_unmap_notify_event_t withdrawal{ };
     withdrawal.response_type = XCB_UNMAP_NOTIFY;
@@ -1380,11 +1349,11 @@ TEST_CASE("Integration: a hidden client's withdrawal undoes LWM showing it meanw
     xcb_flush(c);
     REQUIRE(wait_for_condition(
         [&] { return get_wm_state(conn, window, intern_atom(c, "WM_STATE")) == XCB_ICCCM_WM_STATE_WITHDRAWN; }, kTimeout));
-    CHECK(is_unmapped(conn, window));
+    CHECK(is_hidden(conn, window));
+    CHECK(ipc_json("window list").at("windows").empty());
     // The application can map it again.
     map_window(conn, window);
     REQUIRE(wait_for_active_window(conn, window, kTimeout));
-    CHECK_FALSE(is_unmapped(conn, window));
-    destroy_window(conn, requester);
+    CHECK_FALSE(is_hidden(conn, window));
     destroy_window(conn, window);
 }

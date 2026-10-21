@@ -64,21 +64,13 @@ void WindowManager::complete_transition()
 
 // Client publication
 
-// Hides, shows, configures and maps clients. Returns whether anything moved
-// under the pointer, whether tiled or floating.
+// Clients stay mapped. Hiding moves the last submitted rectangle, or the normal
+// one, to the largest X coordinate: right of the root whatever its size, without a
+// resize the toolkit could answer. Synthetic notifications report the normal
+// presentation. Returns whether anything moved under the pointer.
 bool WindowManager::publish_clients(std::vector<State::Projected> const& clients)
 {
     bool moved = false;
-    for (auto const& [client, presentation] : clients)
-    {
-        auto& output = outputs_[client->id];
-        if (!presentation && output.mapped)
-        {
-            output.unmaps.push_back(xcb_unmap_window(conn_.get(), client->id).sequence);
-            output.mapped = false;
-            moved = true;
-        }
-    }
     // Keep a split resize's configure requests together on the server.
     auto const& drag = state_.drag();
     bool resizing_tiles = drag && std::holds_alternative<State::SplitDrag>(drag->operation);
@@ -86,19 +78,22 @@ bool WindowManager::publish_clients(std::vector<State::Projected> const& clients
         xcb_grab_server(conn_.get());
     for (auto const& [client, presentation] : clients)
     {
-        if (presentation && write_geometry(client->id, outputs_.at(client->id), *presentation))
+        auto& output = outputs_[client->id];
+        auto target = presentation;
+        if (!target)
         {
-            moved = true;
-            send_configure_notify(client->id, *presentation);
-            configure_replies_.erase(client->id);
+            target = output.presentation ? *output.presentation : state_.presentation(*client);
+            target->geometry.x = INT16_MAX;
         }
-        else if (configure_replies_.erase(client->id))
+        bool written = write_geometry(client->id, output, *target);
+        if (configure_replies_.erase(client->id) || (written && presentation))
             send_configure_notify(client->id, presentation ? *presentation : state_.presentation(*client));
+        moved |= written;
     }
     if (resizing_tiles)
         xcb_ungrab_server(conn_.get());
     for (auto const& projected : clients)
-        if (auto& output = outputs_.at(projected.client->id); projected.presentation && !output.mapped)
+        if (auto& output = outputs_.at(projected.client->id); !output.mapped)
         {
             xcb_map_window(conn_.get(), projected.client->id);
             output.mapped = true;

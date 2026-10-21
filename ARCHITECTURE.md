@@ -266,13 +266,12 @@ clients except its managed transient descendants. `FullscreenVisibility` compute
 owners and exemptions once per pass, bounding cyclic parent hints.
 
 `iconic` is an explicit hide owned by a named scratchpad or the generic pool;
-visibility is derived. Completion unmaps hidden clients without changing their
-server geometry, and configures visible clients before mapping them. The output
-cache records submitted mapping and geometry; State owns visibility and normal
-geometry. The shell matches its own unmap acknowledgements by window and X request
-sequence, while application unmaps and synthetic withdrawal release ownership. A
-synthetic withdrawal can follow LWM showing the client, so the shell unmaps it again
-and consumes that acknowledgement at once.
+visibility is derived. Completion keeps every client mapped and moves a hidden one's
+last submitted rectangle to x 32767, right of the root, without resizing it.
+The output cache records submitted mapping and geometry; State owns visibility and
+normal geometry. Any UnmapNotify releases ownership. A synthetic withdrawal can
+follow LWM mapping a client that already unmapped itself, so the shell unmaps it
+again and consumes that acknowledgement at once.
 
 Stored split ratios obey the current configuration bounds. State bounds writes and
 reconciles every workspace during reload and restart topology rebinding, including

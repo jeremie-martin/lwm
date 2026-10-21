@@ -94,7 +94,7 @@ apply = { floating = false }
         REQUIRE(wait_for_condition(
             [&]
             {
-                return is_unmapped(conn, window);
+                return is_hidden(conn, window);
             },
             timeout
         ));
@@ -159,8 +159,8 @@ TEST_CASE(
     auto has_visibility = [&](bool visible)
     {
         auto rect = get_window_geometry(conn, dialog);
-        return visible ? !is_unmapped(conn, dialog) && rect && rect->width == 320 && rect->height == 240 && rect->x >= 0 && rect->y >= 0
-                       : is_unmapped(conn, dialog);
+        return visible ? !is_hidden(conn, dialog) && rect && rect->width == 320 && rect->height == 240 && rect->x >= 0 && rect->y >= 0
+                       : is_hidden(conn, dialog);
     };
     REQUIRE(wait_for_condition([&] { return has_visibility(initially_transient); }, timeout));
 
@@ -205,8 +205,8 @@ TEST_CASE(
     map_window(conn, child);
     REQUIRE(wait_for_active_window(conn, child, timeout));
     REQUIRE(wait_for_x_input_focus(conn, child, timeout));
-    REQUIRE_FALSE(is_unmapped(conn, child));
-    REQUIRE(is_unmapped(conn, unrelated));
+    REQUIRE_FALSE(is_hidden(conn, child));
+    REQUIRE(is_hidden(conn, unrelated));
     REQUIRE(is_stacked_above(conn, child, dialog));
     REQUIRE(is_stacked_above(conn, dialog, owner));
 
@@ -218,33 +218,33 @@ TEST_CASE(
     send_client_message(conn, unrelated, activate, 2);
     observe_title_after_events(conn, child);
     REQUIRE(wait_for_active_window(conn, child, timeout));
-    REQUIRE(is_unmapped(conn, unrelated));
+    REQUIRE(is_hidden(conn, unrelated));
 
     // Ancestry exempts suppression; it does not prevent stashing. An
     // explicit activation must also recognize the ancestry before restoring.
     ipc_ok("scratchpad stash");
     observe_title_after_events(conn, child);
-    REQUIRE(is_unmapped(conn, child));
+    REQUIRE(is_hidden(conn, child));
     send_client_message(conn, child, activate, 2);
     REQUIRE(wait_for_active_window(conn, child, timeout));
-    REQUIRE_FALSE(is_unmapped(conn, child));
+    REQUIRE_FALSE(is_hidden(conn, child));
 
     // Changing an intermediate link updates the whole chain without changing
     // the child's hint, and focus repairs when that child becomes suppressed.
     xcb_delete_property(conn.get(), dialog, XCB_ATOM_WM_TRANSIENT_FOR);
     observe_title_after_events(conn, dialog);
-    REQUIRE(is_unmapped(conn, dialog));
-    REQUIRE(is_unmapped(conn, child));
+    REQUIRE(is_hidden(conn, dialog));
+    REQUIRE(is_hidden(conn, child));
     REQUIRE(wait_for_active_window(conn, owner, timeout));
     set_transient_for(conn, dialog, owner);
     observe_title_after_events(conn, dialog);
-    REQUIRE_FALSE(is_unmapped(conn, child));
+    REQUIRE_FALSE(is_hidden(conn, child));
     REQUIRE(is_stacked_above(conn, child, dialog));
     REQUIRE(is_stacked_above(conn, dialog, owner));
 
     destroy_window(conn, dialog);
     observe_title_after_events(conn, child);
-    REQUIRE(is_unmapped(conn, child));
+    REQUIRE(is_hidden(conn, child));
     destroy_window(conn, child);
     destroy_window(conn, unrelated);
     destroy_window(conn, owner);
@@ -290,9 +290,9 @@ apply = { fullscreen = true }
     auto expect_families = [&](Family const& shown, Family const& hidden)
     {
         for (auto window : { shown.root, shown.dialog, shown.child })
-            CHECK_FALSE(is_unmapped(conn, window));
+            CHECK_FALSE(is_hidden(conn, window));
         for (auto window : { hidden.root, hidden.dialog, hidden.child })
-            CHECK(is_unmapped(conn, window));
+            CHECK(is_hidden(conn, window));
         CHECK(is_stacked_above(conn, shown.child, shown.dialog));
         CHECK(is_stacked_above(conn, shown.dialog, shown.root));
     };
@@ -352,7 +352,7 @@ TEST_CASE(
     observe_title_after_events(conn, window);
     REQUIRE(require_property_cardinal(conn.get(), window, desktop) == 1);
     REQUIRE(get_window_geometry(conn, window));
-    REQUIRE(is_unmapped(conn, window));
+    REQUIRE(is_hidden(conn, window));
 
     SECTION("Window type changes to dialog")
     {
@@ -425,8 +425,8 @@ apply = { floating = true, workspace = 0, sticky = true, fullscreen = false, geo
                 [&]
                 {
                     auto rect = get_window_geometry(conn, window);
-                    return rect && (hidden ? is_unmapped(conn, window)
-                        : !is_unmapped(conn, window) && *rect == WindowGeometry{ 60, 70, 310, 210 });
+                    return rect && (hidden ? is_hidden(conn, window)
+                        : !is_hidden(conn, window) && *rect == WindowGeometry{ 60, 70, 310, 210 });
                 },
                 timeout
             ));
@@ -613,8 +613,8 @@ TEST_CASE("Integration: focusing a window on another workspace settles focus and
     auto second_geometry = get_window_geometry(conn, second);
     REQUIRE(first_geometry);
     REQUIRE(second_geometry);
-    CHECK_FALSE(is_unmapped(conn, first));
-    CHECK(is_unmapped(conn, second));
+    CHECK_FALSE(is_hidden(conn, first));
+    CHECK(is_hidden(conn, second));
     auto reply = send_ipc_command("window list");
     REQUIRE(reply);
     CHECK(nlohmann::json::parse(reply->substr(3)).at("focused") == first);
@@ -761,7 +761,7 @@ TEST_CASE(
     map_window(conn, retained);
     REQUIRE(wait_for_active_window(conn, retained, timeout));
     ipc_ok("scratchpad stash");
-    REQUIRE(is_unmapped(conn, retained));
+    REQUIRE(is_hidden(conn, retained));
     auto withdrawn = create_window(conn, 30, 30, 250, 200);
     map_window(conn, withdrawn);
     REQUIRE(wait_for_active_window(conn, withdrawn, timeout));
@@ -770,8 +770,8 @@ TEST_CASE(
 
     PausedRestart restart(env->wm);
     // The predecessor has restored even its hidden clients before releasing X.
-    REQUIRE_FALSE(is_unmapped(conn, retained));
-    REQUIRE_FALSE(is_unmapped(conn, withdrawn));
+    REQUIRE_FALSE(is_hidden(conn, retained));
+    REQUIRE_FALSE(is_hidden(conn, withdrawn));
     auto property = intern_atom(conn.get(), "_LWM_RESTART");
     auto utf8 = intern_atom(conn.get(), "UTF8_STRING");
     auto snapshot = lwm::xproperty::text(conn.get(), conn.root(), property, utf8);
@@ -787,7 +787,7 @@ TEST_CASE(
         // An oversized outgoing snapshot is likewise not saved at all.
         xcb_delete_property(conn.get(), conn.root(), property);
     xcb_unmap_window(conn.get(), withdrawn);
-    REQUIRE(is_unmapped(conn, withdrawn)); // Round trip orders withdrawal before resume.
+    REQUIRE(is_hidden(conn, withdrawn)); // Round trip orders withdrawal before resume.
     auto wm_state = intern_atom(conn.get(), "WM_STATE");
     auto state_reply = lwm::xproperty::receive(conn.get(), lwm::xproperty::request(conn.get(), withdrawn, wm_state, wm_state, 2));
     auto state = lwm::xproperty::words(state_reply, wm_state);
@@ -799,8 +799,8 @@ TEST_CASE(
     auto windows = ipc_json("window list").at("windows");
     REQUIRE(windows.size() == 1);
     CHECK(windows.at(0).at("id") == retained);
-    CHECK(is_unmapped(conn, withdrawn));
-    CHECK(is_unmapped(conn, retained) == (std::string_view(snapshot_kind) == "valid"));
+    CHECK(is_hidden(conn, withdrawn));
+    CHECK(is_hidden(conn, retained) == (std::string_view(snapshot_kind) == "valid"));
     // An actual subsequent MapRequest remains ordinary application admission.
     map_window(conn, withdrawn);
     REQUIRE(wait_for_active_window(conn, withdrawn, timeout));
@@ -1192,8 +1192,8 @@ TEST_CASE(
         REQUIRE(active);
         REQUIRE(hidden);
         CHECK(active->x == 0);
-        CHECK_FALSE(is_unmapped(conn, owner));
-        CHECK(is_unmapped(conn, owner == first ? second : first));
+        CHECK_FALSE(is_hidden(conn, owner));
+        CHECK(is_hidden(conn, owner == first ? second : first));
     }
     destroy_window(conn, first);
     destroy_window(conn, second);
@@ -1276,8 +1276,8 @@ apply = { fullscreen = false }
         REQUIRE(rectangle);
         CHECK(rectangle->x == 0);
         CHECK(rectangle->width == conn.screen()->width_in_pixels);
-        CHECK(is_unmapped(conn, suppressed));
-        CHECK_FALSE(is_unmapped(conn, owner));
+        CHECK(is_hidden(conn, suppressed));
+        CHECK_FALSE(is_hidden(conn, owner));
         CHECK(has_state(conn, owner, fullscreen));
         CHECK(get_window_property_window(conn.get(), conn.root(), intern_atom(conn.get(), "_NET_ACTIVE_WINDOW")) == owner);
     };
@@ -1356,8 +1356,8 @@ TEST_CASE(
         REQUIRE(parked);
         CHECK(shown->x == 0);
         CHECK(shown->width == conn.screen()->width_in_pixels);
-        CHECK(is_unmapped(conn, suppressed));
-        CHECK_FALSE(is_unmapped(conn, owner));
+        CHECK(is_hidden(conn, suppressed));
+        CHECK_FALSE(is_hidden(conn, owner));
         CHECK(has_state(conn, owner, fullscreen));
         CHECK(has_state(conn, suppressed, fullscreen));
     };
@@ -1497,9 +1497,10 @@ apply = { floating = true, geometry = { width = 640, height = 480 } }
         ipc_ok("workspace switch 1");
     else
         ipc_ok("scratchpad stash");
-    REQUIRE(wait_for_condition([&] { return is_unmapped(conn, floating); }, timeout));
+    REQUIRE(wait_for_condition([&] { return is_hidden(conn, floating); }, timeout));
     observe_title_after_events(conn, floating);
-    CHECK(require_window_geometry(conn, floating) == normal);
+    auto hidden = require_window_geometry(conn, floating);
+    CHECK(hidden == WindowGeometry{ INT16_MAX, normal.y, normal.width, normal.height });
     CHECK(get_window_border_width(conn, floating) == border);
     REQUIRE(ipc_json("window list").at("windows").at(0).at("kind") == "floating");
     if (peer != XCB_NONE)
@@ -1508,19 +1509,21 @@ apply = { floating = true, geometry = { width = 640, height = 480 } }
         ipc_ok("workspace switch 0");
     else
         ipc_ok("scratchpad cycle");
-    REQUIRE(wait_for_condition([&] { return !is_unmapped(conn, floating); }, timeout));
+    REQUIRE(wait_for_condition([&] { return !is_hidden(conn, floating); }, timeout));
     observe_title_after_events(conn, floating);
     CHECK(require_window_geometry(conn, floating) == normal);
     CHECK(get_window_border_width(conn, floating) == border);
     // A toolkit must never receive a temporary resize it could answer with a
-    // minimum-size request or copy into WM_NORMAL_HINTS.
+    // minimum-size request or copy into WM_NORMAL_HINTS. Only the server reports
+    // the position left of the root.
     while (auto event = lwm::reply(xcb_poll_for_event(conn.get())))
         if ((event->response_type & 0x7f) == XCB_CONFIGURE_NOTIFY)
         {
             auto const& configure = reinterpret_cast<xcb_configure_notify_event_t const&>(*event);
             if (configure.window == floating)
             {
-                CHECK(configure.x == normal.x);
+                bool synthetic = event->response_type & 0x80;
+                CHECK((configure.x == normal.x || (!synthetic && configure.x == hidden.x)));
                 CHECK(configure.y == normal.y);
                 CHECK(configure.width == normal.width);
                 CHECK(configure.height == normal.height);
@@ -1532,7 +1535,7 @@ apply = { floating = true, geometry = { width = 640, height = 480 } }
 }
 
 TEST_CASE(
-    "Integration: queued WM unmaps preserve ownership while synthetic withdrawal releases it",
+    "Integration: rapid workspace switches preserve ownership while synthetic withdrawal releases it",
     "[integration][transition][visibility]"
 )
 {
@@ -1546,10 +1549,10 @@ TEST_CASE(
     for (int i = 0; i < 32; ++i)
         send_client_message(conn, conn.root(), desktop, i % 2 == 0 ? 1 : 0);
     observe_title_after_events(conn, window);
-    CHECK_FALSE(is_unmapped(conn, window));
+    CHECK_FALSE(is_hidden(conn, window));
     REQUIRE(ipc_json("window list").at("windows").at(0).at("id") == window);
     ipc_ok("workspace switch 1");
-    REQUIRE(is_unmapped(conn, window));
+    REQUIRE(is_hidden(conn, window));
     xcb_unmap_notify_event_t withdrawal{ };
     withdrawal.response_type = XCB_UNMAP_NOTIFY;
     withdrawal.event = conn.root();

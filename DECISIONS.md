@@ -215,31 +215,33 @@ incorrect. Supporting additional legacy X screens was rejected because RandR out
 are the existing monitor contract; it would broaden ownership and IPC contracts
 without simplifying them. This restriction does not limit the number of RandR outputs.
 
-## Hide by mapping, without temporary geometry (2026-10-08)
+## Hide clients right of the root (2026-10-21)
 
-The 1×1 off-root presentation introduced on October 7 causes GTK 4 to answer the
-resize with a minimum-size request. That request can become the floating client's
-normal geometry, shrinking it when another window leaves fullscreen. A private
-GTK probe reproduced an 800×600 window returning as 122×38 after hide/show.
-Ignoring requests while hidden would only mask feedback: the toolkit can answer
-after showing, and applications legitimately update geometry while hidden.
+Managed clients stay mapped. Hiding moves a client's last submitted rectangle to x
+32767, the largest X coordinate. Windows extend rightwards, so no frame of any size
+reaches back into the root; 16-bit coordinates make 32767 pixels the practical root
+width. Toolkits never see a resize, and windows are not unmapped, so applications
+are not told to stop drawing. State owns visibility; completion derives the hidden
+rectangle, and synthetic notifications report the normal presentation. On Xvfb, a
+switch that moves 200 windows costs about 6% more than unmapping them.
 
-Use X unmapping to express visibility instead of moving or shrinking windows
-off-screen. Completion derives mapping
-from State's projection, and the existing output cache records submitted mapping.
-A shell-owned set of window/request sequences consumes acknowledgements of WM
-unmaps, including multiple queued hide/show cycles; it owns no visibility policy.
-Application unmaps and ICCCM synthetic withdrawal still release ownership. No
-saved-normal-geometry cache, temporary size, coordinate sentinel or request filter
-is needed. Ownership transfer maps clients again, and startup recognizes unmapped
-managed WM_STATE windows so a crashed predecessor cannot strand them.
+Rejected, in the order they were tried:
 
-Mapping before restart makes hidden clients flash until the successor hides them.
-This is accepted. Keeping them unmapped would require the successor to adopt
-unmapped windows across a handoff, and a visible window an application withdrew
-during the exec gap would then be resurrected; telling the two apart needs a new
-handoff protocol. Revisit only with a design that removes, rather than adds, such
-special cases.
+- A fixed negative x: a wide client extends back into the root.
+- A borderless 1×1 rectangle (October 7): GTK 4 answers the resize with a minimum-size
+  request that becomes the floating geometry. A GTK probe returned an 800×600 window as
+  122×38.
+- Unmapping (October 8 to 21): LWM's own unmaps had to be told apart from withdrawals
+  by request sequence, and hidden clients withdrew only by synthetic notification,
+  which raced with showing. Cold startup had to adopt unmapped `WM_STATE` windows, a
+  client reparented while hidden had to be detected separately, and an application's
+  `MapRequest` could reveal a hidden client. Showing remapped the window, so content
+  could be redrawn.
+- Moving left by the frame's own width, as dwm does: 16-bit coordinates cannot hide a
+  frame wider than 32768 pixels.
+
+Restart still moves hidden clients onto the screen before exec, because the exec
+target might not be LWM. They flash until the successor hides them.
 
 ## Preserve direct focus with usable protocol timestamps (2026-10-08)
 
@@ -255,6 +257,13 @@ accepted activation could otherwise be published without moving keyboard focus. 
 rewrites the supporting window's unchanged name and keeps other events in the
 deferred queue, at the
 cost of one synchronous round trip only for `WM_TAKE_FOCUS` clients.
+
+Using the triggering click or key time for X focus was reconsidered on 2026-10-21 and
+rejected. LWM sets other focus with current server time, and LWM does not track
+FocusIn, so X would silently refuse an older event time and leave keyboard focus
+elsewhere while State and `_NET_ACTIVE_WINDOW` name the new window. Clicks gain
+nothing: the replayed click and LWM's focus leave in the same flush, and a
+`WM_TAKE_FOCUS` client answers after LWM's direct focus.
 
 ## Bound shared-state output, not raw input (2026-10-18)
 

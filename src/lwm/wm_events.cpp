@@ -34,6 +34,7 @@ uint32_t event_time(uint8_t type, xcb_generic_event_t const& event)
 void WindowManager::handle_event(xcb_generic_event_t const& event)
 {
     uint8_t type = event.response_type & ~0x80;
+    bool synthetic = event.response_type & 0x80;
     if (type == 0)
     {
         auto const& error = reinterpret_cast<xcb_generic_error_t const&>(event);
@@ -92,18 +93,13 @@ void WindowManager::handle_event(xcb_generic_event_t const& event)
         case XCB_MAP_REQUEST:
             handle_map_request(reinterpret_cast<xcb_map_request_event_t const&>(event));
             break;
-        // A notification of LWM's own unmap carries that request's sequence, even
-        // across rapid hide/show/hide; anything else is a client withdrawal. A hidden
-        // client withdraws by the synthetic notification alone, which can follow LWM
-        // showing it, so LWM unmaps it again and consumes that unmap's notification.
+        // LWM never unmaps clients, so any UnmapNotify is a withdrawal. A synthetic
+        // one alone means the client unmapped before LWM mapped it, so LWM unmaps it
+        // again and consumes that unmap's notification.
         case XCB_UNMAP_NOTIFY:
         {
             auto window = reinterpret_cast<xcb_unmap_notify_event_t const&>(event).window;
-            auto output = outputs_.find(window);
-            bool synthetic = event.response_type & 0x80;
-            if (output != outputs_.end() && !synthetic && std::erase(output->second.unmaps, event.full_sequence))
-                break;
-            if (output != outputs_.end() && synthetic && output->second.mapped)
+            if (auto output = outputs_.find(window); synthetic && output != outputs_.end() && output->second.mapped)
             {
                 auto unmap = xcb_unmap_window(conn_.get(), window).sequence;
                 conn_.sync();
@@ -115,14 +111,16 @@ void WindowManager::handle_event(xcb_generic_event_t const& event)
                 write_geometry(window, outputs_[window], *geometry);
             break;
         }
+        // Only the server reports destruction and reparenting; any client can send
+        // copies. A client reparented before LWM mapped it sends no UnmapNotify, and
+        // the root would not see its destruction.
         case XCB_DESTROY_NOTIFY:
-            state_.erase(reinterpret_cast<xcb_destroy_notify_event_t const&>(event).window);
+            if (!synthetic)
+                state_.erase(reinterpret_cast<xcb_destroy_notify_event_t const&>(event).window);
             break;
-        // A hidden client reparented away sends no UnmapNotify, and the root would
-        // not see its destruction: it has left management like a destroyed window.
         case XCB_REPARENT_NOTIFY:
             if (auto const& reparent = reinterpret_cast<xcb_reparent_notify_event_t const&>(event);
-                reparent.parent != conn_.screen()->root)
+                !synthetic && reparent.parent != conn_.screen()->root)
                 state_.erase(reparent.window);
             break;
         case XCB_ENTER_NOTIFY:
@@ -170,7 +168,7 @@ void WindowManager::handle_event(xcb_generic_event_t const& event)
 
 // Window lifetime
 
-// Showing a managed window is LWM's decision; an application asks by activation.
+// A managed window is already mapped, or will be when this operation completes.
 void WindowManager::handle_map_request(xcb_map_request_event_t const& e)
 {
     if (state_.find(e.window) || state_.find_fixture(e.window))

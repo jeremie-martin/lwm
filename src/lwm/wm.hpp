@@ -63,7 +63,6 @@ private:
     struct Output
     {
         bool mapped = false;
-        std::vector<uint32_t> unmaps; ///< Requests of WM unmaps whose UnmapNotify is pending
         std::optional<State::Presentation> presentation; ///< Last submitted server rectangle and border
         std::optional<uint32_t> border_color;
         std::optional<bool> urgent; ///< Urgency mirrored into the application's WM_HINTS
@@ -128,8 +127,8 @@ private:
 
     // wm_observe.cpp: X reads. Requests are pipelined; decoders are shared by
     // batch admission and single-property updates.
-    // Adoption requires viewability, except managed unmapped windows during cold recovery.
-    std::vector<WindowObservation> observe(std::span<xcb_window_t const> windows, bool adopting, bool cold_recovery = false);
+    // Adoption requires viewability.
+    std::vector<WindowObservation> observe(std::span<xcb_window_t const> windows, bool adopting);
     WindowType window_type(xcb_get_property_cookie_t cookie) const;
     std::vector<xcb_atom_t> read_protocols(xcb_window_t window) const;
     uint32_t read_user_time(xcb_window_t window) const;

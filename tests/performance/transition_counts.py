@@ -343,6 +343,8 @@ def main():
             print(json.dumps(result), flush=True)
             if arguments.check:
                 counts = result["counts"]
+                if scenario != "dock_startup" and counts["mapping"]:
+                    raise AssertionError("Clients stay mapped while hidden: " + json.dumps(result))
                 if scenario == "tiled_ratio":
                     if not operations <= counts["geometry_configure"] <= operations * 10:
                         raise AssertionError("Inactive or excessive ratio layout: " + json.dumps(result))
@@ -367,13 +369,9 @@ def main():
                 if "relocation" in scenario:
                     if counts["get_geometry"]:
                         raise AssertionError("Relocation must use known geometry: " + json.dumps(result))
-                    if scenario.startswith("tiled_"):
-                        if not operations <= counts["geometry_configure"] <= operations * 10:
-                            raise AssertionError("Inactive or excessive relocation geometry: " + json.dumps(result))
-                    elif counts["geometry_configure"]:
-                        raise AssertionError("Floating relocation must preserve geometry: " + json.dumps(result))
-                    if counts["mapping"] != operations:
-                        raise AssertionError("Relocation must change mapping exactly once: " + json.dumps(result))
+                    geometry_budget = operations * (10 if scenario.startswith("tiled_") else 1)
+                    if not operations <= counts["geometry_configure"] <= geometry_budget:
+                        raise AssertionError("Inactive or excessive relocation geometry: " + json.dumps(result))
                 operations_flush_budget = result["operations"] * 20
                 # A workspace switch is an IPC command, which reads its request property.
                 reads = result["operations"] * (1 if scenario == "metadata" else 3 if scenario == "workspace" else 2)
@@ -385,8 +383,8 @@ def main():
                 if scenario in ("metadata", "sticky") and counts["geometry_configure"]:
                     raise AssertionError("Unnecessary geometry writes: " + json.dumps(result))
                 if scenario == "workspace":
-                    if counts["geometry_configure"] or counts["mapping"] != (operations - 1) * 200:
-                        raise AssertionError("Workspace visibility must only change mapping: " + json.dumps(result))
+                    if counts["geometry_configure"] != (operations - 1) * 200:
+                        raise AssertionError("Workspace visibility must move each client once: " + json.dumps(result))
                     if counts["flush"] > operations_flush_budget:
                         raise AssertionError("Notification-driven flush overhead: " + json.dumps(result))
 

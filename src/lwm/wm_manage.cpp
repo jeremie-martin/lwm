@@ -27,9 +27,8 @@ void WindowManager::scan_existing_windows(bool handoff)
         auto* first = xcb_query_tree_children(tree.get());
         children.assign(first, first + xcb_query_tree_children_length(tree.get()));
     }
-    // A cooperative predecessor restored mapping before release, so an unmapped
-    // client has since withdrawn. Only cold recovery needs managed WM_STATE.
-    auto windows = observe(children, true, !handoff);
+    // Every managed client is mapped, so an unmapped one has withdrawn.
+    auto windows = observe(children, true);
 
     std::optional<std::pair<int16_t, int16_t>> pointer;
     if (!handoff)

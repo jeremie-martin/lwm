@@ -337,7 +337,7 @@ TEST_CASE(
     }
     ipc_ok("scratchpad stash");
     REQUIRE(wait_for_active_window(conn, parent, timeout));
-    REQUIRE(is_unmapped(conn, pooled));
+    REQUIRE(is_hidden(conn, pooled));
     auto geometry = require_window_geometry(conn, parent);
     auto previous = wm_instance(conn);
     REQUIRE(previous);
@@ -366,7 +366,7 @@ TEST_CASE(
     CHECK(require_window_geometry(conn, parent) == geometry);
     CHECK(property_has_atom(conn.get(), parent, states, skip));
     CHECK(get_window_property_string(conn.get(), pooled, kind) == "tiled");
-    CHECK(is_unmapped(conn, pooled));
+    CHECK(is_hidden(conn, pooled));
     CHECK(ipc_json("scratchpad list").at("pool") == nlohmann::json::array({ pooled }));
     CHECK(wait_for_active_window(conn, parent, timeout));
     auto child_geometry = require_window_geometry(conn, child);
@@ -385,7 +385,7 @@ TEST_CASE(
     ipc_ok("scratchpad cycle");
     REQUIRE(wait_for_active_window(conn, pooled, timeout));
     CHECK(get_window_property_string(conn.get(), pooled, kind) == "tiled");
-    CHECK_FALSE(is_unmapped(conn, pooled));
+    CHECK_FALSE(is_hidden(conn, pooled));
     CHECK(ipc_json("scratchpad list").at("pool") == nlohmann::json::array({ pooled }));
     for (auto window : { child, pooled, parent }) destroy_window(conn, window);
 }
@@ -465,8 +465,8 @@ match = { class = "NamedOwner" }
     CHECK(wait_for_active_window(conn, tile, timeout));
     CHECK(require_window_geometry(conn, tile) == geometry);
     CHECK(read_property32(conn.get(), conn.root(), workarea_atom, XCB_ATOM_CARDINAL) == workarea);
-    CHECK(is_unmapped(conn, pooled));
-    CHECK(is_unmapped(conn, named));
+    CHECK(is_hidden(conn, pooled));
+    CHECK(is_hidden(conn, named));
     auto list_atom = intern_atom(conn.get(), "_NET_CLIENT_LIST");
     CHECK(get_window_property_windows(conn.get(), conn.root(), list_atom) == windows);
 
@@ -653,7 +653,7 @@ apply = { fullscreen = true }
     REQUIRE(wait_for_window_geometry(conn, second, 0, 0, conn.screen()->width_in_pixels, conn.screen()->height_in_pixels));
     REQUIRE(wait_for_condition([&]
     {
-        return is_unmapped(conn, first);
+        return is_hidden(conn, first);
     }, timeout));
     auto previous = wm_instance(conn);
     REQUIRE(previous);

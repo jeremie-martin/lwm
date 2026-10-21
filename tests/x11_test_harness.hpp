@@ -730,13 +730,17 @@ inline std::optional<uint16_t> get_window_border_width(X11Connection& conn, xcb_
     return result;
 }
 
-inline bool is_unmapped(X11Connection& conn, xcb_window_t window)
+// Unmapped, or mapped right of the root.
+inline bool is_hidden(X11Connection& conn, xcb_window_t window)
 {
     auto* attributes = xcb_get_window_attributes_reply(
         conn.get(), xcb_get_window_attributes(conn.get(), window), nullptr);
     bool unmapped = attributes && attributes->map_state == XCB_MAP_STATE_UNMAPPED;
     free(attributes);
-    return unmapped;
+    auto* geometry = xcb_get_geometry_reply(conn.get(), xcb_get_geometry(conn.get(), window), nullptr);
+    bool off_root = geometry && geometry->x >= conn.screen()->width_in_pixels;
+    free(geometry);
+    return unmapped || off_root;
 }
 
 inline bool wait_for_window_geometry(
