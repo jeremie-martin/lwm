@@ -192,24 +192,6 @@ std::optional<std::array<uint32_t, 4>> get_frame_extents(X11Connection& conn, xc
     return result;
 }
 
-std::optional<xcb_window_t> get_input_focus(X11Connection& conn)
-{
-    auto cookie = xcb_get_input_focus(conn.get());
-    auto* reply = xcb_get_input_focus_reply(conn.get(), cookie, nullptr);
-    if (!reply)
-        return std::nullopt;
-    xcb_window_t const result = reply->focus;
-    free(reply);
-    return result;
-}
-
-void synchronize_x_server(X11Connection& conn)
-{
-    auto cookie = xcb_get_input_focus(conn.get());
-    auto* reply = xcb_get_input_focus_reply(conn.get(), cookie, nullptr);
-    free(reply);
-}
-
 bool drain_window_visibility_events(X11Connection& conn, xcb_window_t window)
 {
     bool observed = false;
@@ -481,15 +463,7 @@ TEST_CASE(
     xcb_flush(conn.get());
     map_window(conn, w2);
     REQUIRE(wait_for_active_window(conn, w2, kTimeout));
-    REQUIRE(wait_for_condition(
-        [&]()
-        {
-            auto focus = get_input_focus(conn);
-            return focus && *focus == w2;
-        },
-        kTimeout
-    ));
-    synchronize_x_server(conn);
+    REQUIRE(wait_for_x_input_focus(conn, w2, kTimeout));
     drain_window_visibility_events(conn, w2);
 
     auto client_list_before = get_client_list(conn, net_client_list);
@@ -523,7 +497,6 @@ TEST_CASE(
         },
         kTimeout
     ));
-    synchronize_x_server(conn);
     CHECK_FALSE(drain_window_visibility_events(conn, w2));
 
     send_client_message(conn, conn.root(), net_current_desktop, 1);
@@ -549,7 +522,6 @@ TEST_CASE(
         },
         kTimeout
     ));
-    synchronize_x_server(conn);
     CHECK_FALSE(drain_window_visibility_events(conn, w2));
 
     destroy_window(conn, w2);
@@ -1216,7 +1188,7 @@ TEST_CASE("Integration: synthetic destruction and reparenting leave a client man
     xcb_send_event(conn.get(), 0, conn.root(),
         XCB_EVENT_MASK_SUBSTRUCTURE_NOTIFY | XCB_EVENT_MASK_SUBSTRUCTURE_REDIRECT, event);
     // After this round trip, the IPC request reaches LWM behind the forged notification.
-    synchronize_x_server(conn);
+    (void)get_input_focus(conn);
     CHECK(ipc_json("window list").at("windows").size() == 1);
     destroy_window(conn, window);
 }

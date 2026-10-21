@@ -43,11 +43,11 @@ inline int tiled_count(size_t workspace, size_t monitor = 0)
 inline std::optional<std::string> wm_instance(X11Connection& conn)
 {
     auto owner = wm_owner(conn);
-    auto* state = xcb_get_property_reply(
-        conn.get(), xcb_get_property(conn.get(), 0, owner, intern_atom(conn.get(), "_LWM_STATE"), XCB_GET_PROPERTY_TYPE_ANY, 0, 0), nullptr
+    auto state = xproperty::receive(
+        conn.get(),
+        xproperty::request(conn.get(), owner, intern_atom(conn.get(), "_LWM_STATE"), XCB_GET_PROPERTY_TYPE_ANY, 0)
     );
     bool published = state && state->type != XCB_NONE;
-    free(state);
     return owner != XCB_NONE && published ? std::optional{ std::to_string(owner) } : std::nullopt;
 }
 

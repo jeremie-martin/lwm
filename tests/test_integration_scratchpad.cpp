@@ -286,7 +286,7 @@ TEST_CASE("Integration: tiled scratchpad pool preserves prior floating geometry"
 
     REQUIRE(toggle_float_at_window_center());
 
-    WindowGeometry saved_float{ 123, 87, 345, 234 };
+    lwm::Geometry saved_float{ 123, 87, 345, 234 };
     constexpr uint32_t move_resize_flags = (1u << 8) | (1u << 9) | (1u << 10) | (1u << 11);
     send_client_message(
         conn,
@@ -323,7 +323,7 @@ TEST_CASE("Integration: tiled scratchpad pool preserves prior floating geometry"
     REQUIRE(wait_for_condition([&]() { return !is_hidden(conn, window); }, kTimeout));
 
     REQUIRE(toggle_float_at_window_center());
-    WindowGeometry final_geometry{};
+    lwm::Geometry final_geometry{};
     bool restored_saved_geometry = wait_for_condition(
         [&]()
         {

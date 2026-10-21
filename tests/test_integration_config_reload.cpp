@@ -75,24 +75,6 @@ bool wait_for_desktop_names(X11Connection& conn, std::vector<std::string> expect
     return wait_for_property_strings(conn.get(), conn.root(), names_atom, std::move(expected), kTimeout);
 }
 
-
-// A shell whose command line names `needle` is found until its commands have finished.
-
-std::optional<std::pair<int16_t, int16_t>> window_center(X11Connection& conn, xcb_window_t window)
-{
-    auto cookie = xcb_get_geometry(conn.get(), window);
-    auto* reply = xcb_get_geometry_reply(conn.get(), cookie, nullptr);
-    if (!reply)
-        return std::nullopt;
-
-    auto center = std::pair<int16_t, int16_t>{
-        static_cast<int16_t>(reply->x + reply->width / 2),
-        static_cast<int16_t>(reply->y + reply->height / 2),
-    };
-    free(reply);
-    return center;
-}
-
 } // namespace
 
 TEST_CASE(
@@ -251,8 +233,8 @@ size = { width = 0.8, height = 0.6 }
     REQUIRE(wait_for_active_window(env->conn, scratchpad_window, kTimeout));
     REQUIRE(wait_for_condition([&]() { return !is_hidden(env->conn, scratchpad_window); }, kTimeout));
 
-    auto saved_center = window_center(env->conn, scratchpad_window);
-    REQUIRE(saved_center.has_value());
+    auto saved_geometry = get_window_geometry(env->conn, scratchpad_window);
+    REQUIRE(saved_geometry.has_value());
 
     auto hide_result = send_ipc_command("scratchpad toggle scratchpad");
     REQUIRE(hide_result.has_value());
@@ -268,8 +250,8 @@ size = { width = 0.8, height = 0.6 }
         0,
         0,
         0,
-        saved_center->first,
-        saved_center->second
+        static_cast<int16_t>(saved_geometry->x + saved_geometry->width / 2),
+        static_cast<int16_t>(saved_geometry->y + saved_geometry->height / 2)
     );
     xcb_flush(env->conn.get());
     REQUIRE(wait_for_active_window(env->conn, fallback, kTimeout));

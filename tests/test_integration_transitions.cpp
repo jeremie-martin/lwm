@@ -113,7 +113,7 @@ apply = { floating = false }
     REQUIRE(send_ipc_command("workspace switch 0")->starts_with("ok"));
     REQUIRE(wait_for_condition([&] { return get_window_geometry(conn, window) == normal; }, timeout));
     REQUIRE(get_window_geometry(conn, peer) != peer_tiled);
-    WindowGeometry moved{ 55, 66, 311, 217 };
+    lwm::Geometry moved{ 55, 66, 311, 217 };
     uint32_t values[] = { 55, 66, 311, 217 };
     xcb_configure_window(
         conn.get(),
@@ -365,7 +365,7 @@ TEST_CASE(
     REQUIRE(reply->starts_with("ok"));
     REQUIRE(wait_for_condition(
         [&] { return get_window_geometry(conn, window)
-                == WindowGeometry{ 10, 10, static_cast<uint16_t>(conn.screen()->width_in_pixels - 24),
+                == lwm::Geometry{ 10, 10, static_cast<uint16_t>(conn.screen()->width_in_pixels - 24),
                                    static_cast<uint16_t>(conn.screen()->height_in_pixels - 24) }; },
         timeout
     ));
@@ -426,7 +426,7 @@ apply = { floating = true, workspace = 0, sticky = true, fullscreen = false, geo
                 {
                     auto rect = get_window_geometry(conn, window);
                     return rect && (hidden ? is_hidden(conn, window)
-                        : !is_hidden(conn, window) && *rect == WindowGeometry{ 60, 70, 310, 210 });
+                        : !is_hidden(conn, window) && *rect == lwm::Geometry{ 60, 70, 310, 210 });
                 },
                 timeout
             ));
@@ -488,7 +488,7 @@ TEST_CASE(
     // Observe completion of the hints before the following request on the same X connection.
     send_client_message(conn, window, state, 0, fullscreen);
     REQUIRE(wait_for_condition(
-        [&] { return get_window_geometry(conn, window) == WindowGeometry{ 140, 150, 420, 280 }; },
+        [&] { return get_window_geometry(conn, window) == lwm::Geometry{ 140, 150, 420, 280 }; },
         timeout
     ));
     send_client_message(conn, window, state, 1, horizontal);
@@ -502,7 +502,7 @@ TEST_CASE(
     ));
     send_client_message(conn, window, state, 0, horizontal);
     REQUIRE(wait_for_condition(
-        [&] { return get_window_geometry(conn, window) == WindowGeometry{ 140, 150, 420, 280 }; },
+        [&] { return get_window_geometry(conn, window) == lwm::Geometry{ 140, 150, 420, 280 }; },
         timeout
     ));
     destroy_window(conn, window);
@@ -1000,12 +1000,12 @@ apply = { floating = true, layer = "below", geometry = { x = 60, y = 70, width =
         0
     );
     REQUIRE(wait_for_condition(
-        [&] { return get_window_geometry(conn, window) == WindowGeometry{ 360, 270, 300, 200 }; },
+        [&] { return get_window_geometry(conn, window) == lwm::Geometry{ 360, 270, 300, 200 }; },
         timeout
     ));
     send_client_message(conn, window, state, 1, above, above, 0, 0);
     observe_title_after_events(conn, window);
-    CHECK(get_window_geometry(conn, window) == WindowGeometry{ 360, 270, 300, 200 });
+    CHECK(get_window_geometry(conn, window) == lwm::Geometry{ 360, 270, 300, 200 });
     CHECK(property_has_atom(conn.get(), window, state, above));
     CHECK_FALSE(property_has_atom(conn.get(), window, state, below));
     // A duplicate toggle is one operation; invalid actions are ignored.
@@ -1022,10 +1022,10 @@ apply = { floating = true, layer = "below", geometry = { x = 60, y = 70, width =
     send_client_message(conn, window, state, 0, fullscreen, 0, 0, 0);
     observe_title_after_events(conn, window);
     CHECK(property_has_atom(conn.get(), window, state, below));
-    CHECK(get_window_geometry(conn, window) == WindowGeometry{ 360, 270, 300, 200 });
+    CHECK(get_window_geometry(conn, window) == lwm::Geometry{ 360, 270, 300, 200 });
     // Reload explicitly reapplies even unchanged placement actions.
     REQUIRE(send_ipc_command("config reload") == "ok");
-    CHECK(get_window_geometry(conn, window) == WindowGeometry{ 60, 70, 300, 200 });
+    CHECK(get_window_geometry(conn, window) == lwm::Geometry{ 60, 70, 300, 200 });
     destroy_window(conn, window);
 }
 
@@ -1500,7 +1500,7 @@ apply = { floating = true, geometry = { width = 640, height = 480 } }
     REQUIRE(wait_for_condition([&] { return is_hidden(conn, floating); }, timeout));
     observe_title_after_events(conn, floating);
     auto hidden = require_window_geometry(conn, floating);
-    CHECK(hidden == WindowGeometry{ INT16_MAX, normal.y, normal.width, normal.height });
+    CHECK(hidden == lwm::Geometry{ INT16_MAX, normal.y, normal.width, normal.height });
     CHECK(get_window_border_width(conn, floating) == border);
     REQUIRE(ipc_json("window list").at("windows").at(0).at("kind") == "floating");
     if (peer != XCB_NONE)

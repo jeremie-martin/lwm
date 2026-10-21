@@ -118,7 +118,7 @@ TEST_CASE("Integration: EWMH resize preserves the opposite edges in every direct
         observe_title_after_events(conn, window);
         REQUIRE(grab(conn) == XCB_GRAB_STATUS_ALREADY_GRABBED);
         xcb_test_fake_input(conn.get(), XCB_MOTION_NOTIFY, 0, XCB_CURRENT_TIME, conn.root(), 120, 130, 0);
-        WindowGeometry expected{ static_cast<int16_t>(start.x + test.dx),
+        lwm::Geometry expected{ static_cast<int16_t>(start.x + test.dx),
                                  static_cast<int16_t>(start.y + test.dy),
                                  static_cast<uint16_t>(start.width + test.dw),
                                  static_cast<uint16_t>(start.height + test.dh) };
@@ -158,7 +158,7 @@ TEST_CASE("Integration: pointer ownership and release belong to one drag", "[int
     observe_title_after_events(conn, window);
     CHECK(
         require_window_geometry(conn, window)
-        == WindowGeometry{ static_cast<int16_t>(start.x + 60),
+        == lwm::Geometry{ static_cast<int16_t>(start.x + 60),
                            static_cast<int16_t>(start.y + 70),
                            start.width,
                            start.height }
@@ -340,7 +340,7 @@ TEST_CASE("Integration: real button grabs drive floating resize and tiled conver
     observe_title_after_events(conn, window);
     CHECK(
         require_window_geometry(conn, window)
-        == WindowGeometry{ start.x,
+        == lwm::Geometry{ start.x,
                            start.y,
                            static_cast<uint16_t>(start.width + 30),
                            static_cast<uint16_t>(start.height + 20) }
@@ -367,7 +367,7 @@ TEST_CASE("Integration: floating motion bursts stop at release and use its final
     observe_title_after_events(conn, window);
     CHECK(
         require_window_geometry(conn, window)
-        == WindowGeometry{ static_cast<int16_t>(start.x + 60),
+        == lwm::Geometry{ static_cast<int16_t>(start.x + 60),
                            static_cast<int16_t>(start.y + 70),
                            start.width,
                            start.height }

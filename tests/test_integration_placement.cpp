@@ -106,7 +106,7 @@ TEST_CASE(
         REQUIRE(wait_for_active_window(conn, w, timeout));
     }
     auto a = windows[0], b = windows[1], c = windows[2];
-    std::vector<WindowGeometry> initial;
+    std::vector<lwm::Geometry> initial;
     for (auto w : windows) initial.push_back(require_window_geometry(conn, w));
     ipc_ok("window focus " + std::to_string(b));
     auto toggle = [&]
@@ -185,7 +185,7 @@ TEST_CASE("Integration: restart preserves a floating tile's return position", "[
         windows.push_back(window);
     }
     ipc_ok("window focus " + std::to_string(windows[1]));
-    std::vector<WindowGeometry> before;
+    std::vector<lwm::Geometry> before;
     for (auto window : windows) before.push_back(require_window_geometry(conn, window));
     ipc_ok("window float");
     if (restart)
@@ -239,7 +239,7 @@ TEST_CASE(
     ipc_ok("window focus " + std::to_string(first));
     auto stacking = list(stack_atom);
     REQUIRE(stacking != expected);
-    std::vector<WindowGeometry> tiles;
+    std::vector<lwm::Geometry> tiles;
     for (auto window : { first, second, third }) tiles.push_back(require_window_geometry(conn, window));
 
     for (int iteration = 0; iteration < 2; ++iteration)
@@ -591,7 +591,7 @@ TEST_CASE("Integration: floating hints agree across live admission, startup and 
         return rectangle && rectangle->width == conn.screen()->width_in_pixels / 2;
     }, timeout));
     auto area = anchored ? require_window_geometry(conn, parent)
-                         : WindowGeometry{ 0, 0, conn.screen()->width_in_pixels, conn.screen()->height_in_pixels };
+                         : lwm::Geometry{ 0, 0, conn.screen()->width_in_pixels, conn.screen()->height_in_pixels };
     int16_t x = std::string_view(position) == "accepted" ? 120 : area.x + (area.width - 150) / 2;
     int16_t y = std::string_view(position) == "accepted" ? 130 : area.y + (area.height - 90) / 2;
     REQUIRE(wait_for_window_geometry(conn, dialog, x, y, 150, 90));
@@ -599,7 +599,7 @@ TEST_CASE("Integration: floating hints agree across live admission, startup and 
     // chosen origin rather than replaying initial centering.
     xcb_icccm_set_wm_normal_hints(conn.get(), dialog, &hints);
     observe_title_after_events(conn, dialog);
-    CHECK(require_window_geometry(conn, dialog) == WindowGeometry{ x, y, 150, 90 });
+    CHECK(require_window_geometry(conn, dialog) == lwm::Geometry{ x, y, 150, 90 });
     hints.flags = XCB_ICCCM_SIZE_HINT_US_SIZE;
     hints.width = 170;
     hints.height = 110;
@@ -609,7 +609,7 @@ TEST_CASE("Integration: floating hints agree across live admission, startup and 
     REQUIRE(previous);
     ipc_ok("restart");
     REQUIRE(wait_for_wm_restart(conn, timeout, *previous));
-    CHECK(require_window_geometry(conn, dialog) == WindowGeometry{ x, y, 170, 110 });
+    CHECK(require_window_geometry(conn, dialog) == lwm::Geometry{ x, y, 170, 110 });
     for (auto window : { dialog, peer, parent }) destroy_window(conn, window);
 }
 
@@ -767,14 +767,14 @@ TEST_CASE("Integration: border reloads and partial geometry requests preserve fr
     uint32_t x = initial.x + 1;
     xcb_configure_window(conn.get(), window, XCB_CONFIG_WINDOW_X, &x);
     observe_title_after_events(conn, window);
-    CHECK(require_window_geometry(conn, window) == WindowGeometry{ static_cast<int16_t>(x), initial.y, 1, 1 });
+    CHECK(require_window_geometry(conn, window) == lwm::Geometry{ static_cast<int16_t>(x), initial.y, 1, 1 });
     CHECK(get_window_border_width(conn, window) == 1);
     REQUIRE(wm.write_config(config(2)));
     ipc_ok("config reload");
     uint32_t width = 9;
     xcb_configure_window(conn.get(), window, XCB_CONFIG_WINDOW_WIDTH, &width);
     observe_title_after_events(conn, window);
-    CHECK(require_window_geometry(conn, window) == WindowGeometry{ static_cast<int16_t>(x), initial.y, 9, 1 });
+    CHECK(require_window_geometry(conn, window) == lwm::Geometry{ static_cast<int16_t>(x), initial.y, 9, 1 });
     CHECK(get_window_border_width(conn, window) == 2);
     destroy_window(conn, window);
 }

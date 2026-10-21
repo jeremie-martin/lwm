@@ -1,5 +1,6 @@
 #pragma once
 
+#include "lwm/core/types.hpp"
 #include "lwm/core/xproperty.hpp"
 #include <algorithm>
 #include <array>
@@ -272,69 +273,31 @@ class X11Connection
 {
 public:
     X11Connection()
-        : conn_(nullptr)
-        , screen_(nullptr)
     {
         // Xvfb briefly refuses connections while resetting between test cases.
         wait_for_condition(
             [&]()
             {
-                if (conn_)
-                    xcb_disconnect(conn_);
+                conn_.reset();
                 // XCB's handshake uses writev: a resetting server can raise SIGPIPE
                 // before xcb_connect returns its connection error. Suppress only
                 // during this synchronous attempt; WM children keep normal signals.
                 auto previous = ::signal(SIGPIPE, SIG_IGN);
-                conn_ = xcb_connect(nullptr, nullptr);
+                conn_.reset(xcb_connect(nullptr, nullptr));
                 ::signal(SIGPIPE, previous);
-                return conn_ && !xcb_connection_has_error(conn_);
+                return conn_ && !xcb_connection_has_error(conn_.get());
             },
             std::chrono::seconds(1)
         );
-        if (conn_ && !xcb_connection_has_error(conn_))
-            screen_ = xcb_setup_roots_iterator(xcb_get_setup(conn_)).data;
     }
 
-    ~X11Connection()
-    {
-        if (conn_)
-            xcb_disconnect(conn_);
-    }
-
-    X11Connection(X11Connection const&) = delete;
-    X11Connection& operator=(X11Connection const&) = delete;
-
-    X11Connection(X11Connection&& other) noexcept
-        : conn_(other.conn_)
-        , screen_(other.screen_)
-    {
-        other.conn_ = nullptr;
-        other.screen_ = nullptr;
-    }
-
-    X11Connection& operator=(X11Connection&& other) noexcept
-    {
-        if (this == &other)
-            return *this;
-
-        if (conn_)
-            xcb_disconnect(conn_);
-
-        conn_ = other.conn_;
-        screen_ = other.screen_;
-        other.conn_ = nullptr;
-        other.screen_ = nullptr;
-        return *this;
-    }
-
-    bool ok() const { return conn_ && !xcb_connection_has_error(conn_) && screen_; }
-    xcb_connection_t* get() const { return conn_; }
-    xcb_screen_t* screen() const { return screen_; }
-    xcb_window_t root() const { return screen_->root; }
+    bool ok() const { return conn_ && !xcb_connection_has_error(conn_.get()) && screen(); }
+    xcb_connection_t* get() const { return conn_.get(); }
+    xcb_screen_t* screen() const { return xcb_setup_roots_iterator(xcb_get_setup(conn_.get())).data; }
+    xcb_window_t root() const { return screen()->root; }
 
 private:
-    xcb_connection_t* conn_;
-    xcb_screen_t* screen_;
+    std::unique_ptr<xcb_connection_t, decltype(&xcb_disconnect)> conn_{ nullptr, xcb_disconnect };
 };
 
 inline bool extension_available(X11Connection& conn, xcb_extension_t* extension_id)
@@ -346,11 +309,10 @@ inline bool extension_available(X11Connection& conn, xcb_extension_t* extension_
 inline xcb_atom_t intern_atom(xcb_connection_t* conn, char const* name)
 {
     auto cookie = xcb_intern_atom(conn, 0, static_cast<uint16_t>(std::strlen(name)), name);
-    auto* reply = xcb_intern_atom_reply(conn, cookie, nullptr);
+    auto reply = lwm::reply(xcb_intern_atom_reply(conn, cookie, nullptr));
     if (!reply)
         return XCB_NONE;
     xcb_atom_t atom = reply->atom;
-    free(reply);
     return atom;
 }
 
@@ -359,10 +321,8 @@ inline xcb_atom_t intern_atom(xcb_connection_t* conn, char const* name)
 inline std::optional<std::vector<uint32_t>>
 read_property32(xcb_connection_t* conn, xcb_window_t window, xcb_atom_t atom, xcb_atom_t type)
 {
-    auto cookie = xcb_get_property(conn, 0, window, atom, XCB_GET_PROPERTY_TYPE_ANY, 0, UINT32_MAX);
-    std::unique_ptr<xcb_get_property_reply_t, decltype(&free)> reply(
-        xcb_get_property_reply(conn, cookie, nullptr),
-        &free
+    auto reply = xproperty::receive(
+        conn, xproperty::request(conn, window, atom, XCB_GET_PROPERTY_TYPE_ANY, UINT32_MAX)
     );
     REQUIRE(reply);
     if (reply->type == XCB_NONE)
@@ -370,9 +330,8 @@ read_property32(xcb_connection_t* conn, xcb_window_t window, xcb_atom_t atom, xc
     REQUIRE(reply->type == type);
     REQUIRE(reply->format == 32);
     REQUIRE(reply->bytes_after == 0);
-    auto count = xcb_get_property_value_length(reply.get()) / 4;
-    auto* values = static_cast<uint32_t*>(xcb_get_property_value(reply.get()));
-    return std::vector<uint32_t>(values, values + count);
+    auto values = xproperty::words(reply, type);
+    return std::vector<uint32_t>(values.begin(), values.end());
 }
 
 inline std::vector<xcb_atom_t> get_window_property_atoms(xcb_connection_t* conn, xcb_window_t window, xcb_atom_t atom)
@@ -405,18 +364,7 @@ inline bool has_state(X11Connection& conn, xcb_window_t window, xcb_atom_t state
 inline std::optional<xcb_window_t>
 get_window_property_window(xcb_connection_t* conn, xcb_window_t window, xcb_atom_t atom)
 {
-    auto cookie = xcb_get_property(conn, 0, window, atom, XCB_ATOM_WINDOW, 0, 1);
-    auto* reply = xcb_get_property_reply(conn, cookie, nullptr);
-    if (!reply)
-        return std::nullopt;
-
-    std::optional<xcb_window_t> result;
-    if (reply->type == XCB_ATOM_WINDOW && reply->format == 32 && xcb_get_property_value_length(reply) == 4)
-    {
-        result = *static_cast<xcb_window_t*>(xcb_get_property_value(reply));
-    }
-    free(reply);
-    return result;
+    return xproperty::scalar(conn, xproperty::request(conn, window, atom, XCB_ATOM_WINDOW, 1), XCB_ATOM_WINDOW);
 }
 
 inline bool wait_for_property_window(
@@ -437,23 +385,6 @@ inline bool wait_for_property_window(
     );
 }
 
-inline bool wait_for_property_window_nonzero(
-    xcb_connection_t* conn,
-    xcb_window_t window,
-    xcb_atom_t atom,
-    std::chrono::milliseconds timeout
-)
-{
-    return wait_for_condition(
-        [conn, window, atom]()
-        {
-            auto value = get_window_property_window(conn, window, atom);
-            return value && *value != XCB_NONE;
-        },
-        timeout
-    );
-}
-
 inline std::optional<xcb_window_t> supporting_wm_window(X11Connection& conn)
 {
     auto atom = intern_atom(conn.get(), "_NET_SUPPORTING_WM_CHECK");
@@ -464,9 +395,10 @@ inline std::optional<xcb_window_t> supporting_wm_window(X11Connection& conn)
 inline xcb_window_t wm_owner(X11Connection& conn)
 {
     auto selection = intern_atom(conn.get(), "WM_S0");
-    auto* reply = xcb_get_selection_owner_reply(conn.get(), xcb_get_selection_owner(conn.get(), selection), nullptr);
+    auto reply = lwm::reply(
+        xcb_get_selection_owner_reply(conn.get(), xcb_get_selection_owner(conn.get(), selection), nullptr)
+    );
     xcb_window_t owner = reply ? reply->owner : XCB_NONE;
-    free(reply);
     return owner;
 }
 
@@ -571,10 +503,7 @@ inline std::optional<std::string>
 get_window_property_string(xcb_connection_t* conn, xcb_window_t window, xcb_atom_t atom)
 {
     auto cookie = xcb_get_property(conn, 0, window, atom, XCB_GET_PROPERTY_TYPE_ANY, 0, 4096);
-    std::unique_ptr<xcb_get_property_reply_t, decltype(&free)> reply(
-        xcb_get_property_reply(conn, cookie, nullptr),
-        &free
-    );
+    auto reply = xproperty::receive(conn, cookie);
     REQUIRE(reply);
     if (reply->type == XCB_NONE)
         return std::nullopt;
@@ -677,53 +606,36 @@ inline bool wait_for_active_window(X11Connection& conn, xcb_window_t expected, s
     return wait_for_property_window(conn.get(), conn.root(), active, expected, timeout);
 }
 
+inline std::optional<xcb_window_t> get_input_focus(X11Connection& conn)
+{
+    auto reply = lwm::reply(xcb_get_input_focus_reply(conn.get(), xcb_get_input_focus(conn.get()), nullptr));
+    return reply ? std::optional{ reply->focus } : std::nullopt;
+}
+
 // Waits for the server's input focus, which decides keyboard delivery, not _NET_ACTIVE_WINDOW.
 inline bool wait_for_x_input_focus(X11Connection& conn, xcb_window_t expected, std::chrono::milliseconds timeout)
 {
-    return wait_for_condition(
-        [&conn, expected]()
-        {
-            auto cookie = xcb_get_input_focus(conn.get());
-            auto* reply = xcb_get_input_focus_reply(conn.get(), cookie, nullptr);
-            if (!reply)
-                return false;
-            bool result = reply->focus == expected;
-            free(reply);
-            return result;
-        },
-        timeout
-    );
+    return wait_for_condition([&] { return get_input_focus(conn) == expected; }, timeout);
 }
 
 // Outer geometry without the border; read the border with get_window_border_width().
-struct WindowGeometry
-{
-    int16_t x = 0;
-    int16_t y = 0;
-    uint16_t width = 0;
-    uint16_t height = 0;
-
-    bool operator==(WindowGeometry const&) const = default;
-};
-
-inline std::optional<WindowGeometry> get_window_geometry(X11Connection& conn, xcb_window_t window)
+inline std::optional<lwm::Geometry> get_window_geometry(X11Connection& conn, xcb_window_t window)
 {
     auto cookie = xcb_get_geometry(conn.get(), window);
-    auto* reply = xcb_get_geometry_reply(conn.get(), cookie, nullptr);
+    auto reply = lwm::reply(xcb_get_geometry_reply(conn.get(), cookie, nullptr));
     if (!reply)
         return std::nullopt;
 
-    WindowGeometry result{
+    lwm::Geometry result{
         .x = reply->x,
         .y = reply->y,
         .width = reply->width,
         .height = reply->height,
     };
-    free(reply);
     return result;
 }
 
-inline WindowGeometry require_window_geometry(X11Connection& conn, xcb_window_t window)
+inline lwm::Geometry require_window_geometry(X11Connection& conn, xcb_window_t window)
 {
     auto geometry = get_window_geometry(conn, window);
     REQUIRE(geometry);
@@ -733,29 +645,26 @@ inline WindowGeometry require_window_geometry(X11Connection& conn, xcb_window_t 
 inline std::optional<uint16_t> get_window_border_width(X11Connection& conn, xcb_window_t window)
 {
     auto cookie = xcb_get_geometry(conn.get(), window);
-    auto* reply = xcb_get_geometry_reply(conn.get(), cookie, nullptr);
+    auto reply = lwm::reply(xcb_get_geometry_reply(conn.get(), cookie, nullptr));
     if (!reply)
         return std::nullopt;
     uint16_t result = reply->border_width;
-    free(reply);
     return result;
 }
 
 inline bool is_mapped(X11Connection& conn, xcb_window_t window)
 {
-    auto* attributes = xcb_get_window_attributes_reply(
-        conn.get(), xcb_get_window_attributes(conn.get(), window), nullptr);
+    auto attributes = lwm::reply(xcb_get_window_attributes_reply(
+        conn.get(), xcb_get_window_attributes(conn.get(), window), nullptr));
     bool mapped = attributes && attributes->map_state != XCB_MAP_STATE_UNMAPPED;
-    free(attributes);
     return mapped;
 }
 
 // LWM hides a client by keeping it mapped right of the root.
 inline bool is_hidden(X11Connection& conn, xcb_window_t window)
 {
-    auto* geometry = xcb_get_geometry_reply(conn.get(), xcb_get_geometry(conn.get(), window), nullptr);
+    auto geometry = lwm::reply(xcb_get_geometry_reply(conn.get(), xcb_get_geometry(conn.get(), window), nullptr));
     bool off_root = geometry && geometry->x >= conn.screen()->width_in_pixels;
-    free(geometry);
     return off_root && is_mapped(conn, window);
 }
 
@@ -769,7 +678,7 @@ inline bool wait_for_window_geometry(
     std::chrono::milliseconds timeout = std::chrono::seconds(2)
 )
 {
-    WindowGeometry expected{ .x = x, .y = y, .width = width, .height = height };
+    lwm::Geometry expected{ .x = x, .y = y, .width = width, .height = height };
     return wait_for_condition(
         [&conn, window, expected]() { return get_window_geometry(conn, window) == expected; },
         timeout
@@ -779,32 +688,25 @@ inline bool wait_for_window_geometry(
 inline bool is_stacked_above(X11Connection& conn, xcb_window_t upper, xcb_window_t lower)
 {
     auto cookie = xcb_query_tree(conn.get(), conn.root());
-    auto* reply = xcb_query_tree_reply(conn.get(), cookie, nullptr);
+    auto reply = lwm::reply(xcb_query_tree_reply(conn.get(), cookie, nullptr));
     if (!reply)
         return false;
 
-    int len = xcb_query_tree_children_length(reply);
-    auto* children = xcb_query_tree_children(reply);
+    int len = xcb_query_tree_children_length(reply.get());
+    auto* children = xcb_query_tree_children(reply.get());
     auto* upper_it = std::find(children, children + len, upper);
     auto* lower_it = std::find(children, children + len, lower);
     bool result = upper_it != children + len && lower_it != children + len && upper_it > lower_it;
-    free(reply);
     return result;
 }
 
 inline std::optional<uint32_t> get_wm_state(X11Connection& conn, xcb_window_t window, xcb_atom_t wm_state)
 {
-    auto cookie = xcb_get_property(conn.get(), 0, window, wm_state, wm_state, 0, 2);
-    auto* reply = xcb_get_property_reply(conn.get(), cookie, nullptr);
-    if (!reply || reply->type != wm_state || reply->format != 32 || xcb_get_property_value_length(reply) < 8)
-    {
-        free(reply);
-        return std::nullopt;
-    }
-
-    uint32_t result = static_cast<uint32_t*>(xcb_get_property_value(reply))[0];
-    free(reply);
-    return result;
+    auto reply = xproperty::receive(
+        conn.get(), xproperty::request(conn.get(), window, wm_state, wm_state, UINT32_MAX)
+    );
+    auto values = xproperty::words(reply, wm_state);
+    return values.size() >= 2 ? std::optional{ values.front() } : std::nullopt;
 }
 
 // Sets both _NET_WM_NAME and WM_NAME, producing two PropertyNotify events.

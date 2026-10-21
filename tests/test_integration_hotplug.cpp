@@ -30,20 +30,6 @@ struct RestoreOutputs
         );
     }
 };
-nlohmann::json query(std::string const& command)
-{
-    auto reply = send_ipc_command(command);
-    if (!reply || !reply->starts_with("ok "))
-        return {};
-    return nlohmann::json::parse(reply->substr(3));
-}
-uint16_t width(X11Connection& conn, xcb_window_t window)
-{
-    auto* reply = xcb_get_geometry_reply(conn.get(), xcb_get_geometry(conn.get(), window), nullptr);
-    auto value = reply ? reply->width : 0;
-    free(reply);
-    return value;
-}
 }
 TEST_CASE(
     "Integration: output add reorder removal and return preserve surviving workspaces",
@@ -64,12 +50,6 @@ apply = { floating = true, monitor = "DUMMY1" }
     REQUIRE(env->x11_env.owns_display());
     RestoreOutputs restore;
     auto& conn = env->conn;
-    auto command = [&](std::string text)
-    {
-        auto result = send_ipc_command(text);
-        REQUIRE(result);
-        REQUIRE(result->starts_with("ok"));
-    };
     auto dock = create_window(conn, 15, 25, 500, 40);
     auto desktop = create_window(conn, 0, 0, 600, 400);
     set_window_type(conn, dock, intern_atom(conn.get(), "_NET_WM_WINDOW_TYPE_DOCK"));
@@ -87,8 +67,8 @@ apply = { floating = true, monitor = "DUMMY1" }
     ));
     auto check_external_geometry = [&]
     {
-        CHECK(width(conn, dock) == 500);
-        CHECK(width(conn, desktop) == 600);
+        CHECK(require_window_geometry(conn, dock).width == 500);
+        CHECK(require_window_geometry(conn, desktop).width == 600);
     };
     auto a = create_window(conn, 10, 10, 200, 150);
     auto b = create_window(conn, 10, 10, 200, 150);
@@ -96,29 +76,29 @@ apply = { floating = true, monitor = "DUMMY1" }
     REQUIRE(wait_for_active_window(conn, a, timeout));
     map_window(conn, b);
     REQUIRE(wait_for_active_window(conn, b, timeout));
-    command("ratio set 0.7");
-    command("window focus " + std::to_string(a));
-    auto original_width = width(conn, a);
+    ipc_ok("ratio set 0.7");
+    ipc_ok("window focus " + std::to_string(a));
+    auto original_width = require_window_geometry(conn, a).width;
     REQUIRE(original_width > 700);
-    command("workspace switch 1");
-    command("layout set monocle");
+    ipc_ok("workspace switch 1");
+    ipc_ok("layout set monocle");
 
     randr({ "--addmode", "DUMMY1", "1280x720" });
     randr({ "--output", "DUMMY1", "--mode", "1280x720", "--right-of", "DUMMY0" });
     bool two_outputs =
-        wait_for_condition([&] { return query("workspace list")["monitors"].size() == 2; }, timeout);
-    INFO(query("workspace list").dump());
+        wait_for_condition([&] { return ipc_json("workspace list")["monitors"].size() == 2; }, timeout);
+    INFO(ipc_json("workspace list").dump());
     INFO(env->wm.diagnostics());
     auto outputs = run_command("/usr/bin/xrandr", { "--query" });
     INFO((outputs ? outputs->stdout_text : "xrandr failed"));
     REQUIRE(two_outputs);
     check_external_geometry();
-    auto workspaces = query("workspace list");
+    auto workspaces = ipc_json("workspace list");
     CHECK(workspaces["monitors"][0]["current_workspace"] == 1);
     CHECK(workspaces["monitors"][0]["workspaces"][1]["layout"] == "monocle");
-    command("workspace switch 0");
+    ipc_ok("workspace switch 0");
     REQUIRE(wait_for_active_window(conn, a, timeout));
-    CHECK(width(conn, a) == original_width);
+    CHECK(require_window_geometry(conn, a).width == original_width);
     check_external_geometry();
 
     auto floating = create_window(conn, 1300, 20, 250, 180);
@@ -126,7 +106,7 @@ apply = { floating = true, monitor = "DUMMY1" }
     map_window(conn, floating);
     auto monitor_for = [&](xcb_window_t id) -> int
     {
-        auto windows = query("window list");
+        auto windows = ipc_json("window list");
         if (windows.contains("windows"))
             for (auto const& window : windows["windows"])
                 if (window["id"] == id)
@@ -136,9 +116,9 @@ apply = { floating = true, monitor = "DUMMY1" }
     REQUIRE(wait_for_condition([&] { return monitor_for(floating) == 1; }, timeout));
     randr({ "--output", "DUMMY1", "--pos", "0x0", "--output", "DUMMY0", "--pos", "1280x0" });
     REQUIRE(wait_for_condition([&] { return monitor_for(a) == 1 && monitor_for(floating) == 0; }, timeout));
-    CHECK(width(conn, a) == original_width);
+    CHECK(require_window_geometry(conn, a).width == original_width);
     check_external_geometry();
-    command("window focus " + std::to_string(a));
+    ipc_ok("window focus " + std::to_string(a));
     auto state = intern_atom(conn.get(), "_NET_WM_STATE");
     auto fullscreen = intern_atom(conn.get(), "_NET_WM_STATE_FULLSCREEN");
     xcb_client_message_event_t event{};
@@ -156,17 +136,17 @@ apply = { floating = true, monitor = "DUMMY1" }
         reinterpret_cast<char*>(&event)
     );
     xcb_flush(conn.get());
-    REQUIRE(wait_for_condition([&] { return width(conn, a) == 1280; }, timeout));
+    REQUIRE(wait_for_condition([&] { return require_window_geometry(conn, a).width == 1280; }, timeout));
     randr({ "--output", "DUMMY0", "--off" });
     REQUIRE(wait_for_condition(
-        [&] { return query("workspace list")["monitors"].size() == 1 && monitor_for(a) == 0; },
+        [&] { return ipc_json("workspace list")["monitors"].size() == 1 && monitor_for(a) == 0; },
         timeout
     ));
     REQUIRE(wait_for_active_window(conn, a, timeout));
-    CHECK(width(conn, a) == 1280);
+    CHECK(require_window_geometry(conn, a).width == 1280);
     check_external_geometry();
     randr({ "--output", "DUMMY0", "--mode", "1280x720", "--right-of", "DUMMY1" });
-    REQUIRE(wait_for_condition([&] { return query("workspace list")["monitors"].size() == 2; }, timeout));
+    REQUIRE(wait_for_condition([&] { return ipc_json("workspace list")["monitors"].size() == 2; }, timeout));
     CHECK(monitor_for(a) == 0); // Returning outputs do not reclaim relocated clients.
     CHECK(monitor_for(floating) == 0);
     check_external_geometry();
@@ -200,26 +180,12 @@ warp_cursor_on_monitor_change = false
     randr({ "--addmode", "DUMMY1", "1280x720" });
     randr({ "--output", "DUMMY1", "--mode", "1280x720", "--right-of", "DUMMY0" });
     auto two_outputs =
-        wait_for_condition([&] { return query("workspace list")["monitors"].size() == 2; }, timeout);
-    INFO(query("workspace list").dump());
+        wait_for_condition([&] { return ipc_json("workspace list")["monitors"].size() == 2; }, timeout);
+    INFO(ipc_json("workspace list").dump());
     INFO(env->wm.diagnostics());
     auto outputs = run_command("/usr/bin/xrandr", { "--query" });
     INFO((outputs ? outputs->stdout_text : "xrandr failed"));
     REQUIRE(two_outputs);
-    auto command = [&](std::string text)
-    {
-        auto reply = send_ipc_command(text);
-        REQUIRE(reply);
-        REQUIRE(reply->starts_with("ok"));
-    };
-    auto rectangle = [&](xcb_window_t window)
-    {
-        auto* reply = xcb_get_geometry_reply(conn.get(), xcb_get_geometry(conn.get(), window), nullptr);
-        REQUIRE(reply);
-        std::array<int, 4> result{ reply->x, reply->y, reply->width, reply->height };
-        free(reply);
-        return result;
-    };
     for (bool floating : { false, true })
     {
         CAPTURE(floating);
@@ -230,40 +196,41 @@ warp_cursor_on_monitor_change = false
         REQUIRE(wait_for_active_window(conn, window, timeout));
         auto location = [&]() -> nlohmann::json
         {
-            auto snapshot = query("window list");
+            auto snapshot = ipc_json("window list");
             for (auto const& client : snapshot["windows"])
                 if (client["id"] == window)
                     return client;
             return { };
         };
-        auto before = rectangle(window);
+        auto before = require_window_geometry(conn, window);
         auto source = location()["monitor"].get<size_t>();
         auto destination = 1 - source;
         REQUIRE(send_key(conn, XK_F9));
         REQUIRE(wait_for_condition([&] { return location()["monitor"] == destination; }, timeout));
         REQUIRE(wait_for_active_window(conn, window, timeout));
-        CHECK(query("workspace list")["focused_monitor"] == destination);
-        auto moved = rectangle(window);
+        CHECK(ipc_json("workspace list")["focused_monitor"] == destination);
+        auto moved = require_window_geometry(conn, window);
         if (floating)
             REQUIRE(
                 moved
-                == std::array<int, 4>{ static_cast<int>(destination) * 1280 + (1280 - before[2] - 4) / 2,
-                                       (720 - before[3] - 4) / 2,
-                                       before[2],
-                                       before[3] }
+                == lwm::Geometry{
+                       static_cast<int16_t>(destination * 1280 + (1280 - before.width - 4) / 2),
+                       static_cast<int16_t>((720 - before.height - 4) / 2),
+                       before.width,
+                       before.height }
             );
         auto workspace = location()["workspace"].get<size_t>();
-        command("workspace switch 0");
-        command("window focus " + std::to_string(window));
+        ipc_ok("workspace switch 0");
+        ipc_ok("window focus " + std::to_string(window));
         // Both destinations start on workspace 0; moving away clears active focus.
         REQUIRE(workspace == 0);
         REQUIRE(send_key(conn, XK_F10));
         REQUIRE(wait_for_condition([&] { return location()["workspace"] == 1; }, timeout));
-        REQUIRE(wait_for_condition([&] { return query("window list")["focused"] != window; }, timeout));
-        command("workspace switch 1");
+        REQUIRE(wait_for_condition([&] { return ipc_json("window list")["focused"] != window; }, timeout));
+        ipc_ok("workspace switch 1");
         REQUIRE(wait_for_active_window(conn, window, timeout));
-        REQUIRE(rectangle(window) == moved);
-        command("workspace switch 0");
+        REQUIRE(require_window_geometry(conn, window) == moved);
+        ipc_ok("workspace switch 0");
         destroy_window(conn, window);
     }
 }
@@ -283,7 +250,7 @@ TEST_CASE(
     randr({ "--addmode", "DUMMY1", "1280x720" });
     randr({ "--output", "DUMMY1", "--mode", "1280x720", "--pos", "1280x0" });
     auto& conn = env->conn;
-    REQUIRE(wait_for_condition([&] { return query("workspace list")["monitors"].size() == 2; }, timeout));
+    REQUIRE(wait_for_condition([&] { return ipc_json("workspace list")["monitors"].size() == 2; }, timeout));
     auto workarea = intern_atom(conn.get(), "_NET_WORKAREA");
     auto partial = intern_atom(conn.get(), "_NET_WM_STRUT_PARTIAL");
     auto legacy = intern_atom(conn.get(), "_NET_WM_STRUT");
@@ -342,14 +309,14 @@ TEST_CASE(
     auto& conn = env->conn;
     randr({ "--addmode", "DUMMY1", "1280x720" });
     randr({ "--output", "DUMMY1", "--mode", "1280x720", "--right-of", "DUMMY0" });
-    REQUIRE(wait_for_condition([&] { return query("workspace list")["monitors"].size() == 2; }, timeout));
+    REQUIRE(wait_for_condition([&] { return ipc_json("workspace list")["monitors"].size() == 2; }, timeout));
     auto window = create_window(conn, 10, 10, 200, 150);
     set_window_type(conn, window, intern_atom(conn.get(), "_NET_WM_WINDOW_TYPE_DIALOG"));
     map_window(conn, window);
     REQUIRE(wait_for_active_window(conn, window, timeout));
     auto monitor = [&]
     {
-        auto snapshot = query("window list");
+        auto snapshot = ipc_json("window list");
         for (auto const& client : snapshot["windows"])
             if (client["id"] == window)
                 return client["monitor"].get<int>();
@@ -386,7 +353,7 @@ TEST_CASE(
     REQUIRE(grab_status() == XCB_GRAB_STATUS_ALREADY_GRABBED);
     randr({ "--output", "DUMMY1", "--off" });
     REQUIRE(wait_for_condition(
-        [&] { return query("workspace list")["monitors"].size() == 1 && monitor() == 0; },
+        [&] { return ipc_json("workspace list")["monitors"].size() == 1 && monitor() == 0; },
         timeout
     ));
     REQUIRE(grab_status() == XCB_GRAB_STATUS_SUCCESS);
@@ -408,7 +375,7 @@ TEST_CASE(
     auto& conn = env->conn;
     randr({ "--addmode", "DUMMY1", "1280x720" });
     randr({ "--output", "DUMMY1", "--mode", "1280x720", "--right-of", "DUMMY0" });
-    REQUIRE(wait_for_condition([&] { return query("workspace list")["monitors"].size() == 2; }, timeout));
+    REQUIRE(wait_for_condition([&] { return ipc_json("workspace list")["monitors"].size() == 2; }, timeout));
     // Explicit desktop requests make placement independent of pointer position.
     std::vector<xcb_window_t> windows;
     for (int i = 0; i < 3; ++i)
@@ -431,14 +398,14 @@ TEST_CASE(
     {
         randr({ "--output", "DUMMY1", "--pos", "0x0", "--output", "DUMMY0", "--pos", "1280x0" });
         REQUIRE(wait_for_condition(
-            [&] { return query("workspace list")["monitors"][0]["name"] == "DUMMY1"; }, timeout
+            [&] { return ipc_json("workspace list")["monitors"][0]["name"] == "DUMMY1"; }, timeout
         ));
     }
     SECTION("Removed outputs cannot lend their slot to the survivor")
     {
         removed = true;
         randr({ "--output", "DUMMY0", "--off" });
-        REQUIRE(wait_for_condition([&] { return query("workspace list")["monitors"].size() == 1; }, timeout));
+        REQUIRE(wait_for_condition([&] { return ipc_json("workspace list")["monitors"].size() == 1; }, timeout));
     }
     // Also carry the resulting slot decision through a real exec handoff.
     auto previous = wm_instance(conn);
@@ -473,7 +440,7 @@ TEST_CASE(
     auto& conn = env->conn;
     randr({ "--addmode", "DUMMY1", "1280x720" });
     randr({ "--output", "DUMMY1", "--mode", "1280x720", "--right-of", "DUMMY0" });
-    REQUIRE(wait_for_condition([&] { return query("workspace list")["monitors"].size() == 2; }, timeout));
+    REQUIRE(wait_for_condition([&] { return ipc_json("workspace list")["monitors"].size() == 2; }, timeout));
     auto tile = [&](uint32_t desktop)
     {
         auto window = create_window(conn, 20, 20, 200, 150);
@@ -540,7 +507,7 @@ TEST_CASE(
     REQUIRE(get_window_geometry(conn, newcomer));
     restart.resume();
     REQUIRE(wait_for_wm_restart(conn, std::chrono::seconds(5), *previous));
-    auto workspaces = query("workspace list");
+    auto workspaces = ipc_json("workspace list");
     size_t target = removed ? 0 : 1;
     REQUIRE(workspaces["monitors"].size() == (removed ? 1 : 2));
     CHECK(workspaces["focused_monitor"] == target);
@@ -555,7 +522,7 @@ TEST_CASE(
     }
     auto monitor_for = [&](xcb_window_t id)
     {
-        auto windows = query("window list");
+        auto windows = ipc_json("window list");
         for (auto const& window : windows["windows"])
             if (window["id"] == id)
             {
@@ -604,10 +571,10 @@ TEST_CASE(
     if (removed)
     {
         randr({ "--output", "DUMMY0", "--mode", "1280x720", "--right-of", "DUMMY1" });
-        REQUIRE(wait_for_condition([&] { return query("workspace list")["monitors"].size() == 2; }, timeout));
+        REQUIRE(wait_for_condition([&] { return ipc_json("workspace list")["monitors"].size() == 2; }, timeout));
         CHECK(monitor_for(a) == 0);
         CHECK(monitor_for(floating) == 0);
-        CHECK(query("workspace list")["monitors"][1]["current_workspace"] == 0);
+        CHECK(ipc_json("workspace list")["monitors"][1]["current_workspace"] == 0);
     }
     for (auto window : { a, b, c, d, floating, newcomer, dock }) destroy_window(conn, window);
 }
@@ -637,7 +604,7 @@ match = { class = "RecallNamed" }
     randr({ "--addmode", "DUMMY1", "1280x720" });
     randr({ "--output", "DUMMY1", "--mode", "1280x720", "--pos", "1280x0" });
     auto& conn = env->conn;
-    REQUIRE(wait_for_condition([&] { return query("workspace list")["monitors"].size() == 2; }, timeout));
+    REQUIRE(wait_for_condition([&] { return ipc_json("workspace list")["monitors"].size() == 2; }, timeout));
     auto desktop = intern_atom(conn.get(), "_NET_CURRENT_DESKTOP");
     send_client_message(conn, conn.root(), desktop, 0);
     REQUIRE(wait_for_property_cardinal(conn.get(), conn.root(), desktop, 0, timeout));
