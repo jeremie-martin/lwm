@@ -117,11 +117,14 @@ void flush_before_exec(std::chrono::milliseconds limit)
     if (!logger)
         return;
     auto deadline = std::chrono::steady_clock::now() + limit;
-    if (pending_flush.valid() && pending_flush.wait_until(deadline) != std::future_status::ready)
+    if (pending_flush.valid() && pending_flush.wait_until(deadline) == std::future_status::timeout)
         return;
-    pending_flush = std::async(std::launch::async, [target = logger] { target->flush_log(); });
-    quill::Backend::notify(); // The idle backend would otherwise sleep through the limit.
-    pending_flush.wait_until(deadline);
+    // Without a thread to spare the task is deferred and never runs; exec goes ahead.
+    pending_flush = std::async([target = logger] { target->flush_log(1'000'000); });
+    // An idle backend would sleep through the limit before it sees the flush.
+    while (pending_flush.wait_for(std::chrono::milliseconds(1)) == std::future_status::timeout
+           && std::chrono::steady_clock::now() < deadline)
+        quill::Backend::notify();
 }
 void shutdown()
 {

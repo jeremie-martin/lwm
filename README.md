@@ -161,8 +161,8 @@ by the host; use stderr redirection for a file.
 
 Logging is asynchronous and best effort. A full queue drops new records so a slow
 sink does not block ordinary WM operations. **Normal shutdown drains the worker
-and can wait for a stalled output destination.** Exec restart does not drain and
-may lose queued messages.
+and can wait for a stalled output destination.** Exec restart waits up to 100 ms for
+queued messages; a stalled destination can still lose them.
 
 `lwm-notify [notify-send arguments...]` shows a notification and, when `WINDOWID`
 is numeric, marks that managed source window urgent. The optional
