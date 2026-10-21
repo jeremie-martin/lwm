@@ -94,7 +94,7 @@ void WindowManager::handle_event(xcb_generic_event_t const& event)
         case XCB_UNMAP_NOTIFY:
         {
             auto window = reinterpret_cast<xcb_unmap_notify_event_t const&>(event).window;
-            if (auto output = outputs_.find(window); synthetic && output != outputs_.end() && output->second.mapped)
+            if (synthetic && outputs_.contains(window))
             {
                 auto unmap = xcb_unmap_window(conn_.get(), window).sequence;
                 sync_events();
@@ -177,7 +177,6 @@ void WindowManager::handle_map_request(xcb_map_request_event_t const& e)
     state_.admit(observed.front());
     manage(observed.front());
 }
-
 
 // Pointer and keyboard
 
@@ -315,8 +314,11 @@ void WindowManager::handle_client_message(xcb_client_message_event_t const& e)
     else if (e.type == ewmh->_NET_ACTIVE_WINDOW)
     {
         LWM_LOG_DEBUG("_NET_ACTIVE_WINDOW request: window={:#x} source={}", e.window, e.data.data32[0]);
-        state_.request_activation(e.window, e.data.data32[0] == XCB_EWMH_CLIENT_SOURCE_TYPE_NORMAL, e.data.data32[1],
-                                  read_user_time(state_.active_window()));
+        bool application = e.data.data32[0] == XCB_EWMH_CLIENT_SOURCE_TYPE_NORMAL;
+        // The active client's user time is read only when State would compare it.
+        bool competes = state_.activation_competes(e.window, application);
+        auto active_time = competes ? read_user_time(state_.active_window()) : 0;
+        state_.request_activation(e.window, application, e.data.data32[1], active_time);
     }
     else if (e.type == ewmh->_NET_WM_DESKTOP)
     {

@@ -7,11 +7,9 @@
 
 namespace lwm {
 
-// Hidden clients are published like visible ones, at their normal presentation.
+// Before X is released, hidden clients move back to the rectangle they would have if shown.
 void WindowManager::restore_clients()
 {
-    state_.end_drag(false);
-    release_pointer();
     auto clients = state_.project(state_.fullscreen_visibility());
     for (auto& [client, presentation] : clients)
         if (!presentation)
@@ -19,13 +17,13 @@ void WindowManager::restore_clients()
     publish_clients(clients);
 }
 
-void WindowManager::scan_existing_windows(bool handoff)
+void WindowManager::scan_existing_windows(bool restarted)
 {
     // Every managed client is mapped, so an unmapped one has withdrawn.
     auto windows = observe(root_children(), true);
 
     std::optional<std::pair<int16_t, int16_t>> pointer;
-    if (!handoff)
+    if (!restarted)
         if (auto query = reply(xcb_query_pointer_reply(conn_.get(), xcb_query_pointer(conn_.get(), conn_.screen()->root), nullptr)))
             pointer = { query->root_x, query->root_y };
     state_.adopt(windows, handoff_ ? &*handoff_ : nullptr, pointer);

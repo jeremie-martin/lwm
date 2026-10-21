@@ -42,9 +42,9 @@ independent reviews with code access found that it relocates the state rather th
 removing mechanism: most validation is relational (unique ranks, tiled membership
 agreeing with placement, disjoint scratchpad ownership), so splitting the record
 replaces whole-record rejection with repair rules for contradictory records written
-by a non-transactional completion. Restoration, topology rebinding and the
-retained-predecessor handoff remain either way; estimates ranged from -100 lines (only
-with lenient decoding and restores that may blend two operations) to +250. It would
+by a non-transactional completion. Restoration, topology rebinding and the exec
+handoff remain either way; estimates ranged from -100 lines (only with lenient decoding
+and restores that may blend two operations) to +250. It would
 add crash loops (today the snapshot is deleted as it is read), stale state after
 another WM, and self-declared fixtures. Its main benefit, crash survival, is void
 where LWM is the session process, as on both maintainer hosts. Revisit only if
@@ -97,7 +97,7 @@ a mode.
 
 A tiling layout has no place for iconified windows and LWM has no taskbar to restore
 them from, so a client that minimized itself simply disappeared. `WM_CHANGE_STATE`,
-`_NET_WM_STATE_HIDDEN` requests and iconic `WM_HINTS.initial_state` are ignored and
+`_NET_WM_ACTION_MINIMIZE` is not advertised; only scratchpads make windows iconic.
 `_NET_WM_ACTION_MINIMIZE` is not advertised; LWM hides windows only through scratchpads.
 
 ## Restore hiding only from private intent (2026-10-07)
@@ -135,8 +135,9 @@ monitoring consumer.
 
 ## Require RandR (2026-10-06)
 
-Every X server LWM targets has RandR; the fallback to a single root-sized monitor was an
-untested second topology path. Startup now fails with a clear error without it.
+Every X server LWM targets has RandR; running without the extension was an untested
+second topology path. Startup now fails with a clear error without it. Topology still
+comes from RandR alone: a report with no usable output yields one root-sized output.
 
 ## Drop rule `apply.scratchpad` (2026-10-06)
 
@@ -222,8 +223,9 @@ Managed clients stay mapped. Hiding moves a client's last submitted rectangle to
 reaches back into the root; 16-bit coordinates make 32767 pixels the practical root
 width. Toolkits never see a resize, and windows are not unmapped, so applications
 are not told to stop drawing. State owns visibility; completion derives the hidden
-rectangle, and synthetic notifications report the normal presentation. On Xvfb, a
-switch that moves 200 windows costs about 6% more than unmapping them.
+rectangle, and synthetic notifications report the rectangle the client would have if
+shown. On Xvfb, a switch that moves 200 windows costs about 6% more than unmapping
+them.
 
 Rejected, in the order they were tried:
 
@@ -259,11 +261,11 @@ deferred queue, at the
 cost of one synchronous round trip only for `WM_TAKE_FOCUS` clients.
 
 Using the triggering click or key time for X focus was reconsidered on 2026-10-21 and
-rejected. LWM sets other focus with current server time, and LWM does not track
-FocusIn, so X would silently refuse an older event time and leave keyboard focus
-elsewhere while State and `_NET_ACTIVE_WINDOW` name the new window. Clicks gain
-nothing: the replayed click and LWM's focus leave in the same flush, and a
-`WM_TAKE_FOCUS` client answers after LWM's direct focus.
+rejected. LWM sets other focus with `CurrentTime`, and LWM does not track FocusIn, so X
+would silently refuse an older event time and leave keyboard focus elsewhere while
+State and `_NET_ACTIVE_WINDOW` name the new window. Clicks gain nothing: the replayed
+click and LWM's focus leave in the same flush, and a `WM_TAKE_FOCUS` client answers
+after LWM's direct focus.
 
 ## Bound shared-state output, not raw input (2026-10-18)
 
@@ -283,8 +285,8 @@ removing it improves the tradeoff; reload deliberately refreshes and reapplies i
 ## Read user time on demand (2026-10-19)
 
 `_NET_WM_USER_TIME` only arbitrates application activation against the active client,
-so LWM reads that client's value, through its user-time window, when an activation
-request arrives. Eager tracking subscribed to foreign windows, including the root, and cost a
+so LWM reads that client's value, through its user-time window, only when `State`
+says an application's request competes with it. Eager tracking subscribed to foreign windows, including the root, and cost a
 synchronous read for every keystroke in toolkits that update the property per input.
 The comparison uses the newer of the observed value and LWM's recorded focus time.
 

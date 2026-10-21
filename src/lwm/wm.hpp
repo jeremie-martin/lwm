@@ -88,12 +88,12 @@ private:
     bool monitors_dirty_ = false;
     // Republish window properties a client rewrote (urgency hints, shared
     // _NET_WM_STATE). State changes are tracked by revision.
-    bool presentation_dirty_ = false;
+    bool republish_properties_ = false;
     uint64_t published_revision_ = UINT64_MAX;
 
     // Events read during synchronous requests, dispatched in order by the event loop.
     std::deque<xcb_generic_event_t> deferred_events_;
-    bool pointer_grabbed_ = false; ///< Held exactly while State has a drag
+    bool pointer_grabbed_ = false; ///< Taken before a drag begins; completion releases it once State has none
     std::optional<RunResult> stop_; ///< Set when the event loop should end
     std::string restart_binary_;
     // Latest key, button, motion or crossing time. User time reflects interaction,
@@ -118,6 +118,7 @@ private:
     void defer_queued_events();
     void sync_events();
     std::vector<xcb_window_t> root_children();
+    std::vector<xcb_window_t> root_children(xcb_query_tree_cookie_t cookie);
     void dispatch_event(xcb_generic_event_t const& event);
     std::expected<void, std::string> reload_config(std::string_view source);
     bool launch_program(std::vector<std::string> const& command, std::string_view source);
@@ -132,11 +133,12 @@ private:
     std::vector<xcb_atom_t> read_protocols(xcb_window_t window) const;
     uint32_t read_user_time(xcb_window_t window) const;
     std::optional<Geometry> read_window_geometry(xcb_window_t window) const;
+    void handle_property_notify(xcb_property_notify_event_t const& event);
 
     // wm_manage.cpp: admission adapters
-    void scan_existing_windows(bool handoff);
+    void scan_existing_windows(bool restarted);
     void manage(WindowObservation const& observed);
-    void restore_clients(); ///< Show every client at its normal geometry before releasing X
+    void restore_clients(); ///< Move hidden clients back on screen before releasing X
 
     // wm_transition.cpp: operation completion and publication
     void complete_transition();
@@ -160,10 +162,16 @@ private:
     void publish_urgency(Client const& client, Output& output);
     void publish_fixtures();
     void publish_root();
-    std::optional<uint32_t> reconcile_stacking(State::FullscreenVisibility const& fullscreen, bool reassert);
-    void withdraw_removed();
+    struct StackingRepair
+    {
+        std::vector<xcb_window_t> order;
+        xcb_query_tree_cookie_t tree;
+    };
+    std::optional<StackingRepair> request_stacking(State::FullscreenVisibility const& fullscreen, bool reassert);
+    std::optional<uint32_t> restack(StackingRepair const& repair);
+    std::vector<xcb_window_t> withdraw_removed();
+    void forget_withdrawn(std::span<xcb_window_t const> windows);
     void commit_focus();
-    void flush_and_drain_crossing(std::optional<uint32_t> since);
 
     // wm_events.cpp: X event handlers
     void handle_event(xcb_generic_event_t const& event);
@@ -178,7 +186,6 @@ private:
     void handle_moveresize_window(xcb_client_message_event_t const& e);
     void handle_wm_moveresize(xcb_client_message_event_t const& e);
     void handle_configure_request(xcb_configure_request_event_t const& e);
-    void handle_property_notify(xcb_property_notify_event_t const& event);
     bool grab_pointer(xcb_cursor_t cursor = XCB_NONE);
     bool release_pointer(); ///< Whether a grab ended, generating crossings to drain
     void begin_interaction(State::Interaction const& interaction, int16_t x, int16_t y, uint8_t button);

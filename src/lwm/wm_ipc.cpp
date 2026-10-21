@@ -176,7 +176,6 @@ std::string WindowManager::handle_request(std::string_view text)
     );
 }
 
-
 // The exposed state, also published as _LWM_STATE for watchers.
 std::string WindowManager::state_json() const
 {

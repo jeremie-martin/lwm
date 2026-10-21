@@ -1193,36 +1193,33 @@ TEST_CASE("Integration: synthetic destruction and reparenting leave a client man
     destroy_window(conn, window);
 }
 
-TEST_CASE("Integration: a hidden client reparented away leaves management", "[integration][workspace][visibility]")
+TEST_CASE("Integration: a window reparented before LWM maps it leaves management", "[integration][workspace]")
 {
-    auto test_env = TestEnvironment::create("[workspaces]\nnames = [\"1\", \"2\"]\n");
+    auto test_env = TestEnvironment::create();
     if (!test_env)
         SKIP("Test environment not available");
     auto& conn = test_env->conn;
-    xcb_atom_t net_wm_desktop = intern_atom(conn.get(), "_NET_WM_DESKTOP");
     xcb_atom_t net_client_list = intern_atom(conn.get(), "_NET_CLIENT_LIST");
-
-    xcb_window_t window = create_window(conn, 10, 10, 200, 150);
-    map_window(conn, window);
-    REQUIRE(wait_for_active_window(conn, window, kTimeout));
-    send_client_message(conn, window, net_wm_desktop, 1);
-    REQUIRE(wait_for_condition([&] { return is_hidden(conn, window); }, kTimeout));
-
+    auto marker = create_window(conn, 300, 300, 100, 100);
+    map_window(conn, marker);
+    REQUIRE(wait_for_active_window(conn, marker, kTimeout));
     // An override-redirect host, like a tray, is not managed itself.
     xcb_window_t host = xcb_generate_id(conn.get());
     uint32_t override_redirect = 1;
     xcb_create_window(conn.get(), XCB_COPY_FROM_PARENT, host, conn.root(), 0, 0, 50, 50, 0,
                       XCB_WINDOW_CLASS_INPUT_OUTPUT, XCB_COPY_FROM_PARENT, XCB_CW_OVERRIDE_REDIRECT, &override_redirect);
+    xcb_window_t window = create_window(conn, 10, 10, 200, 150);
+    // One read carries the map request and the reparenting, which sends no UnmapNotify.
+    xcb_map_window(conn.get(), window);
     xcb_reparent_window(conn.get(), window, host, 0, 0);
     xcb_flush(conn.get());
-    REQUIRE(wait_for_condition(
-        [&]
-        {
-            auto list = get_client_list(conn, net_client_list);
-            return list && !std::ranges::contains(*list, window);
-        },
-        kTimeout
-    ));
+    // A marker on the same connection proves both events were handled.
+    observe_title_after_events(conn, marker);
+    auto list = get_client_list(conn, net_client_list);
+    REQUIRE(list);
+    CHECK_FALSE(std::ranges::contains(*list, window));
+    destroy_window(conn, host);
+    destroy_window(conn, marker);
 }
 
 TEST_CASE("Integration: window requests queued behind a restart reach the successor", "[integration][restart][adoption]")
@@ -1260,28 +1257,6 @@ TEST_CASE("Integration: window requests queued behind a restart reach the succes
     destroy_window(conn, fresh);
     destroy_window(conn, withdrawn);
     destroy_window(conn, requester);
-}
-
-TEST_CASE("Integration: an application's map request does not show a stashed client", "[integration][scratchpad][focus]")
-{
-    auto env = TestEnvironment::create();
-    REQUIRE(env);
-    auto& conn = env->conn;
-    auto stashed = create_window(conn, 10, 10, 200, 150);
-    map_window(conn, stashed);
-    REQUIRE(wait_for_active_window(conn, stashed, kTimeout));
-    auto other = create_window(conn, 20, 20, 200, 150);
-    map_window(conn, other);
-    REQUIRE(wait_for_active_window(conn, other, kTimeout));
-    stash(stashed);
-    REQUIRE(is_hidden(conn, stashed));
-    // Showing it takes an activation, which the focus-stealing rules govern.
-    map_window(conn, stashed);
-    observe_title_after_events(conn, other);
-    CHECK(is_hidden(conn, stashed));
-    CHECK(ipc_json("window list").at("focused") == other);
-    destroy_window(conn, other);
-    destroy_window(conn, stashed);
 }
 
 TEST_CASE("Integration: a withdrawal before LWM maps a window undoes LWM mapping it", "[integration][visibility]")

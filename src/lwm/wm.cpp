@@ -22,19 +22,19 @@ WindowManager::WindowManager(Config config, std::string config_path)
     create_wm_window();
     setup_root();
     claim_wm_ownership();
-    bool handoff = release_predecessor();
+    bool restarted = release_predecessor();
     create_cursors();
     grab_buttons();
     refresh_topology();
     ewmh_.advertise(wm_window_, atoms_.lwm_window_class);
-    scan_existing_windows(handoff);
+    scan_existing_windows(restarted);
     grab_keys();
     complete_transition();
     LWM_LOG_INFO(
         "WM ready: monitors={} clients={} restart={} active_window={:#x}",
         state_.monitors().size(),
         state_.clients().size(),
-        handoff,
+        restarted,
         state_.active_window()
     );
 }
@@ -273,10 +273,17 @@ RunResult WindowManager::run()
     // Requests already queued are still handled, with the server grabbed so that no
     // new one arrives before X is released: the next manager sees every pending map
     // and withdrawal, and losing the selection still turns a restart into an exit.
+    // A drag ends first, so no split resize takes and releases a grab of its own.
+    state_.end_drag(false);
+    release_pointer();
     xcb_grab_server(conn_.get());
     sync_events();
-    for (auto const& event : std::exchange(deferred_events_, { }))
+    while (!deferred_events_.empty())
+    {
+        auto event = deferred_events_.front();
+        deferred_events_.pop_front();
         dispatch_event(event);
+    }
     restore_clients();
     if (*stop_ == RunResult::Restart)
         prepare_restart();
@@ -302,7 +309,12 @@ void WindowManager::sync_events()
 
 std::vector<xcb_window_t> WindowManager::root_children()
 {
-    auto tree = reply(xcb_query_tree_reply(conn_.get(), xcb_query_tree(conn_.get(), conn_.screen()->root), nullptr));
+    return root_children(xcb_query_tree(conn_.get(), conn_.screen()->root));
+}
+
+std::vector<xcb_window_t> WindowManager::root_children(xcb_query_tree_cookie_t cookie)
+{
+    auto tree = reply(xcb_query_tree_reply(conn_.get(), cookie, nullptr));
     if (!tree)
         return { };
     auto* first = xcb_query_tree_children(tree.get());
@@ -413,12 +425,13 @@ uint32_t WindowManager::server_time()
     auto* c = conn_.get();
     uint32_t const selected = XCB_EVENT_MASK_PROPERTY_CHANGE, unselected = XCB_EVENT_MASK_NO_EVENT;
     xcb_change_window_attributes(c, wm_window_, XCB_CW_EVENT_MASK, &selected);
-    xcb_ewmh_set_wm_name(ewmh_.get(), wm_window_, command::identity.size(), command::identity.data());
+    auto marker = xcb_ewmh_set_wm_name(ewmh_.get(), wm_window_, command::identity.size(), command::identity.data());
     xcb_change_window_attributes(c, wm_window_, XCB_CW_EVENT_MASK, &unselected);
     sync_events();
+    // The notification carries the sequence of the write that caused it.
     auto notify = std::ranges::find_if(deferred_events_, [&](auto const& event)
     {
-        return event.response_type == XCB_PROPERTY_NOTIFY
+        return event.response_type == XCB_PROPERTY_NOTIFY && event.full_sequence == marker.sequence
             && reinterpret_cast<xcb_property_notify_event_t const&>(event).window == wm_window_;
     });
     if (notify == deferred_events_.end())

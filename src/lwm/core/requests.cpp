@@ -48,6 +48,12 @@ void State::request_states(xcb_window_t id, StateChange change, WindowStates req
         request_fullscreen(id);
 }
 
+// Only an application's request for another managed client competes with the active one.
+bool State::activation_competes(xcb_window_t id, bool application) const
+{
+    return application && find(id) && active_window_ != XCB_NONE && active_window_ != id;
+}
+
 void State::request_activation(xcb_window_t id, bool application, uint32_t timestamp, uint32_t active_user_time)
 {
     auto const* client = find(id);
@@ -59,7 +65,7 @@ void State::request_activation(xcb_window_t id, bool application, uint32_t times
         if (application)
             urgency(id, &Urgency::wm, true);
     };
-    if (application && active_window_ != XCB_NONE && active_window_ != id)
+    if (activation_competes(id, application))
     {
         if (timestamp == 0)
             return deny("missing-timestamp");

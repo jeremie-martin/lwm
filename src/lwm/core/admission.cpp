@@ -305,7 +305,6 @@ void State::apply_default_mode(xcb_window_t id)
             set_mode(id, *floating);
 }
 
-
 void State::apply_rule_state(xcb_window_t window, RuleActions const& rule)
 {
     LWM_LOG_DEBUG("Applying matched rule: window={:#x}", window);

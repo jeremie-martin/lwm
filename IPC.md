@@ -158,7 +158,7 @@ U+FFFD. This display conversion does not alter the model or private restart data
 }
 ```
 
-`window list` excludes dock and desktop clients and returns:
+`window list` excludes docks and desktops and returns:
 
 ```json
 {

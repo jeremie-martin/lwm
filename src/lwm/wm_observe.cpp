@@ -188,6 +188,9 @@ std::vector<WindowObservation> WindowManager::observe(std::span<xcb_window_t con
         auto role = State::role(w.id, w.type, w.transient_for != XCB_NONE, handoff_ ? &*handoff_ : nullptr);
         if (role == WindowRole::Dock)
             reads.strut = request_strut(c, e, w.id);
+        // An unmanaged parent's geometry is read with the client's properties.
+        if (role == WindowRole::Client && w.transient_for != XCB_NONE && !state_.find(w.transient_for))
+            reads.parent = xcb_get_geometry(c, w.transient_for);
         if (role == WindowRole::Client)
             reads.properties = Properties{
                 xcb_get_geometry(c, w.id),
@@ -223,20 +226,13 @@ std::vector<WindowObservation> WindowManager::observe(std::span<xcb_window_t con
         xcb_ewmh_get_wm_fullscreen_monitors_reply_t monitors;
         if (xcb_ewmh_get_wm_fullscreen_monitors_reply(e, cookie.fullscreen_monitors, &monitors, nullptr))
             w.fullscreen_monitors = FullscreenMonitors{ monitors.top, monitors.bottom, monitors.left, monitors.right };
-        // An unmanaged parent's geometry is read across the batch before any reply.
-        if (w.transient_for != XCB_NONE && !state_.find(w.transient_for))
-            reads.parent = xcb_get_geometry(c, w.transient_for);
+        if (reads.parent)
+            w.unmanaged_parent = geometry(c, *reads.parent);
     }
     std::vector<WindowObservation> result;
-    result.reserve(pending.size());
     for (auto& reads : pending)
-    {
-        if (!reads.manageable)
-            continue;
-        if (reads.parent)
-            reads.window.unmanaged_parent = geometry(c, *reads.parent);
-        result.push_back(std::move(reads.window));
-    }
+        if (reads.manageable)
+            result.push_back(std::move(reads.window));
     return result;
 }
 
@@ -259,7 +255,7 @@ void WindowManager::handle_property_notify(xcb_property_notify_event_t const& ev
     // A refused shared-property write remains unpublished. A later external
     // change can make it fit; successful writes' own notifications cost nothing.
     if (atom == e->_NET_WM_STATE && !states_current(*client))
-        presentation_dirty_ = true;
+        republish_properties_ = true;
     if (atom == e->_NET_WM_NAME || atom == XCB_ATOM_WM_NAME)
     {
         // Title updates are frequent; the legacy name is read only when needed.
@@ -277,10 +273,10 @@ void WindowManager::handle_property_notify(xcb_property_notify_event_t const& ev
         state_.transient(window, window_value(c, request(c, window, XCB_ATOM_WM_TRANSIENT_FOR, XCB_ATOM_WINDOW, 1)));
     else if (atom == XCB_ATOM_WM_NORMAL_HINTS)
     {
+        auto hints = xcb_icccm_get_wm_normal_hints(c, window);
         auto parent = client->transient_for;
-        state_.size_hints(window,
-                          size_hints(c, xcb_icccm_get_wm_normal_hints(c, window)),
-                          parent && !state_.find(parent) ? read_window_geometry(parent) : std::nullopt);
+        auto unmanaged = parent && !state_.find(parent) ? std::optional{ xcb_get_geometry(c, parent) } : std::nullopt;
+        state_.size_hints(window, size_hints(c, hints), unmanaged ? geometry(c, *unmanaged) : std::nullopt);
     }
     else if (atom == XCB_ATOM_WM_HINTS)
     {
@@ -292,7 +288,7 @@ void WindowManager::handle_property_notify(xcb_property_notify_event_t const& ev
         if (auto& output = outputs_[window]; output.urgent != observed.urgent)
         {
             output.urgent = observed.urgent;
-            presentation_dirty_ = true;
+            republish_properties_ = true;
         }
     }
     else if (atom == e->WM_PROTOCOLS)

@@ -184,8 +184,8 @@ public:
     // Focus
     xcb_window_t active_window() const { return active_window_; }
     size_t focused_monitor() const { return focused_monitor_; }
-    // Activation restores a hidden client and selects its workspace. Unknown or
-    // clients without input or WM_TAKE_FOCUS are refused; NONE releases focus
+    // Activation restores an iconic client and selects its workspace. Unknown clients
+    // and clients without input or WM_TAKE_FOCUS are refused; NONE releases focus
     // until a later choice, which settling does not override.
     void focus(xcb_window_t id, uint32_t time = 0, bool record_user_time = true);
     bool cycle_focus(bool forward);
@@ -214,7 +214,7 @@ public:
     // Move the active client to the adjacent monitor's current workspace.
     bool move_to_monitor(int direction);
     void floating(xcb_window_t id, bool enabled);
-    // The user's float toggle focuses the client; it leaves fullscreen and hidden
+    // The user's float toggle focuses the client; it leaves fullscreen and iconic
     // clients alone. Leaving floating also leaves maximize.
     void toggle_floating(xcb_window_t id);
     void geometry(xcb_window_t id, Geometry rectangle);
@@ -247,6 +247,7 @@ public:
     // observed _NET_WM_USER_TIME. Refusals demand attention. No request surfaces a
     // window suppressed by the fullscreen owner of its placement.
     void request_activation(xcb_window_t id, bool application, uint32_t timestamp, uint32_t active_user_time = 0);
+    bool activation_competes(xcb_window_t id, bool application) const;
     // _NET_WM_DESKTOP: a concrete desktop pins the placement; the sticky value sticks.
     void request_desktop(xcb_window_t id, uint32_t desktop);
     // _NET_CURRENT_DESKTOP names a monitor and one of its workspaces.
@@ -292,7 +293,7 @@ public:
     std::expected<ScratchpadConfig const*, std::string> toggle_scratchpad(std::string_view name);
     void scratchpad_pending(std::string_view name, bool pending);
     void pool_scratchpad(xcb_window_t id);
-    // Hide the client in the pool. Claims, fullscreen, hidden and dragged
+    // Hide the client in the pool. Claims, fullscreen, iconic and dragged
     // clients are left alone.
     void stash(xcb_window_t id);
     // Recall or focus the pool target; an active local target rotates the pool.

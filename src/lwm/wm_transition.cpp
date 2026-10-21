@@ -14,7 +14,7 @@ namespace lwm {
 // Compare complete projections with prior output, so mutations need no change lists.
 void WindowManager::complete_transition()
 {
-    bool obligations = !configure_replies_.empty() || restack_requested_ || presentation_dirty_;
+    bool obligations = !configure_replies_.empty() || restack_requested_ || republish_properties_;
     if (!obligations && state_.revision() == published_revision_)
         return;
 
@@ -34,31 +34,46 @@ void WindowManager::complete_transition()
         // Explicit focus reasserts the focused state even if a client rewrote it.
         properties_.erase({ state_.active_window(), ewmh_.get()->_NET_WM_STATE });
     }
+    // The tree query rides on the shared-state round trip.
+    auto stacking = request_stacking(fullscreen, focus_request);
     StateUpdates states;
     for (auto const& projected : clients)
         publish_properties(*projected.client, outputs_.at(projected.client->id), states);
     publish_states(states);
     publish_fixtures();
     publish_root();
-    auto restacked = reconcile_stacking(fullscreen, focus_request);
-    withdraw_removed();
-    if (!state_.drag() && (released || moved || restacked))
-        flush_and_drain_crossing(released || moved ? std::nullopt : restacked);
+    auto restacked = stacking ? restack(*stacking) : std::nullopt;
+    auto withdrawn = withdraw_removed();
+    // One round trip after every move collects the crossings it caused and any
+    // property a withdrawn client rewrote.
+    bool drain = !state_.drag() && (released || moved || restacked);
+    if (drain || !withdrawn.empty())
+        sync_events();
+    forget_withdrawn(withdrawn);
+    // Drop crossings so stale pointer focus cannot override the result. A restack
+    // alone leaves the crossings the pointer made before it.
+    if (drain)
+        std::erase_if(deferred_events_, [since = released || moved ? std::nullopt : restacked](auto const& event)
+        {
+            uint8_t type = event.response_type & ~0x80;
+            return (type == XCB_ENTER_NOTIFY || type == XCB_LEAVE_NOTIFY || type == XCB_MOTION_NOTIFY)
+                && (!since || static_cast<int32_t>(event.full_sequence - *since) >= 0);
+        });
     conn_.flush();
     state_.thaw();
 
     configure_replies_.clear();
     restack_requested_ = false;
-    presentation_dirty_ = false;
+    republish_properties_ = false;
     LWM_ASSERT_INVARIANTS(state_);
 }
 
 // Client publication
 
-// Clients stay mapped. Hiding moves the last submitted rectangle, or the normal
-// one, to the largest X coordinate: right of the root whatever its size, without a
-// resize the toolkit could answer. Synthetic notifications report the normal
-// presentation. Returns whether anything moved under the pointer.
+// Clients stay mapped. Hiding moves the last submitted rectangle, or the one State
+// would present, to the largest X coordinate: right of the root whatever its size,
+// without a resize the toolkit could answer. Synthetic notifications report the
+// rectangle State presents when shown. Returns whether anything moved under the pointer.
 bool WindowManager::publish_clients(std::vector<State::Projected> const& clients)
 {
     bool moved = false;
@@ -361,19 +376,25 @@ void WindowManager::publish_root()
 }
 
 // A changed desired order, a forwarded restack, or an explicit focus request
-// reads the tree and repairs the server order, including external restacks.
-// Other operations leave an unchanged order alone. Returns the first restack's
-// request sequence, if any.
-std::optional<uint32_t> WindowManager::reconcile_stacking(State::FullscreenVisibility const& fullscreen, bool reassert)
+// queries the tree to repair the server order, including external restacks.
+// Other operations leave an unchanged order alone.
+std::optional<WindowManager::StackingRepair>
+WindowManager::request_stacking(State::FullscreenVisibility const& fullscreen, bool reassert)
 {
     auto order = stacking::compute_order(state_, fullscreen);
-    if (!publish(conn_.screen()->root, ewmh_.get()->_NET_CLIENT_LIST_STACKING, XCB_ATOM_WINDOW, order) && !restack_requested_
-        && !reassert)
+    auto root = conn_.screen()->root;
+    if (!publish(root, ewmh_.get()->_NET_CLIENT_LIST_STACKING, XCB_ATOM_WINDOW, order) && !restack_requested_ && !reassert)
         return std::nullopt;
     if (order.size() < 2)
         return std::nullopt;
+    return StackingRepair{ std::move(order), xcb_query_tree(conn_.get(), root) };
+}
+
+// Returns the first restack's request sequence, if any.
+std::optional<uint32_t> WindowManager::restack(StackingRepair const& repair)
+{
     std::optional<uint32_t> first;
-    for (auto const& move : stacking::plan_moves(root_children(), order))
+    for (auto const& move : stacking::plan_moves(root_children(repair.tree), repair.order))
     {
         uint32_t values[] = { move.sibling, move.mode };
         auto request = xcb_configure_window(
@@ -383,27 +404,30 @@ std::optional<uint32_t> WindowManager::reconcile_stacking(State::FullscreenVisib
     return first;
 }
 
-// Unmanaged windows are withdrawn: WM_STATE says so, LWM deletes the EWMH state and
-// desktop it published, and click-to-focus releases the window to a new parent's owner.
-// A client may already have rewritten either property for its next map, as toolkits do
-// when hiding and showing at once; the round trip reads that change, which keeps it.
-void WindowManager::withdraw_removed()
+// Unmanaged windows are withdrawn: WM_STATE says so, and click-to-focus releases
+// the window to a new parent's owner. Returns the withdrawn windows.
+std::vector<xcb_window_t> WindowManager::withdraw_removed()
 {
-    auto* e = ewmh_.get();
     std::vector<xcb_window_t> removed;
     for (auto const& [window, output] : outputs_)
         if (!state_.find(window) && !state_.find_fixture(window))
             removed.push_back(window);
-    if (removed.empty())
-        return;
     for (auto window : removed)
     {
         uint32_t const withdrawn[] = { XCB_ICCCM_WM_STATE_WITHDRAWN, 0 };
         publish(window, atoms_.wm_state, atoms_.wm_state, withdrawn);
         xcb_ungrab_button(conn_.get(), XCB_BUTTON_INDEX_ANY, window, XCB_MOD_MASK_ANY);
     }
-    sync_events();
-    for (auto window : removed)
+    return removed;
+}
+
+// After a round trip, LWM deletes the EWMH state and desktop it published. A client
+// may already have rewritten either for its next map, as toolkits do when hiding and
+// showing at once; a queued notification of that change keeps it.
+void WindowManager::forget_withdrawn(std::span<xcb_window_t const> windows)
+{
+    auto* e = ewmh_.get();
+    for (auto window : windows)
     {
         for (auto atom : { e->_NET_WM_STATE, e->_NET_WM_DESKTOP })
             if (properties_.contains({ window, atom }) && std::ranges::none_of(deferred_events_, [&](auto const& event)
@@ -415,21 +439,6 @@ void WindowManager::withdraw_removed()
         properties_.erase(properties_.lower_bound({ window, 0 }), properties_.upper_bound({ window, UINT32_MAX }));
         outputs_.erase(window);
     }
-}
-
-// A round trip makes the server generate crossing events for what LWM just
-// moved; they are dropped so stale pointer focus cannot override the result.
-// Synchronous observations may already have deferred some of them. A restack
-// alone leaves the crossings the pointer made before it.
-void WindowManager::flush_and_drain_crossing(std::optional<uint32_t> since)
-{
-    sync_events();
-    std::erase_if(deferred_events_, [since](auto const& event)
-    {
-        uint8_t type = event.response_type & ~0x80;
-        return (type == XCB_ENTER_NOTIFY || type == XCB_LEAVE_NOTIFY || type == XCB_MOTION_NOTIFY)
-            && (!since || static_cast<int32_t>(event.full_sequence - *since) >= 0);
-    });
 }
 
 } // namespace lwm

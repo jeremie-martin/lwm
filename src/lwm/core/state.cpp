@@ -58,7 +58,6 @@ std::vector<std::optional<size_t>> preserve_workspaces(std::span<Monitor> previo
 
 } // namespace
 
-
 Client const* State::find(xcb_window_t id) const
 {
     auto it = clients_.find(id);
@@ -315,7 +314,7 @@ void State::focus_fallback(size_t monitor, bool record_user_time)
     select_focus(focus::fallback(*this, monitor), 0, record_user_time);
 }
 
-// Shows a hidden client in place and focuses it if it accepts focus.
+// Shows an iconic client in place and focuses it if it accepts focus.
 void State::restore(xcb_window_t id)
 {
     iconic(id, false);
@@ -673,7 +672,6 @@ void State::fullscreen_monitors(xcb_window_t id, std::optional<FullscreenMonitor
 {
     assign(id, &Client::fullscreen_monitors, value);
 }
-
 
 // Metadata
 

@@ -25,20 +25,20 @@ bool WindowManager::release_predecessor()
 {
     int pid = 0, fd = -1;
     auto const* value = std::getenv(kPredecessorConnection);
-    bool handoff = value && std::sscanf(value, "%d %d", &pid, &fd) == 2 && pid == getpid();
-    if (handoff)
+    bool restarted = value && std::sscanf(value, "%d %d", &pid, &fd) == 2 && pid == getpid();
+    if (restarted)
         close(fd);
     unsetenv(kPredecessorConnection);
     auto text = xproperty::text(conn_.get(), conn_.screen()->root, atoms_.lwm_restart, ewmh_.get()->UTF8_STRING, true);
     if (!text)
-        return handoff;
+        return restarted;
     handoff_ = restart::decode(*text);
     if (!handoff_)
         LWM_LOG_WARN("Ignoring restart state: malformed or not format {}; adopting windows afresh", restart::format);
     else
         LWM_LOG_INFO("Restart state accepted: monitors={} clients={} focused_monitor={} active_window={:#x}",
                      handoff_->monitors.size(), handoff_->clients.size(), handoff_->focused_monitor, handoff_->active);
-    return handoff;
+    return restarted;
 }
 
 void WindowManager::prepare_restart()

@@ -123,7 +123,6 @@ void State::scratchpad_pending(std::string_view name, bool pending)
     slot->window = pending ? std::nullopt : std::optional<xcb_window_t>{ XCB_NONE };
 }
 
-
 // The first unclaimed scratchpad whose matcher accepts the client claims it.
 ScratchpadConfig const* State::match_scratchpad(Client const& client) const
 {

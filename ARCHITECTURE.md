@@ -34,7 +34,7 @@ Paths are relative to `src/`.
 | Logging, snapshot codec, invariants | `log.*`, `restart.*`, `invariants.hpp` |
 | Event loop, setup, topology discovery, reload, processes | `lwm/wm.cpp` |
 | Window observation (pipelined X reads) | `lwm/wm_observe.cpp` |
-| Client lifecycle adapters: scan, resources and ownership release | `lwm/wm_manage.cpp` |
+| Admission adapters (scan, per-role X resources), moving hidden clients back before release | `lwm/wm_manage.cpp` |
 | X event translation | `lwm/wm_events.cpp` |
 | Action execution: dispatch, effects, replies | `lwm/wm_actions.cpp` |
 | Completion and publication | `lwm/wm_transition.cpp` |
@@ -76,7 +76,9 @@ the drag ended by release, cancellation, invalidation, reload or topology change
 
 `State` owns the installed `Config`. `configure()` installs an already validated
 configuration, rebinds workspaces when their count changed, reconciles scratchpad
-slots and reapplies every matching rule.
+slots and reapplies every matching rule. Stored split ratios obey the current
+configuration bounds: State bounds writes and reconciles every workspace during reload
+and restart topology rebinding, including the unchanged-topology path.
 
 Each monitor has an output name, geometry, and the
 configured number of workspaces; a reload that changes the count rebinds like a
@@ -108,9 +110,9 @@ Authoritative state:
 | `drag_` | The current pointer interaction, if any |
 
 Use `find()` where a window may be unmanaged; use `require()` once ownership is
-established. Mutations maintain membership and claims; workareas are derived.
-A revision counter advances when intent changes or an explicit effect is requested. User-time bookkeeping is not
-published and does not advance it.
+established. Mutations maintain membership and claims; workareas are derived. A
+revision counter advances when intent changes or an explicit effect is requested.
+User-time bookkeeping is not published and does not advance it.
 
 Visibility, fullscreen ownership, effective layer/skip values, published
 `_NET_WM_STATE` values and tiled rectangles are derived. Completion owns one property
@@ -119,9 +121,9 @@ for `_NET_WM_STATE`. Refused writes never advance it. Shared-state reads are bat
 EWMH only converts atoms, and one size-checked writer submits every published property.
 A later external change retries a refused shared-state write; successful writes'
 notifications require no read. Registration order across clients and fixtures is a
-single `State` derivation. Per-window `Output` records cover geometry and
-mapping, border, and urgency
-mirrored into the application's `WM_HINTS`. Caches never drive domain decisions.
+single `State` derivation. Per-window `Output` records cover geometry and mapping,
+border, and urgency mirrored into the application's `WM_HINTS`. Caches never drive
+domain decisions.
 
 ## Operations and completion
 
@@ -139,11 +141,13 @@ and outputs forgotten after an external write.
 3. Freeze `State`. Derive fullscreen visibility and one projection per client from it,
    including a tiled drag preview.
 4. Hide, configure and map clients; acknowledge ConfigureRequests; commit explicit
-   focus; publish client, fixture and root properties and stacking; withdraw removed
-   windows.
-5. Outside drags, drain stale crossing events after visible movement or a pointer
-   release, and those generated since a restack, which the pointer did not cause;
-   flush X, thaw, and check Debug invariants.
+   focus; publish client, fixture and root properties and stacking, with the stacking
+   tree query sharing the `_NET_WM_STATE` read round trip; withdraw removed windows.
+5. One round trip, when either needs it, serves withdrawal and crossings: LWM keeps a
+   withdrawn window's EWMH state or desktop if a notification shows the client
+   rewrote it, and otherwise deletes them. Outside drags, it drains stale crossing
+   events after visible movement or a pointer release, and those generated since a
+   restack, which the pointer did not cause; flush X, thaw, and check Debug invariants.
 
 This orders effects; it is not an atomic X transaction. Publication must not mutate
 the frozen model. A ConfigureNotify mismatch forgets cached geometry without forcing
@@ -151,16 +155,17 @@ completion; a conflicting urgency hint forces reconciliation. Explicit focus rea
 X focus, focused state and stacking even when the selected window is unchanged.
 Request timestamps only arbitrate in State; X focus uses `CurrentTime`. For clients
 supporting `WM_TAKE_FOCUS`, the message and direct X focus share a fresh server time,
-observed by rewriting the supporting window's name. LWM selects that window's property
+observed by rewriting the supporting window's name; `WM_DELETE_WINDOW` close requests
+and `WM_S0` acquisition use the same observation. LWM selects that window's property
 events only around the rewrite, so its own publication does not echo back into the
-event loop, and watchers re-read the state only when `_LWM_STATE` changes. The observation costs one round trip and defers other
-queued events without dispatching them; passive clients need no timestamp observation.
+event loop. The observation costs one round trip and defers other queued events
+without dispatching them; passive clients need no timestamp observation.
 
 The event loop polls the X connection, its only event source. Each event completes its
 operation; batches stop after 64 events or 2 ms so topology refreshes and connection
 checks still run under load. Already-read pointer motion is coalesced up to the next
-non-motion event. Crossing drains only
-consume events already queued and defer unrelated ones; handlers never re-enter.
+non-motion event. Crossing drains only consume events already queued and defer
+unrelated ones; handlers never re-enter.
 Once the loop stops, events already queued are still dispatched, with the server
 grabbed until X is released, so the next manager sees every pending map and
 withdrawal. Losing the screen then still turns a restart into an exit; a restart
@@ -274,10 +279,6 @@ normal geometry. Any UnmapNotify releases ownership. A synthetic withdrawal can
 follow LWM mapping a client that already unmapped itself, so the shell unmaps it
 again and consumes that acknowledgement at once.
 
-Stored split ratios obey the current configuration bounds. State bounds writes and
-reconciles every workspace during reload and restart topology rebinding, including
-the unchanged-topology path.
-
 `fullscreen()` is idempotent and used by rules; `request_fullscreen()` renews the
 claim rank and is used by interactions and restoration. Entering fullscreen clears
 maximize. Focus eligibility requires visibility and an input hint or `WM_TAKE_FOCUS`.
@@ -342,9 +343,11 @@ per-caller state.
 
 IPC query results are typed view records serialized by reflect-cpp. Completion
 publishes the same state view as `_LWM_STATE` on the `WM_S0` owner window through the
-property cache, so watchers see one settled state per changed operation. It skips that
-derivation while a drag is active, whose motions change only geometry the state omits;
-the completion that ends the drag publishes everything that changed meanwhile. [IPC.md](IPC.md#watching-state) owns the
+property cache, so watchers see one settled state per changed operation and re-read
+it only when `_LWM_STATE` changes, not when a server-time observation rewrites the
+window's name. Completion skips that derivation while a drag is active, whose motions
+change only geometry the state omits; the completion that ends the drag publishes
+everything that changed meanwhile. [IPC.md](IPC.md#watching-state) owns the
 guarantees.
 
 ## Restart and process lifetime
@@ -365,19 +368,22 @@ keeps the idle connection until it exits. After a failed exec, main keeps the ol
 `WindowManager` until the recovery owns the screen and has closed the duplicate.
 
 `State::snapshot()` stores private intent in `_LWM_RESTART`: placements, modes, hiding,
-preferences, urgency, focus ranks, workspace graphs, scratchpad claims, pending
-launches, pool order, fullscreen claims and fixture roles with registration ranks.
+preferences, urgency, focus ranks and released focus, workspace graphs, scratchpad
+claims, pending launches, pool order, fullscreen claims, close requests, per-client
+flags (borderless, desktop pin, fullscreen monitors) and fixture roles with
+registration ranks.
 Application properties are observed afresh; derived rectangles, dock reservations
 and publication caches are not saved. The live value types are the snapshot schema,
 encoded with reflect-cpp over yyjson as `UTF8_STRING` JSON whose `format` field names
 the schema. The library reader rejects missing or extra fields and unknown variant
 tags; the predecessor wrote the text from the same schema, so it is not hardened
 against forgery. The persistent graph is then validated with the same validator
-Debug builds use. Incoming registration, focus and fullscreen ranks must also leave headroom for
-all adoption passes before they become live counters. Any malformed or incompatible snapshot is rejected whole and windows are adopted
-afresh, as they are when a snapshot too large for one X request is not saved. Fresh
-adoption ignores application `HIDDEN` atoms; only accepted private intent restores
-LWM's hiding. Schema changes bump `restart::format`; there is no migration.
+Debug builds use. Incoming registration, focus and fullscreen ranks must also leave
+headroom for all adoption passes before they become live counters. Any malformed or
+incompatible snapshot is rejected whole and windows are adopted afresh, as they are
+when a snapshot too large for one X request is not saved. Fresh adoption ignores
+application `HIDDEN` atoms; only accepted private intent restores LWM's hiding.
+Schema changes bump `restart::format`; there is no migration.
 
 Restoration overlays saved intent on surviving observations, installs the saved
 graph, rebinds it to discovered outputs through the live topology code (folding fewer

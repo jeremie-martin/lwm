@@ -98,7 +98,7 @@ inline std::optional<Violation> validate(restart::Snapshot const& graph, uint64_
             return Violation{ "Scratchpad pool ownership is missing or duplicated", id };
     for (auto const& client : graph.clients)
         if (client.iconic && !claimed.contains(client.id))
-            return Violation{ "Hidden client has no scratchpad owner", client.id };
+            return Violation{ "Iconic client has no scratchpad owner", client.id };
     if (graph.active != XCB_NONE && !clients.contains(graph.active))
         return Violation{ "Active window is unmanaged", graph.active };
     return std::nullopt;
