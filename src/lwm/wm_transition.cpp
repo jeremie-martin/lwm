@@ -49,10 +49,10 @@ void WindowManager::complete_transition()
     publish_states(states);
     publish_fixtures();
     publish_root();
-    reconcile_stacking(fullscreen, focus_request);
+    auto restacked = reconcile_stacking(fullscreen, focus_request);
     withdraw_removed();
-    if (released || (moved && !state_.drag()))
-        flush_and_drain_crossing();
+    if (!state_.drag() && (released || moved || restacked))
+        flush_and_drain_crossing(released || moved ? std::nullopt : restacked);
     conn_.flush();
     state_.thaw();
 
@@ -321,9 +321,10 @@ void WindowManager::commit_focus()
     // Explicit same-window focus still reasserts input focus and WM_TAKE_FOCUS.
     auto const* client = state_.find(state_.active_window());
     auto time = client && client->supports_take_focus ? server_time() : XCB_CURRENT_TIME;
+    // Direct focus first, so the client's answer to WM_TAKE_FOCUS comes after it.
+    xcb_set_input_focus(conn_.get(), XCB_INPUT_FOCUS_POINTER_ROOT, client ? client->id : conn_.screen()->root, time);
     if (time != XCB_CURRENT_TIME)
         send_protocol_message(client->id, atoms_.wm_take_focus, time);
-    xcb_set_input_focus(conn_.get(), XCB_INPUT_FOCUS_POINTER_ROOT, client ? client->id : conn_.screen()->root, time);
 }
 
 // Root publication
@@ -374,15 +375,16 @@ void WindowManager::publish_root()
 
 // A changed desired order, a forwarded restack, or an explicit focus request
 // reads the tree and repairs the server order, including external restacks.
-// Other operations leave an unchanged order alone.
-void WindowManager::reconcile_stacking(State::FullscreenVisibility const& fullscreen, bool reassert)
+// Other operations leave an unchanged order alone. Returns the first restack's
+// request sequence, if any.
+std::optional<uint32_t> WindowManager::reconcile_stacking(State::FullscreenVisibility const& fullscreen, bool reassert)
 {
     auto order = stacking::compute_order(state_, fullscreen);
     if (!publish(conn_.screen()->root, ewmh_.get()->_NET_CLIENT_LIST_STACKING, XCB_ATOM_WINDOW, order) && !restack_requested_
         && !reassert)
-        return;
+        return std::nullopt;
     if (order.size() < 2)
-        return;
+        return std::nullopt;
     auto tree = reply(xcb_query_tree_reply(conn_.get(), xcb_query_tree(conn_.get(), conn_.screen()->root), nullptr));
     std::vector<stacking::StackMove> moves;
     if (tree)
@@ -392,11 +394,14 @@ void WindowManager::reconcile_stacking(State::FullscreenVisibility const& fullsc
         );
     else
         for (size_t i = 1; i < order.size(); ++i) moves.push_back({ order[i], order[i - 1], XCB_STACK_MODE_ABOVE });
+    std::optional<uint32_t> first;
     for (auto const& move : moves)
     {
         uint32_t values[] = { move.sibling, move.mode };
-        xcb_configure_window(conn_.get(), move.window, XCB_CONFIG_WINDOW_SIBLING | XCB_CONFIG_WINDOW_STACK_MODE, values);
+        auto request = xcb_configure_window(conn_.get(), move.window, XCB_CONFIG_WINDOW_SIBLING | XCB_CONFIG_WINDOW_STACK_MODE, values);
+        first = first.value_or(request.sequence);
     }
+    return first;
 }
 
 // Unmanaged windows are withdrawn: WM_STATE says so, LWM deletes the EWMH state and
@@ -433,15 +438,17 @@ void WindowManager::withdraw_removed()
 
 // A round trip makes the server generate crossing events for what LWM just
 // moved; they are dropped so stale pointer focus cannot override the result.
-// Synchronous observations may already have deferred some of them.
-void WindowManager::flush_and_drain_crossing()
+// Synchronous observations may already have deferred some of them. A restack
+// alone leaves the crossings the pointer made before it.
+void WindowManager::flush_and_drain_crossing(std::optional<uint32_t> since)
 {
     conn_.sync();
     defer_queued_events();
-    std::erase_if(deferred_events_, [](auto const& event)
+    std::erase_if(deferred_events_, [since](auto const& event)
     {
         uint8_t type = event.response_type & ~0x80;
-        return type == XCB_ENTER_NOTIFY || type == XCB_LEAVE_NOTIFY || type == XCB_MOTION_NOTIFY;
+        return (type == XCB_ENTER_NOTIFY || type == XCB_LEAVE_NOTIFY || type == XCB_MOTION_NOTIFY)
+            && (!since || static_cast<int32_t>(event.full_sequence - *since) >= 0);
     });
 }
 

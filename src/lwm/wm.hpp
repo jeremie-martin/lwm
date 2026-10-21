@@ -165,10 +165,10 @@ private:
     void publish_urgency(Client const& client, Output& output);
     void publish_fixtures();
     void publish_root();
-    void reconcile_stacking(State::FullscreenVisibility const& fullscreen, bool reassert);
+    std::optional<uint32_t> reconcile_stacking(State::FullscreenVisibility const& fullscreen, bool reassert);
     void withdraw_removed();
     void commit_focus();
-    void flush_and_drain_crossing();
+    void flush_and_drain_crossing(std::optional<uint32_t> since);
 
     // wm_events.cpp: X event handlers
     void handle_event(xcb_generic_event_t const& event);

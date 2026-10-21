@@ -1813,3 +1813,36 @@ TEST_CASE(
     REQUIRE(is_stacked_above(conn, owner, desktop));
     for (auto w : { owner, suppressed, desktop }) destroy_window(conn, w);
 }
+
+TEST_CASE("Integration: focus that restacks windows under a still pointer stays", "[integration][focus][stacking]")
+{
+    auto env = TestEnvironment::create("[layout]\nstrategy = \"monocle\"\n");
+    REQUIRE(env);
+    auto& conn = env->conn;
+    std::vector<xcb_window_t> tiles;
+    for (int i = 0; i < 3; ++i)
+    {
+        tiles.push_back(create_window(conn, 10, 10, 200, 150));
+        map_window(conn, tiles.back());
+        REQUIRE(wait_for_active_window(conn, tiles.back(), kTimeout));
+    }
+    auto floating = create_window(conn, 10, 10, 200, 150);
+    map_window(conn, floating);
+    REQUIRE(wait_for_active_window(conn, floating, kTimeout));
+    ipc_ok("window float");
+    // Keep the floating window away from the pointer, which rests over the tiles.
+    uint32_t const corner[] = { 1000, 600 };
+    xcb_configure_window(conn.get(), floating, XCB_CONFIG_WINDOW_X | XCB_CONFIG_WINDOW_Y, corner);
+    ipc_ok("window focus " + std::to_string(tiles.front()));
+    xcb_warp_pointer(conn.get(), XCB_NONE, conn.root(), 0, 0, 0, 0, 300, 300);
+    xcb_flush(conn.get());
+    observe_title_after_events(conn, tiles.front());
+    REQUIRE(ipc_json("window list").at("focused") == tiles.front());
+    // Focusing the floating window lowers the first tile below the last one, which
+    // the pointer now enters without moving.
+    ipc_ok("window focus " + std::to_string(floating));
+    observe_title_after_events(conn, floating);
+    CHECK(ipc_json("window list").at("focused") == floating);
+    destroy_window(conn, floating);
+    for (auto tile : tiles) destroy_window(conn, tile);
+}

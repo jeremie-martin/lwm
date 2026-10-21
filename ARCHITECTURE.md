@@ -127,8 +127,7 @@ mirrored into the application's `WM_HINTS`. Caches never drive domain decisions.
 An operation is one dispatched X event (including an IPC request),
 a topology pass, or the startup scan. Handlers call `State` and retain only
 obligations the model cannot express: ConfigureRequest replies, forwarded restacks,
-crossing-event drains after a pointer release, and outputs forgotten after an
-external write.
+and outputs forgotten after an external write.
 
 `complete_transition()` orders completion:
 
@@ -141,8 +140,9 @@ external write.
 4. Hide, configure and map clients; acknowledge ConfigureRequests; commit explicit
    focus; publish client, fixture and root properties and stacking; withdraw removed
    windows.
-5. Drain stale crossing events after visible movement (outside drags) or a pointer
-   release, flush X, thaw, and check Debug invariants.
+5. Outside drags, drain stale crossing events after visible movement or a pointer
+   release, and those generated since a restack, which the pointer did not cause;
+   flush X, thaw, and check Debug invariants.
 
 This orders effects; it is not an atomic X transaction. Publication must not mutate
 the frozen model. A ConfigureNotify mismatch forgets cached geometry without forcing
