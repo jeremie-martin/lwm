@@ -41,7 +41,6 @@ public:
 
     RunResult run();
     std::string const& restart_binary() const { return restart_binary_; }
-    void prepare_restart();
 
 private:
     // Atoms outside xcb-ewmh's set, interned once at startup.
@@ -118,6 +117,8 @@ private:
     Topology discover_topology();
     void refresh_topology();
     void defer_queued_events();
+    void sync_events();
+    std::vector<xcb_window_t> root_children();
     void dispatch_event(xcb_generic_event_t const& event);
     std::expected<void, std::string> reload_config(std::string_view source);
     bool launch_program(std::vector<std::string> const& command, std::string_view source);
@@ -197,6 +198,7 @@ private:
 
     // wm_restart.cpp
     bool release_predecessor();
+    void prepare_restart();
 };
 
 } // namespace lwm

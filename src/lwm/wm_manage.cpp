@@ -21,14 +21,8 @@ void WindowManager::restore_clients()
 
 void WindowManager::scan_existing_windows(bool handoff)
 {
-    std::vector<xcb_window_t> children;
-    if (auto tree = reply(xcb_query_tree_reply(conn_.get(), xcb_query_tree(conn_.get(), conn_.screen()->root), nullptr)))
-    {
-        auto* first = xcb_query_tree_children(tree.get());
-        children.assign(first, first + xcb_query_tree_children_length(tree.get()));
-    }
     // Every managed client is mapped, so an unmapped one has withdrawn.
-    auto windows = observe(children, true);
+    auto windows = observe(root_children(), true);
 
     std::optional<std::pair<int16_t, int16_t>> pointer;
     if (!handoff)

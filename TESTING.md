@@ -86,7 +86,7 @@ termination. Use the CLI only when its process or output behavior is the contrac
 Tests use private log destinations, never the host journal. Direct
 Catch runs lack CTest's outer timeout, so fixture waits must remain bounded.
 
-Use `is_hidden()` to assert that a client is unmapped or right of the root, and
+Use `is_hidden()` to assert that a client is mapped right of the root, and
 check that hiding does not change a floating client's size, border or y position. Check normal geometry
 after showing, withdrawal/remapping (including a tiled drag preview versus an applied
 floating move) and cooperative ownership transfer, as well as

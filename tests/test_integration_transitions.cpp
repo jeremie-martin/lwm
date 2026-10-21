@@ -787,7 +787,7 @@ TEST_CASE(
         // An oversized outgoing snapshot is likewise not saved at all.
         xcb_delete_property(conn.get(), conn.root(), property);
     xcb_unmap_window(conn.get(), withdrawn);
-    REQUIRE(is_hidden(conn, withdrawn)); // Round trip orders withdrawal before resume.
+    REQUIRE_FALSE(is_mapped(conn, withdrawn)); // Round trip orders withdrawal before resume.
     auto wm_state = intern_atom(conn.get(), "WM_STATE");
     auto state_reply = lwm::xproperty::receive(conn.get(), lwm::xproperty::request(conn.get(), withdrawn, wm_state, wm_state, 2));
     auto state = lwm::xproperty::words(state_reply, wm_state);
@@ -799,7 +799,7 @@ TEST_CASE(
     auto windows = ipc_json("window list").at("windows");
     REQUIRE(windows.size() == 1);
     CHECK(windows.at(0).at("id") == retained);
-    CHECK(is_hidden(conn, withdrawn));
+    CHECK_FALSE(is_mapped(conn, withdrawn));
     CHECK(is_hidden(conn, retained) == (std::string_view(snapshot_kind) == "valid"));
     // An actual subsequent MapRequest remains ordinary application admission.
     map_window(conn, withdrawn);
@@ -1553,13 +1553,7 @@ TEST_CASE(
     REQUIRE(ipc_json("window list").at("windows").at(0).at("id") == window);
     ipc_ok("workspace switch 1");
     REQUIRE(is_hidden(conn, window));
-    xcb_unmap_notify_event_t withdrawal{ };
-    withdrawal.response_type = XCB_UNMAP_NOTIFY;
-    withdrawal.event = conn.root();
-    withdrawal.window = window;
-    xcb_send_event(conn.get(), false, conn.root(),
-        XCB_EVENT_MASK_SUBSTRUCTURE_NOTIFY | XCB_EVENT_MASK_SUBSTRUCTURE_REDIRECT,
-        reinterpret_cast<char const*>(&withdrawal));
+    send_withdrawal(conn, window);
     xcb_flush(conn.get());
     REQUIRE(wait_for_condition([&] { return ipc_json("window list").at("windows").empty(); }, timeout));
     destroy_window(conn, window);

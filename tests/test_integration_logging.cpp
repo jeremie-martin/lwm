@@ -161,17 +161,13 @@ TEST_CASE("Integration: losing the screen wins over a restart queued in either o
     xcb_change_property(c, XCB_PROP_MODE_REPLACE, requester, command, intern_atom(c, "UTF8_STRING"), 8, 7, "restart");
     auto replacement = create_window(connection, 0, 0, 1, 1);
     // Both reach LWM in one read: the takeover and a restart request.
-    xcb_client_message_event_t message{ };
-    message.response_type = XCB_CLIENT_MESSAGE;
-    message.format = 32;
-    message.window = wm_window;
-    message.type = command;
-    message.data.data32[0] = requester;
+    auto restart = [&]
+    { lwm::send_message(c, wm_window, command, XCB_EVENT_MASK_NO_EVENT, { .data32 = { requester } }); };
     if (restart_first)
-        xcb_send_event(c, 0, wm_window, XCB_EVENT_MASK_NO_EVENT, reinterpret_cast<char const*>(&message));
+        restart();
     xcb_set_selection_owner(c, replacement, selection, XCB_CURRENT_TIME);
     if (!restart_first)
-        xcb_send_event(c, 0, wm_window, XCB_EVENT_MASK_NO_EVENT, reinterpret_cast<char const*>(&message));
+        restart();
     xcb_flush(c);
     auto status = wm.wait_for_exit(std::chrono::seconds(2));
     REQUIRE(status);

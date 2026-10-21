@@ -247,12 +247,7 @@ TEST_CASE("Integration: state a withdrawn client wrote for its next map survives
     // A toolkit's hide() and show() in one burst: withdraw, write the next initial
     // state on the withdrawn window, and map it again.
     xcb_unmap_window(conn.get(), window);
-    xcb_unmap_notify_event_t withdrawal{ };
-    withdrawal.response_type = XCB_UNMAP_NOTIFY;
-    withdrawal.event = conn.root();
-    withdrawal.window = window;
-    xcb_send_event(conn.get(), 0, conn.root(), XCB_EVENT_MASK_SUBSTRUCTURE_REDIRECT | XCB_EVENT_MASK_SUBSTRUCTURE_NOTIFY,
-                   reinterpret_cast<char const*>(&withdrawal));
+    send_withdrawal(conn, window);
     xcb_change_property(conn.get(), XCB_PROP_MODE_REPLACE, window, net_wm_state, XCB_ATOM_ATOM, 32, 1, &above);
     xcb_map_window(conn.get(), window);
     xcb_flush(conn.get());

@@ -658,6 +658,17 @@ inline void send_client_message(
     xcb_flush(conn);
 }
 
+// The ICCCM withdrawal of a window its client unmapped, or never mapped.
+inline void send_withdrawal(X11Connection& conn, xcb_window_t window)
+{
+    xcb_unmap_notify_event_t withdrawal{ };
+    withdrawal.response_type = XCB_UNMAP_NOTIFY;
+    withdrawal.event = conn.root();
+    withdrawal.window = window;
+    uint32_t mask = XCB_EVENT_MASK_SUBSTRUCTURE_REDIRECT | XCB_EVENT_MASK_SUBSTRUCTURE_NOTIFY;
+    xcb_send_event(conn.get(), 0, conn.root(), mask, reinterpret_cast<char const*>(&withdrawal));
+}
+
 inline bool wait_for_active_window(X11Connection& conn, xcb_window_t expected, std::chrono::milliseconds timeout)
 {
     xcb_atom_t active = intern_atom(conn.get(), "_NET_ACTIVE_WINDOW");
@@ -730,17 +741,22 @@ inline std::optional<uint16_t> get_window_border_width(X11Connection& conn, xcb_
     return result;
 }
 
-// Unmapped, or mapped right of the root.
-inline bool is_hidden(X11Connection& conn, xcb_window_t window)
+inline bool is_mapped(X11Connection& conn, xcb_window_t window)
 {
     auto* attributes = xcb_get_window_attributes_reply(
         conn.get(), xcb_get_window_attributes(conn.get(), window), nullptr);
-    bool unmapped = attributes && attributes->map_state == XCB_MAP_STATE_UNMAPPED;
+    bool mapped = attributes && attributes->map_state != XCB_MAP_STATE_UNMAPPED;
     free(attributes);
+    return mapped;
+}
+
+// LWM hides a client by keeping it mapped right of the root.
+inline bool is_hidden(X11Connection& conn, xcb_window_t window)
+{
     auto* geometry = xcb_get_geometry_reply(conn.get(), xcb_get_geometry(conn.get(), window), nullptr);
     bool off_root = geometry && geometry->x >= conn.screen()->width_in_pixels;
     free(geometry);
-    return unmapped || off_root;
+    return off_root && is_mapped(conn, window);
 }
 
 inline bool wait_for_window_geometry(
@@ -968,13 +984,7 @@ inline std::optional<std::string> send_ipc_command(
     xcb_create_window(conn.get(), 0, requester, conn.root(), -1, -1, 1, 1, 0, XCB_WINDOW_CLASS_INPUT_ONLY, XCB_COPY_FROM_PARENT, XCB_CW_EVENT_MASK, &events);
     xcb_change_property(conn.get(), XCB_PROP_MODE_REPLACE, requester, request, intern_atom(conn.get(), type), format,
                         command.size() / (format / 8), command.data());
-    xcb_client_message_event_t message{ };
-    message.response_type = XCB_CLIENT_MESSAGE;
-    message.format = 32;
-    message.window = owner;
-    message.type = request;
-    message.data.data32[0] = requester;
-    xcb_send_event(conn.get(), 0, owner, XCB_EVENT_MASK_NO_EVENT, reinterpret_cast<char const*>(&message));
+    lwm::send_message(conn.get(), owner, request, XCB_EVENT_MASK_NO_EVENT, { .data32 = { requester } });
     xcb_flush(conn.get());
     std::optional<std::string> response;
     wait_for_condition(

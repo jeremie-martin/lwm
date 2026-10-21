@@ -330,9 +330,13 @@ uint32_t WindowManager::read_user_time(xcb_window_t window) const
     auto* e = ewmh_.get();
     if (window == XCB_NONE)
         return 0;
-    auto time_window = window_value(c, request(c, window, e->_NET_WM_USER_TIME_WINDOW, XCB_ATOM_WINDOW, 1));
-    auto source = time_window != XCB_NONE ? time_window : window;
-    return scalar(c, request(c, source, e->_NET_WM_USER_TIME, XCB_ATOM_CARDINAL, 1), XCB_ATOM_CARDINAL).value_or(0);
+    auto time_cookie = request(c, window, e->_NET_WM_USER_TIME_WINDOW, XCB_ATOM_WINDOW, 1);
+    auto own_cookie = request(c, window, e->_NET_WM_USER_TIME, XCB_ATOM_CARDINAL, 1);
+    auto time_window = window_value(c, time_cookie);
+    auto own = scalar(c, own_cookie, XCB_ATOM_CARDINAL);
+    if (time_window != XCB_NONE)
+        own = scalar(c, request(c, time_window, e->_NET_WM_USER_TIME, XCB_ATOM_CARDINAL, 1), XCB_ATOM_CARDINAL);
+    return own.value_or(0);
 }
 
 std::optional<Geometry> WindowManager::read_window_geometry(xcb_window_t window) const

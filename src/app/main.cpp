@@ -109,9 +109,7 @@ int main(int argc, char* argv[])
             if (result != lwm::RunResult::Restart)
                 break;
 
-            phase = "Restart preparation";
             std::string restart_binary = wm->restart_binary();
-            wm->prepare_restart();
             // A successor restarts from its argv[0], so that names the binary exec'd.
             argv[0] = restart_binary.empty() ? self : restart_binary.data();
             char const* binary = argv[0];

@@ -102,8 +102,7 @@ void WindowManager::handle_event(xcb_generic_event_t const& event)
             if (auto output = outputs_.find(window); synthetic && output != outputs_.end() && output->second.mapped)
             {
                 auto unmap = xcb_unmap_window(conn_.get(), window).sequence;
-                conn_.sync();
-                defer_queued_events();
+                sync_events();
                 std::erase_if(deferred_events_, [&](auto const& queued)
                     { return queued.response_type == XCB_UNMAP_NOTIFY && queued.full_sequence == unmap; });
             }

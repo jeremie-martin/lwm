@@ -381,13 +381,10 @@ std::optional<uint32_t> WindowManager::reconcile_stacking(State::FullscreenVisib
         return std::nullopt;
     if (order.size() < 2)
         return std::nullopt;
-    auto tree = reply(xcb_query_tree_reply(conn_.get(), xcb_query_tree(conn_.get(), conn_.screen()->root), nullptr));
+    auto children = root_children();
     std::vector<stacking::StackMove> moves;
-    if (tree)
-        moves = stacking::plan_moves(
-            { xcb_query_tree_children(tree.get()), static_cast<size_t>(xcb_query_tree_children_length(tree.get())) },
-            order
-        );
+    if (!children.empty())
+        moves = stacking::plan_moves(children, order);
     else
         for (size_t i = 1; i < order.size(); ++i) moves.push_back({ order[i], order[i - 1], XCB_STACK_MODE_ABOVE });
     std::optional<uint32_t> first;
@@ -408,19 +405,21 @@ std::optional<uint32_t> WindowManager::reconcile_stacking(State::FullscreenVisib
 void WindowManager::withdraw_removed()
 {
     auto* e = ewmh_.get();
-    for (auto it = outputs_.begin(); it != outputs_.end();)
+    std::vector<xcb_window_t> removed;
+    for (auto const& [window, output] : outputs_)
+        if (!state_.find(window) && !state_.find_fixture(window))
+            removed.push_back(window);
+    if (removed.empty())
+        return;
+    for (auto window : removed)
     {
-        auto window = it->first;
-        if (state_.find(window) || state_.find_fixture(window))
-        {
-            ++it;
-            continue;
-        }
         uint32_t const withdrawn[] = { XCB_ICCCM_WM_STATE_WITHDRAWN, 0 };
         publish(window, atoms_.wm_state, atoms_.wm_state, withdrawn);
         xcb_ungrab_button(conn_.get(), XCB_BUTTON_INDEX_ANY, window, XCB_MOD_MASK_ANY);
-        conn_.sync();
-        defer_queued_events();
+    }
+    sync_events();
+    for (auto window : removed)
+    {
         for (auto atom : { e->_NET_WM_STATE, e->_NET_WM_DESKTOP })
             if (properties_.contains({ window, atom }) && std::ranges::none_of(deferred_events_, [&](auto const& event)
                 {
@@ -429,7 +428,7 @@ void WindowManager::withdraw_removed()
                 }))
                 xcb_delete_property(conn_.get(), window, atom);
         properties_.erase(properties_.lower_bound({ window, 0 }), properties_.upper_bound({ window, UINT32_MAX }));
-        it = outputs_.erase(it);
+        outputs_.erase(window);
     }
 }
 
@@ -439,8 +438,7 @@ void WindowManager::withdraw_removed()
 // alone leaves the crossings the pointer made before it.
 void WindowManager::flush_and_drain_crossing(std::optional<uint32_t> since)
 {
-    conn_.sync();
-    defer_queued_events();
+    sync_events();
     std::erase_if(deferred_events_, [since](auto const& event)
     {
         uint8_t type = event.response_type & ~0x80;

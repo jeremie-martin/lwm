@@ -57,21 +57,17 @@ void WindowManager::prepare_restart()
     uint32_t no_events = XCB_EVENT_MASK_NO_EVENT;
     xcb_ungrab_key(c, XCB_GRAB_ANY, root, XCB_MOD_MASK_ANY);
     xcb_ungrab_button(c, XCB_BUTTON_INDEX_ANY, root, XCB_MOD_MASK_ANY);
-    if (auto tree = reply(xcb_query_tree_reply(c, xcb_query_tree(c, root), nullptr)))
-        for (auto window : std::span(xcb_query_tree_children(tree.get()), xcb_query_tree_children_length(tree.get())))
-        {
-            xcb_ungrab_button(c, XCB_BUTTON_INDEX_ANY, window, XCB_MOD_MASK_ANY);
-            xcb_change_window_attributes(c, window, XCB_CW_EVENT_MASK, &no_events);
-        }
+    for (auto window : root_children())
+    {
+        xcb_ungrab_button(c, XCB_BUTTON_INDEX_ANY, window, XCB_MOD_MASK_ANY);
+        xcb_change_window_attributes(c, window, XCB_CW_EVENT_MASK, &no_events);
+    }
     xcb_change_window_attributes(c, root, XCB_CW_EVENT_MASK, &no_events);
     xcb_randr_select_input(c, root, 0);
     xcb_set_selection_owner(c, XCB_NONE, atoms_.wm_s0, XCB_CURRENT_TIME);
-    xcb_ungrab_server(c);
 
-    // A round trip guarantees the server processed the release before exec. A duplicate
-    // of the descriptor, unlike XCB's own, survives exec and keeps the connection open
-    // until the successor or a failed-exec recovery closes it.
-    conn_.sync();
+    // A duplicate of the descriptor, unlike XCB's own, survives exec and keeps the
+    // connection open until the successor or a failed-exec recovery closes it.
     auto handoff = std::to_string(getpid()) + ' ' + std::to_string(dup(xcb_get_file_descriptor(c)));
     setenv(kPredecessorConnection, handoff.c_str(), 1);
 }

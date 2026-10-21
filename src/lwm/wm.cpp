@@ -274,16 +274,15 @@ RunResult WindowManager::run()
     // new one arrives before X is released: the next manager sees every pending map
     // and withdrawal, and losing the selection still turns a restart into an exit.
     xcb_grab_server(conn_.get());
-    conn_.sync();
-    defer_queued_events();
+    sync_events();
     for (auto const& event : std::exchange(deferred_events_, { }))
         dispatch_event(event);
     restore_clients();
-    if (*stop_ == RunResult::Exit)
-    {
-        xcb_ungrab_server(conn_.get());
-        conn_.sync();
-    }
+    if (*stop_ == RunResult::Restart)
+        prepare_restart();
+    // The round trip also guarantees the server processed a restart's release before exec.
+    xcb_ungrab_server(conn_.get());
+    conn_.sync();
     return *stop_;
 }
 
@@ -292,6 +291,22 @@ void WindowManager::defer_queued_events()
 {
     while (auto event = reply(xcb_poll_for_queued_event(conn_.get())))
         deferred_events_.push_back(*event);
+}
+
+// A round trip makes the server generate the events for every request before it.
+void WindowManager::sync_events()
+{
+    conn_.sync();
+    defer_queued_events();
+}
+
+std::vector<xcb_window_t> WindowManager::root_children()
+{
+    auto tree = reply(xcb_query_tree_reply(conn_.get(), xcb_query_tree(conn_.get(), conn_.screen()->root), nullptr));
+    if (!tree)
+        return { };
+    auto* first = xcb_query_tree_children(tree.get());
+    return { first, first + xcb_query_tree_children_length(tree.get()) };
 }
 
 void WindowManager::dispatch_event(xcb_generic_event_t const& event)
@@ -400,8 +415,7 @@ uint32_t WindowManager::server_time()
     xcb_change_window_attributes(c, wm_window_, XCB_CW_EVENT_MASK, &selected);
     xcb_ewmh_set_wm_name(ewmh_.get(), wm_window_, command::identity.size(), command::identity.data());
     xcb_change_window_attributes(c, wm_window_, XCB_CW_EVENT_MASK, &unselected);
-    conn_.sync();
-    defer_queued_events();
+    sync_events();
     auto notify = std::ranges::find_if(deferred_events_, [&](auto const& event)
     {
         return event.response_type == XCB_PROPERTY_NOTIFY
