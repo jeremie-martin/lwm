@@ -274,8 +274,8 @@ removing it improves the tradeoff; reload deliberately refreshes and reapplies i
 ## Read user time on demand (2026-10-19)
 
 `_NET_WM_USER_TIME` only arbitrates application activation against the active client,
-so LWM reads that client's value, through its user-time window, when such a request
-arrives. Eager tracking subscribed to foreign windows, including the root, and cost a
+so LWM reads that client's value, through its user-time window, when an activation
+request arrives. Eager tracking subscribed to foreign windows, including the root, and cost a
 synchronous read for every keystroke in toolkits that update the property per input.
 The comparison uses the newer of the observed value and LWM's recorded focus time.
 

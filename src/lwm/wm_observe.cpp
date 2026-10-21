@@ -330,7 +330,7 @@ std::vector<xcb_atom_t> WindowManager::read_protocols(xcb_window_t window) const
 }
 
 // The application's latest interaction time, possibly kept on a separate window.
-// It is read only when an activation request competes with this client.
+// It is read for activation requests; State decides whether one competes.
 uint32_t WindowManager::read_user_time(xcb_window_t window) const
 {
     auto* c = conn_.get();

@@ -385,9 +385,9 @@ bool State::settle(uint32_t input_time)
     {
         auto& client = edit(active_window_);
         client.mru_order = next_recency_++;
+        // Serial order is meaningless across 2^31 ms, so the latest focus always counts.
         uint32_t time = request->time ? request->time : input_time;
-        if (request->record_user_time && time
-            && (!client.user_time || !timestamp_is_before(time, client.user_time)))
+        if (request->record_user_time && time)
             client.user_time = time;
         if (client.tiled())
             edit_workspace(client.monitor, client.workspace).preferred_tile = XCB_NONE;

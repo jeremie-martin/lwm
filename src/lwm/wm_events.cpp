@@ -329,9 +329,8 @@ void WindowManager::handle_client_message(xcb_client_message_event_t const& e)
     else if (e.type == ewmh->_NET_ACTIVE_WINDOW)
     {
         LWM_LOG_DEBUG("_NET_ACTIVE_WINDOW request: window={:#x} source={}", e.window, e.data.data32[0]);
-        bool application = e.data.data32[0] == XCB_EWMH_CLIENT_SOURCE_TYPE_NORMAL;
-        auto active_time = application ? read_user_time(state_.active_window()) : 0;
-        state_.request_activation(e.window, application, e.data.data32[1], active_time);
+        state_.request_activation(e.window, e.data.data32[0] == XCB_EWMH_CLIENT_SOURCE_TYPE_NORMAL, e.data.data32[1],
+                                  read_user_time(state_.active_window()));
     }
     else if (e.type == ewmh->_NET_WM_DESKTOP)
     {

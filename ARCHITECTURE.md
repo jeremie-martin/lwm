@@ -51,7 +51,7 @@ everything the model needs:
 - Protocol requests arrive decoded: `_NET_WM_STATE` as a `StateChange` and a set of
   `WindowState` values, ConfigureRequest and `_NET_MOVERESIZE_WINDOW` as a
   `GeometryRequest`, activation as its source and timestamp with the active client's
-  `_NET_WM_USER_TIME`, read only for application requests that compete with it.
+  `_NET_WM_USER_TIME`, which `State` uses only when an application request competes.
 - Property changes arrive as new values (`title`, `window_class`, `window_type`,
   `transient`, `size_hints`, `focus_hints`, `reserve`).
 - Topology arrives as a `Topology`: output names, rectangles and the screen extent.

@@ -300,3 +300,21 @@ TEST_CASE("Focus traversal continues when an unrelated window maps", "[focus][st
     REQUIRE(state.cycle_focus(true));
     CHECK(state.active_window() == 1);
 }
+
+TEST_CASE("Recorded user time follows each explicit focus across wraparound", "[focus][state]")
+{
+    auto state = test::state();
+    add(state, 1);
+    add(state, 2);
+    state.focus(1, 0x10);
+    state.settle();
+    state.focus(2, 0x20);
+    state.settle();
+    // Refocusing after more than 2^31 ms looks older in serial order, yet it is the latest.
+    state.focus(1, 0x90000010);
+    state.settle();
+    CHECK(state.require(1).user_time == 0x90000010);
+    state.request_activation(2, true, 0x90000020);
+    state.settle();
+    CHECK(state.active_window() == 2);
+}
