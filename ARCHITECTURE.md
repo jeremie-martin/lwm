@@ -150,9 +150,9 @@ completion; a conflicting urgency hint forces reconciliation. Explicit focus rea
 X focus, focused state and stacking even when the selected window is unchanged.
 Request timestamps only arbitrate in State; X focus uses `CurrentTime`. For clients
 supporting `WM_TAKE_FOCUS`, the message and direct X focus share a fresh server time,
-observed by rewriting the supporting window's name. Property events on that private window are selected
-only around the rewrite, so publication does not echo
-back into the event loop. The observation costs one round trip and defers other
+observed by rewriting the supporting window's name. LWM selects that window's property
+events only around the rewrite, so its own publication does not echo back into the
+event loop, and watchers re-read the state only when `_LWM_STATE` changes. The observation costs one round trip and defers other
 queued events without dispatching them; passive clients need no timestamp observation.
 
 The event loop polls the X connection, its only event source. Each event completes its

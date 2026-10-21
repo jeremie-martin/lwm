@@ -142,22 +142,25 @@ int watch()
     if (wm == XCB_NONE)
         throw std::runtime_error("lwm is not running");
     std::string printed;
-    for (;;)
+    for (bool changed = true, attach = false;;)
     {
-        if (auto text = wm != XCB_NONE ? x.text(wm, x.state) : std::nullopt; text && !text->empty() && *text != printed)
+        if (auto text = (changed || attach) && wm != XCB_NONE ? x.text(wm, x.state) : std::nullopt; text && !text->empty() && *text != printed)
         {
             printed = std::move(*text);
             std::cout << printed << '\n' << std::flush;
         }
         if (!std::cout)
             return 0; // A closed pipe ends watching normally.
-        // One read covers a burst: every event already queued is consumed with it.
-        bool attach = false;
+        // One read covers a burst: every event already queued is consumed with it. Only a
+        // state change or a new owner needs a read; the owner's other properties do not.
+        changed = attach = false;
         for (auto event = lwm::reply(xcb_wait_for_event(x.conn())); event; event = lwm::reply(xcb_poll_for_queued_event(x.conn())))
         {
             uint8_t type = event->response_type & ~0x80;
             auto const& destroyed = reinterpret_cast<xcb_destroy_notify_event_t const&>(*event);
             auto const& message = reinterpret_cast<xcb_client_message_event_t const&>(*event);
+            auto const& property = reinterpret_cast<xcb_property_notify_event_t const&>(*event);
+            changed |= type == XCB_PROPERTY_NOTIFY && property.atom == x.state;
             attach |= (type == XCB_DESTROY_NOTIFY && destroyed.window == wm)
                 || (type == XCB_CLIENT_MESSAGE && message.type == x.manager && message.data.data32[1] == x.selection);
         }
