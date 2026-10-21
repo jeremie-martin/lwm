@@ -483,7 +483,6 @@ struct Monitor
     size_t current_workspace = 0;
     size_t previous_workspace = 0;
 
-    Workspace& current() { return workspaces[current_workspace]; }
     Workspace const& current() const { return workspaces[current_workspace]; }
 
     bool operator==(Monitor const&) const = default;

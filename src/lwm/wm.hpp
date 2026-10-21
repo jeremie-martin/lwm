@@ -130,7 +130,6 @@ private:
     // batch admission and single-property updates.
     // Adoption requires viewability.
     std::vector<WindowObservation> observe(std::span<xcb_window_t const> windows, bool adopting);
-    WindowType window_type(xcb_get_property_cookie_t cookie) const;
     std::vector<xcb_atom_t> read_protocols(xcb_window_t window) const;
     uint32_t read_user_time(xcb_window_t window) const;
     std::optional<Geometry> read_window_geometry(xcb_window_t window) const;
@@ -173,7 +172,6 @@ private:
     void handle_enter_notify(xcb_enter_notify_event_t const& e);
     void handle_motion_notify(xcb_motion_notify_event_t const& e);
     void handle_button_press(xcb_button_press_event_t const& e);
-    void handle_button_release(xcb_button_release_event_t const& e);
     void handle_key_press(xcb_key_press_event_t const& e);
     void handle_client_message(xcb_client_message_event_t const& e);
     void handle_restack_message(xcb_client_message_event_t const& e);

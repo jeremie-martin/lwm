@@ -2,6 +2,7 @@
 #include "lwm/core/classification.hpp"
 #include <unordered_map>
 #include <algorithm>
+#include <queue>
 #include <functional>
 #include <tuple>
 
@@ -109,18 +110,13 @@ std::vector<xcb_window_t> compute_order(State const& state, State::FullscreenVis
             links[parent].child = i;
         }
     }
-    std::make_heap(ready.begin(), ready.end(), std::greater<>{ });
-    while (!ready.empty())
+    std::priority_queue lowest(std::greater<>{ }, std::move(ready));
+    while (!lowest.empty())
     {
-        std::pop_heap(ready.begin(), ready.end(), std::greater<>{ });
-        size_t current = ready.back();
-        ready.pop_back();
+        size_t current = lowest.top();
+        lowest.pop();
         result.push_back(ranked[current].id);
-        for (size_t child = links[current].child; child != none; child = links[child].sibling)
-        {
-            ready.push_back(child);
-            std::push_heap(ready.begin(), ready.end(), std::greater<>{ });
-        }
+        for (size_t child = links[current].child; child != none; child = links[child].sibling) lowest.push(child);
     }
     return result;
 }

@@ -86,7 +86,7 @@ void State::request_desktop(xcb_window_t id, uint32_t desktop)
     {
         sticky(id, false);
         relocate(id, placement->first, placement->second, RelocationGeometry::Center).value();
-        pin_desktop(id, true);
+        assign(id, &Client::desktop_pinned, true);
     }
 }
 

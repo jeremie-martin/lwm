@@ -10,7 +10,8 @@
 
 namespace lwm {
 
-// Owns EWMH resources and protocol conversions; simple property writes use XCB directly.
+// Owns the EWMH connection, the WM's advertisement and atom conversions; completion
+// writes the properties.
 class Ewmh
 {
 public:
@@ -32,7 +33,6 @@ public:
     // First recognized _NET_WM_WINDOW_TYPE atom, or Normal.
     WindowType window_type(std::span<xcb_atom_t const> atoms) const;
 
-    xcb_ewmh_connection_t* get() { return &ewmh_; }
     xcb_ewmh_connection_t* get() const { return &ewmh_; }
 
 private:

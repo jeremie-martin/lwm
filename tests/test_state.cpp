@@ -629,6 +629,24 @@ TEST_CASE("Window size requests share clipped normal geometry across presentatio
     CHECK(normal() == Geometry{ 30, 20, 13, 11 });
 }
 
+TEST_CASE("Runtime position hints distinguish assigned desktops from WM publication", "[state][floating][monitor]")
+{
+    auto state = test::state(2);
+    add(state, 1, { .floating = true, .geometry = { 100, 100, 400, 300 } });
+    SizeHints hints{ .program_position = std::pair<int16_t, int16_t>{ 1200, 100 } };
+    SECTION("An ordinary client may follow its hint to another monitor")
+    {
+        state.size_hints(1, hints);
+        CHECK(state.normal_geometry(state.require(1)).x == 1200);
+    }
+    SECTION("A client-authored desktop pin constrains the hint to its assigned monitor")
+    {
+        state.request_desktop(1, 0);
+        state.size_hints(1, hints);
+        CHECK(contains_center(state.monitors()[0].geometry, state.normal_geometry(state.require(1))));
+    }
+}
+
 TEST_CASE("A projection contains every client once with its final visible rectangle", "[state][geometry][projection]")
 {
     auto state = test::state(2);

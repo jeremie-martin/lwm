@@ -64,16 +64,11 @@ void WindowManager::handle_event(xcb_generic_event_t const& event)
     }
     if (uint32_t time = event_time(type, event))
         last_input_time_ = time;
-    if (type == conn_.randr_event_base() + XCB_RANDR_SCREEN_CHANGE_NOTIFY)
+    // Only screen, CRTC and output changes are selected.
+    auto randr = conn_.randr_event_base();
+    if (type == randr + XCB_RANDR_SCREEN_CHANGE_NOTIFY || type == randr + XCB_RANDR_NOTIFY)
     {
         monitors_dirty_ = true;
-        return;
-    }
-    if (type == conn_.randr_event_base() + XCB_RANDR_NOTIFY)
-    {
-        auto const& notify = reinterpret_cast<xcb_randr_notify_event_t const&>(event);
-        if (notify.subCode == XCB_RANDR_NOTIFY_CRTC_CHANGE || notify.subCode == XCB_RANDR_NOTIFY_OUTPUT_CHANGE)
-            monitors_dirty_ = true;
         return;
     }
 
@@ -132,8 +127,11 @@ void WindowManager::handle_event(xcb_generic_event_t const& event)
             handle_button_press(reinterpret_cast<xcb_button_press_event_t const&>(event));
             break;
         case XCB_BUTTON_RELEASE:
-            handle_button_release(reinterpret_cast<xcb_button_release_event_t const&>(event));
+        {
+            auto const& release = reinterpret_cast<xcb_button_release_event_t const&>(event);
+            state_.release(release.root_x, release.root_y, release.detail);
             break;
+        }
         case XCB_KEY_PRESS:
             handle_key_press(reinterpret_cast<xcb_key_press_event_t const&>(event));
             break;
@@ -226,15 +224,6 @@ void WindowManager::handle_button_press(xcb_button_press_event_t const& e)
     if (action)
         if (auto result = execute(*action, "mousebind"); !result)
             LWM_LOG_DEBUG("Mouse action failed: button={} error={}", e.detail, result.error());
-}
-
-void WindowManager::handle_button_release(xcb_button_release_event_t const& e)
-{
-    auto const& drag = state_.drag();
-    if (!drag || (drag->button && drag->button != e.detail))
-        return;
-    state_.drag_to(e.root_x, e.root_y);
-    state_.end_drag(true);
 }
 
 bool WindowManager::grab_pointer(xcb_cursor_t cursor)

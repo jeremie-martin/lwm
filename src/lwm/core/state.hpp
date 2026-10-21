@@ -312,6 +312,8 @@ public:
     void drag_to(int16_t x, int16_t y);
     // Commit applies a tiled drop; a split drag's ratio is already applied.
     void end_drag(bool commit);
+    // The initiating button's release, or any for a zero button, drops the drag at the pointer.
+    void release(int16_t x, int16_t y, uint8_t button);
 
     // Exec handoff
     restart::Snapshot snapshot() const;
@@ -382,8 +384,7 @@ private:
     void apply_rule_state(xcb_window_t id, RuleActions const& rule);
     PlacementGeometry rule_geometry(xcb_window_t id, RuleActions const& rule, PlacementGeometry placement) const;
     void apply_default_mode(xcb_window_t id);
-    void apply_rule(xcb_window_t id, RuleActions const& rule);
-    void apply_initial_rule(xcb_window_t id);
+    void apply_rule(xcb_window_t id);
     bool match_rule(xcb_window_t id);
     void reapply_rules();
     void restore_graph(restart::Snapshot const& snapshot, std::span<Client> observed);
@@ -413,7 +414,6 @@ private:
     // Focus and client state
     void select_focus(xcb_window_t id, uint32_t time = 0, bool record_user_time = true);
     void focus_fallback(size_t monitor, bool record_user_time = true);
-    void pin_desktop(xcb_window_t id, bool pinned);
 
     // Scratchpads
     NamedScratchpad* slot(std::string_view name);
@@ -422,7 +422,6 @@ private:
     bool claim_pending_scratchpad(xcb_window_t id);
     void show_named_scratchpad(xcb_window_t id, ScratchpadConfig const& config);
     void show_pooled_scratchpad(xcb_window_t id);
-    void advance_scratchpad_pool();
     void release_scratchpad(xcb_window_t id);
     void reconcile_scratchpads();
 

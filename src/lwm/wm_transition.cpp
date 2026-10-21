@@ -381,14 +381,8 @@ std::optional<uint32_t> WindowManager::reconcile_stacking(State::FullscreenVisib
         return std::nullopt;
     if (order.size() < 2)
         return std::nullopt;
-    auto children = root_children();
-    std::vector<stacking::StackMove> moves;
-    if (!children.empty())
-        moves = stacking::plan_moves(children, order);
-    else
-        for (size_t i = 1; i < order.size(); ++i) moves.push_back({ order[i], order[i - 1], XCB_STACK_MODE_ABOVE });
     std::optional<uint32_t> first;
-    for (auto const& move : moves)
+    for (auto const& move : stacking::plan_moves(root_children(), order))
     {
         uint32_t values[] = { move.sibling, move.mode };
         auto request = xcb_configure_window(

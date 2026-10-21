@@ -15,20 +15,16 @@ Result WindowManager::execute(Action const& action, std::string_view source)
     xcb_window_t active = state_.active_window();
     size_t monitor = state_.focused_monitor();
     auto fail = [](std::string message) -> Result { return std::unexpected(std::move(message)); };
-    auto on_active = [&](auto operation) -> Result
+    // An operation that cannot fail succeeds.
+    auto lift = [](auto operation) -> Result
     {
-        if (!state_.find(active))
-            return fail("no active window");
         if constexpr (std::is_void_v<decltype(operation())>)
-        {
-            operation();
-            return { };
-        }
+            return operation(), Result{ };
         else
             return operation();
     };
-    return std::visit(
-        Overloaded{
+    auto on_active = [&](auto operation) { return state_.find(active) ? lift(operation) : fail("no active window"); };
+    Overloaded handlers{
             [&](Kill const&) { return on_active([&] { close_window(active); }); },
             [&](ReloadConfig const&) { return reload_config(source); },
             [&](Restart const& restart) -> Result
@@ -69,11 +65,10 @@ Result WindowManager::execute(Action const& action, std::string_view source)
                     return fail("focus request refused");
                 return { };
             },
-            [&](FocusMonitor const& focus) -> Result
+            [&](FocusMonitor const& focus)
             {
                 if (state_.focus_adjacent_monitor(focus.direction))
                     warp_to_monitor(state_.monitors()[state_.focused_monitor()]);
-                return { };
             },
             [&](MoveToMonitor const& move)
             {
@@ -86,30 +81,14 @@ Result WindowManager::execute(Action const& action, std::string_view source)
             {
                 return state_.switch_workspace(monitor, target.workspace).transform([](bool) { });
             },
-            [&](ToggleWorkspace const&) -> Result
-            {
-                state_.toggle_workspace();
-                return { };
-            },
-            [&](CycleWorkspace const& cycle) -> Result
-            {
-                state_.cycle_workspace(cycle.step);
-                return { };
-            },
+            [&](ToggleWorkspace const&) { state_.toggle_workspace(); },
+            [&](CycleWorkspace const& cycle) { state_.cycle_workspace(cycle.step); },
             [&](MoveToWorkspace const& target) -> Result
             {
                 return on_active([&] { return state_.relocate(active, state_.require(active).monitor, target.workspace); });
             },
-            [&](SwapTile const& swap) -> Result
-            {
-                state_.swap_tile(swap.offset);
-                return { };
-            },
-            [&](SetLayout const& layout) -> Result
-            {
-                state_.layout(monitor, layout.strategy);
-                return { };
-            },
+            [&](SwapTile const& swap) { state_.swap_tile(swap.offset); },
+            [&](SetLayout const& layout) { state_.layout(monitor, layout.strategy); },
             [&](SetRatio const& ratio) -> Result
             {
                 if (!state_.set_ratio(ratio.value))
@@ -119,22 +98,10 @@ Result WindowManager::execute(Action const& action, std::string_view source)
                 }
                 return { };
             },
-            [&](AdjustRatio const& adjust) -> Result
-            {
-                state_.adjust_ratio(adjust.delta);
-                return { };
-            },
-            [&](ResetRatios const&) -> Result
-            {
-                state_.reset_ratios(monitor);
-                return { };
-            },
+            [&](AdjustRatio const& adjust) { state_.adjust_ratio(adjust.delta); },
+            [&](ResetRatios const&) { state_.reset_ratios(monitor); },
             [&](ScratchpadStash const&) { return on_active([&] { state_.stash(active); }); },
-            [&](ScratchpadCycle const&) -> Result
-            {
-                state_.cycle_scratchpad_pool();
-                return { };
-            },
+            [&](ScratchpadCycle const&) { state_.cycle_scratchpad_pool(); },
             // A pending launch begins only after process creation succeeds.
             [&](ScratchpadToggle const& toggle) -> Result
             {
@@ -161,9 +128,8 @@ Result WindowManager::execute(Action const& action, std::string_view source)
                 state_.urgency(attention.window, UrgencySource::WmInitiated, true);
                 return { };
             },
-        },
-        action
-    );
+    };
+    return std::visit([&](auto const& request) { return lift([&] { return handlers(request); }); }, action);
 }
 
 void WindowManager::warp_to_monitor(Monitor const& monitor)

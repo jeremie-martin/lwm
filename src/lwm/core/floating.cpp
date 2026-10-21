@@ -81,23 +81,6 @@ Geometry presentation_geometry(Geometry normal, Geometry area, bool horizontal, 
     return normal;
 }
 
-PositionHintResolution resolve_position_hint(
-    std::vector<Monitor> const& monitors,
-    size_t assigned_monitor,
-    bool constrained_to_assigned_monitor,
-    Geometry hinted_geometry
-)
-{
-    size_t fallback = assigned_monitor < monitors.size() ? assigned_monitor : 0;
-    if (monitors.empty())
-        return { false, fallback };
-    if (constrained_to_assigned_monitor)
-        return { contains_center(monitors[fallback].geometry, hinted_geometry), fallback };
-    if (auto monitor = monitor_at(monitors, hinted_geometry))
-        return { true, *monitor };
-    return { false, fallback };
-}
-
 Geometry clamp_to_area(Geometry area, Geometry geometry)
 {
     return clamp_geometry(area, geometry, geometry.x, geometry.y);

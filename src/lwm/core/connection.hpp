@@ -12,12 +12,8 @@ class Connection
 {
 public:
     Connection();
-    ~Connection() = default;
-
     Connection(Connection const&) = delete;
     Connection& operator=(Connection const&) = delete;
-    Connection(Connection&&) = default;
-    Connection& operator=(Connection&&) = default;
 
     xcb_connection_t* get() const { return conn_.get(); }
     xcb_screen_t* screen() const { return screen_; }
@@ -44,8 +40,6 @@ private:
     std::unique_ptr<xcb_key_symbols_t, decltype(&xcb_key_symbols_free)> keysyms_;
 
     uint8_t randr_event_base_ = 0;
-
-    void init_randr();
 };
 
 } // namespace lwm

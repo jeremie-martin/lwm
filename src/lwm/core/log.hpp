@@ -31,10 +31,6 @@ using Logger = Frontend::logger_t;
 
 // Submission and lifecycle calls belong to the WM thread.
 Logger* active_logger() noexcept;
-std::expected<quill::LogLevel, std::string> parse_level(std::string_view);
-std::expected<ColorMode, std::string> parse_color_mode(std::string_view);
-std::expected<Target, std::string> parse_target(std::string_view);
-std::string level_name(quill::LogLevel);
 std::expected<void, std::string> initialize(LogOptions options = { });
 void shutdown();
 // Waits at most `limit` for pending lines before exec replaces the process; a

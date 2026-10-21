@@ -64,15 +64,6 @@ void State::pool_scratchpad(xcb_window_t id)
     scratchpad_pool_.push_back(id);
 }
 
-// The back is the recall target. Advancing preserves every member in rotation.
-void State::advance_scratchpad_pool()
-{
-    if (scratchpad_pool_.size() < 2)
-        return;
-    mutated();
-    std::rotate(scratchpad_pool_.begin(), scratchpad_pool_.end() - 1, scratchpad_pool_.end());
-}
-
 void State::stash(xcb_window_t id)
 {
     auto const& client = require(id);
@@ -98,7 +89,8 @@ template <typename Show> bool State::summon(xcb_window_t window, Show show)
 }
 
 // Pool order owns selection, independently of workspace visibility or hiding.
-// Cycling an active target hides it and advances the rotation.
+// The back is the recall target: cycling an active target hides it and rotates
+// the next member, keeping every member in rotation, to the back.
 void State::cycle_scratchpad_pool()
 {
     if (scratchpad_pool_.empty())
@@ -107,9 +99,11 @@ void State::cycle_scratchpad_pool()
     if (!summon(window, [&] { show_pooled_scratchpad(window); }))
         return;
     iconic(window, true);
-    advance_scratchpad_pool();
-    if (scratchpad_pool_.size() > 1)
-        show_pooled_scratchpad(scratchpad_pool_.back());
+    if (scratchpad_pool_.size() < 2)
+        return;
+    mutated();
+    std::ranges::rotate(scratchpad_pool_, scratchpad_pool_.end() - 1);
+    show_pooled_scratchpad(scratchpad_pool_.back());
 }
 
 // Pooled clients keep their mode and floating offset within the workarea.

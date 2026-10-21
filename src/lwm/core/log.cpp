@@ -14,53 +14,6 @@ Logger* logger = nullptr;
 std::future<void> pending_flush;
 }
 Logger* active_logger() noexcept { return logger; }
-std::expected<quill::LogLevel, std::string> parse_level(std::string_view value)
-{
-    using enum quill::LogLevel;
-    for (auto level : { TraceL3, Debug, Info, Warning, Error, Critical, None })
-        if (value == level_name(level))
-            return level;
-    return std::unexpected("invalid log level '" + std::string(value) + "'");
-}
-std::string level_name(quill::LogLevel level)
-{
-    using enum quill::LogLevel;
-    switch (level)
-    {
-        case TraceL3:
-            return "trace";
-        case Debug:
-            return "debug";
-        case Info:
-            return "info";
-        case Warning:
-            return "warn";
-        case Error:
-            return "error";
-        case Critical:
-            return "critical";
-        default:
-            return "off";
-    }
-}
-std::expected<ColorMode, std::string> parse_color_mode(std::string_view value)
-{
-    if (value == "auto")
-        return ColorMode::Automatic;
-    if (value == "always")
-        return ColorMode::Always;
-    if (value == "never")
-        return ColorMode::Never;
-    return std::unexpected("invalid log color '" + std::string(value) + "'");
-}
-std::expected<Target, std::string> parse_target(std::string_view value)
-{
-    if (value == "journal")
-        return Target::Journal;
-    if (value == "stderr")
-        return Target::Stderr;
-    return std::unexpected("invalid log target '" + std::string(value) + "' (expected journal or stderr)");
-}
 std::expected<void, std::string> initialize(LogOptions config)
 {
     try

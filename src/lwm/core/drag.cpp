@@ -235,4 +235,12 @@ std::optional<Geometry> State::drag_preview(Client const& client) const
     return std::nullopt;
 }
 
+void State::release(int16_t x, int16_t y, uint8_t button)
+{
+    if (!drag_ || (drag_->button && drag_->button != button))
+        return;
+    drag_to(x, y);
+    end_drag(true);
+}
+
 } // namespace lwm

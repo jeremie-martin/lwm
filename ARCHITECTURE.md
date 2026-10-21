@@ -53,9 +53,10 @@ everything the model needs:
   `GeometryRequest`, activation as its source and timestamp with the active client's
   `_NET_WM_USER_TIME`, which `State` uses only when an application request competes.
 - Property changes arrive as new values (`title`, `window_class`, `window_type`,
-  `transient`, `size_hints`, `focus_hints`, `reserve`).
+  `transient`, `size_hints`, `focus_hints`, `hint_urgency`, `reserve`).
 - Topology arrives as a `Topology`: output names, rectangles and the screen extent.
-- Button presses arrive as the window, position, button, modifiers and time.
+- Button presses arrive as the window, position, button, modifiers and time; releases
+  as position and button, and `State` decides which release ends a drag.
 - Bindings and IPC commands share one `Action` type. `execute()` maps each action to
   a named model operation and performs only the effects the model asks for: closing
   a window, launching a process (including a scratchpad launch the model requested),
@@ -77,7 +78,7 @@ the drag ended by release, cancellation, invalidation, reload or topology change
 configuration, rebinds workspaces when their count changed, reconciles scratchpad
 slots and reapplies every matching rule.
 
-Each monitor has an output name, geometry, derived workarea reservation, and the
+Each monitor has an output name, geometry, and the
 configured number of workspaces; a reload that changes the count rebinds like a
 topology change. One workspace is current; the previous index supports toggling.
 `focused_monitor` selects the target for commands and is distinct from X input focus.
@@ -88,8 +89,8 @@ The registry has two kinds of managed window:
   variant. `TiledMode` holds an optional remembered floating rectangle; `FloatingMode`
   holds its normal rectangle and an optional tile-return slot.
 - `Fixture`: a dock or desktop with no placement, layout participation, or focus. A
-  dock carries its observed reservation; every monitor's workarea is derived from the
-  current docks and the screen extent whenever docks or outputs change. Popup-only
+  dock carries its observed reservation; every monitor's workarea is computed on demand
+  from the current docks and the screen extent. Popup-only
   types are mapped by the shell and never registered.
 
 Authoritative state:
@@ -115,7 +116,7 @@ Visibility, fullscreen ownership, effective layer/skip values, published
 `_NET_WM_STATE` values and tiled rectangles are derived. Completion owns one property
 cache: submitted bytes for plain properties, and successfully merged owned values
 for `_NET_WM_STATE`. Refused writes never advance it. Shared-state reads are batched;
-EWMH only converts atoms, and the same size-checked writer submits every property.
+EWMH only converts atoms, and one size-checked writer submits every published property.
 A later external change retries a refused shared-state write; successful writes'
 notifications require no read. Registration order across clients and fixtures is a
 single `State` derivation. Per-window `Output` records cover geometry and

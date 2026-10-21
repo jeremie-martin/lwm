@@ -147,39 +147,6 @@ TEST_CASE("Position hint guard respects non-zero monitor origin", "[floating]")
     }
 }
 
-TEST_CASE("Runtime position hints distinguish assigned desktops from WM publication", "[floating][monitor]")
-{
-    Monitor left;
-    left.geometry.x = 0;
-    left.geometry.y = 0;
-    left.geometry.width = 1920;
-    left.geometry.height = 1080;
-
-    Monitor right = left;
-    right.geometry.x = 1920;
-
-    std::vector<Monitor> monitors{ left, right };
-    Geometry hinted{ 2200, 100, 400, 300 };
-    Client client;
-    client.mode = FloatingMode{ Geometry{ 100, 100, 400, 300 } };
-    client.monitor = 0;
-
-    SECTION("An ordinary client may follow its hint to another monitor")
-    {
-        auto target = floating::resolve_position_hint(monitors, client.monitor, client.desktop_pinned, hinted);
-        REQUIRE(target.accepted);
-        REQUIRE(target.monitor == 1);
-    }
-
-    SECTION("A client-authored desktop pin constrains the hint to its assigned monitor")
-    {
-        client.desktop_pinned = true;
-        auto target = floating::resolve_position_hint(monitors, client.monitor, client.desktop_pinned, hinted);
-        REQUIRE_FALSE(target.accepted);
-        REQUIRE(target.monitor == 0);
-    }
-}
-
 TEST_CASE("Interactive resize clamps moving edges without displacing fixed edges", "[floating][drag]")
 {
     using E = lwm::floating::ResizeEdge;

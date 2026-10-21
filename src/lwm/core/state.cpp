@@ -19,13 +19,6 @@ size_t wrap(int64_t index, size_t size)
     return static_cast<size_t>((index % count + count) % count);
 }
 
-// One geometry policy for clients affected by live or restart-time topology changes.
-Geometry fit_floating(Geometry rectangle, Geometry area, bool displaced)
-{
-    return displaced ? floating::place_floating(area, rectangle.width, rectangle.height, std::nullopt)
-                     : floating::clamp_to_area(area, rectangle);
-}
-
 void merge_membership(Workspace& target, Workspace& source)
 {
     target.windows.insert(target.windows.end(), source.windows.begin(), source.windows.end());
@@ -681,7 +674,6 @@ void State::fullscreen_monitors(xcb_window_t id, std::optional<FullscreenMonitor
     assign(id, &Client::fullscreen_monitors, value);
 }
 
-void State::pin_desktop(xcb_window_t id, bool pinned) { assign(id, &Client::desktop_pinned, pinned); }
 
 // Metadata
 
@@ -888,8 +880,14 @@ void State::rebind(std::vector<Topology::Output> outputs)
         if (topology_changed)
         {
             c.fullscreen_monitors.reset();
+            // A displaced client is placed afresh; others are kept within the workarea.
             if (auto* mode = floating_mode(c))
-                mode->geometry = fit_floating(mode->geometry, working_area(monitors_[c.monitor]), displaced);
+            {
+                auto area = working_area(monitors_[c.monitor]);
+                auto& rectangle = mode->geometry;
+                rectangle = displaced ? floating::place_floating(area, rectangle.width, rectangle.height, std::nullopt)
+                                      : floating::clamp_to_area(area, rectangle);
+            }
         }
     }
 }

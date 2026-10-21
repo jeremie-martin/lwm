@@ -89,14 +89,14 @@ SizeHints size_hints(xcb_connection_t* conn, xcb_get_property_cookie_t cookie)
     return result;
 }
 
-std::vector<xcb_atom_t> protocols(xcb_connection_t* conn, xcb_get_property_cookie_t cookie)
+xcb_get_property_cookie_t request_atoms(xcb_connection_t* conn, xcb_window_t window, xcb_atom_t property)
 {
-    xcb_icccm_get_wm_protocols_reply_t reply;
-    if (!xcb_icccm_get_wm_protocols_reply(conn, cookie, &reply, nullptr))
-        return { };
-    std::vector<xcb_atom_t> result(reply.atoms, reply.atoms + reply.atoms_len);
-    xcb_icccm_get_wm_protocols_reply_wipe(&reply);
-    return result;
+    return request(conn, window, property, XCB_ATOM_ATOM, UINT32_MAX);
+}
+
+std::vector<xcb_atom_t> atoms(xcb_connection_t* conn, xcb_get_property_cookie_t cookie)
+{
+    return std::ranges::to<std::vector>(xproperty::words(xproperty::receive(conn, cookie), XCB_ATOM_ATOM));
 }
 
 struct StrutCookies
@@ -175,7 +175,7 @@ std::vector<WindowObservation> WindowManager::observe(std::span<xcb_window_t con
         reads.manageable = true;
         uint32_t mask = attr->your_event_mask | kObservedWindowEventMask;
         xcb_change_window_attributes(c, w.id, XCB_CW_EVENT_MASK, &mask);
-        reads.type = xcb_ewmh_get_wm_window_type(e, w.id);
+        reads.type = request_atoms(c, w.id, e->_NET_WM_WINDOW_TYPE);
         reads.transient = request(c, w.id, XCB_ATOM_WM_TRANSIENT_FOR, XCB_ATOM_WINDOW, 1);
     }
     for (auto& reads : pending)
@@ -183,7 +183,7 @@ std::vector<WindowObservation> WindowManager::observe(std::span<xcb_window_t con
         if (!reads.manageable)
             continue;
         auto& w = reads.window;
-        w.type = window_type(reads.type);
+        w.type = ewmh_.window_type(atoms(c, reads.type));
         w.transient_for = window_value(c, reads.transient);
         auto role = State::role(w.id, w.type, w.transient_for != XCB_NONE, handoff_ ? &*handoff_ : nullptr);
         if (role == WindowRole::Dock)
@@ -194,11 +194,11 @@ std::vector<WindowObservation> WindowManager::observe(std::span<xcb_window_t con
                 { request(c, w.id, e->_NET_WM_NAME, e->UTF8_STRING, kTitleLimit),
                   request(c, w.id, XCB_ATOM_WM_NAME, XCB_ATOM_STRING, kTitleLimit) },
                 xcb_icccm_get_wm_class(c, w.id),
-                xcb_ewmh_get_wm_desktop(e, w.id),
-                xcb_ewmh_get_wm_state(e, w.id),
+                request(c, w.id, e->_NET_WM_DESKTOP, XCB_ATOM_CARDINAL, 1),
+                request_atoms(c, w.id, e->_NET_WM_STATE),
                 xcb_icccm_get_wm_hints(c, w.id),
                 xcb_icccm_get_wm_normal_hints(c, w.id),
-                xcb_icccm_get_wm_protocols(c, w.id, e->WM_PROTOCOLS),
+                request_atoms(c, w.id, e->WM_PROTOCOLS),
                 xcb_ewmh_get_wm_fullscreen_monitors(e, w.id),
             };
     }
@@ -213,20 +213,13 @@ std::vector<WindowObservation> WindowManager::observe(std::span<xcb_window_t con
         w.geometry = geometry(c, cookie.geometry);
         w.name = name(c, cookie.name, e->UTF8_STRING);
         std::tie(w.wm_class_name, w.wm_class) = wm_class(c, cookie.wm_class);
-        uint32_t desktop = 0;
-        if (xcb_ewmh_get_wm_desktop_reply(e, cookie.desktop, &desktop, nullptr))
-            w.desktop = desktop;
-        xcb_ewmh_get_atoms_reply_t states;
-        if (xcb_ewmh_get_wm_state_reply(e, cookie.state, &states, nullptr))
-        {
-            w.states = ewmh_.states({ states.atoms, states.atoms_len });
-            xcb_ewmh_get_atoms_reply_wipe(&states);
-        }
+        w.desktop = scalar(c, cookie.desktop, XCB_ATOM_CARDINAL);
+        w.states = ewmh_.states(atoms(c, cookie.state));
         auto observed_hints = hints(c, cookie.hints);
         w.accepts_input = observed_hints.accepts_input;
         w.urgent = observed_hints.urgent;
         w.size_hints = size_hints(c, cookie.normal_hints);
-        w.supports_take_focus = std::ranges::contains(protocols(c, cookie.protocols), atoms_.wm_take_focus);
+        w.supports_take_focus = std::ranges::contains(atoms(c, cookie.protocols), atoms_.wm_take_focus);
         xcb_ewmh_get_wm_fullscreen_monitors_reply_t monitors;
         if (xcb_ewmh_get_wm_fullscreen_monitors_reply(e, cookie.fullscreen_monitors, &monitors, nullptr))
             w.fullscreen_monitors = FullscreenMonitors{ monitors.top, monitors.bottom, monitors.left, monitors.right };
@@ -244,17 +237,6 @@ std::vector<WindowObservation> WindowManager::observe(std::span<xcb_window_t con
             reads.window.unmanaged_parent = geometry(c, *reads.parent);
         result.push_back(std::move(reads.window));
     }
-    return result;
-}
-
-// First recognized _NET_WM_WINDOW_TYPE, or Normal.
-WindowType WindowManager::window_type(xcb_get_property_cookie_t cookie) const
-{
-    xcb_ewmh_get_atoms_reply_t types;
-    if (!xcb_ewmh_get_wm_window_type_reply(ewmh_.get(), cookie, &types, nullptr))
-        return WindowType::Normal;
-    auto result = ewmh_.window_type({ types.atoms, types.atoms_len });
-    xcb_ewmh_get_atoms_reply_wipe(&types);
     return result;
 }
 
@@ -290,7 +272,7 @@ void WindowManager::handle_property_notify(xcb_property_notify_event_t const& ev
         state_.window_class(window, std::move(instance), std::move(name));
     }
     else if (atom == e->_NET_WM_WINDOW_TYPE)
-        state_.window_type(window, window_type(xcb_ewmh_get_wm_window_type(e, window)));
+        state_.window_type(window, ewmh_.window_type(atoms(c, request_atoms(c, window, e->_NET_WM_WINDOW_TYPE))));
     else if (atom == XCB_ATOM_WM_TRANSIENT_FOR)
         state_.transient(window, window_value(c, request(c, window, XCB_ATOM_WM_TRANSIENT_FOR, XCB_ATOM_WINDOW, 1)));
     else if (atom == XCB_ATOM_WM_NORMAL_HINTS)
@@ -319,7 +301,7 @@ void WindowManager::handle_property_notify(xcb_property_notify_event_t const& ev
 
 std::vector<xcb_atom_t> WindowManager::read_protocols(xcb_window_t window) const
 {
-    return protocols(conn_.get(), xcb_icccm_get_wm_protocols(conn_.get(), window, ewmh_.get()->WM_PROTOCOLS));
+    return atoms(conn_.get(), request_atoms(conn_.get(), window, ewmh_.get()->WM_PROTOCOLS));
 }
 
 // The application's latest interaction time, possibly kept on a separate window.

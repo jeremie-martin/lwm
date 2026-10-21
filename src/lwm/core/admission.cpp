@@ -256,13 +256,16 @@ std::optional<State::PlacementGeometry> State::size_hint_geometry(xcb_window_t i
     if (position)
     {
         Geometry hinted{ position->first, position->second, rectangle.width, rectangle.height };
-        auto target = floating::resolve_position_hint(monitors_, client.monitor, anchored || client.desktop_pinned, hinted);
-        center = !target.accepted;
-        if (target.accepted)
+        // Transient and client-pinned windows stay on their monitor; others may follow the hint.
+        auto target = anchored || client.desktop_pinned
+            ? (contains_center(monitors_[client.monitor].geometry, hinted) ? std::optional{ client.monitor } : std::nullopt)
+            : monitor_at(monitors_, hinted);
+        center = !target;
+        if (target)
         {
             rectangle = hinted;
-            if (initial && target.monitor != client.monitor)
-                relocate(id, target.monitor, monitors_[target.monitor].current_workspace).value();
+            if (initial && *target != client.monitor)
+                relocate(id, *target, monitors_[*target].current_workspace).value();
         }
     }
     if (center)
@@ -347,11 +350,15 @@ State::PlacementGeometry State::rule_geometry(xcb_window_t id, RuleActions const
     return Geometry{ geometry_coordinate(area.x + position->first), geometry_coordinate(area.y + position->second), size.width, size.height };
 }
 
-void State::apply_rule(xcb_window_t id, RuleActions const& rule)
+// The matched rule's state, then its geometry for a client floating by then.
+void State::apply_rule(xcb_window_t id)
 {
-    apply_rule_state(id, rule);
+    auto const& rule = require(id).rule;
+    if (!rule)
+        return;
+    apply_rule_state(id, *rule);
     if (auto const* floating = floating_mode(require(id)))
-        geometry(id, resolve_geometry(id, rule_geometry(id, rule, floating->geometry), std::nullopt));
+        geometry(id, resolve_geometry(id, rule_geometry(id, *rule, floating->geometry), std::nullopt));
 }
 
 // Metadata reconciles changed rule actions; losing a match leaves prior actions.
@@ -359,7 +366,7 @@ void State::reconcile_metadata(xcb_window_t id)
 {
     bool changed = match_rule(id);
     if (!claim_pending_scratchpad(id) && changed)
-        apply_initial_rule(id);
+        apply_rule(id);
 }
 
 bool State::match_rule(xcb_window_t id)
@@ -368,19 +375,13 @@ bool State::match_rule(xcb_window_t id)
     return assign(id, &Client::rule, rule ? std::optional{ *rule } : std::nullopt);
 }
 
-void State::apply_initial_rule(xcb_window_t id)
-{
-    if (auto const& rule = require(id).rule)
-        apply_rule(id, *rule);
-}
-
 // Reload deliberately reapplies unchanged actions and does not claim pending launches.
 void State::reapply_rules()
 {
     for (auto const* client : clients_by_order())
     {
         match_rule(client->id);
-        apply_initial_rule(client->id);
+        apply_rule(client->id);
     }
 }
 
