@@ -78,7 +78,6 @@ private:
     // successfully merged into a shared property. Neither records refused writes.
     // An unknown property is always written, so a fresh WM replaces stale values.
     std::map<std::pair<xcb_window_t, xcb_atom_t>, std::variant<std::optional<std::string>, WindowStates>> properties_;
-    std::vector<xcb_window_t> fullscreen_owners_; ///< Logged ownership per monitor
     std::string config_path_;
     xcb_window_t wm_window_ = XCB_NONE; ///< Owns WM_S0, the EWMH supporting check and IPC
     std::optional<restart::Snapshot> handoff_; ///< Predecessor state, consumed during startup adoption

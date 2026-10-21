@@ -381,7 +381,7 @@ TEST_CASE("Integration: asynchronous X failures retain protocol context", "[inte
     REQUIRE(ping->exit_code == 0);
 }
 
-TEST_CASE("Integration: fullscreen diagnostics identify requests and resolved ownership", "[integration][logging]")
+TEST_CASE("Integration: fullscreen diagnostics identify requests", "[integration][logging]")
 {
     auto& environment = X11TestEnvironment::instance();
     if (!environment.available())
@@ -402,9 +402,7 @@ TEST_CASE("Integration: fullscreen diagnostics identify requests and resolved ow
         [&]
         {
             auto diagnostics = wm.diagnostics();
-            return diagnostics.find("Fullscreen changed: window=" + id.str() + " enabled=true") != std::string::npos
-                && diagnostics.find("Fullscreen owner changed: monitor=0 window=0x0 -> " + id.str())
-                != std::string::npos;
+            return diagnostics.find("Fullscreen changed: window=" + id.str() + " enabled=true") != std::string::npos;
         },
         std::chrono::seconds(2)
     ));
@@ -413,9 +411,7 @@ TEST_CASE("Integration: fullscreen diagnostics identify requests and resolved ow
         [&]
         {
             auto diagnostics = wm.diagnostics();
-            return diagnostics.find("Fullscreen changed: window=" + id.str() + " enabled=false") != std::string::npos
-                && diagnostics.find("Fullscreen owner changed: monitor=0 window=" + id.str() + " -> 0x0")
-                != std::string::npos;
+            return diagnostics.find("Fullscreen changed: window=" + id.str() + " enabled=false") != std::string::npos;
         },
         std::chrono::seconds(2)
     ));

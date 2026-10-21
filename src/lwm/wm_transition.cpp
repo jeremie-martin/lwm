@@ -22,19 +22,10 @@ void WindowManager::complete_transition()
     auto focus_request = state_.settle(last_input_time_);
     bool released = !state_.drag() && release_pointer();
     auto fullscreen = state_.fullscreen_visibility();
-    auto const& owners = fullscreen.owners;
     published_revision_ = state_.revision();
 
     // Publication reads a frozen model.
     state_.freeze();
-    for (size_t m = 0; m < std::max(owners.size(), fullscreen_owners_.size()); ++m)
-    {
-        auto before = m < fullscreen_owners_.size() ? fullscreen_owners_[m] : XCB_NONE;
-        auto after = m < owners.size() ? owners[m] : XCB_NONE;
-        if (before != after)
-            LWM_LOG_DEBUG("Fullscreen owner changed: monitor={} window={:#x} -> {:#x}", m, before, after);
-    }
-    fullscreen_owners_ = owners;
     auto clients = state_.project(fullscreen);
     bool moved = publish_clients(clients);
     if (focus_request)
