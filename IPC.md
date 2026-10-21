@@ -109,6 +109,9 @@ Cycling fails when no window is eligible.
 
 A restart requested while LWM is already stopping fails with `lwm is stopping`;
 losing the screen to another window manager turns a pending restart into an exit.
+Restart keeps LWM's X connection open across exec and names it in `LWM_RESTART_FD`;
+a binary run by `exec PATH` that ignores the variable keeps that idle connection
+until it exits.
 Reload and restart clamp stored ratios on every workspace to the current bounds.
 Ratio values must be finite numbers with no trailing characters. `ratio set` rejects
 values outside `[min_ratio, 1 - min_ratio]` from the active configuration; `ratio

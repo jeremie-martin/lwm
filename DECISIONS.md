@@ -285,9 +285,14 @@ The server resets when its last live client disconnects, and retained resources 
 not count. Restart previously combined RetainPermanent, a self-identifying owner
 window the successor killed, and a wait of up to 250 ms for the IPC requester to
 disconnect. Keeping the predecessor's connection open through exec gives the same
-guarantee directly: its descriptor survives without close-on-exec, it is never shut
-down, and the successor closes it after claiming the screen. A failed exec recovers
-the same way. Exec into a binary that does not know `LWM_RESTART_FD` keeps the old
-connection until that process exits. The `restart_resources` CTest probe guards the
+guarantee directly: a duplicate of its descriptor survives exec, the connection is
+never shut down, and the successor closes it after claiming the screen. A failed exec
+recovers the same way, with the old WM alive until the recovery owns the screen.
+Exec into a binary that does not know `LWM_RESTART_FD` keeps the old connection until
+that process exits, so the predecessor first drops every grab and event selection;
+the variable names its process ID, which exec keeps, so copies inherited elsewhere
+are ignored. Handing over a fresh idle connection instead was rejected: the successor
+would reuse the predecessor's client slot and window IDs, which tests and watchers use
+to tell WM lifetimes apart. The `restart_resources` CTest probe guards the
 empty-server case.
 

@@ -336,8 +336,7 @@ IPC needs no transport of its own: a request is a `_LWM_COMMAND` ClientMessage n
 the caller's window, handled like any other X event. The handler reads and deletes
 the request property, executes it, completes the operation and only then writes the
 reply on the same connection, so the reply follows every effect. The WM keeps no
-per-caller state; a restart waits briefly for its requester to disconnect, so that
-an otherwise empty server cannot reset during the handoff.
+per-caller state.
 
 IPC query results are typed view records serialized by reflect-cpp. Completion
 publishes the same state view as `_LWM_STATE` on the `WM_S0` owner window through the
@@ -353,13 +352,15 @@ programs) and owns logging across WM lifetimes; a failed exec reconstructs the W
 the same logger. Automatic child reaping ends before main returns, so exit-time
 helpers can wait for their children. The X connection is the only event source.
 
-Restart keeps the predecessor's X connection open through exec, passing its
-descriptor in `LWM_RESTART_FD`, so the server always has a live client and cannot
-reset. The successor, or a failed-exec recovery in the same process, closes it after
-claiming the screen; the server then frees the predecessor's resources. A binary that
-ignores the variable keeps that connection until it exits.
-Across failed exec, main retains the owning `Connection` and moves it into recovery;
-it is destroyed after the replacement claims the screen, before adopting windows.
+Restart keeps the predecessor's X connection open through exec, so the server always
+has a live client and cannot reset. Before exec it releases every grab and event
+selection, so nothing accumulates for a connection no one reads, and passes a
+duplicate descriptor, which survives exec unlike XCB's own, in `LWM_RESTART_FD` with
+its process ID. The successor closes that descriptor after claiming the screen; the
+server then frees the predecessor's resources. Exec keeps the process ID, so a
+variable another process inherited is ignored. A binary that ignores the variable
+keeps the idle connection until it exits. After a failed exec, main keeps the old
+`WindowManager` until the recovery owns the screen and has closed the duplicate.
 
 `State::snapshot()` stores private intent in `_LWM_RESTART`: placements, modes, hiding,
 preferences, urgency, focus ranks, workspace graphs, scratchpad claims, pending

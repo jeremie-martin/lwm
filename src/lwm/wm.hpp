@@ -39,11 +39,11 @@ enum class RunResult
 class WindowManager
 {
 public:
-    WindowManager(Config config, std::string config_path, std::optional<Connection> predecessor = {});
+    WindowManager(Config config, std::string config_path);
 
     RunResult run();
     std::string const& restart_binary() const { return restart_binary_; }
-    Connection prepare_restart();
+    void prepare_restart();
 
 private:
     // Atoms outside xcb-ewmh's set, interned once at startup.
@@ -84,7 +84,7 @@ private:
     std::map<std::pair<xcb_window_t, xcb_atom_t>, std::variant<std::optional<std::string>, WindowStates>> properties_;
     std::vector<xcb_window_t> fullscreen_owners_; ///< Logged ownership per monitor
     std::string config_path_;
-    xcb_window_t wm_window_ = XCB_NONE; ///< Owns WM_S0, the EWMH supporting check, IPC and the restart marker
+    xcb_window_t wm_window_ = XCB_NONE; ///< Owns WM_S0, the EWMH supporting check and IPC
     std::optional<restart::Snapshot> handoff_; ///< Predecessor state, consumed during startup adoption
 
     // Obligations of the current operation that are not projections of state.
@@ -200,8 +200,7 @@ private:
     std::string state_json() const;
 
     // wm_restart.cpp
-    bool release_predecessor(std::optional<Connection> predecessor);
-    void read_handoff();
+    bool release_predecessor();
 };
 
 } // namespace lwm

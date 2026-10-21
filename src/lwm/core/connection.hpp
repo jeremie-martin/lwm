@@ -1,7 +1,6 @@
 #pragma once
 
 #include <cstdlib>
-#include <fcntl.h>
 #include <memory>
 #include <xcb/randr.h>
 #include <xcb/xcb.h>
@@ -31,13 +30,6 @@ public:
     bool fits_property(size_t bytes) const
     {
         return bytes / 4 + (bytes % 4 != 0) + 7 <= xcb_get_maximum_request_length(conn_.get());
-    }
-    // Allows exec to inherit the descriptor while this object retains ownership.
-    int inherit_fd()
-    {
-        int fd = xcb_get_file_descriptor(conn_.get());
-        fcntl(fd, F_SETFD, fcntl(fd, F_GETFD) & ~FD_CLOEXEC);
-        return fd;
     }
     // Flush and wait until the server has processed every earlier request.
     void sync()

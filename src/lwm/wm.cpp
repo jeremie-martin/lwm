@@ -13,7 +13,7 @@
 
 namespace lwm {
 
-WindowManager::WindowManager(Config config, std::string config_path, std::optional<Connection> predecessor)
+WindowManager::WindowManager(Config config, std::string config_path)
     : ewmh_(conn_)
     , config_path_(std::move(config_path))
 {
@@ -22,7 +22,7 @@ WindowManager::WindowManager(Config config, std::string config_path, std::option
     create_wm_window();
     setup_root();
     claim_wm_ownership();
-    bool handoff = release_predecessor(std::move(predecessor));
+    bool handoff = release_predecessor();
     create_cursors();
     grab_buttons();
     refresh_topology();

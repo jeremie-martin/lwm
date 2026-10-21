@@ -10,7 +10,7 @@
 #include <lwm/config/config.hpp>
 #include <lwm/core/log.hpp>
 #include <lwm/wm.hpp>
-#include <optional>
+#include <memory>
 #include <stdexcept>
 #include <string>
 #include <string_view>
@@ -80,7 +80,8 @@ int main(int argc, char* argv[])
 
         bool explicit_config = parsed->config_path.has_value();
         char* const self = argv[0];
-        std::optional<lwm::Connection> predecessor;
+        // After a failed exec, the old WM keeps its connection until recovery owns the screen.
+        std::unique_ptr<lwm::WindowManager> predecessor;
 
         while (true)
         {
@@ -95,24 +96,22 @@ int main(int argc, char* argv[])
                 config = lwm::default_config();
             }
 
-            std::string restart_binary;
+            phase = "WM initialization";
+            auto wm = std::make_unique<lwm::WindowManager>(std::move(*config), config_path);
+            predecessor.reset();
+            phase = "WM event loop";
+            auto result = wm->run();
+            if (result == lwm::RunResult::Failed)
             {
-                phase = "WM initialization";
-                lwm::WindowManager wm(std::move(*config), config_path, std::move(predecessor));
-                phase = "WM event loop";
-                auto result = wm.run();
-                if (result == lwm::RunResult::Failed)
-                {
-                    exit_code = 1;
-                    break;
-                }
-                if (result != lwm::RunResult::Restart)
-                    break;
-
-                phase = "Restart preparation";
-                restart_binary = wm.restart_binary();
-                predecessor = wm.prepare_restart();
+                exit_code = 1;
+                break;
             }
+            if (result != lwm::RunResult::Restart)
+                break;
+
+            phase = "Restart preparation";
+            std::string restart_binary = wm->restart_binary();
+            wm->prepare_restart();
             // A successor restarts from its argv[0], so that names the binary exec'd.
             argv[0] = restart_binary.empty() ? self : restart_binary.data();
             char const* binary = argv[0];
@@ -124,6 +123,7 @@ int main(int argc, char* argv[])
             int exec_errno = errno;
 
             LWM_LOG_CRITICAL("exec '{}' failed: {}, recovering", binary, std::strerror(exec_errno));
+            predecessor = std::move(wm);
         }
     }
     catch (std::exception const& e)

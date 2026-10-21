@@ -181,6 +181,27 @@ TEST_CASE("Integration: losing the screen wins over a restart queued in either o
     CHECK(wm_owner(connection) == replacement);
 }
 
+TEST_CASE("Integration: a restart variable inherited from another process is ignored", "[integration][logging][restart]")
+{
+    auto& environment = X11TestEnvironment::instance();
+    if (!environment.available())
+        SKIP("Xvfb not available");
+    X11Connection connection;
+    REQUIRE(connection.ok());
+    // Another process's handoff, or one naming only a descriptor, which here may be
+    // this WM's own X connection.
+    auto value = GENERATE("1 4", "4");
+    CAPTURE(value);
+    LwmProcess wm(environment.display(), { }, { "--log-level", "info" }, -1, find_test_executable_path("lwm"),
+                  { { "LWM_RESTART_FD", value } });
+    REQUIRE(wait_for_wm_ready(connection, std::chrono::seconds(2)));
+    REQUIRE(wait_for_condition([&] { return wm.diagnostics().find("WM ready") != std::string::npos; }, std::chrono::seconds(2)));
+    CHECK(wm.diagnostics().find("restart=false") != std::string::npos);
+    auto version = run_lwmctl(wm, { "version" });
+    REQUIRE(version);
+    CHECK(version->exit_code == 0);
+}
+
 TEST_CASE(
     "Integration: blocked console leaves the event loop and exec restart responsive",
     "[integration][logging][restart]"
