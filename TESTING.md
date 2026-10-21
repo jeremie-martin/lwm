@@ -78,7 +78,7 @@ restart tests with `[restart]` wherever they live.
 `lwm_observation_probe` links the real WM and interposes XCB property delivery.
 It writes through a separate X connection after the first read but before its reply
 is delivered, testing admission subscription order without sleeps or production hooks.
-The fixture also covers separate user-time windows and both live and cold admission.
+The fixture covers both live and cold admission.
 
 Use `TestFd` and the bounded process helpers for cleanup on assertion
 failure. `LwmProcess::wait_for_exit()` tests normal shutdown; `stop()` may force
@@ -159,7 +159,7 @@ python3 tests/performance/logging_bench.py --binary build/release/src/app/lwm
   `--take-focus` includes the fresh server-time observation each such focus costs.
 - `restart_resources.py` uses libXRes to check that repeated restart and failed-exec
   recovery release predecessor X clients, and that a restart on an otherwise empty
-  server does not reset it. CTest runs it as `restart_resources` when libXRes exists.
+  server does not reset it. CTest runs it as `restart_resources` when libXRes and Xvfb exist.
 - The blocked-console integration test repeats failed execs without replacing the
   process, bounds outstanding flush threads, and resumes delivery before orderly
   shutdown. Orderly exit also allows LeakSanitizer to check predecessor heap cleanup

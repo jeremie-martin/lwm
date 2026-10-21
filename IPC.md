@@ -71,8 +71,9 @@ Commands name their object first: `window`, `workspace`, `monitor`, `layout`,
 tiles and recently used windows alike. Window IDs are decimal or `0x` hexadecimal.
 
 Consecutive `window focus next` / `window focus prev` commands retain their starting recent-use
-order, including sticky windows, and skip ineligible clients. Activation, a changed
-monitor/workspace or active window, or a new registration starts a fresh traversal.
+order, including sticky windows, and skip ineligible clients. Activation or a changed
+monitor/workspace or active window starts a fresh traversal; windows mapped meanwhile
+join the next one.
 Cycling fails when no window is eligible.
 
 | Command | Result |
