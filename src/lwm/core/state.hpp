@@ -185,12 +185,14 @@ public:
     // Focus
     xcb_window_t active_window() const { return active_window_; }
     size_t focused_monitor() const { return focused_monitor_; }
-    // Activation restores an iconic client and selects its workspace. Unknown clients
-    // and clients without input or WM_TAKE_FOCUS are refused; NONE releases focus
-    // until a later choice, which settling does not override.
+    // Focus shows an iconic client and selects its workspace. Unknown clients and
+    // clients without input or WM_TAKE_FOCUS are refused; NONE releases focus until a
+    // later choice, which settling does not override.
     void focus(xcb_window_t id, uint32_t time = 0, bool record_user_time = true);
+    // Activation shows any client the same way and focuses it if it accepts focus;
+    // otherwise focus stays with, or falls back to, a window on its monitor.
+    void activate(xcb_window_t id, uint32_t time = 0);
     bool cycle_focus(bool forward);
-    void restore(xcb_window_t id);
     void focus_monitor(size_t monitor);
     // Focus the adjacent monitor's fallback; returns whether the monitor changed.
     bool focus_adjacent_monitor(int direction);
@@ -414,13 +416,14 @@ private:
     void set_mode(xcb_window_t id, bool floating);
 
     // Focus and client state
+    void show(Client const& client);
     void select_focus(xcb_window_t id, uint32_t time = 0, bool record_user_time = true);
     void focus_fallback(size_t monitor, bool record_user_time = true);
 
     // Scratchpads
     NamedScratchpad* slot(std::string_view name);
     ScratchpadConfig const* match_scratchpad(Client const& client) const;
-    template <typename Show> bool summon(xcb_window_t window, Show show);
+    template <typename Present> bool summon(xcb_window_t window, Present present);
     bool claim_pending_scratchpad(xcb_window_t id);
     void show_named_scratchpad(xcb_window_t id, ScratchpadConfig const& config);
     void show_pooled_scratchpad(xcb_window_t id);

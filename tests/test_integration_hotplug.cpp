@@ -636,3 +636,36 @@ match = { class = "RecallNamed" }
     REQUIRE(geometry->x >= 1280);
     destroy_window(conn, window);
 }
+
+TEST_CASE(
+    "Integration: a RandR rebuild keeps the fullscreen owner and its suppression",
+    "[integration][focus][fullscreen][multioutput][.multioutput]"
+)
+{
+    auto* server = std::getenv("LWM_TEST_XSERVER");
+    if (!server || std::strcmp(server, "Xorg") != 0)
+        SKIP("Select the owned Xorg dummy server for multi-output coverage");
+    auto env = TestEnvironment::create();
+    REQUIRE(env);
+    REQUIRE(env->x11_env.owns_display());
+    RestoreOutputs restore;
+    auto& conn = env->conn;
+    auto fullscreen = intern_atom(conn.get(), "_NET_WM_STATE_FULLSCREEN");
+    auto owner = create_window(conn, 10, 10, 640, 360);
+    map_window(conn, owner);
+    REQUIRE(wait_for_active_window(conn, owner, timeout));
+    send_client_message(conn, owner, intern_atom(conn.get(), "_NET_WM_STATE"), 1, fullscreen);
+    REQUIRE(wait_for_condition([&] { return has_state(conn, owner, fullscreen); }, timeout));
+    auto behind = create_window(conn, 80, 80, 320, 180);
+    map_window(conn, behind);
+    REQUIRE(wait_for_condition([&] { return is_hidden(conn, behind); }, timeout));
+    REQUIRE(wait_for_active_window(conn, owner, timeout));
+
+    randr({ "--output", "DUMMY0", "--mode", "1920x1080" });
+    REQUIRE(wait_for_window_geometry(conn, owner, 0, 0, 1920, 1080, timeout));
+    CHECK(has_state(conn, owner, fullscreen));
+    CHECK(wait_for_active_window(conn, owner, timeout));
+    CHECK(is_hidden(conn, behind));
+    destroy_window(conn, behind);
+    destroy_window(conn, owner);
+}

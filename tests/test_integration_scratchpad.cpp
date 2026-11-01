@@ -129,7 +129,7 @@ TEST_CASE(
     REQUIRE(wait_for_active_window(conn, sp, kTimeout));
     auto sp_geom = get_window_geometry(conn, sp);
     REQUIRE(sp_geom.has_value());
-    REQUIRE(sp_geom->x >= 0);
+    REQUIRE_FALSE(is_hidden(conn, sp));
 
     // Use _NET_ACTIVE_WINDOW to focus the tiled window (simulating keyboard focus change)
     xcb_atom_t net_active_window = intern_atom(conn.get(), "_NET_ACTIVE_WINDOW");
@@ -138,11 +138,7 @@ TEST_CASE(
     REQUIRE(wait_for_active_window(conn, tiled, kTimeout));
 
     // Scratchpad should still be on-screen (not hidden)
-    {
-        auto geom = get_window_geometry(conn, sp);
-        REQUIRE(geom.has_value());
-        REQUIRE(geom->x >= 0);
-    }
+    REQUIRE_FALSE(is_hidden(conn, sp));
 
     // Warp to root (away), then to scratchpad center — should trigger EnterNotify and refocus
     xcb_warp_pointer(conn.get(), XCB_NONE, conn.root(), 0, 0, 0, 0, 0, 0);
@@ -186,7 +182,7 @@ TEST_CASE("Integration: floating scratchpad preserves kind and geometry across r
     // Record the geometry the WM assigned (centered floating)
     auto geom_before = get_window_geometry(conn, sp);
     REQUIRE(geom_before.has_value());
-    REQUIRE(geom_before->x >= 0);
+    REQUIRE_FALSE(is_hidden(conn, sp));
 
     auto previous = wm_instance(conn);
     REQUIRE(previous);

@@ -49,6 +49,7 @@ void WindowManager::manage(WindowObservation const& observed)
     }
     if (!state_.find(window))
     {
+        release_window(window);
         if (!observed.mapped)
             xcb_map_window(conn_.get(), window);
         return;

@@ -75,13 +75,14 @@ void State::stash(xcb_window_t id)
 }
 
 // Shows a remote or hidden scratchpad here and focuses a shown inactive one.
-// Returns whether it was already the active client, which callers then hide.
-template <typename Show> bool State::summon(xcb_window_t window, Show show)
+// Returns whether it was already summoned, active or refusing focus, which callers
+// then hide.
+template <typename Present> bool State::summon(xcb_window_t window, Present present)
 {
     auto const& client = require(window);
     if (client.monitor != focused_monitor_ || !visible(client))
-        show();
-    else if (window != active_window_)
+        present();
+    else if (window != active_window_ && accepts_focus(client))
         focus(window);
     else
         return true;
@@ -111,7 +112,7 @@ void State::show_pooled_scratchpad(xcb_window_t id)
 {
     LWM_LOG_DEBUG("Showing pool scratchpad window {:#x}", id);
     relocate(id, focused_monitor_, monitors_[focused_monitor_].current_workspace, RelocationGeometry::Translate).value();
-    restore(id);
+    activate(id);
 }
 
 void State::scratchpad_pending(std::string_view name, bool pending)
@@ -195,7 +196,7 @@ void State::show_named_scratchpad(xcb_window_t window, ScratchpadConfig const& c
     auto height = geometry_extent(static_cast<int64_t>(area.height * config.height));
     geometry(window, floating::place_floating(area, width, height, std::nullopt));
     relocate(window, monitor, workspace).value();
-    restore(window);
+    activate(window);
 }
 
 } // namespace lwm

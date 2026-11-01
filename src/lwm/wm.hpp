@@ -177,7 +177,10 @@ private:
     };
     std::optional<StackingRepair> request_stacking(State::FullscreenVisibility const& fullscreen, bool reassert);
     std::optional<uint32_t> restack(StackingRepair const& repair);
+    void restore_withdrawn(xcb_window_t window, State::Presentation const& presentation);
     std::vector<xcb_window_t> withdraw_removed();
+    // Drops LWM's button grab and event selection on a window it no longer tracks.
+    void release_window(xcb_window_t window);
     void forget_withdrawn(std::span<xcb_window_t const> windows);
     void commit_focus();
 

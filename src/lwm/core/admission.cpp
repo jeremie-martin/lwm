@@ -69,13 +69,14 @@ std::optional<Client> State::classify(WindowObservation const& window, restart::
         client_kind_str(client),
         rule != nullptr
     );
+    auto const& states = window.states;
+    // A sticky client is on every desktop, so a desktop index cannot also pin it.
+    client.sticky = states.has(WindowState::Sticky) || window.desktop == STICKY_DESKTOP;
     client.monitor = focused_monitor_;
     client.workspace = monitors_[client.monitor].current_workspace;
-    if (window.desktop)
+    if (window.desktop && !client.sticky)
     {
-        if (*window.desktop == STICKY_DESKTOP)
-            client.sticky = true;
-        else if (auto placement = desktop_placement(*window.desktop))
+        if (auto placement = desktop_placement(*window.desktop))
         {
             std::tie(client.monitor, client.workspace) = *placement;
             client.desktop_pinned = true;
@@ -83,14 +84,12 @@ std::optional<Client> State::classify(WindowObservation const& window, restart::
         else
             LWM_LOG_WARN("Ignoring out-of-range _NET_WM_DESKTOP: window={:#x} desktop={}", window.id, *window.desktop);
     }
-    auto const& states = window.states;
     if (states.has(WindowState::Above) || states.has(WindowState::Below))
         client.preferences.layer = states.has(WindowState::Above) ? LayerHint::Above : LayerHint::Below;
     if (states.has(WindowState::SkipTaskbar))
         client.preferences.skip_taskbar = true;
     if (states.has(WindowState::SkipPager))
         client.preferences.skip_pager = true;
-    client.sticky |= states.has(WindowState::Sticky);
     client.modal = states.has(WindowState::Modal);
     // Fullscreen supersedes remembered maximize; observation is its only source.
     bool fullscreen = states.has(WindowState::Fullscreen);

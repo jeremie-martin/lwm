@@ -97,8 +97,8 @@ a mode.
 
 A tiling layout has no place for iconified windows and LWM has no taskbar to restore
 them from, so a client that minimized itself simply disappeared. `WM_CHANGE_STATE`,
+`_NET_WM_STATE_HIDDEN` requests and iconic `WM_HINTS.initial_state` are ignored and
 `_NET_WM_ACTION_MINIMIZE` is not advertised; only scratchpads make windows iconic.
-`_NET_WM_ACTION_MINIMIZE` is not advertised; LWM hides windows only through scratchpads.
 
 ## Restore hiding only from private intent (2026-10-07)
 

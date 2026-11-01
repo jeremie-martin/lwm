@@ -1,5 +1,6 @@
 #include "wm_observations.hpp"
 #include <catch2/catch_test_macros.hpp>
+#include <catch2/generators/catch_generators.hpp>
 #include <chrono>
 #include <optional>
 
@@ -701,4 +702,24 @@ TEST_CASE(
     send_client_message(conn, w1, net_active_window, 1, 1, 0, 0, 0);
     REQUIRE(wait_for_active_window(conn, w1, kTimeout));
     CHECK(wait_for_x_input_focus(conn, w1, kTimeout));
+}
+
+TEST_CASE("Integration: a malformed _NET_WM_FULLSCREEN_MONITORS is ignored at admission", "[integration][fullscreen]")
+{
+    auto env = TestEnvironment::create();
+    REQUIRE(env);
+    auto& conn = env->conn;
+    auto* c = conn.get();
+    auto hint = intern_atom(c, "_NET_WM_FULLSCREEN_MONITORS");
+    auto window = create_window(conn, 10, 10, 200, 150);
+    uint32_t const values[] = { 0, 0, 0, 0, 0 };
+    auto length = GENERATE(3u, 5u);
+    xcb_change_property(c, XCB_PROP_MODE_REPLACE, window, hint, XCB_ATOM_CARDINAL, 32, length, values);
+    map_window(conn, window);
+    REQUIRE(wait_for_active_window(conn, window, kTimeout));
+    observe_title_after_events(conn, window);
+    auto value = lwm::xproperty::receive(c, xcb_get_property(c, false, window, hint, XCB_ATOM_CARDINAL, 0, 8));
+    REQUIRE(value);
+    CHECK(value->type == XCB_NONE);
+    destroy_window(conn, window);
 }

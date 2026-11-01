@@ -361,7 +361,9 @@ def main():
                         raise AssertionError("Dock refresh must share one root geometry read: " + json.dumps(result))
                     continue
                 if "drag" in scenario:
-                    if not 1 <= counts["geometry_configure"] <= operations + 20:
+                    # Queued motion coalesces: a burst must cost far fewer moves than motions.
+                    geometry_budget = operations // 4 if scenario.endswith("burst") else operations + 20
+                    if not 1 <= counts["geometry_configure"] <= geometry_budget:
                         raise AssertionError("Inactive or excessive drag geometry: " + json.dumps(result))
                     if counts["visibility_barrier"] > 2 or counts["query_tree"] > 2:
                         raise AssertionError("Per-motion reconciliation: " + json.dumps(result))

@@ -36,7 +36,7 @@ State::Press State::press(xcb_window_t window, int16_t x, int16_t y, uint8_t but
                 focus(window);
             if (client && window != active_window_)
                 return { true };
-            return { true, std::nullopt, *action, client ? window : XCB_NONE };
+            return { true, std::nullopt, *action, client ? window : xcb_window_t{ XCB_NONE } };
         }
         auto grip = [&](Edge edges) -> Press
         {

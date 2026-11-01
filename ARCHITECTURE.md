@@ -141,8 +141,9 @@ and outputs forgotten after an external write.
 3. Freeze `State`. Derive fullscreen visibility and one projection per client from it,
    including a tiled drag preview.
 4. Hide, configure and map clients; acknowledge ConfigureRequests; commit explicit
-   focus; publish client, fixture and root properties and stacking, with the stacking
-   tree query sharing the `_NET_WM_STATE` read round trip; withdraw removed windows.
+   focus; publish client and fixture properties, root properties when the revision
+   changed, and stacking, with the stacking tree query sharing the `_NET_WM_STATE`
+   read round trip; withdraw removed windows, releasing LWM's grab and event selection.
 5. One round trip, when either needs it, serves withdrawal and crossings: LWM keeps a
    withdrawn window's EWMH state or desktop if a notification shows the client
    rewrote it, and otherwise deletes them. Outside drags, it drains stale crossing
@@ -276,15 +277,20 @@ visibility is derived. Completion keeps every client mapped and moves a hidden o
 last submitted rectangle to x 32767, right of the root, without resizing it.
 The output cache records submitted mapping and geometry; State owns visibility and
 normal geometry. Any UnmapNotify releases ownership. A synthetic withdrawal can
-follow LWM mapping a client that already unmapped itself, so the shell unmaps it
-again and consumes that acknowledgement at once.
+follow LWM mapping a client or popup that already unmapped itself, so the shell
+unmaps it again and consumes that acknowledgement at once. Withdrawal writes the model
+rectangle back only while the window is still a child of the root: a client
+reparented away reports the reparenting with its unmap. LWM's event selection lives
+exactly as long as a window is tracked as a client or fixture; a popup keeps none.
 
 `fullscreen()` is idempotent and used by rules; `request_fullscreen()` renews the
 claim rank and is used by interactions and restoration. Entering fullscreen clears
 maximize. Focus eligibility requires visibility and an input hint or `WM_TAKE_FOCUS`.
 
 `focus()` deiconifies and selects the placement, then falls back if the target is
-suppressed. Operations that choose a window as policy (workspace and monitor
+suppressed. `activate()`, used by activation requests and scratchpad recall, shows a
+client that refuses focus the same way and leaves focus with an eligible window on its
+monitor. Operations that choose a window as policy (workspace and monitor
 navigation) fall back explicitly; nothing else repairs focus as a side effect.
 `settle()` is the one repair: a selection that lost its client or eligibility, or an
 empty selection, takes the focused monitor's fallback, and it records only the final
@@ -359,7 +365,8 @@ helpers can wait for their children. The X connection is the only event source.
 
 Restart keeps the predecessor's X connection open through exec, so the server always
 has a live client and cannot reset. Before exec it releases every grab and event
-selection, so nothing accumulates for a connection no one reads, and passes a
+selection, on every window it tracks, including one it forgot since the last
+completion, so nothing accumulates for a connection no one reads, and passes a
 duplicate descriptor, which survives exec unlike XCB's own, in `LWM_RESTART_FD` with
 its process ID. The successor closes that descriptor after claiming the screen; the
 server then frees the predecessor's resources. Exec keeps the process ID, so a

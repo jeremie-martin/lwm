@@ -89,20 +89,23 @@ void WindowManager::handle_event(xcb_generic_event_t const& event)
             handle_map_request(reinterpret_cast<xcb_map_request_event_t const&>(event));
             break;
         // LWM never unmaps clients, so any UnmapNotify is a withdrawal. A synthetic
-        // one alone means the client unmapped before LWM mapped it, so LWM unmaps it
-        // again and consumes that unmap's notification.
+        // one alone means the client unmapped before LWM mapped it, as a client or a
+        // popup, so LWM unmaps it again and consumes that unmap's own notification.
         case XCB_UNMAP_NOTIFY:
         {
             auto window = reinterpret_cast<xcb_unmap_notify_event_t const&>(event).window;
-            if (synthetic && outputs_.contains(window))
+            if (synthetic)
             {
                 auto unmap = xcb_unmap_window(conn_.get(), window).sequence;
                 sync_events();
                 std::erase_if(deferred_events_, [&](auto const& queued)
-                    { return queued.response_type == XCB_UNMAP_NOTIFY && queued.full_sequence == unmap; });
+                {
+                    return queued.response_type == XCB_UNMAP_NOTIFY && queued.full_sequence == unmap
+                        && reinterpret_cast<xcb_unmap_notify_event_t const&>(queued).window == window;
+                });
             }
             if (auto geometry = state_.withdraw(window))
-                write_geometry(window, outputs_[window], *geometry);
+                restore_withdrawn(window, *geometry);
             break;
         }
         // Only the server reports destruction and reparenting; any client can send

@@ -231,7 +231,7 @@ std::vector<WindowObservation> WindowManager::observe(std::span<xcb_window_t con
                 xcb_icccm_get_wm_hints(c, w.id),
                 xcb_icccm_get_wm_normal_hints(c, w.id),
                 request_atoms(c, w.id, e->WM_PROTOCOLS),
-                xcb_ewmh_get_wm_fullscreen_monitors(e, w.id),
+                request(c, w.id, e->_NET_WM_FULLSCREEN_MONITORS, XCB_ATOM_CARDINAL, 4),
             };
     }
     for (auto& reads : pending)
@@ -252,9 +252,9 @@ std::vector<WindowObservation> WindowManager::observe(std::span<xcb_window_t con
         w.urgent = observed_hints.urgent;
         w.size_hints = size_hints(c, cookie.normal_hints);
         w.supports_take_focus = std::ranges::contains(atoms(c, cookie.protocols), atoms_.wm_take_focus);
-        xcb_ewmh_get_wm_fullscreen_monitors_reply_t monitors;
-        if (xcb_ewmh_get_wm_fullscreen_monitors_reply(e, cookie.fullscreen_monitors, &monitors, nullptr))
-            w.fullscreen_monitors = FullscreenMonitors{ monitors.top, monitors.bottom, monitors.left, monitors.right };
+        auto monitors_reply = xproperty::receive(c, cookie.fullscreen_monitors);
+        if (auto monitors = xproperty::words(monitors_reply, XCB_ATOM_CARDINAL); monitors.size() == 4)
+            w.fullscreen_monitors = FullscreenMonitors{ monitors[0], monitors[1], monitors[2], monitors[3] };
         if (reads.parent)
             w.unmanaged_parent = parent_anchor(c, *reads.parent);
     }

@@ -459,10 +459,11 @@ ConfigLoadResult parse_config(std::string_view text, std::string const& source)
 // The shipped example is the default configuration, so defaults have one home.
 Config default_config()
 {
-    static constexpr char text[] = {
+    // Embedded bytes are integers; unsigned char takes any UTF-8 the example holds.
+    static constexpr unsigned char text[] = {
 #embed "../../../config.toml.example"
     };
-    auto config = parse_config({ text, sizeof text }, "built-in defaults");
+    auto config = parse_config({ reinterpret_cast<char const*>(text), sizeof text }, "built-in defaults");
     if (!config)
         throw std::logic_error(config.error());
     return std::move(*config);

@@ -1066,3 +1066,62 @@ TEST_CASE("Resizing a tile with remembered maximize starts from the displayed ti
     REQUIRE(state.drag());
     CHECK(std::get<State::WindowDrag>(state.drag()->operation).start_geometry == displayed);
 }
+
+TEST_CASE("Activation shows a client that refuses focus and keeps focus on its monitor", "[state][focus]")
+{
+    auto state = test::state();
+    ScratchpadConfig term{ .name = "term" };
+    term.match.class_regex = std::regex("term");
+    test::configure(state, [&](Config& config) { config.scratchpads = { term }; });
+    state.admit({ .id = 1 });
+    state.admit({ .id = 2, .wm_class = "term", .wm_class_name = "term", .accepts_input = false });
+    REQUIRE(state.require(2).iconic);
+    state.switch_workspace(0, 1).value();
+    state.settle();
+
+    state.request_activation(2, false, 0, 0);
+    state.settle();
+    CHECK_FALSE(state.require(2).iconic);
+    CHECK(state.monitors()[0].current_workspace == 0);
+    CHECK(state.active_window() == 1);
+}
+
+TEST_CASE("Toggling a shown scratchpad that refuses focus hides it", "[state][scratchpad]")
+{
+    auto state = test::state();
+    ScratchpadConfig term{ .name = "term" };
+    term.match.class_regex = std::regex("term");
+    test::configure(state, [&](Config& config) { config.scratchpads = { term }; });
+    state.admit({ .id = 1 });
+    state.scratchpad_pending("term", true);
+    state.admit({ .id = 2, .wm_class = "term", .wm_class_name = "term", .accepts_input = false });
+    state.settle();
+    REQUIRE_FALSE(state.require(2).iconic);
+    REQUIRE(state.active_window() == 1);
+
+    REQUIRE(state.toggle_scratchpad("term").value() == nullptr);
+    CHECK(state.require(2).iconic);
+    REQUIRE(state.toggle_scratchpad("term").value() == nullptr);
+    CHECK_FALSE(state.require(2).iconic);
+
+    state.admit({ .id = 3, .accepts_input = false });
+    state.stash(3);
+    state.cycle_scratchpad_pool();
+    REQUIRE_FALSE(state.require(3).iconic);
+    state.cycle_scratchpad_pool();
+    CHECK(state.require(3).iconic);
+    state.settle();
+    CHECK(state.active_window() == 1);
+}
+
+TEST_CASE("A window mapped sticky ignores its desktop index", "[state][admission]")
+{
+    auto state = test::state();
+    WindowObservation window{ .id = 1, .desktop = 2 };
+    window.states.set(WindowState::Sticky, true);
+    state.admit(window);
+    auto const& client = state.require(1);
+    CHECK(client.sticky);
+    CHECK_FALSE(client.desktop_pinned);
+    CHECK(client.workspace == 0);
+}

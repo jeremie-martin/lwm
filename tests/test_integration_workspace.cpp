@@ -893,9 +893,7 @@ TEST_CASE("Integration: restart places unrecorded windows on the restored worksp
         },
         kTimeout
     ));
-    auto geometry = get_window_geometry(conn, window);
-    REQUIRE(geometry);
-    CHECK(geometry->x >= 0);
+    CHECK_FALSE(is_hidden(conn, window));
     destroy_window(conn, window);
 }
 
@@ -1281,4 +1279,88 @@ TEST_CASE("Integration: a withdrawal before LWM maps a window undoes LWM mapping
     REQUIRE(wait_for_active_window(conn, window, kTimeout));
     CHECK_FALSE(is_hidden(conn, window));
     destroy_window(conn, window);
+}
+
+TEST_CASE("Integration: a popup withdrawn before LWM maps it stays unmapped", "[integration][visibility]")
+{
+    auto env = TestEnvironment::create();
+    REQUIRE(env);
+    auto& conn = env->conn;
+    auto* c = conn.get();
+    auto marker = create_window(conn, 300, 300, 100, 100);
+    map_window(conn, marker);
+    REQUIRE(wait_for_active_window(conn, marker, kTimeout));
+    auto popup = create_window(conn, 10, 10, 200, 150);
+    set_window_type(conn, popup, intern_atom(c, "_NET_WM_WINDOW_TYPE_POPUP_MENU"));
+    // One read carries the map request and the withdrawal of the still unmapped popup.
+    xcb_map_window(c, popup);
+    xcb_unmap_window(c, popup);
+    send_withdrawal(conn, popup);
+    xcb_flush(c);
+    observe_title_after_events(conn, marker);
+    CHECK_FALSE(is_mapped(conn, popup));
+    destroy_window(conn, popup);
+    destroy_window(conn, marker);
+}
+
+TEST_CASE("Integration: LWM keeps no event selection on a window it no longer manages", "[integration][visibility]")
+{
+    auto env = TestEnvironment::create();
+    REQUIRE(env);
+    auto& conn = env->conn;
+    auto* c = conn.get();
+    auto marker = create_window(conn, 300, 300, 100, 100);
+    map_window(conn, marker);
+    REQUIRE(wait_for_active_window(conn, marker, kTimeout));
+    auto others = [&](xcb_window_t window)
+    {
+        auto attributes = lwm::reply(xcb_get_window_attributes_reply(c, xcb_get_window_attributes(c, window), nullptr));
+        REQUIRE(attributes);
+        return attributes->all_event_masks & ~attributes->your_event_mask;
+    };
+    auto window = create_window(conn, 10, 10, 200, 150);
+    map_window(conn, window);
+    REQUIRE(wait_for_active_window(conn, window, kTimeout));
+    REQUIRE(others(window) != 0);
+    xcb_unmap_window(c, window);
+    xcb_flush(c);
+    REQUIRE(wait_for_condition(
+        [&] { return get_wm_state(conn, window, intern_atom(c, "WM_STATE")) == XCB_ICCCM_WM_STATE_WITHDRAWN; }, kTimeout));
+    CHECK(others(window) == 0);
+
+    auto popup = create_window(conn, 10, 10, 200, 150);
+    set_window_type(conn, popup, intern_atom(c, "_NET_WM_WINDOW_TYPE_POPUP_MENU"));
+    map_window(conn, popup);
+    observe_title_after_events(conn, marker);
+    REQUIRE(is_mapped(conn, popup));
+    CHECK(others(popup) == 0);
+    destroy_window(conn, popup);
+    destroy_window(conn, window);
+    destroy_window(conn, marker);
+}
+
+TEST_CASE("Integration: reparenting a hidden client keeps the position its new parent gives", "[integration][visibility]")
+{
+    auto env = TestEnvironment::create("[workspaces]\nnames = [\"1\", \"2\"]\n");
+    REQUIRE(env);
+    auto& conn = env->conn;
+    auto* c = conn.get();
+    auto window = create_window(conn, 10, 10, 200, 150);
+    map_window(conn, window);
+    REQUIRE(wait_for_active_window(conn, window, kTimeout));
+    ipc_ok("workspace switch 1");
+    REQUIRE(wait_for_condition([&] { return is_hidden(conn, window); }, kTimeout));
+    auto host = create_window(conn, 0, 0, 400, 300);
+    uint32_t override_redirect = 1;
+    xcb_change_window_attributes(c, host, XCB_CW_OVERRIDE_REDIRECT, &override_redirect);
+    xcb_map_window(c, host);
+    xcb_reparent_window(c, window, host, 5, 7);
+    xcb_flush(c);
+    REQUIRE(wait_for_condition([&] { return ipc_json("window list").at("windows").empty(); }, kTimeout));
+    auto geometry = get_window_geometry(conn, window);
+    REQUIRE(geometry);
+    CHECK(geometry->x == 5);
+    CHECK(geometry->y == 7);
+    destroy_window(conn, window);
+    destroy_window(conn, host);
 }

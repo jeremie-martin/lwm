@@ -6,7 +6,6 @@
 #include <catch2/generators/catch_generators.hpp>
 #include <chrono>
 #include <optional>
-#include <xcb/randr.h>
 #include <xcb/xtest.h>
 
 using namespace lwm::test;
@@ -56,43 +55,6 @@ match = { class = "FloatHidden" }
 apply = { floating = true, workspace = 1 }
 )";
 }
-
-bool set_randr_screen_size(X11Connection& conn, uint16_t width, uint16_t height)
-{
-    uint32_t const width_mm = std::max<uint16_t>(conn.screen()->width_in_millimeters, 1);
-    uint32_t const height_mm = std::max<uint16_t>(conn.screen()->height_in_millimeters, 1);
-    auto cookie = xcb_randr_set_screen_size_checked(conn.get(), conn.root(), width, height, width_mm, height_mm);
-    auto* error = xcb_request_check(conn.get(), cookie);
-    if (error)
-    {
-        free(error);
-        return false;
-    }
-
-    xcb_flush(conn.get());
-    return wait_for_condition(
-        [&]()
-        {
-            auto geometry = get_window_geometry(conn, conn.root());
-            return geometry && geometry->width == width && geometry->height == height;
-        },
-        kTimeout
-    );
-}
-
-struct RandrScreenSizeGuard
-{
-    X11Connection& conn;
-    uint16_t width = 0;
-    uint16_t height = 0;
-    bool restore = false;
-
-    ~RandrScreenSizeGuard()
-    {
-        if (restore)
-            (void)set_randr_screen_size(conn, width, height);
-    }
-};
 
 } // namespace
 
@@ -1364,77 +1326,6 @@ TEST_CASE("Integration: applications cannot minimize themselves", "[integration]
     CHECK_FALSE(has_state(conn, w1, hidden));
     CHECK_FALSE(is_hidden(conn, w1));
     CHECK(wait_for_active_window(conn, w1, kTimeout));
-    destroy_window(conn, w1);
-}
-
-TEST_CASE(
-    "Integration: RandR rebuild restores fullscreen owner and suppression",
-    "[integration][focus][fullscreen][randr]"
-)
-{
-    auto test_env = TestEnvironment::create();
-    if (!test_env)
-        SKIP("Test environment not available");
-    if (!test_env->x11_env.owns_display())
-        SKIP("RandR screen-size mutation is only safe on the owned Xvfb display.");
-
-    auto& conn = test_env->conn;
-    if (!extension_available(conn, &xcb_randr_id))
-        SKIP("RandR extension not available.");
-
-    auto original_geometry = get_window_geometry(conn, conn.root());
-    if (!original_geometry || original_geometry->width <= 1)
-        SKIP("Root window geometry is not suitable for RandR resize test.");
-
-    RandrScreenSizeGuard screen_guard{
-        .conn = conn,
-        .width = original_geometry->width,
-        .height = original_geometry->height,
-    };
-
-    xcb_atom_t net_wm_state = intern_atom(conn.get(), "_NET_WM_STATE");
-    xcb_atom_t net_wm_state_fullscreen = intern_atom(conn.get(), "_NET_WM_STATE_FULLSCREEN");
-    REQUIRE(net_wm_state != XCB_NONE);
-    REQUIRE(net_wm_state_fullscreen != XCB_NONE);
-
-    xcb_window_t w1 = create_window(conn, 10, 10, 640, 360);
-    map_window(conn, w1);
-    REQUIRE(wait_for_active_window(conn, w1, kTimeout));
-    send_client_message(conn, w1, net_wm_state, 1, net_wm_state_fullscreen, 0, 0, 0);
-    REQUIRE(wait_for_condition([&]() { return has_state(conn, w1, net_wm_state_fullscreen); }, kTimeout));
-
-    xcb_window_t w2 = create_window(conn, 80, 80, 320, 180);
-    map_window(conn, w2);
-    REQUIRE(wait_for_active_window(conn, w1, kTimeout));
-    REQUIRE(wait_for_condition([&]() { return is_hidden(conn, w2); }, kTimeout));
-
-    uint16_t const target_width = static_cast<uint16_t>(original_geometry->width - 1);
-    if (!set_randr_screen_size(conn, target_width, original_geometry->height))
-        SKIP("RandR screen-size change not supported by this X server.");
-    screen_guard.restore = true;
-    REQUIRE(wait_for_condition(
-        [&]
-        {
-            auto geometry = get_window_geometry(conn, w1);
-            return geometry && geometry->width == target_width && geometry->height == original_geometry->height;
-        },
-        kTimeout
-    ));
-
-    REQUIRE(wait_for_active_window(conn, w1, kTimeout));
-    REQUIRE(wait_for_condition(
-        [&]()
-        {
-            return has_state(conn, w1, net_wm_state_fullscreen) && !is_hidden(conn, w1)
-                && is_hidden(conn, w2);
-        },
-        kTimeout
-    ));
-
-    REQUIRE(set_randr_screen_size(conn, screen_guard.width, screen_guard.height));
-    screen_guard.restore = false;
-
-    destroy_window(conn, w2);
     destroy_window(conn, w1);
 }
 

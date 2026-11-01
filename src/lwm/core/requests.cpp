@@ -79,7 +79,7 @@ void State::request_activation(xcb_window_t id, bool application, uint32_t times
     bool shown = client->sticky || shows(client->monitor, client->workspace);
     if (shown && suppressed(*client))
         return deny("fullscreen-suppressed");
-    focus(id, application ? timestamp : 0);
+    activate(id, application ? timestamp : 0);
 }
 
 void State::request_desktop(xcb_window_t id, uint32_t desktop)

@@ -57,15 +57,13 @@ void WindowManager::prepare_restart()
         LWM_LOG_WARN("Restart state not saved: bytes={} exceeds the request limit", text.size());
 
     // A successor that ignores the connection never reads it, so it keeps no grab or
-    // event selection; run() then releases the root's, SubstructureRedirect included.
-    uint32_t no_events = XCB_EVENT_MASK_NO_EVENT;
+    // event selection. LWM holds them only on windows it tracks, including any it
+    // forgot since the last completion; run() then releases the root's,
+    // SubstructureRedirect included.
     xcb_ungrab_key(c, XCB_GRAB_ANY, root, XCB_MOD_MASK_ANY);
     xcb_ungrab_button(c, XCB_BUTTON_INDEX_ANY, root, XCB_MOD_MASK_ANY);
-    for (auto window : root_children())
-    {
-        xcb_ungrab_button(c, XCB_BUTTON_INDEX_ANY, window, XCB_MOD_MASK_ANY);
-        xcb_change_window_attributes(c, window, XCB_CW_EVENT_MASK, &no_events);
-    }
+    for (auto const& [window, output] : outputs_)
+        release_window(window);
     xcb_randr_select_input(c, root, 0);
     xcb_set_selection_owner(c, XCB_NONE, atoms_.wm_s0, XCB_CURRENT_TIME);
 

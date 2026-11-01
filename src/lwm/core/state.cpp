@@ -298,10 +298,7 @@ void State::focus(xcb_window_t id, uint32_t time, bool record_user_time)
         auto const* client = find(id);
         if (!client || !accepts_focus(*client))
             return;
-        iconic(id, false);
-        focus_monitor(client->monitor);
-        if (!client->sticky)
-            switch_workspace(client->monitor, client->workspace).value();
+        show(*client);
         if (!visible(*client))
             return focus_fallback(client->monitor, false);
     }
@@ -314,11 +311,23 @@ void State::focus_fallback(size_t monitor, bool record_user_time)
     select_focus(focus::fallback(*this, monitor), 0, record_user_time);
 }
 
-// Shows an iconic client in place and focuses it if it accepts focus.
-void State::restore(xcb_window_t id)
+// Brings a client into view in place: shown, its monitor focused, its workspace current.
+void State::show(Client const& client)
 {
-    iconic(id, false);
-    focus(id);
+    iconic(client.id, false);
+    focus_monitor(client.monitor);
+    if (!client.sticky)
+        switch_workspace(client.monitor, client.workspace).value();
+}
+
+void State::activate(xcb_window_t id, uint32_t time)
+{
+    auto const& client = require(id);
+    if (accepts_focus(client))
+        return focus(id, time);
+    show(client);
+    if (auto const* active = find(active_window_); !active || active->monitor != client.monitor)
+        focus_fallback(client.monitor);
 }
 
 // Traversal retains one MRU order. Focus and topology changes discard it; windows

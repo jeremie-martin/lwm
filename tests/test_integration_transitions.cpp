@@ -842,9 +842,7 @@ TEST_CASE(
     auto snapshot = clients();
     REQUIRE(snapshot.at("windows").size() == 2);
     for (auto const& client : snapshot.at("windows")) CHECK(client.at("iconic") == false);
-    auto rect = get_window_geometry(conn, first);
-    REQUIRE(rect);
-    CHECK(rect->x >= 0);
+    CHECK_FALSE(is_hidden(conn, first));
     destroy_window(conn, first);
     destroy_window(conn, second);
 }
@@ -1230,6 +1228,7 @@ apply = { workspace = 1 }
     observe_title_after_events(conn, window);
     auto rect = get_window_geometry(conn, window);
     REQUIRE(rect);
+    CHECK_FALSE(is_hidden(conn, window));
     CHECK(rect->x >= 0);
     CHECK(rect->x + rect->width <= conn.screen()->width_in_pixels);
     CHECK(rect->y >= 0);

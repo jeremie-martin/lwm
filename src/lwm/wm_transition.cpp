@@ -22,7 +22,8 @@ void WindowManager::complete_transition()
     auto focus_request = state_.settle(last_input_time_);
     bool released = !state_.drag() && release_pointer();
     auto fullscreen = state_.fullscreen_visibility();
-    published_revision_ = state_.revision();
+    // Root properties derive from State alone; obligations without a revision leave them.
+    bool revised = std::exchange(published_revision_, state_.revision()) != state_.revision();
 
     // Publication reads a frozen model.
     state_.freeze();
@@ -41,7 +42,8 @@ void WindowManager::complete_transition()
         publish_properties(*projected.client, outputs_.at(projected.client->id), states);
     publish_states(states);
     publish_fixtures();
-    publish_root();
+    if (revised)
+        publish_root();
     auto restacked = stacking ? restack(*stacking) : std::nullopt;
     auto withdrawn = withdraw_removed();
     // One round trip after every move collects the crossings it caused and any
@@ -407,8 +409,22 @@ std::optional<uint32_t> WindowManager::restack(StackingRepair const& repair)
     return first;
 }
 
-// Unmanaged windows are withdrawn: WM_STATE says so, and click-to-focus releases
-// the window to a new parent's owner. Returns the withdrawn windows.
+// Withdrawal restores the model rectangle so a remap keeps it. A client reparented
+// away reports that with the unmap, and its new parent would take the rectangle.
+void WindowManager::restore_withdrawn(xcb_window_t window, State::Presentation const& presentation)
+{
+    auto& output = outputs_[window];
+    if (output.presentation == presentation)
+        return;
+    auto* c = conn_.get();
+    auto tree = reply(xcb_query_tree_reply(c, xcb_query_tree(c, window), nullptr));
+    if (tree && tree->parent == conn_.screen()->root)
+        write_geometry(window, output, presentation);
+}
+
+// Unmanaged windows are withdrawn: WM_STATE says so, and LWM releases the window's
+// click-to-focus grab and its event selection, which no longer serve it. Returns
+// the withdrawn windows.
 std::vector<xcb_window_t> WindowManager::withdraw_removed()
 {
     std::vector<xcb_window_t> removed;
@@ -419,9 +435,16 @@ std::vector<xcb_window_t> WindowManager::withdraw_removed()
     {
         uint32_t const withdrawn[] = { XCB_ICCCM_WM_STATE_WITHDRAWN, 0 };
         publish(window, atoms_.wm_state, atoms_.wm_state, withdrawn);
-        xcb_ungrab_button(conn_.get(), XCB_BUTTON_INDEX_ANY, window, XCB_MOD_MASK_ANY);
+        release_window(window);
     }
     return removed;
+}
+
+void WindowManager::release_window(xcb_window_t window)
+{
+    uint32_t const no_events = XCB_EVENT_MASK_NO_EVENT;
+    xcb_ungrab_button(conn_.get(), XCB_BUTTON_INDEX_ANY, window, XCB_MOD_MASK_ANY);
+    xcb_change_window_attributes(conn_.get(), window, XCB_CW_EVENT_MASK, &no_events);
 }
 
 // After a round trip, LWM deletes the EWMH state and desktop it published. A client
