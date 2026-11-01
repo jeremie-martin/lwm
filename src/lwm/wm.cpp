@@ -292,8 +292,7 @@ RunResult WindowManager::run()
         prepare_restart();
     // Releasing SubstructureRedirect before X lets a map that waited on the grab reach
     // the screen, where the next manager adopts it, instead of this one.
-    uint32_t const no_events = XCB_EVENT_MASK_NO_EVENT;
-    xcb_change_window_attributes(conn_.get(), conn_.screen()->root, XCB_CW_EVENT_MASK, &no_events);
+    release_window(conn_.screen()->root);
     // The round trip also guarantees the server processed a restart's release before exec.
     xcb_ungrab_server(conn_.get());
     conn_.sync();

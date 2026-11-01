@@ -168,7 +168,7 @@ std::string WindowManager::handle_request(std::string_view text)
             },
             [&](Action const& action) -> std::string
             {
-                auto result = execute(action, "ipc");
+                auto result = execute(action, "ipc", state_.active_window());
                 return result ? "ok" : "error " + result.error();
             },
         },

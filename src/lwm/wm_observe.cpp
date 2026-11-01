@@ -41,11 +41,8 @@ std::string name(xcb_connection_t* conn, NameCookies cookies, xcb_atom_t utf8)
 // reads past it, which libxcb-icccm's decoder does for empty or unterminated ones.
 std::pair<std::string, std::string> wm_class(xcb_connection_t* conn, xcb_get_property_cookie_t cookie)
 {
-    auto reply = xproperty::receive(conn, cookie);
-    if (!reply || reply->type != XCB_ATOM_STRING || reply->format != 8)
-        return { };
-    std::string_view value(static_cast<char const*>(xcb_get_property_value(reply.get())),
-                           static_cast<size_t>(xcb_get_property_value_length(reply.get())));
+    auto bytes = text(conn, cookie, XCB_ATOM_STRING).value_or("");
+    std::string_view value(bytes);
     auto instance = value.substr(0, value.find('\0'));
     auto name = value.substr(std::min(value.size(), instance.size() + 1));
     return { std::string(instance), std::string(name.substr(0, name.find('\0'))) };

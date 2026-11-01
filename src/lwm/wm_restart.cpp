@@ -7,6 +7,7 @@
 #include "wm.hpp"
 #include <cstdio>
 #include <cstdlib>
+#include <ranges>
 #include <span>
 #include <string>
 #include <unistd.h>
@@ -58,11 +59,10 @@ void WindowManager::prepare_restart()
 
     // A successor that ignores the connection never reads it, so it keeps no grab or
     // event selection. LWM holds them only on windows it tracks, including any it
-    // forgot since the last completion; run() then releases the root's,
-    // SubstructureRedirect included.
+    // forgot since the last completion; run() then releases the root's buttons and
+    // selection, SubstructureRedirect included.
     xcb_ungrab_key(c, XCB_GRAB_ANY, root, XCB_MOD_MASK_ANY);
-    xcb_ungrab_button(c, XCB_BUTTON_INDEX_ANY, root, XCB_MOD_MASK_ANY);
-    for (auto const& [window, output] : outputs_)
+    for (auto window : outputs_ | std::views::keys)
         release_window(window);
     xcb_randr_select_input(c, root, 0);
     xcb_set_selection_owner(c, XCB_NONE, atoms_.wm_s0, XCB_CURRENT_TIME);

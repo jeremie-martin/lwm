@@ -203,9 +203,9 @@ private:
     xcb_cursor_t split_cursor(State::SplitHit const& split) const;
 
     // wm_actions.cpp: the one executor for key bindings and IPC
-    // A mouse binding's action targets the subject State chose instead of the active window.
-    std::expected<void, std::string>
-    execute(Action const& action, std::string_view source, std::optional<xcb_window_t> subject = std::nullopt);
+    // Window actions act on `active`: the active window, or for a mouse binding the
+    // client State chose, which is none over the root.
+    std::expected<void, std::string> execute(Action const& action, std::string_view source, xcb_window_t active);
     void warp_to_monitor(Monitor const& monitor);
 
     // wm_ipc.cpp

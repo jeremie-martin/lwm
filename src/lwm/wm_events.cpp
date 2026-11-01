@@ -290,7 +290,7 @@ void WindowManager::handle_key_press(xcb_key_press_event_t const& e)
     // Executing may reload and replace the configuration that owns the binding.
     Action action = binding->second;
     LWM_LOG_TRACE("Key action: keysym={:#x} modifiers={:#x}", keysym, e.state);
-    if (auto result = execute(action, "keybind"); !result)
+    if (auto result = execute(action, "keybind", state_.active_window()); !result)
         LWM_LOG_DEBUG("Key action failed: keysym={:#x} error={}", keysym, result.error());
 }
 

@@ -718,8 +718,6 @@ TEST_CASE("Integration: a malformed _NET_WM_FULLSCREEN_MONITORS is ignored at ad
     map_window(conn, window);
     REQUIRE(wait_for_active_window(conn, window, kTimeout));
     observe_title_after_events(conn, window);
-    auto value = lwm::xproperty::receive(c, xcb_get_property(c, false, window, hint, XCB_ATOM_CARDINAL, 0, 8));
-    REQUIRE(value);
-    CHECK(value->type == XCB_NONE);
+    CHECK_FALSE(read_property32(c, window, hint, XCB_ATOM_CARDINAL));
     destroy_window(conn, window);
 }

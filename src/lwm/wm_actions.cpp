@@ -9,10 +9,9 @@ using Result = std::expected<void, std::string>;
 
 // The one executor for key bindings and IPC. Success is silent; IPC callers
 // read outcomes from the published state.
-Result WindowManager::execute(Action const& action, std::string_view source, std::optional<xcb_window_t> subject)
+Result WindowManager::execute(Action const& action, std::string_view source, xcb_window_t active)
 {
     using namespace lwm::action;
-    xcb_window_t active = subject.value_or(state_.active_window());
     size_t monitor = state_.focused_monitor();
     auto fail = [](std::string message) -> Result { return std::unexpected(std::move(message)); };
     // An operation that cannot fail succeeds.
