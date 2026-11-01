@@ -1558,3 +1558,39 @@ TEST_CASE(
     REQUIRE(wait_for_condition([&] { return ipc_json("window list").at("windows").empty(); }, timeout));
     destroy_window(conn, window);
 }
+
+TEST_CASE("Integration: a snapshot left for another program is not adopted later", "[integration][restart][scratchpad]")
+{
+    auto& x11 = X11TestEnvironment::instance();
+    if (!x11.available())
+    {
+        REQUIRE(std::getenv("LWM_TEST_REQUIRE_X11") == nullptr);
+        SKIP("Test environment not available");
+    }
+    X11Connection conn;
+    REQUIRE(conn.ok());
+    auto ready = [&](LwmProcess const& wm)
+    {
+        return wait_for_condition(
+            [&] { return !wm.running() || wait_for_wm_ready(conn, std::chrono::milliseconds(10)); }, timeout
+        ) && wm.running();
+    };
+    xcb_window_t window = XCB_NONE;
+    {
+        LwmProcess first(x11.display());
+        REQUIRE(ready(first));
+        window = create_window(conn, 10, 10, 200, 150);
+        map_window(conn, window);
+        REQUIRE(wait_for_active_window(conn, window, timeout));
+        stash(window);
+        REQUIRE(wait_for_condition([&] { return is_hidden(conn, window); }, timeout));
+        // The program exec'd in LWM's place ignores the handoff and exits.
+        REQUIRE(send_ipc_command("exec /bin/true"));
+        REQUIRE(first.wait_for_exit(std::chrono::seconds(3)));
+    }
+    LwmProcess second(x11.display());
+    REQUIRE(ready(second));
+    CHECK_FALSE(is_hidden(conn, window));
+    CHECK_FALSE(get_window_property_string(conn.get(), conn.root(), intern_atom(conn.get(), "_LWM_RESTART")));
+    destroy_window(conn, window);
+}

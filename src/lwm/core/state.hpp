@@ -83,6 +83,7 @@ public:
         bool consumed; ///< The client does not receive the click
         std::optional<Interaction> interaction;
         std::optional<Action> action; ///< A binding's action, run after this press
+        xcb_window_t subject = XCB_NONE; ///< The client that action targets; none over no client
     };
 
     enum class RelocationGeometry

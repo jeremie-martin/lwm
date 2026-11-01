@@ -3,6 +3,7 @@
 #include "lwm/core/action.hpp"
 #include "lwm/core/types.hpp"
 #include <algorithm>
+#include <cmath>
 #include <cstddef>
 #include <cstdint>
 #include <expected>
@@ -89,9 +90,11 @@ struct LayoutConfig
     LayoutStrategy strategy = LayoutStrategy::MasterStack;
     double default_ratio = 0.5;
     double min_ratio = 0.1;
-    // Split ratios stay within [min_ratio, 1 - min_ratio].
-    bool accepts_ratio(double ratio) const { return ratio >= min_ratio && ratio <= 1.0 - min_ratio; }
-    double clamp_ratio(double ratio) const { return std::clamp(ratio, min_ratio, 1.0 - min_ratio); }
+    // Split ratios stay within [min_ratio, 1 - min_ratio]. Ratios are decimal settings:
+    // the bound rounds away the binary subtraction error, so 0.67 fits beside 0.33.
+    double max_ratio() const { return std::round((1.0 - min_ratio) * 1e12) / 1e12; }
+    bool accepts_ratio(double ratio) const { return ratio >= min_ratio && ratio <= max_ratio(); }
+    double clamp_ratio(double ratio) const { return std::clamp(ratio, min_ratio, max_ratio()); }
     uint32_t resize_grab_threshold = 8; // pixels from split border to trigger resize
 };
 

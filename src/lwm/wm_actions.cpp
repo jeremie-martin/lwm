@@ -9,10 +9,10 @@ using Result = std::expected<void, std::string>;
 
 // The one executor for key bindings and IPC. Success is silent; IPC callers
 // read outcomes from the published state.
-Result WindowManager::execute(Action const& action, std::string_view source)
+Result WindowManager::execute(Action const& action, std::string_view source, std::optional<xcb_window_t> subject)
 {
     using namespace lwm::action;
-    xcb_window_t active = state_.active_window();
+    xcb_window_t active = subject.value_or(state_.active_window());
     size_t monitor = state_.focused_monitor();
     auto fail = [](std::string message) -> Result { return std::unexpected(std::move(message)); };
     // An operation that cannot fail succeeds.
@@ -93,8 +93,9 @@ Result WindowManager::execute(Action const& action, std::string_view source)
             {
                 if (!state_.set_ratio(ratio.value))
                 {
-                    double min = config().layout.min_ratio;
-                    return fail("ratio out of range [" + std::to_string(min) + ", " + std::to_string(1.0 - min) + "]");
+                    auto const& layout = config().layout;
+                    return fail("ratio out of range [" + std::to_string(layout.min_ratio) + ", "
+                                + std::to_string(layout.max_ratio()) + "]");
                 }
                 return { };
             },

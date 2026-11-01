@@ -10,6 +10,7 @@ namespace lwm::stacking {
 namespace {
 enum class Tier
 {
+    Desktop,
     Below,
     Normal,
     Above,
@@ -35,9 +36,12 @@ std::vector<xcb_window_t> compute_order(State const& state, State::FullscreenVis
     std::vector<xcb_window_t> result;
     result.reserve(ranked.capacity());
     for (auto const& [id, fixture] : state.fixtures())
-        ranked.push_back(
-            { id, true, fixture.role == WindowRole::Desktop ? Tier::Below : Tier::Above, false, fixture.order, XCB_NONE }
-        );
+        ranked.push_back({ id,
+                           true,
+                           fixture.role == WindowRole::Desktop ? Tier::Desktop : Tier::Above,
+                           false,
+                           fixture.order,
+                           XCB_NONE });
     bool has_transients = false;
     for (auto const& [id, client] : state.clients())
     {

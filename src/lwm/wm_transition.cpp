@@ -72,8 +72,9 @@ void WindowManager::complete_transition()
 
 // Clients stay mapped. Hiding moves the last submitted rectangle, or the one State
 // would present, to the largest X coordinate: right of the root whatever its size,
-// without a resize the toolkit could answer. Synthetic notifications report the
-// rectangle State presents when shown. Returns whether anything moved under the pointer.
+// without a resize the toolkit could answer. Synthetic notifications, hiding's too,
+// report the rectangle State presents when shown, so a toolkit tracking its position
+// never takes the hiding place for its own. Returns whether anything moved under the pointer.
 bool WindowManager::publish_clients(std::vector<State::Projected> const& clients)
 {
     bool moved = false;
@@ -92,7 +93,7 @@ bool WindowManager::publish_clients(std::vector<State::Projected> const& clients
             target->geometry.x = INT16_MAX;
         }
         bool written = write_geometry(client->id, output, *target);
-        if (configure_replies_.erase(client->id) || (written && presentation))
+        if (configure_replies_.erase(client->id) || written)
             send_configure_notify(client->id, presentation ? *presentation : state_.presentation(*client));
         moved |= written;
     }
@@ -161,21 +162,22 @@ bool WindowManager::publish(
 )
 {
     auto [it, inserted] = properties_.try_emplace({ window, property });
-    auto const& previous = std::get<std::optional<std::string>>(it->second);
+    auto const& previous = std::get<std::optional<std::string>>(it->second.value);
     if (!inserted && (previous && bytes ? *previous == *bytes : !previous && !bytes))
         return false;
-    if (!write_property(window, property, type, format, bytes))
+    auto sequence = write_property(window, property, type, format, bytes);
+    if (!sequence)
     {
         if (inserted)
             properties_.erase(it);
         return false;
     }
-    it->second = bytes ? std::optional<std::string>{ *bytes } : std::nullopt;
+    it->second = { bytes ? std::optional<std::string>{ *bytes } : std::nullopt, *sequence };
     return true;
 }
 
 // Size validation and submission have one owner for plain and shared properties.
-bool WindowManager::write_property(
+std::optional<uint32_t> WindowManager::write_property(
     xcb_window_t window,
     xcb_atom_t property,
     xcb_atom_t type,
@@ -191,15 +193,13 @@ bool WindowManager::write_property(
             window,
             bytes->size()
         );
-        return false;
+        return std::nullopt;
     }
     if (bytes)
-        xcb_change_property(
+        return xcb_change_property(
             conn_.get(), XCB_PROP_MODE_REPLACE, window, property, type, format, bytes->size() * 8 / format, bytes->data()
-        );
-    else
-        xcb_delete_property(conn_.get(), window, property);
-    return true;
+        ).sequence;
+    return xcb_delete_property(conn_.get(), window, property).sequence;
 }
 
 bool WindowManager::publish(xcb_window_t window, xcb_atom_t property, xcb_atom_t type, std::span<uint32_t const> words)
@@ -216,7 +216,7 @@ bool WindowManager::publish(xcb_window_t window, xcb_atom_t property, xcb_atom_t
 bool WindowManager::states_current(Client const& client) const
 {
     auto it = properties_.find({ client.id, ewmh_.get()->_NET_WM_STATE });
-    auto* cached = it == properties_.end() ? nullptr : std::get_if<WindowStates>(&it->second);
+    auto* cached = it == properties_.end() ? nullptr : std::get_if<WindowStates>(&it->second.value);
     return cached && *cached == published_states(client, client.id == state_.active_window());
 }
 
@@ -239,8 +239,11 @@ void WindowManager::publish_states(StateUpdates const& updates)
             : std::optional<std::string_view>{
                   { reinterpret_cast<char const*>(atoms.data()), atoms.size() * sizeof(xcb_atom_t) }
         };
-        if (std::ranges::equal(atoms, previous) || write_property(window, property, XCB_ATOM_ATOM, 32, bytes))
-            properties_[{ window, property }] = ewmh_.states(atoms);
+        auto sequence = std::ranges::equal(atoms, previous)
+            ? std::optional{ cookies[i].sequence }
+            : write_property(window, property, XCB_ATOM_ATOM, 32, bytes);
+        if (sequence)
+            properties_[{ window, property }] = { ewmh_.states(atoms), *sequence };
     }
 }
 
@@ -423,17 +426,20 @@ std::vector<xcb_window_t> WindowManager::withdraw_removed()
 
 // After a round trip, LWM deletes the EWMH state and desktop it published. A client
 // may already have rewritten either for its next map, as toolkits do when hiding and
-// showing at once; a queued notification of that change keeps it.
+// showing at once; a queued notification of that change keeps it. The notification
+// of LWM's own write carries that write's sequence, so it does not count.
 void WindowManager::forget_withdrawn(std::span<xcb_window_t const> windows)
 {
     auto* e = ewmh_.get();
     for (auto window : windows)
     {
         for (auto atom : { e->_NET_WM_STATE, e->_NET_WM_DESKTOP })
-            if (properties_.contains({ window, atom }) && std::ranges::none_of(deferred_events_, [&](auto const& event)
+            if (auto it = properties_.find({ window, atom }); it != properties_.end()
+                && std::ranges::none_of(deferred_events_, [&](auto const& event)
                 {
                     auto const& notify = reinterpret_cast<xcb_property_notify_event_t const&>(event);
-                    return event.response_type == XCB_PROPERTY_NOTIFY && notify.window == window && notify.atom == atom;
+                    return event.response_type == XCB_PROPERTY_NOTIFY && notify.window == window && notify.atom == atom
+                        && static_cast<int32_t>(event.full_sequence - it->second.sequence) > 0;
                 }))
                 xcb_delete_property(conn_.get(), window, atom);
         properties_.erase(properties_.lower_bound({ window, 0 }), properties_.upper_bound({ window, UINT32_MAX }));

@@ -256,6 +256,29 @@ TEST_CASE("Integration: state a withdrawn client wrote for its next map survives
     destroy_window(conn, window);
 }
 
+TEST_CASE("Integration: LWM's own late writes do not survive a withdrawal", "[integration][client_message][ewmh]")
+{
+    auto test_env = TestEnvironment::create();
+    if (!test_env)
+        SKIP("Test environment not available");
+    auto& conn = test_env->conn;
+    xcb_window_t window = create_window(conn, 10, 10, 200, 150);
+    // Withdrawn before LWM handles the map: LWM publishes the state and desktop while
+    // mapping it, and the notifications of those writes queue behind the withdrawal.
+    xcb_map_window(conn.get(), window);
+    xcb_unmap_window(conn.get(), window);
+    send_withdrawal(conn, window);
+    xcb_flush(conn.get());
+    REQUIRE(wait_for_condition(
+        [&] { return get_wm_state(conn, window, intern_atom(conn.get(), "WM_STATE")) == XCB_ICCCM_WM_STATE_WITHDRAWN; },
+        kTimeout
+    ));
+    ipc_ok("version");
+    CHECK_FALSE(read_property32(conn.get(), window, intern_atom(conn.get(), "_NET_WM_STATE"), XCB_ATOM_ATOM));
+    CHECK_FALSE(get_window_property_cardinal(conn.get(), window, intern_atom(conn.get(), "_NET_WM_DESKTOP")));
+    destroy_window(conn, window);
+}
+
 TEST_CASE("Integration: close requests for LWM's own windows are ignored", "[integration][client_message][edge]")
 {
     auto test_env = TestEnvironment::create();

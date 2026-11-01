@@ -20,7 +20,8 @@ constexpr char const* kPredecessorConnection = "LWM_RESTART_FD";
 
 // The screen is owned now: closing the predecessor's descriptor lets the server free
 // its resources, and its snapshot is taken over. Returns whether this start continues
-// an exec restart.
+// an exec restart. Only that handoff carries a snapshot; one left by an exec into
+// another program is stale and is discarded, whatever its type.
 bool WindowManager::release_predecessor()
 {
     int pid = 0, fd = -1;
@@ -29,7 +30,10 @@ bool WindowManager::release_predecessor()
     if (restarted)
         close(fd);
     unsetenv(kPredecessorConnection);
-    auto text = xproperty::text(conn_.get(), conn_.screen()->root, atoms_.lwm_restart, ewmh_.get()->UTF8_STRING, true);
+    auto root = conn_.screen()->root;
+    auto text =
+        restarted ? xproperty::text(conn_.get(), root, atoms_.lwm_restart, ewmh_.get()->UTF8_STRING) : std::nullopt;
+    xcb_delete_property(conn_.get(), root, atoms_.lwm_restart);
     if (!text)
         return restarted;
     handoff_ = restart::decode(*text);
@@ -53,7 +57,7 @@ void WindowManager::prepare_restart()
         LWM_LOG_WARN("Restart state not saved: bytes={} exceeds the request limit", text.size());
 
     // A successor that ignores the connection never reads it, so it keeps no grab or
-    // event selection. Releasing SubstructureRedirect lets the successor claim the screen.
+    // event selection; run() then releases the root's, SubstructureRedirect included.
     uint32_t no_events = XCB_EVENT_MASK_NO_EVENT;
     xcb_ungrab_key(c, XCB_GRAB_ANY, root, XCB_MOD_MASK_ANY);
     xcb_ungrab_button(c, XCB_BUTTON_INDEX_ANY, root, XCB_MOD_MASK_ANY);
@@ -62,7 +66,6 @@ void WindowManager::prepare_restart()
         xcb_ungrab_button(c, XCB_BUTTON_INDEX_ANY, window, XCB_MOD_MASK_ANY);
         xcb_change_window_attributes(c, window, XCB_CW_EVENT_MASK, &no_events);
     }
-    xcb_change_window_attributes(c, root, XCB_CW_EVENT_MASK, &no_events);
     xcb_randr_select_input(c, root, 0);
     xcb_set_selection_owner(c, XCB_NONE, atoms_.wm_s0, XCB_CURRENT_TIME);
 

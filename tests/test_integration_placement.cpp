@@ -801,3 +801,35 @@ TEST_CASE("Integration: cold client-list publication interleaves every managed r
     CHECK(get_window_property_windows(conn.get(), conn.root(), list) == windows);
     for (auto window : windows) destroy_window(conn, window);
 }
+
+TEST_CASE("Integration: only a viewable unmanaged parent anchors a transient", "[integration][placement][transient]")
+{
+    auto env = TestEnvironment::create();
+    REQUIRE(env);
+    auto& conn = env->conn;
+    auto root = require_window_geometry(conn, conn.root());
+    // An unmapped leader at the root origin, which Qt names for parentless dialogs.
+    xcb_window_t leader = create_window(conn, 0, 0, 1, 1);
+    // A viewable override-redirect owner, which LWM does not manage.
+    xcb_window_t owner = xcb_generate_id(conn.get());
+    uint32_t const override_redirect = 1;
+    xcb_create_window(conn.get(), XCB_COPY_FROM_PARENT, owner, conn.root(), 700, 400, 200, 100, 0,
+                      XCB_WINDOW_CLASS_INPUT_OUTPUT, XCB_COPY_FROM_PARENT, XCB_CW_OVERRIDE_REDIRECT,
+                      &override_redirect);
+    xcb_map_window(conn.get(), owner);
+    auto center = [&](xcb_window_t parent)
+    {
+        auto dialog = create_window(conn, 0, 0, 400, 300);
+        set_transient_for(conn, dialog, parent);
+        map_window(conn, dialog);
+        REQUIRE(wait_for_active_window(conn, dialog, timeout));
+        auto frame = require_window_geometry(conn, dialog);
+        return std::pair{ frame.x + frame.width / 2, frame.y + frame.height / 2 };
+    };
+    auto [leader_x, leader_y] = center(leader);
+    CHECK(std::abs(leader_x - root.width / 2) <= 4);
+    CHECK(std::abs(leader_y - root.height / 2) <= 4);
+    auto [owner_x, owner_y] = center(owner);
+    CHECK(std::abs(owner_x - 800) <= 4);
+    CHECK(std::abs(owner_y - 450) <= 4);
+}

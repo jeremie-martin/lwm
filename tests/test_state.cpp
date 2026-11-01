@@ -633,6 +633,20 @@ TEST_CASE("Runtime position hints distinguish assigned desktops from WM publicat
     }
 }
 
+TEST_CASE("Hidden clients keep their position when they echo the hiding place", "[state][floating][requests]")
+{
+    auto state = test::state(1, 2);
+    test::configure(state, [](Config& config) { config.appearance = { .padding = 0, .border_width = 0 }; });
+    add(state, 1, { .floating = true, .geometry = { 100, 100, 200, 100 } });
+    REQUIRE(state.switch_workspace(0, 1).value());
+    // Hidden right of the root, a toolkit resizes itself from the position it was told.
+    state.configure_request(1, { .x = 32767, .y = 100, .width = 220 });
+    CHECK(state.normal_geometry(state.require(1)) == Geometry{ 100, 100, 220, 100 });
+    // A destination on a monitor is still the client's own choice.
+    state.configure_request(1, { .x = 300, .y = 200 });
+    CHECK(state.normal_geometry(state.require(1)) == Geometry{ 300, 200, 220, 100 });
+}
+
 TEST_CASE("A projection contains every client once with its final visible rectangle", "[state][geometry][projection]")
 {
     auto state = test::state(2);
@@ -1025,4 +1039,30 @@ TEST_CASE("Split double clicks identify their output and workspace", "[state][dr
     CHECK(state.monitors()[0].current().split_ratios.at(SplitAddress{ 0 }) == 0.3);
     CHECK_FALSE(state.press(XCB_NONE, 310, 400, 1, 0, 1200).interaction);
     CHECK_FALSE(state.monitors()[0].current().split_ratios.contains(SplitAddress{ 0 }));
+}
+
+TEST_CASE("A pending launch claims its window before an empty slot listed first", "[state][scratchpad]")
+{
+    auto state = test::state();
+    ScratchpadConfig scratch{ .name = "scratch" }, notes{ .name = "notes" };
+    scratch.match.class_regex = notes.match.class_regex = std::regex("term");
+    test::configure(state, [&](Config& config) { config.scratchpads = { scratch, notes }; });
+    state.scratchpad_pending("notes", true);
+    state.admit({ .id = 1, .wm_class = "term", .wm_class_name = "term" });
+    CHECK(state.named_scratchpad("notes")->claimed_window() == 1);
+    CHECK(state.named_scratchpad("scratch")->claimed_window() == XCB_NONE);
+    CHECK_FALSE(state.require(1).iconic);
+}
+
+TEST_CASE("Resizing a tile with remembered maximize starts from the displayed tile", "[state][drag]")
+{
+    auto state = test::state();
+    add(state, 1);
+    add(state, 2);
+    state.maximize(2, true, true);
+    test::focus(state, 2);
+    auto displayed = state.frame(state.require(2));
+    state.begin_drag(State::Grip{ 2, floating::ResizeEdge::Right | floating::ResizeEdge::Bottom }, 500, 400, 3);
+    REQUIRE(state.drag());
+    CHECK(std::get<State::WindowDrag>(state.drag()->operation).start_geometry == displayed);
 }

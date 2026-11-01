@@ -426,6 +426,15 @@ size = { width = 0.1, height = 1 }
     CHECK(loaded->scratchpads.front().width == 0.1);
     CHECK(loaded->scratchpads.front().height == 1.0);
     CHECK(load_from_string("[layout]\nmin_ratio = 0.45\ndefault_ratio = 0.45\n"));
+    // Decimal complements are inclusive although 1.0 - 0.33 rounds below 0.67 in binary.
+    for (auto [min, max] : { std::pair{ "0.07", "0.93" }, { "0.32", "0.68" }, { "0.33", "0.67" }, { "0.34", "0.66" } })
+    {
+        CAPTURE(min, max);
+        auto complement =
+            load_from_string(std::string("[layout]\nmin_ratio = ") + min + "\ndefault_ratio = " + max + "\n");
+        REQUIRE(complement);
+        CHECK(complement->layout.clamp_ratio(complement->layout.default_ratio) == complement->layout.default_ratio);
+    }
 
     auto defaults = load_from_string(R"(
 [layout]

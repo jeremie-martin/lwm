@@ -1,5 +1,6 @@
 #include "lwm/core/types.hpp"
 #include "wm_observations.hpp"
+#include <X11/keysym.h>
 #include <catch2/catch_test_macros.hpp>
 #include <catch2/generators/catch_generators.hpp>
 #include <xcb/xtest.h>
@@ -446,4 +447,68 @@ TEST_CASE("Integration: a desktop window under the pointer does not hide split b
     send_pointer_event(conn, XCB_BUTTON_RELEASE, x, y, 3);
     observe_title_after_events(conn, first);
     expect_released(conn);
+}
+
+TEST_CASE("Integration: a click released before the pointer grab ends its drag", "[integration][drag][input]")
+{
+    auto env = TestEnvironment::create();
+    REQUIRE(env);
+    auto& conn = env->conn;
+    auto window = floating_window(conn);
+    auto before = require_window_geometry(conn, window);
+    // Press and release in one flush: the server handles the release before LWM's
+    // pointer grab replaces the passive one. The default binds super+button1 to move.
+    REQUIRE(send_mouse_chord(conn, XK_Super_L, 1, before.x + 50, before.y + 50));
+    observe_title_after_events(conn, window);
+    expect_released(conn);
+    xcb_test_fake_input(
+        conn.get(), XCB_MOTION_NOTIFY, 0, XCB_CURRENT_TIME, conn.root(), before.x + 150, before.y + 120, 0
+    );
+    observe_title_after_events(conn, window);
+    CHECK(require_window_geometry(conn, window) == before);
+}
+
+TEST_CASE("Integration: a press queued behind a restart begins no drag across exec", "[integration][drag][restart]")
+{
+    auto env = TestEnvironment::create("[appearance]\npadding = 10\nborder_width = 1\n");
+    REQUIRE(env);
+    auto& conn = env->conn;
+    auto first = create_window(conn, 10, 10, 200, 200), second = create_window(conn, 10, 10, 200, 200);
+    map_window(conn, first);
+    REQUIRE(wait_for_active_window(conn, first, timeout));
+    map_window(conn, second);
+    REQUIRE(wait_for_active_window(conn, second, timeout));
+    auto left = require_window_geometry(conn, first), right = require_window_geometry(conn, second);
+    if (left.x > right.x)
+        std::swap(left, right);
+    auto x = static_cast<int16_t>((left.x + left.width + right.x) / 2);
+    auto y = static_cast<int16_t>(left.y + left.height / 2);
+    // The restart request and a split-gap press share one connection, so the press is
+    // still queued when the WM stops and is handled while it drains.
+    X11Connection ipc;
+    REQUIRE(ipc.ok());
+    auto request = intern_atom(ipc.get(), "_LWM_COMMAND");
+    std::string command = "exec " LWM_RESTART_GATE_PATH;
+    xcb_window_t requester = xcb_generate_id(ipc.get());
+    xcb_create_window(ipc.get(), 0, requester, ipc.root(), -1, -1, 1, 1, 0, XCB_WINDOW_CLASS_INPUT_ONLY,
+                      XCB_COPY_FROM_PARENT, 0, nullptr);
+    xcb_change_property(ipc.get(), XCB_PROP_MODE_REPLACE, requester, request, intern_atom(ipc.get(), "UTF8_STRING"), 8,
+                        command.size(), command.data());
+    lwm::send_message(ipc.get(), wm_owner(ipc), request, XCB_EVENT_MASK_NO_EVENT, { .data32 = { requester } });
+    send_pointer_event(ipc, XCB_BUTTON_PRESS, x, y);
+    // The gate stops after exec, still holding the predecessor's connection.
+    pid_t pid = env->wm.pid();
+    REQUIRE(wait_for_condition(
+        [&]
+        {
+            int status = 0;
+            return waitpid(pid, &status, WUNTRACED | WNOHANG) == pid && WIFSTOPPED(status);
+        },
+        std::chrono::seconds(3)
+    ));
+    auto status = grab(conn);
+    xcb_ungrab_pointer(conn.get(), XCB_CURRENT_TIME);
+    xcb_flush(conn.get());
+    kill(pid, SIGCONT);
+    CHECK(status == XCB_GRAB_STATUS_SUCCESS);
 }

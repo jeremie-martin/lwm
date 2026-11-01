@@ -77,7 +77,14 @@ private:
     // Last submitted bytes (nullopt records deletion), or the owned EWMH states
     // successfully merged into a shared property. Neither records refused writes.
     // An unknown property is always written, so a fresh WM replaces stale values.
-    std::map<std::pair<xcb_window_t, xcb_atom_t>, std::variant<std::optional<std::string>, WindowStates>> properties_;
+    // The sequence is LWM's write, or the read that found the value current: a
+    // notification carrying a later one is another client's change.
+    struct Published
+    {
+        std::variant<std::optional<std::string>, WindowStates> value;
+        uint32_t sequence = 0;
+    };
+    std::map<std::pair<xcb_window_t, xcb_atom_t>, Published> properties_;
     std::string config_path_;
     xcb_window_t wm_window_ = XCB_NONE; ///< Owns WM_S0, the EWMH supporting check and IPC
     std::optional<restart::Snapshot> handoff_; ///< Predecessor state, consumed during startup adoption
@@ -149,7 +156,8 @@ private:
         xcb_window_t window, xcb_atom_t property, xcb_atom_t type, uint8_t format, std::optional<std::string_view> bytes
     );
     bool publish(xcb_window_t window, xcb_atom_t property, xcb_atom_t type, std::span<uint32_t const> words);
-    bool write_property(
+    // The submitted request's sequence; nothing when the server would refuse it.
+    std::optional<uint32_t> write_property(
         xcb_window_t window,
         xcb_atom_t property,
         xcb_atom_t type,
@@ -192,7 +200,9 @@ private:
     xcb_cursor_t split_cursor(State::SplitHit const& split) const;
 
     // wm_actions.cpp: the one executor for key bindings and IPC
-    std::expected<void, std::string> execute(Action const& action, std::string_view source);
+    // A mouse binding's action targets the subject State chose instead of the active window.
+    std::expected<void, std::string>
+    execute(Action const& action, std::string_view source, std::optional<xcb_window_t> subject = std::nullopt);
     void warp_to_monitor(Monitor const& monitor);
 
     // wm_ipc.cpp

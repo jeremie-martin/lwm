@@ -27,15 +27,16 @@ State::Press State::press(xcb_window_t window, int16_t x, int16_t y, uint8_t but
     );
     if (binding != config_.mousebinds.end())
     {
-        // Commands act on the active window, so a clicked client that refuses
-        // focus runs nothing rather than letting the command reach another window.
+        // Commands target the clicked client, so one that refuses focus runs nothing,
+        // and over no client a command that needs a window finds none, rather than
+        // letting the command reach another window.
         if (auto const* action = std::get_if<Action>(&binding->action))
         {
             if (client && window != active_window_)
                 focus(window);
             if (client && window != active_window_)
                 return { true };
-            return { true, std::nullopt, *action };
+            return { true, std::nullopt, *action, client ? window : XCB_NONE };
         }
         auto grip = [&](Edge edges) -> Press
         {
@@ -102,13 +103,14 @@ void State::begin_drag(Interaction const& interaction, int16_t x, int16_t y, uin
             return;
         focus(id);
         auto const& client = require(id);
+        auto displayed = frame(client);
         // A tiled resize away from a split becomes a floating resize.
         if (client.tiled() && edges != floating::ResizeEdge::None)
             floating(id, true);
         if (presents_maximized(client))
         {
-            // Exiting maximize starts from the displayed rectangle.
-            geometry(id, frame(client));
+            // Exiting maximize starts from the rectangle displayed before the drag.
+            geometry(id, displayed);
             maximize(id, false, false);
         }
         WindowDrag drag{ id, client.tiled(), client.monitor, client.workspace, normal_geometry(client), edges };

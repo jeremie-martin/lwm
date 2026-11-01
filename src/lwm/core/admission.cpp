@@ -205,10 +205,12 @@ void State::adopt(
         focus(XCB_NONE);
     else
         focus_fallback(focused_monitor_, false);
-    // Saved claims precede pending launches that mapped while the WM was absent.
+    // Pending launches claim only windows that mapped while the WM was absent; saved
+    // clients keep the roles they had, as without a restart.
     if (handoff)
         for (auto const* client : clients_by_order())
-            claim_pending_scratchpad(client->id);
+            if (!handoff->find(client->id))
+                claim_pending_scratchpad(client->id);
 }
 
 // Live admission and batch adoption share preparation and geometry resolution.

@@ -215,13 +215,13 @@ void WindowManager::handle_button_press(xcb_button_press_event_t const& e)
     xcb_window_t root = conn_.screen()->root;
     bool from_window_grab = e.event != root;
     xcb_window_t target = from_window_grab ? e.event : e.child;
-    auto [consumed, interaction, action] = state_.press(target, e.root_x, e.root_y, e.detail, e.state, e.time);
+    auto [consumed, interaction, action, subject] = state_.press(target, e.root_x, e.root_y, e.detail, e.state, e.time);
     if (from_window_grab)
         xcb_allow_events(conn_.get(), consumed ? XCB_ALLOW_ASYNC_POINTER : XCB_ALLOW_REPLAY_POINTER, e.time);
     if (interaction)
         begin_interaction(*interaction, e.root_x, e.root_y, e.detail);
     if (action)
-        if (auto result = execute(*action, "mousebind"); !result)
+        if (auto result = execute(*action, "mousebind", subject); !result)
             LWM_LOG_DEBUG("Mouse action failed: button={} error={}", e.detail, result.error());
 }
 
@@ -258,9 +258,12 @@ bool WindowManager::release_pointer()
 }
 
 // Domain changes start only after the grab succeeds; completion releases it
-// once State no longer has a drag.
+// once State no longer has a drag. A stopping WM begins none: the shutdown drain
+// must not take a pointer grab that outlives exec, nor a split drag's server grab.
 void WindowManager::begin_interaction(State::Interaction const& interaction, int16_t x, int16_t y, uint8_t button)
 {
+    if (stop_)
+        return;
     auto const* split = std::get_if<State::SplitHit>(&interaction);
     if (grab_pointer(split ? split_cursor(*split) : XCB_NONE))
         state_.begin_drag(interaction, x, y, button);

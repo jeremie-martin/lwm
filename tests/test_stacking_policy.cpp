@@ -45,6 +45,16 @@ TEST_CASE("Global stacking ranks kinds, focus, layers, fixtures and fullscreen v
     REQUIRE(scene.order() == std::vector<xcb_window_t>{ 6, 3, 1, 5, 2, 4 });
 }
 
+TEST_CASE("Desktop windows stack below keep-below clients registered before them", "[stacking][policy]")
+{
+    Scene scene;
+    scene.add(1);
+    scene.add(2);
+    scene.state.layer(1, LayerHint::Below);
+    scene.state.insert_fixture(3, WindowRole::Desktop);
+    CHECK(scene.order(2) == std::vector<xcb_window_t>{ 3, 1, 2 });
+}
+
 TEST_CASE("Hidden clients precede visible clients and do not constrain visible transients", "[stacking][policy]")
 {
     Scene scene;

@@ -123,19 +123,23 @@ void State::scratchpad_pending(std::string_view name, bool pending)
     slot->window = pending ? std::nullopt : std::optional<xcb_window_t>{ XCB_NONE };
 }
 
-// The first unclaimed scratchpad whose matcher accepts the client claims it.
+// The first unclaimed scratchpad whose matcher accepts the client claims it; a
+// pending launch claims its window before an empty slot listed earlier.
 ScratchpadConfig const* State::match_scratchpad(Client const& client) const
 {
-    auto const& configs = config_.scratchpads;
-    auto matches = [&](ScratchpadConfig const& config)
+    ScratchpadConfig const* empty = nullptr;
+    for (auto const& config : config_.scratchpads)
     {
         auto const* slot = named_scratchpad(config.name);
-        return slot && slot->claimed_window() == XCB_NONE;
-    };
-    for (auto const& config : configs)
-        if (matches(config) && config.match.matches(client.wm_class, client.wm_class_name, client.name))
+        if (!slot || slot->claimed_window() != XCB_NONE
+            || !config.match.matches(client.wm_class, client.wm_class_name, client.name))
+            continue;
+        if (slot->pending_launch())
             return &config;
-    return nullptr;
+        if (!empty)
+            empty = &config;
+    }
+    return empty;
 }
 
 // A returned configuration asks the adapter to launch; pending begins only after spawn succeeds.

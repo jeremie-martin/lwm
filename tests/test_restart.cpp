@@ -420,6 +420,26 @@ TEST_CASE("Restart preserves pending requests only for surviving scratchpad name
     CHECK_FALSE(restored.named_scratchpad("pending")->pending_launch());
 }
 
+TEST_CASE("Restart lets pending launches claim only windows mapped during the handoff", "[restart][state][scratchpad]")
+{
+    ScratchpadConfig pad{ .name = "pad" };
+    pad.match.class_regex = std::regex("term");
+    auto source = test::state();
+    test::configure(source, [&](Config& config) { config.scratchpads = { pad }; });
+    add(source, 1);
+    source.window_class(1, "term", "term");
+    source.scratchpad_pending("pad", true);
+    auto snapshot = restart::decode(restart::encode(source.snapshot()));
+    REQUIRE(snapshot);
+    auto restored = test::state();
+    test::configure(restored, [&](Config& config) { config.scratchpads = { pad }; });
+    // The ordinary window survives; the launched one mapped while no WM ran.
+    WindowObservation launched{ .id = 2, .wm_class = "term", .wm_class_name = "term" };
+    restored.adopt({ test::observe(source.require(1)), launched }, &*snapshot);
+    CHECK(restored.named_scratchpad("pad")->claimed_window() == 2);
+    CHECK(restored.require(1).tiled());
+}
+
 TEST_CASE("Restart rejects ambiguous output identities and scratchpad ownership", "[restart][codec]")
 {
     auto snapshot = sample();

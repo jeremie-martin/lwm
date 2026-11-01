@@ -407,6 +407,58 @@ TEST_CASE(
 }
 
 TEST_CASE(
+    "Integration: a hidden client that echoes its known position stays on screen",
+    "[integration][focus][floating][workspace][configure]"
+)
+{
+    auto test_env = TestEnvironment::create();
+    if (!test_env)
+        SKIP("Test environment not available");
+    auto& conn = test_env->conn;
+    xcb_window_t window = create_window(conn, 10, 10, 200, 150);
+    uint32_t const structure = XCB_EVENT_MASK_STRUCTURE_NOTIFY;
+    xcb_change_window_attributes(conn.get(), window, XCB_CW_EVENT_MASK, &structure);
+    set_window_type(conn, window, intern_atom(conn.get(), "_NET_WM_WINDOW_TYPE_DIALOG"));
+    map_window(conn, window);
+    REQUIRE(wait_for_active_window(conn, window, kTimeout));
+    auto shown = require_window_geometry(conn, window);
+    ipc_ok("workspace switch 1");
+    REQUIRE(wait_for_condition([&] { return is_hidden(conn, window); }, kTimeout));
+    ipc_ok("version");
+    (void)get_input_focus(conn);
+    // Like toolkits, the client takes the last ConfigureNotify as its position.
+    std::optional<std::pair<int16_t, int16_t>> known;
+    while (auto* event = xcb_poll_for_event(conn.get()))
+    {
+        auto const* configure = reinterpret_cast<xcb_configure_notify_event_t const*>(event);
+        if ((event->response_type & ~0x80) == XCB_CONFIGURE_NOTIFY && configure->window == window)
+            known = std::pair{ configure->x, configure->y };
+        free(event);
+    }
+    REQUIRE(known);
+    CHECK(*known == std::pair{ shown.x, shown.y });
+    // Whatever it was told, a resize at its hiding place keeps it reachable.
+    for (int16_t x : { known->first, int16_t{ INT16_MAX } })
+    {
+        uint32_t values[] = {
+            static_cast<uint32_t>(x), static_cast<uint32_t>(known->second), shown.width + 20u, shown.height
+        };
+        xcb_configure_window(
+            conn.get(),
+            window,
+            XCB_CONFIG_WINDOW_X | XCB_CONFIG_WINDOW_Y | XCB_CONFIG_WINDOW_WIDTH | XCB_CONFIG_WINDOW_HEIGHT,
+            values
+        );
+        observe_title_after_events(conn, window);
+    }
+    ipc_ok("workspace switch 0");
+    REQUIRE(wait_for_condition([&] { return !is_hidden(conn, window); }, kTimeout));
+    CHECK(require_window_geometry(conn, window)
+          == lwm::Geometry{ shown.x, shown.y, static_cast<uint16_t>(shown.width + 20), shown.height });
+    destroy_window(conn, window);
+}
+
+TEST_CASE(
     "Integration: focused initially urgent floating window clears urgency",
     "[integration][focus][floating][urgent]"
 )
@@ -492,6 +544,34 @@ TEST_CASE("Integration: a mouse command acts on the clicked window, never anothe
     CHECK(get_window_property_string(conn.get(), other, kind) == "tiled");
     destroy_window(conn, other);
     destroy_window(conn, clicked);
+}
+
+TEST_CASE("Integration: a mouse command over no window acts on no window", "[integration][focus][mouse]")
+{
+    auto test_env = TestEnvironment::create(R"(
+[mousebinds]
+"super+2" = "window float"
+"super+3" = "workspace next"
+)");
+    if (!test_env)
+        SKIP("Test environment not available");
+    auto& conn = test_env->conn;
+    if (!extension_available(conn, &xcb_test_id))
+        SKIP("XTEST extension not available");
+    auto kind = intern_atom(conn.get(), "_LWM_WINDOW_CLASS");
+    xcb_window_t window = create_window(conn, 10, 10, 320, 220);
+    map_window(conn, window);
+    REQUIRE(wait_for_active_window(conn, window, kTimeout));
+    // The padding at the monitor's corner is bare root.
+    REQUIRE(send_mouse_chord(conn, XStringToKeysym("Super_L"), XCB_BUTTON_INDEX_2, 2, 2));
+    observe_title_after_events(conn, window);
+    CHECK(get_window_property_string(conn.get(), window, kind) == "tiled");
+    CHECK(wait_for_active_window(conn, window, kTimeout));
+    // Commands that need no window still run there.
+    REQUIRE(send_mouse_chord(conn, XStringToKeysym("Super_L"), XCB_BUTTON_INDEX_3, 2, 2));
+    auto current = intern_atom(conn.get(), "_NET_CURRENT_DESKTOP");
+    CHECK(wait_for_property_cardinal(conn.get(), conn.root(), current, 1, kTimeout));
+    destroy_window(conn, window);
 }
 
 TEST_CASE(

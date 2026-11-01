@@ -142,6 +142,8 @@ void WindowManager::claim_wm_ownership()
                  { .data32 = { time, atoms_.wm_s0, wm_window_ } });
 }
 
+// The release is reported too: a drag the press begins must end even when the
+// button comes up before LWM's own pointer grab replaces the passive one.
 void WindowManager::grab_buttons()
 {
     xcb_window_t root = conn_.screen()->root;
@@ -152,7 +154,7 @@ void WindowManager::grab_buttons()
                 conn_.get(),
                 0,
                 root,
-                XCB_EVENT_MASK_BUTTON_PRESS,
+                XCB_EVENT_MASK_BUTTON_PRESS | XCB_EVENT_MASK_BUTTON_RELEASE,
                 XCB_GRAB_MODE_ASYNC,
                 XCB_GRAB_MODE_ASYNC,
                 XCB_NONE,
@@ -273,7 +275,8 @@ RunResult WindowManager::run()
     // Requests already queued are still handled, with the server grabbed so that no
     // new one arrives before X is released: the next manager sees every pending map
     // and withdrawal, and losing the selection still turns a restart into an exit.
-    // A drag ends first, so no split resize takes and releases a grab of its own.
+    // A drag ends first and none begins meanwhile, so no split resize takes and
+    // releases a grab of its own.
     state_.end_drag(false);
     release_pointer();
     xcb_grab_server(conn_.get());
@@ -287,6 +290,10 @@ RunResult WindowManager::run()
     restore_clients();
     if (*stop_ == RunResult::Restart)
         prepare_restart();
+    // Releasing SubstructureRedirect before X lets a map that waited on the grab reach
+    // the screen, where the next manager adopts it, instead of this one.
+    uint32_t const no_events = XCB_EVENT_MASK_NO_EVENT;
+    xcb_change_window_attributes(conn_.get(), conn_.screen()->root, XCB_CW_EVENT_MASK, &no_events);
     // The round trip also guarantees the server processed a restart's release before exec.
     xcb_ungrab_server(conn_.get());
     conn_.sync();

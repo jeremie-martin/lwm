@@ -37,15 +37,18 @@ std::string name(xcb_connection_t* conn, NameCookies cookies, xcb_atom_t utf8)
     return net ? *net : legacy.value_or(kUntitled);
 }
 
+// Instance and class are NUL-separated within the value; a malformed value never
+// reads past it, which libxcb-icccm's decoder does for empty or unterminated ones.
 std::pair<std::string, std::string> wm_class(xcb_connection_t* conn, xcb_get_property_cookie_t cookie)
 {
-    xcb_icccm_get_wm_class_reply_t reply;
-    if (!xcb_icccm_get_wm_class_reply(conn, cookie, &reply, nullptr))
+    auto reply = xproperty::receive(conn, cookie);
+    if (!reply || reply->type != XCB_ATOM_STRING || reply->format != 8)
         return { };
-    std::pair<std::string, std::string> result{ reply.instance_name ? reply.instance_name : "",
-                                                reply.class_name ? reply.class_name : "" };
-    xcb_icccm_get_wm_class_reply_wipe(&reply);
-    return result;
+    std::string_view value(static_cast<char const*>(xcb_get_property_value(reply.get())),
+                           static_cast<size_t>(xcb_get_property_value_length(reply.get())));
+    auto instance = value.substr(0, value.find('\0'));
+    auto name = value.substr(std::min(value.size(), instance.size() + 1));
+    return { std::string(instance), std::string(name.substr(0, name.find('\0'))) };
 }
 
 xcb_window_t window_value(xcb_connection_t* conn, xcb_get_property_cookie_t cookie)
@@ -67,24 +70,28 @@ Hints hints(xcb_connection_t* conn, xcb_get_property_cookie_t cookie)
     return { !(reply.flags & XCB_ICCCM_WM_HINT_INPUT) || reply.input, xcb_icccm_wm_hints_get_urgency(&reply) != 0 };
 }
 
-// Nonpositive sizes keep the current extent; oversized ones saturate.
+// Nonpositive sizes keep the current extent; oversized ones saturate. Hints count
+// only when the property holds flags, position and size; libxcb-icccm would leave
+// the fields of a truncated property unset.
 SizeHints size_hints(xcb_connection_t* conn, xcb_get_property_cookie_t cookie)
 {
     SizeHints result;
-    xcb_size_hints_t reply;
-    if (!xcb_icccm_get_wm_normal_hints_reply(conn, cookie, &reply, nullptr))
+    auto reply = xproperty::receive(conn, cookie);
+    auto words = xproperty::words(reply, XCB_ATOM_WM_SIZE_HINTS);
+    if (words.size() < 5)
         return result;
-    std::pair position{ geometry_coordinate(reply.x), geometry_coordinate(reply.y) };
-    if (reply.flags & XCB_ICCCM_SIZE_HINT_US_POSITION)
+    auto field = [&](size_t index) { return static_cast<int32_t>(words[index]); };
+    std::pair position{ geometry_coordinate(field(1)), geometry_coordinate(field(2)) };
+    if (words[0] & XCB_ICCCM_SIZE_HINT_US_POSITION)
         result.user_position = position;
-    if (reply.flags & XCB_ICCCM_SIZE_HINT_P_POSITION)
+    if (words[0] & XCB_ICCCM_SIZE_HINT_P_POSITION)
         result.program_position = position;
-    if (reply.flags & (XCB_ICCCM_SIZE_HINT_US_SIZE | XCB_ICCCM_SIZE_HINT_P_SIZE))
+    if (words[0] & (XCB_ICCCM_SIZE_HINT_US_SIZE | XCB_ICCCM_SIZE_HINT_P_SIZE))
     {
-        if (reply.width > 0)
-            result.width = geometry_extent(reply.width);
-        if (reply.height > 0)
-            result.height = geometry_extent(reply.height);
+        if (field(3) > 0)
+            result.width = geometry_extent(field(3));
+        if (field(4) > 0)
+            result.height = geometry_extent(field(4));
     }
     return result;
 }
@@ -134,6 +141,28 @@ std::optional<Geometry> geometry(xcb_connection_t* conn, xcb_get_geometry_cookie
     return reply ? std::optional{ Geometry{ reply->x, reply->y, reply->width, reply->height } } : std::nullopt;
 }
 
+// A transient's unmanaged parent anchors it only while viewable: a toolkit's unmapped
+// leader or owner window has no meaningful rectangle, and the root names a group.
+struct ParentCookies
+{
+    xcb_get_window_attributes_cookie_t attributes;
+    xcb_get_geometry_cookie_t geometry;
+};
+
+std::optional<ParentCookies> request_parent(xcb_connection_t* conn, xcb_window_t root, xcb_window_t parent)
+{
+    if (parent == XCB_NONE || parent == root)
+        return std::nullopt;
+    return ParentCookies{ xcb_get_window_attributes(conn, parent), xcb_get_geometry(conn, parent) };
+}
+
+std::optional<Geometry> parent_anchor(xcb_connection_t* conn, ParentCookies cookies)
+{
+    auto attributes = lwm::reply(xcb_get_window_attributes_reply(conn, cookies.attributes, nullptr));
+    auto frame = geometry(conn, cookies.geometry);
+    return attributes && attributes->map_state == XCB_MAP_STATE_VIEWABLE ? frame : std::nullopt;
+}
+
 } // namespace
 
 // Attributes gate admission, subscription precedes identity, and identity
@@ -157,7 +186,7 @@ std::vector<WindowObservation> WindowManager::observe(std::span<xcb_window_t con
         xcb_get_property_cookie_t type, transient;
         std::optional<Properties> properties;
         std::optional<StrutCookies> strut;
-        std::optional<xcb_get_geometry_cookie_t> parent;
+        std::optional<ParentCookies> parent;
     };
     std::vector<Pending> pending(windows.size());
     for (size_t i = 0; i < windows.size(); ++i)
@@ -189,8 +218,8 @@ std::vector<WindowObservation> WindowManager::observe(std::span<xcb_window_t con
         if (role == WindowRole::Dock)
             reads.strut = request_strut(c, e, w.id);
         // An unmanaged parent's geometry is read with the client's properties.
-        if (role == WindowRole::Client && w.transient_for != XCB_NONE && !state_.find(w.transient_for))
-            reads.parent = xcb_get_geometry(c, w.transient_for);
+        if (role == WindowRole::Client && !state_.find(w.transient_for))
+            reads.parent = request_parent(c, conn_.screen()->root, w.transient_for);
         if (role == WindowRole::Client)
             reads.properties = Properties{
                 xcb_get_geometry(c, w.id),
@@ -227,7 +256,7 @@ std::vector<WindowObservation> WindowManager::observe(std::span<xcb_window_t con
         if (xcb_ewmh_get_wm_fullscreen_monitors_reply(e, cookie.fullscreen_monitors, &monitors, nullptr))
             w.fullscreen_monitors = FullscreenMonitors{ monitors.top, monitors.bottom, monitors.left, monitors.right };
         if (reads.parent)
-            w.unmanaged_parent = geometry(c, *reads.parent);
+            w.unmanaged_parent = parent_anchor(c, *reads.parent);
     }
     std::vector<WindowObservation> result;
     for (auto& reads : pending)
@@ -274,9 +303,10 @@ void WindowManager::handle_property_notify(xcb_property_notify_event_t const& ev
     else if (atom == XCB_ATOM_WM_NORMAL_HINTS)
     {
         auto hints = xcb_icccm_get_wm_normal_hints(c, window);
-        auto parent = client->transient_for;
-        auto unmanaged = parent && !state_.find(parent) ? std::optional{ xcb_get_geometry(c, parent) } : std::nullopt;
-        state_.size_hints(window, size_hints(c, hints), unmanaged ? geometry(c, *unmanaged) : std::nullopt);
+        auto parent = state_.find(client->transient_for)
+            ? std::nullopt
+            : request_parent(c, conn_.screen()->root, client->transient_for);
+        state_.size_hints(window, size_hints(c, hints), parent ? parent_anchor(c, *parent) : std::nullopt);
     }
     else if (atom == XCB_ATOM_WM_HINTS)
     {

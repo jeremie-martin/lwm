@@ -47,7 +47,7 @@ everything the model needs:
 
 - Admission passes a `WindowObservation`: type, transient parent, class, title,
   desktop hint, `_NET_WM_STATE`, `WM_HINTS`, size hints, dock reservation
-  and, for parents LWM does not manage, their server rectangle.
+  and, for viewable parents LWM does not manage, their server rectangle.
 - Protocol requests arrive decoded: `_NET_WM_STATE` as a `StateChange` and a set of
   `WindowState` values, ConfigureRequest and `_NET_MOVERESIZE_WINDOW` as a
   `GeometryRequest`, activation as its source and timestamp with the active client's
@@ -192,7 +192,7 @@ newcomers, and restoration reinstates surviving identities' saved ranks.
   The application's state decides which survivors are fullscreen; surviving claims
   keep their saved ranks, and claims made during adoption rank after them in
   observation order. It selects the pointer's monitor on a cold start, chooses focus, and
-  lets pending launches claim remaining clients after a handoff.
+  lets pending launches claim windows that mapped during a handoff.
 
 Placement shares one implementation for initial placement and later size-hint
 updates. A transient with a managed parent joins the parent's workspace in either
@@ -261,8 +261,8 @@ are eligible tiles of the current workspace, then sticky tiles of others; fullsc
 clients take no slot.
 
 `write_geometry()` owns submitted server rectangles and skips unchanged geometry.
-Completion sends synthetic ConfigureNotify for visible changes and acknowledges every
-outstanding ConfigureRequest using the model rectangle, including hidden clients.
+Completion sends synthetic ConfigureNotify for every submitted change, hiding included,
+and acknowledges every outstanding ConfigureRequest, always with the model rectangle.
 
 ## Visibility, focus and stacking
 
@@ -381,8 +381,11 @@ against forgery. The persistent graph is then validated with the same validator
 Debug builds use. Incoming registration, focus and fullscreen ranks must also leave
 headroom for all adoption passes before they become live counters. Any malformed or
 incompatible snapshot is rejected whole and windows are adopted afresh, as they are
-when a snapshot too large for one X request is not saved. Fresh adoption ignores
-application `HIDDEN` atoms; only accepted private intent restores LWM's hiding.
+when a snapshot too large for one X request is not saved. Only a start that continues
+the handoff, which `LWM_RESTART_FD` names, reads the snapshot; every start deletes it,
+so one left by an exec into another program never reaches a later LWM. Fresh
+adoption ignores application `HIDDEN` atoms; only accepted private intent restores
+LWM's hiding.
 Schema changes bump `restart::format`; there is no migration.
 
 Restoration overlays saved intent on surviving observations, installs the saved

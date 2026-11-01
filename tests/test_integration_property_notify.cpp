@@ -1370,6 +1370,45 @@ TEST_CASE("Integration: titles validate format and retain bounded text fallback"
     check(fallback);
 }
 
+TEST_CASE(
+    "Integration: class and size hints decode only the bytes a property holds",
+    "[integration][property][malformed]"
+)
+{
+    auto env = TestEnvironment::create();
+    REQUIRE(env);
+    auto& conn = env->conn;
+    auto window = create_window(conn, 10, 10, 200, 150);
+    set_window_type(conn, window, intern_atom(conn.get(), "_NET_WM_WINDOW_TYPE_DIALOG"));
+    map_window(conn, window);
+    REQUIRE(wait_for_active_window(conn, window, kTimeout));
+    auto shown = require_window_geometry(conn, window);
+    // Flags claim a position and size that a three-word property cannot hold.
+    uint32_t const hints[] = { XCB_ICCCM_SIZE_HINT_US_POSITION | XCB_ICCCM_SIZE_HINT_US_SIZE, 123, 77 };
+    xcb_change_property(
+        conn.get(), XCB_PROP_MODE_REPLACE, window, XCB_ATOM_WM_NORMAL_HINTS, XCB_ATOM_WM_SIZE_HINTS, 32, 3, hints
+    );
+    observe_title_after_events(conn, window);
+    CHECK(require_window_geometry(conn, window) == shown);
+    // Instance and class end at the value's last byte, even without terminators.
+    auto identity = [&](std::string_view value)
+    {
+        xcb_change_property(
+            conn.get(), XCB_PROP_MODE_REPLACE, window, XCB_ATOM_WM_CLASS, XCB_ATOM_STRING, 8, value.size(), value.data()
+        );
+        observe_title_after_events(conn, window);
+        for (auto const& entry : ipc_json("window list").at("windows"))
+            if (entry.at("id") == window)
+                return entry.at("instance").get<std::string>() + "/" + entry.at("class").get<std::string>();
+        return std::string("unlisted");
+    };
+    CHECK(identity({ "inst\0Class\0", 11 }) == "inst/Class");
+    CHECK(identity("") == "/");
+    CHECK(identity("abcdefgh") == "abcdefgh/");
+    CHECK(identity({ "abc\0", 4 }) == "abc/");
+    destroy_window(conn, window);
+}
+
 TEST_CASE("Integration: admission subscribes before identity and dependent property reads", "[integration][property][observation]")
 {
     bool adopting = GENERATE(false, true);

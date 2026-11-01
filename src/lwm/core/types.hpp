@@ -229,7 +229,7 @@ struct WindowObservation
     std::string wm_class_name;
     WindowType type = WindowType::Normal;
     xcb_window_t transient_for = XCB_NONE;
-    std::optional<Geometry> unmanaged_parent; ///< Server rectangle of a parent LWM does not manage
+    std::optional<Geometry> unmanaged_parent; ///< Server rectangle of a viewable parent LWM does not manage
     std::optional<uint32_t> desktop;          ///< _NET_WM_DESKTOP, including STICKY_DESKTOP
     WindowStates states;                      ///< _NET_WM_STATE
     bool accepts_input = true;                ///< WM_HINTS input (ICCCM default: true)

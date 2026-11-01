@@ -55,7 +55,8 @@
 # button. Buttons are 1..255 (X11: 1 = left, 2 = middle, 3 = right).
 # "move" drags the window under the pointer and "resize" resizes it, or the
 # split under it. Any other action is what a key binding takes; it runs after
-# the window under the pointer is focused.
+# the window under the pointer is focused, and over no window, one that acts on
+# a window does nothing.
 [mousebinds]
 "super+1" = "move"
 "super+3" = "resize"
@@ -164,9 +165,11 @@ keys = ["1", "2", "3", "4", "5", "6", "7", "8", "9", "0"]
 # Each entry requires a unique name, a spawn command, and at least one
 # class/instance/title regex. Size values are fractions from 0.1 through 1.0
 # of the focused monitor's working area (defaults: width=0.8, height=0.7).
-# A failed exec leaves the scratchpad retryable. If a launched program never
-# creates a matching window, use `lwmctl scratchpad cancel-launch NAME` before
-# retrying. Cancellation does not terminate the program.
+# A window matching several scratchpads goes to one waiting for its launch, else
+# to the first empty one. A failed exec leaves the scratchpad retryable. If a
+# launched program never creates a matching window, use
+# `lwmctl scratchpad cancel-launch NAME` before retrying. Cancellation does not
+# terminate the program.
 # Toggle with a binding such as "super+u" = "scratchpad toggle terminal".
 # The generic pool uses "scratchpad stash" and "scratchpad cycle".
 

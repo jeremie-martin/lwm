@@ -126,6 +126,8 @@ void State::configure_request(xcb_window_t id, GeometryRequest request)
         moveresize_request(id, request);
 }
 
+// A hidden client is told it sits right of the root: a position off every monitor
+// echoes that hiding place, so the frame keeps its own.
 void State::moveresize_request(xcb_window_t id, GeometryRequest request)
 {
     auto const* client = find(id);
@@ -133,9 +135,10 @@ void State::moveresize_request(xcb_window_t id, GeometryRequest request)
     if (!floating)
         return;
     auto frame = resize_frame(*client, floating->geometry, request.width, request.height);
-    frame.x = request.x.value_or(frame.x);
-    frame.y = request.y.value_or(frame.y);
-    request_geometry(id, frame);
+    auto moved = frame;
+    moved.x = request.x.value_or(frame.x);
+    moved.y = request.y.value_or(frame.y);
+    request_geometry(id, visible(*client) || monitor_at(monitors_, moved) ? moved : frame);
 }
 
 } // namespace lwm
